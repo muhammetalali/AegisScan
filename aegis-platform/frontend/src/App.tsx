@@ -25,6 +25,7 @@ const ComplianceIntelligence = lazy(() => import('./pages/compliance/ComplianceI
 const SecurityAssurance = lazy(() => import('./pages/compliance/SecurityAssuranceCommandCenterPage').then(m => ({ default: m.SecurityAssuranceCommandCenterPage })))
 const ContinuousAssurance = lazy(() => import('./pages/assurance/ContinuousAssurancePage').then(m => ({ default: m.ContinuousAssurancePage })))
 const CorrelationConflict = lazy(() => import('./pages/compliance/CorrelationConflictPage').then(m => ({ default: m.CorrelationConflictPage })))
+const CorrelatedEvidenceGraph = lazy(() => import('./pages/compliance/CorrelatedEvidenceGraphPage').then(m => ({ default: m.CorrelatedEvidenceGraphPage })))
 const KnowledgeBase = lazy(() => import('./pages/knowledge/KnowledgeBase').then(m => ({ default: m.KnowledgeBase })))
 const DigitalTwin = lazy(() => import('./pages/digital-twin/DigitalTwin').then(m => ({ default: m.DigitalTwin })))
 const SecurityPosture = lazy(() => import('./pages/posture/SecurityPosture').then(m => ({ default: m.SecurityPosture })))
@@ -63,6 +64,7 @@ const App = () => <AuthProvider><ThemeProvider><LanguageProvider><Routes>
     <Route path="/assurance" element={<Suspense fallback={<LoadingScreen />}><SecurityAssurance /></Suspense>} />
     <Route path="/assurance/continuous" element={<Suspense fallback={<LoadingScreen />}><ContinuousAssurance /></Suspense>} />
     <Route path="/assurance/conflicts" element={<Suspense fallback={<LoadingScreen />}><CorrelationConflict /></Suspense>} />
+    <Route path="/assurance/evidence" element={<Suspense fallback={<LoadingScreen />}><CorrelatedEvidenceGraph /></Suspense>} />
     <Route path="/knowledge" element={<Suspense fallback={<LoadingScreen />}><KnowledgeBase /></Suspense>} />
     <Route path="/digital-twin" element={<Suspense fallback={<LoadingScreen />}><DigitalTwin /></Suspense>} />
     <Route path="/posture" element={<Suspense fallback={<LoadingScreen />}><SecurityPosture /></Suspense>} />
