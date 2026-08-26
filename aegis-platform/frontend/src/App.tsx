@@ -15,7 +15,7 @@ const ProjectDetail = lazy(() => import('./pages/projects/ProjectDetail').then(m
 const Assets = lazy(() => import('./pages/assets/Assets').then(m => ({ default: m.Assets })))
 const ScanPage = lazy(() => import('./pages/scans/ScanPage').then(m => ({ default: m.ScanPage })))
 const ScanProgress = lazy(() => import('./pages/scans/ScanProgress').then(m => ({ default: m.ScanProgress })))
-const ScanResults = lazy(() => import('./pages/scans/ScanResults').then(m => ({ default: m.ScanResults })))
+const ScanResults = lazy(() => import('./pages/validations/ValidationCommandCenter').then(m => ({ default: m.ValidationCommandCenter })))
 const Vulnerabilities = lazy(() => import('./pages/vulnerabilities/Vulnerabilities').then(m => ({ default: m.Vulnerabilities })))
 const VulnerabilityDetail = lazy(() => import('./pages/vulnerabilities/VulnerabilityDetail').then(m => ({ default: m.VulnerabilityDetail })))
 const Reports = lazy(() => import('./pages/reports/Reports').then(m => ({ default: m.Reports })))
