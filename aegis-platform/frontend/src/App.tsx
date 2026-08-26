@@ -23,6 +23,7 @@ const ReportDetail = lazy(() => import('./pages/reports/ReportDetail').then(m =>
 const Compliance = lazy(() => import('./pages/compliance/Compliance').then(m => ({ default: m.Compliance })))
 const ComplianceIntelligence = lazy(() => import('./pages/compliance/ComplianceIntelligencePage').then(m => ({ default: m.ComplianceIntelligencePage })))
 const SecurityAssurance = lazy(() => import('./pages/compliance/SecurityAssuranceCommandCenterPage').then(m => ({ default: m.SecurityAssuranceCommandCenterPage })))
+const ContinuousAssurance = lazy(() => import('./pages/assurance/ContinuousAssurancePage').then(m => ({ default: m.ContinuousAssurancePage })))
 const KnowledgeBase = lazy(() => import('./pages/knowledge/KnowledgeBase').then(m => ({ default: m.KnowledgeBase })))
 const DigitalTwin = lazy(() => import('./pages/digital-twin/DigitalTwin').then(m => ({ default: m.DigitalTwin })))
 const SecurityPosture = lazy(() => import('./pages/posture/SecurityPosture').then(m => ({ default: m.SecurityPosture })))
@@ -34,18 +35,8 @@ const AuditLogs = lazy(() => import('./pages/audit/AuditLogs').then(m => ({ defa
 const Notifications = lazy(() => import('./pages/notifications/Notifications').then(m => ({ default: m.Notifications })))
 const NewValidation = lazy(() => import('./pages/validations/ValidationWizard').then(m => ({ default: m.ValidationWizard })))
 
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated, loading } = useAuth()
-  if (loading) return <LoadingScreen />
-  if (!isAuthenticated) return <Navigate to="/login" replace />
-  return <>{children}</>
-}
-const PublicRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated, loading } = useAuth()
-  if (loading) return <LoadingScreen />
-  if (isAuthenticated) return <Navigate to="/dashboard" replace />
-  return <>{children}</>
-}
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => { const { isAuthenticated, loading } = useAuth(); if (loading) return <LoadingScreen />; if (!isAuthenticated) return <Navigate to="/login" replace />; return <>{children}</> }
+const PublicRoute = ({ children }: { children: React.ReactNode }) => { const { isAuthenticated, loading } = useAuth(); if (loading) return <LoadingScreen />; if (isAuthenticated) return <Navigate to="/dashboard" replace />; return <>{children}</> }
 
 const App = () => <AuthProvider><ThemeProvider><LanguageProvider><Routes>
   <Route path="/login" element={<PublicRoute><Suspense fallback={<LoadingScreen />}><Login /></Suspense></PublicRoute>} />
@@ -69,6 +60,7 @@ const App = () => <AuthProvider><ThemeProvider><LanguageProvider><Routes>
     <Route path="/compliance" element={<Suspense fallback={<LoadingScreen />}><Compliance /></Suspense>} />
     <Route path="/compliance/intelligence" element={<Suspense fallback={<LoadingScreen />}><ComplianceIntelligence /></Suspense>} />
     <Route path="/assurance" element={<Suspense fallback={<LoadingScreen />}><SecurityAssurance /></Suspense>} />
+    <Route path="/assurance/continuous" element={<Suspense fallback={<LoadingScreen />}><ContinuousAssurance /></Suspense>} />
     <Route path="/knowledge" element={<Suspense fallback={<LoadingScreen />}><KnowledgeBase /></Suspense>} />
     <Route path="/digital-twin" element={<Suspense fallback={<LoadingScreen />}><DigitalTwin /></Suspense>} />
     <Route path="/posture" element={<Suspense fallback={<LoadingScreen />}><SecurityPosture /></Suspense>} />
