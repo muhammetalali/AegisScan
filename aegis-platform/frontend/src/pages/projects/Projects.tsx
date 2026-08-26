@@ -1,95 +1,159 @@
-import { useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { FolderKanban, Plus, Search, MoreHorizontal, Play, Copy, Archive, Trash2, Download, Shield, Clock } from 'lucide-react'
+import { AlertCircle, ArrowUpRight, FolderKanban, Plus, Search, ShieldCheck, Sparkles } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
 import { Skeleton } from '@/components/ui/skeleton'
 
-type Project = { id: string; name: string; owner: string; assets: number; lastValidation: string; score: number; risk: string; status: string; updated: string }
+type Project = {
+  id: string
+  name: string
+  owner?: string
+  assets?: number
+  lastValidation?: string | null
+  score?: number | null
+  risk?: string | null
+  status?: string | null
+  updated?: string | null
+}
 
-const MOCK: Project[] = [
-  { id: 'prj-001', name: 'E-Commerce Platform', owner: 'Security Team', assets: 12, lastValidation: '2026-08-26 14:20', score: 78, risk: 'high', status: 'active', updated: '2h ago' },
-  { id: 'prj-002', name: 'API Gateway', owner: 'Platform Team', assets: 8, lastValidation: '2026-08-25 09:10', score: 92, risk: 'low', status: 'active', updated: '1d ago' },
-  { id: 'prj-003', name: 'Mobile Banking', owner: 'FinTech Squad', assets: 21, lastValidation: '2026-08-24 18:40', score: 64, risk: 'critical', status: 'active', updated: '3d ago' },
-]
+type ProjectsResponse = Project[] | { items?: Project[]; results?: Project[]; count?: number }
+
+const unwrapProjects = (data: ProjectsResponse | undefined): Project[] => {
+  if (Array.isArray(data)) return data
+  return data?.items ?? data?.results ?? []
+}
+
+const riskClass = (risk?: string | null) => {
+  switch (risk?.toLowerCase()) {
+    case 'critical': return 'border-destructive/30 bg-destructive/10 text-destructive'
+    case 'high': return 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+    case 'medium': return 'border-yellow-500/30 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400'
+    default: return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+  }
+}
+
+const scoreClass = (score?: number | null) => {
+  if (score == null) return 'text-muted-foreground'
+  if (score >= 80) return 'text-emerald-600 dark:text-emerald-400'
+  if (score >= 60) return 'text-amber-600 dark:text-amber-400'
+  return 'text-destructive'
+}
 
 export const Projects = () => {
   const [q, setQ] = useState('')
-  const { data, isLoading } = useQuery({ queryKey: ['projects'], queryFn: async () => {
-    try { return await apiHelpers.get<any>('/projects') } catch { return { items: MOCK } }
-  }})
-  const items: Project[] = (data?.items || MOCK).filter((p: Project) => !q || p.name.toLowerCase().includes(q.toLowerCase()))
+  const { data, isLoading, isError, refetch } = useQuery<ProjectsResponse>({
+    queryKey: ['projects'],
+    queryFn: () => apiHelpers.get<ProjectsResponse>('/projects'),
+    staleTime: 30_000,
+  })
+
+  const projects = unwrapProjects(data)
+  const items = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    if (!needle) return projects
+    return projects.filter((project) =>
+      [project.name, project.owner, project.risk, project.status].some((value) => value?.toLowerCase().includes(needle)),
+    )
+  }, [projects, q])
+
+  const totalAssets = projects.reduce((sum, project) => sum + (project.assets ?? 0), 0)
+  const scoredProjects = projects.filter((project) => project.score != null)
+  const averageScore = scoredProjects.length
+    ? Math.round(scoredProjects.reduce((sum, project) => sum + Number(project.score), 0) / scoredProjects.length)
+    : null
+  const highRisk = projects.filter((project) => ['critical', 'high'].includes(project.risk?.toLowerCase() ?? '')).length
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><FolderKanban className="h-6 w-6 text-primary" /> Projects</h1>
-          <p className="text-sm text-muted-foreground">Enterprise project registry — owner, assets, last validation, score, risk, status</p>
+    <div className="space-y-6">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-2 rounded-full border bg-card/80 px-3 py-1 text-xs text-muted-foreground">
+            <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Security workspace
+          </div>
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">Projects</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Your security validation workspaces, assets, risk posture and latest assurance activity in one place.</p>
+          </div>
         </div>
         <div className="flex gap-2">
-          <Link to="/validations/new" className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm inline-flex items-center gap-1"><Plus className="h-4 w-4" /> New Validation</Link>
-          <button className="px-3 py-2 rounded-lg border bg-card text-sm">New Project</button>
+          <Link to="/validations/new" className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90">
+            <Sparkles className="h-4 w-4" /> New validation
+          </Link>
+          <button type="button" className="inline-flex items-center gap-2 rounded-lg border bg-card px-4 py-2.5 text-sm font-medium transition hover:bg-accent">
+            <Plus className="h-4 w-4" /> New project
+          </button>
         </div>
-      </div>
+      </header>
 
-      <div className="rounded-xl border bg-card p-3 flex gap-2">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search projects, owner, tags..." className="w-full pl-8 pr-3 py-2 rounded-lg border bg-background text-sm" />
+      <section className="grid gap-3 sm:grid-cols-3">
+        {[
+          ['Projects', projects.length.toString(), 'Active security workspaces'],
+          ['Assets', totalAssets.toString(), 'Tracked attack surface'],
+          ['Average score', averageScore == null ? '—' : `${averageScore}`, highRisk ? `${highRisk} high-risk workspace${highRisk > 1 ? 's' : ''}` : 'No high-risk workspaces'],
+        ].map(([label, value, hint]) => (
+          <div key={label} className="rounded-xl border bg-card p-4 shadow-sm">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+            <div className="mt-2 flex items-end justify-between gap-3">
+              <span className={cn('text-2xl font-semibold tracking-tight', label === 'Average score' && scoreClass(averageScore))}>{value}</span>
+              <span className="text-right text-xs text-muted-foreground">{hint}</span>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <section className="rounded-xl border bg-card shadow-sm">
+        <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-semibold">Project registry</h2>
+            <p className="text-xs text-muted-foreground">Live data from the AegisScan API</p>
+          </div>
+          <div className="relative w-full sm:max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search projects..." className="h-9 w-full rounded-lg border bg-background pl-9 pr-3 text-sm outline-none ring-offset-background transition focus:ring-2 focus:ring-primary/30" aria-label="Search projects" />
+          </div>
         </div>
-        <span className="text-xs text-muted-foreground self-center">{items.length} projects</span>
-      </div>
 
-      {isLoading ? <Skeleton className="h-64 w-full" /> : (
-        <div className="rounded-xl border bg-card overflow-hidden">
-          <div className="overflow-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="border-b bg-muted/30 text-xs text-muted-foreground">
-                <th className="text-start px-4 py-3 font-medium">Project</th>
-                <th className="text-start px-4 py-3 font-medium">Owner</th>
-                <th className="text-start px-4 py-3 font-medium">Assets</th>
-                <th className="text-start px-4 py-3 font-medium">Last Validation</th>
-                <th className="text-start px-4 py-3 font-medium">Security Score</th>
-                <th className="text-start px-4 py-3 font-medium">Risk</th>
-                <th className="text-start px-4 py-3 font-medium">Status</th>
-                <th className="text-start px-4 py-3 font-medium">Updated</th>
-                <th className="px-4 py-3"></th>
+        {isLoading ? (
+          <div className="space-y-3 p-4"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
+        ) : isError ? (
+          <div className="flex flex-col items-center justify-center gap-3 p-12 text-center">
+            <div className="rounded-full border border-destructive/20 bg-destructive/10 p-3"><AlertCircle className="h-5 w-5 text-destructive" /></div>
+            <div><p className="font-medium">Projects could not be loaded</p><p className="mt-1 text-sm text-muted-foreground">The API did not return a usable response. Your workspace was not replaced with demo data.</p></div>
+            <button type="button" onClick={() => refetch()} className="rounded-lg border bg-card px-3 py-2 text-sm font-medium hover:bg-accent">Retry</button>
+          </div>
+        ) : items.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 p-14 text-center">
+            <div className="rounded-full border bg-muted/40 p-3"><FolderKanban className="h-5 w-5 text-muted-foreground" /></div>
+            <div><p className="font-medium">{q ? 'No matching projects' : 'No projects yet'}</p><p className="mt-1 text-sm text-muted-foreground">{q ? 'Try a different name, owner or risk filter.' : 'Create a project to start organizing assets and validations.'}</p></div>
+            {!q && <button type="button" className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground">Create project</button>}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[920px] text-sm">
+              <thead><tr className="border-b bg-muted/20 text-left text-xs text-muted-foreground">
+                {['Project', 'Owner', 'Assets', 'Last validation', 'Score', 'Risk', 'Status', 'Updated', ''].map((heading) => <th key={heading} className="px-4 py-3 font-medium">{heading}</th>)}
               </tr></thead>
               <tbody>
-                {items.map(p=>(
-                  <tr key={p.id} className="border-b hover:bg-muted/20">
-                    <td className="px-4 py-3"><Link to={`/projects/${p.id}`} className="font-medium hover:underline flex items-center gap-2"><Shield className="h-4 w-4 text-primary" />{p.name}</Link></td>
-                    <td className="px-4 py-3 text-muted-foreground">{p.owner}</td>
-                    <td className="px-4 py-3">{p.assets}</td>
-                    <td className="px-4 py-3 font-mono text-xs flex items-center gap-1"><Clock className="h-3 w-3" />{p.lastValidation}</td>
-                    <td className="px-4 py-3"><span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', p.score>=80 ? 'bg-emerald-500 text-white' : p.score>=60 ? 'bg-amber-500 text-white' : 'bg-destructive text-destructive-foreground')}>{p.score}</span></td>
-                    <td className="px-4 py-3"><span className={cn('px-2 py-0.5 rounded-full text-xs capitalize', p.risk==='critical' ? 'bg-red-600 text-white' : p.risk==='high' ? 'bg-orange-500 text-white' : 'bg-emerald-500 text-white')}>{p.risk}</span></td>
-                    <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs">{p.status}</span></td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{p.updated}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1">
-                        <Link to={`/projects/${p.id}`} className="p-1.5 rounded hover:bg-accent" title="Open"><FolderKanban className="h-4 w-4" /></Link>
-                        <Link to="/validations/new" className="p-1.5 rounded hover:bg-accent" title="Run Validation"><Play className="h-4 w-4" /></Link>
-                        <button className="p-1.5 rounded hover:bg-accent" title="More"><MoreHorizontal className="h-4 w-4" /></button>
-                      </div>
-                    </td>
+                {items.map((project) => (
+                  <tr key={project.id} className="group border-b last:border-0 transition hover:bg-muted/20">
+                    <td className="px-4 py-4"><Link to={`/projects/${project.id}`} className="inline-flex items-center gap-2 font-medium hover:text-primary"><span className="rounded-md border bg-background p-1.5"><FolderKanban className="h-4 w-4 text-primary" /></span>{project.name}<ArrowUpRight className="h-3.5 w-3.5 opacity-0 transition group-hover:opacity-100" /></Link></td>
+                    <td className="px-4 py-4 text-muted-foreground">{project.owner || '—'}</td>
+                    <td className="px-4 py-4 font-medium">{project.assets ?? '—'}</td>
+                    <td className="px-4 py-4 font-mono text-xs text-muted-foreground">{project.lastValidation || 'Not validated'}</td>
+                    <td className={cn('px-4 py-4 font-semibold', scoreClass(project.score))}>{project.score == null ? '—' : project.score}</td>
+                    <td className="px-4 py-4"><span className={cn('rounded-full border px-2 py-1 text-xs font-medium capitalize', riskClass(project.risk))}>{project.risk || 'unknown'}</span></td>
+                    <td className="px-4 py-4"><span className="rounded-full border bg-muted/40 px-2 py-1 text-xs capitalize">{project.status || 'unknown'}</span></td>
+                    <td className="px-4 py-4 text-xs text-muted-foreground">{project.updated || '—'}</td>
+                    <td className="px-4 py-4 text-right"><Link to={`/projects/${project.id}`} className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={`Open ${project.name}`}><ArrowUpRight className="h-4 w-4" /></Link></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="px-4 py-3 border-t bg-muted/20 flex gap-2 text-xs">
-            <span className="inline-flex items-center gap-1"><Copy className="h-3 w-3" />Duplicate</span>
-            <span className="inline-flex items-center gap-1"><Archive className="h-3 w-3" />Archive</span>
-            <span className="inline-flex items-center gap-1 text-destructive"><Trash2 className="h-3 w-3" />Delete</span>
-            <span className="inline-flex items-center gap-1 ml-auto"><Download className="h-3 w-3" />Download Report</span>
-          </div>
-        </div>
-      )}
-
-      {items.length===0 && <div className="rounded-xl border border-dashed bg-card p-12 text-center"><FolderKanban className="h-8 w-8 mx-auto text-muted-foreground" /><p className="text-sm font-medium mt-2">No projects</p><p className="text-xs text-muted-foreground">Create your first project to group assets and validations</p></div>}
+        )}
+      </section>
     </div>
   )
 }
