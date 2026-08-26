@@ -50,7 +50,14 @@ async def create_action_endpoint(body: ActionCreate, user: dict[str, Any] = Depe
     decision = _decision_by_id(body.decision_id)
     if decision is None:
         raise HTTPException(status_code=404, detail="Decision not found")
-    return create_action(decision, body.owner, body.sla_hours, str(user.get("id") or user.get("username") or "user"))
+    actor = str(user.get("id") or user.get("username") or "user")
+    item = create_action(decision, body.owner, body.sla_hours, actor)
+    try:
+        from .audit import add_audit_entry
+        add_audit_entry(user=actor, action="decision_action.create", target=item["actionId"], project="—", result="success")
+    except Exception:
+        pass
+    return item
 
 @router.get("/actions/{action_id}")
 async def action_detail(action_id: str, user: dict[str, Any] = Depends(require_user)):
@@ -63,7 +70,13 @@ async def action_detail(action_id: str, user: dict[str, Any] = Depends(require_u
 async def action_transition(action_id: str, body: ActionTransition, user: dict[str, Any] = Depends(require_user)):
     actor = str(user.get("id") or user.get("username") or "user")
     try:
-        return transition(action_id, body.state, actor, body.note)
+        item = transition(action_id, body.state, actor, body.note)
+        try:
+            from .audit import add_audit_entry
+            add_audit_entry(user=actor, action=f"decision_action.{body.state}", target=action_id, project="—", result="success")
+        except Exception:
+            pass
+        return item
     except KeyError:
         raise HTTPException(status_code=404, detail="Action not found")
     except ValueError:
