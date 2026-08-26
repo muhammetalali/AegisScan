@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { CommandPalette } from './CommandPalette'
 import { useAuthStore } from '@/stores/authStore'
-import { LayoutDashboard, FolderKanban, Server, Zap, Activity, Bug, FileText, ShieldCheck, BookOpen, GitBranch, TrendingUp, Users, Settings, Monitor, ClipboardList, Bell } from 'lucide-react'
+import { LayoutDashboard, FolderKanban, Server, Zap, Activity, Bug, FileText, ShieldCheck, BookOpen, GitBranch, TrendingUp, Users, Settings, Monitor, ClipboardList, Bell, Gauge } from 'lucide-react'
 
 export const NAV_GROUPS = [
   { label: 'Overview', items: [{ name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['all'] }] },
@@ -20,6 +20,7 @@ export const NAV_GROUPS = [
   { label: 'Analyze', items: [
     { name: 'Reports', href: '/reports', icon: FileText, roles: ['all'] },
     { name: 'Compliance', href: '/compliance', icon: ShieldCheck, roles: ['analyst','manager','admin','auditor'] },
+    { name: 'Security Assurance', href: '/assurance', icon: Gauge, roles: ['analyst','manager','admin','auditor'] },
     { name: 'Security Posture', href: '/posture', icon: TrendingUp, roles: ['manager','admin'] },
     { name: 'Digital Twin', href: '/digital-twin', icon: GitBranch, roles: ['analyst','manager','admin'] },
     { name: 'Knowledge', href: '/knowledge', icon: BookOpen, roles: ['all'] },
