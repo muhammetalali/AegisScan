@@ -12,6 +12,7 @@ from ..services.graph_intelligence import analyze_graph
 from ..services.autonomous_triage import build_triage
 from ..services.security_decision import build_decision_pack
 from ..services.decision_action_orchestration import create_action, get_action, list_actions, transition
+from ..services.workflow_intelligence import enrich_action, workflow_metrics
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -43,7 +44,13 @@ def _decision_by_id(decision_id: str) -> dict[str, Any] | None:
 
 @router.get("/actions")
 async def actions(user: dict[str, Any] = Depends(require_user)):
-    return {"items": list_actions()}
+    items = [enrich_action(item) for item in list_actions()]
+    return {"items": items, "metrics": workflow_metrics(items)}
+
+@router.get("/actions/overview")
+async def actions_overview(user: dict[str, Any] = Depends(require_user)):
+    items = [enrich_action(item) for item in list_actions()]
+    return {"items": items, "metrics": workflow_metrics(items)}
 
 @router.post("/actions", status_code=201)
 async def create_action_endpoint(body: ActionCreate, user: dict[str, Any] = Depends(require_user)):
@@ -57,14 +64,14 @@ async def create_action_endpoint(body: ActionCreate, user: dict[str, Any] = Depe
         add_audit_entry(user=actor, action="decision_action.create", target=item["actionId"], project="—", result="success")
     except Exception:
         pass
-    return item
+    return enrich_action(item)
 
 @router.get("/actions/{action_id}")
 async def action_detail(action_id: str, user: dict[str, Any] = Depends(require_user)):
     item = get_action(action_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Action not found")
-    return item
+    return enrich_action(item)
 
 @router.post("/actions/{action_id}/transition")
 async def action_transition(action_id: str, body: ActionTransition, user: dict[str, Any] = Depends(require_user)):
@@ -76,7 +83,7 @@ async def action_transition(action_id: str, body: ActionTransition, user: dict[s
             add_audit_entry(user=actor, action=f"decision_action.{body.state}", target=action_id, project="—", result="success")
         except Exception:
             pass
-        return item
+        return enrich_action(item)
     except KeyError:
         raise HTTPException(status_code=404, detail="Action not found")
     except ValueError:
