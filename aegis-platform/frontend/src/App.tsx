@@ -24,6 +24,7 @@ const Compliance = lazy(() => import('./pages/compliance/Compliance').then(m => 
 const KnowledgeBase = lazy(() => import('./pages/knowledge/KnowledgeBase').then(m => ({ default: m.KnowledgeBase })))
 const DigitalTwin = lazy(() => import('./pages/digital-twin/DigitalTwin').then(m => ({ default: m.DigitalTwin })))
 const SecurityPosture = lazy(() => import('./pages/posture/SecurityPosture').then(m => ({ default: m.SecurityPosture })))
+const CISOExecutivePage = lazy(() => import('./pages/executive/CISOExecutivePage').then(m => ({ default: m.CISOExecutivePage })))
 const Users = lazy(() => import('./pages/users/Users').then(m => ({ default: m.Users })))
 const Settings = lazy(() => import('./pages/settings/Settings').then(m => ({ default: m.Settings })))
 const SystemMonitor = lazy(() => import('./pages/system/SystemMonitor').then(m => ({ default: m.SystemMonitor })))
@@ -37,7 +38,6 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   if (!isAuthenticated) return <Navigate to="/login" replace />
   return <>{children}</>
 }
-
 const PublicRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, loading } = useAuth()
   if (loading) return <LoadingScreen />
@@ -68,6 +68,7 @@ const App = () => <AuthProvider><ThemeProvider><LanguageProvider><Routes>
     <Route path="/knowledge" element={<Suspense fallback={<LoadingScreen />}><KnowledgeBase /></Suspense>} />
     <Route path="/digital-twin" element={<Suspense fallback={<LoadingScreen />}><DigitalTwin /></Suspense>} />
     <Route path="/posture" element={<Suspense fallback={<LoadingScreen />}><SecurityPosture /></Suspense>} />
+    <Route path="/executive" element={<Suspense fallback={<LoadingScreen />}><CISOExecutivePage /></Suspense>} />
     <Route path="/users" element={<Suspense fallback={<LoadingScreen />}><Users /></Suspense>} />
     <Route path="/settings" element={<Suspense fallback={<LoadingScreen />}><Settings /></Suspense>} />
     <Route path="/system" element={<Suspense fallback={<LoadingScreen />}><SystemMonitor /></Suspense>} />
@@ -77,5 +78,4 @@ const App = () => <AuthProvider><ThemeProvider><LanguageProvider><Routes>
   </Route>
   <Route path="*" element={<Navigate to="/dashboard" replace />} />
 </Routes></LanguageProvider></ThemeProvider></AuthProvider>
-
 export default App
