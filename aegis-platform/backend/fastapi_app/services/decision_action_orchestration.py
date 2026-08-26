@@ -36,6 +36,10 @@ def _pool_instance() -> ThreadedConnectionPool:
     return _pool
 
 
+def initialize_action_store() -> None:
+    _ensure_schema()
+
+
 def _ensure_schema() -> None:
     global _schema_ready
     if _schema_ready:
@@ -75,6 +79,8 @@ def _ensure_schema() -> None:
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_action_events_action_id_created ON security_decision_action_events(action_id, created_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_actions_state_updated ON security_decision_actions(state, updated_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_actions_owner_sla ON security_decision_actions(owner, created_at)")
             conn.commit()
         _schema_ready = True
     finally:
