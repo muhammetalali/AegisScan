@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, ClipboardCheck, ShieldCheck, Target, TrendingDown } from 'lucide-react'
+import type { SecurityAssuranceModel } from './SecurityAssuranceModel'
 
-export type ExecutiveSecurityModel = { securityScore: number; scoreDelta: number; critical: number; high: number; remediationRate: number; controlCoverage: number; validationCoverage: number; riskExposure: number; openExceptions: number }
+export type ExecutiveSecurityModel = SecurityAssuranceModel
 
 export function CISOExecutiveView({ model, priorities = [], onReviewRisk, onOpenReports }: { model: ExecutiveSecurityModel; priorities?: Array<{ title: string; severity: string; owner: string; due: string }>; onReviewRisk?: () => void; onOpenReports?: () => void }) {
   const scoreUp = model.scoreDelta >= 0
