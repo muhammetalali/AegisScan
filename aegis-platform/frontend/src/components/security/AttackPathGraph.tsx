@@ -1,16 +1,9 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ArrowRight, Database, Globe2, Maximize2, Minus, Plus, RotateCcw, Server, ShieldAlert, Waypoints } from 'lucide-react'
+import { AlertTriangle, Database, Globe2, Maximize2, Minus, Plus, RotateCcw, Server, ShieldAlert, Waypoints } from 'lucide-react'
 import { cn } from '@/utils/cn'
 
-export type AttackPathNode = {
-  id: string
-  label: string
-  type: 'entry' | 'asset' | 'service' | 'finding' | 'data'
-  severity?: 'critical' | 'high' | 'medium' | 'low'
-  meta?: string
-}
+export type AttackPathNode = { id: string; label: string; type: 'entry' | 'asset' | 'service' | 'finding' | 'data'; severity?: 'critical' | 'high' | 'medium' | 'low'; meta?: string }
 export type AttackPathEdge = { from: string; to: string; label?: string }
-
 const iconFor = { entry: Globe2, asset: Server, service: Waypoints, finding: ShieldAlert, data: Database }
 const toneFor = { entry: 'border-sky-500/40 bg-sky-500/10', asset: 'border-violet-500/40 bg-violet-500/10', service: 'border-cyan-500/40 bg-cyan-500/10', finding: 'border-red-500/50 bg-red-500/10', data: 'border-amber-500/40 bg-amber-500/10' }
 
@@ -19,73 +12,23 @@ export function AttackPathGraph({ nodes, edges, onSelect }: { nodes: AttackPathN
   const [scale, setScale] = useState(1)
   const [focusOnly, setFocusOnly] = useState(false)
   const selectedNode = nodes.find((node) => node.id === selected)
-
-  const adjacency = useMemo(() => {
-    const map = new Map<string, Set<string>>()
-    nodes.forEach((node) => map.set(node.id, new Set()))
-    edges.forEach(({ from, to }) => { map.get(from)?.add(to); map.get(to)?.add(from) })
-    return map
-  }, [nodes, edges])
-
-  const connected = useMemo(() => {
-    if (!selected) return new Set(nodes.map((node) => node.id))
-    const result = new Set<string>([selected])
-    adjacency.get(selected)?.forEach((id) => result.add(id))
-    return result
-  }, [selected, adjacency, nodes])
-
-  const levels = useMemo(() => {
-    const incoming = new Map(nodes.map((node) => [node.id, 0]))
-    edges.forEach((edge) => incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1))
-    const result: AttackPathNode[][] = []
-    let remaining = new Set(nodes.map((node) => node.id))
-    let safety = nodes.length + 1
-    while (remaining.size && safety--) {
-      const level = nodes.filter((node) => remaining.has(node.id) && (incoming.get(node.id) ?? 0) === 0)
-      if (!level.length) { result.push(nodes.filter((node) => remaining.has(node.id))); break }
-      result.push(level)
-      level.forEach((node) => remaining.delete(node.id))
-      level.forEach((node) => edges.filter((edge) => edge.from === node.id).forEach((edge) => incoming.set(edge.to, Math.max(0, (incoming.get(edge.to) ?? 0) - 1))))
-    }
-    return result
-  }, [nodes, edges])
-
+  const adjacency = useMemo(() => { const map = new Map<string, Set<string>>(); nodes.forEach((node) => map.set(node.id, new Set())); edges.forEach(({ from, to }) => { map.get(from)?.add(to); map.get(to)?.add(from) }); return map }, [nodes, edges])
+  const connected = useMemo(() => { if (!selected) return new Set(nodes.map((node) => node.id)); const result = new Set<string>([selected]); adjacency.get(selected)?.forEach((id) => result.add(id)); return result }, [selected, adjacency, nodes])
+  const levels = useMemo(() => { const incoming = new Map(nodes.map((node) => [node.id, 0])); edges.forEach((edge) => incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1)); const result: AttackPathNode[][] = []; let remaining = new Set(nodes.map((node) => node.id)); let safety = nodes.length + 1; while (remaining.size && safety--) { const level = nodes.filter((node) => remaining.has(node.id) && (incoming.get(node.id) ?? 0) === 0); if (!level.length) { result.push(nodes.filter((node) => remaining.has(node.id))); break } result.push(level); level.forEach((node) => remaining.delete(node.id)); level.forEach((node) => edges.filter((edge) => edge.from === node.id).forEach((edge) => incoming.set(edge.to, Math.max(0, (incoming.get(edge.to) ?? 0) - 1)))) } return result }, [nodes, edges])
+  const positions = useMemo(() => { const result = new Map<string, { x: number; y: number }>(); levels.forEach((level, li) => level.forEach((node, ni) => result.set(node.id, { x: 110 + li * 195, y: 90 + ni * 110 }))); return result }, [levels])
   const selectNode = (node: AttackPathNode) => { setSelected(node.id); onSelect?.(node) }
   const resetView = () => { setSelected(nodes[0]?.id ?? null); setScale(1); setFocusOnly(false) }
+  const graphHeight = Math.max(390, ...levels.map((level) => level.length * 110 + 70))
 
   return <div className="overflow-hidden rounded-2xl border bg-card">
-    <header className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
-      <div><div className="flex items-center gap-2 font-semibold"><Waypoints className="h-4 w-4 text-primary" /> Attack Path</div><p className="mt-1 text-xs text-muted-foreground">Trace exposure from entry point to impacted resource.</p></div>
-      <div className="flex items-center gap-1 rounded-lg border bg-background/70 p-1">
-        <button title="Zoom out" aria-label="Zoom out" onClick={() => setScale((v) => Math.max(.75, v - .1))} className="rounded-md p-1.5 hover:bg-muted"><Minus className="h-3.5 w-3.5" /></button>
-        <span className="w-12 text-center text-[11px] font-medium">{Math.round(scale * 100)}%</span>
-        <button title="Zoom in" aria-label="Zoom in" onClick={() => setScale((v) => Math.min(1.5, v + .1))} className="rounded-md p-1.5 hover:bg-muted"><Plus className="h-3.5 w-3.5" /></button>
-        <button title="Focus selected" aria-label="Focus selected" onClick={() => setFocusOnly((v) => !v)} className={cn('rounded-md p-1.5 hover:bg-muted', focusOnly && 'bg-primary/10 text-primary')}><Maximize2 className="h-3.5 w-3.5" /></button>
-        <button title="Reset view" aria-label="Reset view" onClick={resetView} className="rounded-md p-1.5 hover:bg-muted"><RotateCcw className="h-3.5 w-3.5" /></button>
-      </div>
-    </header>
-
-    <div className="overflow-auto bg-[radial-gradient(circle_at_center,hsl(var(--muted)/.45)_1px,transparent_1px)] [background-size:18px_18px] p-6">
-      <div className="min-w-[900px] origin-left transition-transform duration-300" style={{ transform: `scale(${scale})` }}>
-        <div className="flex items-stretch gap-3">
-          {levels.map((level, levelIndex) => <div key={levelIndex} className="flex min-w-[190px] flex-1 flex-col justify-center gap-4">
-            {level.map((node) => {
-              const Icon = iconFor[node.type]
-              const active = selected === node.id
-              const visible = !focusOnly || connected.has(node.id)
-              return <div key={node.id} className={cn('relative transition-all duration-300', !visible && 'opacity-15 saturate-0')}>
-                <button type="button" onClick={() => selectNode(node)} aria-pressed={active} className={cn('group w-full rounded-xl border p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md', toneFor[node.type], active && 'ring-2 ring-primary/60 shadow-md')}>
-                  <div className="flex items-start gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border bg-background/70"><Icon className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{node.label}</span><span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{node.meta ?? node.type}</span></span>{node.severity && <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase"><AlertTriangle className="h-3 w-3" />{node.severity}</span>}</div>
-                </button>
-                {levelIndex < levels.length - 1 && <div className="pointer-events-none absolute -right-3 top-1/2 z-10 hidden -translate-y-1/2 md:block"><ArrowRight className="h-4 w-4 text-muted-foreground/60" /></div>}
-              </div>
-            })}
-          </div>)}
-        </div>
-        {edges.some((edge) => edge.label) && <div className="mt-5 flex flex-wrap gap-2 border-t pt-4">{edges.filter((edge) => edge.label).map((edge) => <span key={`${edge.from}-${edge.to}`} className="rounded-full border bg-background/70 px-2.5 py-1 text-[10px] text-muted-foreground">{edge.label}</span>)}</div>}
-      </div>
-    </div>
-
-    {selectedNode && <footer className="border-t bg-muted/20 px-5 py-4"><div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Selected node</div><div className="mt-1 flex flex-wrap items-center justify-between gap-3"><div><div className="font-medium">{selectedNode.label}</div><div className="text-xs text-muted-foreground">{selectedNode.meta ?? selectedNode.type}</div></div><div className="text-xs text-muted-foreground">{edges.filter((edge) => edge.from === selectedNode.id || edge.to === selectedNode.id).length} relationships</div></div></footer>}
+    <header className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4"><div><div className="flex items-center gap-2 font-semibold"><Waypoints className="h-4 w-4 text-primary" /> Attack Path</div><p className="mt-1 text-xs text-muted-foreground">Live attack-flow visualization with directional security signals.</p></div><div className="flex items-center gap-1 rounded-lg border bg-background/70 p-1"><button title="Zoom out" aria-label="Zoom out" onClick={() => setScale((v) => Math.max(.75, v - .1))} className="rounded-md p-1.5 hover:bg-muted"><Minus className="h-3.5 w-3.5" /></button><span className="w-12 text-center text-[11px] font-medium">{Math.round(scale * 100)}%</span><button title="Zoom in" aria-label="Zoom in" onClick={() => setScale((v) => Math.min(1.5, v + .1))} className="rounded-md p-1.5 hover:bg-muted"><Plus className="h-3.5 w-3.5" /></button><button title="Focus selected" aria-label="Focus selected" onClick={() => setFocusOnly((v) => !v)} className={cn('rounded-md p-1.5 hover:bg-muted', focusOnly && 'bg-primary/10 text-primary')}><Maximize2 className="h-3.5 w-3.5" /></button><button title="Reset view" aria-label="Reset view" onClick={resetView} className="rounded-md p-1.5 hover:bg-muted"><RotateCcw className="h-3.5 w-3.5" /></button></div></header>
+    <div className="overflow-auto bg-[radial-gradient(circle_at_center,hsl(var(--muted)/.45)_1px,transparent_1px)] [background-size:18px_18px] p-6"><div className="origin-left transition-transform duration-300" style={{ width: Math.max(980, levels.length * 195 + 80), transform: `scale(${scale})` }}><div className="relative" style={{ height: graphHeight }}>
+      <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${Math.max(980, levels.length * 195 + 80)} ${graphHeight}`} preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="attack-flow-gradient" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="currentColor" stopOpacity=".15" /><stop offset="45%" stopColor="currentColor" stopOpacity=".7" /><stop offset="100%" stopColor="currentColor" stopOpacity=".2" /></linearGradient><filter id="attack-glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="2.2" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter><marker id="attack-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" /></marker></defs>
+        {edges.map((edge) => { const a = positions.get(edge.from); const b = positions.get(edge.to); if (!a || !b) return null; const active = edge.from === selected || edge.to === selected; const visible = !focusOnly || connected.has(edge.from) || connected.has(edge.to); const mid = (a.x + b.x) / 2; const path = `M ${a.x + 78} ${a.y + 30} C ${mid} ${a.y + 30}, ${mid} ${b.y + 30}, ${b.x - 78} ${b.y + 30}`; return <g key={`${edge.from}-${edge.to}`} className={cn('transition-opacity', !visible && 'opacity-10', selected && !active && 'opacity-20')}><path d={path} fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 1.4} strokeDasharray={active ? '9 7' : '4 8'} markerEnd="url(#attack-arrow)" className={active ? 'text-primary' : 'text-muted-foreground/35'} />{active && <path d={path} fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2 24" strokeLinecap="round" className="text-primary" filter="url(#attack-glow)"><animate attributeName="stroke-dashoffset" from="0" to="-26" dur=".9s" repeatCount="indefinite" /></path>}{edge.label && <text x={mid} y={(a.y + b.y) / 2 + 22} textAnchor="middle" className="fill-muted-foreground text-[9px]">{edge.label}</text>}</g> })}
+      </svg>
+      {levels.map((level) => level.map((node) => { const p = positions.get(node.id)!; const Icon = iconFor[node.type]; const active = selected === node.id; const visible = !focusOnly || connected.has(node.id); return <div key={node.id} className={cn('absolute z-10 w-[156px] transition-all duration-300', !visible && 'opacity-15 saturate-0')} style={{ left: p.x - 78, top: p.y }}><button type="button" onClick={() => selectNode(node)} aria-pressed={active} className={cn('relative w-full rounded-xl border p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md', toneFor[node.type], active && 'ring-2 ring-primary/70 shadow-[0_0_28px_hsl(var(--primary)/.18)]')}><div className="flex items-start gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border bg-background/70"><Icon className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{node.label}</span><span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{node.meta ?? node.type}</span></span>{node.severity && <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase"><AlertTriangle className="h-3 w-3" />{node.severity}</span>}</div>{active && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-primary shadow-[0_0_12px_hsl(var(--primary)/.8)]" />}</button></div> }))}
+    </div></div></div>
+    {selectedNode && <footer className="border-t bg-muted/20 px-5 py-4"><div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Active attack node</div><div className="mt-1 flex flex-wrap items-center justify-between gap-3"><div><div className="font-medium">{selectedNode.label}</div><div className="text-xs text-muted-foreground">{selectedNode.meta ?? selectedNode.type}</div></div><div className="text-xs text-muted-foreground">{edges.filter((edge) => edge.from === selectedNode.id || edge.to === selectedNode.id).length} relationships</div></div></footer>}
   </div>
 }
