@@ -1,0 +1,16 @@
+# أسرار ومفاتيح — لا تُرفع أبداً
+.aegis.key
+.aegis_audit.key
+*.key
+
+# بيانات محلية حساسة
+aegis.db
+*.log
+audit.log
+reports/
+aegis_sandbox/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/

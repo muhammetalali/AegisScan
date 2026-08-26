@@ -1,0 +1,34 @@
+database:
+  path: "aegis.db"
+
+logging:
+  level: "INFO"
+  file: "aegis.log"
+
+plugins:
+  directory: "aegis/plugins"
+  auto_load: true
+
+storage:
+  encrypt_raw_data: false   # فعّلها لتشفير المحتوى الحساس في القاعدة
+  key_file: ".aegis.key"
+
+security:
+  audit_log_file: "audit.log"
+  audit_key_file: ".aegis_audit.key"
+  audit_strict: false       # true = فشل التدقيق يوقف الفحص (Fail-Closed)
+  max_concurrent_scans: 3
+
+twin:
+  sandbox_dir: "aegis_sandbox"
+  sync_interval_hours: 6
+  max_drift_threshold: 5.0
+  network_isolation: true
+
+correlation:
+  confidence_threshold: 0.60
+
+gui:
+  host: "127.0.0.1"   # ليس 0.0.0.0 افتراضياً (إصلاح أمني)
+  port: 5000
+  debug: false

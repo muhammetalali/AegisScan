@@ -1,0 +1,2 @@
+import{j as e}from"./ui-s79f_TND.js";import"./vendor-DEJPD7yw.js";const s=()=>e.jsxs("div",{className:"p-6",children:[e.jsx("h1",{className:"text-2xl font-bold",children:"ReportDetail"}),e.jsx("p",{className:"text-muted-foreground mt-2",children:"���� ReportDetail - ��� ������� (Placeholder) - ���� ����� ��� Windows"})]});export{s as ReportDetail};
+//# sourceMappingURL=ReportDetail-DdAt-6kr.js.map

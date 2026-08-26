@@ -1,0 +1,30 @@
+database:
+  path: aegis.db
+logging:
+  level: INFO
+  file: aegis.log
+plugins:
+  directory: aegis/plugins
+  auto_load: true
+storage:
+  encrypt_raw_data: false
+  key_file: .aegis.key
+security:
+  audit_log_file: audit.log
+  audit_key_file: .aegis_audit.key
+  audit_strict: false
+  max_concurrent_scans: 3
+twin:
+  sandbox_dir: aegis_sandbox
+  sync_interval_hours: 6
+  max_drift_threshold: 5.0
+  network_isolation: true
+correlation:
+  confidence_threshold: 0.6
+integrations:
+  slack_webhook: ${AEGIS_SLACK_WEBHOOK}
+  teams_webhook: ${AEGIS_TEAMS_WEBHOOK}
+gui:
+  host: 127.0.0.1
+  port: 5000
+  debug: false

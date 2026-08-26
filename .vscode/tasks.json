@@ -1,0 +1,55 @@
+﻿{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Aegis: Activate venv + Test Core",
+      "type": "shell",
+      "command": "powershell -ExecutionPolicy Bypass -Command \".\\.venv\\Scripts\\Activate.ps1; `$env:PYTHONIOENCODING='utf-8'; `$env:PATH += ';C:\\Users\\muham\\AppData\\Roaming\\Python\\Python314\\Scripts'; python -m pytest tests/ -q\"",
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1" },
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "new" }
+    },
+    {
+      "label": "Aegis: scan --code .",
+      "type": "shell",
+      "command": "powershell -ExecutionPolicy Bypass -Command \".\\.venv\\Scripts\\Activate.ps1; `$env:PYTHONIOENCODING='utf-8'; `$env:PATH += ';C:\\Users\\muham\\AppData\\Roaming\\Python\\Python314\\Scripts'; aegis scan --code . --markdown report.md\"",
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1" },
+      "group": "build"
+    },
+    {
+      "label": "Aegis: validate --code .",
+      "type": "shell",
+      "command": "powershell -ExecutionPolicy Bypass -Command \".\\.venv\\Scripts\\Activate.ps1; `$env:PYTHONIOENCODING='utf-8'; `$env:PATH += ';C:\\Users\\muham\\AppData\\Roaming\\Python\\Python314\\Scripts'; aegis validate --code . --markdown platform_report.md\"",
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1" },
+      "group": "build"
+    },
+    {
+      "label": "Frontend: npm install",
+      "type": "shell",
+      "command": "npm install",
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\aegis-platform\\frontend" }
+    },
+    {
+      "label": "Frontend: npm run dev",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\aegis-platform\\frontend" },
+      "isBackground": true,
+      "presentation": { "reveal": "always" },
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "Frontend: npm run build",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\aegis-platform\\frontend" },
+      "group": "build"
+    },
+    {
+      "label": "Docker: up",
+      "type": "shell",
+      "command": "docker-compose up -d",
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\aegis-platform" }
+    }
+  ]
+}
