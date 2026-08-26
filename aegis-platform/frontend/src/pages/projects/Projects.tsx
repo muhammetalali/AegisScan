@@ -45,7 +45,7 @@ export const Projects = () => {
   const [q, setQ] = useState('')
   const { data, isLoading, isError, refetch } = useQuery<ProjectsResponse>({
     queryKey: ['projects'],
-    queryFn: () => apiHelpers.get<ProjectsResponse>('/projects'),
+    queryFn: () => apiHelpers.get<ProjectsResponse>('/projects/'),
     staleTime: 30_000,
   })
 
