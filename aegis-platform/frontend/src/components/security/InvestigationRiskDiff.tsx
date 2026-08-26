@@ -1,0 +1,9 @@
+import { ArrowDownRight, ArrowUpRight, GitCompare, ShieldAlert } from 'lucide-react'
+
+export function InvestigationRiskDiff({ before, after, beforeBlastRadius, afterBlastRadius }: { before: number; after: number; beforeBlastRadius: number; afterBlastRadius: number }) {
+  const delta = after - before
+  const radiusDelta = afterBlastRadius - beforeBlastRadius
+  const improved = delta < 0
+  return <section className="rounded-2xl border bg-card p-5"><div className="flex items-center gap-2 font-semibold"><GitCompare className="h-4 w-4 text-primary" /> Security posture delta</div><p className="mt-1 text-xs text-muted-foreground">A compact proof layer for the remediation decision.</p><div className="mt-5 grid gap-3 sm:grid-cols-2"><DeltaCard label="Risk score" before={before} after={after} delta={delta} improved={improved} /><DeltaCard label="Blast radius" before={beforeBlastRadius} after={afterBlastRadius} delta={radiusDelta} improved={radiusDelta < 0} /></div></section>
+}
+function DeltaCard({ label, before, after, delta, improved }: { label: string; before: number; after: number; delta: number; improved: boolean }) { const Icon = delta <= 0 ? ArrowDownRight : ArrowUpRight; return <div className="rounded-xl border bg-muted/10 p-4"><div className="flex justify-between"><span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span><ShieldAlert className="h-3.5 w-3.5 text-muted-foreground" /></div><div className="mt-3 flex items-end gap-3"><span className="text-3xl font-black">{before}</span><span className="pb-1 text-muted-foreground">→</span><span className="text-3xl font-black">{after}</span></div><div className={`mt-2 inline-flex items-center gap-1 text-[10px] font-bold ${improved ? 'text-primary' : 'text-destructive'}`}><Icon className="h-3 w-3" /> {delta > 0 ? '+' : ''}{delta} delta</div></div> }
