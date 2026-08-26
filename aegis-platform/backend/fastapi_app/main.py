@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Set
 from datetime import datetime
 
-from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision
+from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .core.config import settings
@@ -120,6 +120,7 @@ app.include_router(system.router, prefix="/system", tags=["System"])
 app.include_router(assurance.router, prefix="/api/v1/assurance", tags=["Assurance Correlation"])
 app.include_router(assurance_graph.router, prefix="/api/v1/assurance", tags=["Assurance Graph"])
 app.include_router(security_decision.router, prefix="/api/v1/assurance", tags=["Security Decision"])
+app.include_router(decision_actions.router, prefix="/api/v1/assurance", tags=["Decision Actions"])
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validations.router, prefix="/api", tags=["Validations"])
