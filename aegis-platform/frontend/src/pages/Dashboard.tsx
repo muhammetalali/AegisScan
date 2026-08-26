@@ -1,125 +1,112 @@
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ShieldCheck, FolderKanban, Server, Activity, AlertTriangle, TrendingUp, Plus, Eye, FileText, Settings, Bug } from 'lucide-react'
+import { ShieldCheck, FolderKanban, Server, Activity, AlertTriangle, TrendingUp, Plus, FileText, Settings, Bug, ArrowUpRight, RefreshCw } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
 import { Skeleton, CardSkeleton } from '@/components/ui/skeleton'
 
-const sevColor: Record<string,string> = { critical:'bg-red-600 text-white', high:'bg-orange-500 text-white', medium:'bg-amber-500 text-white', low:'bg-emerald-500 text-white', informational:'bg-slate-500 text-white' }
+const StatCard = ({ icon: Icon, label, value, hint, tone = 'default' }: { icon: any; label: string; value: number | string | undefined; hint: string; tone?: 'default'|'danger'|'warning' }) => (
+  <div className="enterprise-card enterprise-card-hover p-4">
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <div className="enterprise-muted flex items-center gap-1.5"><Icon className="h-3.5 w-3.5" />{label}</div>
+        <div className={cn('mt-2 text-2xl font-bold tracking-tight', tone === 'danger' && 'text-destructive', tone === 'warning' && 'text-amber-500')}>{value ?? '—'}</div>
+      </div>
+      <div className="rounded-lg bg-muted p-2 text-muted-foreground"><Icon className="h-4 w-4" /></div>
+    </div>
+    <div className="mt-2 text-[11px] text-muted-foreground">{hint}</div>
+  </div>
+)
+
+const ChartEmpty = ({ label }: { label: string }) => <div className="flex h-56 items-center justify-center rounded-lg border border-dashed bg-muted/20 text-sm text-muted-foreground">{label}</div>
 
 export const Dashboard = () => {
-  const { data: summary, isLoading: sLoading } = useQuery({ queryKey:['dash-summary'], queryFn:()=>apiHelpers.get<any>('/dashboard/summary') })
-  const { data: risk } = useQuery({ queryKey:['dash-risk'], queryFn:()=>apiHelpers.get<any>('/dashboard/risk-distribution') })
-  const { data: trends } = useQuery({ queryKey:['dash-trends'], queryFn:()=>apiHelpers.get<any>('/dashboard/trends?days=30') })
-  const { data: recent } = useQuery({ queryKey:['dash-recent'], queryFn:()=>apiHelpers.get<any>('/dashboard/recent-validations?limit=5') })
-  const { data: validations } = useQuery({ queryKey:['dash-validations'], queryFn: async ()=>{ try{ return await apiHelpers.get<any>('/validations') } catch{ return [] } } })
+  const summaryQuery = useQuery({ queryKey: ['dash-summary'], queryFn: () => apiHelpers.get<any>('/dashboard/summary') })
+  const riskQuery = useQuery({ queryKey: ['dash-risk'], queryFn: () => apiHelpers.get<any>('/dashboard/risk-distribution') })
+  const trendsQuery = useQuery({ queryKey: ['dash-trends'], queryFn: () => apiHelpers.get<any>('/dashboard/trends?days=30') })
+  const recentQuery = useQuery({ queryKey: ['dash-recent'], queryFn: () => apiHelpers.get<any>('/dashboard/recent-validations?limit=5') })
 
-  if (sLoading) return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">{Array.from({length:6}).map((_,i)=><CardSkeleton key={i} />)}</div>
-      <Skeleton className="h-72 w-full" />
+  if (summaryQuery.isLoading) return (
+    <div className="space-y-6">
+      <div className="h-20 rounded-xl bg-muted animate-pulse" />
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">{Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}</div>
+      <div className="grid gap-4 xl:grid-cols-3"><Skeleton className="h-72 xl:col-span-2" /><Skeleton className="h-72" /></div>
     </div>
   )
 
-  const secScore = summary?.security_score ?? 82
-  const pieData = risk ? [
-    { value: risk.critical, name: 'Critical' },
-    { value: risk.high, name: 'High' },
-    { value: risk.medium, name: 'Medium' },
-    { value: risk.low, name: 'Low' },
-    { value: risk.informational, name: 'Info' },
-  ] : []
+  if (summaryQuery.isError) return (
+    <div className="enterprise-card flex min-h-64 flex-col items-center justify-center p-8 text-center">
+      <AlertTriangle className="mb-3 h-8 w-8 text-destructive" />
+      <h2 className="text-lg font-semibold">Dashboard data unavailable</h2>
+      <p className="mt-1 max-w-md text-sm text-muted-foreground">The platform API could not provide the security overview. Check the backend services and retry.</p>
+      <button onClick={() => summaryQuery.refetch()} className="mt-5 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"><RefreshCw className="h-4 w-4" />Retry</button>
+    </div>
+  )
 
-  const trendOption = trends ? {
-    tooltip:{trigger:'axis'},
-    xAxis:{type:'category', data: trends.map((t:any)=>t.date.slice(5)), boundaryGap:false},
-    yAxis:{type:'value', min:0, max:100},
-    series:[{ type:'line', data: trends.map((t:any)=>t.score), smooth:true, areaStyle:{}, lineStyle:{width:2} }],
-    grid:{left:30,right:10,top:10,bottom:20},
-  } : {}
+  const summary = summaryQuery.data
+  const risk = riskQuery.data
+  const trends = Array.isArray(trendsQuery.data) ? trendsQuery.data : []
+  const recent = Array.isArray(recentQuery.data) ? recentQuery.data : []
+  const score = typeof summary?.security_score === 'number' ? Math.round(summary.security_score) : undefined
+  const riskValues = risk ? [risk.critical, risk.high, risk.medium, risk.low, risk.informational].map((v: any) => Number(v || 0)) : []
 
-  const severityBar = risk ? {
-    tooltip:{trigger:'axis'},
-    xAxis:{type:'category', data:['Critical','High','Medium','Low','Info']},
-    yAxis:{type:'value'},
-    series:[{ type:'bar', data:[risk.critical, risk.high, risk.medium, risk.low, risk.informational], itemStyle:{borderRadius:[4,4,0,0]} }],
-    grid:{left:30,right:10,top:10,bottom:20},
-  } : {}
+  const trendOption = trends.length ? {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 12, right: 12, top: 20, bottom: 20, containLabel: true },
+    xAxis: { type: 'category', data: trends.map((item: any) => String(item.date).slice(5)), boundaryGap: false, axisLine: { show: false }, axisTick: { show: false } },
+    yAxis: { type: 'value', min: 0, max: 100, splitLine: { lineStyle: { type: 'dashed' } } },
+    series: [{ type: 'line', data: trends.map((item: any) => item.score), smooth: true, symbol: 'circle', symbolSize: 5, areaStyle: { opacity: 0.08 }, lineStyle: { width: 2 } }],
+  } : null
+
+  const severityOption = risk ? {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 12, right: 12, top: 12, bottom: 20, containLabel: true },
+    xAxis: { type: 'category', data: ['Critical', 'High', 'Medium', 'Low', 'Info'], axisLine: { show: false }, axisTick: { show: false } },
+    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { type: 'dashed' } } },
+    series: [{ type: 'bar', data: riskValues, barMaxWidth: 34, itemStyle: { borderRadius: [6, 6, 0, 0] } }],
+  } : null
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap justify-between gap-3">
+      <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ShieldCheck className="h-6 w-6 text-primary" /> لوحة القيادة المركزية</h1>
-          <p className="text-sm text-muted-foreground">Security Score • Projects • Assets • Validations • Risk — Enterprise Security Operations</p>
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-primary"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Security Operations</div>
+          <h1 className="text-2xl font-bold tracking-tight lg:text-3xl">Security overview</h1>
+          <p className="mt-1 text-sm text-muted-foreground">A real-time view of your security validation posture, risk and recent activity.</p>
         </div>
         <div className="flex gap-2">
-          <Link to="/validations/new" className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm inline-flex items-center gap-1"><Plus className="h-4 w-4" /> New Validation</Link>
-          <Link to="/projects" className="px-3 py-2 rounded-lg border bg-card text-sm">New Project</Link>
+          <Link to="/projects" className="inline-flex items-center gap-2 rounded-lg border bg-card px-3.5 py-2 text-sm font-medium hover:bg-accent">Projects <ArrowUpRight className="h-3.5 w-3.5" /></Link>
+          <Link to="/validations/new" className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm hover:opacity-90"><Plus className="h-4 w-4" />New validation</Link>
         </div>
-      </div>
+      </section>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="rounded-xl border bg-card p-4">
-          <div className="text-xs text-muted-foreground flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Security Score</div>
-          <div className="text-2xl font-bold mt-1">{secScore}<span className="text-sm font-normal">/100</span></div>
-          <div className={cn('text-xs mt-1', secScore>=80?'text-emerald-600':secScore>=60?'text-amber-600':'text-destructive')}>{secScore>=80?'Excellent':'Needs attention'}</div>
-        </div>
-        <div className="rounded-xl border bg-card p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><FolderKanban className="h-3.5 w-3.5" /> Projects</div><div className="text-2xl font-bold mt-1">{summary?.total_projects ?? 12}</div><div className="text-xs text-muted-foreground">Total</div></div>
-        <div className="rounded-xl border bg-card p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><Server className="h-3.5 w-3.5" /> Assets</div><div className="text-2xl font-bold mt-1">{summary?.total_assets ?? 38}</div><div className="text-xs text-muted-foreground">Across projects</div></div>
-        <div className="rounded-xl border bg-card p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><Activity className="h-3.5 w-3.5" /> Validations</div><div className="text-2xl font-bold mt-1">{summary?.total_validations ?? 47}</div><div className="text-xs text-muted-foreground">All time</div></div>
-        <div className="rounded-xl border bg-card p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5 text-red-500" /> Critical</div><div className="text-2xl font-bold mt-1 text-red-600">{risk?.critical ?? summary?.critical ?? 3}</div><div className="text-xs text-muted-foreground">Findings</div></div>
-        <div className="rounded-xl border bg-card p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><Bug className="h-3.5 w-3.5 text-orange-500" /> High</div><div className="text-2xl font-bold mt-1 text-orange-500">{risk?.high ?? summary?.high ?? 8}</div><div className="text-xs text-muted-foreground">Findings</div></div>
-      </div>
+      <section className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <StatCard icon={ShieldCheck} label="Security score" value={score !== undefined ? `${score}/100` : undefined} hint={score !== undefined ? (score >= 80 ? 'Healthy posture' : 'Attention recommended') : 'No score available'} />
+        <StatCard icon={FolderKanban} label="Projects" value={summary?.total_projects} hint="Active workspace scope" />
+        <StatCard icon={Server} label="Assets" value={summary?.total_assets} hint="Across your projects" />
+        <StatCard icon={Activity} label="Validations" value={summary?.total_validations} hint="Recorded executions" />
+        <StatCard icon={AlertTriangle} label="Critical" value={risk?.critical ?? summary?.critical} hint="Requires immediate review" tone="danger" />
+        <StatCard icon={Bug} label="High" value={risk?.high ?? summary?.high} hint="Priority remediation" tone="warning" />
+      </section>
 
-      {/* Charts */}
-      <div className="grid lg:grid-cols-3 gap-4">
-        <div className="rounded-xl border bg-card p-4 lg:col-span-2">
-          <h3 className="text-sm font-semibold flex items-center gap-1"><TrendingUp className="h-4 w-4 text-primary" /> Security Score Trend (30d)</h3>
-          {trends ? <ReactECharts option={trendOption} style={{height:220}} /> : <Skeleton className="h-56 w-full mt-2" />}
+      <section className="grid gap-4 xl:grid-cols-3">
+        <div className="enterprise-card p-5 xl:col-span-2">
+          <div className="mb-3 flex items-center justify-between"><div><h2 className="enterprise-section-title flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" />Security score trend</h2><p className="enterprise-muted mt-1">Last 30 days</p></div></div>
+          {trendsQuery.isLoading ? <Skeleton className="h-56 w-full" /> : trendsQuery.isError ? <ChartEmpty label="Unable to load trend data" /> : trendOption ? <ReactECharts option={trendOption} style={{ height: 224 }} /> : <ChartEmpty label="No trend data yet" />}
         </div>
-        <div className="rounded-xl border bg-card p-4">
-          <h3 className="text-sm font-semibold">Risk Distribution</h3>
-          {risk ? <ReactECharts option={{ tooltip:{trigger:'item'}, series:[{type:'pie', radius:['40%','70%'], data: pieData, label:{show:false}}] }} style={{height:220}} /> : <Skeleton className="h-56 w-full mt-2" />}
+        <div className="enterprise-card p-5">
+          <div className="mb-3"><h2 className="enterprise-section-title">Risk distribution</h2><p className="enterprise-muted mt-1">Findings by severity</p></div>
+          {riskQuery.isLoading ? <Skeleton className="h-56 w-full" /> : riskQuery.isError ? <ChartEmpty label="Unable to load risk data" /> : risk ? <ReactECharts option={{ tooltip: { trigger: 'item' }, legend: { bottom: 0, icon: 'circle', itemWidth: 7, itemHeight: 7 }, series: [{ type: 'pie', radius: ['46%', '70%'], center: ['50%', '45%'], data: [{ value: risk.critical, name: 'Critical' }, { value: risk.high, name: 'High' }, { value: risk.medium, name: 'Medium' }, { value: risk.low, name: 'Low' }, { value: risk.informational, name: 'Info' }], label: { show: false } }] }} style={{ height: 224 }} /> : <ChartEmpty label="No risk data yet" />}
         </div>
-      </div>
+      </section>
 
-      <div className="grid lg:grid-cols-2 gap-4">
-        <div className="rounded-xl border bg-card p-4">
-          <h3 className="text-sm font-semibold mb-2">Findings by Severity</h3>
-          {risk ? <ReactECharts option={severityBar} style={{height:200}} /> : <Skeleton className="h-48 w-full" />}
-        </div>
-        <div className="rounded-xl border bg-card p-4">
-          <h3 className="text-sm font-semibold mb-3">Recent Validations</h3>
-          <div className="space-y-2">
-            {(recent || validations || []).slice(0,5).map((v:any)=>(
-              <Link key={v.id || v.validation_id} to={v.id ? `/validations/${v.id}/results` : '/validations/new'} className="flex items-center justify-between rounded-lg border px-3 py-2 hover:bg-muted/50">
-                <div>
-                  <div className="text-sm font-medium font-mono">{v.id || v.validation_id}</div>
-                  <div className="text-xs text-muted-foreground">{v.target_value || v.target || v.project_name || '—'} • {v.status || 'queued'}</div>
-                </div>
-                <span className={cn('text-xs px-2 py-0.5 rounded-full', v.status==='completed'?'bg-emerald-500 text-white': v.status==='running'?'bg-primary text-primary-foreground':'bg-muted')}>{v.status||'—'}</span>
-              </Link>
-            ))}
-            {(!recent || recent.length===0) && (!validations || validations.length===0) && <div className="text-sm text-muted-foreground text-center py-6">No recent activity — run your first validation</div>}
-          </div>
-        </div>
-      </div>
+      <section className="grid gap-4 lg:grid-cols-2">
+        <div className="enterprise-card p-5"><div className="mb-3"><h2 className="enterprise-section-title">Findings by severity</h2><p className="enterprise-muted mt-1">Current open risk distribution</p></div>{severityOption ? <ReactECharts option={severityOption} style={{ height: 208 }} /> : <ChartEmpty label="No findings data yet" />}</div>
+        <div className="enterprise-card p-5"><div className="mb-3 flex items-center justify-between"><div><h2 className="enterprise-section-title">Recent validations</h2><p className="enterprise-muted mt-1">Latest execution activity</p></div><Link to="/scan" className="text-xs font-medium text-primary hover:underline">View all</Link></div><div className="space-y-2">{recent.length ? recent.slice(0, 5).map((item: any) => <Link key={item.id || item.validation_id} to={item.id ? `/validations/${item.id}/results` : '/scan'} className="flex items-center justify-between rounded-lg border px-3 py-2.5 transition-colors hover:bg-accent"><div className="min-w-0"><div className="truncate font-mono text-xs font-semibold">{item.id || item.validation_id || 'Validation'}</div><div className="mt-0.5 truncate text-xs text-muted-foreground">{item.target_value || item.target || item.project_name || '—'}</div></div><span className="ml-3 shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-semibold uppercase">{item.status || 'unknown'}</span></Link>) : <div className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">No validation activity yet.</div>}</div></div>
+      </section>
 
-      {/* Quick Actions */}
-      <div className="rounded-xl border bg-card p-4">
-        <h3 className="text-sm font-semibold mb-3">Quick Actions</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
-          <Link to="/validations/new" className="rounded-lg border p-3 hover:bg-accent text-center"><Plus className="h-5 w-5 mx-auto" /><div className="text-xs font-medium mt-1">New Validation</div></Link>
-          <Link to="/projects" className="rounded-lg border p-3 hover:bg-accent text-center"><FolderKanban className="h-5 w-5 mx-auto" /><div className="text-xs font-medium mt-1">New Project</div></Link>
-          <Link to="/assets" className="rounded-lg border p-3 hover:bg-accent text-center"><Server className="h-5 w-5 mx-auto" /><div className="text-xs font-medium mt-1">Add Asset</div></Link>
-          <Link to="/vulnerabilities" className="rounded-lg border p-3 hover:bg-accent text-center"><Bug className="h-5 w-5 mx-auto" /><div className="text-xs font-medium mt-1">View Findings</div></Link>
-          <Link to="/reports" className="rounded-lg border p-3 hover:bg-accent text-center"><FileText className="h-5 w-5 mx-auto" /><div className="text-xs font-medium mt-1">Reports</div></Link>
-          <Link to="/settings" className="rounded-lg border p-3 hover:bg-accent text-center"><Settings className="h-5 w-5 mx-auto" /><div className="text-xs font-medium mt-1">Settings</div></Link>
-        </div>
-      </div>
+      <section className="enterprise-card p-5"><div className="mb-3"><h2 className="enterprise-section-title">Quick actions</h2><p className="enterprise-muted mt-1">Start the next security workflow</p></div><div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">{[[Plus,'New validation','/validations/new'],[FolderKanban,'Projects','/projects'],[Server,'Assets','/assets'],[Bug,'Findings','/vulnerabilities'],[FileText,'Reports','/reports'],[Settings,'Settings','/settings']].map(([Icon,label,href]) => <Link key={String(label)} to={String(href)} className="group rounded-lg border p-3 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:bg-accent"><Icon className="h-5 w-5 text-muted-foreground transition-colors group-hover:text-primary" /><div className="mt-2 text-xs font-semibold">{String(label)}</div></Link>)}</div></section>
     </div>
   )
 }
