@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Set
 from datetime import datetime
 
-from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit
+from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .core.config import settings
@@ -17,39 +17,20 @@ from .core.security import verify_token
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global instances
 websocket_manager = WebSocketManager()
 scan_orchestrator = ScanOrchestrator(websocket_manager)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     logger.info("Starting AegisScan FastAPI server...")
     await scan_orchestrator.start()
     yield
-    # Shutdown
     logger.info("Shutting down AegisScan FastAPI server...")
     await scan_orchestrator.stop()
 
-app = FastAPI(
-    title="AegisScan Platform API",
-    description="Security Validation Platform - High Performance API Layer",
-    version="1.0.0",
-    lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
+app = FastAPI(title="AegisScan Platform API", description="Security Validation Platform - High Performance API Layer", version="1.0.0", lifespan=lifespan, docs_url="/docs", redoc_url="/redoc")
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Security
+app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 security = HTTPBearer(auto_error=False)
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -60,7 +41,6 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
 
-# WebSocket endpoint for real-time scan progress
 @app.websocket("/ws/scan/{scan_id}")
 async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
     await websocket_manager.connect(scan_id, websocket)
@@ -68,7 +48,7 @@ async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
     await websocket_manager.connect(f"validation_{scan_id}", websocket)
     try:
         while True:
-            data = await websocket.receive_text()
+            await websocket.receive_text()
             await asyncio.sleep(0.1)
     except WebSocketDisconnect:
         websocket_manager.disconnect(scan_id, websocket)
@@ -80,7 +60,6 @@ async def websocket_validation_progress(websocket: WebSocket, validation_id: str
     await websocket_manager.connect(validation_id, websocket)
     await websocket_manager.connect(f"validation_{validation_id}", websocket)
     await websocket_manager.connect(f"scan_{validation_id}", websocket)
-    # send current state immediately
     try:
         from .routers.validations import _store
         v = _store.get(validation_id)
@@ -123,7 +102,6 @@ async def websocket_system_monitor(websocket: WebSocket, token: str = None):
     except WebSocketDisconnect:
         websocket_manager.disconnect("system_monitor", websocket)
 
-# Health checks
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
@@ -132,7 +110,6 @@ async def health_check():
 async def readiness_check():
     return {"ready": True, "timestamp": datetime.utcnow().isoformat()}
 
-# Include routers
 app.include_router(scans.router, prefix="/scans", tags=["Scans"])
 app.include_router(vulnerabilities.router, prefix="/vulnerabilities", tags=["Vulnerabilities"])
 app.include_router(reports.router, prefix="/reports", tags=["Reports"])
@@ -142,6 +119,7 @@ app.include_router(knowledge.router, prefix="/knowledge", tags=["Knowledge"])
 app.include_router(digital_twin.router, prefix="/digital-twin", tags=["Digital Twin"])
 app.include_router(posture.router, prefix="/posture", tags=["Security Posture"])
 app.include_router(system.router, prefix="/system", tags=["System"])
+app.include_router(assurance.router, prefix="/api/v1/assurance", tags=["Assurance Correlation"])
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validations.router, prefix="/api", tags=["Validations"])
@@ -149,7 +127,6 @@ app.include_router(validations.router, prefix="/api/v1", tags=["Validations"])
 app.include_router(audit.router, prefix="/api", tags=["Audit"])
 app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 
-# Scan orchestration endpoints
 @app.post("/scans/{scan_id}/start")
 async def start_scan(scan_id: str, user=Depends(get_current_user)):
     return await scan_orchestrator.start_scan(scan_id, user)
@@ -170,7 +147,6 @@ async def cancel_scan(scan_id: str, user=Depends(get_current_user)):
 async def get_scan_progress(scan_id: str, user=Depends(get_current_user)):
     return await scan_orchestrator.get_progress(scan_id)
 
-# Engine management
 @app.get("/engines")
 async def list_engines(user=Depends(get_current_user)):
     return await scan_orchestrator.list_engines()
