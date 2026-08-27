@@ -15,9 +15,10 @@ from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import User
+from .models import ROLE_PERMISSIONS, User
 from .serializers import UserSerializer
 
 
@@ -42,7 +43,26 @@ def _send_message(subject: str, body: str, recipient: str) -> None:
     send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [recipient], fail_silently=True)
 
 
+class AegisTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """Issue JWTs with a stable claim contract shared with FastAPI."""
+
+    @classmethod
+    def get_token(cls, user: User):
+        token = super().get_token(user)
+        token['email'] = user.email
+        token['role'] = user.role
+        token['is_staff'] = user.is_staff
+        token['is_superuser'] = user.is_superuser
+        token['permissions'] = [
+            permission.value if hasattr(permission, 'value') else permission
+            for permission in ROLE_PERMISSIONS.get(user.role, [])
+        ]
+        return token
+
+
 class SecureTokenObtainPairView(TokenObtainPairView):
+    serializer_class = AegisTokenObtainPairSerializer
+
     def post(self, request, *args, **kwargs):
         email = str(request.data.get('email', '')).strip().lower()
         password = request.data.get('password', '')
@@ -54,9 +74,15 @@ class SecureTokenObtainPairView(TokenObtainPairView):
         if user and user.two_factor_enabled:
             otp = request.data.get('otp')
             if not otp:
-                return Response({'detail': 'Two-factor authentication code required', 'two_factor_required': True}, status=status.HTTP_401_UNAUTHORIZED)
+                return Response(
+                    {'detail': 'Two-factor authentication code required', 'two_factor_required': True},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
             if not verify_totp(user.two_factor_secret, otp):
-                return Response({'detail': 'Invalid two-factor authentication code', 'two_factor_required': True}, status=status.HTTP_401_UNAUTHORIZED)
+                return Response(
+                    {'detail': 'Invalid two-factor authentication code', 'two_factor_required': True},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
 
         response = super().post(request, *args, **kwargs)
         if response.status_code == status.HTTP_200_OK and user:
