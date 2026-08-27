@@ -18,6 +18,10 @@ def _edge(edges: list[dict[str, Any]], seen: set[tuple[str, str, str]], source: 
     edges.append({"source": source, "target": target, "relation": relation, **meta})
 
 
+def _severity_risk(severity: str) -> int:
+    return {"critical": 95, "high": 80, "medium": 60, "low": 35, "info": 10}.get(str(severity).lower(), 0)
+
+
 def build_assurance_graph(validations: dict[str, dict[str, Any]], correlations: dict[str, Any] | None = None) -> dict[str, Any]:
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
@@ -26,23 +30,66 @@ def build_assurance_graph(validations: dict[str, dict[str, Any]], correlations: 
 
     for validation_id, validation in validations.items():
         v_id = f"validation:{validation_id}"
-        _node(nodes, v_id, "validation", validation_id, status=validation.get("status"), risk=min(100, int(validation.get("progress", 0))))
+        _node(nodes, v_id, "validation", validation_id, status=validation.get("status"), risk=0, confidence=0)
         selected_engines = validation.get("engines", []) or []
         for engine in selected_engines:
             e_id = f"engine:{engine}"
             _node(nodes, e_id, "engine", engine, source=engine)
             _edge(edges, seen_edges, v_id, e_id, "validated-by")
-            state = validation.get("engines_state", {}).get(engine, {})
-            findings = int(state.get("findings", 0) or 0)
-            if findings:
-                f_id = f"finding:{validation_id}:{engine}"
-                confidence = 60 + min(35, findings * 8)
-                _node(nodes, f_id, "finding", f"{engine} finding", risk=min(100, 35 + findings * 12), confidence=confidence, findings=findings)
-                _edge(edges, seen_edges, e_id, f_id, "detected")
-                ev_id = f"evidence:{validation_id}:{engine}"
-                _node(nodes, ev_id, "evidence", f"{engine} evidence", confidence=confidence, evidenceBacked=True)
-                _edge(edges, seen_edges, f_id, ev_id, "supported-by")
-                _edge(edges, seen_edges, ev_id, v_id, "validated-by")
+
+        results = validation.get("results", {}) or {}
+        findings = results.get("findings", []) or []
+        evidence = results.get("evidence", []) or []
+
+        evidence_map: dict[str, str] = {}
+        for item in evidence:
+            evidence_id = str(item.get("id") or f"evidence:{validation_id}:{len(evidence_map)}")
+            engine = str(item.get("engine") or "unknown")
+            evidence_map[evidence_id] = evidence_id
+            confidence = int(item.get("confidence", 90) or 90)
+            data = item.get("data") or {}
+            label = str(item.get("type") or "Evidence")
+            _node(nodes, evidence_id, "evidence", label, confidence=confidence, evidenceBacked=True, source=engine, data=data)
+            _edge(edges, seen_edges, f"engine:{engine}", evidence_id, "produced")
+            _edge(edges, seen_edges, evidence_id, v_id, "validated-by")
+
+        finding_ids = set()
+        for finding in findings:
+            finding_id = str(finding.get("id") or f"finding:{validation_id}:{len(finding_ids)}")
+            finding_ids.add(finding_id)
+            severity = str(finding.get("severity") or "info").lower()
+            risk = int(finding.get("risk", _severity_risk(severity)) or 0)
+            confidence = int(finding.get("confidence", 85) or 85)
+            engine = str(finding.get("engine") or finding.get("source") or "unknown")
+            _node(nodes, finding_id, "finding", str(finding.get("title") or finding_id), risk=risk, confidence=confidence, severity=severity, rule=finding.get("rule"), asset=finding.get("asset"))
+            _edge(edges, seen_edges, f"engine:{engine}", finding_id, "detected")
+
+            linked_evidence = [str(value) for value in (finding.get("evidence_ids") or [])]
+            if linked_evidence:
+                for evidence_id in linked_evidence:
+                    if evidence_id in evidence_map:
+                        _edge(edges, seen_edges, finding_id, evidence_id, "supported-by")
+            else:
+                for evidence_item in evidence:
+                    if str(evidence_item.get("engine") or "") == engine:
+                        evidence_id = str(evidence_item.get("id"))
+                        if evidence_id in evidence_map:
+                            _edge(edges, seen_edges, finding_id, evidence_id, "supported-by")
+                            break
+
+            asset = finding.get("asset")
+            if asset:
+                asset_id = f"asset:{asset}"
+                _node(nodes, asset_id, "asset", str(asset), risk=risk, confidence=confidence)
+                _edge(edges, seen_edges, finding_id, asset_id, "impacts")
+
+        if findings:
+            finding_risks = [_severity_risk(str(item.get("severity", "info"))) for item in findings]
+            v_node = nodes[v_id]
+            v_node["risk"] = max(finding_risks)
+            v_node["confidence"] = round(sum(int(item.get("confidence", 85) or 85) for item in findings) / len(findings))
+        elif evidence:
+            nodes[v_id]["confidence"] = 90
 
     conflicts_by_validation: defaultdict[str, int] = defaultdict(int)
     for conflict in conflict_items:
@@ -61,7 +108,7 @@ def build_assurance_graph(validations: dict[str, dict[str, Any]], correlations: 
         v_id = f"validation:{validation_id}"
         if v_id in nodes:
             nodes[v_id]["conflicts"] = count
-            nodes[v_id]["confidence"] = max(0, 100 - min(80, count * 8))
+            nodes[v_id]["confidence"] = max(0, int(nodes[v_id].get("confidence", 100)) - min(80, count * 8))
 
     for node in nodes.values():
         node["risk"] = max(0, min(100, int(node.get("risk", 0))))
@@ -78,6 +125,7 @@ def build_assurance_graph(validations: dict[str, dict[str, Any]], correlations: 
             "validations": sum(1 for n in nodes.values() if n["kind"] == "validation"),
             "findings": sum(1 for n in nodes.values() if n["kind"] == "finding"),
             "evidence": sum(1 for n in nodes.values() if n["kind"] == "evidence"),
+            "assets": sum(1 for n in nodes.values() if n["kind"] == "asset"),
             "conflicts": sum(1 for n in nodes.values() if n["kind"] == "conflict"),
         },
     }
