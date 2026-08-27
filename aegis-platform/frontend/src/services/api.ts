@@ -1,7 +1,7 @@
 import axios, { AxiosError, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/stores/authStore'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1'
 
 export const api = axios.create({ baseURL: API_BASE_URL, timeout: 30000, headers: { 'Content-Type': 'application/json' }, withCredentials: true })
 
@@ -44,6 +44,6 @@ export const apiHelpers = { get: <T>(url: string, config?: AxiosRequestConfig) =
 
 export const uploadFile = async (file: File, onProgress?: (progress: number) => void) => { const formData = new FormData(); formData.append('file', file); const response = await api.post('/uploads/', formData, { headers: { 'Content-Type': 'multipart/form-data' }, onUploadProgress: (progressEvent) => { if (progressEvent.total && onProgress) onProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total)) } }); return response.data }
 
-export const createWebSocket = (url: string, protocols?: string | string[]) => { const { accessToken } = useAuthStore.getState(); const wsUrl = `${import.meta.env.VITE_WS_URL || 'ws://localhost:8000'}${url}${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ''}`; return new WebSocket(wsUrl, protocols) }
+export const createWebSocket = (url: string, protocols?: string | string[]) => { const { accessToken } = useAuthStore.getState(); const browserWs = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`; const wsUrl = `${browserWs}${url}${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ''}`; return new WebSocket(wsUrl, protocols) }
 
 export default api
