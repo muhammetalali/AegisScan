@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from .routers import scans, vulnerabilities, assets, knowledge, digital_twin, posture, system, dashboard, validations, validation_runtime, engine_capabilities, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
+from .routers import scans, vulnerabilities, assets, knowledge, digital_twin, posture, system, dashboard, validation_runtime, engine_capabilities, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -101,7 +101,6 @@ async def websocket_validation_progress(websocket: WebSocket, validation_id: str
     try:
         while True:
             await websocket.receive_text()
-            await asyncio.sleep(0.1)
     except WebSocketDisconnect:
         websocket_manager.disconnect(validation_id, websocket)
         websocket_manager.disconnect(f"validation_{validation_id}", websocket)
@@ -141,8 +140,10 @@ async def health_check():
 async def readiness_check():
     return {"ready": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
-# FastAPI owns runtime/orchestration APIs. Persistent business resources such as
-# Reports and Compliance remain Django-owned and are not registered here.
+# API ownership contract:
+# - Django owns durable business resources (including Reports and Compliance).
+# - FastAPI owns runtime/orchestration resources.
+# - All FastAPI HTTP routes use the versioned /api/v1 contract.
 app.include_router(scans.router, prefix="/api/v1/scans", tags=["Scans"])
 app.include_router(vulnerabilities.router, prefix="/api/v1/vulnerabilities", tags=["Vulnerabilities"])
 app.include_router(assets.router, prefix="/api/v1/assets", tags=["Assets"])
@@ -159,7 +160,6 @@ app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-C
 app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine Capabilities"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
-app.include_router(validations.router, prefix="/api/v1", tags=["Validation State Store"])
 app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 
 @app.post("/api/v1/scans/{scan_id}/start")
@@ -191,7 +191,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user))
+async def disable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
