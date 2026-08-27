@@ -2,7 +2,8 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import UserViewSet, TeamViewSet, APIKeyViewSet, UserSessionViewSet
-from .auth_security import SecureTokenObtainPairView, request_password_reset, confirm_password_reset, verify_email, resend_verification, enable_2fa, verify_2fa, disable_2fa
+from .auth_security import SecureTokenObtainPairView, request_password_reset, confirm_password_reset, enable_2fa, verify_2fa, disable_2fa
+from .email_security import register_user, verify_email, resend_verification
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
@@ -13,7 +14,7 @@ router.register(r'sessions', UserSessionViewSet, basename='session')
 urlpatterns = [
     path('auth/login/', SecureTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    path('auth/register/', UserViewSet.as_view({'post': 'create'}), name='register'),
+    path('auth/register/', register_user, name='register'),
     path('auth/password/reset/', request_password_reset, name='password_reset'),
     path('auth/password/reset/confirm/', confirm_password_reset, name='password_reset_confirm'),
     path('auth/verify-email/', verify_email, name='verify_email'),
