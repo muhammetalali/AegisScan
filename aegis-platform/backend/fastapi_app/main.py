@@ -3,15 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 import asyncio
-import json
 import logging
-from typing import Dict, List, Set
 from datetime import datetime
 
 from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
+from .services.workflow_live_bridge import WorkflowLiveBridge
 from .core.config import settings
 from .core.security import verify_token
 
@@ -19,15 +18,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 websocket_manager = WebSocketManager()
 scan_orchestrator = ScanOrchestrator(websocket_manager)
+workflow_bridge = WorkflowLiveBridge(lambda event: websocket_manager.broadcast("workflow", event))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting AegisScan FastAPI server...")
     initialize_action_store()
+    await workflow_bridge.start()
     await scan_orchestrator.start()
     yield
-    logger.info("Shutting down AegisScan FastAPI server...")
+    await workflow_bridge.stop()
     await scan_orchestrator.stop()
+    logger.info("Shutting down AegisScan FastAPI server...")
 
 app = FastAPI(title="AegisScan Platform API", description="Security Validation Platform - High Performance API Layer", version="1.0.0", lifespan=lifespan, docs_url="/docs", redoc_url="/redoc")
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -40,6 +42,20 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     if not user:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
+
+@app.websocket("/ws/workflow")
+async def websocket_workflow(websocket: WebSocket, token: str = None):
+    user = await verify_token(token) if token else None
+    if not user:
+        await websocket.close(code=4001)
+        return
+    await websocket_manager.connect("workflow", websocket)
+    try:
+        await websocket.send_json({"type": "workflow.connected", "user_id": user.get("id")})
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        websocket_manager.disconnect("workflow", websocket)
 
 @app.websocket("/ws/scan/{scan_id}")
 async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
