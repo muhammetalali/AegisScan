@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ..services.validation_executor import execute_http_probe
+from ..services.engine_adapters import execute_engine
 from .validations import ALL_ENGINES, ENGINE_PHASE, GROUPS, _engine_state, _make_live_event, _store, _tasks
 
 router = APIRouter()
@@ -42,10 +42,6 @@ class ValidationOut(BaseModel):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _broadcast_sync_placeholder():
-    return None
 
 
 async def _run_real_validation(vid: str) -> None:
@@ -88,37 +84,31 @@ async def _run_real_validation(vid: str) -> None:
         item["live_events"].append(_make_live_event("engine.started", f"Engine {engine} started", {"engine": engine}))
         await broadcast({"type": "engine.started", "engine": engine, "phase": phase})
 
-        if engine == "recon":
-            result = await execute_http_probe(item["target_type"], item["target_value"])
-            item["results"]["findings"].extend(result.findings)
-            item["results"]["evidence"].extend(result.evidence)
-            item["results"]["metrics"].append(result.metrics)
-            item["engines_state"][engine]["findings"] = len(result.findings)
-            item["engines_state"][engine]["progress"] = 100
-            if result.status == "failed":
-                item["status"] = "failed"
-                item["error"] = result.error
-                item["live_events"].append(_make_live_event("engine.failed", result.error or "Execution failed", {"engine": engine}))
-                await broadcast({"type": "engine.failed", "engine": engine, "error": result.error})
-                return
-            if result.status == "unsupported":
-                item["engines_state"][engine]["status"] = "unsupported"
-                item["live_events"].append(_make_live_event("engine.unsupported", result.error or "Engine unsupported", {"engine": engine}))
-                await broadcast({"type": "engine.unsupported", "engine": engine, "message": result.error})
-            else:
-                item["live_events"].append(_make_live_event("evidence.collected", "Live HTTP response collected", {"engine": engine, "findings": len(result.findings)}))
-                await broadcast({"type": "evidence.collected", "engine": engine, "findings": len(result.findings)})
+        result = await execute_engine(engine, item["target_type"], item["target_value"])
+        item["results"]["findings"].extend(result.findings)
+        item["results"]["evidence"].extend(result.evidence)
+        item["results"]["metrics"].append(result.metrics)
+        item["engines_state"][engine]["findings"] = len(result.findings)
+        item["engines_state"][engine]["progress"] = 100 if result.status in {"completed", "unsupported", "unavailable", "failed"} else 0
+
+        if result.status == "failed":
+            item["engines_state"][engine]["status"] = "failed"
+            item["error"] = result.error
+            item["status"] = "failed"
+            item["live_events"].append(_make_live_event("engine.failed", result.error or "Execution failed", {"engine": engine}))
+            await broadcast({"type": "engine.failed", "engine": engine, "error": result.error})
+            return
+        if result.status in {"unsupported", "unavailable"}:
+            item["engines_state"][engine]["status"] = result.status
+            item["engines_state"][engine]["error"] = result.error
+            item["live_events"].append(_make_live_event(f"engine.{result.status}", result.error or "Engine unavailable", {"engine": engine}))
+            await broadcast({"type": f"engine.{result.status}", "engine": engine, "message": result.error})
         else:
-            item["engines_state"][engine]["status"] = "unavailable"
-            item["engines_state"][engine]["progress"] = 0
-            message = "Engine is registered in the platform contract but has no real executor implementation yet."
-            item["engines_state"][engine]["error"] = message
-            item["live_events"].append(_make_live_event("engine.unavailable", message, {"engine": engine}))
-            await broadcast({"type": "engine.unavailable", "engine": engine, "message": message})
+            item["engines_state"][engine]["status"] = "completed"
+            item["live_events"].append(_make_live_event("evidence.collected", f"{engine} produced live evidence", {"engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)}))
+            await broadcast({"type": "evidence.collected", "engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)})
 
         item["progress"] = int(((index + 1) / total) * 100)
-        if item["engines_state"][engine]["status"] == "running":
-            item["engines_state"][engine]["status"] = "completed"
         item["live_events"].append(_make_live_event("engine.completed", f"Engine {engine} completed", {"engine": engine}))
         await broadcast({"type": "engine.completed", "engine": engine, "overall": item["progress"]})
 
@@ -126,7 +116,7 @@ async def _run_real_validation(vid: str) -> None:
     item["status"] = "completed"
     item["progress"] = 100
     item["completed_at"] = _now()
-    item["live_events"].append(_make_live_event("validation.completed", "Validation completed from real execution contract", {"findings": len(item["results"]["findings"]), "evidence": len(item["results"]["evidence"])}))
+    item["live_events"].append(_make_live_event("validation.completed", "Validation completed from real execution adapters", {"findings": len(item["results"]["findings"]), "evidence": len(item["results"]["evidence"])}))
     await broadcast({"type": "validation.completed", "validation_id": vid, "progress": 100, "findings": len(item["results"]["findings"])})
 
 
