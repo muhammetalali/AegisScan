@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 
-from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions, governance
+from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -140,6 +140,7 @@ app.include_router(assurance_graph.router, prefix="/api/v1/assurance", tags=["As
 app.include_router(security_decision.router, prefix="/api/v1/assurance", tags=["Security Decision"])
 app.include_router(decision_actions.router, prefix="/api/v1/assurance", tags=["Decision Actions"])
 app.include_router(governance.router, prefix="/api/v1/assurance", tags=["Governance"])
+app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-Code"])
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validations.router, prefix="/api", tags=["Validations"])
