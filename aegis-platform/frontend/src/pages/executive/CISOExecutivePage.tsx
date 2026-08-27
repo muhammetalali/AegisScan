@@ -30,14 +30,14 @@ export const CISOExecutivePage = () => {
   const compliance = query.data.compliance
   const failed = compliance.filter((item) => item.status === 'fail').length
   const partial = compliance.filter((item) => item.status === 'partial').length
-  const evidenceBacked = compliance.filter((item) => (item.evidenceCount ?? 0) > 0).length
+  const evidenceBacked = compliance.filter((item) => Number(item.evidenceCount ?? 0) > 0).length
   const correlationItems = Array.isArray(c.items) ? c.items : []
   const graph: AssuranceGraph = buildExecutiveGraph(model, compliance, query.data.validationId, correlationItems)
 
   return <div className="space-y-6">
     <CISOExecutiveView model={model} onOpenReports={() => window.location.assign('/reports')} onOpenConflicts={() => window.location.assign('/assurance/conflicts')} />
     <section className="mx-auto max-w-[1600px] px-6"><div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Unified assurance control plane</div><h2 className="mt-1 text-xl font-black tracking-tight">Evidence → Risk → Governance → Outcome</h2><p className="mt-1 max-w-3xl text-xs text-muted-foreground">One traceable graph connecting the live executive model with correlation, compliance, evidence, validation and remediation signals.</p></div><div className="rounded-full border px-3 py-1 text-[10px] font-semibold">{graph.nodes.length} nodes · {graph.edges.length} relations</div></div><AssuranceGraphView graph={graph} onInvestigate={(node) => { if (node.type === 'finding' || node.type === 'evidence') window.location.assign('/compliance/correlated-evidence') }} /></section>
-    <section className="mx-auto max-w-[1600px] px-6 pb-6"><div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Governance evidence layer</div><h2 className="mt-1 text-xl font-black tracking-tight">Compliance impact chain</h2><p className="mt-1 text-xs text-muted-foreground">Control → Finding → Evidence → Validation → Executive impact, using the latest real validation.</p></div><div className="flex gap-2 text-[10px] font-semibold"><span className="rounded-full border px-2.5 py-1">{failed} failed</span><span className="rounded-full border px-2.5 py-1">{partial} partial</span><span className="rounded-full border px-2.5 py-1">{evidenceBacked} evidence-backed</span></div></div><ComplianceIntelligence items={compliance} /></section>
+    <section className="mx-auto max-w-[1600px] px-6 pb-6"><div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Governance evidence layer</div><h2 className="mt-1 text-xl font-black tracking-tight">Compliance impact chain</h2><p className="mt-1 max-w-3xl text-xs text-muted-foreground">Control → Finding → Evidence → Validation → Executive impact, using the latest real validation.</p></div><div className="flex gap-2 text-[10px] font-semibold"><span className="rounded-full border px-2.5 py-1">{failed} failed</span><span className="rounded-full border px-2.5 py-1">{partial} partial</span><span className="rounded-full border px-2.5 py-1">{evidenceBacked} evidence-backed</span></div></div><ComplianceIntelligence items={compliance} /></section>
   </div>
 }
 
@@ -48,7 +48,7 @@ function buildExecutiveGraph(model: ExecutiveSecurityModel, compliance: Complian
   const addEdge = (from: string, to: string, type: AssuranceGraph['edges'][number]['type'], confidence?: number, conflictCount?: number) => edges.push({ id: `${from}->${to}`, from, to, type, confidence, conflictCount })
   const validationNode = validationId ?? 'latest-validation'
 
-  addNode({ id: validationNode, label: validationId ? `Validation ${validationId.slice(0, 8)}` : 'Latest validation', type: 'validation', status: 'verified', confidence: model.assuranceConfidence, sourceCount: compliance.reduce((n, item) => n + (item.evidenceCount ?? 0), 0) })
+  addNode({ id: validationNode, label: validationId ? `Validation ${validationId.slice(0, 8)}` : 'Latest validation', type: 'validation', status: 'verified', confidence: model.assuranceConfidence, sourceCount: compliance.reduce((n, item) => n + Number(item.evidenceCount ?? 0), 0) })
   addNode({ id: 'risk:exposure', label: 'Risk exposure', type: 'threat', status: model.critical > 0 ? 'impacted' : 'unknown', risk: model.riskExposure, severity: model.critical > 0 ? 'critical' : 'medium', confidence: model.assuranceConfidence, conflictCount: model.assuranceConflicts })
   addNode({ id: 'posture', label: 'Security posture', type: 'asset', status: model.scoreDelta >= 0 ? 'verified' : 'impacted', risk: model.riskExposure, confidence: model.assuranceConfidence })
   addNode({ id: 'remediation', label: 'Remediation outcome', type: 'remediation', status: model.remediationRate >= 80 ? 'resolved' : 'open', risk: model.remediationRate, confidence: model.validationCoverage })
@@ -61,18 +61,22 @@ function buildExecutiveGraph(model: ExecutiveSecurityModel, compliance: Complian
 
   for (const item of compliance.slice(0, 12)) {
     const controlId = `control:${item.id}`
-    addNode({ id: controlId, label: item.control, type: 'control', status: item.status === 'pass' ? 'verified' : item.status === 'fail' ? 'failed' : item.status === 'partial' ? 'impacted' : 'unknown', confidence: item.validationCount > 0 ? Math.min(100, item.validationCount * 25) : undefined, sourceCount: item.evidenceCount, metadata: { framework: item.framework, findings: item.findingCount, evidence: item.evidenceCount } })
+    const validationCount = Number(item.validationCount ?? 0)
+    const evidenceCount = Number(item.evidenceCount ?? 0)
+    const findingCount = Number(item.findingCount ?? 0)
+    const controlConfidence = validationCount > 0 ? Math.min(100, validationCount * 25) : 0
+    addNode({ id: controlId, label: item.control, type: 'control', status: item.status === 'pass' ? 'verified' : item.status === 'fail' ? 'failed' : item.status === 'partial' ? 'impacted' : 'unknown', confidence: controlConfidence, sourceCount: evidenceCount, metadata: { framework: item.framework, findings: findingCount, evidence: evidenceCount } })
     addEdge(validationNode, controlId, 'maps-to')
     addEdge(controlId, 'risk:exposure', item.status === 'fail' ? 'affects' : 'related-to')
-    if (item.evidenceCount > 0) {
+    if (evidenceCount > 0) {
       const evidenceId = `evidence:${item.id}`
-      addNode({ id: evidenceId, label: `${item.evidenceCount} evidence item${item.evidenceCount === 1 ? '' : 's'}`, type: 'evidence', status: 'verified', sourceCount: item.evidenceCount, confidence: Math.min(100, 60 + item.evidenceCount * 5) })
+      addNode({ id: evidenceId, label: `${evidenceCount} evidence item${evidenceCount === 1 ? '' : 's'}`, type: 'evidence', status: 'verified', sourceCount: evidenceCount, confidence: Math.min(100, 60 + evidenceCount * 5) })
       addEdge(controlId, evidenceId, 'supported-by')
       addEdge(evidenceId, validationNode, 'validated-by')
     }
-    if (item.findingCount > 0) {
+    if (findingCount > 0) {
       const findingId = `finding:${item.id}`
-      addNode({ id: findingId, label: `${item.findingCount} finding${item.findingCount === 1 ? '' : 's'}`, type: 'finding', status: item.status === 'fail' ? 'open' : 'impacted', severity: item.status === 'fail' ? 'high' : 'medium', metadata: { control: item.control } })
+      addNode({ id: findingId, label: `${findingCount} finding${findingCount === 1 ? '' : 's'}`, type: 'finding', status: item.status === 'fail' ? 'open' : 'impacted', severity: item.status === 'fail' ? 'high' : 'medium', metadata: { control: item.control } })
       addEdge(findingId, controlId, 'maps-to')
       addEdge(findingId, 'risk:exposure', 'affects')
     }
