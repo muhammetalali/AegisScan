@@ -17,7 +17,8 @@ const processQueue = (error: Error | null, token: string | null = null) => { fai
 
 api.interceptors.response.use((response) => response, async (error: AxiosError) => {
   const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined
-  if (error.response?.status !== 401 || !originalRequest || originalRequest._retry) return Promise.reject(error)
+  const isRefreshRequest = Boolean(originalRequest?.url?.includes('/auth/refresh/'))
+  if (error.response?.status !== 401 || !originalRequest || originalRequest._retry || isRefreshRequest) return Promise.reject(error)
   originalRequest._retry = true
   if (isRefreshing) return new Promise((resolve, reject) => failedQueue.push({ resolve, reject })).then((token) => { if (!token) return Promise.reject(error); if (originalRequest.headers) originalRequest.headers.Authorization = `Bearer ${token}`; return api(originalRequest) })
   isRefreshing = true
