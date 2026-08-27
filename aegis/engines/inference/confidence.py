@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from aegis.core.event_bus import EventBus
 from aegis.models.evidence import Evidence, EvidenceCategory
-from aegis.models.finding import Finding, Severity
+from aegis.models.finding import Finding
 from aegis.models.provenance import DecisionStep
 
 logger = logging.getLogger("aegis.inference.confidence")

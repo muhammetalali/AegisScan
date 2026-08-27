@@ -9,12 +9,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+logger = logging.getLogger("aegis.intelligence.passive")
 
 
 @dataclass(frozen=True)
@@ -184,9 +187,16 @@ async def collect_passive(
     for provider in providers:
         if not provider.available():
             continue
-        try:
-            observations.extend(await provider.collect(target))
-        except Exception:
-            # Passive intelligence must never block the primary scan.
-            continue
+        observations.extend(await _safe_collect(provider, target))
     return observations
+
+
+async def _safe_collect(
+    provider: PassiveProvider, target: str
+) -> list[PassiveObservation]:
+    """اعزل فشل مزود واحد مع إبقاء بقية عملية الجمع متاحة."""
+    try:
+        return await provider.collect(target)
+    except Exception as exc:  # pragma: no cover - provider-specific failure
+        logger.warning("Passive provider %s failed: %s", provider.name, exc)
+        return []

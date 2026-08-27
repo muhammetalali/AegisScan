@@ -12,7 +12,9 @@ AegisScan is a defensive security-validation platform with a Python analysis cor
 
 ## API contract
 
-The canonical Django authentication routes are `/api/v1/auth/*`, the authenticated self-service route is `/api/v1/users/me/`, and durable reports are served by Django at `/api/v1/reports/`. FastAPI remains the operational API for high-throughput validation, live progress, and assurance workflows; it does not maintain a second in-memory report store.
+The canonical Django authentication routes are `/api/v1/auth/*`, the authenticated self-service route is `/api/v1/users/me/`, durable reports are served by Django at `/api/v1/reports/`, and persisted compliance is served at `/api/v1/compliance/`. FastAPI remains the operational API for high-throughput validation, live progress, and assurance workflows; it does not maintain second in-memory report or compliance stores.
+
+Optional passive intelligence adapters for Shodan, Censys, AlienVault OTX, and URLScan are available in the core. They are disabled without explicit credentials, never perform active probing, and isolate provider failures from the primary scan.
 
 ## Quality checks
 

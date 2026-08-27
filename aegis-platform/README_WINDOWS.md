@@ -29,7 +29,7 @@ aegis version
 
 # الاختبارات
 python -m pytest tests/ -q
-# النتيجة: 122 passed, 1 skipped
+# النتيجة المتوقعة: جميع اختبارات النواة ناجحة، مع تخطي اختبارات Docker إذا لم يكن المحرك جاهزاً
 ```
 
 ### المشاكل التي تم حلها:
@@ -125,7 +125,7 @@ Login → Dashboard → Projects → Assets → New Validation → Progress Live
 # Backend Django Models: 11 تطبيق (users, projects, assets, scans, vulnerabilities, reports, compliance, knowledge, notifications, audit, system)
 # Frontend Pages: 23 صفحة
 # Engines: 20 محرك (15 الأصلي + 5 إضافي)
-# Tests: 122 passed
+# Tests: شغّل `python -m pytest -q` للحصول على العدد الحالي
 # CLI: scan + validate + findings + status + version (كلها تعمل)
 ```
 
@@ -139,4 +139,4 @@ docker-compose -f docker-compose.prod.yml up -d --build
 
 ---
 
-**المنصة جاهزة 100% للاستخدام على Windows 11**
+**المنصة قابلة للتشغيل على Windows 11 بعد إعداد المتطلبات وتشغيل فحوصات الجاهزية.**

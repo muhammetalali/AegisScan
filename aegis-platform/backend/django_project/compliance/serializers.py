@@ -63,6 +63,8 @@ class ComplianceAssessmentSerializer(serializers.ModelSerializer):
     project_id = serializers.PrimaryKeyRelatedField(source="project", read_only=True)
     framework_id = serializers.PrimaryKeyRelatedField(source="framework", read_only=True)
     control_id = serializers.PrimaryKeyRelatedField(source="control", read_only=True)
+    framework = serializers.CharField(source="framework.name", read_only=True)
+    control = serializers.CharField(source="control.title", read_only=True)
     assessed_by = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
@@ -73,6 +75,8 @@ class ComplianceAssessmentSerializer(serializers.ModelSerializer):
             "scan",
             "framework_id",
             "control_id",
+            "framework",
+            "control",
             "status",
             "evidence",
             "findings",

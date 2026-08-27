@@ -7,9 +7,9 @@ from aegis.core.immutable_audit import ImmutableAuditChain
 from aegis.core.scan_state_machine import ScanPhase, ScanStateMachine
 from aegis.engines.inference.contextual_enrichment import ContextualEnricher
 from aegis.engines.inference.smart_aggregator import SmartAggregator
+from aegis.engines.intelligence.passive_intel import ShodanProvider, collect_passive
 from aegis.models.evidence import Evidence, EvidenceCategory, EvidenceType
 from aegis.models.finding import Finding
-from aegis.engines.intelligence.passive_intel import ShodanProvider, collect_passive
 
 
 def _evidence(tool: str, confidence: float = 0.7) -> Evidence:

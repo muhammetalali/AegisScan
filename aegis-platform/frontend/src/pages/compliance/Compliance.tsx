@@ -6,12 +6,14 @@ import { apiHelpers } from '@/services/api'
 
 export const Compliance = () => {
   const query = useQuery({ queryKey: ['compliance-overview'], queryFn: async () => {
-    const vals = await apiHelpers.get<any>('/validations')
-    const validations = Array.isArray(vals) ? vals : vals?.items ?? vals?.results ?? []
-    const id = validations[0]?.id
-    if (!id) return []
-    const response = await apiHelpers.get<any>(`/validations/${id}/compliance`)
-    return Array.isArray(response) ? response : response?.items ?? response?.results ?? []
+    const response = await apiHelpers.get<any>('/compliance/assessments/')
+    const assessments = Array.isArray(response) ? response : response?.items ?? response?.results ?? []
+    return assessments.map((item: any) => ({
+      ...item,
+      status: item.status === 'compliant' ? 'pass' : item.status === 'non_compliant' ? 'fail' : item.status,
+      framework: item.framework ?? item.framework_name,
+      control: item.control ?? item.control_name,
+    }))
   } })
 
   if (query.isLoading) return <div className="grid min-h-[70vh] place-items-center text-sm text-muted-foreground">Loading compliance…</div>

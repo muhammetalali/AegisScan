@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 import json
+from collections import defaultdict
 from pathlib import Path
 
 
@@ -38,7 +38,7 @@ class FeedbackWeights:
         )
 
     @classmethod
-    def load(cls, path: str | Path, prior: float = 0.5) -> "FeedbackWeights":
+    def load(cls, path: str | Path, prior: float = 0.5) -> FeedbackWeights:
         """استعادة إحصاءات سابقة مع تجاهل الملف التالف أو غير الصالح."""
         instance = cls(prior=prior)
         target = Path(path)

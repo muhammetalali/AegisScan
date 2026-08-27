@@ -98,7 +98,9 @@ jobs:
         run: npm run build
 
       - name: Duplicate-code audit
-        run: npx --yes jscpd src --min-lines 8 --min-tokens 50 --reporters console --exit-code 1
+        # Avoid flagging short, intentionally repeated import scaffolding while
+        # still failing on meaningful duplicated implementation blocks.
+        run: npx --yes jscpd src --min-lines 8 --min-tokens 80 --reporters console --exit-code 1
 
   docker-config:
     name: Docker configuration

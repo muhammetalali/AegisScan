@@ -24,51 +24,51 @@ from aegis.core.config_manager import ConfigManager
 from aegis.core.data_manager import DataManager
 from aegis.core.event_bus import EventBus
 
+# ── التحليل ──
+from aegis.engines.analysis.code_quality import CodeQualityEngine
+from aegis.engines.analysis.config_check import ConfigurationCheckEngine
+from aegis.engines.analysis.dep_risk import DependencyRiskEngine
+from aegis.engines.analysis.performance import PerformanceAnalysisEngine
+from aegis.engines.analysis.runtime import RuntimeAnalysisEngine
+from aegis.engines.inference.confidence import ConfidenceScoringEngine
+
+# ── الاستدلال ──
+from aegis.engines.inference.knowledge_graph import KnowledgeGraphEngine
+from aegis.engines.inference.risk import RiskAssessmentEngine
+from aegis.engines.inference.why_engine import WhyEngine
+
 # ── الاستخبارات ──
 from aegis.engines.intelligence.aegis_scan import AegisScan
 from aegis.engines.intelligence.bte import BTE
 from aegis.engines.intelligence.external_hub import ExternalIntelligenceHub
 from aegis.engines.intelligence.fusion import EvidenceFusionEngine
+from aegis.engines.intelligence.passive_intel import collect_passive
 from aegis.engines.intelligence.trust import SourceTrustFramework
+from aegis.engines.offensive.aepex import AePEX
 
-# ── التحليل ──
-from aegis.engines.analysis.code_quality import CodeQualityEngine
-from aegis.engines.analysis.runtime import RuntimeAnalysisEngine
-from aegis.engines.analysis.performance import PerformanceAnalysisEngine
-from aegis.engines.analysis.dep_risk import DependencyRiskEngine
-from aegis.engines.analysis.config_check import ConfigurationCheckEngine
-
-# ── الاستدلال ──
-from aegis.engines.inference.knowledge_graph import KnowledgeGraphEngine
-from aegis.engines.inference.confidence import ConfidenceScoringEngine
-from aegis.engines.inference.risk import RiskAssessmentEngine
-from aegis.engines.inference.why_engine import WhyEngine
-
-# ── التحقق ──
-from aegis.engines.validation.authorization import AuthorizationGate, ActionLevel
-from aegis.engines.validation.planner import ExecutionPlanner, PlannedAction
-from aegis.engines.validation.controller import ExecutionController
-from aegis.engines.validation.recorder import ActionRecorder
-from aegis.engines.validation.replay import ReplayEngine
-
-# ── الإصلاح ──
-from aegis.engines.remediation.orchestrator import RemediationOrchestrator
-from aegis.engines.remediation.verifier import RemediationVerifier
-from aegis.engines.remediation.report import ReportGenerator
+# ── الطبقة الهجومية (التوأم الرقمي) ──
+from aegis.engines.offensive.twin import DigitalTwin, TwinConfig
+from aegis.engines.offensive.verifier import VerificationEngine
 
 # ── العمليات ──
 from aegis.engines.operational.correlation import CorrelationEngine
 from aegis.engines.operational.soc import SOCEngine
 
-# ── الطبقة الهجومية (التوأم الرقمي) ──
-from aegis.engines.offensive.twin import DigitalTwin, TwinConfig
-from aegis.engines.offensive.aepex import AePEX
-from aegis.engines.offensive.verifier import VerificationEngine
+# ── الإصلاح ──
+from aegis.engines.remediation.orchestrator import RemediationOrchestrator
+from aegis.engines.remediation.report import ReportGenerator
+from aegis.engines.remediation.verifier import RemediationVerifier
+
+# ── التحقق ──
+from aegis.engines.validation.authorization import ActionLevel, AuthorizationGate
+from aegis.engines.validation.controller import ExecutionController
+from aegis.engines.validation.planner import ExecutionPlanner, PlannedAction
+from aegis.engines.validation.recorder import ActionRecorder
+from aegis.engines.validation.replay import ReplayEngine
+from aegis.models.evidence import Evidence, EvidenceCategory, EvidenceType
 
 # ── النماذج ──
 from aegis.models.scan import Scan, ScanType
-from aegis.models.evidence import Evidence
-from aegis.models.finding import Finding
 
 logger = logging.getLogger("aegis.orchestrator")
 
@@ -155,6 +155,7 @@ class AegisOrchestrator:
         target_url: Optional[str] = None,
         user_id: str = "cli",
         enable_external_intel: bool = True,
+        enable_passive_intel: bool = True,
         enable_analysis: bool = True,
         enable_remediation: bool = False,
     ) -> Dict[str, Any]:
@@ -216,6 +217,31 @@ class AegisOrchestrator:
                     external_evidences.extend(ext_evs)
                 except Exception as exc:
                     logger.warning("استخبارات خارجية فشلت: %s", exc)
+
+            # ── استخبارات سلبية اختيارية (لا تُرسل أي طلب للهدف) ──
+            passive_evidence_count = 0
+            if enable_passive_intel and target_url:
+                try:
+                    observations = await collect_passive(target_url)
+                    for observation in observations:
+                        external_evidences.append(Evidence(
+                            scan_id=scan.id,
+                            source_tool=f"PassiveIntel.{observation.provider}",
+                            evidence_type=EvidenceType.NETWORK,
+                            category=EvidenceCategory.UNKNOWN,
+                            description=observation.summary,
+                            location=observation.source_url,
+                            confidence_weight=observation.confidence,
+                            context={
+                                "passive": True,
+                                "provider": observation.provider,
+                                "target": observation.target,
+                                "metadata": observation.metadata or {},
+                            },
+                        ))
+                    passive_evidence_count = len(observations)
+                except Exception as exc:
+                    logger.warning("الاستخبارات السلبية فشلت: %s", exc)
 
             # ── تحليل الكود (Phase 4) ──
             if enable_analysis and code_path:
@@ -419,6 +445,7 @@ class AegisOrchestrator:
                 "target": scan.target,
                 "evidence_count": len(all_evidences),
                 "external_evidence_count": len(external_evidences),
+                "passive_evidence_count": passive_evidence_count,
                 "analysis_evidence_count": len(analysis_evidences),
                 "duration_seconds": scan.duration_seconds,
                 "risk_summary": risk_summary,
