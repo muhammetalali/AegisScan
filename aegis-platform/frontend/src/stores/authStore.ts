@@ -11,18 +11,19 @@ interface AuthState {
   isAuthenticated: boolean
   loading: boolean
   error: string | null
-  login: (email: string, password: string, rememberMe?: boolean) => Promise<void>
+  login: (email: string, password: string, rememberMe?: boolean, otp?: string) => Promise<void>
   register: (data: RegisterData) => Promise<void>
   logout: () => Promise<void>
   refreshAccessToken: () => Promise<void>
   forgotPassword: (email: string) => Promise<void>
   resetPassword: (token: string, password: string) => Promise<void>
   verifyEmail: (token: string) => Promise<void>
+  resendVerification: () => Promise<void>
   updateProfile: (data: Partial<User>) => Promise<void>
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>
   enable2FA: () => Promise<{ secret: string; qrCode: string }>
   verify2FA: (code: string) => Promise<void>
-  disable2FA: () => Promise<void>
+  disable2FA: (password: string, code: string) => Promise<void>
   fetchUser: () => Promise<void>
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
@@ -33,13 +34,14 @@ interface RegisterData { email: string; password: string; password_confirm: stri
 export const useAuthStore = create<AuthState>()(persist((set, get) => ({
   user: null, accessToken: null, refreshToken: null, isAuthenticated: false, loading: false, error: null,
   setLoading: (loading) => set({ loading }), setError: (error) => set({ error }),
-  login: async (email, password) => {
+  login: async (email, password, rememberMe, otp) => {
     set({ loading: true, error: null })
     try {
-      const { data } = await api.post('/auth/login/', { email, password })
+      const { data } = await api.post('/auth/login/', { email, password, ...(otp ? { otp } : {}) })
       if (!data?.access || !data?.refresh || !data?.user) throw new Error('Invalid login response')
       api.defaults.headers.common['Authorization'] = `Bearer ${data.access}`
       set({ user: data.user, accessToken: data.access, refreshToken: data.refresh, isAuthenticated: true, loading: false })
+      void rememberMe
     } catch (error: any) {
       set({ loading: false, isAuthenticated: false, error: error.response?.data?.detail || error.message || 'Login failed' })
       throw error
@@ -80,11 +82,12 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
   forgotPassword: async (email) => { set({ loading: true, error: null }); try { await api.post('/auth/password/reset/', { email }); set({ loading: false }) } catch (error: any) { set({ loading: false, error: error.response?.data?.detail || error.message || 'Failed to send reset email' }); throw error } },
   resetPassword: async (token, password) => { set({ loading: true, error: null }); try { await api.post('/auth/password/reset/confirm/', { token, password }); set({ loading: false }) } catch (error: any) { set({ loading: false, error: error.response?.data?.detail || error.message || 'Failed to reset password' }); throw error } },
   verifyEmail: async (token) => { set({ loading: true, error: null }); try { await api.post('/auth/verify-email/', { token }); set({ loading: false }) } catch (error: any) { set({ loading: false, error: error.response?.data?.detail || error.message || 'Failed to verify email' }); throw error } },
+  resendVerification: async () => { set({ loading: true, error: null }); try { await api.post('/auth/resend-verification/'); set({ loading: false }) } catch (error: any) { set({ loading: false, error: error.response?.data?.detail || error.message || 'Failed to resend verification' }); throw error } },
   updateProfile: async (data) => { set({ loading: true, error: null }); try { const response = await api.patch('/users/me/', data); set({ user: response.data, loading: false }) } catch (error: any) { set({ loading: false, error: error.response?.data?.detail || error.message || 'Failed to update profile' }); throw error } },
   changePassword: async (oldPassword, newPassword) => { set({ loading: true, error: null }); try { await api.post('/users/me/change_password/', { old_password: oldPassword, new_password: newPassword }); set({ loading: false }) } catch (error: any) { set({ loading: false, error: error.response?.data?.detail || error.message || 'Failed to change password' }); throw error } },
   enable2FA: async () => (await api.post('/users/me/2fa/enable/')).data,
-  verify2FA: async (code) => { await api.post('/users/me/2fa/verify/', { code }) },
-  disable2FA: async () => { await api.post('/users/me/2fa/disable/') },
+  verify2FA: async (code) => { await api.post('/users/me/2fa/verify/', { code }); await get().fetchUser() },
+  disable2FA: async (password, code) => { await api.post('/users/me/2fa/disable/', { password, code }); await get().fetchUser() },
   fetchUser: async () => { const response = await api.get('/users/me/'); if (!response.data) throw new Error('Invalid user response'); set({ user: response.data, isAuthenticated: true, error: null }) },
 }), { name: 'aegis-auth', storage: createJSONStorage(() => localStorage), partialize: (state) => ({ accessToken: state.accessToken, refreshToken: state.refreshToken, user: state.user, isAuthenticated: state.isAuthenticated }) }))
 
