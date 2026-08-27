@@ -3,6 +3,8 @@ from pathlib import Path
 import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+LOG_DIR = BASE_DIR / 'logs'
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 env = environ.Env(
     DEBUG=(bool, False),
@@ -40,7 +42,6 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # Third party
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
@@ -53,7 +54,6 @@ INSTALLED_APPS = [
     'health_check.db',
     'health_check.cache',
     'health_check.storage',
-    # Local apps
     'core',
     'users',
     'projects',
@@ -100,9 +100,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'aegis_core.wsgi.application'
 ASGI_APPLICATION = 'aegis_core.asgi.application'
 
-DATABASES = {
-    'default': env.db('DATABASE_URL'),
-}
+DATABASES = {'default': env.db('DATABASE_URL')}
 DATABASES['default']['CONN_MAX_AGE'] = 60
 DATABASES['default']['OPTIONS'] = {'connect_timeout': 10}
 
@@ -110,36 +108,22 @@ CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
         'LOCATION': env('REDIS_URL'),
-        'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-            'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
-        },
+        'OPTIONS': {'CLIENT_CLASS': 'django_redis.client.DefaultClient', 'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor'},
         'KEY_PREFIX': 'aegis',
     }
 }
 
 SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
 SESSION_CACHE_ALIAS = 'default'
-
 CORS_ALLOWED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = DEBUG
-
 CSRF_TRUSTED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
-    ),
-    'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticated',
-    ),
-    'DEFAULT_FILTER_BACKENDS': (
-        'django_filters.rest_framework.DjangoFilterBackend',
-        'rest_framework.filters.SearchFilter',
-        'rest_framework.filters.OrderingFilter',
-    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication', 'rest_framework.authentication.SessionAuthentication'),
+    'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAuthenticated',),
+    'DEFAULT_FILTER_BACKENDS': ('django_filters.rest_framework.DjangoFilterBackend', 'rest_framework.filters.SearchFilter', 'rest_framework.filters.OrderingFilter'),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -210,14 +194,7 @@ CELERY_TASK_TIME_LIMIT = 3600
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.RedisChannelLayer',
-        'CONFIG': {
-            'hosts': [env('REDIS_URL')],
-        },
-    },
-}
+CHANNEL_LAYERS = {'default': {'BACKEND': 'channels_redis.RedisChannelLayer', 'CONFIG': {'hosts': [env('REDIS_URL')]}}}
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -227,48 +204,28 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 AUTH_USER_MODEL = 'users.User'
-
 LANGUAGE_CODE = 'ar'
 TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
-
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
-            'style': '{',
-        },
-        'json': {
-            'format': '{"level": "%(levelname)s", "time": "%(asctime)s", "module": "%(module)s", "message": "%(message)s"}',
-        },
+        'verbose': {'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}', 'style': '{'},
+        'json': {'format': '{"level": "%(levelname)s", "time": "%(asctime)s", "module": "%(module)s", "message": "%(message)s"}'},
     },
     'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
-        },
-        'file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': BASE_DIR / 'logs' / 'aegis.log',
-            'maxBytes': 1024 * 1024 * 10,
-            'backupCount': 5,
-            'formatter': 'json',
-        },
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'verbose'},
+        'file': {'class': 'logging.handlers.RotatingFileHandler', 'filename': LOG_DIR / 'aegis.log', 'maxBytes': 1024 * 1024 * 10, 'backupCount': 5, 'formatter': 'json'},
     },
-    'root': {
-        'handlers': ['console', 'file'],
-        'level': env('LOG_LEVEL'),
-    },
+    'root': {'handlers': ['console', 'file'], 'level': env('LOG_LEVEL')},
     'loggers': {
         'django': {'handlers': ['console', 'file'], 'level': 'INFO', 'propagate': False},
         'celery': {'handlers': ['console', 'file'], 'level': 'INFO', 'propagate': False},
@@ -284,7 +241,6 @@ EMAIL_USE_TLS = env('EMAIL_USE_TLS')
 EMAIL_HOST_USER = env('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL')
-
 FRONTEND_URL = env('FRONTEND_URL')
 
 if env('SENTRY_DSN'):
@@ -292,10 +248,4 @@ if env('SENTRY_DSN'):
     from sentry_sdk.integrations.django import DjangoIntegration
     from sentry_sdk.integrations.celery import CeleryIntegration
     from sentry_sdk.integrations.redis import RedisIntegration
-    sentry_sdk.init(
-        dsn=env('SENTRY_DSN'),
-        integrations=[DjangoIntegration(), CeleryIntegration(), RedisIntegration()],
-        traces_sample_rate=0.1,
-        profiles_sample_rate=0.1,
-        environment='production' if not DEBUG else 'development',
-    )
+    sentry_sdk.init(dsn=env('SENTRY_DSN'), integrations=[DjangoIntegration(), CeleryIntegration(), RedisIntegration()], traces_sample_rate=0.1, profiles_sample_rate=0.1, environment='production' if not DEBUG else 'development')
