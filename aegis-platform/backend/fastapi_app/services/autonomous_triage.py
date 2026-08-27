@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -76,4 +77,35 @@ def triage_graph(graph: dict[str, Any]) -> dict[str, Any]:
             "evidenceBackedNodes": evidence_backed,
             "triagedNodes": len(priorities),
         },
+    }
+
+
+def build_triage(intelligence: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility adapter for existing decision-pack consumers.
+
+    Graph Intelligence exposes `priorities`; the legacy Decision layer expects
+    `items`. Keep one scoring source and translate the shape without duplicating
+    triage logic.
+    """
+    priorities = intelligence.get("priorities") or []
+    items: list[dict[str, Any]] = []
+    for priority in priorities:
+        items.append({
+            "nodeId": priority.get("nodeId"),
+            "label": priority.get("label"),
+            "kind": priority.get("kind"),
+            "priority": priority.get("priority", 0),
+            "urgency": priority.get("urgency", "low"),
+            "risk": priority.get("risk", 0),
+            "confidence": priority.get("confidence", 0),
+            "conflicts": priority.get("conflicts", 0),
+            "evidenceStrength": priority.get("evidenceStrength", 0),
+            "recommendedAction": priority.get("recommendedAction"),
+            "investigationBrief": priority.get("investigationBrief"),
+            "executiveImpact": priority.get("executiveImpact"),
+        })
+    return {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+        "metrics": intelligence.get("metrics", {}),
     }
