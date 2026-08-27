@@ -1,6 +1,10 @@
+import logging
+
+from django.db import transaction
 from django.db.models import F, Q
 from django.http import FileResponse, HttpResponse
 from django.utils.text import slugify
+from fastapi_app.tasks.report_tasks import generate_report
 from projects.models import ProjectMembership
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -10,6 +14,8 @@ from rest_framework.response import Response
 
 from .models import Report, ReportTemplate
 from .serializers import ReportSerializer
+
+logger = logging.getLogger(__name__)
 
 
 class ReportViewSet(viewsets.ModelViewSet):
@@ -33,7 +39,24 @@ class ReportViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if not self._can_manage_project(serializer.validated_data["project"]):
             raise PermissionDenied("Only project owners and administrators can create reports.")
-        serializer.save(generated_by=self.request.user)
+        report = serializer.save(generated_by=self.request.user)
+        transaction.on_commit(
+            lambda: self._enqueue_generation(report.id, self.request.user.id)
+        )
+
+    @staticmethod
+    def _enqueue_generation(report_id, user_id):
+        try:
+            generate_report.delay(
+                str(report_id),
+                {"requested_by": str(user_id)},
+            )
+        except Exception as exc:  # pragma: no cover - broker outage path
+            logger.exception("Could not enqueue report %s", report_id)
+            Report.objects.filter(pk=report_id).update(
+                status=Report.Status.FAILED,
+                error_message=f"Report queue unavailable: {exc}",
+            )
 
     def perform_update(self, serializer):
         if not self._can_manage_project(serializer.instance.project):

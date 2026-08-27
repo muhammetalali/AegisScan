@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.urls import reverse
 from projects.models import Project
 from reports.models import Report
@@ -33,23 +35,26 @@ class ReportApiTests(APITestCase):
         self.project.members.add(self.member)
         self.list_url = reverse("report-list")
 
-    def test_owner_can_create_and_member_can_read_report(self):
+    @patch("reports.views.generate_report.delay")
+    def test_owner_can_create_and_member_can_read_report(self, queue_report):
         self.client.force_authenticate(self.owner)
-        response = self.client.post(
-            self.list_url,
-            {
-                "project_id": str(self.project.id),
-                "title": "Weekly assurance",
-                "report_type": Report.Type.FULL,
-                "format": Report.Format.MARKDOWN,
-            },
-            format="json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self.list_url,
+                {
+                    "project_id": str(self.project.id),
+                    "title": "Weekly assurance",
+                    "report_type": Report.Type.FULL,
+                    "format": Report.Format.MARKDOWN,
+                },
+                format="json",
+            )
 
         self.assertEqual(response.status_code, 201)
         report = Report.objects.get(pk=response.data["id"])
         self.assertEqual(report.generated_by_id, self.owner.id)
         self.assertEqual(str(response.data["project_id"]), str(self.project.id))
+        queue_report.assert_called_once()
 
         self.client.force_authenticate(self.member)
         detail = self.client.get(reverse("report-detail", args=[report.id]))
