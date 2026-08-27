@@ -18,7 +18,7 @@ export function InvestigationDecisionCockpit({ risk, confidence, evidenceCount, 
   const confidenceGate = confidence >= 75
   const conflictGate = conflicts === 0
   const evidenceGate = evidenceSufficiency >= 60
-  const decisionReady = decisionState === 'ready' || (risk >= 70 && confidenceGate && evidenceGate && conflictGate)
+  const decisionReady = decisionState === 'verified' || (risk >= 70 && confidenceGate && evidenceGate && conflictGate)
   const readiness = Math.round((Number(confidenceGate) + Number(evidenceGate) + Number(conflictGate) + Number(risk >= 70)) * 25)
 
   const decisionLabel = decisionReady ? 'Decision ready' : conflicts > 0 ? 'Conflict review required' : 'Investigation in progress'
