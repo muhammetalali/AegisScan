@@ -15,10 +15,16 @@ module.exports = {
   extends: ['eslint:recommended'],
   rules: {
     'no-unused-vars': 'off',
-    '@typescript-eslint/no-unused-vars': 'off',
+    '@typescript-eslint/no-unused-vars': ['error', {
+      args: 'after-used',
+      argsIgnorePattern: '^_',
+      varsIgnorePattern: '^_',
+      caughtErrors: 'all',
+      caughtErrorsIgnorePattern: '^_',
+    }],
     'react-hooks/rules-of-hooks': 'error',
     'react-hooks/exhaustive-deps': 'warn',
     'react-refresh/only-export-components': 'warn',
   },
-  ignorePatterns: ['dist/', 'node_modules/'],
+  ignorePatterns: ['dist/', 'node_modules/', 'coverage/'],
 }
