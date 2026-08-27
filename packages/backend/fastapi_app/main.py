@@ -12,6 +12,7 @@ from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
 from .services.workflow_live_bridge import WorkflowLiveBridge
 from .services.policy_engine import initialize_policy_store
+from .services.validation_state import get_validation
 from .core.config import settings
 from .core.security import verify_token
 
@@ -92,10 +93,9 @@ async def websocket_validation_progress(websocket: WebSocket, validation_id: str
     await websocket_manager.connect(f"validation_{validation_id}", websocket)
     await websocket_manager.connect(f"scan_{validation_id}", websocket)
     try:
-        from .routers.validations import _store
-        v = _store.get(validation_id)
-        if v:
-            await websocket.send_json({"type": "snapshot", "validation_id": validation_id, "status": v["status"], "progress": v["progress"], "current_phase": v["current_phase"]})
+        validation = get_validation(validation_id)
+        if validation:
+            await websocket.send_json({"type": "snapshot", "validation_id": validation_id, "status": validation["status"], "progress": validation["progress"], "current_phase": validation["current_phase"]})
     except Exception:
         pass
     try:
@@ -191,7 +191,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user)):
+async def disable_engine(engine_name: str, user=Depends(get_current_user))
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
