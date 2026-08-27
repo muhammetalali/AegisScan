@@ -4,7 +4,9 @@ import socket
 from typing import Any
 from urllib.parse import urlparse
 
+from .code_quality_executor import analyze_code
 from .endpoint_discovery import discover_endpoints
+from .runtime_analysis_executor import analyze_runtime
 from .security_intelligence import analyze_dependency_manifest, execute_tls_intelligence
 from .validation_executor import ExecutionResult, execute_http_probe, normalize_target
 from .vulnerability_intelligence import analyze_response
@@ -12,7 +14,8 @@ from .vulnerability_intelligence import analyze_response
 
 SUPPORTED_REAL_ENGINES = {
     "recon", "evidence_collection", "control_validation", "endpoint_discovery",
-    "vuln_intelligence", "tls_intelligence", "dependency_risk",
+    "vuln_intelligence", "tls_intelligence", "dependency_risk", "code_quality",
+    "runtime_analysis",
 }
 
 
@@ -32,6 +35,13 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
     extra = extra or {}
     target = normalize_target(target_type, target_value)
     hostname = urlparse(target).hostname
+
+    if engine == "code_quality":
+        return await analyze_code(extra)
+
+    if engine == "runtime_analysis":
+        return await analyze_runtime(extra)
+
     if not hostname:
         return ExecutionResult("failed", [], [], {"engine": engine}, "Unable to determine target hostname")
 
