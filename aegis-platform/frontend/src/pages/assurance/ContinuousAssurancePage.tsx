@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { apiHelpers } from '@/services/api'
 import { ContinuousAssuranceFabric, type AssuranceCheckpoint } from '@/components/security/ContinuousAssuranceFabric'
 import { CisoImpactBridge } from '@/components/security/CisoImpactBridge'
+import { InvestigationStateIntelligence } from '@/components/security/InvestigationStateIntelligence'
 import TraceabilityEvidenceGraph, { type TraceEdge, type TraceNode } from '@/components/security/TraceabilityEvidenceGraph'
 
 export const ContinuousAssurancePage = () => {
@@ -27,6 +28,9 @@ export const ContinuousAssurancePage = () => {
   const regressed = checkpoints.filter((item) => item.state === 'regressed').length
   const confidence = latest?.confidence ?? Number(summary?.confidence ?? 0)
   const postureDelta = latest && first ? (first.risk - latest.risk) / 10 : 0
+  const conflicts = Number(summary?.conflicts ?? summary?.conflict_count ?? 0)
+  const hasValidation = Boolean(summary?.validation || summary?.validation_count || summary?.validations)
+  const hasRemediation = Boolean(summary?.remediation || summary?.remediation_count || summary?.remediations)
 
   const traceNodes: TraceNode[] = latest ? [
     { id: 'validation', kind: 'validation', label: latest.label, value: latest.timestamp, detail: 'Current assurance checkpoint from the live dashboard trend.', confidence: latest.confidence, sourceCount: latest.sources },
@@ -39,5 +43,5 @@ export const ContinuousAssurancePage = () => {
     { from: 'validation', to: 'risk', label: 'measures' }, { from: 'validation', to: 'evidence', label: 'provenance' }, { from: 'risk', to: 'posture', label: 'changes' }, { from: 'evidence', to: 'posture', label: 'supports' }, { from: 'posture', to: 'executive', label: 'propagates' },
   ]
 
-  return <div className="space-y-5"><ContinuousAssuranceFabric checkpoints={checkpoints} onOpenPosture={() => navigate('/posture')} onOpenExecutive={() => navigate('/executive')} /><TraceabilityEvidenceGraph nodes={traceNodes} edges={traceEdges} /><CisoImpactBridge signal={{ postureDelta, riskDelta, resolved, regressed, critical: latest?.critical ?? 0, confidence, sources: latest?.sources ?? 0 }} onOpenExecutive={() => navigate('/executive')} /></div>
+  return <div className="space-y-5"><InvestigationStateIntelligence signal={{ risk: latest?.risk ?? 0, confidence, sources: latest?.sources ?? 0, conflicts, critical: latest?.critical ?? 0, hasValidation, hasRemediation, resolved, regressed }} /><ContinuousAssuranceFabric checkpoints={checkpoints} onOpenPosture={() => navigate('/posture')} onOpenExecutive={() => navigate('/executive')} /><TraceabilityEvidenceGraph nodes={traceNodes} edges={traceEdges} /><CisoImpactBridge signal={{ postureDelta, riskDelta, resolved, regressed, critical: latest?.critical ?? 0, confidence, sources: latest?.sources ?? 0 }} onOpenExecutive={() => navigate('/executive')} /></div>
 }
