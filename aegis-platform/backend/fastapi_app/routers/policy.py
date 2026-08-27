@@ -1,12 +1,11 @@
-from __future__ import annotations
-
-from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from typing import Any
 
 from ..core.security import verify_token
 from ..services.policy_engine import evaluate_policy, initialize_policy_store, list_policies, save_policy
+from ..services.policy_simulation import simulate_policy
 from ..services.decision_action_orchestration import get_action
 
 router = APIRouter()
@@ -25,6 +24,10 @@ class PolicyPayload(BaseModel):
     priority: int = Field(default=50, ge=0, le=1000)
     when: dict[str, Any] = Field(default_factory=dict)
     actions: dict[str, Any] = Field(default_factory=dict)
+
+class PolicySimulationPayload(BaseModel):
+    action_id: str = Field(min_length=1, max_length=256)
+    policy: PolicyPayload
 
 initialize_policy_store()
 
@@ -53,3 +56,11 @@ async def evaluate_action_policy(action_id: str, user: dict[str, Any] = Depends(
     if not action:
         raise HTTPException(status_code=404, detail="Action not found")
     return {"actionId": action_id, "policy": evaluate_policy(action)}
+
+@router.post("/policies/simulate")
+async def simulate(body: PolicySimulationPayload, user: dict[str, Any] = Depends(require_user)):
+    action = get_action(body.action_id)
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    result = simulate_policy(action, body.policy.model_dump())
+    return result
