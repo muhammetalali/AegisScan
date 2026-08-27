@@ -131,6 +131,7 @@ async def readiness_check():
 app.include_router(scans.router, prefix="/scans", tags=["Scans"])
 app.include_router(vulnerabilities.router, prefix="/vulnerabilities", tags=["Vulnerabilities"])
 app.include_router(reports.router, prefix="/reports", tags=["Reports"])
+app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(assets.router, prefix="/assets", tags=["Assets"])
 app.include_router(compliance.router, prefix="/compliance", tags=["Compliance"])
 app.include_router(knowledge.router, prefix="/knowledge", tags=["Knowledge"])

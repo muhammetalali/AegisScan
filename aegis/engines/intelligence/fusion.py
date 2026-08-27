@@ -100,7 +100,7 @@ class EvidenceFusionEngine:
     def _fingerprint(ev: Evidence) -> str:
         """بصمة للدمج: الفئة + الموقع + أول 50 حرف من الوصف."""
         raw = f"{ev.category.value}|{ev.location or ''}|{ev.description[:50]}"
-        return hashlib.md5(raw.encode()).hexdigest()[:12]
+        return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
     @staticmethod
     def _build_index(evidences: List[Evidence]) -> Dict[str, Evidence]:

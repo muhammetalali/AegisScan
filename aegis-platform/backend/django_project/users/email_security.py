@@ -23,6 +23,8 @@ def issue_verification(user, request=None):
     send_mail('Verify your AegisScan email', f'Verify your account: {link}\n\nThis link expires in 24 hours.', settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=True)
 
 
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
 def register_user(request):
     serializer = UserCreateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)

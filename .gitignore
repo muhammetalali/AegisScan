@@ -24,8 +24,8 @@ htmlcov/
 .venv/
 venv/
 
-# Frontend build/runtime artifacts
+# The production bundle is a tracked deployment artifact; local dependencies
+# and temporary Vite state remain ignored.
 aegis-platform/frontend/node_modules/
-aegis-platform/frontend/dist/
 aegis-platform/frontend/coverage/
 aegis-platform/frontend/.vite/

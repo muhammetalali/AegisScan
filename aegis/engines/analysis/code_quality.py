@@ -9,7 +9,7 @@ from __future__ import annotations
 import ast
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from aegis.core.event_bus import EventBus
 from aegis.models.evidence import Evidence, EvidenceCategory, EvidenceType
@@ -17,12 +17,12 @@ from aegis.models.evidence import Evidence, EvidenceCategory, EvidenceType
 logger = logging.getLogger("aegis.analysis.quality")
 
 # الثوابط المُ烈ّدة الصراحة
-SUSPICIOUS_PATTERNS: Dict[str, Dict[str, Any]] = {
+SUSPICIOUS_PATTERNS: dict[str, dict[str, Any]] = {
     "eval_usage": {
         "pattern": r"\beval\s*\(",
         "severity": "high",
         "category": EvidenceCategory.INJECTION,
-        "description": "استخدام eval() — خطير subsidized资助 الاستWonderرDanceر استWonder",
+        "description": "استخدام eval() — تنفيذ كود ديناميكي قد يسمح بحقن التعليمات",
     },
     "exec_usage": {
         "pattern": r"\bexec\s*\(",
@@ -34,7 +34,7 @@ SUSPICIOUS_PATTERNS: Dict[str, Dict[str, Any]] = {
         "pattern": r"pickle\.load",
         "severity": "high",
         "category": EvidenceCategory.INJECTION,
-        "description": "تحميل pickle من مصادر غير موثوقة — استWonderLog استWonder",
+        "description": "تحميل pickle من مصادر غير موثوقة — قد يؤدي إلى تنفيذ كود",
     },
     "md5_usage": {
         "pattern": r"\bhashlib\.md5\b",
@@ -75,8 +75,8 @@ class CodeQualityEngine:
         self,
         code_path: str,
         scan_id: str,
-        patterns: Optional[List[str]] = None,
-    ) -> List[Evidence]:
+        patterns: list[str] | None = None,
+    ) -> list[Evidence]:
         """تحليل مسار كود كامل."""
         path = Path(code_path)
         if not path.exists():
@@ -84,7 +84,7 @@ class CodeQualityEngine:
             return []
 
         target_patterns = patterns or list(SUSPICIOUS_PATTERNS.keys())
-        all_evidences: List[Evidence] = []
+        all_evidences: list[Evidence] = []
 
         if path.is_file():
             evs = await self._analyze_file(path, scan_id, target_patterns)
@@ -107,10 +107,10 @@ class CodeQualityEngine:
         self,
         file_path: Path,
         scan_id: str,
-        patterns: List[str],
-    ) -> List[Evidence]:
+        patterns: list[str],
+    ) -> list[Evidence]:
         """تحليل ملف واحد."""
-        evidences: List[Evidence] = []
+        evidences: list[Evidence] = []
 
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -118,7 +118,6 @@ class CodeQualityEngine:
             return []
 
         # فحص الأنماط المشبوهة
-        import re
         for pattern_key in patterns:
             pat = SUSPICIOUS_PATTERNS.get(pattern_key)
             if not pat:
@@ -173,9 +172,9 @@ class CodeQualityEngine:
     @staticmethod
     def _analyze_function(
         node: ast.FunctionDef | ast.AsyncFunctionDef, file_path: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """تحليل دالة واحدة — تعقيد وطول."""
-        issues: List[Dict[str, Any]] = []
+        issues: list[dict[str, Any]] = []
 
         # عدد الأسطر
         if hasattr(node, "end_lineno") and node.end_lineno:

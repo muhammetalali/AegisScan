@@ -111,7 +111,8 @@ ASGI_APPLICATION = 'django_project.asgi.application'
 
 DATABASES = {'default': env.db('DATABASE_URL')}
 DATABASES['default']['CONN_MAX_AGE'] = 60
-DATABASES['default']['OPTIONS'] = {'connect_timeout': 10}
+if DATABASES['default']['ENGINE'].endswith('postgresql'):
+    DATABASES['default']['OPTIONS'] = {'connect_timeout': 10}
 
 CACHES = {
     'default': {

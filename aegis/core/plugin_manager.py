@@ -6,13 +6,14 @@
 
 import importlib
 import inspect
-import pkgutil
 import logging
+import pkgutil
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Type
 
-from aegis.core.event_bus import EventBus, Event
+from aegis.core.event_bus import Event, EventBus
+from aegis.core.plugin_registry import PluginMetadata, PluginRegistry
 
 logger = logging.getLogger("aegis.plugin_manager")
 
@@ -43,9 +44,10 @@ class BasePlugin(ABC):
 class PluginManager:
     """اكتشاف وتحميل وإدارة دورة حياة المكونات الإضافية."""
 
-    def __init__(self, event_bus: EventBus) -> None:
+    def __init__(self, event_bus: EventBus, registry_path: str | Path | None = None) -> None:
         self.event_bus = event_bus
-        self.plugins: Dict[str, BasePlugin] = {}
+        self.plugins: dict[str, BasePlugin] = {}
+        self.registry = PluginRegistry(registry_path)
 
     def load_package(self, package_name: str = "aegis.plugins") -> int:
         """تحميل جميع الإضافات من حزمة بايثون؛ يعيد عدد الإضافات المحمّلة.
@@ -80,13 +82,17 @@ class PluginManager:
                         logger.exception("Failed to instantiate plugin '%s'", obj.__name__)
         return loaded
 
-    def get(self, name: str) -> Optional[BasePlugin]:
+    def get(self, name: str) -> BasePlugin | None:
         """إرجاع مكوّن محمّل بالاسم."""
         return self.plugins.get(name)
 
     def names(self) -> Iterable[str]:
         """أسماء جميع الإضافات المحمّلة."""
         return self.plugins.keys()
+
+    def metadata(self, name: str) -> PluginMetadata | None:
+        """قراءة metadata المسجلة دون تغيير دورة حياة الإضافة."""
+        return self.registry.get(name)
 
     async def unload_all(self) -> None:
         """إلغاء اشتراك جميع الإضافات من الناقل."""

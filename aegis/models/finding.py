@@ -7,11 +7,12 @@
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 from aegis.models.evidence import EvidenceCategory
+from aegis.models.provenance import DecisionStep
 
 
 def _new_id() -> str:
@@ -50,18 +51,19 @@ class Finding(BaseModel):
     status: FindingStatus = FindingStatus.DETECTED
     category: EvidenceCategory = EvidenceCategory.UNKNOWN
     description: str = Field(..., min_length=15)
-    root_cause: Optional[str] = None
-    attack_path: Optional[str] = None
-    evidence_ids: List[str] = Field(default_factory=list)
-    remediation_suggestion: Optional[str] = None
-    exploit_proof: Optional[str] = None
+    root_cause: str | None = None
+    attack_path: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    remediation_suggestion: str | None = None
+    exploit_proof: str | None = None
+    decision_trail: list[DecisionStep] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     context: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("evidence_ids")
     @classmethod
-    def _require_two_evidences(cls, v: List[str]) -> List[str]:
+    def _require_two_evidences(cls, v: list[str]) -> list[str]:
         """المادة 1 (الدليل المطلق): لا ثغرة بأقل من دليلين مستقلين."""
         if len(v) < 2:
             raise ValueError(

@@ -80,7 +80,7 @@ class EvidenceCollectionEngine:
         tags: Optional[List[str]] = None,
     ) -> CollectedEvidence:
         """جمع دليل واحد."""
-        eid = hashlib.md5(
+        eid = hashlib.sha256(
             f"{scan_id}:{source.value}:{description[:100]}".encode()
         ).hexdigest()[:12]
 

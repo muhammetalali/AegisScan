@@ -217,6 +217,7 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
       await api.post('/users/change_password/', {
         old_password: oldPassword,
         new_password: newPassword,
+        new_password_confirm: newPassword,
       })
       set({ loading: false })
     } catch (error: any) {

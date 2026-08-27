@@ -26,6 +26,11 @@ class HasPermission(permissions.BasePermission):
         if isinstance(perms, str):
             perms = [perms]
 
+        # IsAuthenticated handles authentication. Actions without an explicit
+        # role permission should remain usable by authenticated users.
+        if not perms:
+            return True
+
         # Check if user has any of the required permissions
         return request.user.has_any_permission(*perms)
 

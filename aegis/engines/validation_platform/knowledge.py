@@ -74,7 +74,7 @@ class KnowledgeEngine:
         tags: Optional[List[str]] = None,
     ) -> KnowledgeItem:
         """إضافة عنصر معرفة."""
-        item_id = hashlib.md5(
+        item_id = hashlib.sha256(
             f"{knowledge_type.value}:{title}:{description[:50]}".encode()
         ).hexdigest()[:12]
 

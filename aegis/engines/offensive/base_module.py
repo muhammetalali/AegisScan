@@ -26,6 +26,9 @@ logger = logging.getLogger("aegis.offensive.base_module")
 class TestResult(BaseModel):
     """نتيجة تنفيذ وحدة اختبار واحدة."""
 
+    # This is a result model, not a pytest test class.
+    __test__ = False
+
     success: bool
     proof: str
     risk_level: Severity = Severity.INFO

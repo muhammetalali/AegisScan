@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from aegis.core.data_manager import DataManager
 from aegis.core.event_bus import EventBus
 from aegis.models.evidence import EvidenceCategory, EvidenceType
 from aegis.models.finding import Finding, FindingStatus, Severity
+from aegis.models.provenance import DecisionStep
 
 logger = logging.getLogger("aegis.operational.correlation")
 
@@ -69,14 +70,14 @@ class CorrelationEngine:
         self.data_manager = data_manager
         self.confidence_threshold = confidence_threshold
 
-    async def correlate_scan(self, scan_id: str) -> List[Finding]:
+    async def correlate_scan(self, scan_id: str) -> list[Finding]:
         evidences = self.data_manager.get_evidences_by_scan(scan_id)
         if not evidences:
             logger.info("لا أدلة للفحص %s", scan_id)
             return []
 
         logger.info("ربط %d دليل للفحص %s", len(evidences), scan_id)
-        findings: List[Finding] = []
+        findings: list[Finding] = []
 
         for category, group in self._group_by_category(evidences).items():
             sources = {ev.get("source_tool") for ev in group}
@@ -115,6 +116,7 @@ class CorrelationEngine:
                         {ev.get("source_tool") for ev in deduped}
                     ),
                 },
+                decision_trail=self._decision_trail(deduped, reasoning),
             )
 
             self.data_manager.save_finding(finding.to_dict())
@@ -133,9 +135,9 @@ class CorrelationEngine:
 
     @staticmethod
     def _group_by_category(
-        evidences: List[Dict[str, Any]],
-    ) -> Dict[EvidenceCategory, List[Dict[str, Any]]]:
-        grouped: Dict[EvidenceCategory, List[Dict[str, Any]]] = defaultdict(list)
+        evidences: list[dict[str, Any]],
+    ) -> dict[EvidenceCategory, list[dict[str, Any]]]:
+        grouped: dict[EvidenceCategory, list[dict[str, Any]]] = defaultdict(list)
         for ev in evidences:
             try:
                 cat = EvidenceCategory(ev.get("category", "unknown"))
@@ -145,9 +147,9 @@ class CorrelationEngine:
         return dict(grouped)
 
     @staticmethod
-    def _deduplicate(evidences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _deduplicate(evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen: set = set()
-        unique: List[Dict[str, Any]] = []
+        unique: list[dict[str, Any]] = []
         for ev in evidences:
             h = ev.get("content_hash")
             if h:
@@ -160,8 +162,8 @@ class CorrelationEngine:
     # ─── المعادلة المصححة ─────────────────────────────────────
 
     def _confidence(
-        self, evidences: List[Dict[str, Any]]
-    ) -> Tuple[float, Dict[str, Any]]:
+        self, evidences: list[dict[str, Any]]
+    ) -> tuple[float, dict[str, Any]]:
         groups = {"behavioral": 0, "structural": 0, "historical": 0}
         for ev in evidences:
             try:
@@ -207,10 +209,67 @@ class CorrelationEngine:
         return score, reasoning
 
     @staticmethod
+    def _decision_trail(
+        evidences: list[dict[str, Any]], reasoning: dict[str, Any]
+    ) -> list[DecisionStep]:
+        """تحويل مكوّنات المعادلة إلى سجل مفهوم وقابل للتدقيق."""
+        counts = reasoning['counts']
+        sources = [str(ev.get('source_tool', 'unknown')) for ev in evidences]
+        steps = [DecisionStep(
+            stage='correlation',
+            operation='base_confidence',
+            reason='بدء الحساب من الثقة الأساسية المحددة للمنظومة',
+            source_ids=sources,
+            contribution=BASE_CONFIDENCE,
+        )]
+        for name, value in (
+            ('behavioral', BEHAVIORAL_BONUS if counts['behavioral'] else 0.0),
+            ('structural', STRUCTURAL_BONUS if counts['structural'] else 0.0),
+            ('historical', HISTORICAL_BONUS if counts['historical'] else 0.0),
+        ):
+            if value:
+                steps.append(DecisionStep(
+                    stage='correlation',
+                    operation=f'{name}_support',
+                    reason=f'وجود {counts[name]} دليل من فئة {name}',
+                    source_ids=sources,
+                    input_values={'count': counts[name]},
+                    contribution=value,
+                ))
+        extra = reasoning['unique_source_count'] - 2
+        if extra > 0:
+            steps.append(DecisionStep(
+                stage='correlation',
+                operation='independent_source_bonus',
+                reason='مكافأة محدودة للمصادر الإضافية',
+                source_ids=sources,
+                input_values={'extra_sources': extra},
+                contribution=min(extra * EXTRA_SOURCE_BONUS, 0.15),
+            ))
+        penalty = reasoning['conflicts']
+        if penalty:
+            steps.append(DecisionStep(
+                stage='correlation',
+                operation='conflict_penalty',
+                reason='خصم بسبب تعارض في الأدلة',
+                source_ids=sources,
+                input_values={'conflicts': penalty},
+                penalty=penalty * CONFLICT_PENALTY,
+            ))
+        steps.append(DecisionStep(
+            stage='correlation',
+            operation='final_score',
+            reason='تقييد النتيجة إلى المجال 0..1',
+            source_ids=sources,
+            output_score=reasoning['final_score'],
+        ))
+        return steps
+
+    @staticmethod
     def _detect_conflicts(
-        evidences: List[Dict[str, Any]]
-    ) -> Tuple[int, List[Dict[str, Any]]]:
-        server_claims: Dict[str, set] = defaultdict(set)
+        evidences: list[dict[str, Any]]
+    ) -> tuple[int, list[dict[str, Any]]]:
+        server_claims: dict[str, set] = defaultdict(set)
         for ev in evidences:
             ctx = ev.get("context") or {}
             detected = ctx.get("detected_tech") or []
@@ -222,7 +281,7 @@ class CorrelationEngine:
                     if server in tech_l:
                         server_claims[server].add(ev.get("source_tool", "?"))
 
-        details: List[Dict[str, Any]] = []
+        details: list[dict[str, Any]] = []
         if len(server_claims) > 1:
             details.append({
                 "type": "server_mismatch",
@@ -270,7 +329,7 @@ class CorrelationEngine:
         return titles.get(category, f"مشكلة أمنية: {category.value}")
 
     @staticmethod
-    def _description(evidences: List[Dict[str, Any]]) -> str:
+    def _description(evidences: list[dict[str, Any]]) -> str:
         lines = [
             f"- [{ev.get('source_tool')}] {ev.get('description')}"
             for ev in evidences[:5]
@@ -280,7 +339,7 @@ class CorrelationEngine:
         )
 
     @staticmethod
-    def _root_cause(evidences: List[Dict[str, Any]]) -> str:
+    def _root_cause(evidences: list[dict[str, Any]]) -> str:
         for ev in evidences:
             ctx = ev.get("context") or {}
             if isinstance(ctx, str):

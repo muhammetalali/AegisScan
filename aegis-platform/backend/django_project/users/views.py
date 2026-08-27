@@ -72,8 +72,17 @@ class UserViewSet(viewsets.ModelViewSet):
             return User.objects.all()
         return User.objects.filter(id=user.id)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get', 'patch'])
     def me(self, request):
+        if request.method == 'PATCH':
+            serializer = UserUpdateSerializer(
+                request.user,
+                data=request.data,
+                partial=True,
+                context={'request': request},
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         serializer = UserSerializer(request.user, context={'request': request})
         return Response(serializer.data)
 

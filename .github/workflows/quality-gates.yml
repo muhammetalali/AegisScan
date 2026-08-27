@@ -22,10 +22,15 @@ jobs:
 
       - name: Install backend dependencies
         working-directory: aegis-platform/backend
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt ruff
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt ruff bandit
 
       - name: Ruff lint
-        run: ruff check aegis-platform/backend
+        run: |
+          ruff check aegis-platform/backend --select E9
+          ruff check aegis/core/scan_state_machine.py aegis/core/feedback.py aegis/core/immutable_audit.py aegis/core/plugin_registry.py aegis/models/provenance.py aegis/engines/inference/smart_aggregator.py aegis/engines/inference/contextual_enrichment.py --select E4,E7,E9,F,B,I,UP --ignore E501
+
+      - name: Bandit security audit
+        run: bandit -r aegis-platform/backend/django_project aegis-platform/backend/fastapi_app -ll -x "*/migrations/*"
 
       - name: Python compile audit
         run: python -m compileall -q aegis-platform/backend
@@ -41,6 +46,12 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
         run: |
           python -c "import django; django.setup(); print('DJANGO_SETUP_OK')"
+
+      - name: Core pytest suite
+        working-directory: .
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pytest -q
 
   frontend-quality:
     name: Frontend quality

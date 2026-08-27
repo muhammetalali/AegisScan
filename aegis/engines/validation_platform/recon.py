@@ -172,7 +172,7 @@ class ReconAssetDiscoveryEngine:
         import re
         hosts = re.findall(r'(?:host|server|hostname)\s*[=:]\s*["\']?([^\s"\']+)', content_lower)
         for host in hosts:
-            if host not in ("localhost", "127.0.0.1", "0.0.0.0"):
+            if host not in ("localhost", "127.0.0.1", "0.0.0.0"):  # nosec B104 - this is input classification, not a bind operation
                 discovered.append(DiscoveredAsset(
                     asset_id=f"server_{host.replace('.', '_')}",
                     name=f"Server ({host})",

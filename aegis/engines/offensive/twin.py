@@ -258,16 +258,18 @@ class DigitalTwin:
 
     def verify_isolation(self) -> bool:
         """برهان عملي: محاولة وصول للإنترنت من الداخل يجب أن تفشل."""
-        probe = self.exec_in_sandbox(
-            "sandbox",
-            ["sh", "-c",
+        if self.state != TwinState.BUILDING or not self.compose_file_used:
+            return False
+
+        # أثناء البناء نستخدم نفس مسار Docker المعزول، دون المرور ببوابة
+        # exec_in_sandbox التي لا تسمح بالأوامر قبل READY.
+        probe = self._run(
+            ["docker", "compose", "-p", self.config.project_name,
+             "-f", str(self.compose_file_used), "exec", "-T", "sandbox",
+             "sh", "-c",
              "wget -q -T 5 -O /dev/null http://example.com 2>/dev/null; echo $?"],
             timeout=30,
-        ) if self.state == TwinState.BUILDING else None
-
-        # أثناء البناء الحالة BUILDING لذلك نسمح مؤقتاً بهذا الاستدعاء الداخلي
-        if probe is None:
-            return False
+        )
 
         exit_code = probe.get("stdout", "").strip()
         isolated = bool(probe["success"]) and exit_code != "0"

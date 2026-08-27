@@ -324,7 +324,7 @@ class DataManager:
     def get_stats(self) -> Dict[str, Any]:
         stats: Dict[str, Any] = {}
         for table in ("projects", "scans", "evidences", "findings", "remediations", "assets"):
-            row = self.execute_query(f"SELECT COUNT(*) AS c FROM {table}")
+            row = self.execute_query(f"SELECT COUNT(*) AS c FROM {table}")  # nosec B608 - table is selected from a fixed allowlist
             stats[table] = row[0]["c"] if row else 0
         stats["graph_nodes"] = self.graph.number_of_nodes()
         stats["graph_edges"] = self.graph.number_of_edges()
