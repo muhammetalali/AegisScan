@@ -37,16 +37,10 @@ class Scan(models.Model):
     scan_type = models.CharField(_('scan type'), max_length=30, choices=Type.choices)
     status = models.CharField(_('status'), max_length=20, choices=Status.choices, default=Status.PENDING)
     depth = models.CharField(_('depth'), max_length=20, choices=Depth.choices, default=Depth.STANDARD)
-
-    # Target asset
     asset = models.ForeignKey('assets.Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
-
-    # Configuration
-    engines = models.JSONField(_('engines'), default=list)  # List of engine names to run
+    engines = models.JSONField(_('engines'), default=list)
     config = models.JSONField(_('configuration'), default=dict, blank=True)
     template = models.ForeignKey('projects.ScanTemplate', on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
-
-    # Execution
     celery_task_id = models.CharField(_('celery task ID'), max_length=100, blank=True)
     started_at = models.DateTimeField(_('started at'), blank=True, null=True)
     completed_at = models.DateTimeField(_('completed at'), blank=True, null=True)
@@ -54,8 +48,6 @@ class Scan(models.Model):
     progress = models.FloatField(_('progress %'), default=0)
     current_phase = models.CharField(_('current phase'), max_length=50, blank=True)
     current_engine = models.CharField(_('current engine'), max_length=100, blank=True)
-
-    # Results summary
     security_score = models.FloatField(_('security score'), default=0)
     risk_level = models.CharField(_('risk level'), max_length=20, blank=True)
     findings_count = models.PositiveIntegerField(_('findings count'), default=0)
@@ -65,18 +57,11 @@ class Scan(models.Model):
     low_count = models.PositiveIntegerField(_('low count'), default=0)
     info_count = models.PositiveIntegerField(_('info count'), default=0)
     false_positive_count = models.PositiveIntegerField(_('false positive count'), default=0)
-
-    # Engine results
     engine_results = models.JSONField(_('engine results'), default=dict, blank=True)
-
-    # Error info
     error_message = models.TextField(_('error message'), blank=True)
     error_traceback = models.TextField(_('error traceback'), blank=True)
-
-    # Initiator
     initiated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='initiated_scans')
     scheduled_scan = models.ForeignKey('projects.ScheduledScan', on_delete=models.SET_NULL, null=True, blank=True, related_name='scan_runs')
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -136,10 +121,10 @@ class ScanEngine(models.Model):
     is_core = models.BooleanField(_('core engine'), default=False)
     requires_docker = models.BooleanField(_('requires docker'), default=False)
     timeout = models.PositiveIntegerField(_('timeout (seconds)'), default=300)
-    config_schema = models.JSONField(_('config schema'), default=dict, blank=True)
-    default_config = models.JSONField(_('default config'), default=dict, blank=True)
-    dependencies = models.JSONField(_('dependencies'), default=list, blank=True)  # Other engine names
-    order = models.PositiveIntegerField(_('execution order'), default=0)
+    config_schema = models.JSONField(default=dict, blank=True)
+    default_config = models.JSONField(default=dict, blank=True)
+    dependencies = models.JSONField(default=list, blank=True)
+    order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -164,15 +149,15 @@ class ScanEngineExecution(models.Model):
     scan = models.ForeignKey(Scan, on_delete=models.CASCADE, related_name='engine_executions')
     engine = models.ForeignKey(ScanEngine, on_delete=models.CASCADE, related_name='executions')
     status = models.CharField(_('status'), max_length=20, choices=ExecutionStatus.choices, default=ExecutionStatus.PENDING)
-    progress = models.FloatField(_('progress %'), default=0)
-    started_at = models.DateTimeField(_('started at'), blank=True, null=True)
-    completed_at = models.DateTimeField(_('completed at'), blank=True, null=True)
-    duration = models.FloatField(_('duration (seconds)'), default=0)
-    findings_found = models.PositiveIntegerField(_('findings found'), default=0)
-    evidences_collected = models.PositiveIntegerField(_('evidences collected'), default=0)
-    result_data = models.JSONField(_('result data'), default=dict, blank=True)
-    error_message = models.TextField(_('error message'), blank=True)
-    logs = models.TextField(_('logs'), blank=True)
+    progress = models.FloatField(default=0)
+    started_at = models.DateTimeField(blank=True, null=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    duration = models.FloatField(default=0)
+    findings_found = models.PositiveIntegerField(default=0)
+    evidences_collected = models.PositiveIntegerField(default=0)
+    result_data = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    logs = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -193,10 +178,16 @@ class ScanLog(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     scan = models.ForeignKey(Scan, on_delete=models.CASCADE, related_name='logs')
-    engine_execution = models.ForeignKey(ScanEngineExecution, on_delete=models.SET_NULL, null=True, blank=True, related_name='logs')
+    engine_execution = models.ForeignKey(
+        ScanEngineExecution,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='log_entries',
+    )
     level = models.CharField(_('level'), max_length=10, choices=Level.choices, default=Level.INFO)
     message = models.TextField(_('message'))
-    context = models.JSONField(_('context'), default=dict, blank=True)
+    context = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -214,10 +205,10 @@ class ScanComparison(models.Model):
     project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='scan_comparisons')
     scan_a = models.ForeignKey(Scan, on_delete=models.CASCADE, related_name='comparisons_as_a')
     scan_b = models.ForeignKey(Scan, on_delete=models.CASCADE, related_name='comparisons_as_b')
-    similarity_score = models.FloatField(_('similarity score'), default=0)
-    new_findings = models.JSONField(_('new findings'), default=list)
-    fixed_findings = models.JSONField(_('fixed findings'), default=list)
-    changed_findings = models.JSONField(_('changed findings'), default=list)
+    similarity_score = models.FloatField(default=0)
+    new_findings = models.JSONField(default=list)
+    fixed_findings = models.JSONField(default=list)
+    changed_findings = models.JSONField(default=list)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='created_comparisons')
     created_at = models.DateTimeField(auto_now_add=True)
 
