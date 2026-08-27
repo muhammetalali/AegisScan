@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 
-from .routers import scans, vulnerabilities, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, validation_runtime, engine_capabilities, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
+from .routers import scans, vulnerabilities, assets, knowledge, digital_twin, posture, system, dashboard, validations, validation_runtime, engine_capabilities, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -132,7 +132,6 @@ app.include_router(scans.router, prefix="/scans", tags=["Scans"])
 app.include_router(vulnerabilities.router, prefix="/vulnerabilities", tags=["Vulnerabilities"])
 # Reports are owned by Django so the API and workers share durable persistence.
 app.include_router(assets.router, prefix="/assets", tags=["Assets"])
-app.include_router(compliance.router, prefix="/compliance", tags=["Compliance"])
 app.include_router(knowledge.router, prefix="/knowledge", tags=["Knowledge"])
 app.include_router(digital_twin.router, prefix="/digital-twin", tags=["Digital Twin"])
 app.include_router(posture.router, prefix="/posture", tags=["Security Posture"])
