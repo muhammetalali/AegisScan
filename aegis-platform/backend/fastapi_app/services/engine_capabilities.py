@@ -23,6 +23,8 @@ CAPABILITY["dependency_risk"]["status"] = "partial"
 CAPABILITY["dependency_risk"]["executor"] = "services.security_intelligence.analyze_dependency_manifest"
 CAPABILITY["dependency_risk"]["evidence"] = True
 CAPABILITY["dependency_risk"]["scope"] = "manifest parsing and review signals; no external CVE/package registry correlation"
+CAPABILITY["code_quality"]["scope"] = "bounded static analysis of supplied code_content/code_files snapshots"
+CAPABILITY["runtime_analysis"]["scope"] = "bounded pattern analysis of supplied runtime_logs; no host-level telemetry access"
 
 
 def list_capabilities() -> list[dict[str, Any]]:
