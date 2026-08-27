@@ -37,6 +37,9 @@ urlpatterns = [
 
     # User management routes.
     path("api/v1/users/", include("users.management_urls")),
+
+    # Reports are persisted and authorized by Django.
+    path("api/v1/reports/", include("reports.urls")),
 ]
 
 

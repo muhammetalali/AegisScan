@@ -1,5 +1,6 @@
 from typing import List
 import os
+import tempfile
 
 from pydantic_settings import BaseSettings
 
@@ -43,7 +44,12 @@ class Settings(BaseSettings):
 
     # File upload
     MAX_FILE_SIZE: int = 100 * 1024 * 1024  # 100MB
-    UPLOAD_DIR: str = "/tmp/aegis_uploads"
+    UPLOAD_DIR: str = os.path.join(tempfile.gettempdir(), "aegis_uploads")
+
+    # Network binding
+    # Docker services must accept the container network; deployments can override this.
+    HOST: str = os.getenv("AEGIS_HOST") or "0.0.0.0"  # nosec B104
+    PORT: int = 8001
 
     # Monitoring
     PROMETHEUS_ENABLED: bool = True

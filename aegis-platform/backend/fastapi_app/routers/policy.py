@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from typing import Any
 
 from ..core.security import verify_token
-from ..services.policy_engine import evaluate_policy, initialize_policy_store, list_policies, save_policy
+from ..services.policy_engine import evaluate_policy, list_policies, save_policy
 from ..services.policy_simulation import simulate_policy
 from ..services.decision_action_orchestration import get_action
 
@@ -28,8 +28,6 @@ class PolicyPayload(BaseModel):
 class PolicySimulationPayload(BaseModel):
     action_id: str = Field(min_length=1, max_length=256)
     policy: PolicyPayload
-
-initialize_policy_store()
 
 @router.get("/policies")
 async def policies(user: dict[str, Any] = Depends(require_user)):

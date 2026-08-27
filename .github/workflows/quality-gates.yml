@@ -47,6 +47,18 @@ jobs:
         run: |
           python -c "import django; django.setup(); print('DJANGO_SETUP_OK')"
 
+      - name: Django API tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          SECRET_KEY: aegisscan-ci-secret
+          JWT_SECRET_KEY: aegisscan-ci-jwt-secret
+          DEBUG: "1"
+          ALLOWED_HOSTS: "*"
+          DATABASE_URL: sqlite:///ci.sqlite3
+          REDIS_URL: redis://localhost:6379/0
+        run: python -m pytest -q tests
+
       - name: Core pytest suite
         working-directory: .
         run: |

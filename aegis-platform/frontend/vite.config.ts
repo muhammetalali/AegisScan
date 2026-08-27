@@ -21,6 +21,10 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/api/v1/reports': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
       // FastAPI owns the operational/assurance API surface.
       '/api': {
         target: 'http://localhost:8001',

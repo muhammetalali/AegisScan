@@ -8,7 +8,7 @@ export const Reports = () => {
     const [summary, risk, reports] = await Promise.all([
       apiHelpers.get<any>('/dashboard/summary'),
       apiHelpers.get<any>('/dashboard/risk-distribution'),
-      apiHelpers.get<any>('/reports'),
+      apiHelpers.get<any>('/reports/'),
     ])
     const items = Array.isArray(reports) ? reports : reports?.results ?? reports?.items ?? []
     return { model: normalizeAssuranceModel(summary, risk), items }

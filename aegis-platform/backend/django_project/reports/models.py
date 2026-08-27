@@ -44,6 +44,7 @@ class Report(models.Model):
 
     # Data snapshot
     data_snapshot = models.JSONField(_('data snapshot'), default=dict, blank=True)
+    error_message = models.TextField(_('error message'), blank=True)
 
     # Generation info
     generated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='generated_reports')
