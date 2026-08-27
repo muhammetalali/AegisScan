@@ -1,10 +1,10 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from contextlib import asynccontextmanager
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .routers import scans, vulnerabilities, assets, knowledge, digital_twin, posture, system, dashboard, validations, validation_runtime, engine_capabilities, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
 from .services.scan_orchestrator import ScanOrchestrator
@@ -33,8 +33,21 @@ async def lifespan(app: FastAPI):
     await scan_orchestrator.stop()
     logger.info("Shutting down AegisScan FastAPI server...")
 
-app = FastAPI(title="AegisScan Platform API", description="Security Validation Platform - High Performance API Layer", version="1.0.0", lifespan=lifespan, docs_url="/docs", redoc_url="/redoc")
-app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(
+    title="AegisScan Platform API",
+    description="Security Validation Platform - High Performance API Layer",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 security = HTTPBearer(auto_error=False)
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -110,7 +123,7 @@ async def websocket_notifications(websocket: WebSocket, token: str = None):
 @app.websocket("/ws/system/monitor")
 async def websocket_system_monitor(websocket: WebSocket, token: str = None):
     user = await verify_token(token) if token else None
-    if not user or not user.get('is_staff'):
+    if not user or not user.get("is_staff"):
         await websocket.close(code=4003)
         return
     await websocket_manager.connect("system_monitor", websocket)
@@ -122,20 +135,21 @@ async def websocket_system_monitor(websocket: WebSocket, token: str = None):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/ready")
 async def readiness_check():
-    return {"ready": True, "timestamp": datetime.utcnow().isoformat()}
+    return {"ready": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
-app.include_router(scans.router, prefix="/scans", tags=["Scans"])
-app.include_router(vulnerabilities.router, prefix="/vulnerabilities", tags=["Vulnerabilities"])
-# Reports are owned by Django so the API and workers share durable persistence.
-app.include_router(assets.router, prefix="/assets", tags=["Assets"])
-app.include_router(knowledge.router, prefix="/knowledge", tags=["Knowledge"])
-app.include_router(digital_twin.router, prefix="/digital-twin", tags=["Digital Twin"])
-app.include_router(posture.router, prefix="/posture", tags=["Security Posture"])
-app.include_router(system.router, prefix="/system", tags=["System"])
+# FastAPI owns runtime/orchestration APIs. Persistent business resources such as
+# Reports and Compliance remain Django-owned and are not registered here.
+app.include_router(scans.router, prefix="/api/v1/scans", tags=["Scans"])
+app.include_router(vulnerabilities.router, prefix="/api/v1/vulnerabilities", tags=["Vulnerabilities"])
+app.include_router(assets.router, prefix="/api/v1/assets", tags=["Assets"])
+app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
+app.include_router(digital_twin.router, prefix="/api/v1/digital-twin", tags=["Digital Twin"])
+app.include_router(posture.router, prefix="/api/v1/posture", tags=["Security Posture"])
+app.include_router(system.router, prefix="/api/v1/system", tags=["System"])
 app.include_router(assurance.router, prefix="/api/v1/assurance", tags=["Assurance Correlation"])
 app.include_router(assurance_graph.router, prefix="/api/v1/assurance", tags=["Assurance Graph"])
 app.include_router(security_decision.router, prefix="/api/v1/assurance", tags=["Security Decision"])
@@ -143,45 +157,41 @@ app.include_router(decision_actions.router, prefix="/api/v1/assurance", tags=["D
 app.include_router(governance.router, prefix="/api/v1/assurance", tags=["Governance"])
 app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-Code"])
 app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine Capabilities"])
-app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
-app.include_router(validation_runtime.router, prefix="/api", tags=["Validations"])
-app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validations"])
-app.include_router(validations.router, prefix="/api", tags=["Validations Legacy"])
-app.include_router(validations.router, prefix="/api/v1", tags=["Validations Legacy"])
-app.include_router(audit.router, prefix="/api", tags=["Audit"])
+app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
+app.include_router(validations.router, prefix="/api/v1", tags=["Validation State Store"])
 app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 
-@app.post("/scans/{scan_id}/start")
+@app.post("/api/v1/scans/{scan_id}/start")
 async def start_scan(scan_id: str, user=Depends(get_current_user)):
     return await scan_orchestrator.start_scan(scan_id, user)
 
-@app.post("/scans/{scan_id}/pause")
+@app.post("/api/v1/scans/{scan_id}/pause")
 async def pause_scan(scan_id: str, user=Depends(get_current_user)):
     return await scan_orchestrator.pause_scan(scan_id)
 
-@app.post("/scans/{scan_id}/resume")
+@app.post("/api/v1/scans/{scan_id}/resume")
 async def resume_scan(scan_id: str, user=Depends(get_current_user)):
     return await scan_orchestrator.resume_scan(scan_id)
 
-@app.post("/scans/{scan_id}/cancel")
+@app.post("/api/v1/scans/{scan_id}/cancel")
 async def cancel_scan(scan_id: str, user=Depends(get_current_user)):
     return await scan_orchestrator.cancel_scan(scan_id)
 
-@app.get("/scans/{scan_id}/progress")
+@app.get("/api/v1/scans/{scan_id}/progress")
 async def get_scan_progress(scan_id: str, user=Depends(get_current_user)):
     return await scan_orchestrator.get_progress(scan_id)
 
-@app.get("/engines")
+@app.get("/api/v1/engines")
 async def list_engines(user=Depends(get_current_user)):
     return await scan_orchestrator.list_engines()
 
-@app.post("/engines/{engine_name}/enable")
+@app.post("/api/v1/engines/{engine_name}/enable")
 async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
-@app.post("/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user)):
+@app.post("/api/v1/engines/{engine_name}/disable")
+async def disable_engine(engine_name: str, user=Depends(get_current_user))
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
