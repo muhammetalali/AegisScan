@@ -89,6 +89,8 @@ async def _run_real_validation(vid: str) -> None:
         item["results"]["evidence"].extend(result.evidence)
         item["results"]["metrics"].append(result.metrics)
         item["engines_state"][engine]["findings"] = len(result.findings)
+        item["engines_state"][engine]["error"] = result.error
+        item["engines_state"][engine]["status"] = result.status
         item["engines_state"][engine]["progress"] = 100 if result.status in {"completed", "unsupported", "unavailable", "failed"} else 0
 
         if result.status == "failed":
@@ -99,12 +101,9 @@ async def _run_real_validation(vid: str) -> None:
             await broadcast({"type": "engine.failed", "engine": engine, "error": result.error})
             return
         if result.status in {"unsupported", "unavailable"}:
-            item["engines_state"][engine]["status"] = result.status
-            item["engines_state"][engine]["error"] = result.error
             item["live_events"].append(_make_live_event(f"engine.{result.status}", result.error or "Engine unavailable", {"engine": engine}))
             await broadcast({"type": f"engine.{result.status}", "engine": engine, "message": result.error})
         else:
-            item["engines_state"][engine]["status"] = "completed"
             item["live_events"].append(_make_live_event("evidence.collected", f"{engine} produced live evidence", {"engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)}))
             await broadcast({"type": "evidence.collected", "engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)})
 
