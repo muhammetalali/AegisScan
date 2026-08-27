@@ -7,6 +7,7 @@ from ..services.assurance_correlation import correlate_all, correlate_validation
 from ..services.assurance_graph_aggregator import build_assurance_graph
 from ..services.graph_intelligence import analyze_graph
 from ..services.autonomous_triage import triage_graph
+from ..services.security_outcome_bridge import build_security_outcome
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -20,6 +21,7 @@ async def require_user(credentials: HTTPAuthorizationCredentials = Depends(secur
 def _build(validations: dict[str, dict[str, Any]], correlations: dict[str, Any]) -> dict[str, Any]:
     graph = analyze_graph(build_assurance_graph(validations, correlations))
     graph["triage"] = triage_graph(graph)
+    graph["outcome"] = build_security_outcome(graph)
     return graph
 
 @router.get("/graph")
