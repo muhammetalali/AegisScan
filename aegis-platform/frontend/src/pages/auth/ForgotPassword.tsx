@@ -1,9 +1,2 @@
-import React from 'react'
-export const ForgotPassword = () => (
-  <div className="min-h-screen flex items-center justify-center p-6">
-    <div className="max-w-md w-full">
-      <h1 className="text-2xl font-bold">استعادة كلمة المرور</h1>
-      <p className="text-muted-foreground mt-2">صفحة استعادة كلمة المرور - Placeholder يعمل على Windows</p>
-    </div>
-  </div>
-)
+import { Link } from 'react-router-dom'
+export const ForgotPassword = () => <div className="min-h-screen grid place-items-center p-6"><div className="max-w-md w-full rounded-2xl border bg-card p-6"><h1 className="text-2xl font-bold">استعادة كلمة المرور</h1><p className="mt-2 text-sm text-muted-foreground">جارٍ تجهيز استعادة كلمة المرور.</p><Link className="mt-4 inline-block text-primary" to="/login">العودة لتسجيل الدخول</Link></div></div>
