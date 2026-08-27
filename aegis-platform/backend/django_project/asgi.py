@@ -16,9 +16,12 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
-from core.routing import websocket_urlpatterns
 
 django_asgi_app = get_asgi_application()
+
+# Consumers call get_user_model() during module import, so Django's app
+# registry must be initialized before importing websocket routing.
+from core.routing import websocket_urlpatterns
 
 application = ProtocolTypeRouter({
     'http': django_asgi_app,
