@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Activity, ChevronLeft, Crosshair, FileSearch, ShieldAlert, ShieldCheck, Waypoints } from 'lucide-react'
 import { AttackPathGraph, type AttackPathEdge, type AttackPathNode } from './AttackPathGraph'
 import { AttackPathNodeInspector } from './AttackPathNodeInspector'
@@ -19,37 +19,301 @@ import { ExecutiveImpactDiff } from './ExecutiveImpactDiff'
 import { ExecutiveOutcomeScore } from './ExecutiveOutcomeScore'
 import { InvestigationImpactBridge } from './InvestigationImpactBridge'
 
-export type InvestigationWorkspaceProps = { title?: string; subtitle?: string; attackPath: { nodes: AttackPathNode[]; edges: AttackPathEdge[] }; evidenceGraph: { nodes: EvidenceGraphNode[]; edges: EvidenceGraphEdge[] }; evidenceEvents: EvidenceEvent[]; riskImpact?: RiskImpactModel; blastRadius?: { nodes: BlastRadiusNode[]; edges: BlastRadiusEdge[] }; enableRadialBlastRadius?: boolean; decisionState?: DecisionState; riskDiff?: RiskDiff; remediationSteps?: RemediationStep[]; proofEvents?: ProofEvent[] }
+export type InvestigationWorkspaceProps = {
+  title?: string
+  subtitle?: string
+  attackPath: { nodes: AttackPathNode[]; edges: AttackPathEdge[] }
+  evidenceGraph: { nodes: EvidenceGraphNode[]; edges: EvidenceGraphEdge[] }
+  evidenceEvents: EvidenceEvent[]
+  riskImpact?: RiskImpactModel
+  blastRadius?: { nodes: BlastRadiusNode[]; edges: BlastRadiusEdge[] }
+  enableRadialBlastRadius?: boolean
+  decisionState?: DecisionState
+  riskDiff?: RiskDiff
+  remediationSteps?: RemediationStep[]
+  proofEvents?: ProofEvent[]
+}
 
-export function InvestigationWorkspace({ title = 'Security Investigation', subtitle = 'Trace risk, attack propagation, blast radius, and evidence as one investigation context.', attackPath, evidenceGraph, evidenceEvents, riskImpact, blastRadius, enableRadialBlastRadius = true, decisionState = 'unknown', riskDiff, remediationSteps = [], proofEvents = [] }: InvestigationWorkspaceProps) {
+export function InvestigationWorkspace({
+  title = 'Security Investigation',
+  subtitle = 'Trace risk, attack propagation, blast radius, and evidence as one investigation context.',
+  attackPath,
+  evidenceGraph,
+  evidenceEvents,
+  riskImpact,
+  blastRadius,
+  enableRadialBlastRadius = true,
+  decisionState = 'unknown',
+  riskDiff,
+  remediationSteps = [],
+  proofEvents = [],
+}: InvestigationWorkspaceProps) {
   const [selectedAttackNode, setSelectedAttackNode] = useState<AttackPathNode | null>(attackPath.nodes[0] ?? null)
-  const [selectedEvidenceNode, setSelectedEvidenceNode] = useState<EvidenceGraphNode | null>(evidenceGraph.nodes[0] ?? null)
   const [activeView, setActiveView] = useState<'attack' | 'evidence'>('attack')
   const [flowStep, setFlowStep] = useState<'risk' | 'attack' | 'blast' | 'evidence'>('attack')
+
   const findings = attackPath.nodes.filter((node) => node.type === 'finding').length
   const critical = attackPath.nodes.filter((node) => node.severity === 'critical').length
   const verified = evidenceEvents.filter((event) => event.status === 'verified').length
-  const centerId = selectedAttackNode?.id ?? blastRadius?.nodes.find((n) => n.type === 'finding')?.id
+  const centerId = selectedAttackNode?.id ?? blastRadius?.nodes.find((node) => node.type === 'finding')?.id
   const beforeRisk = riskDiff?.before ?? riskImpact?.riskScore ?? 0
   const afterRisk = riskDiff?.after ?? beforeRisk
   const evidenceCount = evidenceEvents.length
-  const affectedAssets = riskDiff?.afterBlastRadius ?? blastRadius?.nodes.filter((n) => n.impact > 0).length ?? 0
+  const affectedAssets = riskDiff?.afterBlastRadius ?? blastRadius?.nodes.filter((node) => node.impact > 0).length ?? 0
   const decisionVisible = Boolean(riskImpact || riskDiff || decisionState !== 'unknown')
   const confidence = riskImpact?.confidence ?? 0
   const conflictSignals = evidenceGraph.nodes.filter((node) => String(node.label).toLowerCase().includes('conflict')).length
-  const navigateFlow = (step: 'risk' | 'attack' | 'blast' | 'evidence') => { setFlowStep(step); if (step === 'evidence') setActiveView('evidence'); else setActiveView('attack') }
-  const selectAttack = (node: AttackPathNode) => { setSelectedAttackNode(node); setFlowStep(node.type === 'finding' ? 'risk' : 'attack') }
-  const focusContext = (section: string) => { if (section === 'evidence') navigateFlow('evidence'); else if (section === 'blast') navigateFlow('blast'); else if (section === 'risk') navigateFlow('risk'); else navigateFlow('attack') }
+
+  const navigateFlow = (step: 'risk' | 'attack' | 'blast' | 'evidence') => {
+    setFlowStep(step)
+    setActiveView(step === 'evidence' ? 'evidence' : 'attack')
+  }
+
+  const selectAttack = (node: AttackPathNode) => {
+    setSelectedAttackNode(node)
+    setFlowStep(node.type === 'finding' ? 'risk' : 'attack')
+  }
+
+  const focusContext = (section: string) => {
+    if (section === 'evidence') return navigateFlow('evidence')
+    if (section === 'blast') return navigateFlow('blast')
+    if (section === 'risk') return navigateFlow('risk')
+    return navigateFlow('attack')
+  }
+
   const runCommand = (command: InvestigationCommand) => {
     if (command === 'evidence' || command === 'revalidate') return navigateFlow('evidence')
     if (command === 'blast') return navigateFlow('blast')
-    if (command === 'attack' || command === 'focus' || command === 'control' || command === 'decision' || command === 'action') return navigateFlow('attack')
     if (command === 'compare' || command === 'conflicts') return navigateFlow('risk')
+    return navigateFlow('attack')
   }
-  const executiveBefore = { risk: beforeRisk, blastRadius: riskDiff?.beforeBlastRadius ?? blastRadius?.nodes.length ?? 0, criticalFindings: critical, confidence, affectedAssets: riskDiff?.beforeBlastRadius ?? affectedAssets }
-  const executiveAfter = { risk: afterRisk, blastRadius: riskDiff?.afterBlastRadius ?? affectedAssets, criticalFindings: riskDiff?.afterCritical ?? critical, confidence: riskDiff?.afterConfidence ?? confidence, affectedAssets }
 
-  return <main className="min-h-full bg-background"><header className="sticky top-0 z-20 border-b bg-background/90 px-6 py-4 backdrop-blur"><div className="mx-auto max-w-[1600px]"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2 text-xs text-muted-foreground"><span>Investigations</span><ChevronLeft className="h-3 w-3 rotate-180" /><span>Security</span></div><h1 className="mt-2 text-2xl font-bold tracking-tight">{title}</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">{subtitle}</p></div><div className="flex items-center gap-2 rounded-xl border bg-card px-3 py-2 text-xs"><Activity className="h-4 w-4 text-emerald-500" /><span className="font-medium">Unified investigation</span><span className="text-muted-foreground">· UX mode</span></div></div><div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-4"><Metric icon={<Waypoints className="h-4 w-4" />} label="Attack nodes" value={attackPath.nodes.length} /><Metric icon={<ShieldAlert className="h-4 w-4" />} label="Critical findings" value={critical} /><Metric icon={<FileSearch className="h-4 w-4" />} label="Evidence events" value={evidenceCount} /><Metric icon={<ShieldCheck className="h-4 w-4" />} label="Verified evidence" value={verified} /></div></div></header><div className="mx-auto max-w-[1600px] space-y-5 p-6"><InvestigationCommandBar onCommand={runCommand} conflictCount={conflictSignals} /><InvestigationContextRail risk={afterRisk} confidence={confidence} evidence={evidenceCount} verifiedEvidence={verified} findings={findings} critical={critical} affectedAssets={affectedAssets} relationships={attackPath.edges.length + evidenceGraph.edges.length + (blastRadius?.edges.length ?? 0)} decisionState={decisionState} onFocus={focusContext} /><InvestigationDecisionCockpit risk={afterRisk} confidence={confidence} evidenceCount={evidenceCount} verifiedEvidence={verified} conflicts={conflictSignals} affectedAssets={affectedAssets} decisionState={decisionState} onInvestigate={() => setFlowStep('evidence')} onDecide={() => setFlowStep('attack')} /><DecisionActionVerificationLoop riskBefore={beforeRisk} riskAfter={riskDiff?.after} expectedRiskReduction={beforeRisk ? Math.round(((beforeRisk - afterRisk) / beforeRisk) * 100) : 0} evidenceRequired={evidenceCount} evidenceVerified={verified} state={decisionState === 'resolved' ? 'verified' : decisionState === 'ready' ? 'ready' : 'planned'} onExecute={() => setFlowStep('attack')} onVerify={() => setFlowStep('evidence')} /><ExecutiveOutcomeScore before={executiveBefore} after={executiveAfter} verified={decisionState === 'resolved'} evidenceCount={evidenceCount} conflicts={conflictSignals} /><ExecutiveImpactDiff before={executiveBefore} after={executiveAfter} verified={decisionState === 'resolved'} /><InvestigationImpactBridge risk={afterRisk} blastRadius={riskDiff?.afterBlastRadius ?? blastRadius?.nodes.length ?? 0} affectedAssets={affectedAssets} evidenceCount={evidenceCount} verifiedEvidence={verified} confidence={confidence} conflicts={conflictSignals} decisionState={decisionState} /><UnifiedInvestigationFlow active={flowStep} onNavigate={navigateFlow} />{decisionVisible && <UnifiedSecurityDecisionLayer state={decisionState} riskBefore={beforeRisk} riskAfter={afterRisk} evidenceCount={evidenceCount} affectedAssets={affectedAssets} onInvestigate={() => setFlowStep('attack')} onRevalidate={() => setFlowStep('evidence')} />}{riskImpact && <AttackPathRiskImpact nodes={attackPath.nodes} model={riskImpact} onFocusRisk={() => setFlowStep('risk')} />}{riskDiff && remediationSteps.length > 0 && <RemediationLoop steps={remediationSteps} diff={riskDiff} onRevalidate={() => setFlowStep('evidence')} />}{proofEvents.length > 0 && <ProofOfFixTimeline events={proofEvents} beforeRisk={beforeRisk} afterRisk={afterRisk} onVerify={() => setFlowStep('evidence')} />}<nav className="flex w-fit items-center gap-1 rounded-xl border bg-card p-1" aria-label="Investigation views"><ViewButton active={activeView === 'attack'} onClick={() => { setActiveView('attack'); setFlowStep('attack') }} icon={<Crosshair className="h-3.5 w-3.5" />} label={`Attack Path${findings ? ` · ${findings} findings` : ''}`} /><ViewButton active={activeView === 'evidence'} onClick={() => { setActiveView('evidence'); setFlowStep('evidence') }} icon={<FileSearch className="h-3.5 w-3.5" />} label="Evidence Chain" /></nav>{activeView === 'attack' ? <section className="space-y-5"><div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]"><AttackPathGraph nodes={attackPath.nodes} edges={attackPath.edges} onSelect={selectAttack} /><AttackPathNodeInspector node={selectedAttackNode} nodes={attackPath.nodes} edges={attackPath.edges} onOpen={setSelectedAttackNode} /></div>{blastRadius && <div className="space-y-5"><BlastRadiusMap nodes={blastRadius.nodes} edges={blastRadius.edges} centerId={centerId} onSelect={() => setFlowStep('blast')} />{enableRadialBlastRadius && <InteractiveRadialBlastRadius nodes={blastRadius.nodes} edges={blastRadius.edges} centerId={centerId} onSelect={() => setFlowStep('blast')} /></div>}</section> : <section className="space-y-5"><EvidenceGraph nodes={evidenceGraph.nodes} edges={evidenceGraph.edges} onSelect={(node) => { setSelectedEvidenceNode(node); setFlowStep('evidence') }} /><EvidenceTimeline events={evidenceEvents} /></section>}<footer className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground"><span>Unified investigation context · derived from shared investigation inputs.</span><span>{attackPath.edges.length + evidenceGraph.edges.length + (blastRadius?.edges.length ?? 0)} total relationships</span></footer></div></main>
+  const executiveBefore = {
+    risk: beforeRisk,
+    blastRadius: riskDiff?.beforeBlastRadius ?? blastRadius?.nodes.length ?? 0,
+    criticalFindings: critical,
+    confidence,
+    affectedAssets: riskDiff?.beforeBlastRadius ?? affectedAssets,
+  }
+
+  const executiveAfter = {
+    risk: afterRisk,
+    blastRadius: riskDiff?.afterBlastRadius ?? affectedAssets,
+    criticalFindings: riskDiff?.afterCritical ?? critical,
+    confidence: riskDiff?.afterConfidence ?? confidence,
+    affectedAssets,
+  }
+
+  return (
+    <main className="min-h-full bg-background">
+      <header className="sticky top-0 z-20 border-b bg-background/90 px-6 py-4 backdrop-blur">
+        <div className="mx-auto max-w-[1600px]">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>Investigations</span>
+                <ChevronLeft className="h-3 w-3 rotate-180" />
+                <span>Security</span>
+              </div>
+              <h1 className="mt-2 text-2xl font-bold tracking-tight">{title}</h1>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{subtitle}</p>
+            </div>
+            <div className="flex items-center gap-2 rounded-xl border bg-card px-3 py-2 text-xs">
+              <Activity className="h-4 w-4 text-emerald-500" />
+              <span className="font-medium">Unified investigation</span>
+              <span className="text-muted-foreground">· UX mode</span>
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <Metric icon={<Waypoints className="h-4 w-4" />} label="Attack nodes" value={attackPath.nodes.length} />
+            <Metric icon={<ShieldAlert className="h-4 w-4" />} label="Critical findings" value={critical} />
+            <Metric icon={<FileSearch className="h-4 w-4" />} label="Evidence events" value={evidenceCount} />
+            <Metric icon={<ShieldCheck className="h-4 w-4" />} label="Verified evidence" value={verified} />
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-[1600px] space-y-5 p-6">
+        <InvestigationCommandBar onCommand={runCommand} conflictCount={conflictSignals} />
+        <InvestigationContextRail
+          risk={afterRisk}
+          confidence={confidence}
+          evidence={evidenceCount}
+          verifiedEvidence={verified}
+          findings={findings}
+          critical={critical}
+          affectedAssets={affectedAssets}
+          relationships={attackPath.edges.length + evidenceGraph.edges.length + (blastRadius?.edges.length ?? 0)}
+          decisionState={decisionState}
+          onFocus={focusContext}
+        />
+        <InvestigationDecisionCockpit
+          risk={afterRisk}
+          confidence={confidence}
+          evidenceCount={evidenceCount}
+          verifiedEvidence={verified}
+          conflicts={conflictSignals}
+          affectedAssets={affectedAssets}
+          decisionState={decisionState}
+          onInvestigate={() => setFlowStep('evidence')}
+          onDecide={() => setFlowStep('attack')}
+        />
+        <DecisionActionVerificationLoop
+          riskBefore={beforeRisk}
+          riskAfter={riskDiff?.after}
+          expectedRiskReduction={beforeRisk ? Math.round(((beforeRisk - afterRisk) / beforeRisk) * 100) : 0}
+          evidenceRequired={evidenceCount}
+          evidenceVerified={verified}
+          state={decisionState === 'resolved' ? 'verified' : decisionState === 'ready' ? 'ready' : 'planned'}
+          onExecute={() => setFlowStep('attack')}
+          onVerify={() => setFlowStep('evidence')}
+        />
+        <ExecutiveOutcomeScore
+          before={executiveBefore}
+          after={executiveAfter}
+          verified={decisionState === 'resolved'}
+          evidenceCount={evidenceCount}
+          conflicts={conflictSignals}
+        />
+        <ExecutiveImpactDiff before={executiveBefore} after={executiveAfter} verified={decisionState === 'resolved'} />
+        <InvestigationImpactBridge
+          risk={afterRisk}
+          blastRadius={riskDiff?.afterBlastRadius ?? blastRadius?.nodes.length ?? 0}
+          affectedAssets={affectedAssets}
+          evidenceCount={evidenceCount}
+          verifiedEvidence={verified}
+          confidence={confidence}
+          conflicts={conflictSignals}
+          decisionState={decisionState}
+        />
+        <UnifiedInvestigationFlow active={flowStep} onNavigate={navigateFlow} />
+
+        {decisionVisible && (
+          <UnifiedSecurityDecisionLayer
+            state={decisionState}
+            riskBefore={beforeRisk}
+            riskAfter={afterRisk}
+            evidenceCount={evidenceCount}
+            affectedAssets={affectedAssets}
+            onInvestigate={() => setFlowStep('attack')}
+            onRevalidate={() => setFlowStep('evidence')}
+          />
+        )}
+
+        {riskImpact && (
+          <AttackPathRiskImpact
+            nodes={attackPath.nodes}
+            model={riskImpact}
+            onFocusRisk={() => setFlowStep('risk')}
+          />
+        )}
+
+        {riskDiff && remediationSteps.length > 0 && (
+          <RemediationLoop
+            steps={remediationSteps}
+            diff={riskDiff}
+            onRevalidate={() => setFlowStep('evidence')}
+          />
+        )}
+
+        {proofEvents.length > 0 && (
+          <ProofOfFixTimeline
+            events={proofEvents}
+            beforeRisk={beforeRisk}
+            afterRisk={afterRisk}
+            onVerify={() => setFlowStep('evidence')}
+          />
+        )}
+
+        <nav className="flex w-fit items-center gap-1 rounded-xl border bg-card p-1" aria-label="Investigation views">
+          <ViewButton
+            active={activeView === 'attack'}
+            onClick={() => navigateFlow('attack')}
+            icon={<Crosshair className="h-3.5 w-3.5" />}
+            label={`Attack Path${findings ? ` · ${findings} findings` : ''}`}
+          />
+          <ViewButton
+            active={activeView === 'evidence'}
+            onClick={() => navigateFlow('evidence')}
+            icon={<FileSearch className="h-3.5 w-3.5" />}
+            label="Evidence Chain"
+          />
+        </nav>
+
+        {activeView === 'attack' ? (
+          <section className="space-y-5">
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+              <AttackPathGraph nodes={attackPath.nodes} edges={attackPath.edges} onSelect={selectAttack} />
+              <AttackPathNodeInspector
+                node={selectedAttackNode}
+                nodes={attackPath.nodes}
+                edges={attackPath.edges}
+                onOpen={setSelectedAttackNode}
+              />
+            </div>
+
+            {blastRadius && (
+              <div className="space-y-5">
+                <BlastRadiusMap
+                  nodes={blastRadius.nodes}
+                  edges={blastRadius.edges}
+                  centerId={centerId}
+                  onSelect={() => setFlowStep('blast')}
+                />
+                {enableRadialBlastRadius && (
+                  <InteractiveRadialBlastRadius
+                    nodes={blastRadius.nodes}
+                    edges={blastRadius.edges}
+                    centerId={centerId}
+                    onSelect={() => setFlowStep('blast')}
+                  />
+                )}
+              </div>
+            )}
+          </section>
+        ) : (
+          <section className="space-y-5">
+            <EvidenceGraph
+              nodes={evidenceGraph.nodes}
+              edges={evidenceGraph.edges}
+              onSelect={() => setFlowStep('evidence')}
+            />
+            <EvidenceTimeline events={evidenceEvents} />
+          </section>
+        )}
+
+        <footer className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground">
+          <span>Unified investigation context · derived from shared investigation inputs.</span>
+          <span>{attackPath.edges.length + evidenceGraph.edges.length + (blastRadius?.edges.length ?? 0)} total relationships</span>
+        </footer>
+      </div>
+    </main>
+  )
 }
-function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) { return <div className="rounded-xl border bg-card p-3"><div className="flex items-center gap-2 text-muted-foreground">{icon}<span className="text-[11px] font-medium">{label}</span></div><div className="mt-1 text-xl font-bold tracking-tight">{value}</div></div> }
-function ViewButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) { return <button type="button" onClick={onClick} aria-pressed={active} className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>{icon}{label}</button> }
+
+function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: number }) {
+  return (
+    <div className="rounded-xl border bg-card p-3">
+      <div className="flex items-center gap-2 text-muted-foreground">
+        {icon}
+        <span className="text-[11px] font-medium">{label}</span>
+      </div>
+      <div className="mt-1 text-xl font-bold tracking-tight">{value}</div>
+    </div>
+  )
+}
+
+function ViewButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: ReactNode; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+    >
+      {icon}
+      {label}
+    </button>
+  )
+}
