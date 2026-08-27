@@ -9,6 +9,7 @@ from aegis.engines.inference.contextual_enrichment import ContextualEnricher
 from aegis.engines.inference.smart_aggregator import SmartAggregator
 from aegis.models.evidence import Evidence, EvidenceCategory, EvidenceType
 from aegis.models.finding import Finding
+from aegis.engines.intelligence.passive_intel import ShodanProvider, collect_passive
 
 
 def _evidence(tool: str, confidence: float = 0.7) -> Evidence:
@@ -99,6 +100,25 @@ def test_feedback_weights_persist(tmp_path) -> None:
     weights.save(path)
     restored = FeedbackWeights.load(path)
     assert restored.snapshot() == weights.snapshot()
+
+
+def test_passive_sources_are_disabled_without_credentials(monkeypatch) -> None:
+    monkeypatch.delenv('SHODAN_API_KEY', raising=False)
+    assert not ShodanProvider().available()
+
+
+@pytest.mark.asyncio
+async def test_passive_provider_failure_does_not_block_scan() -> None:
+    class FailingProvider:
+        name = 'test'
+
+        def available(self):
+            return True
+
+        async def collect(self, target):
+            raise RuntimeError('provider unavailable')
+
+    assert await collect_passive('example.com', (FailingProvider(),)) == []
 
 
 def test_immutable_audit_chain_detects_tampering() -> None:
