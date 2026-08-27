@@ -1,0 +1,97 @@
+name: AegisScan Quality Gates
+
+on:
+  push:
+    branches:
+      - main
+      - feature/enterprise-platform-ui-v2
+  pull_request:
+
+jobs:
+  backend-quality:
+    name: Backend quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: aegis-platform/backend
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt ruff
+
+      - name: Ruff lint
+        run: ruff check aegis-platform/backend
+
+      - name: Python compile audit
+        run: python -m compileall -q aegis-platform/backend
+
+      - name: Django application audit
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          SECRET_KEY: aegisscan-ci-secret
+          DEBUG: "1"
+          ALLOWED_HOSTS: "*"
+          DATABASE_URL: sqlite:///ci.sqlite3
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          python -c "import django; django.setup(); print('DJANGO_SETUP_OK')"
+
+  frontend-quality:
+    name: Frontend quality
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aegis-platform/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Tests
+        run: npm test -- --run
+
+      - name: Production build
+        run: npm run build
+
+      - name: Duplicate-code audit
+        run: npx --yes jscpd src --min-lines 8 --min-tokens 50 --reporters console --exit-code 1
+
+  docker-config:
+    name: Docker configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose
+        run: docker compose -f aegis-platform/docker-compose.yml config
+
+      - name: Verify service definitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          services=$(docker compose -f aegis-platform/docker-compose.yml config --services)
+          for service in postgres redis django fastapi celery_worker celery_beat frontend; do
+            echo "$services" | grep -qx "$service"
+          done
