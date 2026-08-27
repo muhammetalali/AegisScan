@@ -12,13 +12,25 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': {
+      // Django owns authentication and user-management APIs.
+      '/api/v1/auth': {
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/api/v1/users': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      // FastAPI owns the operational/assurance API surface.
+      '/api': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      // All WebSocket endpoints are served by FastAPI.
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: 'ws://localhost:8001',
         ws: true,
+        changeOrigin: true,
       },
     },
   },
