@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 import { apiHelpers } from '@/services/api'
 import { cn } from '@/utils/cn'
-import { Activity, ArrowLeft, ArrowRight, Check, Globe, Server, FolderCode, Plug, ShieldCheck, SlidersHorizontal, Zap } from 'lucide-react'
+import { Activity, ArrowLeft, ArrowRight, Check, Globe, Server, FolderCog, Plug, ShieldCheck, SlidersHorizontal, Zap } from 'lucide-react'
 
 type Target = 'url' | 'ip' | 'code' | 'api'
 type Profile = 'quick' | 'full' | 'custom'
@@ -12,7 +12,7 @@ type Profile = 'quick' | 'full' | 'custom'
 const targets = [
   { id: 'url' as Target, title: 'Web Application', subtitle: 'Website or web app', icon: Globe, placeholder: 'https://app.example.com' },
   { id: 'ip' as Target, title: 'Host / IP', subtitle: 'Server or network target', icon: Server, placeholder: '192.168.1.10' },
-  { id: 'code' as Target, title: 'Source Code', subtitle: 'Repository or local path', icon: FolderCode, placeholder: '/workspace/project' },
+  { id: 'code' as Target, title: 'Source Code', subtitle: 'Repository or local path', icon: FolderCog, placeholder: '/workspace/project' },
   { id: 'api' as Target, title: 'API', subtitle: 'REST or GraphQL endpoint', icon: Plug, placeholder: 'https://api.example.com/v1' },
 ]
 
