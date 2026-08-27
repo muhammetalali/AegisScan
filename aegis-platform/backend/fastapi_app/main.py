@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 
-from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
+from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, validation_runtime, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -77,7 +77,7 @@ async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
 async def websocket_validation_progress(websocket: WebSocket, validation_id: str):
     await websocket_manager.connect(validation_id, websocket)
     await websocket_manager.connect(f"validation_{validation_id}", websocket)
-    await websocket_manager.connect(f"scan_{validation_id}", websocket)
+    await websocket_manager.connect(f"validation_{validation_id}", websocket)
     try:
         from .routers.validations import _store
         v = _store.get(validation_id)
@@ -145,8 +145,12 @@ app.include_router(governance.router, prefix="/api/v1/assurance", tags=["Governa
 app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-Code"])
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
-app.include_router(validations.router, prefix="/api", tags=["Validations"])
-app.include_router(validations.router, prefix="/api/v1", tags=["Validations"])
+# Real validation route is registered first so POST /validations is served by the execution contract.
+app.include_router(validation_runtime.router, prefix="/api", tags=["Validations"])
+app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validations"])
+# Legacy read/control routes remain available against the same _store for compatibility.
+app.include_router(validations.router, prefix="/api", tags=["Validations Legacy"])
+app.include_router(validations.router, prefix="/api/v1", tags=["Validations Legacy"])
 app.include_router(audit.router, prefix="/api", tags=["Audit"])
 app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 
