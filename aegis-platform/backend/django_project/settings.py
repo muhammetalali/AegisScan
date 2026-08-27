@@ -37,6 +37,14 @@ SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
 
+# Promote shared service endpoints to explicit Django settings so application
+# code can consume the same configured endpoints used by cache/Celery/Channels.
+DATABASE_URL = env('DATABASE_URL')
+REDIS_URL = env('REDIS_URL')
+CELERY_BROKER_URL = env('CELERY_BROKER_URL')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND')
+JWT_SECRET_KEY = env('JWT_SECRET_KEY')
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -107,7 +115,7 @@ DATABASES['default']['OPTIONS'] = {'connect_timeout': 10}
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': env('REDIS_URL'),
+        'LOCATION': REDIS_URL,
         'KEY_PREFIX': 'aegis',
     }
 }
@@ -153,7 +161,7 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
     'ALGORITHM': 'HS256',
-    'SIGNING_KEY': env('JWT_SECRET_KEY'),
+    'SIGNING_KEY': JWT_SECRET_KEY,
     'AUTH_HEADER_TYPES': ('Bearer',),
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
     'USER_ID_FIELD': 'id',
@@ -162,8 +170,6 @@ SIMPLE_JWT = {
     'JTI_CLAIM': 'jti',
 }
 
-CELERY_BROKER_URL = env('CELERY_BROKER_URL')
-CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -176,7 +182,7 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.RedisChannelLayer',
-        'CONFIG': {'hosts': [env('REDIS_URL')]},
+        'CONFIG': {'hosts': [REDIS_URL]},
     }
 }
 
