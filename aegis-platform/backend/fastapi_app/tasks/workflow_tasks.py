@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..celery_app import celery_app
+from ..services.workflow_events import publish_workflow_events
 from ..services.workflow_sla import evaluate_sla_actions
 
 
@@ -10,6 +11,7 @@ from ..services.workflow_sla import evaluate_sla_actions
 def evaluate_action_slas(self) -> dict[str, Any]:
     try:
         changed = evaluate_sla_actions()
-        return {"changed": len(changed), "items": changed}
+        published = publish_workflow_events(changed)
+        return {"changed": len(changed), "published": published, "items": changed}
     except Exception as exc:  # pragma: no cover - operational retry path
         raise self.retry(exc=exc)
