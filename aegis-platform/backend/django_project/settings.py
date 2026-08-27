@@ -36,9 +36,6 @@ environ.Env.read_env(BASE_DIR / '.env')
 SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
-
-# Promote shared service endpoints to explicit Django settings so application
-# code can consume the same configured endpoints used by cache/Celery/Channels.
 DATABASE_URL = env('DATABASE_URL')
 REDIS_URL = env('REDIS_URL')
 CELERY_BROKER_URL = env('CELERY_BROKER_URL')
@@ -111,7 +108,6 @@ DATABASES = {'default': env.db('DATABASE_URL')}
 DATABASES['default']['CONN_MAX_AGE'] = 60
 DATABASES['default']['OPTIONS'] = {'connect_timeout': 10}
 
-# Django's native Redis cache backend avoids an undeclared django-redis dependency.
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
