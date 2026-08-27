@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { CheckCircle2, GitCompare, Play, ShieldCheck, Wrench, XCircle } from 'lucide-react'
 
 export type RemediationStep = { id: string; label: string; detail: string; state: 'complete' | 'current' | 'pending' | 'blocked' }
-export type RiskDiff = { before: number; after: number; beforeBlastRadius: number; afterBlastRadius: number; beforeCritical: number; afterCritical: number }
+export type RiskDiff = { before: number; after: number; beforeBlastRadius: number; afterBlastRadius: number; beforeCritical: number; afterCritical: number; afterConfidence?: number }
 
 export function RemediationLoop({ steps, diff, onRevalidate, onOpenPlan }: { steps: RemediationStep[]; diff: RiskDiff; onRevalidate?: () => void; onOpenPlan?: () => void }) {
   const [compare, setCompare] = useState<'risk' | 'blast'>('risk')
