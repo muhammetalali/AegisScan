@@ -11,6 +11,7 @@ from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
 from .services.workflow_live_bridge import WorkflowLiveBridge
+from .services.policy_engine import initialize_policy_store
 from .core.config import settings
 from .core.security import verify_token
 
@@ -24,6 +25,7 @@ workflow_bridge = WorkflowLiveBridge(lambda event: websocket_manager.broadcast("
 async def lifespan(app: FastAPI):
     logger.info("Starting AegisScan FastAPI server...")
     initialize_action_store()
+    initialize_policy_store()
     await workflow_bridge.start()
     await scan_orchestrator.start()
     yield
