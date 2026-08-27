@@ -11,6 +11,7 @@ from datetime import datetime
 from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
+from .services.decision_action_orchestration import initialize_action_store
 from .core.config import settings
 from .core.security import verify_token
 
@@ -22,6 +23,7 @@ scan_orchestrator = ScanOrchestrator(websocket_manager)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting AegisScan FastAPI server...")
+    initialize_action_store()
     await scan_orchestrator.start()
     yield
     logger.info("Shutting down AegisScan FastAPI server...")
