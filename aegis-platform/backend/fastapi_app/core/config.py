@@ -1,6 +1,8 @@
-from pydantic_settings import BaseSettings
 from typing import List
 import os
+
+from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "AegisScan Platform"
@@ -8,7 +10,12 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
 
     # Security
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+    # Django is the authentication authority. FastAPI verifies the same
+    # HS256 signing key so access tokens work across both API services.
+    SECRET_KEY: str = os.getenv(
+        "JWT_SECRET_KEY",
+        os.getenv("SECRET_KEY", "your-secret-key-change-in-production"),
+    )
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440
@@ -42,8 +49,11 @@ class Settings(BaseSettings):
     PROMETHEUS_ENABLED: bool = True
     METRICS_PORT: int = 9090
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+        "extra": "ignore",
+    }
+
 
 settings = Settings()

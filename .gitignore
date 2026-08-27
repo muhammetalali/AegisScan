@@ -11,7 +11,7 @@ aegis.db
 *.sqlite3
 *.log
 audit.log
-reports/
+/aegis-platform/backend/runtime/reports/
 aegis_sandbox/
 celerybeat-schedule
 
