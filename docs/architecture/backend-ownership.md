@@ -21,6 +21,7 @@ Django owns:
 - Vulnerabilities, evidence, notes and remediation state.
 - Reports and report artifacts/metadata.
 - Compliance assessments, controls and durable compliance records.
+- Audit history and durable audit records.
 - Other business entities when they require PostgreSQL persistence, durable lifecycle state, authorization, auditability, or CRUD semantics.
 
 A FastAPI endpoint must not create an independent in-memory or database-backed source of truth for a durable Django-owned resource.
@@ -81,7 +82,7 @@ There must be one authoritative HTTP surface for each durable resource. Compatib
 | Scans + durable lifecycle | Django | Execution/orchestration |
 | Scan logs/executions | Django | Produce runtime telemetry/results |
 | Vulnerabilities + evidence | Django | Analyze/normalize findings |
-| Reports | Django | Trigger/observe runtime generation |
+| Reports + artifacts/metadata | Django | Trigger/observe runtime generation |
 | Compliance records | Django | Runtime analysis/aggregation only |
 | Audit history | Django | Emit runtime events; no duplicate durable store |
 | Validation runtime state | FastAPI service | Runtime-only state |
@@ -120,7 +121,24 @@ FastAPI Router
 
 If validation history becomes a durable business record, its persistence owner must be explicitly assigned to Django and this contract updated before implementation.
 
-## 10. Change-control requirement
+## 10. Ownership contract tests
+
+The permanent regression guard is:
+
+```text
+packages/backend/tests/test_ownership_contract.py
+```
+
+The suite verifies that:
+
+- FastAPI CRUD router files for Django-owned resources do not reappear.
+- `main.py` does not register duplicate CRUD routers for those resources.
+- Django exposes the authoritative URL module for every owned resource.
+- FastAPI retains only the explicitly permitted Scan runtime/orchestration endpoints.
+
+Any future architectural change that intentionally violates this contract must update this document and the tests in the same change.
+
+## 11. Change-control requirement
 
 Any new endpoint must answer these questions before merge:
 
