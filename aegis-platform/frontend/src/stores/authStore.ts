@@ -21,7 +21,7 @@ interface AuthState {
   resendVerification: () => Promise<void>
   updateProfile: (data: Partial<User>) => Promise<void>
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>
-  enable2FA: () => Promise<{ secret: string; qrCode: string }>
+  enable2FA: () => Promise<{ secret: string; qrCode: string; otpauthUri: string }>
   verify2FA: (code: string) => Promise<void>
   disable2FA: (password: string, code: string) => Promise<void>
   fetchUser: () => Promise<void>
