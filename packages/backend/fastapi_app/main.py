@@ -1,18 +1,19 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import asyncio
 import logging
-from datetime import datetime, timezone
 
-from .routers import scans, vulnerabilities, assets, knowledge, digital_twin, posture, system, dashboard, validation_runtime, engine_capabilities, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
-from .services.scan_orchestrator import ScanOrchestrator
-from .services.websocket_manager import WebSocketManager
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from .routers import assurance, assurance_graph, dashboard, decision_actions, digital_twin, engine_capabilities, governance, knowledge, policy, posture, security_decision, system, validation_runtime
 from .services.decision_action_orchestration import initialize_action_store
-from .services.workflow_live_bridge import WorkflowLiveBridge
 from .services.policy_engine import initialize_policy_store
+from .services.scan_orchestrator import ScanOrchestrator
 from .services.validation_state import get_validation
+from .services.websocket_manager import WebSocketManager
+from .services.workflow_live_bridge import WorkflowLiveBridge
 from .core.config import settings
 from .core.security import verify_token
 
@@ -127,13 +128,8 @@ async def health_check():
 async def readiness_check():
     return {"ready": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
-# API ownership contract:
-# - Django owns durable business resources (including Reports and Compliance).
-# - FastAPI owns runtime/orchestration resources.
-# - All FastAPI HTTP routes use the versioned /api/v1 contract.
-app.include_router(scans.router, prefix="/api/v1/scans", tags=["Scans"])
-app.include_router(vulnerabilities.router, prefix="/api/v1/vulnerabilities", tags=["Vulnerabilities"])
-app.include_router(assets.router, prefix="/api/v1/assets", tags=["Assets"])
+# Ownership boundary: durable Assets/Scans/Vulnerabilities are Django-owned.
+# FastAPI exposes runtime/orchestration only for those resources.
 app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
 app.include_router(digital_twin.router, prefix="/api/v1/digital-twin", tags=["Digital Twin"])
 app.include_router(posture.router, prefix="/api/v1/posture", tags=["Security Posture"])
@@ -147,7 +143,6 @@ app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-C
 app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine Capabilities"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
-app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 
 @app.post("/api/v1/scans/{scan_id}/start")
 async def start_scan(scan_id: str, user=Depends(get_current_user)):
