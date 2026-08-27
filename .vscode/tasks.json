@@ -27,13 +27,13 @@
       "label": "Frontend: npm install",
       "type": "shell",
       "command": "npm install",
-      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\aegis-platform\\frontend" }
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\packages\\web" }
     },
     {
       "label": "Frontend: npm run dev",
       "type": "shell",
       "command": "npm run dev",
-      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\aegis-platform\\frontend" },
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\packages\\web" },
       "isBackground": true,
       "presentation": { "reveal": "always" },
       "problemMatcher": "$tsc"
@@ -42,14 +42,14 @@
       "label": "Frontend: npm run build",
       "type": "shell",
       "command": "npm run build",
-      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\aegis-platform\\frontend" },
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\packages\\web" },
       "group": "build"
     },
     {
       "label": "Docker: up",
       "type": "shell",
       "command": "docker-compose up -d",
-      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\aegis-platform" }
+      "options": { "cwd": "C:\\Users\\muham\\Desktop\\AegisScan-1\\packages\\platform" }
     }
   ]
 }

@@ -46,7 +46,7 @@ dev = [
 aegis = "aegis.cli.main:run"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["packages/core"]
 include = ["aegis*"]
 
 [tool.pytest.ini_options]

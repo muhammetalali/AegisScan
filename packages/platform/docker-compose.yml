@@ -33,7 +33,7 @@ services:
 
   django:
     build:
-      context: ./backend
+      context: ../backend
       dockerfile: Dockerfile.django
     container_name: aegis-django
     restart: unless-stopped
@@ -56,7 +56,7 @@ services:
       EMAIL_HOST_PASSWORD: ""
       DEFAULT_FROM_EMAIL: AegisScan <noreply@aegisscan.local>
     volumes:
-      - ./backend:/app
+      - ../backend:/app
       - media_data:/app/media
       - static_data:/app/staticfiles
     ports:
@@ -74,7 +74,7 @@ services:
 
   fastapi:
     build:
-      context: ./backend
+      context: ../backend
       dockerfile: Dockerfile.fastapi
     container_name: aegis-fastapi
     restart: unless-stopped
@@ -87,7 +87,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
     volumes:
-      - ./backend:/app
+      - ../backend:/app
     ports:
       - "8001:8001"
     depends_on:
@@ -103,7 +103,7 @@ services:
 
   celery_worker:
     build:
-      context: ./backend
+      context: ../backend
       dockerfile: Dockerfile.django
     container_name: aegis-celery-worker
     restart: unless-stopped
@@ -116,7 +116,7 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
     volumes:
-      - ./backend:/app
+      - ../backend:/app
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,7 +125,7 @@ services:
 
   celery_beat:
     build:
-      context: ./backend
+      context: ../backend
       dockerfile: Dockerfile.django
     container_name: aegis-celery-beat
     restart: unless-stopped
@@ -138,7 +138,7 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
     volumes:
-      - ./backend:/app
+      - ../backend:/app
     depends_on:
       postgres:
         condition: service_healthy
@@ -147,7 +147,7 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: ../web
       dockerfile: Dockerfile
     container_name: aegis-frontend
     restart: unless-stopped

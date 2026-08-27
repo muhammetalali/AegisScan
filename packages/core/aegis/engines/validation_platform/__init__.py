@@ -13,6 +13,12 @@ from .twin_engine import DigitalTwinEngine, TwinStatus, ChangeType
 from .scenarios import ScenarioLibrary, Scenario
 from .dashboard import ExecutiveDashboard, ExecutiveSummary, DashboardMetric
 from .reporting import ReportingEngine, ReportType, Report
+from .defensive_simulation import (
+    DefensiveAdversarySimulator,
+    DefensiveSimulationResult,
+    DefensiveTechnique,
+    SimulationObservation,
+)
 
 __all__ = [
     "ReconAssetDiscoveryEngine", "AssetCriticality", "AssetType", "DiscoveredAsset",
@@ -30,4 +36,6 @@ __all__ = [
     "ScenarioLibrary", "Scenario",
     "ExecutiveDashboard", "ExecutiveSummary", "DashboardMetric",
     "ReportingEngine", "ReportType", "Report",
+    "DefensiveAdversarySimulator", "DefensiveSimulationResult",
+    "DefensiveTechnique", "SimulationObservation",
 ]

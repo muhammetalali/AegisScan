@@ -94,6 +94,18 @@ class PluginManager:
         """قراءة metadata المسجلة دون تغيير دورة حياة الإضافة."""
         return self.registry.get(name)
 
+    def download_plugin(self, name: str, install_dir: str | Path) -> Path:
+        """تنزيل إضافة موثقة فقط؛ التحميل لا يعني التفعيل أو التنفيذ."""
+        return self.registry.download_verified(name, install_dir)
+
+    def sync_plugins(
+        self,
+        installed: dict[str, str],
+        install_dir: str | Path,
+    ) -> dict[str, Path]:
+        """مزامنة الإضافات الموثقة فقط؛ لا يتم تشغيل التنزيل أو التفعيل تلقائياً."""
+        return self.registry.sync_verified(installed, install_dir)
+
     async def unload_all(self) -> None:
         """إلغاء اشتراك جميع الإضافات من الناقل."""
         for plugin in list(self.plugins.values()):

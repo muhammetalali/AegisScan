@@ -11,7 +11,7 @@ aegis.db
 *.sqlite3
 *.log
 audit.log
-/aegis-platform/backend/runtime/reports/
+/packages/backend/runtime/reports/
 aegis_sandbox/
 celerybeat-schedule
 
@@ -26,6 +26,7 @@ venv/
 
 # The production bundle is a tracked deployment artifact; local dependencies
 # and temporary Vite state remain ignored.
-aegis-platform/frontend/node_modules/
-aegis-platform/frontend/coverage/
-aegis-platform/frontend/.vite/
+packages/web/node_modules/
+packages/web/coverage/
+packages/web/.vite/
+*.egg-info/

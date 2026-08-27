@@ -5,7 +5,7 @@ import runpy
 import sys
 
 ROOT_DIR = Path(__file__).resolve().parent
-BACKEND_DIR = ROOT_DIR / "aegis-platform" / "backend"
+BACKEND_DIR = ROOT_DIR / "packages" / "backend"
 BACKEND_MANAGE = BACKEND_DIR / "manage.py"
 
 if not BACKEND_MANAGE.is_file():

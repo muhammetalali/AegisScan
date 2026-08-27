@@ -44,7 +44,7 @@ python -m pytest tests/ -q
 ## 2. تشغيل الواجهة الاحترافية (Frontend)
 
 ```powershell
-cd C:\Users\muham\Desktop\AegisScan-1\aegis-platform\frontend
+cd C:\Users\muham\Desktop\AegisScan-1\packages\web
 
 # التثبيت (قد يستغرق 2-3 دقائق)
 npm install
@@ -71,7 +71,7 @@ npm run preview
 ## 3. تشغيل الخلفية الكاملة (Backend) عبر Docker
 
 ```powershell
-cd C:\Users\muham\Desktop\AegisScan-1\aegis-platform
+cd C:\Users\muham\Desktop\AegisScan-1\packages\platform
 
 # إنشاء ملف البيئة
 copy .env.example .env
@@ -98,7 +98,7 @@ docker-compose logs -f celery_worker
 ## 4. فتح في VS Code
 
 1. افتح VS Code: `code C:\Users\muham\Desktop\AegisScan-1`
-2. افتح المجلد `aegis-platform`
+2. افتح مجلد `packages/platform`
 3. استخدم `Ctrl+Shift+P` → `Tasks: Run Task` → اختر `Start AegisScan`
 
 ### VS Code Tasks (تم إنشاؤها في .vscode/tasks.json):

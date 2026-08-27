@@ -21,22 +21,22 @@ jobs:
           python-version: "3.12"
 
       - name: Install backend dependencies
-        working-directory: aegis-platform/backend
+        working-directory: packages/backend
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt ruff bandit
 
       - name: Ruff lint
         run: |
-          ruff check aegis-platform/backend --select E9
-          ruff check aegis/core/scan_state_machine.py aegis/core/feedback.py aegis/core/immutable_audit.py aegis/core/plugin_registry.py aegis/models/provenance.py aegis/engines/inference/smart_aggregator.py aegis/engines/inference/contextual_enrichment.py --select E4,E7,E9,F,B,I,UP --ignore E501
+          ruff check packages/backend --select E9
+          ruff check packages/core/aegis/core/scan_state_machine.py packages/core/aegis/core/feedback.py packages/core/aegis/core/immutable_audit.py packages/core/aegis/core/plugin_registry.py packages/core/aegis/models/provenance.py packages/core/aegis/engines/inference/smart_aggregator.py packages/core/aegis/engines/inference/contextual_enrichment.py --select E4,E7,E9,F,B,I,UP --ignore E501
 
       - name: Bandit security audit
-        run: bandit -r aegis-platform/backend/django_project aegis-platform/backend/fastapi_app -ll -x "*/migrations/*"
+        run: bandit -r packages/backend/django_project packages/backend/fastapi_app -ll -x "*/migrations/*"
 
       - name: Python compile audit
-        run: python -m compileall -q aegis-platform/backend
+        run: python -m compileall -q packages/backend
 
       - name: Django application audit
-        working-directory: aegis-platform/backend
+        working-directory: packages/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           SECRET_KEY: aegisscan-ci-secret
@@ -48,7 +48,7 @@ jobs:
           python -c "import django; django.setup(); print('DJANGO_SETUP_OK')"
 
       - name: Django API tests
-        working-directory: aegis-platform/backend
+        working-directory: packages/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           SECRET_KEY: aegisscan-ci-secret
@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: aegis-platform/frontend
+        working-directory: packages/web
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: aegis-platform/frontend/package-lock.json
+          cache-dependency-path: packages/web/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -110,13 +110,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate Compose
-        run: docker compose -f aegis-platform/docker-compose.yml config
+        run: docker compose -f packages/platform/docker-compose.yml config
 
       - name: Verify service definitions
         shell: bash
         run: |
           set -euo pipefail
-          services=$(docker compose -f aegis-platform/docker-compose.yml config --services)
+          services=$(docker compose -f packages/platform/docker-compose.yml config --services)
           for service in postgres redis django fastapi celery_worker celery_beat frontend; do
             echo "$services" | grep -qx "$service"
           done
