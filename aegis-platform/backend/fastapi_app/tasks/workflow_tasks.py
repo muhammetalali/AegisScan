@@ -1,0 +1,15 @@
+from __future__ import annotations
+
+from typing import Any
+
+from ..celery_app import celery_app
+from ..services.workflow_sla import evaluate_sla_actions
+
+
+@celery_app.task(name="fastapi_app.tasks.workflow_tasks.evaluate_action_slas", bind=True, max_retries=3, default_retry_delay=30)
+def evaluate_action_slas(self) -> dict[str, Any]:
+    try:
+        changed = evaluate_sla_actions()
+        return {"changed": len(changed), "items": changed}
+    except Exception as exc:  # pragma: no cover - operational retry path
+        raise self.retry(exc=exc)
