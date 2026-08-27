@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from aegis.core.event_bus import EventBus
 from aegis.models.evidence import Evidence, EvidenceCategory
 from aegis.models.finding import Finding, Severity
+from aegis.models.provenance import DecisionStep
 
 logger = logging.getLogger("aegis.inference.confidence")
 
@@ -77,6 +78,56 @@ class ConfidenceScoringEngine:
         score -= conflicts
 
         final = max(0.0, min(1.0, round(score, 3)))
+
+        # Persist the calculation trace on the finding for auditable decisions.
+        finding.decision_trail = [
+            DecisionStep(
+                stage="confidence",
+                operation="base_score",
+                reason="نقطة البداية قبل تحليل الأدلة",
+                source_ids=[e.id for e in evidences],
+                input_values={"base": self.BASE},
+                output_score=round(self.BASE, 3),
+            ),
+            DecisionStep(
+                stage="confidence",
+                operation="behavioral_signal",
+                reason="إضافة وزن الأدلة السلوكية",
+                source_ids=[e.id for e in evidences if e.evidence_type.value == "behavioral"],
+                contribution=behavioral,
+            ),
+            DecisionStep(
+                stage="confidence",
+                operation="structural_signal",
+                reason="إضافة دعم الأدلة المتكررة من الفئة نفسها",
+                source_ids=[e.id for e in evidences if e.category == finding.category],
+                contribution=structural,
+            ),
+            DecisionStep(
+                stage="confidence",
+                operation="independent_sources",
+                reason="إضافة وزن محدود للمصادر الإضافية المستقلة",
+                source_ids=[e.id for e in evidences],
+                input_values={"source_count": len({e.source_tool for e in evidences})},
+                contribution=extra,
+            ),
+            DecisionStep(
+                stage="confidence",
+                operation="historical_signal",
+                reason="إضافة الإشارة التاريخية عند توفرها",
+                input_values={"similar_findings_count": (historical_stats or {}).get("similar_findings_count", 0)},
+                contribution=historical,
+            ),
+            DecisionStep(
+                stage="confidence",
+                operation="conflict_penalty",
+                reason="خصم التعارض بين تصنيفات الأدلة",
+                source_ids=[e.id for e in evidences],
+                penalty=conflicts,
+                output_score=final,
+            ),
+        ]
+        finding.confidence_score = final
 
         # نشر النتيجة
         await self.event_bus.publish(

@@ -34,6 +34,25 @@ def test_provenance_is_serialized_on_finding() -> None:
     assert 'decision_trail' in finding.to_dict()
 
 
+@pytest.mark.asyncio
+async def test_confidence_engine_records_decision_trail() -> None:
+    from aegis.core.event_bus import EventBus
+    from aegis.engines.inference.confidence import ConfidenceScoringEngine
+
+    finding = Finding(
+        scan_id='scan_test',
+        title='ثغرة حقن مع مسار قرار واضح',
+        confidence_score=0.1,
+        description='وصف اختبار طويل بما يكفي لنموذج الثغرة الموحد',
+        evidence_ids=['ev_a', 'ev_b'],
+    )
+    evidences = [_evidence('semgrep'), _evidence('nmap')]
+    score = await ConfidenceScoringEngine(EventBus()).score_finding(finding, evidences)
+    assert finding.confidence_score == score
+    assert len(finding.decision_trail) == 6
+    assert finding.decision_trail[-1].output_score == score
+
+
 def test_smart_aggregator_dampens_correlated_sources() -> None:
     result = SmartAggregator({'semgrep': 'static-analysis', 'bandit': 'static-analysis'}).aggregate([
         _evidence('semgrep'),
@@ -71,6 +90,15 @@ def test_context_priority_and_feedback_weight() -> None:
     assert enriched.priority == 'urgent'
     weights = FeedbackWeights()
     assert weights.record('semgrep', True) > weights.record('bandit', False)
+
+
+def test_feedback_weights_persist(tmp_path) -> None:
+    path = tmp_path / 'weights.json'
+    weights = FeedbackWeights()
+    weights.record('semgrep', True)
+    weights.save(path)
+    restored = FeedbackWeights.load(path)
+    assert restored.snapshot() == weights.snapshot()
 
 
 def test_immutable_audit_chain_detects_tampering() -> None:
