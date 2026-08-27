@@ -4,7 +4,7 @@ from typing import Any
 
 from django.db import transaction
 
-from .models import AuditLog
+from .models import AuditLog, AuditChainState
 
 
 GENESIS_HASH = "0" * 64
@@ -15,11 +15,16 @@ def append_audit(*, action: str, ip_address: str, user=None, result: str = Audit
                  changes: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None,
                  user_agent: str = "", location: str = "", session_id: str = "",
                  error_message: str = "", duration_ms: int = 0, request_id=None) -> AuditLog:
-    """Append one audit entry while serializing writers on the chain tail."""
+    """Append one audit entry while serializing every writer on a persistent chain-tail row."""
     with transaction.atomic():
-        last = AuditLog.objects.select_for_update().order_by("-sequence").first()
-        previous_hash = last.entry_hash if last else GENESIS_HASH
-        sequence = (last.sequence + 1) if last else 1
+        state, _ = AuditChainState.objects.get_or_create(
+            id=1,
+            defaults={"last_sequence": 0, "last_hash": GENESIS_HASH},
+        )
+        state = AuditChainState.objects.select_for_update().get(pk=state.pk)
+
+        sequence = state.last_sequence + 1
+        previous_hash = state.last_hash
         entry = AuditLog(
             user=user, action=action, result=result, resource_type=resource_type,
             resource_id=resource_id, resource_repr=resource_repr, changes=changes or {},
@@ -31,6 +36,10 @@ def append_audit(*, action: str, ip_address: str, user=None, result: str = Audit
             entry.request_id = request_id
         entry.entry_hash = AuditLog.calculate_hash(entry, previous_hash)
         entry.save(force_insert=True)
+
+        state.last_sequence = sequence
+        state.last_hash = entry.entry_hash
+        state.save(update_fields=["last_sequence", "last_hash", "updated_at"])
         return entry
 
 
@@ -44,4 +53,8 @@ def verify_audit_chain() -> bool:
             return False
         previous = entry.entry_hash
         expected_sequence += 1
-    return True
+
+    state = AuditChainState.objects.filter(pk=1).first()
+    if state is None:
+        return expected_sequence == 1
+    return state.last_sequence == expected_sequence - 1 and state.last_hash == previous
