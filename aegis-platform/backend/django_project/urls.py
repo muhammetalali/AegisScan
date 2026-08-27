@@ -40,6 +40,9 @@ urlpatterns = [
 
     # Reports are persisted and authorized by Django.
     path("api/v1/reports/", include("reports.urls")),
+
+    # Compliance data is persisted and authorized by Django.
+    path("api/v1/compliance/", include("compliance.urls")),
 ]
 
 
