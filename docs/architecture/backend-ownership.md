@@ -1,7 +1,7 @@
 # Backend Ownership Contract
 
-**Status:** Active architectural contract
-**Scope:** Django, FastAPI, Celery, PostgreSQL, Redis
+**Status:** Active architectural contract  
+**Scope:** Django, FastAPI, Celery, PostgreSQL, Redis  
 **Applies to:** `feature/enterprise-platform-ui-v2` and subsequent platform branches
 
 ## 1. Purpose
@@ -16,6 +16,9 @@ Django owns:
 
 - Users, teams, memberships and durable identity state.
 - Projects and durable project relationships.
+- Assets and durable asset relationships/fingerprints.
+- Scans, scan lifecycle metadata, logs and engine-execution records.
+- Vulnerabilities, evidence, notes and remediation state.
 - Reports and report artifacts/metadata.
 - Compliance assessments, controls and durable compliance records.
 - Other business entities when they require PostgreSQL persistence, durable lifecycle state, authorization, auditability, or CRUD semantics.
@@ -29,11 +32,13 @@ FastAPI is the runtime and orchestration layer.
 FastAPI owns:
 
 - High-throughput runtime APIs.
-- Scan/validation orchestration.
+- Scan/validation orchestration and execution control.
 - Engine execution and runtime coordination.
 - Runtime progress and WebSocket delivery.
 - Stateless or explicitly ephemeral runtime views.
 - Integration adapters that execute work and return normalized results to the owning service.
+
+FastAPI may receive a Django-owned Scan/Asset/Vulnerability identifier and operate on it as runtime input, but durable creation, mutation, authorization and persistence remain owned by Django.
 
 Runtime state that must survive process restart, worker replacement, or deployment must be promoted to a durable owner rather than remaining only in FastAPI process memory.
 
@@ -72,9 +77,14 @@ There must be one authoritative HTTP surface for each durable resource. Compatib
 | --- | --- | --- |
 | Identity/users | Django | Authentication/runtime verification only |
 | Projects/membership | Django | Runtime consumption |
+| Assets + relationships | Django | Runtime target/reference |
+| Scans + durable lifecycle | Django | Execution/orchestration |
+| Scan logs/executions | Django | Produce runtime telemetry/results |
+| Vulnerabilities + evidence | Django | Analyze/normalize findings |
 | Reports | Django | Trigger/observe runtime generation |
 | Compliance records | Django | Runtime analysis/aggregation only |
-| Scan/validation execution | FastAPI runtime | Primary orchestration |
+| Audit history | Django | Emit runtime events; no duplicate durable store |
+| Validation runtime state | FastAPI service | Runtime-only state |
 | Engine execution | FastAPI/Core | Execute and normalize |
 | Runtime progress/WebSockets | FastAPI | Primary delivery |
 | Async report generation | Celery | Worker execution |
@@ -91,6 +101,8 @@ There must be one authoritative HTTP surface for each durable resource. Compatib
 6. New durable state requires an explicit owner, persistence strategy, authorization model, and migration/test coverage.
 7. Legacy endpoints are removed only after repository-wide reference checks and contract tests.
 8. Every ownership exception must be documented here before implementation.
+9. FastAPI route modules for Django-owned resources must not contain placeholder CRUD implementations.
+10. A deleted/retired FastAPI resource surface must not be reintroduced without an explicit architecture review.
 
 ## 9. Validation runtime rule
 
