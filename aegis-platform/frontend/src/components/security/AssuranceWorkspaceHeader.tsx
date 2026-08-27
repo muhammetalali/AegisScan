@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Activity, ShieldCheck } from 'lucide-react'
 
 type AssuranceWorkspaceHeaderProps = {
@@ -5,7 +6,7 @@ type AssuranceWorkspaceHeaderProps = {
   title: string
   description: string
   live?: boolean
-  actions?: React.ReactNode
+  actions?: ReactNode
 }
 
 export function AssuranceWorkspaceHeader({
