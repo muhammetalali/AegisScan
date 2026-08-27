@@ -12,7 +12,6 @@ from .validations import ALL_ENGINES, ENGINE_PHASE, GROUPS, _engine_state, _make
 
 router = APIRouter()
 
-
 class ValidationCreate(BaseModel):
     target_type: str = Field(description="url | ip | code | api")
     target_value: str
@@ -24,7 +23,6 @@ class ValidationCreate(BaseModel):
     duration_minutes: int = 60
     rate_limit: int = 5
     extra: dict = Field(default_factory=dict)
-
 
 class ValidationOut(BaseModel):
     id: str
@@ -39,10 +37,8 @@ class ValidationOut(BaseModel):
     created_at: str
     audit_note: str
 
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 async def _run_real_validation(vid: str) -> None:
     try:
@@ -84,7 +80,7 @@ async def _run_real_validation(vid: str) -> None:
         item["live_events"].append(_make_live_event("engine.started", f"Engine {engine} started", {"engine": engine}))
         await broadcast({"type": "engine.started", "engine": engine, "phase": phase})
 
-        result = await execute_engine(engine, item["target_type"], item["target_value"])
+        result = await execute_engine(engine, item["target_type"], item["target_value"], item.get("extra") or {})
         item["results"]["findings"].extend(result.findings)
         item["results"]["evidence"].extend(result.evidence)
         item["results"]["metrics"].append(result.metrics)
@@ -94,7 +90,6 @@ async def _run_real_validation(vid: str) -> None:
         item["engines_state"][engine]["progress"] = 100 if result.status in {"completed", "unsupported", "unavailable", "failed"} else 0
 
         if result.status == "failed":
-            item["engines_state"][engine]["status"] = "failed"
             item["error"] = result.error
             item["status"] = "failed"
             item["live_events"].append(_make_live_event("engine.failed", result.error or "Execution failed", {"engine": engine}))
@@ -117,7 +112,6 @@ async def _run_real_validation(vid: str) -> None:
     item["completed_at"] = _now()
     item["live_events"].append(_make_live_event("validation.completed", "Validation completed from real execution adapters", {"findings": len(item["results"]["findings"]), "evidence": len(item["results"]["evidence"])}))
     await broadcast({"type": "validation.completed", "validation_id": vid, "progress": 100, "findings": len(item["results"]["findings"])})
-
 
 @router.post("/validations", response_model=ValidationOut, status_code=201)
 async def create_real_validation(body: ValidationCreate):
@@ -160,7 +154,6 @@ async def create_real_validation(body: ValidationCreate):
     _tasks[vid] = asyncio.create_task(_run_real_validation(vid))
 
     return ValidationOut(**{key: item[key] for key in ValidationOut.model_fields})
-
 
 @router.get("/validations/{vid}/results")
 async def validation_results(vid: str):
