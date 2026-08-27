@@ -6,7 +6,6 @@ on:
       - feature/enterprise-platform-ui-v2
     paths-ignore:
       - 'aegis-platform/backend/django_project/*/migrations/**'
-      - '.github/workflows/generate-django-migrations.yml'
 
 permissions:
   contents: write
