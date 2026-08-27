@@ -83,7 +83,7 @@ services:
       dockerfile: Dockerfile.django
     container_name: aegis-celery-worker
     restart: unless-stopped
-    command: celery -A celery_app worker -l info -c 4
+    command: celery -A fastapi_app.celery_app worker -l info -c 4
     volumes:
       - ./backend:/app
     env_file: ./backend/.env
@@ -97,7 +97,7 @@ services:
       dockerfile: Dockerfile.django
     container_name: aegis-celery-beat
     restart: unless-stopped
-    command: celery -A celery_app beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: celery -A fastapi_app.celery_app beat -l info
     volumes:
       - ./backend:/app
     env_file: ./backend/.env
