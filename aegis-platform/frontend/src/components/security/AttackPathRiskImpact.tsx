@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Activity, Crosshair, Gauge, ShieldAlert, Target, TrendingUp } from 'lucide-react'
 import type { AttackPathNode } from './AttackPathGraph'
 
-export type RiskImpactModel = { riskScore: number; exploitability: number; impact: number; exposure: number; blastRadius: number; affectedAssets: number; affectedServices: number }
+export type RiskImpactModel = { riskScore: number; exploitability: number; impact: number; exposure: number; blastRadius: number; affectedAssets: number; affectedServices: number; confidence?: number }
 
 export function AttackPathRiskImpact({ nodes, model, onFocusRisk }: { nodes: AttackPathNode[]; model: RiskImpactModel; onFocusRisk?: () => void }) {
   const score = Math.max(0, Math.min(100, model.riskScore))
