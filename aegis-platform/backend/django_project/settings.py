@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+from datetime import timedelta
+
 import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -8,7 +10,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 env = environ.Env(
     DEBUG=(bool, False),
-    SECRET_KEY=(str, 'django-insecure-change-me-in-production'),
+    SECRET_KEY=(str, 'django-insecure-change-me'),
     ALLOWED_HOSTS=(list, ['*']),
     CORS_ALLOWED_ORIGINS=(list, ['http://localhost:5173', 'http://127.0.0.1:5173']),
     DATABASE_URL=(str, 'postgresql://aegis:aegis@localhost:5432/aegisdb'),
@@ -51,9 +53,6 @@ INSTALLED_APPS = [
     'channels',
     'drf_spectacular',
     'health_check',
-    'health_check.db',
-    'health_check.cache',
-    'health_check.storage',
     'core',
     'users',
     'projects',
@@ -79,7 +78,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'aegis_core.urls'
+ROOT_URLCONF = 'django_project.urls'
 
 TEMPLATES = [
     {
@@ -97,18 +96,18 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'aegis_core.wsgi.application'
-ASGI_APPLICATION = 'aegis_core.asgi.application'
+WSGI_APPLICATION = 'django_project.wsgi.application'
+ASGI_APPLICATION = 'django_project.asgi.application'
 
 DATABASES = {'default': env.db('DATABASE_URL')}
 DATABASES['default']['CONN_MAX_AGE'] = 60
 DATABASES['default']['OPTIONS'] = {'connect_timeout': 10}
 
+# Django's native Redis cache backend avoids an undeclared django-redis dependency.
 CACHES = {
     'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
         'LOCATION': env('REDIS_URL'),
-        'OPTIONS': {'CLIENT_CLASS': 'django_redis.client.DefaultClient', 'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor'},
         'KEY_PREFIX': 'aegis',
     }
 }
@@ -121,9 +120,16 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG
 CSRF_TRUSTED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication', 'rest_framework.authentication.SessionAuthentication'),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ),
     'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAuthenticated',),
-    'DEFAULT_FILTER_BACKENDS': ('django_filters.rest_framework.DjangoFilterBackend', 'rest_framework.filters.SearchFilter', 'rest_framework.filters.OrderingFilter'),
+    'DEFAULT_FILTER_BACKENDS': (
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -138,23 +144,7 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
     'SCHEMA_PATH_PREFIX': '/api/v1',
-    'TAGS': [
-        {'name': 'Authentication', 'description': 'User authentication and authorization'},
-        {'name': 'Projects', 'description': 'Project management'},
-        {'name': 'Scans', 'description': 'Security scan operations'},
-        {'name': 'Vulnerabilities', 'description': 'Vulnerability management'},
-        {'name': 'Reports', 'description': 'Report generation and management'},
-        {'name': 'Assets', 'description': 'Asset discovery and management'},
-        {'name': 'Compliance', 'description': 'Compliance and policy checking'},
-        {'name': 'Knowledge', 'description': 'Knowledge base and lessons learned'},
-        {'name': 'Notifications', 'description': 'Real-time notifications'},
-        {'name': 'Audit', 'description': 'Audit trail and logging'},
-        {'name': 'System', 'description': 'System monitoring and health'},
-        {'name': 'Users', 'description': 'User and role management'},
-    ],
 }
-
-from datetime import timedelta
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=env('JWT_ACCESS_TOKEN_LIFETIME')),
@@ -164,23 +154,12 @@ SIMPLE_JWT = {
     'UPDATE_LAST_LOGIN': True,
     'ALGORITHM': 'HS256',
     'SIGNING_KEY': env('JWT_SECRET_KEY'),
-    'VERIFYING_KEY': None,
-    'AUDIENCE': None,
-    'ISSUER': 'aegisscan',
-    'JWK_URL': None,
-    'LEEWAY': 0,
     'AUTH_HEADER_TYPES': ('Bearer',),
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
-    'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule',
-    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
     'TOKEN_TYPE_CLAIM': 'token_type',
-    'TOKEN_USER_CLASS': 'rest_framework_simplejwt.models.TokenUser',
     'JTI_CLAIM': 'jti',
-    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
-    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=env('JWT_ACCESS_TOKEN_LIFETIME')),
-    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(minutes=env('JWT_REFRESH_TOKEN_LIFETIME')),
 }
 
 CELERY_BROKER_URL = env('CELERY_BROKER_URL')
@@ -194,7 +173,12 @@ CELERY_TASK_TIME_LIMIT = 3600
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
-CHANNEL_LAYERS = {'default': {'BACKEND': 'channels_redis.RedisChannelLayer', 'CONFIG': {'hosts': [env('REDIS_URL')]}}}
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.RedisChannelLayer',
+        'CONFIG': {'hosts': [env('REDIS_URL')]},
+    }
+}
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -218,12 +202,23 @@ LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'formatters': {
-        'verbose': {'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}', 'style': '{'},
-        'json': {'format': '{"level": "%(levelname)s", "time": "%(asctime)s", "module": "%(module)s", "message": "%(message)s"}'},
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'json': {
+            'format': '{"level": "%(levelname)s", "time": "%(asctime)s", "module": "%(module)s", "message": "%(message)s"}'
+        },
     },
     'handlers': {
         'console': {'class': 'logging.StreamHandler', 'formatter': 'verbose'},
-        'file': {'class': 'logging.handlers.RotatingFileHandler', 'filename': LOG_DIR / 'aegis.log', 'maxBytes': 1024 * 1024 * 10, 'backupCount': 5, 'formatter': 'json'},
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOG_DIR / 'aegis.log',
+            'maxBytes': 10 * 1024 * 1024,
+            'backupCount': 5,
+            'formatter': 'json',
+        },
     },
     'root': {'handlers': ['console', 'file'], 'level': env('LOG_LEVEL')},
     'loggers': {
@@ -248,4 +243,11 @@ if env('SENTRY_DSN'):
     from sentry_sdk.integrations.django import DjangoIntegration
     from sentry_sdk.integrations.celery import CeleryIntegration
     from sentry_sdk.integrations.redis import RedisIntegration
-    sentry_sdk.init(dsn=env('SENTRY_DSN'), integrations=[DjangoIntegration(), CeleryIntegration(), RedisIntegration()], traces_sample_rate=0.1, profiles_sample_rate=0.1, environment='production' if not DEBUG else 'development')
+
+    sentry_sdk.init(
+        dsn=env('SENTRY_DSN'),
+        integrations=[DjangoIntegration(), CeleryIntegration(), RedisIntegration()],
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
+        environment='production' if not DEBUG else 'development',
+    )
