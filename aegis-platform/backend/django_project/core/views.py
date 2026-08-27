@@ -1,7 +1,9 @@
+from django.conf import settings
 from django.http import JsonResponse
 from django.db import connection
 from django.core.cache import cache
 import redis
+
 
 def health_check(request):
     checks = {
@@ -9,6 +11,7 @@ def health_check(request):
         'cache': False,
         'redis': False,
     }
+
     try:
         with connection.cursor() as cursor:
             cursor.execute('SELECT 1')
@@ -23,7 +26,8 @@ def health_check(request):
         pass
 
     try:
-        r = redis.from_url('redis://localhost:6379/0')
+        redis_url = getattr(settings, 'REDIS_URL', 'redis://localhost:6379/0')
+        r = redis.from_url(redis_url)
         r.ping()
         checks['redis'] = True
     except Exception:
@@ -38,11 +42,13 @@ def health_check(request):
         'version': '1.0.0',
     }, status=status_code)
 
+
 def readiness_check(request):
     checks = {
         'database': False,
         'migrations': False,
     }
+
     try:
         with connection.cursor() as cursor:
             cursor.execute('SELECT 1')
