@@ -1,16 +1,31 @@
-# أسرار ومفاتيح — لا تُرفع أبداً
+# Secrets and signing keys
 .aegis.key
 .aegis_audit.key
 *.key
+.env
+.env.*
+!.env.example
 
-# بيانات محلية حساسة
+# Local data and runtime artifacts
 aegis.db
+*.sqlite3
 *.log
 audit.log
 reports/
 aegis_sandbox/
+celerybeat-schedule
 
+# Python caches and environments
 __pycache__/
 *.pyc
 .pytest_cache/
+.coverage
+htmlcov/
+.venv/
 venv/
+
+# Frontend build/runtime artifacts
+aegis-platform/frontend/node_modules/
+aegis-platform/frontend/dist/
+aegis-platform/frontend/coverage/
+aegis-platform/frontend/.vite/
