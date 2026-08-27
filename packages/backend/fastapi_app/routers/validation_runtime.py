@@ -8,9 +8,21 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..services.engine_adapters import execute_engine
-from .validations import ALL_ENGINES, ENGINE_PHASE, GROUPS, _engine_state, _make_live_event, _store, _tasks
+from ..services.validation_state import (
+    ALL_ENGINES,
+    ENGINE_PHASE,
+    GROUPS,
+    _store,
+    _tasks,
+    engine_state,
+    make_live_event,
+    now_iso,
+    put_task,
+    put_validation,
+)
 
 router = APIRouter()
+
 
 class ValidationCreate(BaseModel):
     target_type: str = Field(description="url | ip | code | api")
@@ -23,6 +35,7 @@ class ValidationCreate(BaseModel):
     duration_minutes: int = 60
     rate_limit: int = 5
     extra: dict = Field(default_factory=dict)
+
 
 class ValidationOut(BaseModel):
     id: str
@@ -37,8 +50,6 @@ class ValidationOut(BaseModel):
     created_at: str
     audit_note: str
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 async def _run_real_validation(vid: str) -> None:
     try:
@@ -61,7 +72,7 @@ async def _run_real_validation(vid: str) -> None:
     item["status"] = "running"
     item["current_phase"] = "initializing"
     item["progress"] = 1
-    item["live_events"].append(_make_live_event("validation.started", f"Validation {vid} started", {"target": item["target_value"]}))
+    item["live_events"].append(make_live_event("validation.started", f"Validation {vid} started", {"target": item["target_value"]}))
     await broadcast({"type": "validation.started", "validation_id": vid, "progress": 1, "current_phase": "initializing"})
 
     selected = [engine for engine in ALL_ENGINES if engine in item["engines"]]
@@ -77,7 +88,7 @@ async def _run_real_validation(vid: str) -> None:
         phase = ENGINE_PHASE.get(engine, "analysis")
         item["current_phase"] = phase
         item["engines_state"][engine]["status"] = "running"
-        item["live_events"].append(_make_live_event("engine.started", f"Engine {engine} started", {"engine": engine}))
+        item["live_events"].append(make_live_event("engine.started", f"Engine {engine} started", {"engine": engine}))
         await broadcast({"type": "engine.started", "engine": engine, "phase": phase})
 
         result = await execute_engine(engine, item["target_type"], item["target_value"], item.get("extra") or {})
@@ -92,26 +103,27 @@ async def _run_real_validation(vid: str) -> None:
         if result.status == "failed":
             item["error"] = result.error
             item["status"] = "failed"
-            item["live_events"].append(_make_live_event("engine.failed", result.error or "Execution failed", {"engine": engine}))
+            item["live_events"].append(make_live_event("engine.failed", result.error or "Execution failed", {"engine": engine}))
             await broadcast({"type": "engine.failed", "engine": engine, "error": result.error})
             return
         if result.status in {"unsupported", "unavailable"}:
-            item["live_events"].append(_make_live_event(f"engine.{result.status}", result.error or "Engine unavailable", {"engine": engine}))
+            item["live_events"].append(make_live_event(f"engine.{result.status}", result.error or "Engine unavailable", {"engine": engine}))
             await broadcast({"type": f"engine.{result.status}", "engine": engine, "message": result.error})
         else:
-            item["live_events"].append(_make_live_event("evidence.collected", f"{engine} produced live evidence", {"engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)}))
+            item["live_events"].append(make_live_event("evidence.collected", f"{engine} produced live evidence", {"engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)}))
             await broadcast({"type": "evidence.collected", "engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)})
 
         item["progress"] = int(((index + 1) / total) * 100)
-        item["live_events"].append(_make_live_event("engine.completed", f"Engine {engine} completed", {"engine": engine}))
+        item["live_events"].append(make_live_event("engine.completed", f"Engine {engine} completed", {"engine": engine}))
         await broadcast({"type": "engine.completed", "engine": engine, "overall": item["progress"]})
 
     item["current_phase"] = "completed"
     item["status"] = "completed"
     item["progress"] = 100
-    item["completed_at"] = _now()
-    item["live_events"].append(_make_live_event("validation.completed", "Validation completed from real execution adapters", {"findings": len(item["results"]["findings"]), "evidence": len(item["results"]["evidence"])}))
+    item["completed_at"] = now_iso()
+    item["live_events"].append(make_live_event("validation.completed", "Validation completed from real execution adapters", {"findings": len(item["results"]["findings"]), "evidence": len(item["results"]["evidence"])}))
     await broadcast({"type": "validation.completed", "validation_id": vid, "progress": 100, "findings": len(item["results"]["findings"])})
+
 
 @router.post("/validations", response_model=ValidationOut, status_code=201)
 async def create_real_validation(body: ValidationCreate):
@@ -137,23 +149,24 @@ async def create_real_validation(body: ValidationCreate):
         "status": "queued",
         "progress": 0,
         "current_phase": "queued",
-        "created_at": _now(),
+        "created_at": now_iso(),
         "completed_at": None,
         "audit_note": f"REAL_EXECUTION scope={body.scope or body.target_value.strip()} authorized={body.authorized}",
         "extra": body.extra,
         "include_subdomains": body.include_subdomains,
         "rate_limit": body.rate_limit,
         "duration_minutes": body.duration_minutes,
-        "engines_state": {e: _engine_state("queued" if e in engines else "skipped") for e in ALL_ENGINES},
-        "live_events": [_make_live_event("validation.queued", f"Validation {vid} queued for real execution", {"scope": body.scope or body.target_value.strip()})],
+        "engines_state": {e: engine_state("queued" if e in engines else "skipped") for e in ALL_ENGINES},
+        "live_events": [make_live_event("validation.queued", f"Validation {vid} queued for real execution", {"scope": body.scope or body.target_value.strip()})],
         "groups": GROUPS,
         "results": {"findings": [], "evidence": [], "metrics": []},
         "error": None,
     }
-    _store[vid] = item
-    _tasks[vid] = asyncio.create_task(_run_real_validation(vid))
+    put_validation(vid, item)
+    put_task(vid, asyncio.create_task(_run_real_validation(vid)))
 
     return ValidationOut(**{key: item[key] for key in ValidationOut.model_fields})
+
 
 @router.get("/validations/{vid}/results")
 async def validation_results(vid: str):
