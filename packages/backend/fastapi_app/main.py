@@ -34,21 +34,8 @@ async def lifespan(app: FastAPI):
     await scan_orchestrator.stop()
     logger.info("Shutting down AegisScan FastAPI server...")
 
-app = FastAPI(
-    title="AegisScan Platform API",
-    description="Security Validation Platform - High Performance API Layer",
-    version="1.0.0",
-    lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="AegisScan Platform API", description="Security Validation Platform - High Performance API Layer", version="1.0.0", lifespan=lifespan, docs_url="/docs", redoc_url="/redoc")
+app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 security = HTTPBearer(auto_error=False)
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -191,7 +178,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user))
+async def disable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
