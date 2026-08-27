@@ -5,30 +5,31 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .endpoint_discovery import discover_endpoints
+from .security_intelligence import analyze_dependency_manifest, execute_tls_intelligence
 from .validation_executor import ExecutionResult, execute_http_probe, normalize_target
 from .vulnerability_intelligence import analyze_response
 
 
-SUPPORTED_REAL_ENGINES = {"recon", "evidence_collection", "control_validation", "endpoint_discovery", "vuln_intelligence"}
+SUPPORTED_REAL_ENGINES = {
+    "recon", "evidence_collection", "control_validation", "endpoint_discovery",
+    "vuln_intelligence", "tls_intelligence", "dependency_risk",
+}
 
 
 def _socket_evidence(hostname: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     evidence_id = f"ev-dns-{abs(hash(hostname)) & 0xffffffff:08x}"
     try:
         addresses = sorted({item[4][0] for item in socket.getaddrinfo(hostname, None) if item[4]})
-        return [
-            {"id": evidence_id, "type": "dns_resolution", "engine": "recon", "data": {"hostname": hostname, "addresses": addresses}}
-        ], {"hostname": hostname, "resolved_addresses": addresses, "resolution_status": "resolved"}
+        return [{"id": evidence_id, "type": "dns_resolution", "engine": "recon", "data": {"hostname": hostname, "addresses": addresses}}], {"hostname": hostname, "resolved_addresses": addresses, "resolution_status": "resolved"}
     except OSError as exc:
-        return [
-            {"id": evidence_id, "type": "dns_resolution", "engine": "recon", "data": {"hostname": hostname, "error": str(exc)}}
-        ], {"hostname": hostname, "resolution_status": "failed", "error": str(exc)}
+        return [{"id": evidence_id, "type": "dns_resolution", "engine": "recon", "data": {"hostname": hostname, "error": str(exc)}}], {"hostname": hostname, "resolution_status": "failed", "error": str(exc)}
 
 
-async def execute_engine(engine: str, target_type: str, target_value: str) -> ExecutionResult:
+async def execute_engine(engine: str, target_type: str, target_value: str, extra: dict[str, Any] | None = None) -> ExecutionResult:
     if engine not in SUPPORTED_REAL_ENGINES:
         return ExecutionResult("unavailable", [], [], {"engine": engine, "execution": "not_implemented"}, "No real executor is registered for this engine yet.")
 
+    extra = extra or {}
     target = normalize_target(target_type, target_value)
     hostname = urlparse(target).hostname
     if not hostname:
@@ -36,6 +37,16 @@ async def execute_engine(engine: str, target_type: str, target_value: str) -> Ex
 
     if engine == "endpoint_discovery":
         return await discover_endpoints(target_type, target_value)
+
+    if engine == "tls_intelligence":
+        return await execute_tls_intelligence(target_type, target_value)
+
+    if engine == "dependency_risk":
+        manifest = extra.get("dependency_manifest") or extra.get("manifest_content")
+        filename = extra.get("dependency_filename") or extra.get("filename")
+        if not isinstance(manifest, str) or not manifest.strip():
+            return ExecutionResult("unsupported", [], [], {"engine": engine, "reason": "dependency_manifest_missing"}, "Dependency risk requires manifest content in validation.extra; no package registry/CVE data is fabricated.")
+        return analyze_dependency_manifest(manifest, str(filename or "dependency-manifest"))
 
     probe = await execute_http_probe(target_type, target_value)
 
