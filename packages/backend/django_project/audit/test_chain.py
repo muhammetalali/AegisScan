@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from django.test import TransactionTestCase
 
-from .models import AuditLog
+from .models import AuditLog, AuditChainState
 from .services import GENESIS_HASH, append_audit, verify_audit_chain
 
 
@@ -16,10 +16,13 @@ class AuditChainTests(TransactionTestCase):
     def test_append_and_persist(self):
         first = self.append()
         second = self.append(AuditLog.Action.LOGOUT)
+        state = AuditChainState.objects.get(pk=1)
         self.assertEqual(first.sequence, 1)
         self.assertEqual(first.previous_hash, GENESIS_HASH)
         self.assertEqual(second.sequence, 2)
         self.assertEqual(second.previous_hash, first.entry_hash)
+        self.assertEqual(state.last_sequence, 2)
+        self.assertEqual(state.last_hash, second.entry_hash)
         self.assertTrue(verify_audit_chain())
 
     def test_verify_detects_tampering(self):
@@ -49,4 +52,7 @@ class AuditChainTests(TransactionTestCase):
 
         self.assertEqual(sorted(sequences), list(range(1, 17)))
         self.assertEqual(AuditLog.objects.count(), 16)
+        state = AuditChainState.objects.get(pk=1)
+        self.assertEqual(state.last_sequence, 16)
+        self.assertEqual(state.last_hash, AuditLog.objects.get(sequence=16).entry_hash)
         self.assertTrue(verify_audit_chain())
