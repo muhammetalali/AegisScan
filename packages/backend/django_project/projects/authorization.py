@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import ProjectMembership
+from .models import Project, ProjectMembership
 
 
 READ_ROLES = frozenset(
@@ -13,12 +13,7 @@ READ_ROLES = frozenset(
         ProjectMembership.Role.VIEWER,
     }
 )
-WRITE_ROLES = frozenset(
-    {
-        ProjectMembership.Role.OWNER,
-        ProjectMembership.Role.ADMIN,
-    }
-)
+WRITE_ROLES = frozenset({ProjectMembership.Role.OWNER, ProjectMembership.Role.ADMIN})
 OWNER_ONLY_ROLES = frozenset({ProjectMembership.Role.OWNER})
 
 
@@ -41,7 +36,7 @@ class ProjectAuthorization:
 
     @property
     def can_read(self) -> bool:
-        return self.is_superuser or self.role in READ_ROLES
+        return self.is_member
 
     @property
     def can_update(self) -> bool:
@@ -60,7 +55,6 @@ class ProjectAuthorization:
         return self.is_superuser or self.role in WRITE_ROLES
 
     def can_manage_membership(self, target: ProjectMembership, *, new_role: str | None = None) -> bool:
-        """Return whether this actor may change/remove a target membership."""
         if not self.can_manage_members:
             return False
         if self.is_superuser or self.role == ProjectMembership.Role.OWNER:
@@ -91,4 +85,10 @@ def get_project_authorization(project_id, user) -> ProjectAuthorization:
         .filter(project_id=project_id, user=user)
         .first()
     )
-    return ProjectAuthorization(membership)
+    if membership is not None:
+        return ProjectAuthorization(membership)
+    if Project.objects.filter(pk=project_id, owner=user).exists():
+        return ProjectAuthorization(
+            ProjectMembership(project_id=project_id, user=user, role=ProjectMembership.Role.OWNER)
+        )
+    return ProjectAuthorization(None)
