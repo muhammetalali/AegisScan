@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import time
-from contextlib import contextmanager
-from typing import Iterator
+import os
 
-from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 try:
     from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
     OTEL_AVAILABLE = True
 except ImportError:  # pragma: no cover
     OTEL_AVAILABLE = False
@@ -25,33 +24,18 @@ INTELLIGENCE_LATENCY = Histogram("aegis_intelligence_request_duration_seconds", 
 
 
 def configure_tracing() -> None:
-    if not OTEL_AVAILABLE:
+    if not OTEL_AVAILABLE or os.getenv("OTEL_ENABLED", "1").lower() not in {"1", "true", "yes"}:
         return
-    provider = TracerProvider(resource=Resource.create({"service.name": "aegisscan-fastapi"}))
-    provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    if not endpoint:
+        return
+    provider = TracerProvider(resource=Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME", "aegisscan-fastapi")}))
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
     trace.set_tracer_provider(provider)
 
 
 def tracer():
-    if OTEL_AVAILABLE:
-        return trace.get_tracer("aegisscan")
-    return None
-
-
-def observe_http(method: str, path: str):
-    @contextmanager
-    def _observe() -> Iterator[None]:
-        started = time.perf_counter()
-        status = "500"
-        try:
-            yield
-            status = "200"
-        except Exception:
-            raise
-        finally:
-            REQUESTS.labels(method, path, status).inc()
-            REQUEST_LATENCY.labels(method, path).observe(time.perf_counter() - started)
-    return _observe()
+    return trace.get_tracer("aegisscan") if OTEL_AVAILABLE else None
 
 
 def metrics_payload() -> tuple[bytes, str]:
