@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from dotenv import load_dotenv
+
 from fastapi_app.services.itsm_remediation_resilient import create_case
+
+
+ROOT = Path(__file__).resolve().parents[3]
+for candidate in (ROOT / ".env", ROOT / "packages" / "backend" / ".env", ROOT / "packages" / "platform" / ".env"):
+    if candidate.exists():
+        load_dotenv(candidate, override=False)
 
 
 async def main() -> int:
@@ -17,11 +25,12 @@ async def main() -> int:
     actor = os.getenv("AEGIS_ITSM_E2E_ACTOR", "e2e-runner")
     owner = os.getenv("AEGIS_ITSM_E2E_OWNER", "security-engineering")
     key = os.getenv("AEGIS_ITSM_E2E_IDEMPOTENCY_KEY") or f"aegis-e2e-{uuid4().hex}"
+    title = os.getenv("AEGIS_ITSM_E2E_TITLE", "[AegisScan E2E] Remediation integration test")
     decision_id = f"e2e-decision-{uuid4().hex[:12]}"
     decision: dict[str, Any] = {
         "decisionId": decision_id,
-        "label": os.getenv("AEGIS_ITSM_E2E_TITLE", "AegisScan real ITSM E2E remediation"),
-        "title": os.getenv("AEGIS_ITSM_E2E_TITLE", "[AegisScan E2E] Remediation integration test"),
+        "label": title,
+        "title": title,
         "final_score": 91,
         "confidence": 0.97,
         "severity": "critical",
