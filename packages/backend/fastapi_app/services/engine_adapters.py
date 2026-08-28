@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -46,9 +47,14 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
         manifest = extra.get("dependency_manifest") or extra.get("manifest_content")
         filename = extra.get("dependency_filename") or extra.get("filename")
         if isinstance(manifest, str) and manifest.strip():
-            result = await analyze_dependency_manifest(manifest, str(filename or "dependency-manifest"))
-            return result
+            return await analyze_dependency_manifest(manifest, str(filename or "dependency-manifest"))
+
         workspace = extra.get("workspace") or extra.get("workspace_path")
+        if not workspace and target_type == "code":
+            candidate = Path(target_value.strip()).expanduser()
+            if candidate.exists() and candidate.is_dir():
+                workspace = str(candidate)
+
         if isinstance(workspace, str) and workspace.strip():
             manifests = discover_dependency_manifests(
                 workspace,
@@ -61,6 +67,7 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
                     {"engine": engine, "reason": "dependency_manifest_missing", "workspace_discovery": True, "manifests_found": 0},
                     "No supported dependency manifest was discovered inside the authorized workspace.",
                 )
+
             combined_findings: list[dict[str, Any]] = []
             combined_evidence: list[dict[str, Any]] = []
             combined_metrics: list[dict[str, Any]] = []
@@ -68,14 +75,37 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
                 result = await analyze_dependency_manifest(manifest_item["content"], manifest_item["filename"])
                 combined_findings.extend(result.findings)
                 combined_evidence.extend(result.evidence)
-                combined_metrics.append({**result.metrics, "manifest_sha256": manifest_item["sha256"], "bytes": manifest_item["bytes"]})
+                combined_metrics.append({
+                    **result.metrics,
+                    "manifest_sha256": manifest_item["sha256"],
+                    "bytes": manifest_item["bytes"],
+                    "filename": manifest_item["filename"],
+                })
                 if result.error and result.status == "failed":
-                    return ExecutionResult("failed", combined_findings, combined_evidence, {"engine": engine, "manifests_found": len(manifests), "manifests": combined_metrics}, result.error)
+                    return ExecutionResult(
+                        "failed", combined_findings, combined_evidence,
+                        {"engine": engine, "manifests_found": len(manifests), "manifests": combined_metrics},
+                        result.error,
+                    )
+
             return ExecutionResult(
                 "completed", combined_findings, combined_evidence,
-                {"engine": engine, "workspace_discovery": True, "manifests_found": len(manifests), "manifests": combined_metrics, "vulnerability_matches": sum(int(m.get("vulnerability_matches", 0)) for m in combined_metrics), "cve_correlation": True},
+                {
+                    "engine": engine,
+                    "workspace_discovery": True,
+                    "workspace": str(Path(workspace).expanduser().resolve()),
+                    "manifests_found": len(manifests),
+                    "manifests": combined_metrics,
+                    "vulnerability_matches": sum(int(m.get("vulnerability_matches", 0)) for m in combined_metrics),
+                    "cve_correlation": True,
+                },
             )
-        return ExecutionResult("unsupported", [], [], {"engine": engine, "reason": "dependency_manifest_missing"}, "Dependency risk requires manifest content or an authorized workspace.")
+
+        return ExecutionResult(
+            "unsupported", [], [],
+            {"engine": engine, "reason": "dependency_manifest_missing", "workspace_discovery": True},
+            "Dependency risk requires manifest content or an authorized code workspace.",
+        )
 
     if not hostname:
         return ExecutionResult("failed", [], [], {"engine": engine}, "Unable to determine target hostname")
