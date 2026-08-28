@@ -10,6 +10,7 @@ celery_app = Celery(
     include=[
         "fastapi_app.tasks.workflow_tasks",
         "fastapi_app.tasks.report_tasks",
+        "fastapi_app.tasks.health_tasks",
     ],
 )
 
