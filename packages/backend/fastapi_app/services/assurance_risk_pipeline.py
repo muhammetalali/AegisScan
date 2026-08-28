@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .dynamic_risk_engine import DynamicRiskModel
+from .engine_adapters import execute_engine
 from .external_intelligence import ExternalIntelligenceFabric
 from .fusion_engine import FusionEngine
 from .intelligence_fabric import IntelligenceFabric
@@ -10,7 +11,7 @@ from .remediation_validation import RemediationValidationSuite
 
 
 class AssuranceRiskPipeline:
-    """Correlate vulnerability, external CTI, remediation and runtime context."""
+    """Correlate vulnerability, dependency, external CTI, remediation and runtime context."""
 
     def __init__(self, *, intelligence=None, external=None, fusion=None, dynamic_risk=None, remediation=None) -> None:
         self.intelligence = intelligence or IntelligenceFabric()
@@ -25,6 +26,9 @@ class AssuranceRiskPipeline:
         critical_service_exposure: bool = False, business_impact: float = 0.0,
         validated_exploitation: bool = False, remediation_candidate: dict[str, Any] | None = None,
         remediation_tools: list[str] | None = None, remediation_timeout: int = 180,
+        dependency_workspace: str | None = None,
+        dependency_manifest: str | None = None,
+        dependency_filename: str | None = None,
     ) -> dict[str, Any]:
         external = await self.external.search(indicator)
         vulnerability = await self.intelligence.enrich(cve_id, assets or []) if cve_id else None
@@ -32,6 +36,17 @@ class AssuranceRiskPipeline:
         if remediation_candidate is not None:
             remediation_result = await self.remediation.validate_workspace(
                 remediation_candidate, tools=remediation_tools, timeout=remediation_timeout
+            )
+
+        dependency_result = None
+        if dependency_manifest or dependency_workspace:
+            dependency_extra = {
+                "dependency_manifest": dependency_manifest,
+                "dependency_filename": dependency_filename,
+                "workspace": dependency_workspace,
+            }
+            dependency_result = await execute_engine(
+                "dependency_risk", "code", dependency_workspace or "dependency-workspace", dependency_extra
             )
 
         observations: dict[str, dict[str, Any]] = {}
@@ -44,6 +59,16 @@ class AssuranceRiskPipeline:
                 observations["cisa_kev"] = {"known": True}
         if external.get("items"):
             observations["external_intelligence"] = external
+        if dependency_result is not None:
+            dependency_metrics = dependency_result.metrics if isinstance(dependency_result.metrics, dict) else {}
+            observations["dependency_risk"] = {
+                **dependency_metrics,
+                "status": dependency_result.status,
+                "error": dependency_result.error,
+                "findings_count": len(dependency_result.findings),
+            }
+            if dependency_result.evidence:
+                observations["dependency_risk"]["evidence_count"] = len(dependency_result.evidence)
         if remediation_result is not None:
             observations["remediation_validation"] = remediation_result
 
@@ -60,11 +85,19 @@ class AssuranceRiskPipeline:
             business_impact=business_impact,
         )
 
+        remediation_priority = self._remediation_priority(dynamic.score, fusion.confidence)
         return {
             "indicator": indicator,
             "cve_id": cve_id,
             "vulnerability": vulnerability,
             "external_intelligence": external,
+            "dependency_intelligence": {
+                "status": dependency_result.status,
+                "findings": dependency_result.findings,
+                "evidence": dependency_result.evidence,
+                "metrics": dependency_result.metrics,
+                "error": dependency_result.error,
+            } if dependency_result is not None else None,
             "remediation_validation": remediation_result,
             "fusion": {
                 "score": fusion.score, "confidence": fusion.confidence, "rationale": fusion.rationale,
@@ -79,6 +112,7 @@ class AssuranceRiskPipeline:
                 "base_score": fusion.score, "final_score": dynamic.score, "severity": dynamic.severity,
                 "confidence": fusion.confidence, "derived_newly_exposed_ports": derived_ports,
                 "derived_validated_exploitation": derived_exploitation,
+                "remediation_priority": remediation_priority,
             },
         }
 
@@ -92,3 +126,13 @@ class AssuranceRiskPipeline:
             if isinstance(provenance, dict) and isinstance(provenance.get("ports"), list):
                 total = max(total, len(provenance["ports"]))
         return total
+
+    @staticmethod
+    def _remediation_priority(score: float, confidence: float) -> str:
+        if score >= 85 and confidence >= 0.75:
+            return "urgent"
+        if score >= 70:
+            return "high"
+        if score >= 45:
+            return "normal"
+        return "monitor"
