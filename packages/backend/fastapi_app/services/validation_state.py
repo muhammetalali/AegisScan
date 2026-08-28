@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any
+
+import redis
+
+from ..core.config import settings
 
 PHASES = [
     "queued",
@@ -63,6 +68,27 @@ ALL_ENGINES = [
 _store: dict[str, dict[str, Any]] = {}
 _tasks: dict[str, asyncio.Task[Any]] = {}
 
+_REDIS_PREFIX = "aegis:validation:"
+_redis = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+
+def _redis_key(validation_id: str) -> str:
+    return f"{_REDIS_PREFIX}{validation_id}"
+
+
+def _redis_get(validation_id: str) -> dict[str, Any] | None:
+    try:
+        raw = _redis.get(_redis_key(validation_id))
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -96,11 +122,32 @@ def make_live_event(
 
 
 def get_validation(validation_id: str) -> dict[str, Any] | None:
-    return _store.get(validation_id)
+    value = _store.get(validation_id)
+    if value is not None:
+        return value
+    value = _redis_get(validation_id)
+    if value is not None:
+        _store[validation_id] = value
+    return value
 
 
 def put_validation(validation_id: str, value: dict[str, Any]) -> None:
     _store[validation_id] = value
+    try:
+        _redis.set(_redis_key(validation_id), json.dumps(value, ensure_ascii=False, separators=(",", ":")), ex=86400)
+    except Exception:
+        # Local cache keeps the current worker functional if Redis is temporarily unavailable.
+        pass
+
+
+def persist_validation(validation_id: str) -> None:
+    value = _store.get(validation_id)
+    if value is None:
+        return
+    try:
+        _redis.set(_redis_key(validation_id), json.dumps(value, ensure_ascii=False, separators=(",", ":")), ex=86400)
+    except Exception:
+        pass
 
 
 def get_task(validation_id: str) -> asyncio.Task[Any] | None:
