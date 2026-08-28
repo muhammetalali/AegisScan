@@ -213,7 +213,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user))
+async def disable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
