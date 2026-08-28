@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
+
+from fastapi.concurrency import run_in_threadpool
+
+from django_project.security_sessions import services as session_service
 
 from .dynamic_risk_engine import DynamicRiskModel
 from .engine_adapters import execute_engine
@@ -20,6 +25,22 @@ class AssuranceRiskPipeline:
         self.dynamic_risk = dynamic_risk or DynamicRiskModel()
         self.remediation = remediation or RemediationValidationSuite()
 
+    async def _record(self, session_id: UUID | str | None, event_type: str, *, target: str = "", action: str = "", status: str = "success", data: dict[str, Any] | None = None) -> None:
+        if session_id is None:
+            return
+        session = await run_in_threadpool(session_service.get_session_snapshot, session_id=session_id, user_id=None)
+        await run_in_threadpool(
+            session_service.append_evidence,
+            session_id=session_id,
+            user_id=session["initiated_by"],
+            event_type=event_type,
+            capability="passive_validate",
+            target=target,
+            action=action,
+            status=status,
+            data=data or {},
+        )
+
     async def assess(
         self, *, indicator: str, cve_id: str | None = None, assets: list[dict[str, Any]] | None = None,
         behavioral_anomaly: float = 0.0, newly_exposed_ports: int = 0,
@@ -29,7 +50,9 @@ class AssuranceRiskPipeline:
         dependency_workspace: str | None = None,
         dependency_manifest: str | None = None,
         dependency_filename: str | None = None,
+        session_id: UUID | str | None = None,
     ) -> dict[str, Any]:
+        await self._record(session_id, "assurance.assessment.started", target=indicator, action="assess")
         external = await self.external.search(indicator)
         vulnerability = await self.intelligence.enrich(cve_id, assets or []) if cve_id else None
         remediation_result = None
@@ -86,7 +109,8 @@ class AssuranceRiskPipeline:
         )
 
         remediation_priority = self._remediation_priority(dynamic.score, fusion.confidence)
-        return {
+        result = {
+            "session_id": str(session_id) if session_id else None,
             "indicator": indicator,
             "cve_id": cve_id,
             "vulnerability": vulnerability,
@@ -115,6 +139,21 @@ class AssuranceRiskPipeline:
                 "remediation_priority": remediation_priority,
             },
         }
+        await self._record(
+            session_id,
+            "assurance.assessment.completed",
+            target=indicator,
+            action="assess",
+            data={
+                "fusion_score": fusion.score,
+                "fusion_confidence": fusion.confidence,
+                "dynamic_risk_score": dynamic.score,
+                "severity": dynamic.severity,
+                "remediation_priority": remediation_priority,
+                "sources": list(fusion.corroborated_sources),
+            },
+        )
+        return result
 
     @staticmethod
     def _shodan_ports(external: dict[str, Any]) -> int:
