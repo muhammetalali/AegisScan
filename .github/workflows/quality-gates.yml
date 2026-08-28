@@ -7,6 +7,9 @@ on:
       - feature/enterprise-platform-ui-v2
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   backend-quality:
     name: Backend quality
@@ -82,7 +85,24 @@ jobs:
           cache: npm
           cache-dependency-path: packages/web/package-lock.json
 
-      - name: Install dependencies
+      - name: Synchronize npm lockfile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Persist synchronized lockfile
+        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/enterprise-platform-ui-v2'
+        working-directory: .
+        run: |
+          if git diff --quiet -- packages/web/package-lock.json; then
+            echo 'package-lock.json already synchronized.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add packages/web/package-lock.json
+          git commit -m 'chore(web): synchronize npm lockfile [lock-sync]'
+          git push origin HEAD:${GITHUB_REF_NAME}
+
+      - name: Clean install from lockfile
         run: npm ci
 
       - name: TypeScript typecheck
@@ -118,6 +138,9 @@ jobs:
           for service in postgres redis django fastapi celery_worker celery_beat frontend; do
             echo "$services" | grep -qx "$service"
           done
+
+      - name: Build frontend production image
+        run: docker compose -f packages/platform/docker-compose.yml build --no-cache frontend
 
   service-e2e:
     name: Service E2E
