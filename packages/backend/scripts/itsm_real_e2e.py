@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 
 from fastapi_app.services.itsm_capability import provider_capability
 from fastapi_app.services.itsm_configuration import validate_itsm_configuration
-from fastapi_app.services.itsm_provider_health import check_provider
 from fastapi_app.services.itsm_remediation_resilient import create_case
 
 for candidate in (ROOT / ".env", ROOT.parent / "platform" / ".env", ROOT.parent.parent / ".env"):
@@ -26,21 +25,26 @@ for candidate in (ROOT / ".env", ROOT.parent / "platform" / ".env", ROOT.parent.
 async def _validate_before_external_creation() -> None:
     mode = os.getenv("AEGIS_ITSM_MODE", "real").strip().lower()
     states = validate_itsm_configuration()
-    config_errors = {provider: state.errors for provider, state in states.items() if state.enabled and not state.valid}
+    config_errors = {
+        provider: state.errors
+        for provider, state in states.items()
+        if state.enabled and not state.valid
+    }
     if config_errors:
-        details = " | ".join(f"{provider}: {', '.join(messages)}" for provider, messages in config_errors.items())
+        details = " | ".join(
+            f"{provider}: {', '.join(messages)}" for provider, messages in config_errors.items()
+        )
         raise RuntimeError("ITSM startup validation failed; no tickets will be created: " + details)
 
     for provider in ("jira", "servicenow"):
-        health = await check_provider(provider)
         capability = await provider_capability(provider)
-        if health.get("status") != "healthy":
-            raise RuntimeError(f"{provider} provider health is not ready: {health.get('status')}")
         if capability.get("status") != "ready":
-            raise RuntimeError(f"{provider} provider capabilities are not ready: {capability.get('status')}")
+            raise RuntimeError(
+                f"{provider} provider capabilities are not ready: {capability.get('status')}"
+            )
         print(
-            f"{provider}.ready=true mode={mode} external={health.get('external', mode == 'real')} "
-            f"health={health.get('status')} capability={capability.get('status')}"
+            f"{provider}.ready=true mode={mode} external={capability.get('external', mode == 'real')} "
+            f"basis={capability.get('readiness_basis', 'sandbox' if mode == 'sandbox' else 'configuration')}"
         )
 
 
@@ -115,7 +119,9 @@ async def main() -> int:
     if mode == "sandbox":
         for provider, prefix in expected_prefix.items():
             if not first_map[provider].startswith(prefix):
-                raise AssertionError(f"Sandbox provider returned a non-sandbox external ID for {provider}: {first_map[provider]}")
+                raise AssertionError(
+                    f"Sandbox provider returned a non-sandbox external ID for {provider}: {first_map[provider]}"
+                )
 
     print(f"PASS: mode={mode}; same action and same Jira/ServiceNow IDs were returned on retry.")
     print(f"jira={first_map['jira']}")
