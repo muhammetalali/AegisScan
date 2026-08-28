@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .routers import assurance, assurance_graph, dashboard, decision_actions, digital_twin, engine_capabilities, governance, knowledge, policy, posture, security_decision, system, validation_runtime
+from .routers import assurance, assurance_graph, dashboard, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, policy, posture, security_decision, system, validation_runtime
 from .services.decision_action_orchestration import initialize_action_store
 from .services.policy_engine import initialize_policy_store
 from .services.scan_orchestrator import ScanOrchestrator
@@ -128,8 +128,6 @@ async def health_check():
 async def readiness_check():
     return {"ready": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
-# Ownership boundary: durable Assets/Scans/Vulnerabilities are Django-owned.
-# FastAPI exposes runtime/orchestration only for those resources.
 app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
 app.include_router(digital_twin.router, prefix="/api/v1/digital-twin", tags=["Digital Twin"])
 app.include_router(posture.router, prefix="/api/v1/posture", tags=["Security Posture"])
@@ -143,6 +141,7 @@ app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-C
 app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine Capabilities"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
+app.include_router(intelligence.router, prefix="/api/v1", tags=["Security Intelligence"])
 
 @app.post("/api/v1/scans/{scan_id}/start")
 async def start_scan(scan_id: str, user=Depends(get_current_user)):
