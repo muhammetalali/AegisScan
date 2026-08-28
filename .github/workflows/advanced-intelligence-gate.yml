@@ -1,0 +1,27 @@
+name: Advanced Intelligence Gate
+
+on:
+  push:
+    branches: [feature/enterprise-platform-ui-v2]
+  pull_request:
+    branches: [feature/enterprise-platform-ui-v2]
+
+jobs:
+  intelligence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend dependencies
+        run: pip install -r packages/backend/requirements.txt
+      - name: Compile advanced intelligence modules
+        run: python -m compileall -q packages/backend/fastapi_app/services
+      - name: Run advanced intelligence tests
+        working-directory: packages/backend
+        env:
+          PYTHONPATH: .
+          DJANGO_SETTINGS_MODULE: django_project.settings
+        run: pytest -q tests/test_advanced_intelligence.py
