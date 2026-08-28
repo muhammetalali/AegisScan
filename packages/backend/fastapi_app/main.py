@@ -92,8 +92,8 @@ async def websocket_validation_progress(websocket: WebSocket, validation_id: str
             await websocket.receive_text()
     except WebSocketDisconnect:
         websocket_manager.disconnect(validation_id, websocket)
-        websocket_manager.disconnect(f"validation_{validation_id}", websocket)
         websocket_manager.disconnect(f"scan_{validation_id}", websocket)
+        websocket_manager.disconnect(f"validation_{validation_id}", websocket)
 
 @app.websocket("/ws/notifications")
 async def websocket_notifications(websocket: WebSocket, token: str = None):
@@ -152,7 +152,7 @@ app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-C
 app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine Capabilities"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
-app.include_router(intelligence.router, prefix="/api/v1", tags=["Security Intelligence"])
+app.include_router(intelligence.router, prefix="/api/v1/intelligence", tags=["Security Intelligence"])
 
 @app.post("/api/v1/scans/{scan_id}/start")
 async def start_scan(scan_id: str, user=Depends(get_current_user)):
@@ -183,7 +183,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user))
+async def disable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
