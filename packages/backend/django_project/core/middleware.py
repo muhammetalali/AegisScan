@@ -4,8 +4,7 @@ from channels.db import database_sync_to_async
 from channels.middleware import BaseMiddleware
 from django.contrib.auth.models import AnonymousUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework_simplejwt.exceptions import InvalidToken
-from rest_framework_simplejwt.tokens import UntypedToken
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 
 class JWTAuthMiddleware(BaseMiddleware):
@@ -22,7 +21,8 @@ class JWTAuthMiddleware(BaseMiddleware):
         if not token:
             return AnonymousUser()
         try:
-            validated = UntypedToken(token)
-            return JWTAuthentication().get_user(validated)
-        except (InvalidToken, Exception):
+            authentication = JWTAuthentication()
+            validated = authentication.get_validated_token(token)
+            return authentication.get_user(validated)
+        except (InvalidToken, TokenError):
             return AnonymousUser()
