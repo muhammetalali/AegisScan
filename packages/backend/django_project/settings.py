@@ -33,6 +33,7 @@ env = environ.Env(
     FRONTEND_URL=(str, "http://localhost:5173"),
     SENTRY_DSN=(str, ""),
     LOG_LEVEL=(str, "INFO"),
+    LOG_TO_FILE=(bool, True),
     WS_ALLOW_QUERY_TOKEN=(bool, False),
     SECURE_SSL_REDIRECT=(bool, False),
 )
@@ -47,6 +48,7 @@ CELERY_BROKER_URL = env("CELERY_BROKER_URL")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND")
 JWT_SECRET_KEY = env("JWT_SECRET_KEY")
 WS_ALLOW_QUERY_TOKEN = env("WS_ALLOW_QUERY_TOKEN")
+LOG_TO_FILE = env("LOG_TO_FILE")
 
 if not DEBUG:
     if SECRET_KEY.startswith("django-insecure-") or len(SECRET_KEY) < 32:
@@ -176,12 +178,19 @@ EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
 EMAIL_USE_TLS = env("EMAIL_USE_TLS")
 FRONTEND_URL = env("FRONTEND_URL")
 
+_handlers = {
+    "console": {"class": "logging.StreamHandler", "formatter": "verbose"},
+}
+if LOG_TO_FILE:
+    _handlers["file"] = {
+        "class": "logging.FileHandler",
+        "filename": str(LOG_DIR / "django.log"),
+        "formatter": "verbose",
+    }
+
 LOGGING = {
     "version": 1, "disable_existing_loggers": False,
     "formatters": {"verbose": {"format": "{levelname} {asctime} {name} {message}", "style": "{"}},
-    "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "verbose"},
-        "file": {"class": "logging.FileHandler", "filename": str(LOG_DIR / "django.log"), "formatter": "verbose"},
-    },
-    "root": {"handlers": ["console", "file"], "level": env("LOG_LEVEL")},
+    "handlers": _handlers,
+    "root": {"handlers": list(_handlers), "level": env("LOG_LEVEL")},
 }
