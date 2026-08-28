@@ -7,6 +7,7 @@ from .serializers import KnowledgeArticleSerializer
 
 
 class KnowledgeArticleViewSet(ReadOnlyModelViewSet):
+    lookup_field = "slug"
     serializer_class = KnowledgeArticleSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [SearchFilter, OrderingFilter]
