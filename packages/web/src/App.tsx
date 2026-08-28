@@ -4,7 +4,9 @@ import { AuthProvider, useAuth } from './stores/authStore'
 import { ThemeProvider } from './stores/themeStore'
 import { LanguageProvider } from './stores/languageStore'
 import { Layout } from './components/layout/Layout'
+import { RouteGuard } from './components/auth/RouteGuard'
 import { LoadingScreen } from './components/ui/LoadingScreen'
+
 const Login = lazy(() => import('./pages/auth/Login').then(m => ({ default: m.Login })))
 const Register = lazy(() => import('./pages/auth/Register').then(m => ({ default: m.Register })))
 const ForgotPassword = lazy(() => import('./pages/auth/ForgotPassword').then(m => ({ default: m.ForgotPassword })))
@@ -45,7 +47,71 @@ const AuditLogs = lazy(() => import('./pages/audit/AuditLogs').then(m => ({ defa
 const Notifications = lazy(() => import('./pages/notifications/Notifications').then(m => ({ default: m.Notifications })))
 const NewValidation = lazy(() => import('./pages/validations/ValidationWizard').then(m => ({ default: m.ValidationWizard })))
 const AegisCommandCenterPage = lazy(() => import('./pages/command/AegisCommandCenterPage').then(m => ({ default: m.AegisCommandCenterPage })))
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => { const { isAuthenticated, loading } = useAuth(); if (loading) return <LoadingScreen />; if (!isAuthenticated) return <Navigate to="/login" replace />; return <>{children}</> }
-const PublicRoute = ({ children }: { children: React.ReactNode }) => { const { isAuthenticated, loading } = useAuth(); if (loading) return <LoadingScreen />; if (isAuthenticated) return <Navigate to="/dashboard" replace />; return <>{children}</> }
-const App = () => <AuthProvider><ThemeProvider><LanguageProvider><Routes><Route path="/login" element={<PublicRoute><Suspense fallback={<LoadingScreen />}><Login /></Suspense></PublicRoute>} /><Route path="/register" element={<PublicRoute><Suspense fallback={<LoadingScreen />}><Register /></Suspense></PublicRoute>} /><Route path="/forgot-password" element={<PublicRoute><Suspense fallback={<LoadingScreen />}><ForgotPassword /></Suspense></PublicRoute>} /><Route element={<ProtectedRoute><Layout /></ProtectedRoute>}><Route path="/dashboard" element={<Suspense fallback={<LoadingScreen />}><Dashboard /></Suspense>} /><Route path="/command-center" element={<Suspense fallback={<LoadingScreen />}><AegisCommandCenterPage /></Suspense>} /><Route path="/projects" element={<Suspense fallback={<LoadingScreen />}><Projects /></Suspense>} /><Route path="/projects/:id" element={<Suspense fallback={<LoadingScreen />}><ProjectDetail /></Suspense>} /><Route path="/assets" element={<Suspense fallback={<LoadingScreen />}><Assets /></Suspense>} /><Route path="/validations/new" element={<Suspense fallback={<LoadingScreen />}><NewValidation /></Suspense>} /><Route path="/validations/:id/progress" element={<Suspense fallback={<LoadingScreen />}><ScanProgress /></Suspense>} /><Route path="/validations/:id/results" element={<Suspense fallback={<LoadingScreen />}><ScanResults /></Suspense>} /><Route path="/scan" element={<Suspense fallback={<LoadingScreen />}><ScanPage /></Suspense>} /><Route path="/scan/:id/progress" element={<Suspense fallback={<LoadingScreen />}><ScanProgress /></Suspense>} /><Route path="/scan/:id/results" element={<Suspense fallback={<LoadingScreen />}><ScanResults /></Suspense>} /><Route path="/vulnerabilities" element={<Suspense fallback={<LoadingScreen />}><Vulnerabilities /></Suspense>} /><Route path="/vulnerabilities/:id" element={<Suspense fallback={<LoadingScreen />}><VulnerabilityDetail /></Suspense>} /><Route path="/reports" element={<Suspense fallback={<LoadingScreen />}><Reports /></Suspense>} /><Route path="/reports/:id" element={<Suspense fallback={<LoadingScreen />}><ReportDetail /></Suspense>} /><Route path="/compliance" element={<Suspense fallback={<LoadingScreen />}><Compliance /></Suspense>} /><Route path="/compliance/intelligence" element={<Suspense fallback={<LoadingScreen />}><ComplianceIntelligence /></Suspense>} /><Route path="/assurance" element={<Suspense fallback={<LoadingScreen />}><SecurityAssurance /></Suspense>} /><Route path="/assurance/continuous" element={<Suspense fallback={<LoadingScreen />}><ContinuousAssurance /></Suspense>} /><Route path="/assurance/conflicts" element={<Suspense fallback={<LoadingScreen />}><CorrelationConflict /></Suspense>} /><Route path="/assurance/evidence" element={<Suspense fallback={<LoadingScreen />}><CorrelatedEvidenceGraph /></Suspense>} /><Route path="/assurance/graph" element={<Suspense fallback={<LoadingScreen />}><AssuranceGraphPage /></Suspense>} /><Route path="/assurance/triage" element={<Suspense fallback={<LoadingScreen />}><AutonomousTriagePage /></Suspense>} /><Route path="/assurance/decisions" element={<Suspense fallback={<LoadingScreen />}><SecurityDecisionPage /></Suspense>} /><Route path="/assurance/actions" element={<Suspense fallback={<LoadingScreen />}><DecisionActionPage /></Suspense>} /><Route path="/assurance/actions/:actionId" element={<Suspense fallback={<LoadingScreen />}><DecisionActionDetailPage /></Suspense>} /><Route path="/assurance/workflow" element={<Suspense fallback={<LoadingScreen />}><WorkflowControlTowerPage /></Suspense>} /><Route path="/assurance/governance" element={<Suspense fallback={<LoadingScreen />}><GovernancePage /></Suspense>} /><Route path="/assurance/policies" element={<Suspense fallback={<LoadingScreen />}><PolicyStudioPage /></Suspense>} /><Route path="/assurance/policies/simulate" element={<Suspense fallback={<LoadingScreen />}><PolicySimulationPage /></Suspense>} /><Route path="/knowledge" element={<Suspense fallback={<LoadingScreen />}><KnowledgeBase /></Suspense>} /><Route path="/digital-twin" element={<Suspense fallback={<LoadingScreen />}><DigitalTwin /></Suspense>} /><Route path="/posture" element={<Suspense fallback={<LoadingScreen />}><SecurityPosture /></Suspense>} /><Route path="/executive" element={<Suspense fallback={<LoadingScreen />}><CISOExecutivePage /></Suspense>} /><Route path="/users" element={<Suspense fallback={<LoadingScreen />}><Users /></Suspense>} /><Route path="/settings" element={<Suspense fallback={<LoadingScreen />}><Settings /></Suspense>} /><Route path="/system" element={<Suspense fallback={<LoadingScreen />}><SystemMonitor /></Suspense>} /><Route path="/audit" element={<Suspense fallback={<LoadingScreen />}><AuditLogs /></Suspense>} /><Route path="/notifications" element={<Suspense fallback={<LoadingScreen />}><Notifications /></Suspense>} /><Route path="/" element={<Navigate to="/dashboard" replace />} /></Route><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></LanguageProvider></ThemeProvider></AuthProvider>
+
+const PublicRoute = ({ children }: { children: React.ReactNode }) => {
+  const { isAuthenticated, loading } = useAuth()
+  if (loading) return <LoadingScreen />
+  if (isAuthenticated) return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
+const Page = ({ children }: { children: React.ReactNode }) => <Suspense fallback={<LoadingScreen />}>{children}</Suspense>
+
+const App = () => (
+  <AuthProvider>
+    <ThemeProvider>
+      <LanguageProvider>
+        <Routes>
+          <Route path="/login" element={<PublicRoute><Page><Login /></Page></PublicRoute>} />
+          <Route path="/register" element={<PublicRoute><Page><Register /></Page></PublicRoute>} />
+          <Route path="/forgot-password" element={<PublicRoute><Page><ForgotPassword /></Page></PublicRoute>} />
+          <Route element={<RouteGuard><Layout /></RouteGuard>}>
+            <Route path="/dashboard" element={<Page><Dashboard /></Page>} />
+            <Route path="/command-center" element={<Page><AegisCommandCenterPage /></Page>} />
+            <Route path="/projects" element={<Page><Projects /></Page>} />
+            <Route path="/projects/:id" element={<Page><ProjectDetail /></Page>} />
+            <Route path="/assets" element={<Page><Assets /></Page>} />
+            <Route path="/validations/new" element={<Page><NewValidation /></Page>} />
+            <Route path="/validations/:id/progress" element={<Page><ScanProgress /></Page>} />
+            <Route path="/validations/:id/results" element={<Page><ScanResults /></Page>} />
+            <Route path="/scan" element={<Page><ScanPage /></Page>} />
+            <Route path="/scan/:id/progress" element={<Page><ScanProgress /></Page>} />
+            <Route path="/scan/:id/results" element={<Page><ScanResults /></Page>} />
+            <Route path="/vulnerabilities" element={<Page><Vulnerabilities /></Page>} />
+            <Route path="/vulnerabilities/:id" element={<Page><VulnerabilityDetail /></Page>} />
+            <Route path="/reports" element={<Page><Reports /></Page>} />
+            <Route path="/reports/:id" element={<Page><ReportDetail /></Page>} />
+            <Route path="/compliance" element={<Page><Compliance /></Page>} />
+            <Route path="/compliance/intelligence" element={<Page><ComplianceIntelligence /></Page>} />
+            <Route path="/assurance" element={<Page><SecurityAssurance /></Page>} />
+            <Route path="/assurance/continuous" element={<Page><ContinuousAssurance /></Page>} />
+            <Route path="/assurance/conflicts" element={<Page><CorrelationConflict /></Page>} />
+            <Route path="/assurance/evidence" element={<Page><CorrelatedEvidenceGraph /></Page>} />
+            <Route path="/assurance/graph" element={<Page><AssuranceGraphPage /></Page>} />
+            <Route path="/assurance/triage" element={<Page><AutonomousTriagePage /></Page>} />
+            <Route path="/assurance/decisions" element={<Page><SecurityDecisionPage /></Page>} />
+            <Route path="/assurance/actions" element={<Page><DecisionActionPage /></Page>} />
+            <Route path="/assurance/actions/:actionId" element={<Page><DecisionActionDetailPage /></Page>} />
+            <Route path="/assurance/workflow" element={<Page><WorkflowControlTowerPage /></Page>} />
+            <Route path="/assurance/governance" element={<Page><GovernancePage /></Page>} />
+            <Route path="/assurance/policies" element={<Page><PolicyStudioPage /></Page>} />
+            <Route path="/assurance/policies/simulate" element={<Page><PolicySimulationPage /></Page>} />
+            <Route path="/knowledge" element={<Page><KnowledgeBase /></Page>} />
+            <Route path="/digital-twin" element={<Page><DigitalTwin /></Page>} />
+            <Route path="/posture" element={<Page><SecurityPosture /></Page>} />
+            <Route path="/executive" element={<Page><CISOExecutivePage /></Page>} />
+            <Route path="/users" element={<Page><Users /></Page>} />
+            <Route path="/settings" element={<Page><Settings /></Page>} />
+            <Route path="/system" element={<Page><SystemMonitor /></Page>} />
+            <Route path="/audit" element={<Page><AuditLogs /></Page>} />
+            <Route path="/notifications" element={<Page><Notifications /></Page>} />
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </LanguageProvider>
+    </ThemeProvider>
+  </AuthProvider>
+)
+
 export default App
