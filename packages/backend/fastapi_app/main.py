@@ -14,6 +14,7 @@ from .services.observability import metrics_payload, configure_tracing
 from .services.decision_action_orchestration import initialize_action_store
 from .services.remediation_lifecycle import initialize_lifecycle_store
 from .services.itsm_remediation_v2 import initialize_itsm_store
+from .services.itsm_configuration import startup_validation
 from .services.policy_engine import initialize_policy_store
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.validation_state import get_validation
@@ -27,11 +28,25 @@ logger = logging.getLogger(__name__)
 websocket_manager = WebSocketManager()
 scan_orchestrator = ScanOrchestrator(websocket_manager)
 workflow_bridge = WorkflowLiveBridge(lambda event: websocket_manager.broadcast("workflow", event))
+_itsm_ready = True
+_itsm_config_errors: dict[str, tuple[str, ...]] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _itsm_ready, _itsm_config_errors
     logger.info("Starting AegisScan FastAPI server...")
     configure_tracing()
+    _itsm_ready, states = startup_validation()
+    _itsm_config_errors = {
+        provider: state.errors for provider, state in states.items() if state.enabled and not state.valid
+    }
+    if not _itsm_ready:
+        for provider, errors in _itsm_config_errors.items():
+            logger.critical("ITSM provider configuration rejected: %s: %s", provider, "; ".join(errors))
+        raise RuntimeError(
+            "Invalid ITSM configuration detected during startup. "
+            + " | ".join(f"{provider}: {', '.join(errors)}" for provider, errors in _itsm_config_errors.items())
+        )
     initialize_action_store()
     initialize_lifecycle_store()
     initialize_itsm_store()
@@ -139,6 +154,8 @@ async def health_check():
 
 @app.get("/ready")
 async def readiness_check():
+    if not _itsm_ready:
+        raise HTTPException(status_code=503, detail={"ready": False, "itsm_configuration_errors": _itsm_config_errors})
     return {"ready": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/metrics/celery")
@@ -200,7 +217,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user)):
+async def disable_engine(engine_name: str, user=Depends(get_current_user))
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
