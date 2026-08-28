@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
 from ..services.engine_adapters import execute_engine
+from ..services.remediation_validation import RemediationValidationSuite
 from ..services.validation_state import (
     ALL_ENGINES,
     ENGINE_PHASE,
@@ -54,6 +55,17 @@ class ValidationCreate(BaseModel):
     duration_minutes: int = 60
     rate_limit: int = 5
     extra: dict = Field(default_factory=dict)
+
+
+class RemediationValidationRequest(BaseModel):
+    approval_id: str = Field(min_length=1, max_length=200)
+    authorized: bool
+    workspace: str
+    tools: list[str] = Field(default_factory=lambda: ["semgrep"])
+    validation_target: str | None = None
+    before_score: float | None = Field(default=None, ge=0, le=100)
+    after_score: float | None = Field(default=None, ge=0, le=100)
+    timeout: int = Field(default=180, ge=10, le=900)
 
 
 class ValidationOut(BaseModel):
@@ -141,27 +153,18 @@ async def _broadcast(vid: str, message: dict) -> None:
 
 
 async def _run_real_validation(vid: str) -> None:
-    item = _store.get(vid)
-    if not item:
-        item = get_validation(vid)
+    item = _store.get(vid) or get_validation(vid)
     if not item:
         return
     try:
         item["status"], item["current_phase"], item["progress"] = "running", "initializing", 1
-        item["live_events"].append(
-            make_live_event("validation.started", f"Validation {vid} started", {"target": item["target_value"]})
-        )
+        item["live_events"].append(make_live_event("validation.started", f"Validation {vid} started", {"target": item["target_value"]}))
         persist_validation(vid)
-        await _broadcast(
-            vid,
-            {"type": "validation.started", "validation_id": vid, "progress": 1, "current_phase": "initializing"},
-        )
-
+        await _broadcast(vid, {"type": "validation.started", "validation_id": vid, "progress": 1, "current_phase": "initializing"})
         selected = [engine for engine in ALL_ENGINES if engine in item["engines"]]
         total = len(selected)
         if not total:
             raise RuntimeError("No valid execution engines selected")
-
         for index, engine in enumerate(selected):
             while item.get("status") == "paused":
                 await asyncio.sleep(0.25)
@@ -170,88 +173,38 @@ async def _run_real_validation(vid: str) -> None:
                     item = refreshed
             if item.get("status") == "cancelled":
                 return
-
             phase = ENGINE_PHASE.get(engine, "analysis")
             item["current_phase"] = phase
             item["engines_state"][engine]["status"] = "running"
             item["engines_state"][engine]["progress"] = 1
             persist_validation(vid)
             await _broadcast(vid, {"type": "engine.started", "engine": engine, "phase": phase})
-
-            result = await execute_engine(
-                engine,
-                item["target_type"],
-                item["target_value"],
-                item.get("extra") or {},
-            )
-
+            result = await execute_engine(engine, item["target_type"], item["target_value"], item.get("extra") or {})
             refreshed = get_validation(vid)
             if refreshed:
                 item = refreshed
             if item.get("status") == "cancelled":
                 persist_validation(vid)
                 return
-
             item["results"]["findings"].extend(result.findings)
             item["results"]["evidence"].extend(result.evidence)
             item["results"]["metrics"].append(result.metrics)
-            item["engines_state"][engine].update(
-                {
-                    "findings": len(result.findings),
-                    "error": result.error,
-                    "status": result.status,
-                    "progress": 100,
-                }
-            )
-
+            item["engines_state"][engine].update({"findings": len(result.findings), "error": result.error, "status": result.status, "progress": 100})
             if result.status == "failed":
                 item["error"] = result.error or "Execution failed"
                 item["status"] = "failed"
-                item["current_phase"] = phase
                 persist_validation(vid)
                 await _broadcast(vid, {"type": "engine.failed", "engine": engine, "error": item["error"]})
                 return
-
-            item["live_events"].append(
-                make_live_event(
-                    "evidence.collected",
-                    result.error or f"{engine} produced live evidence",
-                    {"engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)},
-                )
-            )
+            item["live_events"].append(make_live_event("evidence.collected", result.error or f"{engine} produced live evidence", {"engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)}))
             item["progress"] = int(((index + 1) / total) * 100)
-            item["live_events"].append(
-                make_live_event("engine.completed", f"Engine {engine} completed", {"engine": engine, "progress": item["progress"]})
-            )
+            item["live_events"].append(make_live_event("engine.completed", f"Engine {engine} completed", {"engine": engine, "progress": item["progress"]}))
             persist_validation(vid)
             await _broadcast(vid, {"type": "engine.completed", "engine": engine, "overall": item["progress"]})
-
-        item["current_phase"], item["status"], item["progress"], item["completed_at"] = (
-            "completed",
-            "completed",
-            100,
-            now_iso(),
-        )
-        item["live_events"].append(
-            make_live_event(
-                "validation.completed",
-                "Validation completed from real execution adapters",
-                {
-                    "findings": len(item["results"]["findings"]),
-                    "evidence": len(item["results"]["evidence"]),
-                },
-            )
-        )
+        item["current_phase"], item["status"], item["progress"], item["completed_at"] = "completed", "completed", 100, now_iso()
+        item["live_events"].append(make_live_event("validation.completed", "Validation completed from real execution adapters", {"findings": len(item["results"]["findings"]), "evidence": len(item["results"]["evidence"])}))
         persist_validation(vid)
-        await _broadcast(
-            vid,
-            {
-                "type": "validation.completed",
-                "validation_id": vid,
-                "progress": 100,
-                "findings": len(item["results"]["findings"]),
-            },
-        )
+        await _broadcast(vid, {"type": "validation.completed", "validation_id": vid, "progress": 100, "findings": len(item["results"]["findings"])})
     except asyncio.CancelledError:
         item["status"], item["current_phase"], item["completed_at"] = "cancelled", "cancelled", now_iso()
         item["live_events"].append(make_live_event("validation.cancelled", "Validation cancelled"))
@@ -273,49 +226,34 @@ async def create_real_validation(body: ValidationCreate, user: dict = Depends(cu
         raise HTTPException(status_code=400, detail="authorized must be true - scope authorization required")
     if not body.target_value.strip():
         raise HTTPException(status_code=400, detail="target_value is required")
-
     engines = [engine for engine in body.engines if engine in ALL_ENGINES]
     if not engines:
         raise HTTPException(status_code=400, detail="At least one valid execution engine is required")
-
     vid = f"val-{uuid.uuid4().hex[:8]}"
     scope = body.scope or body.target_value.strip()
-    item = {
-        "id": vid,
-        "owner_id": str(user["id"]),
-        "target_type": body.target_type,
-        "target_value": body.target_value.strip(),
-        "profile": body.profile,
-        "engines": engines,
-        "scope": scope,
-        "status": "queued",
-        "progress": 0,
-        "current_phase": "queued",
-        "created_at": now_iso(),
-        "completed_at": None,
-        "audit_note": f"REAL_EXECUTION scope={scope} authorized={body.authorized}",
-        "extra": body.extra,
-        "include_subdomains": body.include_subdomains,
-        "rate_limit": body.rate_limit,
-        "duration_minutes": body.duration_minutes,
-        "engines_state": {engine: engine_state("queued" if engine in engines else "skipped") for engine in ALL_ENGINES},
-        "live_events": [
-            make_live_event(
-                "validation.queued",
-                f"Validation {vid} queued for real execution",
-                {"scope": scope},
-            )
-        ],
-        "groups": GROUPS,
-        "results": {"findings": [], "evidence": [], "metrics": []},
-        "error": None,
-    }
+    item = {"id": vid, "owner_id": str(user["id"]), "target_type": body.target_type, "target_value": body.target_value.strip(), "profile": body.profile, "engines": engines, "scope": scope, "status": "queued", "progress": 0, "current_phase": "queued", "created_at": now_iso(), "completed_at": None, "audit_note": f"REAL_EXECUTION scope={scope} authorized={body.authorized}", "extra": body.extra, "include_subdomains": body.include_subdomains, "rate_limit": body.rate_limit, "duration_minutes": body.duration_minutes, "engines_state": {engine: engine_state("queued" if engine in engines else "skipped") for engine in ALL_ENGINES}, "live_events": [make_live_event("validation.queued", f"Validation {vid} queued for real execution", {"scope": scope})], "groups": GROUPS, "results": {"findings": [], "evidence": [], "metrics": []}, "error": None}
     put_validation(vid, item)
     task = asyncio.create_task(_run_real_validation(vid))
     put_task(vid, task)
     task.add_done_callback(lambda _: persist_validation(vid))
-
     return ValidationOut(**{key: item[key] for key in ValidationOut.model_fields})
+
+
+@router.post("/remediation/validate")
+async def remediation_validate(body: RemediationValidationRequest, user: dict = Depends(current_user)):
+    if not body.authorized:
+        raise HTTPException(status_code=403, detail="authorized scope is required")
+    suite = RemediationValidationSuite()
+    try:
+        result = await suite.validate_workspace(body.model_dump(), tools=body.tools, timeout=body.timeout)
+    except (PermissionError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if body.before_score is not None and body.after_score is not None:
+        result["risk_diff"] = suite.compare_scores(body.before_score, body.after_score)
+    result["approval_id"] = body.approval_id
+    result["validated_by"] = str(user.get("id"))
+    result["validation_mode"] = "real-tool-execution"
+    return result
 
 
 @router.get("/validations/{vid}/progress")
@@ -378,15 +316,4 @@ async def validation_results(vid: str, user: dict = Depends(current_user)):
     if item is None:
         raise HTTPException(status_code=404, detail="Validation not found")
     ensure_owner(item, user)
-    return {
-        "id": vid,
-        "status": item["status"],
-        "target_type": item["target_type"],
-        "target_value": item["target_value"],
-        "scope": item["scope"],
-        "profile": item["profile"],
-        "findings": item.get("results", {}).get("findings", []),
-        "evidence": item.get("results", {}).get("evidence", []),
-        "metrics": item.get("results", {}).get("metrics", []),
-        "error": item.get("error"),
-    }
+    return {"id": vid, "status": item["status"], "target_type": item["target_type"], "target_value": item["target_value"], "scope": item["scope"], "profile": item["profile"], "findings": item.get("results", {}).get("findings", []), "evidence": item.get("results", {}).get("evidence", []), "metrics": item.get("results", {}).get("metrics", []), "error": item.get("error")}
