@@ -28,7 +28,7 @@ class JiraProvider(TicketProvider):
             return TicketResult(self.name, "not_configured", None, None, {"required": ["JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_USER_EMAIL", "JIRA_PROJECT_KEY"]})
         adf = {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in description.splitlines() if line]}
         payload = {"fields": {"project": {"key": project}, "summary": title[:255], "issuetype": {"name": os.getenv("JIRA_ISSUE_TYPE", "Task")}, "description": adf, "priority": {"name": priority.title()}, "labels": ["aegisscan", "security-validation"]}}
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True, auth=(email, token), headers={"Accept": "application/json"}) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, auth=(email, token), headers={"Accept": "application/json", "Content-Type": "application/json"}) as client:
             response = await client.post(f"{base}/rest/api/3/issue", json=payload)
             response.raise_for_status()
             data = response.json()
@@ -44,13 +44,18 @@ class ServiceNowProvider(TicketProvider):
             return TicketResult(self.name, "not_configured", None, None, {"required": ["SERVICENOW_BASE_URL", "SERVICENOW_API_TOKEN"]})
         urgency = {"critical": "1", "high": "1", "medium": "2", "low": "3"}.get(priority.lower(), "3")
         payload = {"short_description": title[:160], "description": description, "urgency": urgency, "impact": urgency, "category": "Security", "u_aegisscan_finding_id": str(finding.get("id") or finding.get("finding_id") or "")}
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers={"Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json"}) as client:
             response = await client.post(f"{base}/api/now/table/{os.getenv('SERVICENOW_TABLE', 'incident')}", json=payload)
             response.raise_for_status()
             wrapper = response.json()
             data = wrapper.get("result", wrapper)
         number, sys_id = data.get("number"), data.get("sys_id")
-        return TicketResult(self.name, "created", number or sys_id, f"{base}/nav_to.do?uri=incident.do?sys_id={sys_id}" if sys_id else None, data)
+        response_payload = dict(data)
+        if number:
+            response_payload["number"] = number
+        if sys_id:
+            response_payload["sys_id"] = sys_id
+        return TicketResult(self.name, "created", sys_id or number, f"{base}/nav_to.do?uri=incident.do?sys_id={sys_id}" if sys_id else None, response_payload)
 
 class TicketOrchestrator:
     def __init__(self, providers: list[TicketProvider] | None = None) -> None:
