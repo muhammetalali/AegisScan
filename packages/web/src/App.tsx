@@ -38,6 +38,7 @@ const GovernancePage = lazy(() => import('./pages/assurance/GovernancePage').the
 const PolicyStudioPage = lazy(() => import('./pages/assurance/PolicyStudioPage').then(m => ({ default: m.PolicyStudioPage })))
 const PolicySimulationPage = lazy(() => import('./pages/assurance/PolicySimulationPage').then(m => ({ default: m.PolicySimulationPage })))
 const KnowledgeBase = lazy(() => import('./pages/knowledge/KnowledgeBase').then(m => ({ default: m.KnowledgeBase })))
+const KnowledgeArticle = lazy(() => import('./pages/knowledge/KnowledgeArticle').then(m => ({ default: m.KnowledgeArticle })))
 const DigitalTwin = lazy(() => import('./pages/digital-twin/DigitalTwin').then(m => ({ default: m.DigitalTwin })))
 const SecurityPosture = lazy(() => import('./pages/posture/SecurityPosture').then(m => ({ default: m.SecurityPosture })))
 const CISOExecutivePage = lazy(() => import('./pages/executive/CISOExecutivePage').then(m => ({ default: m.CISOExecutivePage })))
@@ -55,7 +56,6 @@ const PublicRoute = ({ children }: { children: React.ReactNode }) => {
   if (isAuthenticated) return <Navigate to="/dashboard" replace />
   return <>{children}</>
 }
-
 const Page = ({ children }: { children: React.ReactNode }) => <Suspense fallback={<LoadingScreen />}>{children}</Suspense>
 
 const App = () => (
@@ -99,6 +99,7 @@ const App = () => (
             <Route path="/assurance/policies" element={<Page><PolicyStudioPage /></Page>} />
             <Route path="/assurance/policies/simulate" element={<Page><PolicySimulationPage /></Page>} />
             <Route path="/knowledge" element={<Page><KnowledgeBase /></Page>} />
+            <Route path="/knowledge/:slug" element={<Page><KnowledgeArticle /></Page>} />
             <Route path="/digital-twin" element={<Page><DigitalTwin /></Page>} />
             <Route path="/posture" element={<Page><SecurityPosture /></Page>} />
             <Route path="/executive" element={<Page><CISOExecutivePage /></Page>} />
