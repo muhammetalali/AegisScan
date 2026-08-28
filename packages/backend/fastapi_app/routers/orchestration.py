@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
-from ..services.itsm_remediation_v2 import create_case
+from ..services.itsm_remediation_resilient import create_case
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
