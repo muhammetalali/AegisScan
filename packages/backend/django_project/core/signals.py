@@ -3,7 +3,7 @@
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from core.events import publish_dashboard_event
+from core.events import publish_dashboard_event, publish_user_dashboard_event
 
 
 def _emit(instance, reason):
@@ -24,26 +24,31 @@ def project_changed(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender="projects.Project")
 def project_deleted(sender, instance, **kwargs):
-    # Project deletion cascades its domain records, so the project event is enough
-    # to invalidate the dashboard for the owner/members still addressable here.
     _emit(instance, "project.deleted")
 
 
 @receiver(post_save, sender="projects.ProjectMembership")
 def membership_changed(sender, instance, created, **kwargs):
-    _emit(instance, "membership.created" if created else "membership.updated")
-    # The membership itself changes who should receive future events. Notify the
-    # affected user directly so their dashboard refreshes immediately.
-    publish_dashboard_event(
+    publish_user_dashboard_event(
+        user_id=instance.user_id,
         project_id=instance.project_id,
-        reason="membership.changed",
+        reason="membership.created" if created else "membership.updated",
         entity="ProjectMembership",
         entity_id=instance.pk,
     )
+    # Existing members also need their aggregate counts refreshed.
+    _emit(instance, "membership.changed")
 
 
 @receiver(post_delete, sender="projects.ProjectMembership")
 def membership_deleted(sender, instance, **kwargs):
+    publish_user_dashboard_event(
+        user_id=instance.user_id,
+        project_id=instance.project_id,
+        reason="membership.deleted",
+        entity="ProjectMembership",
+        entity_id=instance.pk,
+    )
     _emit(instance, "membership.deleted")
 
 
