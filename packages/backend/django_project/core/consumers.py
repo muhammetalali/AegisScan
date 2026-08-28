@@ -1,4 +1,3 @@
-import asyncio
 import json
 
 from channels.db import database_sync_to_async
@@ -13,8 +12,9 @@ class BaseConsumer(AsyncWebsocketConsumer):
         self.user = self.scope.get("user")
         if not self.user or self.user.is_anonymous:
             await self.close(code=4001)
-            return
+            return False
         await self.accept()
+        return True
 
     async def disconnect(self, close_code):
         pass
@@ -25,7 +25,8 @@ class BaseConsumer(AsyncWebsocketConsumer):
 
 class ScanProgressConsumer(BaseConsumer):
     async def connect(self):
-        await super().connect()
+        if not await super().connect():
+            return
         self.scan_id = self.scope["url_route"]["kwargs"]["scan_id"]
         self.room_group_name = f"scan_{self.scan_id}"
 
@@ -77,32 +78,35 @@ class ScanProgressConsumer(BaseConsumer):
 
 
 class DashboardConsumer(BaseConsumer):
-    """Authenticated live dashboard stream with tenant-scoped snapshots."""
+    """Event-driven dashboard stream; Redis/Channels wakes it only after domain changes."""
 
     async def connect(self):
-        await super().connect()
-        self.poll_task = asyncio.create_task(self._stream_snapshots())
+        if not await super().connect():
+            return
+        self.dashboard_group_name = f"dashboard_user_{self.user.id}"
+        await self.channel_layer.group_add(self.dashboard_group_name, self.channel_name)
+        await self._send_snapshot(reason="connected")
 
     async def disconnect(self, close_code):
-        task = getattr(self, "poll_task", None)
-        if task:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        if hasattr(self, "dashboard_group_name"):
+            await self.channel_layer.group_discard(self.dashboard_group_name, self.channel_name)
 
-    async def _stream_snapshots(self):
-        previous = None
-        try:
-            while True:
-                snapshot = await self.get_snapshot()
-                if snapshot != previous:
-                    await self.send_json({"type": "dashboard_snapshot", "data": snapshot})
-                    previous = snapshot
-                await asyncio.sleep(10)
-        except asyncio.CancelledError:
-            raise
+    async def dashboard_changed(self, event):
+        await self._send_snapshot(
+            reason=event.get("reason", "dashboard.changed"),
+            project_id=event.get("project_id"),
+        )
+
+    async def _send_snapshot(self, *, reason, project_id=None):
+        snapshot = await self.get_snapshot()
+        await self.send_json({
+            "type": "dashboard_snapshot",
+            "data": snapshot,
+            "meta": {
+                "reason": reason,
+                "project_id": project_id,
+            },
+        })
 
     @database_sync_to_async
     def get_snapshot(self):
@@ -113,7 +117,8 @@ class DashboardConsumer(BaseConsumer):
 
 class NotificationConsumer(BaseConsumer):
     async def connect(self):
-        await super().connect()
+        if not await super().connect():
+            return
         self.user_group_name = f"user_{self.user.id}"
         await self.channel_layer.group_add(self.user_group_name, self.channel_name)
 
@@ -135,7 +140,8 @@ class NotificationConsumer(BaseConsumer):
 
 class SystemMonitorConsumer(BaseConsumer):
     async def connect(self):
-        await super().connect()
+        if not await super().connect():
+            return
         if not self.user.is_staff:
             await self.close(code=4003)
             return
