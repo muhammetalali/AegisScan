@@ -16,10 +16,13 @@ on:
       - 'packages/backend/fastapi_app/services/itsm_provider_health.py'
       - 'packages/backend/fastapi_app/routers/orchestration.py'
       - 'packages/backend/fastapi_app/routers/engine_capabilities.py'
+      - 'packages/backend/fastapi_app/routers/capability_control.py'
+      - 'packages/backend/fastapi_app/main.py'
       - 'packages/backend/tests/test_itsm_remediation.py'
       - 'packages/backend/tests/test_itsm_configuration.py'
       - 'packages/backend/tests/test_itsm_capability.py'
       - 'packages/backend/tests/test_capability_control_plane.py'
+      - 'packages/backend/tests/test_itsm_provider_health.py'
       - 'packages/backend/scripts/itsm_real_e2e.py'
       - '.github/workflows/itsm-integration-gate.yml'
 
@@ -74,5 +77,7 @@ jobs:
         run: python -m pytest -q tests/test_itsm_configuration.py
       - name: Capability contract tests
         run: python -m pytest -q tests/test_itsm_capability.py tests/test_capability_control_plane.py
+      - name: Provider health contract tests
+        run: python -m pytest -q tests/test_itsm_provider_health.py
       - name: ITSM lifecycle contract tests
         run: python -m pytest -q tests/test_itsm_remediation.py
