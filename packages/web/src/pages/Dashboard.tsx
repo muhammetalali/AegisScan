@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ShieldCheck, FolderKanban, Server, Activity, AlertTriangle, TrendingUp, Plus, FileText, Settings, Bug, ArrowUpRight, RefreshCw, ArrowRight, CheckCircle2 } from 'lucide-react'
+import { ShieldCheck, FolderKanban, Server, Activity, AlertTriangle, TrendingUp, Plus, FileText, Settings, Bug, ArrowUpRight, RefreshCw, ArrowRight, CheckCircle2, type LucideIcon } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
@@ -19,7 +19,7 @@ interface RiskDistribution { critical?: number; high?: number; medium?: number; 
 interface TrendPoint { date: string; score: number }
 interface RecentValidation { id?: string; validation_id?: string; target_value?: string; target?: string; project_name?: string; status?: string }
 
-const StatCard = ({ icon: Icon, label, value, hint, tone = 'default' }: { icon: typeof ShieldCheck; label: string; value: number | string | undefined; hint: string; tone?: 'default' | 'danger' | 'warning' }) => (
+const StatCard = ({ icon: Icon, label, value, hint, tone = 'default' }: { icon: LucideIcon; label: string; value: number | string | undefined; hint: string; tone?: 'default' | 'danger' | 'warning' }) => (
   <div className="aegis-surface aegis-surface-hover p-4">
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
