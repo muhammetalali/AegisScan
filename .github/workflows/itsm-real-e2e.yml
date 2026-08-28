@@ -71,14 +71,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install backend dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE/packages/backend"
-          test -f requirements.txt
-          python -m pip install --upgrade pip
-          python -m pip install -r "$GITHUB_WORKSPACE/packages/backend/requirements.txt"
+      -- name: Install backend dependencies
+  shell: bash
+  run: |
+    cd "$GITHUB_WORKSPACE/packages/backend"
+    test -f requirements.txt
+    python -m pip install --upgrade pip
+    python -m pip install -r "$GITHUB_WORKSPACE/packages/backend/requirements.txt"
 
       - name: Verify required runtime secrets are present
         shell: bash
