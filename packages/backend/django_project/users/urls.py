@@ -4,6 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .views import UserViewSet, TeamViewSet, APIKeyViewSet, UserSessionViewSet
 from .auth_security import SecureTokenObtainPairView, request_password_reset, confirm_password_reset, enable_2fa, verify_2fa, disable_2fa
 from .email_security import register_user, verify_email, resend_verification
+from core.dashboard import DashboardRecentValidationsView, DashboardRiskDistributionView, DashboardSummaryView, DashboardTrendsView
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
@@ -22,5 +23,9 @@ urlpatterns = [
     path('auth/2fa/enable/', enable_2fa, name='enable_2fa'),
     path('auth/2fa/verify/', verify_2fa, name='verify_2fa'),
     path('auth/2fa/disable/', disable_2fa, name='disable_2fa'),
+    path('dashboard/summary', DashboardSummaryView.as_view(), name='dashboard-summary'),
+    path('dashboard/risk-distribution', DashboardRiskDistributionView.as_view(), name='dashboard-risk-distribution'),
+    path('dashboard/trends', DashboardTrendsView.as_view(), name='dashboard-trends'),
+    path('dashboard/recent-validations', DashboardRecentValidationsView.as_view(), name='dashboard-recent-validations'),
     path('', include(router.urls)),
 ]
