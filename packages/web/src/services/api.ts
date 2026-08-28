@@ -92,8 +92,13 @@ export const uploadFile = async (file: File, onProgress?: (progress: number) => 
 export const createWebSocket = (url: string, protocols?: string | string[]) => {
   const { accessToken } = useAuthStore.getState()
   const browserWs = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-  const wsUrl = `${browserWs}${url}${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ''}`
-  return new WebSocket(wsUrl, protocols)
+  const wsUrl = `${browserWs}${url}`
+  const existingProtocols = protocols ? (Array.isArray(protocols) ? protocols : [protocols]) : []
+  // Browser WebSockets cannot set Authorization headers. Use the negotiated
+  // subprotocol instead of putting the JWT in the URL, where it can leak into
+  // access logs, browser history, proxies, and monitoring systems.
+  const wsProtocols = accessToken ? ['bearer', accessToken, ...existingProtocols] : existingProtocols
+  return new WebSocket(wsUrl, wsProtocols.length ? wsProtocols : undefined)
 }
 
 export default api
