@@ -4,6 +4,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from django.db import transaction
 from django.utils import timezone
@@ -21,6 +22,7 @@ from .services import (
 @dataclass(frozen=True)
 class ExecutionResult:
     execution_id: str
+    session_id: str
     kind: str
     operation: str
     target: str
@@ -32,9 +34,6 @@ class ExecutionResult:
     evidence_ref: str
 
 
-# Bounded adapter: no shell=True, no user-supplied executable path, and no
-# arbitrary command strings. Enterprise adapters can implement the same policy
-# contract without bypassing the session/evidence controls.
 SAFE_OPERATIONS: dict[str, tuple[str, ...]] = {
     "identity": ("whoami",),
     "hostname": ("hostname",),
@@ -59,6 +58,7 @@ def _truncate(value: str, limit: int = 12000) -> str:
 def execute_with_identity(
     *,
     token: str,
+    expected_session_id: UUID | str,
     operation: str,
     target: str = "local",
     kind: str = "command",
@@ -73,6 +73,8 @@ def execute_with_identity(
         raise SessionPolicyError("timeout_seconds must be between 1 and 60")
 
     identity, session = authenticate_execution_identity(token)
+    if str(session.id) != str(expected_session_id):
+        raise SessionAccessError("execution identity is not bound to this security test session")
     if not _target_in_scope(session, target):
         raise SessionPolicyError("target is outside the session scope")
 
@@ -108,7 +110,12 @@ def execute_with_identity(
             target=target,
             action=operation,
             status="started",
-            data={"execution_id": execution_id, "kind": kind, "adapter": "bounded_local", "argv": argv},
+            data={
+                "execution_id": execution_id,
+                "kind": kind,
+                "adapter": "bounded_local",
+                "argv": argv,
+            },
         )
 
     try:
@@ -128,6 +135,9 @@ def execute_with_identity(
         status = "timeout"
         stdout = _truncate(exc.stdout or "") if isinstance(exc.stdout, str) else ""
         stderr = _truncate(exc.stderr or "execution timed out") if isinstance(exc.stderr, str) else "execution timed out"
+    except OSError as exc:
+        status = "failed"
+        stderr = _truncate(str(exc))
     finally:
         duration_ms = int((time.perf_counter() - started) * 1000)
 
@@ -157,6 +167,7 @@ def execute_with_identity(
 
     return ExecutionResult(
         execution_id=execution_id,
+        session_id=str(session.id),
         kind=kind,
         operation=operation,
         target=target,
