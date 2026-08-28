@@ -40,7 +40,7 @@ class AssuranceRiskPipeline:
             session_id=session_id,
             user_id=owner_id,
             event_type=event_type,
-            capability="passive_validate",
+            capability="",
             target=target,
             action=action,
             status=status,
@@ -157,6 +157,8 @@ class AssuranceRiskPipeline:
                 "severity": dynamic.severity,
                 "remediation_priority": remediation_priority,
                 "sources": list(fusion.corroborated_sources),
+                "remediation_validation_present": remediation_result is not None,
+                "dependency_intelligence_present": dependency_result is not None,
             },
         )
         return result
