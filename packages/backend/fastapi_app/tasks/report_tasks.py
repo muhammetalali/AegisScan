@@ -247,18 +247,12 @@ def generate_report(self, report_id: str, config: dict[str, Any] | None = None) 
     except Exception as exc:
         logger.exception("Report generation failed for %s", report_id)
         try:
-            if not connection.in_atomic_block:
-                _prepare_database_connection()
-                Report.objects.filter(pk=report_id).update(
-                    status=Report.Status.FAILED,
-                    error_message=str(exc),
-                    generation_duration=(datetime.now(timezone.utc) - started).total_seconds(),
-                )
-            else:
-                logger.warning(
-                    "Skipping FAILED-state persistence inside an active transaction for report %s",
-                    report_id,
-                )
+            _prepare_database_connection()
+            Report.objects.filter(pk=report_id).update(
+                status=Report.Status.FAILED,
+                error_message=str(exc),
+                generation_duration=(datetime.now(timezone.utc) - started).total_seconds(),
+            )
         except Exception:
             logger.exception("Failed to persist FAILED state for report %s", report_id)
         raise
