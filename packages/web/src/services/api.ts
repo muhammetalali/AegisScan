@@ -31,8 +31,9 @@ api.interceptors.response.use(
     const url = originalRequest?.url || ''
     const isRefreshRequest = url.includes('/auth/refresh/')
     const isAuthRequest = url.includes('/auth/login/') || url.includes('/auth/register/')
+    const isLogoutRequest = url.includes('/users/logout/')
 
-    if (error.response?.status !== 401 || !originalRequest || originalRequest._retry || isRefreshRequest || isAuthRequest) {
+    if (error.response?.status !== 401 || !originalRequest || originalRequest._retry || isRefreshRequest || isAuthRequest || isLogoutRequest) {
       return Promise.reject(error)
     }
 
