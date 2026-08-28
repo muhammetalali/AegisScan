@@ -14,6 +14,41 @@ jobs:
   backend-quality:
     name: Backend quality
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      SECRET_KEY: "ci-backend-secret-key-012345678901234567890123"
+      JWT_SECRET_KEY: "ci-backend-jwt-secret-012345678901234567890123"
+      DEBUG: "1"
+      ALLOWED_HOSTS: "localhost,127.0.0.1"
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      WS_ALLOW_QUERY_TOKEN: "0"
+      LOG_TO_FILE: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,30 +75,15 @@ jobs:
           JWT_SECRET_KEY: "ci-production-jwt-secret-012345678901234567890123"
           DEBUG: "0"
           ALLOWED_HOSTS: "localhost,127.0.0.1"
-          DATABASE_URL: sqlite:///ci.sqlite3
+          DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
           REDIS_URL: redis://localhost:6379/0
           WS_ALLOW_QUERY_TOKEN: "0"
         run: python manage.py check --deploy
       - name: Django application audit
         working-directory: packages/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          SECRET_KEY: aegisscan-ci-secret
-          DEBUG: "1"
-          ALLOWED_HOSTS: "*"
-          DATABASE_URL: sqlite:///ci.sqlite3
-          REDIS_URL: redis://localhost:6379/0
         run: python -c "import django; django.setup(); print('DJANGO_SETUP_OK')"
       - name: Django API tests
         working-directory: packages/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          SECRET_KEY: aegisscan-ci-secret
-          JWT_SECRET_KEY: aegisscan-ci-jwt-secret
-          DEBUG: "1"
-          ALLOWED_HOSTS: "*"
-          DATABASE_URL: sqlite:///ci.sqlite3
-          REDIS_URL: redis://localhost:6379/0
         run: python -m pytest -q tests
       - name: Core pytest suite
         working-directory: .
