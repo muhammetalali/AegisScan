@@ -31,10 +31,19 @@ class VulnerabilityViewSet(viewsets.ModelViewSet):
             user=user, role__in=[ProjectMembership.Role.OWNER, ProjectMembership.Role.ADMIN]
         ).exists()
 
+    def perform_create(self, serializer):
+        project = serializer.validated_data.get("project")
+        if project is None or not self._can_manage(project):
+            raise PermissionDenied("Only project owners and administrators can create vulnerabilities.")
+        serializer.save()
+
     def perform_update(self, serializer):
         instance = serializer.instance
         if not self._can_manage(instance.project):
             raise PermissionDenied("Only project owners and administrators can update vulnerabilities.")
+        project = serializer.validated_data.get("project", instance.project)
+        if project != instance.project and not self._can_manage(project):
+            raise PermissionDenied("You cannot move a vulnerability into a project you do not manage.")
         old_status = instance.status
         updated = serializer.save()
         if old_status != updated.status:
@@ -43,6 +52,11 @@ class VulnerabilityViewSet(viewsets.ModelViewSet):
                 changed_by=self.request.user,
             )
 
+    def perform_destroy(self, instance):
+        if not self._can_manage(instance.project):
+            raise PermissionDenied("Only project owners and administrators can delete vulnerabilities.")
+        instance.delete()
+
     @action(detail=True, methods=["get"])
     def evidences(self, request, pk=None):
         return Response(VulnerabilityEvidenceSerializer(self.get_object().evidences.all(), many=True).data)
@@ -50,6 +64,8 @@ class VulnerabilityViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def notes(self, request, pk=None):
         vulnerability = self.get_object()
+        if not self._can_manage(vulnerability.project):
+            raise PermissionDenied("Only project owners and administrators can add vulnerability notes.")
         serializer = VulnerabilityNoteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         note = serializer.save(vulnerability=vulnerability, author=request.user)
@@ -78,8 +94,27 @@ class VulnerabilityEvidenceViewSet(viewsets.ModelViewSet):
             return qs
         return qs.filter(Q(vulnerability__project__owner=user) | Q(vulnerability__project__members=user)).distinct()
 
+    def _can_manage(self, vulnerability):
+        user = self.request.user
+        return user.is_superuser or vulnerability.project.owner_id == user.id or vulnerability.project.memberships.filter(
+            user=user, role__in=[ProjectMembership.Role.OWNER, ProjectMembership.Role.ADMIN]
+        ).exists()
+
     def perform_create(self, serializer):
+        vulnerability = serializer.validated_data.get("vulnerability")
+        if vulnerability is None or not self._can_manage(vulnerability):
+            raise PermissionDenied("You do not have access to this vulnerability.")
         serializer.save()
+
+    def perform_update(self, serializer):
+        if not self._can_manage(serializer.instance.vulnerability):
+            raise PermissionDenied("You do not have access to this evidence.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not self._can_manage(instance.vulnerability):
+            raise PermissionDenied("You do not have access to this evidence.")
+        instance.delete()
 
 
 class VulnerabilityNoteViewSet(viewsets.ModelViewSet):
@@ -93,5 +128,24 @@ class VulnerabilityNoteViewSet(viewsets.ModelViewSet):
             return qs
         return qs.filter(Q(vulnerability__project__owner=user) | Q(vulnerability__project__members=user)).distinct()
 
+    def _can_manage(self, vulnerability):
+        user = self.request.user
+        return user.is_superuser or vulnerability.project.owner_id == user.id or vulnerability.project.memberships.filter(
+            user=user, role__in=[ProjectMembership.Role.OWNER, ProjectMembership.Role.ADMIN]
+        ).exists()
+
     def perform_create(self, serializer):
+        vulnerability = serializer.validated_data.get("vulnerability")
+        if vulnerability is None or not self._can_manage(vulnerability):
+            raise PermissionDenied("You do not have access to this vulnerability.")
         serializer.save(author=self.request.user)
+
+    def perform_update(self, serializer):
+        if not self._can_manage(serializer.instance.vulnerability):
+            raise PermissionDenied("You do not have access to this note.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not self._can_manage(instance.vulnerability):
+            raise PermissionDenied("You do not have access to this note.")
+        instance.delete()
