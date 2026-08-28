@@ -69,24 +69,47 @@ _store: dict[str, dict[str, Any]] = {}
 _tasks: dict[str, asyncio.Task[Any]] = {}
 
 _REDIS_PREFIX = "aegis:validation:"
-_redis = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+_REDIS_TTL_SECONDS = 86400
+_redis_client: redis.Redis | None = None
 
 
 def _redis_key(validation_id: str) -> str:
     return f"{_REDIS_PREFIX}{validation_id}"
 
 
+def _get_redis() -> redis.Redis:
+    """Create the Redis client lazily in the current worker process.
+
+    Uvicorn/Gunicorn may fork worker processes. Creating a Redis client at
+    module import time can inherit a connection pool across forks. Keeping
+    construction lazy guarantees that each worker owns its own pool.
+    """
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.Redis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            health_check_interval=30,
+        )
+    return _redis_client
+
+
 def _redis_get(validation_id: str) -> dict[str, Any] | None:
     try:
-        raw = _redis.get(_redis_key(validation_id))
-    except Exception:
+        raw = _get_redis().get(_redis_key(validation_id))
+    except (redis.RedisError, OSError):
         return None
+
     if not raw:
         return None
+
     try:
         value = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
         return None
+
     return value if isinstance(value, dict) else None
 
 
@@ -122,8 +145,7 @@ def make_live_event(
 
 
 def get_validation(validation_id: str) -> dict[str, Any] | None:
-    # Redis is the shared source of truth. Local state is only a fallback
-    # when Redis is temporarily unavailable.
+    """Read shared validation state from Redis before local fallback."""
     remote = _redis_get(validation_id)
     if remote is not None:
         _store[validation_id] = remote
@@ -131,30 +153,43 @@ def get_validation(validation_id: str) -> dict[str, Any] | None:
     return _store.get(validation_id)
 
 
-def put_validation(validation_id: str, value: dict[str, Any]) -> None:
+def put_validation(
+    validation_id: str,
+    value: dict[str, Any],
+) -> None:
     _store[validation_id] = value
     persist_validation(validation_id)
 
 
-def persist_validation(validation_id: str) -> None:
+def persist_validation(validation_id: str) -> bool:
+    """Persist current validation state to the shared Redis store."""
     value = _store.get(validation_id)
     if value is None:
-        return
+        return False
+
     try:
-        _redis.set(
+        _get_redis().set(
             _redis_key(validation_id),
-            json.dumps(value, ensure_ascii=False, separators=(",", ":")),
-            ex=86400,
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            ex=_REDIS_TTL_SECONDS,
         )
-    except Exception:
-        pass
+        return True
+    except (redis.RedisError, OSError):
+        return False
 
 
 def get_task(validation_id: str) -> asyncio.Task[Any] | None:
     return _tasks.get(validation_id)
 
 
-def put_task(validation_id: str, task: asyncio.Task[Any]) -> None:
+def put_task(
+    validation_id: str,
+    task: asyncio.Task[Any],
+) -> None:
     _tasks[validation_id] = task
 
 
