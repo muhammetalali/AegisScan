@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi_app.services.itsm_configuration import validate_itsm_configuration
+from fastapi_app.services.itsm_configuration import startup_validation, validate_itsm_configuration
 
 
 def test_placeholder_urls_are_invalid(monkeypatch):
@@ -19,7 +19,7 @@ def test_placeholder_urls_are_invalid(monkeypatch):
     assert any("placeholder" in error.lower() for error in states["servicenow"].errors)
 
 
-def test_example_acme_hosts_are_invalid(monkeypatch):
+def test_example_acme_hosts_are_invalid_but_non_blocking_at_startup(monkeypatch):
     monkeypatch.setenv("JIRA_BASE_URL", "https://acme-security.atlassian.net")
     monkeypatch.setenv("JIRA_USER_EMAIL", "security@example.invalid")
     monkeypatch.setenv("JIRA_API_TOKEN", "test-token")
@@ -28,11 +28,11 @@ def test_example_acme_hosts_are_invalid(monkeypatch):
     monkeypatch.setenv("SERVICENOW_API_TOKEN", "test-token")
 
     states = validate_itsm_configuration()
+    ready, _ = startup_validation()
 
     assert not states["jira"].valid
-    assert any("example host" in error.lower() for error in states["jira"].errors)
     assert not states["servicenow"].valid
-    assert any("example host" in error.lower() for error in states["servicenow"].errors)
+    assert ready
 
 
 def test_unconfigured_optional_provider_is_not_an_error(monkeypatch):
@@ -57,7 +57,7 @@ def test_unconfigured_optional_provider_is_not_an_error(monkeypatch):
 
 
 def test_partial_configuration_fails_closed(monkeypatch):
-    monkeypatch.setenv("JIRA_BASE_URL", "https://security.example.org")
+    monkeypatch.setenv("JIRA_BASE_URL", "https://security.example.net")
     monkeypatch.delenv("JIRA_API_TOKEN", raising=False)
     monkeypatch.delenv("JIRA_USER_EMAIL", raising=False)
     monkeypatch.setenv("JIRA_PROJECT_KEY", "SEC")
@@ -67,3 +67,6 @@ def test_partial_configuration_fails_closed(monkeypatch):
     assert states["jira"].enabled
     assert not states["jira"].valid
     assert any("missing JIRA_API_TOKEN" in error for error in states["jira"].errors)
+
+    ready, _ = startup_validation()
+    assert not ready
