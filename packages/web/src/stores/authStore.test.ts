@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/services/api'
+import type { User } from '@/types'
 import { useAuthStore } from './authStore'
 
 const post = vi.spyOn(api, 'post')
@@ -10,7 +11,7 @@ const user = {
   id: '1', email: 'analyst@example.com', first_name: 'Security', last_name: 'Analyst', role: 'security_analyst',
   permissions: ['dashboard.view'], is_active: true, is_verified: true, language: 'en', theme: 'system', timezone: 'UTC',
   two_factor_enabled: false, date_joined: '2026-01-01T00:00:00Z',
-}
+} satisfies User
 
 beforeEach(() => {
   post.mockReset()
