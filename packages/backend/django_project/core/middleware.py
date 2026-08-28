@@ -57,6 +57,8 @@ class SecurityHeadersMiddleware:
         response.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         response.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         response.setdefault("Cross-Origin-Resource-Policy", "same-origin")
-        if not settings.DEBUG:
-            response.setdefault("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'")
+        # Restrict CSP to API responses. Admin/OpenAPI pages may legitimately
+        # use their own script policies and should not be broken by a global CSP.
+        if not settings.DEBUG and request.path.startswith("/api/"):
+            response.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
         return response
