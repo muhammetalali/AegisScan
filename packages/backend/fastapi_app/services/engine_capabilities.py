@@ -19,10 +19,10 @@ for engine in SUPPORTED_REAL_ENGINES:
 CAPABILITY["vuln_intelligence"]["scope"] = "passive response intelligence; no exploitability proof or CVE/package correlation"
 CAPABILITY["endpoint_discovery"]["scope"] = "bounded same-origin links discovered from the initial HTTP document"
 CAPABILITY["tls_intelligence"]["scope"] = "live TLS handshake, certificate metadata, protocol and cipher observation"
-CAPABILITY["dependency_risk"]["status"] = "partial"
+CAPABILITY["dependency_risk"]["status"] = "implemented"
 CAPABILITY["dependency_risk"]["executor"] = "services.security_intelligence.analyze_dependency_manifest"
 CAPABILITY["dependency_risk"]["evidence"] = True
-CAPABILITY["dependency_risk"]["scope"] = "manifest parsing and review signals; no external CVE/package registry correlation"
+CAPABILITY["dependency_risk"]["scope"] = "resolved dependency manifest parsing plus live OSV package/version vulnerability correlation with evidence lineage"
 CAPABILITY["code_quality"]["scope"] = "bounded static analysis of supplied code_content/code_files snapshots"
 CAPABILITY["runtime_analysis"]["scope"] = "bounded pattern analysis of supplied runtime_logs; no host-level telemetry access"
 
