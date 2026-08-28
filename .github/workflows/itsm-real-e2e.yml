@@ -35,7 +35,7 @@ jobs:
     env:
       DJANGO_SETTINGS_MODULE: django_project.settings
       SECRET_KEY: ci-real-itsm-secret-key-012345678901234567890123
-      JWT_SECRET_KEY: ci-real-itsm-jwt-secret-012345678901234567890123
+      JWT_SECRET_KEY: ci-real-itsm-jwt-secret-key-012345678901234567890123
       DEBUG: "1"
       ALLOWED_HOSTS: "localhost,127.0.0.1"
       DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
@@ -72,6 +72,14 @@ jobs:
       - name: Install backend dependencies
         working-directory: packages/backend
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Validate ITSM provider configuration
+        working-directory: packages/backend
+        run: python -c "from fastapi_app.services.itsm_configuration import validate_itsm_configuration; import sys; states=validate_itsm_configuration(); print({k:{'enabled':v.enabled,'valid':v.valid,'errors':list(v.errors)} for k,v in states.items()}); sys.exit(1 if any(v.enabled and not v.valid for v in states.values()) else 0)"
+
+      - name: Run provider health checks
+        working-directory: packages/backend
+        run: python scripts/itsm_provider_health.py
 
       - name: Migrate database
         working-directory: packages/backend
