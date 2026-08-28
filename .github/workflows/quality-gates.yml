@@ -138,6 +138,15 @@ jobs:
   service-e2e:
     name: Service E2E
     runs-on: ubuntu-latest
+    env:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      SECRET_KEY: "ci-e2e-secret-key-012345678901234567890123"
+      JWT_SECRET_KEY: "ci-e2e-jwt-secret-012345678901234567890123"
+      DEBUG: "1"
+      ALLOWED_HOSTS: "localhost,127.0.0.1"
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegis
+      REDIS_URL: redis://localhost:6379/0
+      WS_ALLOW_QUERY_TOKEN: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
