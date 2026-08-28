@@ -6,15 +6,38 @@ on:
   pull_request:
     branches: [feature/enterprise-platform-ui-v2]
 
+permissions:
+  contents: read
+
 jobs:
   intelligence:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      DEBUG: "1"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      WS_ALLOW_QUERY_TOKEN: "0"
+      LOG_TO_FILE: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Generate ephemeral test secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          django_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
+          jwt_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
+          echo "SECRET_KEY=${django_secret}" >> "$GITHUB_ENV"
+          echo "JWT_SECRET_KEY=${jwt_secret}" >> "$GITHUB_ENV"
+          echo "::add-mask::${django_secret}"
+          echo "::add-mask::${jwt_secret}"
       - name: Install backend dependencies
         run: pip install -r packages/backend/requirements.txt
       - name: Compile advanced intelligence modules
@@ -23,5 +46,4 @@ jobs:
         working-directory: packages/backend
         env:
           PYTHONPATH: .
-          DJANGO_SETTINGS_MODULE: django_project.settings
         run: pytest -q tests/test_advanced_intelligence.py
