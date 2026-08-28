@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .routers import assurance, assurance_graph, dashboard, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, policy, posture, security_decision, system, validation_runtime
+from .routers import attack_surface, assurance, assurance_graph, dashboard, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, policy, posture, security_decision, system, validation_runtime
 from .services.celery_monitoring import get_task_metrics
 from .services.observability import metrics_payload, configure_tracing
 from .services.decision_action_orchestration import initialize_action_store
@@ -161,6 +161,7 @@ app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine C
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
 app.include_router(intelligence.router, prefix="/api/v1", tags=["Security Intelligence"])
+app.include_router(attack_surface.router, prefix="/api/v1", tags=["Attack Surface"])
 
 @app.post("/api/v1/scans/{scan_id}/start")
 async def start_scan(scan_id: str, user=Depends(get_current_user)):
