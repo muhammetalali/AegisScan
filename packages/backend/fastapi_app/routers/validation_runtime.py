@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ..core.security import verify_token
 from ..services.engine_adapters import execute_engine
 from ..services.validation_state import (
     ALL_ENGINES,
     ENGINE_PHASE,
     GROUPS,
+    PHASES,
     _store,
     _tasks,
     engine_state,
+    get_task,
     make_live_event,
     now_iso,
     put_task,
@@ -22,6 +24,13 @@ from ..services.validation_state import (
 )
 
 router = APIRouter()
+
+
+async def require_user(token: str | None = None):
+    user = await verify_token(token) if token else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
 
 
 class ValidationCreate(BaseModel):
@@ -51,78 +60,152 @@ class ValidationOut(BaseModel):
     audit_note: str
 
 
-async def _run_real_validation(vid: str) -> None:
+def _group_state(item: dict) -> list[dict]:
+    states = item.get("engines_state", {})
+    result: list[dict] = []
+    for group in GROUPS:
+        engines = []
+        for engine in group["engines"]:
+            state = states.get(engine, engine_state("skipped"))
+            engines.append({
+                "id": engine,
+                "label": engine,
+                "status": state.get("status", "skipped"),
+                "progress": int(state.get("progress", 0)),
+                "findings": int(state.get("findings", 0)),
+            })
+        selected = [engine for engine in group["engines"] if engine in item.get("engines", [])]
+        selected_states = [states.get(engine, {}) for engine in selected]
+        if not selected:
+            group_status = "skipped"
+        elif all(s.get("status") in {"completed", "unsupported"} for s in selected_states):
+            group_status = "completed"
+        elif any(s.get("status") == "running" for s in selected_states):
+            group_status = "running"
+        elif any(s.get("status") == "failed" for s in selected_states):
+            group_status = "failed"
+        else:
+            group_status = "queued"
+        result.append({**group, "status": group_status, "engines": engines})
+    return result
+
+
+def _progress_payload(item: dict) -> dict:
+    engine_states = item.get("engines_state", {})
+    engines = [
+        {
+            "id": engine,
+            "phase": ENGINE_PHASE.get(engine, "analysis"),
+            "status": engine_states.get(engine, {}).get("status", "skipped"),
+            "progress": int(engine_states.get(engine, {}).get("progress", 0)),
+            "findings": int(engine_states.get(engine, {}).get("findings", 0)),
+        }
+        for engine in ALL_ENGINES
+    ]
+    return {
+        "id": item["id"],
+        "target_type": item["target_type"],
+        "target_value": item["target_value"],
+        "scope": item["scope"],
+        "profile": item["profile"],
+        "engines_requested": item.get("engines", []),
+        "status": item["status"],
+        "progress": int(item.get("progress", 0)),
+        "current_phase": item.get("current_phase", "queued"),
+        "created_at": item["created_at"],
+        "completed_at": item.get("completed_at"),
+        "groups": _group_state(item),
+        "engines": engines,
+        "phases": PHASES,
+        "live_events": item.get("live_events", [])[-200:],
+        "error": item.get("error"),
+    }
+
+
+async def _broadcast(vid: str, message: dict) -> None:
     try:
         from ..main import websocket_manager
+        await websocket_manager.broadcast(f"validation_{vid}", message)
+        await websocket_manager.broadcast(f"scan_{vid}", message)
     except Exception:
-        websocket_manager = None
+        pass
 
-    async def broadcast(message: dict) -> None:
-        if websocket_manager:
-            try:
-                await websocket_manager.broadcast(f"validation_{vid}", message)
-                await websocket_manager.broadcast(f"scan_{vid}", message)
-            except Exception:
-                pass
 
+async def _run_real_validation(vid: str) -> None:
     item = _store.get(vid)
     if not item:
         return
 
-    item["status"] = "running"
-    item["current_phase"] = "initializing"
-    item["progress"] = 1
-    item["live_events"].append(make_live_event("validation.started", f"Validation {vid} started", {"target": item["target_value"]}))
-    await broadcast({"type": "validation.started", "validation_id": vid, "progress": 1, "current_phase": "initializing"})
+    try:
+        item["status"] = "running"
+        item["current_phase"] = "initializing"
+        item["progress"] = 1
+        item["live_events"].append(make_live_event("validation.started", f"Validation {vid} started", {"target": item["target_value"]}))
+        await _broadcast(vid, {"type": "validation.started", "validation_id": vid, "progress": 1, "current_phase": "initializing"})
 
-    selected = [engine for engine in ALL_ENGINES if engine in item["engines"]]
-    if not selected:
-        selected = ["recon"]
-        item["engines"] = selected
+        selected = [engine for engine in ALL_ENGINES if engine in item["engines"]]
+        total = len(selected)
+        if not total:
+            raise RuntimeError("No valid execution engines selected")
 
-    total = len(selected)
-    for index, engine in enumerate(selected):
-        if item.get("status") == "cancelled":
-            return
+        for index, engine in enumerate(selected):
+            while item.get("status") == "paused":
+                await asyncio.sleep(0.25)
+            if item.get("status") == "cancelled":
+                return
 
-        phase = ENGINE_PHASE.get(engine, "analysis")
-        item["current_phase"] = phase
-        item["engines_state"][engine]["status"] = "running"
-        item["live_events"].append(make_live_event("engine.started", f"Engine {engine} started", {"engine": engine}))
-        await broadcast({"type": "engine.started", "engine": engine, "phase": phase})
+            phase = ENGINE_PHASE.get(engine, "analysis")
+            item["current_phase"] = phase
+            item["engines_state"][engine]["status"] = "running"
+            item["engines_state"][engine]["progress"] = 1
+            item["live_events"].append(make_live_event("engine.started", f"Engine {engine} started", {"engine": engine}))
+            await _broadcast(vid, {"type": "engine.started", "engine": engine, "phase": phase})
 
-        result = await execute_engine(engine, item["target_type"], item["target_value"], item.get("extra") or {})
-        item["results"]["findings"].extend(result.findings)
-        item["results"]["evidence"].extend(result.evidence)
-        item["results"]["metrics"].append(result.metrics)
-        item["engines_state"][engine]["findings"] = len(result.findings)
-        item["engines_state"][engine]["error"] = result.error
-        item["engines_state"][engine]["status"] = result.status
-        item["engines_state"][engine]["progress"] = 100 if result.status in {"completed", "unsupported", "unavailable", "failed"} else 0
+            result = await execute_engine(engine, item["target_type"], item["target_value"], item.get("extra") or {})
+            if item.get("status") == "cancelled":
+                return
 
-        if result.status == "failed":
-            item["error"] = result.error
-            item["status"] = "failed"
-            item["live_events"].append(make_live_event("engine.failed", result.error or "Execution failed", {"engine": engine}))
-            await broadcast({"type": "engine.failed", "engine": engine, "error": result.error})
-            return
-        if result.status in {"unsupported", "unavailable"}:
-            item["live_events"].append(make_live_event(f"engine.{result.status}", result.error or "Engine unavailable", {"engine": engine}))
-            await broadcast({"type": f"engine.{result.status}", "engine": engine, "message": result.error})
-        else:
-            item["live_events"].append(make_live_event("evidence.collected", f"{engine} produced live evidence", {"engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)}))
-            await broadcast({"type": "evidence.collected", "engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)})
+            item["results"]["findings"].extend(result.findings)
+            item["results"]["evidence"].extend(result.evidence)
+            item["results"]["metrics"].append(result.metrics)
+            item["engines_state"][engine]["findings"] = len(result.findings)
+            item["engines_state"][engine]["error"] = result.error
+            item["engines_state"][engine]["status"] = result.status
+            item["engines_state"][engine]["progress"] = 100
 
-        item["progress"] = int(((index + 1) / total) * 100)
-        item["live_events"].append(make_live_event("engine.completed", f"Engine {engine} completed", {"engine": engine}))
-        await broadcast({"type": "engine.completed", "engine": engine, "overall": item["progress"]})
+            if result.status == "failed":
+                item["error"] = result.error or "Execution failed"
+                item["status"] = "failed"
+                item["live_events"].append(make_live_event("engine.failed", item["error"], {"engine": engine}))
+                await _broadcast(vid, {"type": "engine.failed", "engine": engine, "error": item["error"]})
+                return
 
-    item["current_phase"] = "completed"
-    item["status"] = "completed"
-    item["progress"] = 100
-    item["completed_at"] = now_iso()
-    item["live_events"].append(make_live_event("validation.completed", "Validation completed from real execution adapters", {"findings": len(item["results"]["findings"]), "evidence": len(item["results"]["evidence"])}))
-    await broadcast({"type": "validation.completed", "validation_id": vid, "progress": 100, "findings": len(item["results"]["findings"])})
+            event_type = f"engine.{result.status}" if result.status in {"unsupported", "unavailable"} else "evidence.collected"
+            message = result.error or f"{engine} produced live evidence"
+            item["live_events"].append(make_live_event(event_type, message, {"engine": engine, "findings": len(result.findings), "evidence": len(result.evidence)}))
+            await _broadcast(vid, {"type": event_type, "engine": engine, "message": message, "findings": len(result.findings), "evidence": len(result.evidence)})
+
+            item["progress"] = int(((index + 1) / total) * 100)
+            item["live_events"].append(make_live_event("engine.completed", f"Engine {engine} completed", {"engine": engine}))
+            await _broadcast(vid, {"type": "engine.completed", "engine": engine, "overall": item["progress"]})
+
+        item["current_phase"] = "completed"
+        item["status"] = "completed"
+        item["progress"] = 100
+        item["completed_at"] = now_iso()
+        item["live_events"].append(make_live_event("validation.completed", "Validation completed from real execution adapters", {"findings": len(item["results"]["findings"]), "evidence": len(item["results"]["evidence"])}))
+        await _broadcast(vid, {"type": "validation.completed", "validation_id": vid, "progress": 100, "findings": len(item["results"]["findings"])})
+    except asyncio.CancelledError:
+        item["status"] = "cancelled"
+        item["current_phase"] = "cancelled"
+        item["live_events"].append(make_live_event("validation.cancelled", "Validation cancelled"))
+        await _broadcast(vid, {"type": "validation.cancelled", "validation_id": vid})
+        raise
+    except Exception as exc:
+        item["status"] = "failed"
+        item["error"] = str(exc)
+        item["live_events"].append(make_live_event("validation.failed", str(exc)))
+        await _broadcast(vid, {"type": "validation.failed", "validation_id": vid, "reason": str(exc)})
 
 
 @router.post("/validations", response_model=ValidationOut, status_code=201)
@@ -137,7 +220,7 @@ async def create_real_validation(body: ValidationCreate):
     vid = f"val-{uuid.uuid4().hex[:8]}"
     engines = [e for e in body.engines if e in ALL_ENGINES]
     if not engines:
-        engines = ["recon"]
+        raise HTTPException(status_code=400, detail="At least one valid execution engine is required")
 
     item = {
         "id": vid,
@@ -164,8 +247,59 @@ async def create_real_validation(body: ValidationCreate):
     }
     put_validation(vid, item)
     put_task(vid, asyncio.create_task(_run_real_validation(vid)))
-
     return ValidationOut(**{key: item[key] for key in ValidationOut.model_fields})
+
+
+@router.get("/validations/{vid}/progress")
+async def validation_progress(vid: str):
+    item = _store.get(vid)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Validation not found")
+    return _progress_payload(item)
+
+
+@router.post("/validations/{vid}/pause")
+async def pause_validation(vid: str):
+    item = _store.get(vid)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Validation not found")
+    if item["status"] not in {"queued", "running"}:
+        return _progress_payload(item)
+    item["status"] = "paused"
+    item["live_events"].append(make_live_event("validation.paused", "Validation paused"))
+    await _broadcast(vid, {"type": "validation.paused", "validation_id": vid})
+    return _progress_payload(item)
+
+
+@router.post("/validations/{vid}/resume")
+async def resume_validation(vid: str):
+    item = _store.get(vid)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Validation not found")
+    if item["status"] != "paused":
+        return _progress_payload(item)
+    item["status"] = "running"
+    item["live_events"].append(make_live_event("validation.resumed", "Validation resumed"))
+    await _broadcast(vid, {"type": "validation.resumed", "validation_id": vid})
+    return _progress_payload(item)
+
+
+@router.post("/validations/{vid}/cancel")
+async def cancel_validation(vid: str):
+    item = _store.get(vid)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Validation not found")
+    if item["status"] in {"completed", "failed", "cancelled"}:
+        return _progress_payload(item)
+    item["status"] = "cancelled"
+    item["current_phase"] = "cancelled"
+    item["completed_at"] = now_iso()
+    task = get_task(vid)
+    if task and not task.done():
+        task.cancel()
+    item["live_events"].append(make_live_event("validation.cancelled", "Validation cancelled"))
+    await _broadcast(vid, {"type": "validation.cancelled", "validation_id": vid})
+    return _progress_payload(item)
 
 
 @router.get("/validations/{vid}/results")
@@ -176,6 +310,10 @@ async def validation_results(vid: str):
     return {
         "id": vid,
         "status": item["status"],
+        "target_type": item["target_type"],
+        "target_value": item["target_value"],
+        "scope": item["scope"],
+        "profile": item["profile"],
         "findings": item.get("results", {}).get("findings", []),
         "evidence": item.get("results", {}).get("evidence", []),
         "metrics": item.get("results", {}).get("metrics", []),
