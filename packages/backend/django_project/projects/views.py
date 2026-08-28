@@ -25,7 +25,7 @@ class Conflict(APIException):
 
 def _request_ip(request) -> str:
     forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    return (forwarded.split(",", 1)[0].strip() if forwarded else request.META.get("REMOTE_ADDR")) or "0.0.0.0"
+    return (forwarded.split(",", 1)[0].strip() if forwarded else request.META.get("REMOTE_ADDR")) or "unknown"
 
 
 def _audit(request, *, action: str, project: Project, changes=None, result=AuditLog.Result.SUCCESS, error_message=""):
