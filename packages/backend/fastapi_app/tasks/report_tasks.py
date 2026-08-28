@@ -28,16 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def _prepare_database_connection() -> None:
-    """Refresh stale DB connections without breaking active test transactions.
-
-    pytest-django/TestCase may keep the database connection inside an active
-    transaction. Calling close_old_connections() in that situation can close
-    the test connection and cause subsequent ORM operations to fail with
-    ``InterfaceError: connection already closed``.
-
-    Celery workers normally execute tasks outside an application-managed
-    transaction, so stale connections can safely be checked there.
-    """
+    """Refresh stale DB connections without breaking active test transactions."""
     if connection.in_atomic_block:
         return
     close_old_connections()
@@ -232,11 +223,7 @@ def generate_report(self, report_id: str, config: dict[str, Any] | None = None) 
         content_bytes = binary_content or content.encode("utf-8")
 
         if binary_content:
-            report.file.save(
-                f"{report.id}.{extension}",
-                ContentFile(binary_content),
-                save=False,
-            )
+            report.file.save(f"{report.id}.{extension}", ContentFile(binary_content), save=False)
         elif report.file:
             report.file.delete(save=False)
             report.file = None
@@ -295,9 +282,12 @@ def generate_scheduled_reports() -> dict[str, int]:
             "project", "template", "created_by"
         ).filter(is_active=True, next_generation__lte=now):
             with transaction.atomic():
-                schedule = ReportSchedule.objects.select_for_update().select_related(
-                    "project", "template", "created_by"
-                ).get(pk=schedule.pk)
+                schedule = (
+                    ReportSchedule.objects
+                    .select_for_update(of=("self",))
+                    .select_related("project", "template", "created_by")
+                    .get(pk=schedule.pk)
+                )
                 if not schedule.is_active or schedule.next_generation > now:
                     continue
                 report = Report.objects.create(
