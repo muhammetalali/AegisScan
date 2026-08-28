@@ -5,7 +5,7 @@ from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import Conflict, PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -20,11 +20,16 @@ from .audit import (
 from .authorization import (
     user_can_create_asset,
     user_can_delete_asset,
-    user_can_read_asset_project,
     user_can_update_asset,
 )
 from .models import Asset, AssetRelationship, TechnologyFingerprint
 from .serializers import AssetRelationshipSerializer, AssetSerializer, TechnologyFingerprintSerializer
+
+
+class Conflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The requested resource conflicts with existing state."
+    default_code = "conflict"
 
 
 class AssetViewSet(viewsets.ModelViewSet):
@@ -229,7 +234,10 @@ class TechnologyFingerprintViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             updated = serializer.save()
             changes = {
-                field: {"from": str(before[field]) if field == "asset_id" else before[field], "to": str(getattr(updated, field)) if field == "asset_id" else getattr(updated, field)}
+                field: {
+                    "from": str(before[field]) if field == "asset_id" else before[field],
+                    "to": str(getattr(updated, field)) if field == "asset_id" else getattr(updated, field),
+                }
                 for field in tracked
                 if before[field] != getattr(updated, field)
             }
