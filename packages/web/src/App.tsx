@@ -6,6 +6,7 @@ import { LanguageProvider } from './stores/languageStore'
 import { Layout } from './components/layout/Layout'
 import { RouteGuard } from './components/auth/RouteGuard'
 import { LoadingScreen } from './components/ui/LoadingScreen'
+import { DashboardRealtime } from './services/dashboardRealtime'
 
 const Login = lazy(() => import('./pages/auth/Login').then(m => ({ default: m.Login })))
 const Register = lazy(() => import('./pages/auth/Register').then(m => ({ default: m.Register })))
@@ -61,6 +62,7 @@ const App = () => (
   <AuthProvider>
     <ThemeProvider>
       <LanguageProvider>
+        <DashboardRealtime />
         <Routes>
           <Route path="/login" element={<PublicRoute><Page><Login /></Page></PublicRoute>} />
           <Route path="/register" element={<PublicRoute><Page><Register /></Page></PublicRoute>} />
