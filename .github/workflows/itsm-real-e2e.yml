@@ -17,6 +17,7 @@ jobs:
     name: Real Jira + ServiceNow E2E
     if: ${{ inputs.allow_external_create == true }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -45,6 +46,7 @@ jobs:
       WS_ALLOW_QUERY_TOKEN: "0"
       LOG_TO_FILE: "0"
       AEGIS_ITSM_E2E_ENABLE: "1"
+      AEGIS_ITSM_MODE: "real"
       AEGIS_ITSM_E2E_ACTOR: github-actions-e2e
       AEGIS_ITSM_E2E_OWNER: security-engineering
       JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
@@ -102,6 +104,10 @@ jobs:
       - name: Verify provider capabilities are ready
         working-directory: packages/backend
         run: python -c "import asyncio,sys; from fastapi_app.services.itsm_capability import all_provider_capabilities; results=asyncio.run(all_provider_capabilities()); print(results); sys.exit(1 if any(r.get('status')!='ready' for r in results) else 0)"
+
+      - name: Verify live provider health
+        working-directory: packages/backend
+        run: python -c "import asyncio,sys; from fastapi_app.services.itsm_provider_health import check_all_providers; results=asyncio.run(check_all_providers()); print(results); values=results.values() if isinstance(results,dict) else results; sys.exit(1 if any((v.get('status') if isinstance(v,dict) else '')!='healthy' for v in values) else 0)"
 
       - name: Migrate database
         working-directory: packages/backend
