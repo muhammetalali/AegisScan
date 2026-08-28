@@ -107,7 +107,63 @@ services:
       dockerfile: Dockerfile.django
     container_name: aegis-celery-worker
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app worker -l info -c ${CELERY_WORKER_CONCURRENCY:-4} --hostname=worker@%h
+    command: celery -A fastapi_app.celery_app worker -l info -Q default,health -c ${CELERY_DEFAULT_WORKER_CONCURRENCY:-2} --hostname=core@%h
+    environment:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
+    volumes:
+      - ../backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A fastapi_app.celery_app inspect ping --timeout=5 | grep -q 'pong'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  celery_workflow:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.django
+    container_name: aegis-celery-workflow
+    restart: unless-stopped
+    command: celery -A fastapi_app.celery_app worker -l info -Q workflow -c ${CELERY_WORKFLOW_WORKER_CONCURRENCY:-2} --hostname=workflow@%h
+    environment:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
+    volumes:
+      - ../backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A fastapi_app.celery_app inspect ping --timeout=5 | grep -q 'pong'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  celery_reports:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.django
+    container_name: aegis-celery-reports
+    restart: unless-stopped
+    command: celery -A fastapi_app.celery_app worker -l info -Q reports -c ${CELERY_REPORT_WORKER_CONCURRENCY:-2} --hostname=reports@%h
     environment:
       DJANGO_SETTINGS_MODULE: django_project.settings
       DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
