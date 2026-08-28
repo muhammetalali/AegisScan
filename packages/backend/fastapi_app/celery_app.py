@@ -1,7 +1,9 @@
 from celery import Celery
+from celery.signals import task_failure
 
 from .core.config import settings
 from .services import celery_monitoring  # noqa: F401 - register Celery signals
+from .services.task_reliability import enqueue_dead_letter
 
 celery_app = Celery(
     "aegisscan",
@@ -14,6 +16,7 @@ celery_app = Celery(
     ],
 )
 
+redis_tls = settings.CELERY_BROKER_URL.startswith("rediss://")
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -40,18 +43,9 @@ celery_app.conf.update(
         "health": {"exchange": "aegis", "routing_key": "health"},
     },
     task_routes={
-        "fastapi_app.tasks.workflow_tasks.*": {
-            "queue": "workflow",
-            "routing_key": "workflow",
-        },
-        "fastapi_app.tasks.report_tasks.*": {
-            "queue": "reports",
-            "routing_key": "reports",
-        },
-        "fastapi_app.tasks.health_tasks.*": {
-            "queue": "health",
-            "routing_key": "health",
-        },
+        "fastapi_app.tasks.workflow_tasks.*": {"queue": "workflow", "routing_key": "workflow"},
+        "fastapi_app.tasks.report_tasks.*": {"queue": "reports", "routing_key": "reports"},
+        "fastapi_app.tasks.health_tasks.*": {"queue": "health", "routing_key": "health"},
     },
     task_annotations={
         "fastapi_app.tasks.workflow_tasks.*": {"rate_limit": "30/m"},
@@ -70,3 +64,19 @@ celery_app.conf.update(
         },
     },
 )
+
+if redis_tls:
+    celery_app.conf.update(
+        broker_use_ssl={"ssl_cert_reqs": settings.REDIS_SSL_CERT_REQS},
+        redis_backend_use_ssl={"ssl_cert_reqs": settings.REDIS_SSL_CERT_REQS},
+    )
+
+
+@task_failure.connect(weak=False)
+def route_failed_task_to_dlq(task_id=None, task=None, args=None, kwargs=None, exception=None, **_):
+    if task_id and task:
+        try:
+            enqueue_dead_letter(task.name, task_id, args or (), kwargs or {}, str(exception or "unknown error"))
+        except Exception:
+            # DLQ must never crash the Celery worker failure handler.
+            pass
