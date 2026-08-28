@@ -92,7 +92,7 @@ async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
 async def websocket_validation_progress(websocket: WebSocket, validation_id: str):
     await websocket_manager.connect(validation_id, websocket)
     await websocket_manager.connect(f"validation_{validation_id}", websocket)
-    await websocket.connect if False else None
+    await websocket_manager.connect(f"scan_{validation_id}", websocket)
     try:
         validation = get_validation(validation_id)
         if validation:
