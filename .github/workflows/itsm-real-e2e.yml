@@ -73,6 +73,28 @@ jobs:
         working-directory: packages/backend
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
+      - name: Verify required runtime secrets are present
+        shell: bash
+        env:
+          CI_JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          CI_JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          CI_JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          CI_JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+          CI_SERVICENOW_BASE_URL: ${{ secrets.SERVICENOW_BASE_URL }}
+          CI_SERVICENOW_API_TOKEN: ${{ secrets.SERVICENOW_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in CI_JIRA_BASE_URL CI_JIRA_API_TOKEN CI_JIRA_USER_EMAIL CI_JIRA_PROJECT_KEY CI_SERVICENOW_BASE_URL CI_SERVICENOW_API_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Required GitHub Secret backing ${name#CI_} is not configured."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Validate ITSM provider configuration
         working-directory: packages/backend
         run: python -c "from fastapi_app.services.itsm_configuration import validate_itsm_configuration; import sys; states=validate_itsm_configuration(); print({k:{'enabled':v.enabled,'valid':v.valid,'errors':list(v.errors)} for k,v in states.items()}); sys.exit(1 if any(v.enabled and not v.valid for v in states.values()) else 0)"
