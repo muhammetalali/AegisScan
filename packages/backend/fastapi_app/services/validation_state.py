@@ -122,22 +122,18 @@ def make_live_event(
 
 
 def get_validation(validation_id: str) -> dict[str, Any] | None:
-    value = _store.get(validation_id)
-    if value is not None:
-        return value
-    value = _redis_get(validation_id)
-    if value is not None:
-        _store[validation_id] = value
-    return value
+    # Redis is the shared source of truth. Local state is only a fallback
+    # when Redis is temporarily unavailable.
+    remote = _redis_get(validation_id)
+    if remote is not None:
+        _store[validation_id] = remote
+        return remote
+    return _store.get(validation_id)
 
 
 def put_validation(validation_id: str, value: dict[str, Any]) -> None:
     _store[validation_id] = value
-    try:
-        _redis.set(_redis_key(validation_id), json.dumps(value, ensure_ascii=False, separators=(",", ":")), ex=86400)
-    except Exception:
-        # Local cache keeps the current worker functional if Redis is temporarily unavailable.
-        pass
+    persist_validation(validation_id)
 
 
 def persist_validation(validation_id: str) -> None:
@@ -145,7 +141,11 @@ def persist_validation(validation_id: str) -> None:
     if value is None:
         return
     try:
-        _redis.set(_redis_key(validation_id), json.dumps(value, ensure_ascii=False, separators=(",", ":")), ex=86400)
+        _redis.set(
+            _redis_key(validation_id),
+            json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+            ex=86400,
+        )
     except Exception:
         pass
 
