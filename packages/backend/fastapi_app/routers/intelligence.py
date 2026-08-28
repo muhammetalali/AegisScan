@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
 from ..services.advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
+from ..services.assurance_risk_pipeline import AssuranceRiskPipeline
 from ..services.autonomous_assurance import propose_remediation
 from ..services.behavioral_terrain import build_fingerprint
 from ..services.dynamic_risk_engine import DynamicRiskModel
@@ -26,6 +27,7 @@ adi_provider = ADIProvider()
 scanner_adapter = ScannerAdapter()
 fusion_engine = FusionEngine()
 dynamic_risk_model = DynamicRiskModel()
+assurance_risk_pipeline = AssuranceRiskPipeline(intelligence=fabric, external=external_fabric, fusion=fusion_engine, dynamic_risk=dynamic_risk_model)
 
 
 class Asset(BaseModel):
@@ -53,6 +55,20 @@ class DynamicRiskRequest(BaseModel):
     critical_service_exposure: bool = False
     validated_exploitation: bool = False
     business_impact: float = Field(default=0.0, ge=0.0, le=100.0)
+
+
+class AssuranceRiskRequest(BaseModel):
+    indicator: str = Field(min_length=1, max_length=512)
+    cve_id: str | None = Field(default=None, min_length=8, max_length=32)
+    assets: list[Asset] = Field(default_factory=list, max_length=500)
+    behavioral_anomaly: float = Field(default=0.0, ge=0.0, le=1.0)
+    newly_exposed_ports: int = Field(default=0, ge=0, le=10000)
+    critical_service_exposure: bool = False
+    business_impact: float = Field(default=0.0, ge=0.0, le=100.0)
+    validated_exploitation: bool = False
+    remediation_candidate: dict[str, object] | None = None
+    remediation_tools: list[str] = Field(default_factory=list, max_length=5)
+    remediation_timeout: int = Field(default=180, ge=1, le=900)
 
 
 class BehavioralRequest(BaseModel):
@@ -120,6 +136,7 @@ async def providers(user: dict = Depends(require_user)):
         {"id": "adi", "status": "approved-feed-only"},
         {"id": "fusion", "status": "active"},
         {"id": "dynamic-risk", "status": "active"},
+        {"id": "assurance-risk-pipeline", "status": "active"},
     ]}
 
 
@@ -153,6 +170,30 @@ async def fusion(body: FusionRequest, user: dict = Depends(require_user)):
 async def dynamic_risk(body: DynamicRiskRequest, user: dict = Depends(require_user)):
     result = dynamic_risk_model.assess(base_score=body.base_score, behavioral_anomaly=body.behavioral_anomaly, newly_exposed_ports=body.newly_exposed_ports, critical_service_exposure=body.critical_service_exposure, validated_exploitation=body.validated_exploitation, business_impact=body.business_impact)
     return {"score": result.score, "severity": result.severity, "adjustments": list(result.adjustments), "rationale": result.rationale, "assessed_at": result.assessed_at, "engine": "aegis-dynamic-risk-v1"}
+
+
+@router.post("/intelligence/risk/assess")
+async def assurance_risk_assess(body: AssuranceRiskRequest, user: dict = Depends(require_user)):
+    try:
+        return await assurance_risk_pipeline.assess(
+            indicator=body.indicator,
+            cve_id=body.cve_id,
+            assets=[asset.model_dump() for asset in body.assets],
+            behavioral_anomaly=body.behavioral_anomaly,
+            newly_exposed_ports=body.newly_exposed_ports,
+            critical_service_exposure=body.critical_service_exposure,
+            business_impact=body.business_impact,
+            validated_exploitation=body.validated_exploitation,
+            remediation_candidate=body.remediation_candidate,
+            remediation_tools=body.remediation_tools or None,
+            remediation_timeout=body.remediation_timeout,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/intelligence/behavioral-fingerprint")
