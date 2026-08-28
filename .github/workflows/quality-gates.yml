@@ -8,7 +8,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   backend-quality:
@@ -32,6 +32,18 @@ jobs:
         run: bandit -r packages/backend/django_project packages/backend/fastapi_app -ll -x "*/migrations/*"
       - name: Python compile audit
         run: python -m compileall -q packages/backend
+      - name: Django deployment security audit
+        working-directory: packages/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          SECRET_KEY: "ci-production-secret-key-012345678901234567890123"
+          JWT_SECRET_KEY: "ci-production-jwt-secret-012345678901234567890123"
+          DEBUG: "0"
+          ALLOWED_HOSTS: "localhost,127.0.0.1"
+          DATABASE_URL: sqlite:///ci.sqlite3
+          REDIS_URL: redis://localhost:6379/0
+          WS_ALLOW_QUERY_TOKEN: "0"
+        run: python manage.py check --deploy
       - name: Django application audit
         working-directory: packages/backend
         env:
@@ -62,6 +74,8 @@ jobs:
   frontend-quality:
     name: Frontend quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: packages/web
