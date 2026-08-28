@@ -1,6 +1,7 @@
 from datetime import timedelta
 
-from django.db.models import Count, Q
+from django.db.models import Avg, Count, Q
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -72,14 +73,18 @@ class DashboardTrendsView(APIView):
             days = 30
         projects = visible_projects(request.user)
         start = timezone.now() - timedelta(days=days - 1)
-        scans = Scan.objects.filter(project__in=projects, status=Scan.Status.COMPLETED, created_at__gte=start)
-        points = []
-        for offset in range(days):
-            day = (start + timedelta(days=offset)).date()
-            scores = [float(v) for v in scans.filter(created_at__date=day).values_list('security_score', flat=True) if v is not None]
-            if scores:
-                points.append({'date': day.isoformat(), 'score': round(sum(scores) / len(scores), 1)})
-        return Response(points)
+        rows = (
+            Scan.objects.filter(project__in=projects, status=Scan.Status.COMPLETED, created_at__gte=start)
+            .annotate(day=TruncDate('created_at'))
+            .values('day')
+            .annotate(score=Avg('security_score'))
+            .order_by('day')
+        )
+        return Response([
+            {'date': row['day'].isoformat(), 'score': round(float(row['score']), 1)}
+            for row in rows
+            if row['day'] is not None and row['score'] is not None
+        ])
 
 
 class DashboardRecentValidationsView(APIView):
