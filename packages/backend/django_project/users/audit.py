@@ -72,7 +72,7 @@ def record_user_audit(*, request, action: str, result: str, user=None, resource_
     if canonical_action is None:
         raise ValueError(f"Unsupported user audit action: {action}")
     try:
-        remote = request.META.get("REMOTE_ADDR") or "0.0.0.0"
+        remote = request.META.get("REMOTE_ADDR") or "unknown"
         return append_audit(
             action=canonical_action,
             ip_address=remote,
