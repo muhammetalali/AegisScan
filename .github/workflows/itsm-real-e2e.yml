@@ -72,8 +72,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install backend dependencies
-        working-directory: packages/backend
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packages/backend"
+          test -f requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r "$GITHUB_WORKSPACE/packages/backend/requirements.txt"
 
       - name: Verify required runtime secrets are present
         shell: bash
@@ -84,35 +89,56 @@ jobs:
           CI_JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
           CI_SERVICENOW_BASE_URL: ${{ secrets.SERVICENOW_BASE_URL }}
           CI_SERVICENOW_API_TOKEN: ${{ secrets.SERVICENOW_API_TOKEN }}
+          CI_SERVICENOW_USERNAME: ${{ secrets.SERVICENOW_USERNAME }}
+          CI_SERVICENOW_PASSWORD: ${{ secrets.SERVICENOW_PASSWORD }}
         run: |
           set -euo pipefail
           missing=0
-          for name in CI_JIRA_BASE_URL CI_JIRA_API_TOKEN CI_JIRA_USER_EMAIL CI_JIRA_PROJECT_KEY CI_SERVICENOW_BASE_URL CI_SERVICENOW_API_TOKEN; do
+          for name in CI_JIRA_BASE_URL CI_JIRA_API_TOKEN CI_JIRA_USER_EMAIL CI_JIRA_PROJECT_KEY CI_SERVICENOW_BASE_URL; do
             if [ -z "${!name}" ]; then
               echo "::error::Required GitHub Secret backing ${name#CI_} is not configured."
               missing=1
             fi
           done
+          if [ -z "$CI_SERVICENOW_API_TOKEN" ] && { [ -z "$CI_SERVICENOW_USERNAME" ] || [ -z "$CI_SERVICENOW_PASSWORD" ]; }; then
+            echo "::error::Configure SERVICENOW_API_TOKEN or both SERVICENOW_USERNAME and SERVICENOW_PASSWORD."
+            missing=1
+          fi
           if [ "$missing" -ne 0 ]; then
             exit 1
           fi
 
       - name: Validate ITSM provider configuration
-        working-directory: packages/backend
-        run: python -c "from fastapi_app.services.itsm_configuration import validate_itsm_configuration; import sys; states=validate_itsm_configuration(); print({k:{'enabled':v.enabled,'valid':v.valid,'errors':list(v.errors)} for k,v in states.items()}); sys.exit(1 if any(v.enabled and not v.valid for v in states.values()) else 0)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packages/backend"
+          python -c "from fastapi_app.services.itsm_configuration import validate_itsm_configuration; import sys; states=validate_itsm_configuration(); print({k:{'enabled':v.enabled,'valid':v.valid,'errors':list(v.errors)} for k,v in states.items()}); sys.exit(1 if any(v.enabled and not v.valid for v in states.values()) else 0)"
 
       - name: Verify provider capabilities are ready
-        working-directory: packages/backend
-        run: python -c "import asyncio,sys; from fastapi_app.services.itsm_capability import all_provider_capabilities; results=asyncio.run(all_provider_capabilities()); print(results); sys.exit(1 if any(r.get('status')!='ready' for r in results) else 0)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packages/backend"
+          python -c "import asyncio,sys; from fastapi_app.services.itsm_capability import all_provider_capabilities; results=asyncio.run(all_provider_capabilities()); print(results); sys.exit(1 if any(r.get('status')!='ready' for r in results) else 0)"
 
       - name: Verify live provider health
-        working-directory: packages/backend
-        run: python -c "import asyncio,sys; from fastapi_app.services.itsm_provider_health import check_all_providers; results=asyncio.run(check_all_providers()); print(results); values=results.values() if isinstance(results,dict) else results; sys.exit(1 if any((v.get('status') if isinstance(v,dict) else '')!='healthy' for v in values) else 0)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packages/backend"
+          python -c "import asyncio,sys; from fastapi_app.services.itsm_provider_health import check_all_providers; results=asyncio.run(check_all_providers()); print(results); values=results.values() if isinstance(results,dict) else results; sys.exit(1 if any((v.get('status') if isinstance(v,dict) else '')!='healthy' for v in values) else 0)"
 
       - name: Migrate database
-        working-directory: packages/backend
-        run: python manage.py migrate --noinput
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packages/backend"
+          python manage.py migrate --noinput
 
       - name: Run real Jira + ServiceNow E2E with retry idempotency check
-        working-directory: packages/backend
-        run: python scripts/itsm_real_e2e.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packages/backend"
+          python scripts/itsm_real_e2e.py
