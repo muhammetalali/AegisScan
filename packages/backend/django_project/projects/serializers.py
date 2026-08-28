@@ -1,4 +1,7 @@
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
+
+from users.models import Permission
 
 from .models import Project
 
@@ -15,6 +18,15 @@ class ProjectSerializer(serializers.ModelSerializer):
             "updated_at", "archived_at",
         ]
         read_only_fields = ["id", "owner", "member_count", "created_at", "updated_at", "archived_at"]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get("request")
+        if self.instance is None and request is not None:
+            user = request.user
+            if not user.has_permission(Permission.PROJECT_CREATE):
+                raise PermissionDenied("You do not have permission to create projects.")
+        return attrs
 
     def validate_slug(self, value):
         value = value.strip().lower()
