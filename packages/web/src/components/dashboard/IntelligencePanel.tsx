@@ -4,6 +4,14 @@ import { Activity, Database, ExternalLink, Loader2, ShieldAlert, Sparkles } from
 import { apiHelpers } from '@/services/api'
 
 interface Provider { id: string; status: string }
+interface Fusion {
+  score: number
+  confidence: number
+  rationale: string
+  corroborated_sources: string[]
+  conflicts: Array<Record<string, unknown>>
+  lineage: Array<Record<string, unknown>>
+}
 interface IntelligenceRecord {
   cve_id: string
   severity: string
@@ -16,6 +24,8 @@ interface IntelligenceRecord {
   evidence: Array<{ source: string; type: string; url?: string; value?: number }>
   provider_status?: Record<string, string>
   cache?: 'hit' | 'miss'
+  fusion?: Fusion
+  risk_lineage?: Array<Record<string, unknown>>
 }
 
 export function IntelligencePanel() {
@@ -41,6 +51,7 @@ export function IntelligencePanel() {
   }
   const providers = providersQuery.data?.providers ?? []
   const record = enrichQuery.data
+  const fusion = record?.fusion
 
   return (
     <section className="aegis-surface p-5">
@@ -48,7 +59,7 @@ export function IntelligencePanel() {
         <div>
           <div className="aegis-kicker flex items-center gap-2 text-primary"><Sparkles className="h-3.5 w-3.5" />Security intelligence fabric</div>
           <h2 className="aegis-title mt-1">Multi-source vulnerability intelligence</h2>
-          <p className="aegis-subtitle mt-1 max-w-2xl">Live enrichment from NVD, OSV, CISA KEV and EPSS with normalized severity, exploit context and evidence lineage.</p>
+          <p className="aegis-subtitle mt-1 max-w-2xl">Live enrichment from NVD, OSV, CISA KEV and EPSS with explainable fusion, risk scoring and evidence lineage.</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Activity className="h-3.5 w-3.5" />
@@ -78,6 +89,16 @@ export function IntelligencePanel() {
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase"><span className="rounded-full bg-muted px-2 py-1">{record.severity}</span>{record.kev && <span className="rounded-full bg-destructive/10 px-2 py-1 text-destructive">CISA KEV</span>}<span className="rounded-full border px-2 py-1">{Math.round(record.confidence * 100)}% confidence</span><span className="rounded-full border px-2 py-1">cache {record.cache}</span></div>
         </div>
+
+        {fusion && <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
+          <div className="rounded-xl border bg-muted/20 p-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Fusion rationale</div><p className="mt-1 text-sm">{fusion.rationale}</p><div className="mt-2 flex flex-wrap gap-1.5">{fusion.corroborated_sources.map((source) => <span key={source} className="rounded-full border px-2 py-0.5 text-[10px] uppercase">{source}</span>)}</div></div>
+          <Metric label="Fusion confidence" value={`${Math.round(fusion.confidence * 100)}%`} />
+        </div>}
+
+        {fusion?.conflicts.length ? <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"><div className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">Investigation signals</div><div className="mt-1 text-xs">{fusion.conflicts.length} source conflict(s) retained instead of silently averaging them.</div></div> : null}
+
+        <details className="mt-3 rounded-xl border p-3"><summary className="cursor-pointer text-xs font-semibold">Decision trail & evidence lineage</summary><div className="mt-3 grid gap-2 md:grid-cols-2">{[...(fusion?.lineage ?? []), ...(record.risk_lineage ?? [])].map((item, index) => <pre key={index} className="overflow-auto rounded-lg bg-muted/30 p-2 text-[10px]">{JSON.stringify(item, null, 2)}</pre>)}</div></details>
+
         <div className="mt-4 flex flex-wrap gap-2 border-t pt-3">{record.evidence.map((item, index) => item.url ? <a key={`${item.source}-${index}`} href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] hover:bg-accent">{item.source}<ExternalLink className="h-3 w-3" /></a> : <span key={`${item.source}-${index}`} className="rounded-lg border px-2.5 py-1.5 text-[11px]">{item.source}</span>)}</div>
       </div>}
     </section>
