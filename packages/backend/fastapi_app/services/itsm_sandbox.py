@@ -16,20 +16,27 @@ def _external_id(provider: str, idempotency_key: str) -> str:
 
 
 def capabilities(provider: str) -> dict[str, bool]:
+    """Return the full provider capability contract used by sandbox and capability checks."""
     if provider == "jira":
         return {
             "create_issue": True,
             "search_by_idempotency": True,
+            "reconcile_by_idempotency": True,
             "transition_issue": True,
+            "lifecycle_sync": True,
             "read_issue": True,
+            "verification_sync": True,
             "update_issue": True,
             "comments": True,
         }
     return {
         "create_incident": True,
         "search_by_idempotency": True,
+        "reconcile_by_idempotency": True,
         "transition_incident": True,
+        "lifecycle_sync": True,
         "read_incident": True,
+        "verification_sync": True,
         "update_incident": True,
         "comments": True,
     }
