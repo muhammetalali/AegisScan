@@ -8,7 +8,7 @@ from audit.services import append_audit
 
 def _request_ip(request) -> str:
     forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    return (forwarded.split(",", 1)[0].strip() if forwarded else request.META.get("REMOTE_ADDR")) or "0.0.0.0"
+    return (forwarded.split(",", 1)[0].strip() if forwarded else request.META.get("REMOTE_ADDR")) or "unknown"
 
 
 def record_asset_audit(request, *, action: str, asset, changes: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None):
