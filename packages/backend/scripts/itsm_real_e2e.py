@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+# Resolve the backend package from the script location so the runner works
+# regardless of the caller's current working directory.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
 
 from fastapi_app.services.itsm_remediation_resilient import create_case
 
 
-ROOT = Path(__file__).resolve().parents[3]
-for candidate in (ROOT / ".env", ROOT / "packages" / "backend" / ".env", ROOT / "packages" / "platform" / ".env"):
+for candidate in (
+    ROOT / ".env",
+    ROOT.parent / "platform" / ".env",
+    ROOT.parent.parent / ".env",
+):
     if candidate.exists():
         load_dotenv(candidate, override=False)
 
