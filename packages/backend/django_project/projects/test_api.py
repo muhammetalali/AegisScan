@@ -2,16 +2,22 @@ from django.urls import reverse
 from rest_framework.test import APITestCase
 
 from audit.models import AuditLog
-from users.models import User
+from users.models import User, UserRole
 
 from .models import Project, ProjectMembership
 
 
 class ProjectsAPITests(APITestCase):
     def setUp(self):
-        self.owner = User.objects.create_user(email="project-owner@example.test", password="Owner-2026!", is_active=True)
+        self.owner = User.objects.create_user(
+            email="project-owner@example.test",
+            password="Owner-2026!",
+            role=UserRole.SECURITY_MANAGER,
+            is_active=True,
+        )
         self.admin = User.objects.create_user(email="project-admin@example.test", password="Admin-2026!", is_active=True)
         self.member = User.objects.create_user(email="project-member@example.test", password="Member-2026!", is_active=True)
+        self.viewer = User.objects.create_user(email="project-viewer@example.test", password="Viewer-2026!", is_active=True)
         self.outsider = User.objects.create_user(email="project-outsider@example.test", password="Outsider-2026!", is_active=True)
         self.project = Project.objects.create(name="API Project", slug="api-project", owner=self.owner)
         ProjectMembership.objects.create(project=self.project, user=self.owner, role=ProjectMembership.Role.OWNER)
@@ -25,6 +31,12 @@ class ProjectsAPITests(APITestCase):
         created = Project.objects.get(slug="created-project")
         self.assertTrue(ProjectMembership.objects.filter(project=created, user=self.owner, role=ProjectMembership.Role.OWNER).exists())
         self.assertTrue(AuditLog.objects.filter(action=AuditLog.Action.PROJECT_CREATE, resource_id=str(created.pk)).exists())
+
+    def test_viewer_cannot_create_project(self):
+        self.client.force_authenticate(self.viewer)
+        response = self.client.post(reverse("project-list"), {"name": "Denied", "slug": "denied-project"}, format="json")
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Project.objects.filter(slug="denied-project").exists())
 
     def test_queryset_is_project_scoped(self):
         self.client.force_authenticate(self.outsider)
