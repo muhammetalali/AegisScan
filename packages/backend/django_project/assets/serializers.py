@@ -4,10 +4,9 @@ from .models import Asset, AssetRelationship, TechnologyFingerprint
 
 
 class AssetSerializer(serializers.ModelSerializer):
-    # The API generates a project-scoped slug in AssetViewSet.perform_create().
-    # Keep the field writable for explicit slugs, but do not require clients to
-    # provide one so validation reaches the centralized slug-generation logic.
-    slug = serializers.SlugField(required=False, allow_blank=False, max_length=220)
+    # Slugs are owned by the API and generated per project in AssetViewSet.
+    # Clients must not provide or override this server-managed identifier.
+    slug = serializers.SlugField(read_only=True, max_length=220)
 
     class Meta:
         model = Asset
