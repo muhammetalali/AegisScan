@@ -115,10 +115,7 @@
 @layer base {
   * { @apply border-border outline-ring/50; }
   html { @apply scroll-smooth; }
-  body {
-    @apply bg-background text-foreground antialiased;
-    font-feature-settings: "rlig" 1, "calt" 1;
-  }
+  body { @apply min-h-screen bg-background text-foreground antialiased; font-feature-settings: "rlig" 1, "calt" 1; }
   button, a, input, select, textarea { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background; }
 }
 
@@ -127,28 +124,7 @@
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { @apply bg-muted; }
-::-webkit-scrollbar-thumb { @apply bg-muted-foreground/30 rounded-full; }
+::-webkit-scrollbar-thumb { @apply rounded-full bg-muted-foreground/30; }
 ::-webkit-scrollbar-thumb:hover { @apply bg-muted-foreground/50; }
-
-.focus-visible-ring { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background; }
-
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slide-in-from-top { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-@keyframes slide-in-from-bottom { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-@keyframes pulse-soft { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
-
-.animate-fade-in { animation: fade-in 0.2s ease-out; }
-.animate-slide-in-from-top { animation: slide-in-from-top 0.3s ease-out; }
-.animate-slide-in-from-bottom { animation: slide-in-from-bottom 0.3s ease-out; }
-.animate-pulse-soft { animation: pulse-soft 2s ease-in-out infinite; }
-
-.chart-container { @apply w-full h-full min-h-[300px]; }
-.monaco-editor { @apply border border-border rounded-xl overflow-hidden; }
-
-/* Enterprise surface primitives */
-.enterprise-card { @apply rounded-xl border bg-card shadow-sm; }
-.enterprise-card-hover { @apply transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md; }
-.enterprise-section-title { @apply text-sm font-semibold tracking-tight; }
-.enterprise-muted { @apply text-xs text-muted-foreground; }
 
 @media print { .no-print { display: none !important; } }
