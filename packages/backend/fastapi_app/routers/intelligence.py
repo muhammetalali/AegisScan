@@ -13,6 +13,7 @@ from ..services.intelligence_fabric import IntelligenceFabric, ProviderUnavailab
 from ..services.advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
 from ..services.fusion_engine import FusionEngine
 from ..services.risk_engine import assess_risk
+from ..services.dynamic_risk_engine import DynamicRiskModel
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -23,6 +24,7 @@ bte_provider = BTEProvider()
 adi_provider = ADIProvider()
 scanner_adapter = ScannerAdapter()
 fusion_engine = FusionEngine()
+dynamic_risk_model = DynamicRiskModel()
 
 
 class Asset(BaseModel):
@@ -41,6 +43,15 @@ class EnrichRequest(BaseModel):
 
 class FusionRequest(BaseModel):
     observations: dict[str, dict[str, object]] = Field(default_factory=dict, max_length=32)
+
+
+class DynamicRiskRequest(BaseModel):
+    base_score: float = Field(ge=0.0, le=100.0)
+    behavioral_anomaly: float = Field(default=0.0, ge=0.0, le=1.0)
+    newly_exposed_ports: int = Field(default=0, ge=0, le=10000)
+    critical_service_exposure: bool = False
+    validated_exploitation: bool = False
+    business_impact: float = Field(default=0.0, ge=0.0, le=100.0)
 
 
 class BehavioralRequest(BaseModel):
@@ -90,7 +101,7 @@ async def require_user(credentials: HTTPAuthorizationCredentials = Depends(secur
 
 @router.get("/intelligence/providers")
 async def providers(user: dict = Depends(require_user)):
-    return {"providers": [{"id": key, "status": "configured"} for key in fabric.providers] + [{"id": "bte", "status": "telemetry-only"}, {"id": "adi", "status": "approved-feed-only"}, {"id": "fusion", "status": "active"}]}
+    return {"providers": [{"id": key, "status": "configured"} for key in fabric.providers] + [{"id": "bte", "status": "telemetry-only"}, {"id": "adi", "status": "approved-feed-only"}, {"id": "fusion", "status": "active"}, {"id": "dynamic-risk", "status": "active"}]}
 
 
 @router.post("/intelligence/enrich")
@@ -117,6 +128,26 @@ async def enrich(body: EnrichRequest, user: dict = Depends(require_user)):
 async def fusion(body: FusionRequest, user: dict = Depends(require_user)):
     result = fusion_engine.fuse(body.observations)
     return {"score": result.score, "confidence": result.confidence, "rationale": result.rationale, "corroborated_sources": list(result.corroborated_sources), "conflicts": list(result.conflicts), "lineage": list(result.lineage)}
+
+
+@router.post("/intelligence/risk/dynamic")
+async def dynamic_risk(body: DynamicRiskRequest, user: dict = Depends(require_user)):
+    result = dynamic_risk_model.assess(
+        base_score=body.base_score,
+        behavioral_anomaly=body.behavioral_anomaly,
+        newly_exposed_ports=body.newly_exposed_ports,
+        critical_service_exposure=body.critical_service_exposure,
+        validated_exploitation=body.validated_exploitation,
+        business_impact=body.business_impact,
+    )
+    return {
+        "score": result.score,
+        "severity": result.severity,
+        "adjustments": list(result.adjustments),
+        "rationale": result.rationale,
+        "assessed_at": result.assessed_at,
+        "engine": "aegis-dynamic-risk-v1",
+    }
 
 
 @router.post("/intelligence/behavioral-fingerprint")
