@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from . import itsm_remediation_v2 as core
+from .itsm_configuration import configuration_error
 from .itsm_idempotency import create_or_reconcile
 
 PROVIDERS = core.PROVIDERS
@@ -36,14 +37,20 @@ async def create_case(
     if not providers or any(p not in PROVIDERS for p in providers):
         raise ValueError("providers must contain only jira and/or servicenow")
 
-    # ServiceNow Incident exposes correlation_id as a standard field. Use it
-    # unless the deployment explicitly chooses another dedicated field.
     if not os.getenv("SERVICENOW_IDEMPOTENCY_FIELD"):
         os.environ["SERVICENOW_IDEMPOTENCY_FIELD"] = "correlation_id"
 
     existing = await get_case_by_idempotency(idempotency_key)
     if existing:
         return existing
+
+    invalid = {provider: configuration_error(provider) for provider in providers}
+    invalid = {provider: error for provider, error in invalid.items() if error}
+    if invalid:
+        raise RuntimeError(
+            "ITSM configuration invalid; no external tickets were created: "
+            + " | ".join(f"{provider}: {error}" for provider, error in invalid.items())
+        )
 
     score = float(decision.get("final_score", decision.get("risk", 0)) or 0)
     computed_sla = sla_hours or (24 if score >= 85 else 72 if score >= 70 else 168 if score >= 40 else 720)
@@ -68,13 +75,10 @@ async def create_case(
             raise ValueError("Idempotency key already used with a different request payload")
         if record.get("external_id"):
             continue
-        if not core._configured(provider):
-            core._update_record(
-                record["record_id"],
-                integration_state="not_configured",
-                last_error=f"{provider} credentials are not configured",
-            )
-            core._audit(action["actionId"], "itsm.provider_not_configured", actor, f"{provider} is not configured")
+        _update_error = configuration_error(provider)
+        if _update_error:
+            core._update_record(record["record_id"], integration_state="not_configured", last_error=_update_error)
+            core._audit(action["actionId"], "itsm.provider_not_configured", actor, f"{provider} configuration rejected", {"reason": _update_error})
             continue
         try:
             result = await create_or_reconcile(
