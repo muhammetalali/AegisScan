@@ -34,7 +34,8 @@ def test_example_provider_hosts_are_rejected(provider_env, expected_provider, mo
 
 @pytest.mark.asyncio
 async def test_jira_health_never_exposes_credentials(monkeypatch):
-    monkeypatch.setenv("JIRA_BASE_URL", "https://jira.example.org")
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("JIRA_BASE_URL", "https://tenant.atlassian.net")
     monkeypatch.setenv("JIRA_USER_EMAIL", "security@example.invalid")
     monkeypatch.setenv("JIRA_API_TOKEN", "secret-token")
     monkeypatch.setenv("JIRA_PROJECT_KEY", "SEC")
@@ -59,7 +60,8 @@ async def test_jira_health_never_exposes_credentials(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_provider_health_maps_auth_failure(monkeypatch):
-    monkeypatch.setenv("JIRA_BASE_URL", "https://jira.example.org")
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("JIRA_BASE_URL", "https://tenant.atlassian.net")
     monkeypatch.setenv("JIRA_USER_EMAIL", "security@example.invalid")
     monkeypatch.setenv("JIRA_API_TOKEN", "secret-token")
     monkeypatch.setenv("JIRA_PROJECT_KEY", "SEC")
