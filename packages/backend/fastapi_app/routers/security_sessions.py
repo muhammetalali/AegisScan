@@ -8,9 +8,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from django_project.security_sessions.execution import execute_with_identity
+from django_project.security_sessions.integrity import verify_evidence_chain_by_id
+
 from ..core.security import verify_token
 from ..services import security_sessions as session_service
-from security_sessions.integrity import verify_evidence_chain_by_id
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -79,6 +81,15 @@ class RevokeIdentityRequest(BaseModel):
     reason: str = Field(default="", max_length=2000)
 
 
+class ExecutionRequest(BaseModel):
+    operation: Literal["identity", "hostname", "platform"]
+    target: str = Field(default="local", min_length=1, max_length=500)
+    kind: Literal["command", "interactive", "privileged_validation"] = "command"
+    approval_id: str | None = Field(default=None, max_length=200)
+    timeout_seconds: int = Field(default=30, ge=1, le=60)
+    execution_credential: str = Field(min_length=20, max_length=256)
+
+
 @router.post("/security-sessions", status_code=201)
 async def create_security_session(payload: SessionCreateRequest, user: dict[str, Any] = Depends(current_user)):
     try:
@@ -135,6 +146,31 @@ async def append_session_evidence(
             session_id=session_id, user_id=_user_id(user), event_type=payload.event_type,
             capability=payload.capability, target=payload.target, action=payload.action,
             status=payload.status, data=payload.data, artifact_ref=payload.artifact_ref,
+        )
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.post("/security-sessions/{session_id}/execute")
+async def execute_security_session_operation(
+    session_id: UUID,
+    payload: ExecutionRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    try:
+        snapshot = await run_in_threadpool(
+            session_service.get_session_snapshot, session_id=session_id, user_id=_user_id(user)
+        )
+        if snapshot.get("id") != str(session_id):
+            raise session_service.SessionAccessError("session access denied")
+        return await run_in_threadpool(
+            execute_with_identity,
+            token=payload.execution_credential,
+            operation=payload.operation,
+            target=payload.target,
+            kind=payload.kind,
+            approval_id=payload.approval_id,
+            timeout_seconds=payload.timeout_seconds,
         )
     except Exception as exc:
         raise _translate(exc) from exc
