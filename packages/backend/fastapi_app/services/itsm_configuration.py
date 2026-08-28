@@ -23,6 +23,10 @@ class ProviderConfiguration:
     errors: tuple[str, ...]
 
 
+def sandbox_mode() -> bool:
+    return os.getenv("AEGIS_ITSM_MODE", "real").strip().lower() == "sandbox"
+
+
 def _is_placeholder(value: str) -> bool:
     normalized = value.strip().lower()
     return bool(normalized) and any(token in normalized for token in _PLACEHOLDER_TOKENS)
@@ -47,6 +51,12 @@ def _example_only(errors: list[str]) -> bool:
 
 
 def validate_itsm_configuration() -> dict[str, ProviderConfiguration]:
+    if sandbox_mode():
+        return {
+            "jira": ProviderConfiguration("jira", True, True, ()),
+            "servicenow": ProviderConfiguration("servicenow", True, True, ()),
+        }
+
     jira = {key: (os.getenv(key) or "").strip() for key in ("JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_USER_EMAIL", "JIRA_PROJECT_KEY")}
     jira_enabled = any(jira.values())
     jira_errors: list[str] = []
