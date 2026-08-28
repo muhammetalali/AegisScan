@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+from django.db import close_old_connections
 from django.test import TransactionTestCase
 
 from .models import AuditLog, AuditChainState
@@ -40,12 +41,16 @@ class AuditChainTests(TransactionTestCase):
 
     def test_concurrent_append_has_unique_ordered_chain(self):
         def write(i):
-            return append_audit(
-                action=AuditLog.Action.LOGIN,
-                ip_address='127.0.0.1',
-                request_id=uuid4(),
-                metadata={'worker': i},
-            ).sequence
+            close_old_connections()
+            try:
+                return append_audit(
+                    action=AuditLog.Action.LOGIN,
+                    ip_address='127.0.0.1',
+                    request_id=uuid4(),
+                    metadata={'worker': i},
+                ).sequence
+            finally:
+                close_old_connections()
 
         with ThreadPoolExecutor(max_workers=8) as executor:
             sequences = list(executor.map(write, range(16)))
