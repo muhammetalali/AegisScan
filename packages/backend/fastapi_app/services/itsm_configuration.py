@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 _PLACEHOLDER_TOKENS = (
     "your-instance",
+    "acme-security",
     "example.com",
     "changeme",
     "replace-me",
@@ -32,7 +33,7 @@ def _valid_base_url(value: str, provider: str) -> str | None:
     if not raw:
         return f"{provider} base URL is missing"
     if _is_placeholder(parsed.netloc or parsed.path):
-        return f"{provider} base URL is still a placeholder"
+        return f"{provider} base URL is still a placeholder/example host"
     if parsed.scheme not in {"https", "http"} or not parsed.netloc:
         return f"{provider} base URL must be an absolute HTTP(S) URL"
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
@@ -50,7 +51,7 @@ def validate_itsm_configuration() -> dict[str, ProviderConfiguration]:
             if error := _valid_base_url(jira["JIRA_BASE_URL"], "Jira"):
                 jira_errors.append(error)
         if jira["JIRA_PROJECT_KEY"] and _is_placeholder(jira["JIRA_PROJECT_KEY"]):
-            jira_errors.append("Jira project key is still a placeholder")
+            jira_errors.append("Jira project key is still a placeholder/example value")
 
     sn = {key: (os.getenv(key) or "").strip() for key in ("SERVICENOW_BASE_URL", "SERVICENOW_API_TOKEN", "SERVICENOW_USERNAME", "SERVICENOW_PASSWORD")}
     sn_enabled = any(sn.values())
