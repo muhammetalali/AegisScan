@@ -17,27 +17,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install backend dependencies
         working-directory: packages/backend
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt ruff bandit
-
       - name: Ruff lint
         run: |
           ruff check packages/backend --select E9
           ruff check packages/core/aegis/core/scan_state_machine.py packages/core/aegis/core/feedback.py packages/core/aegis/core/immutable_audit.py packages/core/aegis/core/plugin_registry.py packages/core/aegis/models/provenance.py packages/core/aegis/engines/inference/smart_aggregator.py packages/core/aegis/engines/inference/contextual_enrichment.py --select E4,E7,E9,F,B,I,UP --ignore E501
-
       - name: Bandit security audit
         run: bandit -r packages/backend/django_project packages/backend/fastapi_app -ll -x "*/migrations/*"
-
       - name: Python compile audit
         run: python -m compileall -q packages/backend
-
       - name: Django application audit
         working-directory: packages/backend
         env:
@@ -47,9 +41,7 @@ jobs:
           ALLOWED_HOSTS: "*"
           DATABASE_URL: sqlite:///ci.sqlite3
           REDIS_URL: redis://localhost:6379/0
-        run: |
-          python -c "import django; django.setup(); print('DJANGO_SETUP_OK')"
-
+        run: python -c "import django; django.setup(); print('DJANGO_SETUP_OK')"
       - name: Django API tests
         working-directory: packages/backend
         env:
@@ -61,7 +53,6 @@ jobs:
           DATABASE_URL: sqlite:///ci.sqlite3
           REDIS_URL: redis://localhost:6379/0
         run: python -m pytest -q tests
-
       - name: Core pytest suite
         working-directory: .
         run: |
@@ -77,20 +68,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: packages/web/package-lock.json
-
       - name: Synchronize npm lockfile
         run: npm install --package-lock-only --ignore-scripts
-
       - name: Persist synchronized lockfile
         if: github.event_name == 'push' && github.ref == 'refs/heads/feature/enterprise-platform-ui-v2'
-        working-directory: .
+        working-directory: ${{ github.workspace }}
         run: |
           if git diff --quiet -- packages/web/package-lock.json; then
             echo 'package-lock.json already synchronized.'
@@ -101,22 +89,16 @@ jobs:
           git add packages/web/package-lock.json
           git commit -m 'chore(web): synchronize npm lockfile [lock-sync]'
           git push origin HEAD:${GITHUB_REF_NAME}
-
       - name: Clean install from lockfile
         run: npm ci
-
       - name: TypeScript typecheck
         run: npm run typecheck
-
       - name: ESLint
         run: npm run lint
-
       - name: Tests
         run: npm test -- --run
-
       - name: Production build
         run: npm run build
-
       - name: Duplicate-code audit
         run: npx --yes jscpd src --min-lines 8 --min-tokens 80 --reporters console --exit-code 1
 
@@ -126,10 +108,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Validate Compose
         run: docker compose -f packages/platform/docker-compose.yml config
-
       - name: Verify service definitions
         shell: bash
         run: |
@@ -138,7 +118,6 @@ jobs:
           for service in postgres redis django fastapi celery_worker celery_beat frontend; do
             echo "$services" | grep -qx "$service"
           done
-
       - name: Build frontend production image
         run: docker compose -f packages/platform/docker-compose.yml build --no-cache frontend
 
@@ -148,19 +127,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install backend dependencies
         working-directory: packages/backend
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest
-
       - name: Start data services
         run: docker compose -f packages/platform/docker-compose.yml up -d postgres redis
-
       - name: Wait for data services
         run: |
           set -euo pipefail
@@ -172,15 +147,12 @@ jobs:
           done
           docker compose -f packages/platform/docker-compose.yml ps
           exit 1
-
       - name: Build and migrate Django
         run: |
           docker compose -f packages/platform/docker-compose.yml build django
           docker compose -f packages/platform/docker-compose.yml run --rm django python manage.py migrate --noinput
-
       - name: Start Django and FastAPI
         run: docker compose -f packages/platform/docker-compose.yml up -d django fastapi
-
       - name: Wait for application services
         run: |
           set -euo pipefail
@@ -193,14 +165,11 @@ jobs:
           docker compose -f packages/platform/docker-compose.yml ps
           docker compose -f packages/platform/docker-compose.yml logs --no-color django fastapi
           exit 1
-
       - name: Run service E2E smoke tests
         run: python -m pytest -q packages/backend/tests/e2e_smoke.py
-
       - name: Collect service logs
         if: always()
         run: docker compose -f packages/platform/docker-compose.yml logs --no-color django fastapi postgres redis
-
       - name: Tear down
         if: always()
         run: docker compose -f packages/platform/docker-compose.yml down -v
