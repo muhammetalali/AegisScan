@@ -9,6 +9,7 @@ _PLACEHOLDER_TOKENS = (
     "your-instance",
     "acme-security",
     "example.com",
+    "example.org",
     "changeme",
     "replace-me",
 )
@@ -39,6 +40,10 @@ def _valid_base_url(value: str, provider: str) -> str | None:
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
         return f"{provider} base URL must be an origin only (no API path/query/fragment)"
     return None
+
+
+def _example_only(errors: list[str]) -> bool:
+    return bool(errors) and all("placeholder" in error.lower() or "example" in error.lower() for error in errors)
 
 
 def validate_itsm_configuration() -> dict[str, ProviderConfiguration]:
@@ -73,7 +78,11 @@ def validate_itsm_configuration() -> dict[str, ProviderConfiguration]:
 
 def startup_validation() -> tuple[bool, dict[str, ProviderConfiguration]]:
     states = validate_itsm_configuration()
-    return not any(state.enabled and not state.valid for state in states.values()), states
+    hard_errors = []
+    for state in states.values():
+        if state.enabled and not state.valid and not _example_only(list(state.errors)):
+            hard_errors.append(state.provider)
+    return not hard_errors, states
 
 
 def configuration_error(provider: str) -> str | None:
