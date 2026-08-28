@@ -22,6 +22,11 @@ class ProjectSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Slug cannot be empty.")
         return value
 
+    def validate_status(self, value):
+        if value == Project.Status.ARCHIVED:
+            raise serializers.ValidationError("Use the archive action to archive a project.")
+        return value
+
     def validate_tags(self, value):
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise serializers.ValidationError("Tags must be a list of strings.")
