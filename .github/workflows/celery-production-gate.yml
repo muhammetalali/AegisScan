@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  AEGIS_ENV: ci
+  DJANGO_DEBUG: "0"
+  ALLOWED_HOSTS: localhost,127.0.0.1
+
 jobs:
   celery-runtime:
     name: Celery runtime verification
@@ -17,6 +22,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Generate ephemeral CI secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          django_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
+          jwt_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
+          fastapi_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
+          echo "DJANGO_SECRET_KEY=${django_secret}" >> "$GITHUB_ENV"
+          echo "JWT_SECRET_KEY=${jwt_secret}" >> "$GITHUB_ENV"
+          echo "FASTAPI_SECRET_KEY=${fastapi_secret}" >> "$GITHUB_ENV"
+          echo "::add-mask::${django_secret}"
+          echo "::add-mask::${jwt_secret}"
+          echo "::add-mask::${fastapi_secret}"
 
       - name: Validate Compose
         run: docker compose -f packages/platform/docker-compose.yml config
@@ -67,7 +86,7 @@ jobs:
 
       - name: Execute deterministic worker task
         run: |
-          docker exec aegis-celery-worker python -c 'from fastapi_app.tasks.health_tasks import celery_health; r=celery_health.delay(); print(r.get(timeout=30)); assert r.get(timeout=1)["status"] == "ok"'
+          docker exec aegis-celery-worker python -c 'from fastapi_app.tasks.health_tasks import celery_health; r=celery_health.delay(); result=r.get(timeout=30); print(result); assert result["status"] == "ok"'
 
       - name: Verify beat can start
         run: docker compose -f packages/platform/docker-compose.yml up -d celery_beat
