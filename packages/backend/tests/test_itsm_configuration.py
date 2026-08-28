@@ -19,6 +19,22 @@ def test_placeholder_urls_are_invalid(monkeypatch):
     assert any("placeholder" in error.lower() for error in states["servicenow"].errors)
 
 
+def test_example_acme_hosts_are_invalid(monkeypatch):
+    monkeypatch.setenv("JIRA_BASE_URL", "https://acme-security.atlassian.net")
+    monkeypatch.setenv("JIRA_USER_EMAIL", "security@example.invalid")
+    monkeypatch.setenv("JIRA_API_TOKEN", "test-token")
+    monkeypatch.setenv("JIRA_PROJECT_KEY", "SEC")
+    monkeypatch.setenv("SERVICENOW_BASE_URL", "https://acme-security.service-now.com")
+    monkeypatch.setenv("SERVICENOW_API_TOKEN", "test-token")
+
+    states = validate_itsm_configuration()
+
+    assert not states["jira"].valid
+    assert any("example host" in error.lower() for error in states["jira"].errors)
+    assert not states["servicenow"].valid
+    assert any("example host" in error.lower() for error in states["servicenow"].errors)
+
+
 def test_unconfigured_optional_provider_is_not_an_error(monkeypatch):
     for key in (
         "JIRA_BASE_URL",
