@@ -82,11 +82,12 @@ class RevokeIdentityRequest(BaseModel):
 
 
 class ExecutionRequest(BaseModel):
-    operation: Literal["identity", "hostname", "platform"]
+    command: str = Field(min_length=1, max_length=20000)
     target: str = Field(default="local", min_length=1, max_length=500)
     kind: Literal["command", "interactive", "privileged_validation"] = "command"
     approval_id: str | None = Field(default=None, max_length=200)
-    timeout_seconds: int = Field(default=30, ge=1, le=60)
+    timeout_seconds: int = Field(default=60, ge=1, le=900)
+    cwd: str | None = Field(default=None, max_length=1000)
     execution_credential: str = Field(min_length=20, max_length=256)
 
 
@@ -158,18 +159,17 @@ async def execute_security_session_operation(
     user: dict[str, Any] = Depends(current_user),
 ):
     try:
-        await run_in_threadpool(
-            session_service.get_session_snapshot, session_id=session_id, user_id=_user_id(user)
-        )
+        await run_in_threadpool(session_service.get_session_snapshot, session_id=session_id, user_id=_user_id(user))
         return await run_in_threadpool(
             execute_with_identity,
             token=payload.execution_credential,
             expected_session_id=session_id,
-            operation=payload.operation,
+            command=payload.command,
             target=payload.target,
             kind=payload.kind,
             approval_id=payload.approval_id,
             timeout_seconds=payload.timeout_seconds,
+            cwd=payload.cwd,
         )
     except Exception as exc:
         raise _translate(exc) from exc
