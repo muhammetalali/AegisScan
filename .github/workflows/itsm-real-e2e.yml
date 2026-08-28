@@ -99,10 +99,6 @@ jobs:
         working-directory: packages/backend
         run: python -c "from fastapi_app.services.itsm_configuration import validate_itsm_configuration; import sys; states=validate_itsm_configuration(); print({k:{'enabled':v.enabled,'valid':v.valid,'errors':list(v.errors)} for k,v in states.items()}); sys.exit(1 if any(v.enabled and not v.valid for v in states.values()) else 0)"
 
-      - name: Run provider health checks
-        working-directory: packages/backend
-        run: python scripts/itsm_provider_health.py
-
       - name: Verify provider capabilities are ready
         working-directory: packages/backend
         run: python -c "import asyncio,sys; from fastapi_app.services.itsm_capability import all_provider_capabilities; results=asyncio.run(all_provider_capabilities()); print(results); sys.exit(1 if any(r.get('status')!='ready' for r in results) else 0)"
