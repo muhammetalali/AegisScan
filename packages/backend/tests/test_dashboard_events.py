@@ -13,7 +13,7 @@ def test_dashboard_group_name_is_stable():
     assert dashboard_group_name(user_id) == f"dashboard_user_{user_id}"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_user_dashboard_event_is_published_after_commit():
     user_id = uuid.uuid4()
     project_id = uuid.uuid4()
