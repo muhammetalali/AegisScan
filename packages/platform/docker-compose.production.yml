@@ -1,0 +1,129 @@
+# Production deployment contract.
+# PostgreSQL and Redis are managed externally. No local stateful services are exposed.
+services:
+  django:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.django
+    restart: unless-stopped
+    command: gunicorn django_project.wsgi:application --bind 0.0.0.0:8000 --workers ${DJANGO_WORKERS:-3} --timeout 120 --access-logfile -
+    environment:
+      AEGIS_ENV: production
+      DEBUG: "0"
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL with TLS is required}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:?CELERY_BROKER_URL with TLS is required}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:?CELERY_RESULT_BACKEND with TLS is required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
+      LOG_TO_FILE: "0"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: ${DJANGO_MEMORY_LIMIT:-768m}
+    cpus: ${DJANGO_CPU_LIMIT:-1.5}
+
+  fastapi:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.fastapi
+    restart: unless-stopped
+    command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers ${FASTAPI_WORKERS:-3}
+    environment:
+      AEGIS_ENV: production
+      SECRET_KEY: ${FASTAPI_SECRET_KEY:?FASTAPI_SECRET_KEY is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL with TLS is required}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:?CELERY_BROKER_URL with TLS is required}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:?CELERY_RESULT_BACKEND with TLS is required}
+      DJANGO_API_URL: ${DJANGO_API_URL:?DJANGO_API_URL is required}
+      OTEL_ENABLED: ${OTEL_ENABLED:-1}
+      OTEL_SERVICE_NAME: aegisscan-fastapi
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: ${FASTAPI_MEMORY_LIMIT:-768m}
+    cpus: ${FASTAPI_CPU_LIMIT:-1.5}
+
+  celery_worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.django
+    restart: unless-stopped
+    command: celery -A fastapi_app.celery_app worker -l info -Q default,health -c ${CELERY_DEFAULT_WORKER_CONCURRENCY:-2} --hostname=core@%h
+    environment: &celery_env
+      AEGIS_ENV: production
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL with TLS is required}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:?CELERY_BROKER_URL with TLS is required}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:?CELERY_RESULT_BACKEND with TLS is required}
+      SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: ${CELERY_MEMORY_LIMIT:-512m}
+    cpus: ${CELERY_CPU_LIMIT:-1}
+
+  celery_workflow:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.django
+    restart: unless-stopped
+    command: celery -A fastapi_app.celery_app worker -l info -Q workflow -c ${CELERY_WORKFLOW_WORKER_CONCURRENCY:-2} --hostname=workflow@%h
+    environment: *celery_env
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: ${CELERY_WORKFLOW_MEMORY_LIMIT:-512m}
+    cpus: ${CELERY_WORKFLOW_CPU_LIMIT:-1}
+
+  celery_reports:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.django
+    restart: unless-stopped
+    command: celery -A fastapi_app.celery_app worker -l info -Q reports -c ${CELERY_REPORT_WORKER_CONCURRENCY:-2} --hostname=reports@%h
+    environment: *celery_env
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: ${CELERY_REPORT_MEMORY_LIMIT:-512m}
+    cpus: ${CELERY_REPORT_CPU_LIMIT:-1}
+
+  celery_beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.django
+    restart: unless-stopped
+    command: celery -A fastapi_app.celery_app beat -l info --max-interval=30
+    environment: *celery_env
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: 384m
+    cpus: 0.5
+
+  frontend:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: ${FRONTEND_MEMORY_LIMIT:-256m}
+    cpus: ${FRONTEND_CPU_LIMIT:-0.5}
+
