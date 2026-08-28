@@ -6,6 +6,7 @@ from typing import Any
 from . import itsm_remediation_v2 as core
 from .itsm_configuration import configuration_error
 from .itsm_idempotency import create_or_reconcile
+from . import itsm_sandbox
 
 PROVIDERS = core.PROVIDERS
 initialize_itsm_store = core.initialize_itsm_store
@@ -30,7 +31,7 @@ async def create_case(
     sla_hours: int | None = None,
     approved: bool = False,
 ) -> dict[str, Any]:
-    """Canonical ITSM create path with DB and provider-side idempotency."""
+    """Canonical ITSM create path with DB/provider-side idempotency and explicit sandbox mode."""
     initialize_itsm_store()
     evidence = evidence or []
     providers = list(dict.fromkeys(p.strip().lower() for p in (providers or list(PROVIDERS))))
@@ -44,13 +45,15 @@ async def create_case(
     if existing:
         return existing
 
-    invalid = {provider: configuration_error(provider) for provider in providers}
-    invalid = {provider: error for provider, error in invalid.items() if error}
-    if invalid:
-        raise RuntimeError(
-            "ITSM configuration invalid; no external tickets were created: "
-            + " | ".join(f"{provider}: {error}" for provider, error in invalid.items())
-        )
+    sandbox = itsm_sandbox.enabled()
+    if not sandbox:
+        invalid = {provider: configuration_error(provider) for provider in providers}
+        invalid = {provider: error for provider, error in invalid.items() if error}
+        if invalid:
+            raise RuntimeError(
+                "ITSM configuration invalid; no external tickets were created: "
+                + " | ".join(f"{provider}: {error}" for provider, error in invalid.items())
+            )
 
     score = float(decision.get("final_score", decision.get("risk", 0)) or 0)
     computed_sla = sla_hours or (24 if score >= 85 else 72 if score >= 70 else 168 if score >= 40 else 720)
@@ -75,6 +78,33 @@ async def create_case(
             raise ValueError("Idempotency key already used with a different request payload")
         if record.get("external_id"):
             continue
+
+        if sandbox:
+            result = itsm_sandbox.create(
+                provider=provider,
+                decision=normalized,
+                action=action,
+                evidence=evidence,
+                idempotency_key=idempotency_key,
+            )
+            core._update_record(
+                record["record_id"],
+                integration_state="sandbox_created",
+                external_state="created",
+                external_id=result["external_id"],
+                external_url=result["external_url"],
+                response=result.get("response") or {},
+                last_error=None,
+            )
+            core._audit(
+                action["actionId"],
+                "itsm.sandbox_created",
+                actor,
+                f"Created {provider} sandbox remediation ticket",
+                {"provider": provider, "external_id": result["external_id"]},
+            )
+            continue
+
         _update_error = configuration_error(provider)
         if _update_error:
             core._update_record(record["record_id"], integration_state="not_configured", last_error=_update_error)
