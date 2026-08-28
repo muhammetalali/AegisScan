@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi.concurrency import run_in_threadpool
 
 from django_project.security_sessions import services as session_service
+from django_project.security_sessions.models import SecurityTestSession
 
 from .dynamic_risk_engine import DynamicRiskModel
 from .engine_adapters import execute_engine
@@ -25,14 +26,19 @@ class AssuranceRiskPipeline:
         self.dynamic_risk = dynamic_risk or DynamicRiskModel()
         self.remediation = remediation or RemediationValidationSuite()
 
+    @staticmethod
+    def _session_owner(session_id: UUID | str) -> str:
+        session = SecurityTestSession.objects.only("initiated_by_id").get(pk=session_id)
+        return str(session.initiated_by_id)
+
     async def _record(self, session_id: UUID | str | None, event_type: str, *, target: str = "", action: str = "", status: str = "success", data: dict[str, Any] | None = None) -> None:
         if session_id is None:
             return
-        session = await run_in_threadpool(session_service.get_session_snapshot, session_id=session_id, user_id=None)
+        owner_id = await run_in_threadpool(self._session_owner, session_id)
         await run_in_threadpool(
             session_service.append_evidence,
             session_id=session_id,
-            user_id=session["initiated_by"],
+            user_id=owner_id,
             event_type=event_type,
             capability="passive_validate",
             target=target,
@@ -52,7 +58,7 @@ class AssuranceRiskPipeline:
         dependency_filename: str | None = None,
         session_id: UUID | str | None = None,
     ) -> dict[str, Any]:
-        await self._record(session_id, "assurance.assessment.started", target=indicator, action="assess")
+        await self._record(session_id, "assurance.assessment.started", target=indicator, action="assess", data={"cve_id": cve_id})
         external = await self.external.search(indicator)
         vulnerability = await self.intelligence.enrich(cve_id, assets or []) if cve_id else None
         remediation_result = None
