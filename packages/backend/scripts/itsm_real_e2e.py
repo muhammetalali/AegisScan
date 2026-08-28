@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from dotenv import load_dotenv
 
+from fastapi_app.services.itsm_configuration import validate_itsm_configuration
 from fastapi_app.services.itsm_remediation_resilient import create_case
 
 
@@ -27,16 +28,16 @@ for candidate in (
         load_dotenv(candidate, override=False)
 
 
-def _reject_placeholder_configuration() -> None:
-    for name in ("JIRA_BASE_URL", "SERVICENOW_BASE_URL"):
-        value = os.getenv(name, "").strip()
-        if not value:
-            raise RuntimeError(f"Missing required ITSM configuration: {name}")
-        if "your-instance.atlassian.net" in value.lower() or "your-instance" in value.lower():
-            raise RuntimeError(
-                f"Invalid placeholder configuration for {name}. "
-                "Set the real provider base URL in the active environment before running E2E."
-            )
+def _validate_before_external_creation() -> None:
+    states = validate_itsm_configuration()
+    errors = {
+        provider: state.errors
+        for provider, state in states.items()
+        if not state.valid
+    }
+    if errors:
+        details = " | ".join(f"{provider}: {', '.join(messages)}" for provider, messages in errors.items())
+        raise RuntimeError(f"ITSM startup validation failed; no external tickets will be created: {details}")
 
 
 async def main() -> int:
@@ -44,7 +45,7 @@ async def main() -> int:
         print("Set AEGIS_ITSM_E2E_ENABLE=1 to allow real external ticket creation.")
         return 2
 
-    _reject_placeholder_configuration()
+    _validate_before_external_creation()
 
     actor = os.getenv("AEGIS_ITSM_E2E_ACTOR", "e2e-runner")
     owner = os.getenv("AEGIS_ITSM_E2E_OWNER", "security-engineering")
