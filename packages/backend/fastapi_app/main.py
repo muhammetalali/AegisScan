@@ -5,10 +5,12 @@ import logging
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .routers import assurance, assurance_graph, dashboard, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, policy, posture, security_decision, system, validation_runtime
 from .services.celery_monitoring import get_task_metrics
+from .services.observability import metrics_payload, configure_tracing
 from .services.decision_action_orchestration import initialize_action_store
 from .services.policy_engine import initialize_policy_store
 from .services.scan_orchestrator import ScanOrchestrator
@@ -27,6 +29,7 @@ workflow_bridge = WorkflowLiveBridge(lambda event: websocket_manager.broadcast("
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting AegisScan FastAPI server...")
+    configure_tracing()
     initialize_action_store()
     initialize_policy_store()
     await workflow_bridge.start()
@@ -47,6 +50,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     if not user:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    payload, content_type = metrics_payload()
+    return Response(content=payload, media_type=content_type)
 
 @app.websocket("/ws/workflow")
 async def websocket_workflow(websocket: WebSocket, token: str = None):
@@ -183,7 +191,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user)):
+async def disable_engine(engine_name: str, user=Depends(get_current_user))
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
