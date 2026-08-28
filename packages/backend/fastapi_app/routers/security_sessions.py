@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
 from ..services import security_sessions as session_service
+from ..security_sessions.integrity import verify_evidence_chain_by_id
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -109,6 +110,15 @@ async def get_session_evidence(
 ):
     try:
         return await run_in_threadpool(session_service.list_evidence, session_id=session_id, user_id=_user_id(user), limit=limit)
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.get("/security-sessions/{session_id}/evidence/integrity")
+async def get_evidence_integrity(session_id: UUID, user: dict[str, Any] = Depends(current_user)):
+    try:
+        await run_in_threadpool(session_service.get_session_snapshot, session_id=session_id, user_id=_user_id(user))
+        return await run_in_threadpool(verify_evidence_chain_by_id, session_id)
     except Exception as exc:
         raise _translate(exc) from exc
 
