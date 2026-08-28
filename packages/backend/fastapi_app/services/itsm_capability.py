@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .itsm_configuration import validate_itsm_configuration
@@ -47,11 +48,15 @@ async def provider_capability(provider: str) -> dict[str, Any]:
 
     capabilities = _capabilities(
         provider,
-        servicenow_idempotency_field=bool(provider == "servicenow" and __import__("os").getenv("SERVICENOW_IDEMPOTENCY_FIELD")),
+        servicenow_idempotency_field=bool(
+            provider == "servicenow" and os.getenv("SERVICENOW_IDEMPOTENCY_FIELD")
+        ),
     )
     warnings: list[str] = []
     if provider == "servicenow" and not capabilities["reconcile_by_idempotency"]:
-        warnings.append("SERVICENOW_IDEMPOTENCY_FIELD is not configured; provider-side reconciliation is unavailable")
+        warnings.append(
+            "SERVICENOW_IDEMPOTENCY_FIELD is not configured; provider-side reconciliation is unavailable"
+        )
 
     status = "ready" if not warnings else "degraded"
     return {
