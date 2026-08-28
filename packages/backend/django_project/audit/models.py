@@ -127,6 +127,19 @@ class AuditLog(models.Model):
         return f"{self.get_action_display()} by {self.user or 'System'} - {self.get_result_display()}"
 
 
+class AuditChainState(models.Model):
+    """Singleton row that serializes writers at the audit-chain tail."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    last_sequence = models.PositiveBigIntegerField(default=0, editable=False)
+    last_hash = models.CharField(max_length=64, default='0' * 64, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _('Audit Chain State')
+        verbose_name_plural = _('Audit Chain State')
+
+
 class SecurityEvent(models.Model):
     class EventType(models.TextChoices):
         BRUTE_FORCE = 'brute_force', _('Brute Force Attack')
