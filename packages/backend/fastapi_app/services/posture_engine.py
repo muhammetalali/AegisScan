@@ -28,17 +28,23 @@ class PostureEngine:
         for validation in validations:
             results = validation.get("results") if isinstance(validation.get("results"), dict) else {}
             rows = results.get("findings", []) if isinstance(results, dict) else []
-            if isinstance(rows, list): findings.extend(x for x in rows if isinstance(x, dict))
+            if isinstance(rows, list):
+                findings.extend(x for x in rows if isinstance(x, dict))
             evidence = results.get("evidence", []) if isinstance(results, dict) else []
-            if isinstance(evidence, list): evidence_items += len(evidence)
+            if isinstance(evidence, list):
+                evidence_items += len(evidence)
             controls = results.get("controls", []) if isinstance(results, dict) else []
             if isinstance(controls, list):
                 for control in controls:
-                    if not isinstance(control, dict): continue
+                    if not isinstance(control, dict):
+                        continue
                     controls_total += 1
                     status = str(control.get("status", "")).lower()
-                    if status in {"pass", "passed", "compliant"}: controls_passed += 1
-                    if str(control.get("remediation_status", "")).lower() in {"verified", "remediated", "resolved"}: remediated += 1
+                    if status in {"pass", "passed", "compliant"}:
+                        controls_passed += 1
+                    remediation_status = str(control.get("remediation_status", "")).lower()
+                    if remediation_status in {"verified", "remediated", "resolved"}:
+                        remediated += 1
 
         weighted_debt = sum(SEVERITY_WEIGHT.get(str(f.get("severity", "informational")).lower(), 0.0) for f in findings)
         vulnerability_health = max(0.0, min(100.0, 100.0 - weighted_debt))
@@ -78,7 +84,8 @@ class PostureEngine:
         history = [max(0.0, min(100.0, float(x))) for x in (trend_scores or [])]
         change = round(history[-1] - history[0], 2) if len(history) >= 2 else 0.0
         direction = "improving" if change > 0.5 else "declining" if change < -0.5 else "stable"
-        score = round(max(0.0, min(100.0, score + (min(5.0, change * 0.25) if change > 0.5 else max(-5.0, change * 0.25) if change < -0.5 else 0.0)), 2)
+        trend_adjustment = min(5.0, change * 0.25) if change > 0.5 else max(-5.0, change * 0.25) if change < -0.5 else 0.0
+        score = round(max(0.0, min(100.0, score + trend_adjustment)), 2)
         rating = "excellent" if score >= 90 else "good" if score >= 75 else "fair" if score >= 60 else "poor" if score > 0 else "unknown"
 
         recommendations: list[str] = []
@@ -91,4 +98,5 @@ class PostureEngine:
         if direction == "declining": recommendations.append("Posture is declining; investigate recent risk or exposure changes.")
         if not recommendations: recommendations.append("Maintain continuous assurance and monitor measured posture trend.")
 
-        return PostureAssessment(score=score, rating=rating, metrics=tuple({**m, "trend": direction, "percentage": m.get("value")} for m in metrics), recommendations=tuple(recommendations), trend={"direction": direction, "change_rate": change, "samples": len(history)}, evaluated_at=datetime.now(timezone.utc).isoformat())
+        enriched_metrics = tuple({**metric, "trend": direction, "percentage": metric.get("value")} for metric in metrics)
+        return PostureAssessment(score=score, rating=rating, metrics=enriched_metrics, recommendations=tuple(recommendations), trend={"direction": direction, "change_rate": change, "samples": len(history)}, evaluated_at=datetime.now(timezone.utc).isoformat())
