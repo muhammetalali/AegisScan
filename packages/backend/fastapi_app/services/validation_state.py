@@ -40,11 +40,42 @@ ENGINE_PHASE = {
 }
 
 GROUPS = [
-    {"id": "recon", "label": "Recon", "engines": ["recon", "evidence_collection"], "desc": "DNS • Subdomain • Port • Service Discovery"},
-    {"id": "discovery", "label": "Discovery", "engines": ["vuln_intelligence", "validation"], "desc": "HTTP • Technology • Endpoint • Directory"},
-    {"id": "enumeration", "label": "Enumeration", "engines": ["control_validation", "coverage_gap"], "desc": "Headers • TLS • Config • Vulnerability"},
-    {"id": "analysis", "label": "Analysis", "engines": ["attack_path", "evidence_graph", "knowledge", "posture"], "desc": "Security Checks • Risk Analysis"},
-    {"id": "reporting", "label": "Reporting", "engines": ["policy_compliance", "twin_engine", "scenarios", "dashboard", "reporting"], "desc": "Findings • Report Generator"},
+    {
+        "id": "recon",
+        "label": "Recon",
+        "engines": ["recon", "evidence_collection"],
+        "desc": "DNS • Subdomain • Port • Service Discovery",
+    },
+    {
+        "id": "discovery",
+        "label": "Discovery",
+        "engines": ["vuln_intelligence", "validation"],
+        "desc": "HTTP • Technology • Endpoint • Directory",
+    },
+    {
+        "id": "enumeration",
+        "label": "Enumeration",
+        "engines": ["control_validation", "coverage_gap"],
+        "desc": "Headers • TLS • Config • Vulnerability",
+    },
+    {
+        "id": "analysis",
+        "label": "Analysis",
+        "engines": ["attack_path", "evidence_graph", "knowledge", "posture"],
+        "desc": "Security Checks • Risk Analysis",
+    },
+    {
+        "id": "reporting",
+        "label": "Reporting",
+        "engines": [
+            "policy_compliance",
+            "twin_engine",
+            "scenarios",
+            "dashboard",
+            "reporting",
+        ],
+        "desc": "Findings • Report Generator",
+    },
 ]
 
 ALL_ENGINES = [
@@ -65,6 +96,8 @@ ALL_ENGINES = [
     "reporting",
 ]
 
+# Local memory is retained only by the executing worker as a short-lived
+# working cache. Redis is the authoritative cross-process state store.
 _store: dict[str, dict[str, Any]] = {}
 _tasks: dict[str, asyncio.Task[Any]] = {}
 
@@ -78,12 +111,7 @@ def _redis_key(validation_id: str) -> str:
 
 
 def _get_redis() -> redis.Redis:
-    """Create the Redis client lazily in the current worker process.
-
-    Uvicorn/Gunicorn may fork worker processes. Creating a Redis client at
-    module import time can inherit a connection pool across forks. Keeping
-    construction lazy guarantees that each worker owns its own pool.
-    """
+    """Lazily create the Redis client inside the current worker process."""
     global _redis_client
     if _redis_client is None:
         _redis_client = redis.Redis.from_url(
@@ -97,20 +125,24 @@ def _get_redis() -> redis.Redis:
 
 
 def _redis_get(validation_id: str) -> dict[str, Any] | None:
+    """Return the value, None for a genuine cache miss, and raise on outages."""
     try:
         raw = _get_redis().get(_redis_key(validation_id))
-    except (redis.RedisError, OSError):
-        return None
+    except (redis.RedisError, OSError) as exc:
+        raise RuntimeError("Validation state store is unavailable") from exc
 
     if not raw:
         return None
 
     try:
         value = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        return None
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Validation state store returned invalid data") from exc
 
-    return value if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        raise RuntimeError("Validation state store returned an invalid record")
+
+    return value
 
 
 def now_iso() -> str:
@@ -145,12 +177,16 @@ def make_live_event(
 
 
 def get_validation(validation_id: str) -> dict[str, Any] | None:
-    """Read shared validation state from Redis before local fallback."""
+    """Read authoritative validation state from Redis.
+
+    A Redis outage is intentionally not treated as a cache miss. Returning a
+    local per-process record here would make multi-worker behaviour divergent
+    and could incorrectly report a real validation as "not found".
+    """
     remote = _redis_get(validation_id)
     if remote is not None:
         _store[validation_id] = remote
-        return remote
-    return _store.get(validation_id)
+    return remote
 
 
 def put_validation(
@@ -162,7 +198,7 @@ def put_validation(
 
 
 def persist_validation(validation_id: str) -> bool:
-    """Persist current validation state to the shared Redis store."""
+    """Persist current validation state to the authoritative Redis store."""
     value = _store.get(validation_id)
     if value is None:
         return False
@@ -177,6 +213,15 @@ def persist_validation(validation_id: str) -> bool:
             ),
             ex=_REDIS_TTL_SECONDS,
         )
+        return True
+    except (redis.RedisError, OSError):
+        return False
+
+
+def validation_store_available() -> bool:
+    """Return whether the authoritative Redis validation store is reachable."""
+    try:
+        _get_redis().ping()
         return True
     except (redis.RedisError, OSError):
         return False
