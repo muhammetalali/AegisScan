@@ -1,0 +1,161 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegisscan-api
+  namespace: aegisscan
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels: {app: aegisscan-api}
+  template:
+    metadata:
+      labels: {app: aegisscan-api}
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/muhammetalali/aegisscan-backend:CHANGE_ME
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8000, name: http}]
+          envFrom:
+            - configMapRef: {name: aegisscan-config}
+            - secretRef: {name: aegisscan-secrets}
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aegisscan-api
+  namespace: aegisscan
+spec:
+  selector: {app: aegisscan-api}
+  ports: [{port: 80, targetPort: http, name: http}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aegisscan-api
+  namespace: aegisscan
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: aegisscan-api}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: aegisscan-api
+  namespace: aegisscan
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: aegisscan-api
+  minReplicas: 2
+  maxReplicas: 10
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - {type: Percent, value: 100, periodSeconds: 60}
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - {type: Percent, value: 25, periodSeconds: 60}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+    - type: Resource
+      resource:
+        name: memory
+        target: {type: Utilization, averageUtilization: 75}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegisscan-worker
+  namespace: aegisscan
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: aegisscan-worker}
+  template:
+    metadata:
+      labels: {app: aegisscan-worker}
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/muhammetalali/aegisscan-backend:CHANGE_ME
+          command: ["celery", "-A", "fastapi_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+          envFrom:
+            - configMapRef: {name: aegisscan-config}
+            - secretRef: {name: aegisscan-secrets}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: aegisscan-worker
+  namespace: aegisscan
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: aegisscan-worker
+  minReplicas: 2
+  maxReplicas: 12
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - {type: Percent, value: 25, periodSeconds: 60}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+    - type: Resource
+      resource:
+        name: memory
+        target: {type: Utilization, averageUtilization: 75}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegisscan-beat
+  namespace: aegisscan
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: aegisscan-beat}
+  template:
+    metadata:
+      labels: {app: aegisscan-beat}
+    spec:
+      containers:
+        - name: beat
+          image: ghcr.io/muhammetalali/aegisscan-backend:CHANGE_ME
+          command: ["celery", "-A", "fastapi_app.celery_app", "beat", "--loglevel=INFO"]
+          envFrom:
+            - configMapRef: {name: aegisscan-config}
+            - secretRef: {name: aegisscan-secrets}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
