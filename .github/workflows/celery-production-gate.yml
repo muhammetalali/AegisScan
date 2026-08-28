@@ -1,0 +1,89 @@
+name: AegisScan Celery Production Gate
+
+on:
+  push:
+    branches:
+      - main
+      - feature/enterprise-platform-ui-v2
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  celery-runtime:
+    name: Celery runtime verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose
+        run: docker compose -f packages/platform/docker-compose.yml config
+
+      - name: Start broker and database
+        run: docker compose -f packages/platform/docker-compose.yml up -d postgres redis
+
+      - name: Wait for broker and database
+        run: |
+          set -euo pipefail
+          for i in {1..30}; do
+            postgres=$(docker inspect --format='{{.State.Health.Status}}' aegis-postgres 2>/dev/null || true)
+            redis=$(docker inspect --format='{{.State.Health.Status}}' aegis-redis 2>/dev/null || true)
+            if [ "$postgres" = "healthy" ] && [ "$redis" = "healthy" ]; then exit 0; fi
+            sleep 2
+          done
+          docker compose -f packages/platform/docker-compose.yml ps
+          exit 1
+
+      - name: Build worker image
+        run: docker compose -f packages/platform/docker-compose.yml build --no-cache celery_worker
+
+      - name: Run migrations
+        run: docker compose -f packages/platform/docker-compose.yml run --rm django python manage.py migrate --noinput
+
+      - name: Start worker
+        run: docker compose -f packages/platform/docker-compose.yml up -d celery_worker
+
+      - name: Wait for worker health
+        run: |
+          set -euo pipefail
+          for i in {1..40}; do
+            status=$(docker inspect --format='{{.State.Health.Status}}' aegis-celery-worker 2>/dev/null || true)
+            if [ "$status" = "healthy" ]; then exit 0; fi
+            sleep 2
+          done
+          docker compose -f packages/platform/docker-compose.yml ps
+          docker compose -f packages/platform/docker-compose.yml logs --no-color celery_worker
+          exit 1
+
+      - name: Verify registered tasks
+        run: |
+          set -euo pipefail
+          docker exec aegis-celery-worker celery -A fastapi_app.celery_app inspect registered > /tmp/registered.txt
+          grep -q 'fastapi_app.tasks.workflow_tasks.evaluate_action_slas' /tmp/registered.txt
+          grep -q 'fastapi_app.tasks.report_tasks.generate_scheduled_reports' /tmp/registered.txt
+          grep -q 'fastapi_app.tasks.health_tasks.celery_health' /tmp/registered.txt
+
+      - name: Execute deterministic worker task
+        run: |
+          docker exec aegis-celery-worker python -c 'from fastapi_app.tasks.health_tasks import celery_health; r=celery_health.delay(); print(r.get(timeout=30)); assert r.get(timeout=1)["status"] == "ok"'
+
+      - name: Verify beat can start
+        run: docker compose -f packages/platform/docker-compose.yml up -d celery_beat
+
+      - name: Verify all Celery services are healthy/running
+        run: |
+          set -euo pipefail
+          sleep 5
+          docker compose -f packages/platform/docker-compose.yml ps
+          test "$(docker inspect --format='{{.State.Status}}' aegis-celery-worker)" = "running"
+          test "$(docker inspect --format='{{.State.Status}}' aegis-celery-beat)" = "running"
+
+      - name: Collect Celery logs
+        if: always()
+        run: docker compose -f packages/platform/docker-compose.yml logs --no-color celery_worker celery_beat
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f packages/platform/docker-compose.yml down -v
