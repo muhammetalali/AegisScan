@@ -27,7 +27,12 @@ adi_provider = ADIProvider()
 scanner_adapter = ScannerAdapter()
 fusion_engine = FusionEngine()
 dynamic_risk_model = DynamicRiskModel()
-assurance_risk_pipeline = AssuranceRiskPipeline(intelligence=fabric, external=external_fabric, fusion=fusion_engine, dynamic_risk=dynamic_risk_model)
+assurance_risk_pipeline = AssuranceRiskPipeline(
+    intelligence=fabric,
+    external=external_fabric,
+    fusion=fusion_engine,
+    dynamic_risk=dynamic_risk_model,
+)
 
 
 class Asset(BaseModel):
@@ -69,6 +74,9 @@ class AssuranceRiskRequest(BaseModel):
     remediation_candidate: dict[str, object] | None = None
     remediation_tools: list[str] = Field(default_factory=list, max_length=5)
     remediation_timeout: int = Field(default=180, ge=1, le=900)
+    dependency_workspace: str | None = None
+    dependency_manifest: str | None = None
+    dependency_filename: str | None = None
 
 
 class BehavioralRequest(BaseModel):
@@ -187,6 +195,9 @@ async def assurance_risk_assess(body: AssuranceRiskRequest, user: dict = Depends
             remediation_candidate=body.remediation_candidate,
             remediation_tools=body.remediation_tools or None,
             remediation_timeout=body.remediation_timeout,
+            dependency_workspace=body.dependency_workspace,
+            dependency_manifest=body.dependency_manifest,
+            dependency_filename=body.dependency_filename,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
