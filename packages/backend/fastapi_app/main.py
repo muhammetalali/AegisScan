@@ -139,7 +139,7 @@ async def celery_metrics(user=Depends(get_current_user)):
         logger.exception("Celery metrics collection failed")
         raise HTTPException(status_code=503, detail="Celery metrics unavailable") from exc
 
-app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
+app.include_router(knowledge.router, prefix="/api/v1", tags=["Knowledge"])
 app.include_router(digital_twin.router, prefix="/api/v1/digital-twin", tags=["Digital Twin"])
 app.include_router(posture.router, prefix="/api/v1/posture", tags=["Security Posture"])
 app.include_router(system.router, prefix="/api/v1/system", tags=["System"])
@@ -152,7 +152,7 @@ app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-C
 app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine Capabilities"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
-app.include_router(intelligence.router, prefix="/api/v1/intelligence", tags=["Security Intelligence"])
+app.include_router(intelligence.router, prefix="/api/v1", tags=["Security Intelligence"])
 
 @app.post("/api/v1/scans/{scan_id}/start")
 async def start_scan(scan_id: str, user=Depends(get_current_user)):
