@@ -82,7 +82,9 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
       const { data } = await api.post('/auth/login/', { email: email.trim().toLowerCase(), password, ...(otp ? { otp } : {}) })
       if (data?.two_factor_required && !data?.access) { set({ loading: false }); return true }
       if (!data?.access || !data?.refresh || !data?.user) throw new Error('Invalid login response')
+
       browserStorage.setPreference(rememberMe ? 'local' : 'session')
+      // Remove the opposite persistence bucket so an older session cannot resurrect.
       ;(rememberMe ? window.sessionStorage : window.localStorage).removeItem(AUTH_STORAGE_KEY)
       applyAuthorization(data.access)
       set({ user: data.user, accessToken: data.access, refreshToken: data.refresh, isAuthenticated: true, loading: false })
