@@ -15,7 +15,9 @@ if str(ROOT) not in sys.path:
 
 from dotenv import load_dotenv
 
+from fastapi_app.services.itsm_capability import provider_capability
 from fastapi_app.services.itsm_configuration import validate_itsm_configuration
+from fastapi_app.services.itsm_provider_health import check_provider
 from fastapi_app.services.itsm_remediation_resilient import create_case
 
 
@@ -28,16 +30,38 @@ for candidate in (
         load_dotenv(candidate, override=False)
 
 
-def _validate_before_external_creation() -> None:
+async def _validate_before_external_creation() -> None:
     states = validate_itsm_configuration()
-    errors = {
+    config_errors = {
         provider: state.errors
         for provider, state in states.items()
-        if not state.valid
+        if state.enabled and not state.valid
     }
-    if errors:
-        details = " | ".join(f"{provider}: {', '.join(messages)}" for provider, messages in errors.items())
-        raise RuntimeError(f"ITSM startup validation failed; no external tickets will be created: {details}")
+    if config_errors:
+        details = " | ".join(
+            f"{provider}: {', '.join(messages)}" for provider, messages in config_errors.items()
+        )
+        raise RuntimeError(
+            "ITSM startup validation failed; no external tickets will be created: " + details
+        )
+
+    for provider in ("jira", "servicenow"):
+        health = await check_provider(provider)
+        capability = await provider_capability(provider)
+        if health.get("status") != "healthy":
+            raise RuntimeError(
+                f"{provider} provider health is not ready; no external tickets will be created: "
+                f"{health.get('status')}"
+            )
+        if capability.get("status") != "ready":
+            raise RuntimeError(
+                f"{provider} provider capabilities are not ready; no external tickets will be created: "
+                f"{capability.get('status')}"
+            )
+        print(
+            f"{provider}.ready=true "
+            f"health={health.get('status')} capability={capability.get('status')}"
+        )
 
 
 async def main() -> int:
@@ -45,7 +69,7 @@ async def main() -> int:
         print("Set AEGIS_ITSM_E2E_ENABLE=1 to allow real external ticket creation.")
         return 2
 
-    _validate_before_external_creation()
+    await _validate_before_external_creation()
 
     actor = os.getenv("AEGIS_ITSM_E2E_ACTOR", "e2e-runner")
     owner = os.getenv("AEGIS_ITSM_E2E_OWNER", "security-engineering")
