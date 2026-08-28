@@ -35,6 +35,14 @@ jobs:
       - name: Verify Django project
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
+          DEBUG: '1'
+          SECRET_KEY: 'ci-django-verification-key-0123456789abcdef0123456789abcdef'
+          JWT_SECRET_KEY: 'ci-jwt-verification-key-0123456789abcdef0123456789abcdef'
+          ALLOWED_HOSTS: 'localhost,127.0.0.1'
+          DATABASE_URL: 'sqlite:///ci-migrations.sqlite3'
+          REDIS_URL: 'redis://localhost:6379/0'
+          CELERY_BROKER_URL: 'redis://localhost:6379/0'
+          CELERY_RESULT_BACKEND: 'redis://localhost:6379/0'
         run: |
           python manage.py check
           python manage.py makemigrations --check --dry-run
