@@ -7,6 +7,7 @@ from fastapi_app.services.security_sessions import (
     _validate_capabilities,
     _validate_scope,
 )
+from django_project.security_sessions.execution import SAFE_OPERATIONS
 
 
 def test_scope_requires_explicit_boundary():
@@ -72,11 +73,19 @@ def test_sensitive_evidence_is_redacted():
     assert payload["items"][0]["api_key"] == "[REDACTED]"
 
 
+def test_execution_adapter_is_bounded_and_not_arbitrary_shell():
+    assert set(SAFE_OPERATIONS) == {"identity", "hostname", "platform"}
+    assert all(isinstance(argv, tuple) for argv in SAFE_OPERATIONS.values())
+    assert all(";" not in " ".join(argv) or operation == "platform" for operation, argv in SAFE_OPERATIONS.items())
+
+
 def test_security_session_routes_are_mounted():
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     paths = {route.path for route in app.routes}
     assert "/api/v1/security-sessions" in paths
     assert "/api/v1/security-sessions/{session_id}/evidence" in paths
+    assert "/api/v1/security-sessions/{session_id}/evidence/integrity" in paths
+    assert "/api/v1/security-sessions/{session_id}/execute" in paths
     assert "/api/v1/security-sessions/{session_id}/identity/revoke" in paths
     assert "/api/v1/security-sessions/{session_id}/cleanup/verify" in paths
