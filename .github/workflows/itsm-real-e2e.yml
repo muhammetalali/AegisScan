@@ -81,6 +81,10 @@ jobs:
         working-directory: packages/backend
         run: python scripts/itsm_provider_health.py
 
+      - name: Verify provider capabilities are ready
+        working-directory: packages/backend
+        run: python -c "import asyncio,sys; from fastapi_app.services.itsm_capability import all_provider_capabilities; results=asyncio.run(all_provider_capabilities()); print(results); sys.exit(1 if any(r.get('status')!='ready' for r in results) else 0)"
+
       - name: Migrate database
         working-directory: packages/backend
         run: python manage.py migrate --noinput
