@@ -35,6 +35,16 @@ def capabilities(provider: str) -> dict[str, bool]:
     }
 
 
+def health(provider: str) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "status": "healthy",
+        "transport": "sandbox",
+        "external": False,
+        "latency_ms": 0.0,
+    }
+
+
 def create(
     *,
     provider: str,
