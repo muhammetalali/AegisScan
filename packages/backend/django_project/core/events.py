@@ -11,6 +11,34 @@ def dashboard_group_name(user_id):
     return f"{DASHBOARD_GROUP_PREFIX}{user_id}"
 
 
+def _send(group_name, event):
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return
+    async_to_sync(channel_layer.group_send)(group_name, event)
+
+
+def _event(*, project_id, reason, entity=None, entity_id=None):
+    return {
+        "type": "dashboard.changed",
+        "reason": reason,
+        "project_id": str(project_id),
+        "entity": entity,
+        "entity_id": str(entity_id) if entity_id else None,
+    }
+
+
+def publish_user_dashboard_event(*, user_id, project_id, reason, entity=None, entity_id=None):
+    """Publish an event to one user's dashboard group after commit."""
+    event = _event(
+        project_id=project_id,
+        reason=reason,
+        entity=entity,
+        entity_id=entity_id,
+    )
+    transaction.on_commit(lambda: _send(dashboard_group_name(user_id), event))
+
+
 def _recipient_ids(project):
     ids = set(project.members.values_list("id", flat=True))
     if project.owner_id:
@@ -32,18 +60,13 @@ def publish_dashboard_event(*, project_id, reason, entity=None, entity_id=None):
         except Project.DoesNotExist:
             return
 
-        channel_layer = get_channel_layer()
-        if channel_layer is None:
-            return
-
-        event = {
-            "type": "dashboard.changed",
-            "reason": reason,
-            "project_id": str(project_id),
-            "entity": entity,
-            "entity_id": str(entity_id) if entity_id else None,
-        }
+        event = _event(
+            project_id=project_id,
+            reason=reason,
+            entity=entity,
+            entity_id=entity_id,
+        )
         for user_id in _recipient_ids(project):
-            async_to_sync(channel_layer.group_send)(dashboard_group_name(user_id), event)
+            _send(dashboard_group_name(user_id), event)
 
     transaction.on_commit(_publish)
