@@ -42,7 +42,7 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
     if engine == "runtime_analysis":
         return await analyze_runtime(extra)
 
-    if not hostname:
+    if not hostname and engine != "dependency_risk":
         return ExecutionResult("failed", [], [], {"engine": engine}, "Unable to determine target hostname")
 
     if engine == "endpoint_discovery":
@@ -56,7 +56,7 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
         filename = extra.get("dependency_filename") or extra.get("filename")
         if not isinstance(manifest, str) or not manifest.strip():
             return ExecutionResult("unsupported", [], [], {"engine": engine, "reason": "dependency_manifest_missing"}, "Dependency risk requires manifest content in validation.extra; no package registry/CVE data is fabricated.")
-        return analyze_dependency_manifest(manifest, str(filename or "dependency-manifest"))
+        return await analyze_dependency_manifest(manifest, str(filename or "dependency-manifest"))
 
     probe = await execute_http_probe(target_type, target_value)
 
