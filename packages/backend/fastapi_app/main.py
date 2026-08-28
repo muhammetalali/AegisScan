@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .routers import attack_surface, assurance, assurance_graph, capability_control, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, system, validation_runtime
+from .routers import attack_surface, assurance, assurance_graph, capability_control, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, security_sessions, system, validation_runtime
 from .services.celery_monitoring import get_task_metrics
 from .services.observability import metrics_payload, configure_tracing
 from .services.decision_action_orchestration import initialize_action_store
@@ -175,6 +175,7 @@ app.include_router(governance.router, prefix="/api/v1/assurance", tags=["Governa
 app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-Code"])
 app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine Capabilities"])
 app.include_router(capability_control.router, prefix="/api/v1", tags=["Capability Control Plane"])
+app.include_router(security_sessions.router, prefix="/api/v1", tags=["Security Test Sessions"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(dashboard_live.router, prefix="/api/v1", tags=["Dashboard Live"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
