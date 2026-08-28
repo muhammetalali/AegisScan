@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
 from ..services import security_sessions as session_service
-from ..security_sessions.integrity import verify_evidence_chain_by_id
+from security_sessions.integrity import verify_evidence_chain_by_id
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
