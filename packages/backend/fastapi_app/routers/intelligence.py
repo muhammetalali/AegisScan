@@ -4,16 +4,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from ..advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
 from ..core.security import verify_token
 from ..services.autonomous_assurance import propose_remediation
 from ..services.behavioral_terrain import build_fingerprint
-from ..services.correlation_intelligence import correlate
-from ..services.external_intelligence import ExternalIntelligenceFabric
-from ..services.intelligence_fabric import IntelligenceFabric, ProviderUnavailable
-from ..services.advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
-from ..services.fusion_engine import FusionEngine
-from ..services.risk_engine import assess_risk
 from ..services.dynamic_risk_engine import DynamicRiskModel
+from ..services.external_intelligence import ExternalIntelligenceFabric
+from ..services.fusion_engine import FusionEngine
+from ..services.intelligence_fabric import IntelligenceFabric, ProviderUnavailable
+from ..services.risk_engine import assess_risk
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -101,7 +100,25 @@ async def require_user(credentials: HTTPAuthorizationCredentials = Depends(secur
 
 @router.get("/intelligence/providers")
 async def providers(user: dict = Depends(require_user)):
-    return {"providers": [{"id": key, "status": "configured"} for key in fabric.providers] + [{"id": "bte", "status": "telemetry-only"}, {"id": "adi", "status": "approved-feed-only"}, {"id": "fusion", "status": "active"}, {"id": "dynamic-risk", "status": "active"}]}
+    core = [{"id": key, "status": "configured", "mode": "live-http"} for key in fabric.providers]
+    external = []
+    for provider in external_fabric.providers:
+        name = provider.name
+        if name == "greynoise":
+            status = "configured" if __import__("os").getenv("GREYNOISE_API_KEY") else "not_configured"
+        elif name == "shodan":
+            status = "configured" if __import__("os").getenv("SHODAN_API_KEY") else "not_configured"
+        elif name == "github_advisory":
+            status = "available"
+        else:
+            status = "disabled_by_policy"
+        external.append({"id": name, "status": status, "mode": "live-http" if name != "dark-intel-disabled" else "blocked"})
+    return {"providers": core + external + [
+        {"id": "bte", "status": "telemetry-only"},
+        {"id": "adi", "status": "approved-feed-only"},
+        {"id": "fusion", "status": "active"},
+        {"id": "dynamic-risk", "status": "active"},
+    ]}
 
 
 @router.post("/intelligence/enrich")
@@ -132,22 +149,8 @@ async def fusion(body: FusionRequest, user: dict = Depends(require_user)):
 
 @router.post("/intelligence/risk/dynamic")
 async def dynamic_risk(body: DynamicRiskRequest, user: dict = Depends(require_user)):
-    result = dynamic_risk_model.assess(
-        base_score=body.base_score,
-        behavioral_anomaly=body.behavioral_anomaly,
-        newly_exposed_ports=body.newly_exposed_ports,
-        critical_service_exposure=body.critical_service_exposure,
-        validated_exploitation=body.validated_exploitation,
-        business_impact=body.business_impact,
-    )
-    return {
-        "score": result.score,
-        "severity": result.severity,
-        "adjustments": list(result.adjustments),
-        "rationale": result.rationale,
-        "assessed_at": result.assessed_at,
-        "engine": "aegis-dynamic-risk-v1",
-    }
+    result = dynamic_risk_model.assess(base_score=body.base_score, behavioral_anomaly=body.behavioral_anomaly, newly_exposed_ports=body.newly_exposed_ports, critical_service_exposure=body.critical_service_exposure, validated_exploitation=body.validated_exploitation, business_impact=body.business_impact)
+    return {"score": result.score, "severity": result.severity, "adjustments": list(result.adjustments), "rationale": result.rationale, "assessed_at": result.assessed_at, "engine": "aegis-dynamic-risk-v1"}
 
 
 @router.post("/intelligence/behavioral-fingerprint")
