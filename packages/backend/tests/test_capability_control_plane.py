@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import pytest
+
 from fastapi_app.services.capability_control_plane import engine_contract
 from fastapi_app.services.itsm_capability import provider_capability
 
@@ -15,6 +19,8 @@ def test_unknown_engine_is_explicitly_not_ready():
     assert contract["status"] == "unknown"
     assert contract["safety"]["scope_required"] is True
 
+
+@pytest.mark.asyncio
 async def test_provider_capability_exposes_full_lifecycle(monkeypatch):
     for key in (
         "JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_USER_EMAIL", "JIRA_PROJECT_KEY",
