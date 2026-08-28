@@ -10,12 +10,17 @@ from ..services.behavioral_terrain import build_fingerprint
 from ..services.correlation_intelligence import correlate
 from ..services.external_intelligence import ExternalIntelligenceFabric
 from ..services.intelligence_fabric import IntelligenceFabric, ProviderUnavailable
+from ..services.advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
 from ..services.risk_engine import assess_risk
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
 fabric = IntelligenceFabric()
 external_fabric = ExternalIntelligenceFabric()
+advanced_correlation = CorrelationEngine()
+bte_provider = BTEProvider()
+adi_provider = ADIProvider()
+scanner_adapter = ScannerAdapter()
 
 
 class Asset(BaseModel):
@@ -43,6 +48,27 @@ class CorrelationRequest(BaseModel):
     evidence: list[dict[str, object]] = Field(default_factory=list, max_length=500)
 
 
+class AdvancedCorrelationRequest(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    evidence: list[dict[str, object]] = Field(default_factory=list, max_length=500)
+
+
+class ScannerRequest(BaseModel):
+    tool: str = Field(min_length=2, max_length=32)
+    findings: list[dict[str, object]] = Field(default_factory=list, max_length=1000)
+
+
+class BTERequest(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    behavioral_signals: dict[str, object] = Field(default_factory=dict, max_length=100)
+    anomaly_score: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class ADIRequest(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    approved_cti: list[dict[str, object]] = Field(default_factory=list, max_length=500)
+
+
 class RemediationRequest(BaseModel):
     finding_id: str = Field(min_length=1, max_length=200)
     target: str = Field(min_length=1, max_length=200)
@@ -58,7 +84,7 @@ async def require_user(credentials: HTTPAuthorizationCredentials = Depends(secur
 
 @router.get("/intelligence/providers")
 async def providers(user: dict = Depends(require_user)):
-    return {"providers": [{"id": key, "status": "configured"} for key in fabric.providers]}
+    return {"providers": [{"id": key, "status": "configured"} for key in fabric.providers] + [{"id": "bte", "status": "telemetry-only"}, {"id": "adi", "status": "approved-feed-only"}]}
 
 
 @router.post("/intelligence/enrich")
@@ -72,7 +98,7 @@ async def enrich(body: EnrichRequest, user: dict = Depends(require_user)):
     provider_status = result.get("provider_status", {})
     source_count = sum(status == "ok" for status in provider_status.values()) if provider_status else 4
     assessment = assess_risk(cvss=result.get("cvss"), epss=result.get("epss"), kev=bool(result.get("kev")), matched_assets=len(result.get("matched_assets") or []), published=result.get("published"), source_count=source_count)
-    result.update({"risk_score": assessment.score, "severity": assessment.severity, "confidence": assessment.confidence, "risk_factors": list(assessment.factors), "risk_engine": "aegis-risk-v1"})
+    result.update({"risk_score": assessment.score, "severity": assessment.severity, "confidence": assessment.confidence, "risk_factors": list(assessment.factors), "risk_lineage": list(assessment.lineage), "risk_prediction": assessment.prediction, "risk_decision_id": assessment.decision_id, "risk_engine": "aegis-risk-v2"})
     return result
 
 
@@ -81,10 +107,38 @@ async def behavioral(body: BehavioralRequest, user: dict = Depends(require_user)
     return build_fingerprint(body.asset_id, body.baseline, body.observed).__dict__
 
 
+@router.post("/intelligence/bte")
+async def bte(body: BTERequest, user: dict = Depends(require_user)):
+    evidence = await bte_provider.collect(body.subject, body.model_dump())
+    return {"subject": body.subject, "evidence": [item.__dict__ for item in evidence]}
+
+
+@router.post("/intelligence/adi")
+async def adi(body: ADIRequest, user: dict = Depends(require_user)):
+    evidence = await adi_provider.collect(body.subject, body.model_dump())
+    return {"subject": body.subject, "evidence": [item.__dict__ for item in evidence], "mode": "approved-feed-only"}
+
+
 @router.post("/intelligence/correlate")
 async def correlation(body: CorrelationRequest, user: dict = Depends(require_user)):
     result = correlate(body.entity_id, body.evidence)
     return {"entity_id": result.entity_id, "confidence": result.confidence, "relationships": list(result.relationships), "conflicts": list(result.conflicts)}
+
+
+@router.post("/intelligence/correlate/v2")
+async def correlation_v2(body: AdvancedCorrelationRequest, user: dict = Depends(require_user)):
+    from ..services.advanced_intelligence import Evidence
+    evidence = [Evidence(evidence_id=str(x.get("evidence_id", "")), source=str(x.get("source", "unknown")), kind=str(x.get("kind", "unknown")), subject=str(x.get("subject", body.subject)), confidence=max(0.0, min(1.0, float(x.get("confidence", 0.5)))), observed_at=str(x.get("observed_at", "")), attributes=dict(x.get("attributes", {})) if isinstance(x.get("attributes", {}), dict) else {}) for x in body.evidence]
+    return advanced_correlation.correlate(body.subject, evidence)
+
+
+@router.post("/intelligence/scanners/normalize")
+async def normalize_scanner(body: ScannerRequest, user: dict = Depends(require_user)):
+    try:
+        normalized = scanner_adapter.normalize(body.tool, body.findings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"tool": body.tool.lower(), "count": len(normalized), "evidence": [item.__dict__ for item in normalized]}
 
 
 @router.post("/intelligence/external")
