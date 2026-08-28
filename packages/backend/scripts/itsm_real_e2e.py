@@ -27,10 +27,24 @@ for candidate in (
         load_dotenv(candidate, override=False)
 
 
+def _reject_placeholder_configuration() -> None:
+    for name in ("JIRA_BASE_URL", "SERVICENOW_BASE_URL"):
+        value = os.getenv(name, "").strip()
+        if not value:
+            raise RuntimeError(f"Missing required ITSM configuration: {name}")
+        if "your-instance.atlassian.net" in value.lower() or "your-instance" in value.lower():
+            raise RuntimeError(
+                f"Invalid placeholder configuration for {name}. "
+                "Set the real provider base URL in the active environment before running E2E."
+            )
+
+
 async def main() -> int:
     if os.getenv("AEGIS_ITSM_E2E_ENABLE", "0").lower() not in {"1", "true", "yes"}:
         print("Set AEGIS_ITSM_E2E_ENABLE=1 to allow real external ticket creation.")
         return 2
+
+    _reject_placeholder_configuration()
 
     actor = os.getenv("AEGIS_ITSM_E2E_ACTOR", "e2e-runner")
     owner = os.getenv("AEGIS_ITSM_E2E_OWNER", "security-engineering")
