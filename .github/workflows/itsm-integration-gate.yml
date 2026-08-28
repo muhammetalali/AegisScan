@@ -25,6 +25,13 @@ on:
       - 'packages/backend/tests/test_itsm_provider_health.py'
       - 'packages/backend/scripts/itsm_real_e2e.py'
       - '.github/workflows/itsm-integration-gate.yml'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for manually running the ITSM contract gate"
+        required: false
+        default: "Manual verification"
+        type: string
 
 permissions:
   contents: read
