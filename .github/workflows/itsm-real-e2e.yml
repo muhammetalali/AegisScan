@@ -8,6 +8,11 @@ on:
         required: true
         default: false
         type: boolean
+      environment_name:
+        description: "GitHub Environment containing the ITSM secrets"
+        required: true
+        default: production
+        type: string
 
 permissions:
   contents: read
@@ -18,6 +23,8 @@ jobs:
     if: ${{ inputs.allow_external_create == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment: ${{ inputs.environment_name }}
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -71,13 +78,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      -- name: Install backend dependencies
-  shell: bash
-  run: |
-    cd "$GITHUB_WORKSPACE/packages/backend"
-    test -f requirements.txt
-    python -m pip install --upgrade pip
-    python -m pip install -r "$GITHUB_WORKSPACE/packages/backend/requirements.txt"
+      - name: Install backend dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/packages/backend"
+          test -f requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r "$GITHUB_WORKSPACE/packages/backend/requirements.txt"
 
       - name: Verify required runtime secrets are present
         shell: bash
@@ -95,12 +103,12 @@ jobs:
           missing=0
           for name in CI_JIRA_BASE_URL CI_JIRA_API_TOKEN CI_JIRA_USER_EMAIL CI_JIRA_PROJECT_KEY CI_SERVICENOW_BASE_URL; do
             if [ -z "${!name}" ]; then
-              echo "::error::Required GitHub Secret backing ${name#CI_} is not configured."
+              echo "::error::Required GitHub Environment Secret backing ${name#CI_} is not configured in environment '${{ inputs.environment_name }}'."
               missing=1
             fi
           done
           if [ -z "$CI_SERVICENOW_API_TOKEN" ] && { [ -z "$CI_SERVICENOW_USERNAME" ] || [ -z "$CI_SERVICENOW_PASSWORD" ]; }; then
-            echo "::error::Configure SERVICENOW_API_TOKEN or both SERVICENOW_USERNAME and SERVICENOW_PASSWORD."
+            echo "::error::Configure SERVICENOW_API_TOKEN or both SERVICENOW_USERNAME and SERVICENOW_PASSWORD in environment '${{ inputs.environment_name }}'."
             missing=1
           fi
           if [ "$missing" -ne 0 ]; then
