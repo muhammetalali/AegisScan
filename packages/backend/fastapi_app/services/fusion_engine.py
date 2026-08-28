@@ -15,7 +15,7 @@ class FusionResult:
 
 
 class FusionEngine:
-    """Deterministic, explainable fusion of vulnerability, external, and remediation evidence."""
+    """Deterministic, explainable fusion of vulnerability, dependency, external, and remediation evidence."""
 
     def fuse(self, observations: dict[str, dict[str, Any]]) -> FusionResult:
         available = {name: value for name, value in observations.items() if value and "_error" not in value}
@@ -37,6 +37,28 @@ class FusionEngine:
         if osv_score is not None:
             scores.append(max(0.0, min(1.0, osv_score / 10.0)))
             lineage.append({"source": "osv", "factor": "severity_score", "value": osv_score})
+
+        dependency = available.get("dependency_risk", {})
+        dependency_matches = self._number(dependency.get("vulnerability_matches")) or 0.0
+        dependency_count = self._number(dependency.get("dependency_count")) or 0.0
+        if dependency.get("cve_correlation") and dependency_count > 0:
+            density = min(1.0, dependency_matches / dependency_count)
+            dependency_signal = min(1.0, 0.45 + (0.5 * density) if dependency_matches else 0.05)
+            scores.append(dependency_signal)
+            lineage.append({
+                "source": "dependency_risk",
+                "factor": "osv_vulnerability_density",
+                "value": round(density, 4),
+                "vulnerability_matches": int(dependency_matches),
+                "dependency_count": int(dependency_count),
+                "registry": dependency.get("registry", "OSV"),
+            })
+            if dependency_matches:
+                lineage.append({
+                    "source": "dependency_risk",
+                    "factor": "known_package_vulnerabilities",
+                    "value": int(dependency_matches),
+                })
 
         epss = self._number(available.get("epss", {}).get("epss"))
         if epss is not None:
@@ -68,20 +90,18 @@ class FusionEngine:
             lineage.append({"source": "remediation_validation", "factor": "risk_regression", "value": True})
 
         if cvss is not None and epss is not None:
-            if cvss >= 7 and epss < 0.01:
-                conflicts.append({"type": "severity_vs_exploit_probability", "cvss": cvss, "epss": epss})
-            elif cvss < 4 and epss >= 0.5:
+            if cvss >= 7 and epss < 0.01 or cvss < 4 and epss >= 0.5:
                 conflicts.append({"type": "severity_vs_exploit_probability", "cvss": cvss, "epss": epss})
 
         if external_risk is not None and epss is not None:
-            if external_risk >= 0.75 and epss < 0.10:
-                conflicts.append({"type": "external_cti_vs_epss", "external_risk": external_risk, "epss": epss})
-            elif external_risk < 0.25 and epss >= 0.80:
+            if external_risk >= 0.75 and epss < 0.10 or external_risk < 0.25 and epss >= 0.80:
                 conflicts.append({"type": "external_cti_vs_epss", "external_risk": external_risk, "epss": epss})
 
-        evidence_signals = sum(bool(value) for value in (nvd, osv, available.get("epss"), available.get("cisa_kev"), external_items, remediation))
+        evidence_signals = sum(bool(value) for value in (nvd, osv, dependency, available.get("epss"), available.get("cisa_kev"), external_items, remediation))
         confidence = {0: 0.0, 1: 0.55, 2: 0.68, 3: 0.78}.get(evidence_signals, 0.86)
         confidence -= min(0.18, 0.04 * len(conflicts))
+        if dependency_matches:
+            confidence += 0.04
         if remediation_state == "passed":
             confidence += 0.04
         confidence = round(max(0.0, min(1.0, confidence)), 3)
@@ -89,6 +109,8 @@ class FusionEngine:
         score = round((sum(scores) / len(scores)) * 100.0, 2) if scores else 0.0
         if kev:
             score = max(score, 85.0)
+        if dependency_matches:
+            score = max(score, min(90.0, 55.0 + dependency_matches * 7.5))
         if remediation_state == "passed":
             score -= 12.0
         elif remediation_state == "regressed":
@@ -99,6 +121,10 @@ class FusionEngine:
             rationale = "No provider produced usable evidence; confidence is 0%."
         else:
             rationale = f"Evidence from {', '.join(s.upper() for s in sources)} fused into {confidence * 100:.0f}% confidence."
+            if dependency_matches:
+                rationale += f" OSV correlated {int(dependency_matches)} vulnerable package version(s) from the supplied dependency manifests."
+            elif dependency.get("cve_correlation"):
+                rationale += " Dependency manifests were correlated against OSV with no known matches returned."
             if external_items:
                 rationale += f" External CTI contributed {len(external_items)} provenance-tagged item(s)."
             if remediation_state == "passed":
