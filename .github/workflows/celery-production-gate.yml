@@ -55,38 +55,114 @@ jobs:
           docker compose -f packages/platform/docker-compose.yml ps
           exit 1
 
-      - name: Build worker image
-        run: docker compose -f packages/platform/docker-compose.yml build --no-cache celery_worker
+      - name: Build worker images
+        run: docker compose -f packages/platform/docker-compose.yml build --no-cache celery_worker celery_reports
 
       - name: Run migrations
         run: docker compose -f packages/platform/docker-compose.yml run --rm django python manage.py migrate --noinput
 
-      - name: Start worker
-        run: docker compose -f packages/platform/docker-compose.yml up -d celery_worker
+      - name: Start core and report workers
+        run: docker compose -f packages/platform/docker-compose.yml up -d celery_worker celery_reports
 
       - name: Wait for worker health
         run: |
           set -euo pipefail
           for i in {1..40}; do
-            status=$(docker inspect --format='{{.State.Health.Status}}' aegis-celery-worker 2>/dev/null || true)
-            if [ "$status" = "healthy" ]; then exit 0; fi
+            core=$(docker inspect --format='{{.State.Health.Status}}' aegis-celery-worker 2>/dev/null || true)
+            reports=$(docker inspect --format='{{.State.Health.Status}}' aegis-celery-reports 2>/dev/null || true)
+            if [ "$core" = "healthy" ] && [ "$reports" = "healthy" ]; then exit 0; fi
             sleep 2
           done
           docker compose -f packages/platform/docker-compose.yml ps
-          docker compose -f packages/platform/docker-compose.yml logs --no-color celery_worker
+          docker compose -f packages/platform/docker-compose.yml logs --no-color celery_worker celery_reports
           exit 1
 
       - name: Verify registered tasks
         run: |
           set -euo pipefail
-          docker exec aegis-celery-worker celery -A fastapi_app.celery_app inspect registered > /tmp/registered.txt
-          grep -q 'fastapi_app.tasks.workflow_tasks.evaluate_action_slas' /tmp/registered.txt
-          grep -q 'fastapi_app.tasks.report_tasks.generate_scheduled_reports' /tmp/registered.txt
-          grep -q 'fastapi_app.tasks.health_tasks.celery_health' /tmp/registered.txt
+          docker exec aegis-celery-worker celery -A fastapi_app.celery_app inspect registered > /tmp/registered-core.txt
+          docker exec aegis-celery-reports celery -A fastapi_app.celery_app inspect registered > /tmp/registered-reports.txt
+          grep -q 'fastapi_app.tasks.workflow_tasks.evaluate_action_slas' /tmp/registered-core.txt
+          grep -q 'fastapi_app.tasks.health_tasks.celery_health' /tmp/registered-core.txt
+          grep -q 'fastapi_app.tasks.report_tasks.generate_report' /tmp/registered-reports.txt
+          grep -q 'fastapi_app.tasks.report_tasks.generate_scheduled_reports' /tmp/registered-reports.txt
 
       - name: Execute deterministic worker task
         run: |
           docker exec aegis-celery-worker python -c 'from fastapi_app.tasks.health_tasks import celery_health; r=celery_health.delay(); result=r.get(timeout=30); print(result); assert result["status"] == "ok"'
+
+      - name: Execute durable report task end-to-end
+        run: |
+          set -euo pipefail
+          docker exec aegis-celery-reports python - <<'PY'
+          import os
+          import time
+          import uuid
+
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
+          import django
+          django.setup()
+
+          from projects.models import Project
+          from reports.models import Report
+          from users.models import User, UserRole
+          from fastapi_app.tasks.report_tasks import generate_report
+
+          email = "celery-e2e@aegisscan.local"
+          password = "E2E-Password-12345!"
+          user, _ = User.objects.get_or_create(
+              email=email,
+              defaults={
+                  "first_name": "Celery",
+                  "last_name": "E2E",
+                  "role": UserRole.ADMIN,
+                  "is_active": True,
+              },
+          )
+          user.set_password(password)
+          user.role = UserRole.ADMIN
+          user.is_active = True
+          user.save(update_fields=["password", "role", "is_active"])
+
+          project, _ = Project.objects.update_or_create(
+              slug="celery-runtime-project",
+              defaults={
+                  "name": "Celery Runtime Project",
+                  "owner": user,
+                  "description": "Ephemeral project for Celery report E2E",
+              },
+          )
+
+          report = Report.objects.create(
+              project=project,
+              title="Celery Runtime E2E Report",
+              report_type=Report.Type.TECHNICAL,
+              format=Report.Format.JSON,
+              status=Report.Status.GENERATING,
+              generated_by=user,
+              data_snapshot={"test": True, "correlation_id": str(uuid.uuid4())},
+          )
+
+          result = generate_report.delay(str(report.id), {"runtime_e2e": True})
+          print("queued_task_id=", result.id)
+
+          deadline = time.monotonic() + 60
+          while time.monotonic() < deadline:
+              report.refresh_from_db()
+              if report.status == Report.Status.COMPLETED:
+                  assert report.content
+                  assert report.file_size > 0
+                  assert len(report.file_hash) == 64
+                  print("report_status=", report.status)
+                  print("report_file_size=", report.file_size)
+                  print("report_hash=", report.file_hash)
+                  break
+              if report.status == Report.Status.FAILED:
+                  raise AssertionError(f"Report failed: {report.error_message}")
+              time.sleep(1)
+          else:
+              raise AssertionError(f"Report did not complete; final status={report.status}")
+          PY
 
       - name: Verify beat can start
         run: docker compose -f packages/platform/docker-compose.yml up -d celery_beat
@@ -97,11 +173,12 @@ jobs:
           sleep 5
           docker compose -f packages/platform/docker-compose.yml ps
           test "$(docker inspect --format='{{.State.Status}}' aegis-celery-worker)" = "running"
+          test "$(docker inspect --format='{{.State.Status}}' aegis-celery-reports)" = "running"
           test "$(docker inspect --format='{{.State.Status}}' aegis-celery-beat)" = "running"
 
       - name: Collect Celery logs
         if: always()
-        run: docker compose -f packages/platform/docker-compose.yml logs --no-color celery_worker celery_beat
+        run: docker compose -f packages/platform/docker-compose.yml logs --no-color celery_worker celery_reports celery_beat
 
       - name: Tear down
         if: always()
