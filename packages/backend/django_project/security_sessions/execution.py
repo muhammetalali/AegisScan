@@ -24,7 +24,7 @@ class ExecutionResult:
     execution_id: str
     session_id: str
     kind: str
-    operation: str
+    command: str
     target: str
     status: str
     exit_code: int | None
@@ -32,13 +32,6 @@ class ExecutionResult:
     stderr: str
     duration_ms: int
     evidence_ref: str
-
-
-SAFE_OPERATIONS: dict[str, tuple[str, ...]] = {
-    "identity": ("whoami",),
-    "hostname": ("hostname",),
-    "platform": ("python", "-c", "import platform; print(platform.platform())"),
-}
 
 
 def _target_in_scope(session: SecurityTestSession, target: str) -> bool:
@@ -59,18 +52,20 @@ def execute_with_identity(
     *,
     token: str,
     expected_session_id: UUID | str,
-    operation: str,
+    command: str,
     target: str = "local",
     kind: str = "command",
     approval_id: str | None = None,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = 60,
+    cwd: str | None = None,
 ) -> dict[str, Any]:
+    command = command.strip()
+    if not command:
+        raise SessionPolicyError("command is required")
     if kind not in {"command", "interactive", "privileged_validation"}:
         raise SessionPolicyError("unsupported execution kind")
-    if operation not in SAFE_OPERATIONS:
-        raise SessionPolicyError("operation is not enabled by the execution adapter")
-    if timeout_seconds < 1 or timeout_seconds > 60:
-        raise SessionPolicyError("timeout_seconds must be between 1 and 60")
+    if timeout_seconds < 1 or timeout_seconds > 900:
+        raise SessionPolicyError("timeout_seconds must be between 1 and 900")
 
     identity, session = authenticate_execution_identity(token)
     if str(session.id) != str(expected_session_id):
@@ -94,7 +89,6 @@ def execute_with_identity(
             raise SessionAccessError("approval_id does not match the session authorization context")
 
     execution_id = f"exec-{identity.id}-{int(time.time() * 1000)}"
-    argv = list(SAFE_OPERATIONS[operation])
     started = time.perf_counter()
     stdout = ""
     stderr = ""
@@ -108,24 +102,26 @@ def execute_with_identity(
             event_type="execution.started",
             capability=required_capability,
             target=target,
-            action=operation,
+            action="shell.exec",
             status="started",
             data={
                 "execution_id": execution_id,
                 "kind": kind,
-                "adapter": "bounded_local",
-                "argv": argv,
+                "command": command,
+                "cwd": cwd,
+                "adapter": "authorized_local_shell",
             },
         )
 
     try:
         completed = subprocess.run(
-            argv,
+            command,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
             check=False,
-            shell=False,
+            shell=True,
+            cwd=cwd or None,
         )
         exit_code = completed.returncode
         stdout = _truncate(completed.stdout)
@@ -135,7 +131,7 @@ def execute_with_identity(
         status = "timeout"
         stdout = _truncate(exc.stdout or "") if isinstance(exc.stdout, str) else ""
         stderr = _truncate(exc.stderr or "execution timed out") if isinstance(exc.stderr, str) else "execution timed out"
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         status = "failed"
         stderr = _truncate(str(exc))
     finally:
@@ -148,13 +144,15 @@ def execute_with_identity(
             event_type="execution.completed",
             capability=required_capability,
             target=target,
-            action=operation,
+            action="shell.exec",
             status=status,
             data=redact(
                 {
                     "execution_id": execution_id,
                     "kind": kind,
-                    "adapter": "bounded_local",
+                    "command": command,
+                    "cwd": cwd,
+                    "adapter": "authorized_local_shell",
                     "exit_code": exit_code,
                     "stdout": stdout,
                     "stderr": stderr,
@@ -169,7 +167,7 @@ def execute_with_identity(
         execution_id=execution_id,
         session_id=str(session.id),
         kind=kind,
-        operation=operation,
+        command=command,
         target=target,
         status=status,
         exit_code=exit_code,
