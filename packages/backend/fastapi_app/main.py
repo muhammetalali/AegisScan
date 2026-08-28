@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .routers import attack_surface, assurance, assurance_graph, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, system, validation_runtime
+from .routers import attack_surface, assurance, assurance_graph, capability_control, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, system, validation_runtime
 from .services.celery_monitoring import get_task_metrics
 from .services.observability import metrics_payload, configure_tracing
 from .services.decision_action_orchestration import initialize_action_store
@@ -174,6 +174,7 @@ app.include_router(decision_actions.router, prefix="/api/v1/assurance", tags=["D
 app.include_router(governance.router, prefix="/api/v1/assurance", tags=["Governance"])
 app.include_router(policy.router, prefix="/api/v1/assurance", tags=["Policy-as-Code"])
 app.include_router(engine_capabilities.router, prefix="/api/v1", tags=["Engine Capabilities"])
+app.include_router(capability_control.router, prefix="/api/v1", tags=["Capability Control Plane"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(dashboard_live.router, prefix="/api/v1", tags=["Dashboard Live"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
@@ -212,7 +213,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user)):
+async def disable_engine(engine_name: str, user=Depends(get_current_user))
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
