@@ -40,7 +40,6 @@ jobs:
       CELERY_RESULT_BACKEND: redis://localhost:6379/0
       WS_ALLOW_QUERY_TOKEN: "0"
       LOG_TO_FILE: "0"
-      AEGIS_ITSM_MODE: sandbox
       AEGIS_ITSM_E2E_ENABLE: "1"
       AEGIS_ITSM_E2E_ACTOR: github-actions-sandbox-e2e
       AEGIS_ITSM_E2E_OWNER: security-engineering
@@ -52,18 +51,28 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
       - name: Install backend dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest pytest-asyncio
+
       - name: Compile backend
         run: python -m compileall -q fastapi_app tests scripts
+
       - name: Run sandbox contracts
+        env:
+          AEGIS_ITSM_MODE: sandbox
         run: python -m pytest -q tests/test_itsm_sandbox.py tests/test_itsm_configuration.py tests/test_itsm_provider_health.py tests/test_itsm_capability.py
+
       - name: Migrate database
         run: python manage.py migrate --noinput
+
       - name: Run deterministic sandbox E2E with retry idempotency check
+        env:
+          AEGIS_ITSM_MODE: sandbox
         run: python scripts/itsm_real_e2e.py
