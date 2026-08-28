@@ -23,6 +23,7 @@ urlpatterns = [
     path("api/v1/vulnerabilities/", include("vulnerabilities.urls")),
     path("api/v1/reports/", include("reports.urls")),
     path("api/v1/compliance/", include("compliance.urls")),
+    path("api/v1/knowledge/", include("knowledge.urls")),
     path("api/v1/audit/", include("audit.urls")),
 ]
 
