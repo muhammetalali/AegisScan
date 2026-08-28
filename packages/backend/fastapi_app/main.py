@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .routers import attack_surface, assurance, assurance_graph, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, system, validation_runtime
+from .routers import attack_surface, assurance, assurance_graph, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, system, validation_runtime, itsm_health
 from .services.celery_monitoring import get_task_metrics
 from .services.observability import metrics_payload, configure_tracing
 from .services.decision_action_orchestration import initialize_action_store
@@ -37,16 +37,11 @@ async def lifespan(app: FastAPI):
     logger.info("Starting AegisScan FastAPI server...")
     configure_tracing()
     _itsm_ready, states = startup_validation()
-    _itsm_config_errors = {
-        provider: state.errors for provider, state in states.items() if state.enabled and not state.valid
-    }
+    _itsm_config_errors = {provider: state.errors for provider, state in states.items() if state.enabled and not state.valid}
     if not _itsm_ready:
         for provider, errors in _itsm_config_errors.items():
             logger.critical("ITSM provider configuration rejected: %s: %s", provider, "; ".join(errors))
-        raise RuntimeError(
-            "Invalid ITSM configuration detected during startup. "
-            + " | ".join(f"{provider}: {', '.join(errors)}" for provider, errors in _itsm_config_errors.items())
-        )
+        raise RuntimeError("Invalid ITSM configuration detected during startup. " + " | ".join(f"{provider}: {', '.join(errors)}" for provider, errors in _itsm_config_errors.items()))
     initialize_action_store()
     initialize_lifecycle_store()
     initialize_itsm_store()
@@ -185,6 +180,7 @@ app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validatio
 app.include_router(intelligence.router, prefix="/api/v1", tags=["Security Intelligence"])
 app.include_router(attack_surface.router, prefix="/api/v1", tags=["Attack Surface"])
 app.include_router(orchestration.router, prefix="/api/v1/orchestration", tags=["External Orchestration"])
+app.include_router(itsm_health.router, prefix="/api/v1", tags=["ITSM Provider Health"])
 app.include_router(remediation_itsm.router, prefix="/api/v1", tags=["Remediation ITSM"])
 app.include_router(remediation_lifecycle.router, prefix="/api/v1", tags=["Remediation Lifecycle"])
 
