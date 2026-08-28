@@ -1,6 +1,6 @@
 """Domain signals that turn persistence changes into dashboard events."""
 
-from django.db.models.signals import post_delete, post_save
+from django.db.models.signals import post_delete, post_save, pre_delete
 from django.dispatch import receiver
 
 from core.events import publish_dashboard_event, publish_user_dashboard_event
@@ -22,9 +22,25 @@ def project_changed(sender, instance, created, **kwargs):
     _emit(instance, "project.created" if created else "project.updated")
 
 
+@receiver(pre_delete, sender="projects.Project")
+def project_before_delete(sender, instance, **kwargs):
+    # M2M rows can be removed as part of the cascade before post_delete. Capture
+    # recipients while the membership relation is still available.
+    instance._dashboard_recipient_ids = set(instance.members.values_list("id", flat=True))
+    if instance.owner_id:
+        instance._dashboard_recipient_ids.add(instance.owner_id)
+
+
 @receiver(post_delete, sender="projects.Project")
 def project_deleted(sender, instance, **kwargs):
-    _emit(instance, "project.deleted")
+    for user_id in getattr(instance, "_dashboard_recipient_ids", set()):
+        publish_user_dashboard_event(
+            user_id=user_id,
+            project_id=instance.pk,
+            reason="project.deleted",
+            entity="Project",
+            entity_id=instance.pk,
+        )
 
 
 @receiver(post_save, sender="projects.ProjectMembership")
@@ -36,7 +52,6 @@ def membership_changed(sender, instance, created, **kwargs):
         entity="ProjectMembership",
         entity_id=instance.pk,
     )
-    # Existing members also need their aggregate counts refreshed.
     _emit(instance, "membership.changed")
 
 
