@@ -17,6 +17,36 @@ def _emit(instance, reason):
         )
 
 
+@receiver(post_save, sender="projects.Project")
+def project_changed(sender, instance, created, **kwargs):
+    _emit(instance, "project.created" if created else "project.updated")
+
+
+@receiver(post_delete, sender="projects.Project")
+def project_deleted(sender, instance, **kwargs):
+    # Project deletion cascades its domain records, so the project event is enough
+    # to invalidate the dashboard for the owner/members still addressable here.
+    _emit(instance, "project.deleted")
+
+
+@receiver(post_save, sender="projects.ProjectMembership")
+def membership_changed(sender, instance, created, **kwargs):
+    _emit(instance, "membership.created" if created else "membership.updated")
+    # The membership itself changes who should receive future events. Notify the
+    # affected user directly so their dashboard refreshes immediately.
+    publish_dashboard_event(
+        project_id=instance.project_id,
+        reason="membership.changed",
+        entity="ProjectMembership",
+        entity_id=instance.pk,
+    )
+
+
+@receiver(post_delete, sender="projects.ProjectMembership")
+def membership_deleted(sender, instance, **kwargs):
+    _emit(instance, "membership.deleted")
+
+
 @receiver(post_save, sender="scans.Scan")
 def scan_changed(sender, instance, created, **kwargs):
     _emit(instance, "scan.created" if created else "scan.updated")
