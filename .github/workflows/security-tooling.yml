@@ -1,0 +1,52 @@
+name: AegisScan Security Tooling
+
+on:
+  push:
+    branches: [main, feature/enterprise-platform-ui-v2]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  supply-chain-security:
+    name: Supply-chain and static security scans
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Semgrep
+        uses: semgrep/semgrep-action@v1
+        continue-on-error: true
+        with:
+          config: >-
+            p/python
+            p/javascript
+            p/typescript
+            p/owasp-top-ten
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          format: table
+          exit-code: '0'
+      - name: Grype filesystem scan
+        uses: anchore/scan-action@v6
+        continue-on-error: true
+        with:
+          path: .
+          fail-build: false
+      - name: Security tooling policy
+        run: |
+          echo 'External scanners run in advisory mode while existing findings are baselined.'
+          echo 'Promotion remains controlled by the repository quality gates and review policy.'
