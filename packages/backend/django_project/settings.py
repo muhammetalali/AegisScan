@@ -95,6 +95,10 @@ ASGI_APPLICATION = "django_project.asgi.application"
 
 DATABASES = {"default": env.db("DATABASE_URL")}
 DATABASES["default"]["CONN_MAX_AGE"] = 60
+# Let Django verify persistent PostgreSQL connections before reusing them.
+# This is important for Celery/long-lived workers and test runs where a
+# PostgreSQL connection can be closed outside Django's normal lifecycle.
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 if DATABASES["default"]["ENGINE"].endswith("postgresql"):
     DATABASES["default"]["OPTIONS"] = {"connect_timeout": 10}
 
