@@ -3,11 +3,11 @@ from __future__ import annotations
 import os
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 
 from .itsm_configuration import validate_itsm_configuration
+from . import itsm_sandbox
 
 
 def _safe_origin(value: str) -> str:
@@ -64,6 +64,12 @@ async def _check_servicenow(timeout: float) -> dict[str, Any]:
 
 
 async def check_provider(provider: str, timeout: float = 8.0) -> dict[str, Any]:
+    provider = provider.strip().lower()
+    if itsm_sandbox.enabled():
+        if provider not in {"jira", "servicenow"}:
+            return {"provider": provider, "status": "unsupported", "configured": False, "errors": []}
+        return {**itsm_sandbox.health(provider), "configured": True, "validated": True}
+
     states = validate_itsm_configuration()
     state = states[provider]
     if not state.enabled:
