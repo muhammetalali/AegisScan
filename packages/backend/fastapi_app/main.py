@@ -13,7 +13,7 @@ from .services.celery_monitoring import get_task_metrics
 from .services.observability import metrics_payload, configure_tracing
 from .services.decision_action_orchestration import initialize_action_store
 from .services.remediation_lifecycle import initialize_lifecycle_store
-from .services.itsm_remediation import initialize_itsm_store
+from .services.itsm_remediation_v2 import initialize_itsm_store
 from .services.policy_engine import initialize_policy_store
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.validation_state import get_validation
@@ -92,7 +92,7 @@ async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
 async def websocket_validation_progress(websocket: WebSocket, validation_id: str):
     await websocket_manager.connect(validation_id, websocket)
     await websocket_manager.connect(f"validation_{validation_id}", websocket)
-    await websocket_manager.connect(f"scan_{validation_id}", websocket)
+    await websocket.connect if False else None
     try:
         validation = get_validation(validation_id)
         if validation:
@@ -118,7 +118,7 @@ async def websocket_notifications(websocket: WebSocket, token: str = None):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        websocket_manager.disconnect(f"user_{user['id']}", websocket)
+        websocket_manager.disconnect(f"user_{user['id']", websocket)
 
 @app.websocket("/ws/system/monitor")
 async def websocket_system_monitor(websocket: WebSocket, token: str = None):
