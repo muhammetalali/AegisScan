@@ -1,0 +1,82 @@
+name: AegisScan Real ITSM E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_external_create:
+        description: "Explicitly allow creation of real Jira/ServiceNow test tickets"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  real-itsm-e2e:
+    name: Real Jira + ServiceNow E2E
+    if: ${{ inputs.allow_external_create == true }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      SECRET_KEY: ci-real-itsm-secret-key-012345678901234567890123
+      JWT_SECRET_KEY: ci-real-itsm-jwt-secret-012345678901234567890123
+      DEBUG: "1"
+      ALLOWED_HOSTS: "localhost,127.0.0.1"
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      WS_ALLOW_QUERY_TOKEN: "0"
+      LOG_TO_FILE: "0"
+      AEGIS_ITSM_E2E_ENABLE: "1"
+      AEGIS_ITSM_E2E_ACTOR: github-actions-e2e
+      AEGIS_ITSM_E2E_OWNER: security-engineering
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+      JIRA_ISSUE_TYPE: ${{ secrets.JIRA_ISSUE_TYPE }}
+      SERVICENOW_BASE_URL: ${{ secrets.SERVICENOW_BASE_URL }}
+      SERVICENOW_API_TOKEN: ${{ secrets.SERVICENOW_API_TOKEN }}
+      SERVICENOW_USERNAME: ${{ secrets.SERVICENOW_USERNAME }}
+      SERVICENOW_PASSWORD: ${{ secrets.SERVICENOW_PASSWORD }}
+      SERVICENOW_TABLE: ${{ secrets.SERVICENOW_TABLE }}
+      SERVICENOW_IDEMPOTENCY_FIELD: ${{ secrets.SERVICENOW_IDEMPOTENCY_FIELD }}
+      SERVICENOW_FINDING_FIELD: ${{ secrets.SERVICENOW_FINDING_FIELD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: packages/backend
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Migrate database
+        working-directory: packages/backend
+        run: python manage.py migrate --noinput
+
+      - name: Run real Jira + ServiceNow E2E with retry idempotency check
+        working-directory: packages/backend
+        run: python scripts/itsm_real_e2e.py
