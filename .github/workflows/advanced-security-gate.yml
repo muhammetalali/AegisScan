@@ -1,0 +1,44 @@
+name: AegisScan Advanced Security Gate
+
+on:
+  push:
+    branches: [main, feature/enterprise-platform-ui-v2]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  advanced-backend:
+    name: Advanced intelligence and risk gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        working-directory: packages/backend
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Compile backend
+        run: python -m compileall -q packages/backend
+      - name: Advanced intelligence tests
+        working-directory: packages/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          SECRET_KEY: ci-advanced-secret-key-012345678901234567890123
+          JWT_SECRET_KEY: ci-advanced-jwt-secret-012345678901234567890123
+          DEBUG: "1"
+          ALLOWED_HOSTS: "*"
+          DATABASE_URL: sqlite:///ci.sqlite3
+          REDIS_URL: redis://localhost:6379/0
+        run: python -m pytest -q tests/test_advanced_intelligence.py tests/test_risk_engine.py
+      - name: Verify security boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -R "approved-feed-only" -n packages/backend/fastapi_app/services/advanced_intelligence.py packages/backend/fastapi_app/routers/intelligence.py
+          grep -R "requires_approval" -n packages/backend/fastapi_app/services/autonomous_assurance.py
+          ! grep -R "os.system\|subprocess\.Popen\|subprocess\.call" -n packages/backend/fastapi_app/services/advanced_intelligence.py
