@@ -40,7 +40,7 @@ async def test_invalid_provider_configuration_never_reaches_health(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ready_jira_exposes_supported_operations(monkeypatch):
+async def test_ready_jira_exposes_implemented_operations(monkeypatch):
     monkeypatch.setenv("JIRA_BASE_URL", "https://tenant.atlassian.net")
     monkeypatch.setenv("JIRA_API_TOKEN", "token")
     monkeypatch.setenv("JIRA_USER_EMAIL", "user@example.invalid")
@@ -53,9 +53,27 @@ async def test_ready_jira_exposes_supported_operations(monkeypatch):
     result = await provider_capability("jira")
 
     assert result["status"] == "ready"
-    assert result["capabilities"]["create_issue"] is True
-    assert result["capabilities"]["search_by_idempotency"] is True
-    assert result["capabilities"]["transition_issue"] is True
+    assert result["capabilities"]["create_ticket"] is True
+    assert result["capabilities"]["reconcile_by_idempotency"] is True
+    assert result["capabilities"]["lifecycle_sync"] is True
+
+
+@pytest.mark.asyncio
+async def test_servicenow_without_idempotency_field_is_degraded(monkeypatch):
+    monkeypatch.setenv("SERVICENOW_BASE_URL", "https://tenant.service-now.com")
+    monkeypatch.setenv("SERVICENOW_API_TOKEN", "token")
+    monkeypatch.delenv("SERVICENOW_IDEMPOTENCY_FIELD", raising=False)
+
+    async def healthy(provider: str, timeout: float = 8.0):
+        return {"provider": provider, "status": "healthy", "http_status": 200}
+
+    monkeypatch.setattr("fastapi_app.services.itsm_capability.check_provider", healthy)
+    result = await provider_capability("servicenow")
+
+    assert result["status"] == "degraded"
+    assert result["capabilities"]["create_ticket"] is True
+    assert result["capabilities"]["reconcile_by_idempotency"] is False
+    assert result["warnings"]
 
 
 @pytest.mark.asyncio
