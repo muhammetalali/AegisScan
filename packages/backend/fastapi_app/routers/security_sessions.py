@@ -8,6 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from django_project.security_sessions.cleanup import cleanup_session
 from django_project.security_sessions.execution import execute_with_identity
 from django_project.security_sessions.integrity import verify_evidence_chain_by_id
 
@@ -89,6 +90,10 @@ class ExecutionRequest(BaseModel):
     timeout_seconds: int = Field(default=60, ge=1, le=900)
     cwd: str | None = Field(default=None, max_length=1000)
     execution_credential: str = Field(min_length=20, max_length=256)
+
+
+class CleanupRequest(BaseModel):
+    reason: str = Field(default="", max_length=2000)
 
 
 @router.post("/security-sessions", status_code=201)
@@ -199,6 +204,21 @@ async def revoke_security_identity(
     try:
         return await run_in_threadpool(
             session_service.revoke_identity,
+            session_id=session_id, user_id=_user_id(user), reason=payload.reason,
+        )
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+@router.post("/security-sessions/{session_id}/cleanup")
+async def cleanup_security_session(
+    session_id: UUID,
+    payload: CleanupRequest,
+    user: dict[str, Any] = Depends(current_user),
+):
+    try:
+        return await run_in_threadpool(
+            cleanup_session,
             session_id=session_id, user_id=_user_id(user), reason=payload.reason,
         )
     except Exception as exc:
