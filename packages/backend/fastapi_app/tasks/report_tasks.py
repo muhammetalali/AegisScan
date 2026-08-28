@@ -14,7 +14,7 @@ from typing import Any
 
 import django
 from django.core.files.base import ContentFile
-from django.db import close_old_connections, transaction
+from django.db import close_old_connections, connection, transaction
 from django.utils import timezone as django_timezone
 
 from ..celery_app import celery_app
@@ -25,6 +25,29 @@ django.setup()
 from reports.models import Report  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+def _prepare_database_connection() -> None:
+    """Refresh stale DB connections without breaking active test transactions.
+
+    pytest-django/TestCase may keep the database connection inside an active
+    transaction. Calling close_old_connections() in that situation can close
+    the test connection and cause subsequent ORM operations to fail with
+    ``InterfaceError: connection already closed``.
+
+    Celery workers normally execute tasks outside an application-managed
+    transaction, so stale connections can safely be checked there.
+    """
+    if connection.in_atomic_block:
+        return
+    close_old_connections()
+
+
+def _cleanup_database_connection() -> None:
+    """Run Django connection cleanup only when it is safe to do so."""
+    if connection.in_atomic_block:
+        return
+    close_old_connections()
 
 
 def _snapshot(report: Report, config: dict[str, Any]) -> dict[str, Any]:
@@ -197,7 +220,7 @@ def generate_report(self, report_id: str, config: dict[str, Any] | None = None) 
     """Generate a durable report and persist its artifact metadata."""
 
     started = datetime.now(timezone.utc)
-    close_old_connections()
+    _prepare_database_connection()
     try:
         report = Report.objects.select_related("project", "scan").get(pk=report_id)
         report.status = Report.Status.GENERATING
@@ -236,14 +259,24 @@ def generate_report(self, report_id: str, config: dict[str, Any] | None = None) 
         raise
     except Exception as exc:
         logger.exception("Report generation failed for %s", report_id)
-        Report.objects.filter(pk=report_id).update(
-            status=Report.Status.FAILED,
-            error_message=str(exc),
-            generation_duration=(datetime.now(timezone.utc) - started).total_seconds(),
-        )
+        try:
+            if not connection.in_atomic_block:
+                _prepare_database_connection()
+                Report.objects.filter(pk=report_id).update(
+                    status=Report.Status.FAILED,
+                    error_message=str(exc),
+                    generation_duration=(datetime.now(timezone.utc) - started).total_seconds(),
+                )
+            else:
+                logger.warning(
+                    "Skipping FAILED-state persistence inside an active transaction for report %s",
+                    report_id,
+                )
+        except Exception:
+            logger.exception("Failed to persist FAILED state for report %s", report_id)
         raise
     finally:
-        close_old_connections()
+        _cleanup_database_connection()
 
 
 @celery_app.task(
@@ -254,33 +287,37 @@ def generate_scheduled_reports() -> dict[str, int]:
 
     from reports.models import ReportSchedule
 
-    now = django_timezone.now()
-    queued = 0
-    for schedule in ReportSchedule.objects.select_related(
-        "project", "template", "created_by"
-    ).filter(is_active=True, next_generation__lte=now):
-        with transaction.atomic():
-            schedule = ReportSchedule.objects.select_for_update().select_related(
-                "project", "template", "created_by"
-            ).get(pk=schedule.pk)
-            if not schedule.is_active or schedule.next_generation > now:
-                continue
-            report = Report.objects.create(
-                project=schedule.project,
-                title=f"{schedule.name} - {now.date().isoformat()}",
-                report_type=schedule.template.report_type,
-                format=schedule.template.format,
-                template_used=str(schedule.template.id),
-                data_snapshot={
-                    "schedule_id": str(schedule.id),
-                    "template_id": str(schedule.template.id),
-                    "recipients": schedule.recipients,
-                },
-                generated_by=schedule.created_by,
-            )
-            schedule.last_generated = now
-            schedule.next_generation = _advance_schedule(now, schedule.frequency)
-            schedule.save(update_fields=["last_generated", "next_generation", "updated_at"])
-        generate_report.delay(str(report.id), {"scheduled": True, "schedule_id": str(schedule.id)})
-        queued += 1
-    return {"queued": queued}
+    _prepare_database_connection()
+    try:
+        now = django_timezone.now()
+        queued = 0
+        for schedule in ReportSchedule.objects.select_related(
+            "project", "template", "created_by"
+        ).filter(is_active=True, next_generation__lte=now):
+            with transaction.atomic():
+                schedule = ReportSchedule.objects.select_for_update().select_related(
+                    "project", "template", "created_by"
+                ).get(pk=schedule.pk)
+                if not schedule.is_active or schedule.next_generation > now:
+                    continue
+                report = Report.objects.create(
+                    project=schedule.project,
+                    title=f"{schedule.name} - {now.date().isoformat()}",
+                    report_type=schedule.template.report_type,
+                    format=schedule.template.format,
+                    template_used=str(schedule.template.id),
+                    data_snapshot={
+                        "schedule_id": str(schedule.id),
+                        "template_id": str(schedule.template.id),
+                        "recipients": schedule.recipients,
+                    },
+                    generated_by=schedule.created_by,
+                )
+                schedule.last_generated = now
+                schedule.next_generation = _advance_schedule(now, schedule.frequency)
+                schedule.save(update_fields=["last_generated", "next_generation", "updated_at"])
+            generate_report.delay(str(report.id), {"scheduled": True, "schedule_id": str(schedule.id)})
+            queued += 1
+        return {"queued": queued}
+    finally:
+        _cleanup_database_connection()
