@@ -1,10 +1,7 @@
 import type { User, UserRole } from '@/types'
 
-export type AccessRequirement = {
-  roles?: UserRole[]
-  permissions?: string[]
-  mode?: 'any' | 'all'
-}
+export type AccessRequirement = { roles?: UserRole[]; permissions?: string[]; mode?: 'any' | 'all' }
+export type PlatformTier = 'tier0_security_engineer' | 'tier1_developer' | 'tier2_auditor'
 
 const rolePermissions: Record<UserRole, string[]> = {
   super_admin: ['*'],
@@ -16,6 +13,12 @@ const rolePermissions: Record<UserRole, string[]> = {
   viewer: ['security:read', 'projects:read', 'assets:read', 'vulnerabilities:read', 'reports:read', 'compliance:read', 'assurance:read'],
 }
 
+const tierPermissions: Record<PlatformTier, string[]> = {
+  tier0_security_engineer: ['*'],
+  tier1_developer: ['reports:read', 'remediation:read', 'security:read', 'projects:read', 'assets:read'],
+  tier2_auditor: ['reports:read', 'audit:read', 'compliance:read', 'assurance:read', 'export:read'],
+}
+
 export const hasPermission = (user: User | null, permission: string): boolean => {
   if (!user || !user.is_active) return false
   const explicit = user.permissions ?? []
@@ -23,45 +26,30 @@ export const hasPermission = (user: User | null, permission: string): boolean =>
   return (rolePermissions[user.role] ?? []).some((item) => item === '*' || item === permission)
 }
 
+export const hasTierPermission = (user: User | null, tier: PlatformTier, permission: string): boolean => {
+  if (!user?.is_active) return false
+  const allowed = tierPermissions[tier] ?? []
+  return allowed.includes('*') || allowed.includes(permission) || hasPermission(user, permission)
+}
+
 export const canAccess = (user: User | null, requirement?: AccessRequirement): boolean => {
   if (!requirement) return Boolean(user?.is_active)
   if (!user?.is_active) return false
-
   const mode = requirement.mode ?? 'any'
-  const roleAllowed = requirement.roles?.length
-    ? mode === 'all'
-      ? requirement.roles.every((role) => user.role === role)
-      : requirement.roles.includes(user.role)
-    : true
-  const permissionAllowed = requirement.permissions?.length
-    ? mode === 'all'
-      ? requirement.permissions.every((permission) => hasPermission(user, permission))
-      : requirement.permissions.some((permission) => hasPermission(user, permission))
-    : true
-
-  return mode === 'all' ? roleAllowed && permissionAllowed : roleAllowed && permissionAllowed
+  const roleAllowed = requirement.roles?.length ? (mode === 'all' ? requirement.roles.every((role) => user.role === role) : requirement.roles.includes(user.role)) : true
+  const permissionAllowed = requirement.permissions?.length ? (mode === 'all' ? requirement.permissions.every((permission) => hasPermission(user, permission)) : requirement.permissions.some((permission) => hasPermission(user, permission))) : true
+  return roleAllowed && permissionAllowed
 }
 
 export const routeAccess: Record<string, AccessRequirement> = {
-  '/users': { roles: ['super_admin', 'admin'] },
-  '/audit': { permissions: ['audit:read'] },
-  '/system': { roles: ['super_admin', 'admin'] },
-  '/settings': { roles: ['super_admin', 'admin', 'security_manager', 'developer'] },
-  '/reports': { permissions: ['reports:read'] },
-  '/compliance': { permissions: ['compliance:read'] },
-  '/compliance/intelligence': { permissions: ['compliance:read'] },
-  '/assurance': { permissions: ['assurance:read'] },
-  '/assurance/continuous': { permissions: ['assurance:read'] },
-  '/assurance/conflicts': { permissions: ['assurance:read'] },
-  '/assurance/evidence': { permissions: ['assurance:read'] },
-  '/assurance/graph': { permissions: ['assurance:read'] },
-  '/assurance/triage': { roles: ['super_admin', 'admin', 'security_manager', 'security_analyst'] },
-  '/assurance/decisions': { roles: ['super_admin', 'admin', 'security_manager', 'security_analyst'] },
-  '/assurance/actions': { roles: ['super_admin', 'admin', 'security_manager', 'security_analyst'] },
-  '/assurance/workflow': { roles: ['super_admin', 'admin', 'security_manager'] },
-  '/assurance/governance': { roles: ['super_admin', 'admin', 'security_manager', 'auditor'] },
-  '/assurance/policies': { roles: ['super_admin', 'admin', 'security_manager'] },
-  '/assurance/policies/simulate': { roles: ['super_admin', 'admin', 'security_manager'] },
+  '/users': { roles: ['super_admin', 'admin'] }, '/audit': { permissions: ['audit:read'] }, '/system': { roles: ['super_admin', 'admin'] },
+  '/settings': { roles: ['super_admin', 'admin', 'security_manager', 'developer'] }, '/reports': { permissions: ['reports:read'] },
+  '/compliance': { permissions: ['compliance:read'] }, '/compliance/intelligence': { permissions: ['compliance:read'] }, '/assurance': { permissions: ['assurance:read'] },
+  '/assurance/continuous': { permissions: ['assurance:read'] }, '/assurance/conflicts': { permissions: ['assurance:read'] }, '/assurance/evidence': { permissions: ['assurance:read'] },
+  '/assurance/graph': { permissions: ['assurance:read'] }, '/assurance/triage': { roles: ['super_admin', 'admin', 'security_manager', 'security_analyst'] },
+  '/assurance/decisions': { roles: ['super_admin', 'admin', 'security_manager', 'security_analyst'] }, '/assurance/actions': { roles: ['super_admin', 'admin', 'security_manager', 'security_analyst'] },
+  '/assurance/workflow': { roles: ['super_admin', 'admin', 'security_manager'] }, '/assurance/governance': { roles: ['super_admin', 'admin', 'security_manager', 'auditor'] },
+  '/assurance/policies': { roles: ['super_admin', 'admin', 'security_manager'] }, '/assurance/policies/simulate': { roles: ['super_admin', 'admin', 'security_manager'] },
   '/executive': { roles: ['super_admin', 'admin', 'security_manager', 'auditor'] },
 }
 
