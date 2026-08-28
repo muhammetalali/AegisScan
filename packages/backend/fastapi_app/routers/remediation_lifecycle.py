@@ -7,7 +7,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
-from ..services.decision_action_orchestration import _decision_by_id if False else None
 from ..services.remediation_lifecycle import create_action_and_ticket, get_lifecycle, transition_with_ticket, validate_and_verify
 
 router = APIRouter()
