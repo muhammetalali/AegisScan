@@ -38,7 +38,8 @@ async def create_case(
 
     # ServiceNow Incident exposes correlation_id as a standard field. Use it
     # unless the deployment explicitly chooses another dedicated field.
-    os.environ.setdefault("SERVICENOW_IDEMPOTENCY_FIELD", "correlation_id")
+    if not os.getenv("SERVICENOW_IDEMPOTENCY_FIELD"):
+        os.environ["SERVICENOW_IDEMPOTENCY_FIELD"] = "correlation_id"
 
     existing = await get_case_by_idempotency(idempotency_key)
     if existing:
