@@ -29,14 +29,44 @@ celery_app.conf.update(
     result_expires=86400,
     task_time_limit=30 * 60,
     task_soft_time_limit=25 * 60,
+    task_default_queue="default",
+    task_default_exchange="aegis",
+    task_default_exchange_type="direct",
+    task_default_routing_key="default",
+    task_queues={
+        "default": {"exchange": "aegis", "routing_key": "default"},
+        "workflow": {"exchange": "aegis", "routing_key": "workflow"},
+        "reports": {"exchange": "aegis", "routing_key": "reports"},
+        "health": {"exchange": "aegis", "routing_key": "health"},
+    },
+    task_routes={
+        "fastapi_app.tasks.workflow_tasks.*": {
+            "queue": "workflow",
+            "routing_key": "workflow",
+        },
+        "fastapi_app.tasks.report_tasks.*": {
+            "queue": "reports",
+            "routing_key": "reports",
+        },
+        "fastapi_app.tasks.health_tasks.*": {
+            "queue": "health",
+            "routing_key": "health",
+        },
+    },
+    task_annotations={
+        "fastapi_app.tasks.workflow_tasks.*": {"rate_limit": "30/m"},
+        "fastapi_app.tasks.report_tasks.*": {"rate_limit": "10/m"},
+    },
     beat_schedule={
         "evaluate-action-slas-every-minute": {
             "task": "fastapi_app.tasks.workflow_tasks.evaluate_action_slas",
             "schedule": 60.0,
+            "options": {"queue": "workflow", "routing_key": "workflow"},
         },
         "generate-scheduled-reports": {
             "task": "fastapi_app.tasks.report_tasks.generate_scheduled_reports",
             "schedule": 60.0,
+            "options": {"queue": "reports", "routing_key": "reports"},
         },
     },
 )
