@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .routers import assurance, assurance_graph, dashboard, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, policy, posture, security_decision, system, validation_runtime
+from .services.celery_monitoring import get_task_metrics
 from .services.decision_action_orchestration import initialize_action_store
 from .services.policy_engine import initialize_policy_store
 from .services.scan_orchestrator import ScanOrchestrator
@@ -128,6 +129,16 @@ async def health_check():
 async def readiness_check():
     return {"ready": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
+@app.get("/metrics/celery")
+async def celery_metrics(user=Depends(get_current_user)):
+    if not user.get("is_staff"):
+        raise HTTPException(status_code=403, detail="Staff access required")
+    try:
+        return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat(), "celery": get_task_metrics()}
+    except Exception as exc:
+        logger.exception("Celery metrics collection failed")
+        raise HTTPException(status_code=503, detail="Celery metrics unavailable") from exc
+
 app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
 app.include_router(digital_twin.router, prefix="/api/v1/digital-twin", tags=["Digital Twin"])
 app.include_router(posture.router, prefix="/api/v1/posture", tags=["Security Posture"])
@@ -172,7 +183,7 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user)):
+async def disable_engine(engine_name: str, user=Depends(get_current_user))
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
