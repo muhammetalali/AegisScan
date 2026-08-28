@@ -64,9 +64,7 @@ jobs:
       - name: Compile backend
         run: python -m compileall -q fastapi_app tests scripts
 
-      - name: Run sandbox contracts
-        env:
-          AEGIS_ITSM_MODE: sandbox
+      - name: Run ITSM contracts
         run: python -m pytest -q tests/test_itsm_sandbox.py tests/test_itsm_configuration.py tests/test_itsm_provider_health.py tests/test_itsm_capability.py
 
       - name: Migrate database
