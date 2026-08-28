@@ -2,10 +2,7 @@
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
-from django.contrib.auth import get_user_model
 from django.db import transaction
-
-User = get_user_model()
 
 DASHBOARD_GROUP_PREFIX = "dashboard_user_"
 
