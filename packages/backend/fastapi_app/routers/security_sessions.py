@@ -158,14 +158,13 @@ async def execute_security_session_operation(
     user: dict[str, Any] = Depends(current_user),
 ):
     try:
-        snapshot = await run_in_threadpool(
+        await run_in_threadpool(
             session_service.get_session_snapshot, session_id=session_id, user_id=_user_id(user)
         )
-        if snapshot.get("id") != str(session_id):
-            raise session_service.SessionAccessError("session access denied")
         return await run_in_threadpool(
             execute_with_identity,
             token=payload.execution_credential,
+            expected_session_id=session_id,
             operation=payload.operation,
             target=payload.target,
             kind=payload.kind,
