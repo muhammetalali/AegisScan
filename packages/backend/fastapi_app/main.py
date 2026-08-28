@@ -8,10 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .routers import attack_surface, assurance, assurance_graph, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, policy, posture, security_decision, system, validation_runtime
+from .routers import attack_surface, assurance, assurance_graph, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_lifecycle, security_decision, system, validation_runtime
 from .services.celery_monitoring import get_task_metrics
 from .services.observability import metrics_payload, configure_tracing
 from .services.decision_action_orchestration import initialize_action_store
+from .services.remediation_lifecycle import initialize_lifecycle_store
 from .services.policy_engine import initialize_policy_store
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.validation_state import get_validation
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting AegisScan FastAPI server...")
     configure_tracing()
     initialize_action_store()
+    initialize_lifecycle_store()
     initialize_policy_store()
     await workflow_bridge.start()
     await scan_orchestrator.start()
@@ -164,6 +166,7 @@ app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validatio
 app.include_router(intelligence.router, prefix="/api/v1", tags=["Security Intelligence"])
 app.include_router(attack_surface.router, prefix="/api/v1", tags=["Attack Surface"])
 app.include_router(orchestration.router, prefix="/api/v1/orchestration", tags=["External Orchestration"])
+app.include_router(remediation_lifecycle.router, prefix="/api/v1", tags=["Remediation Lifecycle"])
 
 @app.post("/api/v1/scans/{scan_id}/start")
 async def start_scan(scan_id: str, user=Depends(get_current_user)):
