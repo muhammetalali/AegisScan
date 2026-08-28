@@ -17,12 +17,16 @@ on:
       - 'packages/backend/fastapi_app/routers/orchestration.py'
       - 'packages/backend/fastapi_app/routers/engine_capabilities.py'
       - 'packages/backend/fastapi_app/routers/capability_control.py'
+      - 'packages/backend/fastapi_app/routers/security_sessions.py'
       - 'packages/backend/fastapi_app/main.py'
+      - 'packages/backend/django_project/security_sessions/**'
+      - 'packages/backend/django_project/settings.py'
       - 'packages/backend/tests/test_itsm_remediation.py'
       - 'packages/backend/tests/test_itsm_configuration.py'
       - 'packages/backend/tests/test_itsm_capability.py'
       - 'packages/backend/tests/test_capability_control_plane.py'
       - 'packages/backend/tests/test_itsm_provider_health.py'
+      - 'packages/backend/tests/test_security_sessions.py'
       - 'packages/backend/scripts/itsm_real_e2e.py'
       - '.github/workflows/itsm-integration-gate.yml'
   workflow_dispatch:
@@ -38,7 +42,7 @@ permissions:
 
 jobs:
   itsm-contract:
-    name: ITSM lifecycle and capability contracts
+    name: ITSM lifecycle, capability and security-session contracts
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -79,7 +83,9 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest pytest-asyncio
       - name: Python compile gate
-        run: python -m compileall -q fastapi_app tests scripts
+        run: python -m compileall -q fastapi_app django_project/security_sessions tests scripts
+      - name: Django system and migration check
+        run: python manage.py check && python manage.py makemigrations --check --dry-run security_sessions
       - name: Configuration contract tests
         run: python -m pytest -q tests/test_itsm_configuration.py
       - name: Capability contract tests
@@ -88,3 +94,5 @@ jobs:
         run: python -m pytest -q tests/test_itsm_provider_health.py
       - name: ITSM lifecycle contract tests
         run: python -m pytest -q tests/test_itsm_remediation.py
+      - name: Security session policy and API contracts
+        run: python -m pytest -q tests/test_security_sessions.py
