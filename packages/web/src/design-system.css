@@ -1,57 +1,120 @@
-/* AegisScan Enterprise Design System — experience foundation */
+/* AegisScan Enterprise Design System
+ * Single visual language for application shell, data surfaces and security states.
+ */
 :root {
-  --aegis-shadow-soft: 0 12px 32px rgba(15, 23, 42, .06);
-  --aegis-shadow-elevated: 0 20px 50px rgba(15, 23, 42, .12);
-  --aegis-shadow-floating: 0 28px 80px rgba(15, 23, 42, .16);
-  --aegis-glow: 0 0 0 1px color-mix(in oklab, var(--primary) 16%, transparent), 0 16px 40px color-mix(in oklab, var(--primary) 10%, transparent);
+  --aegis-shadow-soft: 0 10px 30px rgba(15, 23, 42, .06);
+  --aegis-shadow-elevated: 0 18px 46px rgba(15, 23, 42, .10);
+  --aegis-shadow-floating: 0 26px 72px rgba(15, 23, 42, .14);
   --aegis-radius-xs: .5rem;
   --aegis-radius-sm: .625rem;
-  --aegis-radius-md: .875rem;
-  --aegis-radius-lg: 1.125rem;
-  --aegis-radius-xl: 1.5rem;
+  --aegis-radius-md: .75rem;
+  --aegis-radius-lg: 1rem;
+  --aegis-radius-xl: 1.25rem;
   --aegis-sidebar-width: 16rem;
   --aegis-header-height: 4.25rem;
   --aegis-content-max: 1680px;
   --aegis-grid-size: 32px;
   --aegis-transition: 180ms cubic-bezier(.2,.8,.2,1);
+  --aegis-focus-ring: 0 0 0 3px color-mix(in oklab, var(--ring) 22%, transparent);
 }
+
 .dark {
-  --aegis-shadow-soft: 0 14px 36px rgba(0, 0, 0, .24);
-  --aegis-shadow-elevated: 0 24px 60px rgba(0, 0, 0, .36);
-  --aegis-shadow-floating: 0 32px 90px rgba(0, 0, 0, .46);
+  --aegis-shadow-soft: 0 12px 34px rgba(0, 0, 0, .24);
+  --aegis-shadow-elevated: 0 22px 56px rgba(0, 0, 0, .34);
+  --aegis-shadow-floating: 0 30px 84px rgba(0, 0, 0, .44);
 }
-.aegis-page { min-height: 100%; background: radial-gradient(circle at 10% -5%, color-mix(in oklab, var(--primary) 9%, transparent), transparent 34%), radial-gradient(circle at 90% 0%, color-mix(in oklab, var(--chart-2) 7%, transparent), transparent 28%), var(--background); }
+
+/* Layout primitives */
+.aegis-page {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 8% -8%, color-mix(in oklab, var(--primary) 8%, transparent), transparent 32%),
+    radial-gradient(circle at 92% 0%, color-mix(in oklab, var(--chart-2) 6%, transparent), transparent 26%),
+    var(--background);
+}
 .aegis-content { width: min(100%, var(--aegis-content-max)); margin-inline: auto; }
-.aegis-grid-bg { background-image: linear-gradient(to right, color-mix(in oklab, var(--border) 38%, transparent) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in oklab, var(--border) 38%, transparent) 1px, transparent 1px); background-size: var(--aegis-grid-size) var(--aegis-grid-size); mask-image: linear-gradient(to bottom, black, transparent 88%); }
-.aegis-surface { border: 1px solid var(--border); background: color-mix(in oklab, var(--card) 94%, transparent); box-shadow: var(--aegis-shadow-soft); backdrop-filter: blur(14px); }
+.aegis-grid-bg {
+  background-image: linear-gradient(to right, color-mix(in oklab, var(--border) 34%, transparent) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in oklab, var(--border) 34%, transparent) 1px, transparent 1px);
+  background-size: var(--aegis-grid-size) var(--aegis-grid-size);
+  mask-image: linear-gradient(to bottom, black, transparent 88%);
+}
+
+/* Surface hierarchy: use one of these instead of inventing new card styles. */
+.aegis-surface { border: 1px solid var(--border); background: var(--card); box-shadow: var(--aegis-shadow-soft); }
+.aegis-surface-subtle { border: 1px solid color-mix(in oklab, var(--border) 78%, transparent); background: color-mix(in oklab, var(--card) 88%, var(--background)); }
 .aegis-surface-hover { transition: transform var(--aegis-transition), box-shadow var(--aegis-transition), border-color var(--aegis-transition); }
-.aegis-surface-hover:hover { transform: translateY(-2px); box-shadow: var(--aegis-shadow-elevated); border-color: color-mix(in oklab, var(--primary) 28%, var(--border)); }
+.aegis-surface-hover:hover { transform: translateY(-2px); box-shadow: var(--aegis-shadow-elevated); border-color: color-mix(in oklab, var(--primary) 26%, var(--border)); }
 .aegis-surface-interactive { cursor: pointer; transition: transform var(--aegis-transition), box-shadow var(--aegis-transition), border-color var(--aegis-transition), background var(--aegis-transition); }
-.aegis-surface-interactive:hover { transform: translateY(-1px); border-color: color-mix(in oklab, var(--primary) 32%, var(--border)); background: color-mix(in oklab, var(--card) 98%, var(--primary)); box-shadow: var(--aegis-shadow-elevated); }
-.aegis-glass { background: color-mix(in oklab, var(--card) 72%, transparent); border: 1px solid color-mix(in oklab, var(--border) 80%, transparent); backdrop-filter: blur(18px); }
+.aegis-surface-interactive:hover { transform: translateY(-1px); border-color: color-mix(in oklab, var(--primary) 30%, var(--border)); background: color-mix(in oklab, var(--card) 96%, var(--primary)); box-shadow: var(--aegis-shadow-elevated); }
+.aegis-glass { border: 1px solid color-mix(in oklab, var(--border) 82%, transparent); background: color-mix(in oklab, var(--card) 76%, transparent); backdrop-filter: blur(18px); }
 .aegis-floating { box-shadow: var(--aegis-shadow-floating); backdrop-filter: blur(22px); }
-.aegis-ring { box-shadow: 0 0 0 1px color-mix(in oklab, var(--primary) 18%, transparent), 0 0 36px color-mix(in oklab, var(--primary) 12%, transparent); }
-.aegis-focus { box-shadow: var(--aegis-glow); }
-.aegis-focus-visible:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
-.aegis-kicker { font-size: .68rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--muted-foreground); }
-.aegis-title { font-size: clamp(1.45rem, 2vw, 2rem); font-weight: 750; letter-spacing: -.035em; line-height: 1.1; }
+
+/* Typography */
+.aegis-kicker { font-size: .68rem; font-weight: 800; letter-spacing: .14em; line-height: 1; text-transform: uppercase; color: var(--muted-foreground); }
+.aegis-title { font-size: clamp(1.4rem, 2vw, 2rem); font-weight: 750; letter-spacing: -.035em; line-height: 1.1; }
+.aegis-subtitle { color: var(--muted-foreground); font-size: .875rem; line-height: 1.55; }
 .aegis-number { font-variant-numeric: tabular-nums; letter-spacing: -.035em; }
 .aegis-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; }
 .aegis-muted { color: var(--muted-foreground); }
+
+/* Interaction */
+.aegis-focus { box-shadow: var(--aegis-focus-ring); }
+.aegis-focus-visible:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+.aegis-clickable { cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; }
+.aegis-clickable:active { transform: translateY(1px); }
+.aegis-divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); }
+
+/* Form controls */
+.aegis-input { width: 100%; min-height: 2.75rem; border: 1px solid var(--input); border-radius: var(--aegis-radius-md); background: var(--background); color: var(--foreground); padding-inline: .8rem; transition: border-color var(--aegis-transition), box-shadow var(--aegis-transition), background var(--aegis-transition); }
+.aegis-input::placeholder { color: var(--muted-foreground); }
+.aegis-input:hover { border-color: color-mix(in oklab, var(--border) 70%, var(--foreground)); }
+.aegis-input:focus-visible { border-color: var(--ring); box-shadow: var(--aegis-focus-ring); outline: none; }
+.aegis-input[aria-invalid="true"] { border-color: var(--destructive); box-shadow: 0 0 0 3px color-mix(in oklab, var(--destructive) 14%, transparent); }
+.aegis-button { min-height: 2.625rem; border: 1px solid transparent; border-radius: var(--aegis-radius-md); font-size: .875rem; font-weight: 650; padding-inline: 1rem; transition: transform var(--aegis-transition), box-shadow var(--aegis-transition), background var(--aegis-transition), border-color var(--aegis-transition); }
+.aegis-button:hover { transform: translateY(-1px); }
+.aegis-button:active { transform: translateY(0); }
+.aegis-button:focus-visible { outline: none; box-shadow: var(--aegis-focus-ring); }
+.aegis-button-primary { background: var(--primary); color: var(--primary-foreground); box-shadow: 0 6px 18px color-mix(in oklab, var(--primary) 18%, transparent); }
+.aegis-button-primary:hover { background: color-mix(in oklab, var(--primary) 90%, var(--foreground)); }
+.aegis-button-secondary { background: var(--secondary); color: var(--secondary-foreground); border-color: var(--border); }
+.aegis-button-ghost { background: transparent; color: var(--foreground); }
+.aegis-button-ghost:hover { background: var(--muted); }
+
+/* Status and security semantics */
 .aegis-live-dot { position: relative; display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: #22c55e; box-shadow: 0 0 0 4px rgba(34,197,94,.12); }
 .aegis-live-dot::after { content: ''; position: absolute; inset: -4px; border-radius: inherit; border: 1px solid rgba(34,197,94,.25); animation: aegis-ping 1.8s ease-out infinite; }
 .aegis-status-bar { height: 3px; border-radius: 999px; background: var(--muted); overflow: hidden; }
 .aegis-status-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width 360ms ease; }
 .aegis-risk-critical { color: #ef4444; background: color-mix(in oklab, #ef4444 10%, transparent); border-color: color-mix(in oklab, #ef4444 24%, var(--border)); }
 .aegis-risk-high { color: #f97316; background: color-mix(in oklab, #f97316 10%, transparent); border-color: color-mix(in oklab, #f97316 24%, var(--border)); }
-.aegis-risk-medium { color: #eab308; background: color-mix(in oklab, #eab308 10%, transparent); border-color: color-mix(in oklab, #eab308 24%, var(--border)); }
-.aegis-risk-low { color: #22c55e; background: color-mix(in oklab, #22c55e 10%, transparent); border-color: color-mix(in oklab, #22c55e 24%, var(--border)); }
-.aegis-divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); }
-.aegis-command { border: 1px solid var(--border); background: color-mix(in oklab, var(--card) 82%, transparent); box-shadow: 0 12px 30px rgba(0,0,0,.08); backdrop-filter: blur(16px); }
+.aegis-risk-medium { color: #ca8a04; background: color-mix(in oklab, #eab308 10%, transparent); border-color: color-mix(in oklab, #eab308 24%, var(--border)); }
+.aegis-risk-low { color: #16a34a; background: color-mix(in oklab, #22c55e 10%, transparent); border-color: color-mix(in oklab, #22c55e 24%, var(--border)); }
+
+/* Compatibility aliases. Existing pages can migrate incrementally without a visual split. */
+.enterprise-card { border-radius: var(--aegis-radius-lg); border: 1px solid var(--border); background: var(--card); box-shadow: var(--aegis-shadow-soft); }
+.enterprise-card-hover { transition: transform var(--aegis-transition), box-shadow var(--aegis-transition), border-color var(--aegis-transition); }
+.enterprise-card-hover:hover { transform: translateY(-1px); box-shadow: var(--aegis-shadow-elevated); border-color: color-mix(in oklab, var(--primary) 22%, var(--border)); }
+.enterprise-section-title { font-size: .875rem; font-weight: 650; letter-spacing: -.01em; }
+.enterprise-muted { font-size: .75rem; color: var(--muted-foreground); }
+
+/* Utility primitives */
+.aegis-command { border: 1px solid var(--border); background: color-mix(in oklab, var(--card) 88%, transparent); box-shadow: var(--aegis-shadow-elevated); backdrop-filter: blur(16px); }
 .aegis-scrollbar { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent; }
 .aegis-scrollbar::-webkit-scrollbar { width: 7px; height: 7px; }
 .aegis-scrollbar::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--muted-foreground) 28%, transparent); border-radius: 999px; }
+
 @keyframes aegis-ping { 0% { transform: scale(.8); opacity: .8; } 80%, 100% { transform: scale(1.55); opacity: 0; } }
-@media (max-width: 768px) { :root { --aegis-header-height: 3.75rem; --aegis-grid-size: 24px; } .aegis-title { font-size: 1.35rem; } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; } }
-@media print { .aegis-grid-bg { background-image: none; } .aegis-surface, .aegis-glass { box-shadow: none; backdrop-filter: none; } }
+
+@media (max-width: 768px) {
+  :root { --aegis-header-height: 3.75rem; --aegis-grid-size: 24px; }
+  .aegis-title { font-size: 1.35rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}
+
+@media print {
+  .aegis-grid-bg { background-image: none; }
+  .aegis-surface, .aegis-glass { box-shadow: none; backdrop-filter: none; }
+}
