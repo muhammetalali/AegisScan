@@ -119,6 +119,34 @@ async def get_security_session(session_id: UUID, user: dict[str, Any] = Depends(
         raise _translate(exc) from exc
 
 
+@router.get("/security-sessions/{session_id}/report")
+async def get_security_session_report(session_id: UUID, user: dict[str, Any] = Depends(current_user)):
+    try:
+        snapshot = await run_in_threadpool(session_service.get_session_snapshot, session_id=session_id, user_id=_user_id(user))
+        evidence = await run_in_threadpool(session_service.list_evidence, session_id=session_id, user_id=_user_id(user), limit=500)
+        integrity = await run_in_threadpool(verify_evidence_chain_by_id, session_id)
+        phases: dict[str, list[dict[str, Any]]] = {}
+        for event in evidence:
+            prefix = str(event.get("event_type", "unknown")).split(".", 1)[0]
+            phases.setdefault(prefix, []).append(event)
+        return {
+            "session": snapshot,
+            "evidence": evidence,
+            "integrity": integrity,
+            "timeline": evidence,
+            "phases": phases,
+            "report": {
+                "session_id": str(session_id),
+                "status": snapshot.get("status"),
+                "cleanup_status": snapshot.get("cleanup_status"),
+                "evidence_count": len(evidence),
+                "evidence_integrity": integrity.get("valid", False),
+            },
+        }
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
 @router.get("/security-sessions/{session_id}/evidence")
 async def get_session_evidence(
     session_id: UUID,
