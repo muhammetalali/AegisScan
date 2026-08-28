@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
-from ..services.itsm_remediation import create_case, get_case, initialize_itsm_store, sync_case, transition_case, verify_case
+from ..services.itsm_remediation_v2 import create_case, get_case, sync_case, transition_case, verify_case
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -35,10 +35,6 @@ class VerifyBody(BaseModel):
     candidate: dict[str, Any]
     tools: list[str] = Field(default_factory=list, max_length=5)
     timeout: int = Field(default=180, ge=10, le=900)
-
-@router.on_event("startup")
-async def startup():
-    initialize_itsm_store()
 
 @router.post("/remediation/cases", status_code=201)
 async def create_remediation_case(body: CaseCreate, user: dict[str, Any] = Depends(require_user)):
@@ -85,4 +81,4 @@ async def remediation_case_verify(action_id: str, body: VerifyBody, user: dict[s
     except KeyError:
         raise HTTPException(status_code=404, detail="Remediation case not found")
     except (PermissionError, FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc))
