@@ -1,9 +1,12 @@
 """Event-driven application events backed by the Django Channels Redis layer."""
 
+import logging
+
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.db import transaction
 
+logger = logging.getLogger(__name__)
 DASHBOARD_GROUP_PREFIX = "dashboard_user_"
 
 
@@ -15,7 +18,12 @@ def _send(group_name, event):
     channel_layer = get_channel_layer()
     if channel_layer is None:
         return
-    async_to_sync(channel_layer.group_send)(group_name, event)
+    try:
+        async_to_sync(channel_layer.group_send)(group_name, event)
+    except Exception:
+        # Redis/Channels is an availability enhancement for the dashboard. A
+        # broker outage must never turn a committed domain write into a 500.
+        logger.exception("Failed to publish dashboard event to %s", group_name)
 
 
 def _event(*, project_id, reason, entity=None, entity_id=None):
@@ -57,7 +65,11 @@ def publish_dashboard_event(*, project_id, reason, entity=None, entity_id=None):
     def _publish():
         try:
             project = Project.objects.get(pk=project_id)
+            recipients = _recipient_ids(project)
         except Project.DoesNotExist:
+            return
+        except Exception:
+            logger.exception("Failed to resolve dashboard event recipients for %s", project_id)
             return
 
         event = _event(
@@ -66,7 +78,7 @@ def publish_dashboard_event(*, project_id, reason, entity=None, entity_id=None):
             entity=entity,
             entity_id=entity_id,
         )
-        for user_id in _recipient_ids(project):
+        for user_id in recipients:
             _send(dashboard_group_name(user_id), event)
 
     transaction.on_commit(_publish)
