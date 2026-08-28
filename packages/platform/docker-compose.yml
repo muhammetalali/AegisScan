@@ -109,12 +109,15 @@ services:
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app worker -l info -Q default,health -c ${CELERY_DEFAULT_WORKER_CONCURRENCY:-2} --hostname=core@%h
     environment:
+      AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
+      DEBUG: ${DJANGO_DEBUG:-1}
       DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-change-me}
     volumes:
       - ../backend:/app
     depends_on:
@@ -137,12 +140,15 @@ services:
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app worker -l info -Q workflow -c ${CELERY_WORKFLOW_WORKER_CONCURRENCY:-2} --hostname=workflow@%h
     environment:
+      AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
+      DEBUG: ${DJANGO_DEBUG:-1}
       DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-change-me}
     volumes:
       - ../backend:/app
     depends_on:
@@ -165,12 +171,15 @@ services:
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app worker -l info -Q reports -c ${CELERY_REPORT_WORKER_CONCURRENCY:-2} --hostname=reports@%h
     environment:
+      AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
+      DEBUG: ${DJANGO_DEBUG:-1}
       DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-change-me}
     volumes:
       - ../backend:/app
     depends_on:
@@ -193,12 +202,15 @@ services:
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app beat -l info --max-interval=30
     environment:
+      AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
+      DEBUG: ${DJANGO_DEBUG:-1}
       DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-change-me}
     volumes:
       - ../backend:/app
     depends_on:
