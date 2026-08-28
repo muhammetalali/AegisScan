@@ -38,14 +38,10 @@ def initialize_action_store() -> None: _ensure_schema()
 def _ensure_schema() -> None:
     global _schema_ready
     if _schema_ready: return
-    pool = _pool_instance(); conn = pool.getconn()
-    lock_acquired = False
+    pool = _pool_instance(); conn = pool.getconn(); locked = False
     try:
         with conn.cursor() as cur:
-            # FastAPI may start multiple workers concurrently. Serialize the
-            # first-time DDL so PostgreSQL cannot race while registering types.
-            cur.execute("SELECT pg_advisory_lock(813742901)")
-            lock_acquired = True
+            cur.execute("SELECT pg_advisory_lock(813742901)"); locked = True
             cur.execute("""CREATE TABLE IF NOT EXISTS security_decision_actions (
                 action_id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, node_id TEXT NOT NULL, title TEXT NOT NULL,
                 owner TEXT NOT NULL, requested_by TEXT NOT NULL, sla_hours INTEGER NOT NULL CHECK (sla_hours > 0),
@@ -56,6 +52,8 @@ def _ensure_schema() -> None:
             )""")
             cur.execute("ALTER TABLE security_decision_actions ADD COLUMN IF NOT EXISTS sla_status TEXT NOT NULL DEFAULT 'on_track'")
             cur.execute("ALTER TABLE security_decision_actions ADD COLUMN IF NOT EXISTS escalation_level INTEGER NOT NULL DEFAULT 0")
+            cur.execute("ALTER TABLE security_decision_actions ADD COLUMN IF NOT EXISTS idempotency_key TEXT")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_security_decision_actions_idempotency ON security_decision_actions(idempotency_key) WHERE idempotency_key IS NOT NULL")
             cur.execute("""CREATE TABLE IF NOT EXISTS security_decision_action_events (
                 event_id BIGSERIAL PRIMARY KEY, action_id TEXT NOT NULL REFERENCES security_decision_actions(action_id) ON DELETE CASCADE,
                 event_type TEXT NOT NULL, actor TEXT NOT NULL, note TEXT, created_at TIMESTAMPTZ NOT NULL
@@ -65,12 +63,10 @@ def _ensure_schema() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_actions_owner_sla ON security_decision_actions(owner, sla_status, created_at)")
             conn.commit(); _schema_ready = True
     finally:
-        if lock_acquired:
+        if locked:
             try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT pg_advisory_unlock(813742901)")
-            except Exception:
-                conn.rollback()
+                with conn.cursor() as cur: cur.execute("SELECT pg_advisory_unlock(813742901)")
+            except Exception: conn.rollback()
         pool.putconn(conn)
 
 
@@ -78,7 +74,7 @@ def _event_row(row: tuple[Any, ...]) -> dict[str, Any]: return {"type": row[0], 
 
 
 def _hydrate(cur, row: tuple[Any, ...]) -> dict[str, Any]:
-    action_id, decision_id, node_id, title, owner, requested_by, sla_hours, state, risk_before, confidence_before, priority, recommended_action, remediation_plan, created_at, updated_at, version, sla_status, escalation_level = row
+    action_id, decision_id, node_id, title, owner, requested_by, sla_hours, state, risk_before, confidence_before, priority, recommended_action, remediation_plan, created_at, updated_at, version, sla_status, escalation_level, idempotency_key = row
     cur.execute("SELECT event_type, created_at, actor, note FROM security_decision_action_events WHERE action_id = %s ORDER BY event_id ASC", (action_id,))
     events = [_event_row(event) for event in cur.fetchall()]
     due_at = created_at + timedelta(hours=sla_hours)
@@ -86,23 +82,28 @@ def _hydrate(cur, row: tuple[Any, ...]) -> dict[str, Any]:
             "slaHours": sla_hours, "state": state, "riskBefore": risk_before, "confidenceBefore": confidence_before, "priority": priority,
             "recommendedAction": recommended_action, "remediationPlan": remediation_plan if isinstance(remediation_plan, list) else json.loads(remediation_plan or "[]"),
             "createdAt": created_at.isoformat(), "updatedAt": updated_at.isoformat(), "dueAt": due_at.isoformat(), "version": version,
-            "slaStatus": sla_status, "escalationLevel": escalation_level, "events": events}
+            "slaStatus": sla_status, "escalationLevel": escalation_level, "events": events, "idempotencyKey": idempotency_key}
 
 
-def create_action(decision: dict[str, Any], owner: str, sla_hours: int, requested_by: str) -> dict[str, Any]:
+def create_action(decision: dict[str, Any], owner: str, sla_hours: int, requested_by: str, idempotency_key: str | None = None) -> dict[str, Any]:
     _ensure_schema(); action_id = f"act-{uuid4().hex[:12]}"; now = _now(); pool = _pool_instance(); conn = pool.getconn()
     try:
         with conn.cursor() as cur:
-            cur.execute("""INSERT INTO security_decision_actions (action_id,decision_id,node_id,title,owner,requested_by,sla_hours,state,risk_before,confidence_before,priority,recommended_action,remediation_plan,created_at,updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (action_id, str(decision.get("decisionId") or ""), str(decision.get("nodeId") or "unknown"), f"Remediate: {decision.get('label','Security finding')}", owner, requested_by, max(1, sla_hours), "pending", int(decision.get("risk",0) or 0), int(decision.get("confidence",0) or 0), int(decision.get("priority",0) or 0), decision.get("recommendedAction","Apply remediation and re-validate."), json.dumps(decision.get("revalidationPlan",[])), now, now))
+            if idempotency_key:
+                cur.execute("SELECT * FROM security_decision_actions WHERE idempotency_key=%s FOR UPDATE", (idempotency_key,))
+                existing = cur.fetchone()
+                if existing: return _hydrate(cur, existing)
+            cur.execute("""INSERT INTO security_decision_actions (action_id,decision_id,node_id,title,owner,requested_by,sla_hours,state,risk_before,confidence_before,priority,recommended_action,remediation_plan,created_at,updated_at,idempotency_key)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (action_id, str(decision.get("decisionId") or ""), str(decision.get("nodeId") or "unknown"), f"Remediate: {decision.get('label','Security finding')}", owner, requested_by, max(1, sla_hours), "pending", int(decision.get("risk",0) or 0), int(decision.get("confidence",0) or 0), int(decision.get("priority",0) or 0), decision.get("recommendedAction","Apply remediation and re-validate."), json.dumps(decision.get("revalidationPlan",[])), now, now, idempotency_key))
             cur.execute("INSERT INTO security_decision_action_events (action_id,event_type,actor,created_at) VALUES (%s,%s,%s,%s)", (action_id,"action.created",requested_by,now))
             cur.execute("SELECT * FROM security_decision_actions WHERE action_id=%s", (action_id,)); item=_hydrate(cur,cur.fetchone()); conn.commit(); return item
     finally: pool.putconn(conn)
 
 
-def transition(action_id: str, state: str, actor: str, note: str | None = None) -> dict[str, Any]:
+def transition(action_id: str, state: str, actor: str, note: str | None = None, *, verification_context: bool = False) -> dict[str, Any]:
     _ensure_schema()
     if state not in STATES: raise ValueError(f"Invalid state: {state}")
+    if state == "verified" and not verification_context: raise ValueError("verified is only reachable through remediation verification")
     pool = _pool_instance(); conn = pool.getconn()
     try:
         with conn.cursor() as cur:
