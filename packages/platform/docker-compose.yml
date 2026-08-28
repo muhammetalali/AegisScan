@@ -107,7 +107,7 @@ services:
       dockerfile: Dockerfile.django
     container_name: aegis-celery-worker
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app worker -l info -c 4
+    command: celery -A fastapi_app.celery_app worker -l info -c ${CELERY_WORKER_CONCURRENCY:-4} --hostname=worker@%h
     environment:
       DJANGO_SETTINGS_MODULE: django_project.settings
       DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
@@ -122,6 +122,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A fastapi_app.celery_app inspect ping --timeout=5 | grep -q 'pong'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
 
   celery_beat:
     build:
@@ -129,7 +135,7 @@ services:
       dockerfile: Dockerfile.django
     container_name: aegis-celery-beat
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app beat -l info
+    command: celery -A fastapi_app.celery_app beat -l info --max-interval=30
     environment:
       DJANGO_SETTINGS_MODULE: django_project.settings
       DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
@@ -143,6 +149,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      celery_worker:
         condition: service_healthy
 
   frontend:
