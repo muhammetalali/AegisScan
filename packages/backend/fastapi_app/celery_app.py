@@ -74,9 +74,13 @@ if redis_tls:
 
 @task_failure.connect(weak=False)
 def route_failed_task_to_dlq(task_id=None, task=None, args=None, kwargs=None, exception=None, **_):
-    if task_id and task:
-        try:
-            enqueue_dead_letter(task.name, task_id, args or (), kwargs or {}, str(exception or "unknown error"))
-        except Exception:
-            # DLQ must never crash the Celery worker failure handler.
-            pass
+    if not task_id or not task:
+        return
+    retries = getattr(getattr(task, "request", None), "retries", 0)
+    max_retries = getattr(task, "max_retries", 0)
+    if max_retries is None or retries < max_retries:
+        return
+    try:
+        enqueue_dead_letter(task.name, task_id, args or (), kwargs or {}, str(exception or "unknown error"))
+    except Exception:
+        pass
