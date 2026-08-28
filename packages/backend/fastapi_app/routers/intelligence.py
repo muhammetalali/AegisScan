@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from ..advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
 from ..core.security import verify_token
+from ..services.advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
 from ..services.autonomous_assurance import propose_remediation
 from ..services.behavioral_terrain import build_fingerprint
 from ..services.dynamic_risk_engine import DynamicRiskModel
@@ -105,9 +107,9 @@ async def providers(user: dict = Depends(require_user)):
     for provider in external_fabric.providers:
         name = provider.name
         if name == "greynoise":
-            status = "configured" if __import__("os").getenv("GREYNOISE_API_KEY") else "not_configured"
+            status = "configured" if os.getenv("GREYNOISE_API_KEY") else "not_configured"
         elif name == "shodan":
-            status = "configured" if __import__("os").getenv("SHODAN_API_KEY") else "not_configured"
+            status = "configured" if os.getenv("SHODAN_API_KEY") else "not_configured"
         elif name == "github_advisory":
             status = "available"
         else:
