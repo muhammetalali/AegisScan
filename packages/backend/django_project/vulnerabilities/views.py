@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from projects.models import ProjectMembership
 from .models import Vulnerability, VulnerabilityEvidence, VulnerabilityNote, VulnerabilityStatusHistory
 from .serializers import VulnerabilityEvidenceSerializer, VulnerabilityNoteSerializer, VulnerabilitySerializer
+from .tasks import enrich_vulnerability_threat_intel
 
 
 class VulnerabilityViewSet(viewsets.ModelViewSet):
@@ -81,6 +82,16 @@ class VulnerabilityViewSet(viewsets.ModelViewSet):
         vulnerability.validated_by = request.user
         vulnerability.save(update_fields=["validation_status", "validated_at", "validated_by", "updated_at"])
         return Response(self.get_serializer(vulnerability).data)
+
+    @action(detail=True, methods=["post"], url_path="enrich-threat-intel")
+    def enrich_threat_intel(self, request, pk=None):
+        vulnerability = self.get_object()
+        if not self._can_manage(vulnerability.project):
+            raise PermissionDenied("Only project owners and administrators can request threat intelligence enrichment.")
+        if not vulnerability.cve_ids:
+            return Response({"detail": "No CVE identifiers are associated with this vulnerability."}, status=400)
+        task = enrich_vulnerability_threat_intel.delay(str(vulnerability.id))
+        return Response({"task_id": task.id, "status": "queued", "sources": ["NVD", "OSV"]}, status=202)
 
 
 class VulnerabilityEvidenceViewSet(viewsets.ModelViewSet):
