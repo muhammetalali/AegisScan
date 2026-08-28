@@ -17,7 +17,6 @@ urlpatterns = [
     # Django-owned durable resources.
     path("api/v1/", include("users.urls")),
     path("api/v1/users/", include("users.management_urls")),
-    path("api/v1/projects/", include("projects.urls")),
     path("api/v1/assets/", include("assets.urls")),
     path("api/v1/scans/", include("scans.urls")),
     path("api/v1/vulnerabilities/", include("vulnerabilities.urls")),
