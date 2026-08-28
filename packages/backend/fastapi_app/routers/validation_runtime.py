@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ..core.security import verify_token
 from ..services.engine_adapters import execute_engine
 from ..services.validation_state import (
     ALL_ENGINES,
@@ -14,7 +13,6 @@ from ..services.validation_state import (
     GROUPS,
     PHASES,
     _store,
-    _tasks,
     engine_state,
     get_task,
     make_live_event,
@@ -24,13 +22,6 @@ from ..services.validation_state import (
 )
 
 router = APIRouter()
-
-
-async def require_user(token: str | None = None):
-    user = await verify_token(token) if token else None
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return user
 
 
 class ValidationCreate(BaseModel):
@@ -198,6 +189,7 @@ async def _run_real_validation(vid: str) -> None:
     except asyncio.CancelledError:
         item["status"] = "cancelled"
         item["current_phase"] = "cancelled"
+        item["completed_at"] = now_iso()
         item["live_events"].append(make_live_event("validation.cancelled", "Validation cancelled"))
         await _broadcast(vid, {"type": "validation.cancelled", "validation_id": vid})
         raise
