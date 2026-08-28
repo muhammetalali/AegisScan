@@ -11,6 +11,7 @@ from ..services.correlation_intelligence import correlate
 from ..services.external_intelligence import ExternalIntelligenceFabric
 from ..services.intelligence_fabric import IntelligenceFabric, ProviderUnavailable
 from ..services.advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
+from ..services.fusion_engine import FusionEngine
 from ..services.risk_engine import assess_risk
 
 router = APIRouter()
@@ -21,6 +22,7 @@ advanced_correlation = CorrelationEngine()
 bte_provider = BTEProvider()
 adi_provider = ADIProvider()
 scanner_adapter = ScannerAdapter()
+fusion_engine = FusionEngine()
 
 
 class Asset(BaseModel):
@@ -35,6 +37,10 @@ class Asset(BaseModel):
 class EnrichRequest(BaseModel):
     cve_id: str = Field(min_length=8, max_length=32)
     assets: list[Asset] = Field(default_factory=list, max_length=500)
+
+
+class FusionRequest(BaseModel):
+    observations: dict[str, dict[str, object]] = Field(default_factory=dict, max_length=32)
 
 
 class BehavioralRequest(BaseModel):
@@ -84,7 +90,7 @@ async def require_user(credentials: HTTPAuthorizationCredentials = Depends(secur
 
 @router.get("/intelligence/providers")
 async def providers(user: dict = Depends(require_user)):
-    return {"providers": [{"id": key, "status": "configured"} for key in fabric.providers] + [{"id": "bte", "status": "telemetry-only"}, {"id": "adi", "status": "approved-feed-only"}]}
+    return {"providers": [{"id": key, "status": "configured"} for key in fabric.providers] + [{"id": "bte", "status": "telemetry-only"}, {"id": "adi", "status": "approved-feed-only"}, {"id": "fusion", "status": "active"}]}
 
 
 @router.post("/intelligence/enrich")
@@ -97,9 +103,20 @@ async def enrich(body: EnrichRequest, user: dict = Depends(require_user)):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     provider_status = result.get("provider_status", {})
     source_count = sum(status == "ok" for status in provider_status.values()) if provider_status else 4
-    assessment = assess_risk(cvss=result.get("cvss"), epss=result.get("epss"), kev=bool(result.get("kev")), matched_assets=len(result.get("matched_assets") or []), published=result.get("published"), source_count=source_count)
-    result.update({"risk_score": assessment.score, "severity": assessment.severity, "confidence": assessment.confidence, "risk_factors": list(assessment.factors), "risk_lineage": list(assessment.lineage), "risk_prediction": assessment.prediction, "risk_decision_id": assessment.decision_id, "risk_engine": "aegis-risk-v2"})
+    observations = {name: {"available": True} for name, status in provider_status.items() if status == "ok"}
+    observations["nvd"] = {"metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": result.get("cvss")}}]}} if result.get("cvss") is not None else {}
+    observations["epss"] = {"epss": result.get("epss")} if result.get("epss") is not None else {}
+    observations["cisa_kev"] = {"known": True} if result.get("kev") else {}
+    fusion = fusion_engine.fuse(observations)
+    assessment = assess_risk(cvss=result.get("cvss"), epss=result.get("epss"), kev=bool(result.get("kev")), matched_assets=len(result.get("matched_assets") or []), published=result.get("published"), source_count=source_count, exposure=1.0 if result.get("matched_assets") else 0.0)
+    result.update({"risk_score": assessment.score, "severity": assessment.severity, "confidence": assessment.confidence, "risk_factors": list(assessment.factors), "risk_lineage": list(assessment.lineage), "risk_prediction": assessment.prediction, "risk_decision_id": assessment.decision_id, "risk_engine": "aegis-risk-v2", "fusion": {"score": fusion.score, "confidence": fusion.confidence, "rationale": fusion.rationale, "corroborated_sources": list(fusion.corroborated_sources), "conflicts": list(fusion.conflicts), "lineage": list(fusion.lineage)}})
     return result
+
+
+@router.post("/intelligence/fusion")
+async def fusion(body: FusionRequest, user: dict = Depends(require_user)):
+    result = fusion_engine.fuse(body.observations)
+    return {"score": result.score, "confidence": result.confidence, "rationale": result.rationale, "corroborated_sources": list(result.corroborated_sources), "conflicts": list(result.conflicts), "lineage": list(result.lineage)}
 
 
 @router.post("/intelligence/behavioral-fingerprint")
