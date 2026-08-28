@@ -1,0 +1,46 @@
+name: Frontend dependency lock sync
+
+on:
+  push:
+    branches:
+      - feature/enterprise-platform-ui-v2
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-frontend-lock:
+    if: ${{ !contains(github.event.head_commit.message, '[lock-sync]') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/web/package-lock.json
+
+      - name: Regenerate package-lock deterministically
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Commit synchronized lockfile
+        working-directory: .
+        run: |
+          if git diff --quiet -- packages/web/package-lock.json; then
+            echo 'LOCKFILE_ALREADY_SYNCHRONIZED=true' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add packages/web/package-lock.json
+          git commit -m 'chore(web): synchronize npm lockfile [lock-sync]'
+          git push origin HEAD:${GITHUB_REF_NAME}
