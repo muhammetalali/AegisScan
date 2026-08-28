@@ -1,0 +1,80 @@
+name: AegisScan ITSM Integration Gate
+
+on:
+  push:
+    branches:
+      - main
+      - feature/enterprise-platform-ui-v2
+  pull_request:
+    paths:
+      - 'packages/backend/fastapi_app/services/itsm_remediation_v2.py'
+      - 'packages/backend/fastapi_app/services/itsm_remediation_resilient.py'
+      - 'packages/backend/fastapi_app/services/itsm_idempotency.py'
+      - 'packages/backend/fastapi_app/services/itsm_configuration.py'
+      - 'packages/backend/fastapi_app/services/itsm_capability.py'
+      - 'packages/backend/fastapi_app/services/capability_control_plane.py'
+      - 'packages/backend/fastapi_app/services/itsm_provider_health.py'
+      - 'packages/backend/fastapi_app/routers/orchestration.py'
+      - 'packages/backend/fastapi_app/routers/engine_capabilities.py'
+      - 'packages/backend/fastapi_app/routers/capability_control.py'
+      - 'packages/backend/fastapi_app/main.py'
+      - 'packages/backend/tests/test_itsm_remediation.py'
+      - 'packages/backend/tests/test_itsm_configuration.py'
+      - 'packages/backend/tests/test_itsm_capability.py'
+      - 'packages/backend/tests/test_capability_control_plane.py'
+      - 'packages/backend/scripts/itsm_real_e2e.py'
+      - '.github/workflows/itsm-integration-gate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  itsm-contract:
+    name: ITSM lifecycle and provider contracts
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      SECRET_KEY: ci-itsm-secret-key-012345678901234567890123
+      JWT_SECRET_KEY: ci-itsm-jwt-secret-key-012345678901234567890123
+      DEBUG: "1"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      WS_ALLOW_QUERY_TOKEN: "0"
+      LOG_TO_FILE: "0"
+    defaults:
+      run:
+        working-directory: packages/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Python compile gate
+        run: python -m compileall -q fastapi_app tests scripts
+      - name: Configuration contract tests
+        run: python -m pytest -q tests/test_itsm_configuration.py
+      - name: Provider capability contract tests
+        run: python -m pytest -q tests/test_itsm_capability.py tests/test_capability_control_plane.py
+      - name: ITSM lifecycle contract tests
+        run: python -m pytest -q tests/test_itsm_remediation.py
