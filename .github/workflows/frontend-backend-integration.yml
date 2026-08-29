@@ -22,7 +22,8 @@ jobs:
     env:
       AEGIS_ENV: ci
       DJANGO_DEBUG: "0"
-      SECRET_KEY: ci-frontend-backend-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
+      DEBUG: "0"
+      SECRET_KEY: ci-frontend-backend-django-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
       DJANGO_SECRET_KEY: ci-frontend-backend-django-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
       JWT_SECRET_KEY: ci-frontend-backend-jwt-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
       FASTAPI_SECRET_KEY: ci-frontend-backend-fastapi-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
