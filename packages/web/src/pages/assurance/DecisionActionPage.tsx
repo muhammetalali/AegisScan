@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { DecisionActionOrchestration, type DecisionAction } from '@/components/security/DecisionActionOrchestration'
 import OutcomeIntelligencePanel from '@/components/security/OutcomeIntelligencePanel'
@@ -8,8 +8,8 @@ export const DecisionActionPage = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const token = localStorage.getItem('access_token') || ''
-  const load = async () => { setLoading(true); setError(''); try { const response = await fetch('/api/v1/assurance/actions', { headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error('Decision actions unavailable'); const payload = await response.json(); setActions(payload.items ?? []) } catch (err: any) { setError(err.message ?? 'Unable to load actions') } finally { setLoading(false) } }
-  useEffect(() => { void load() }, [])
+  const load = useCallback(async () => { setLoading(true); setError(''); try { const response = await fetch('/api/v1/assurance/actions', { headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error('Decision actions unavailable'); const payload = await response.json(); setActions(payload.items ?? []) } catch (err: any) { setError(err.message ?? 'Unable to load actions') } finally { setLoading(false) } }, [token])
+  useEffect(() => { void load() }, [load])
   const transition = async (actionId: string, state: string) => { const response = await fetch(`/api/v1/assurance/actions/${actionId}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ state }) }); if (!response.ok) throw new Error('Transition failed'); const updated = await response.json(); setActions((items) => items.map((item) => item.actionId === actionId ? updated : item)) }
   if (loading) return <div className="grid min-h-[70vh] place-items-center text-sm text-muted-foreground">Loading decision actions…</div>
   if (error) return <div className="mx-auto grid min-h-[70vh] max-w-xl place-items-center p-6 text-center"><div><h1 className="text-lg font-bold">Decision actions unavailable</h1><p className="mt-2 text-sm text-muted-foreground">Live orchestration state could not be retrieved.</p><button type="button" onClick={() => void load()} className="mt-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold hover:bg-muted"><RefreshCw className="h-3.5 w-3.5" /> Retry</button></div></div>
