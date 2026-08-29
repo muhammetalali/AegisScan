@@ -13,6 +13,18 @@ from .decision_action_orchestration import transition
 
 get_lifecycle = get_case
 
+
+def initialize_lifecycle_store() -> None:
+    """Initialize the persistent lifecycle store used by remediation cases.
+
+    The lifecycle service is a compatibility/orchestration layer over the
+    canonical ITSM remediation store.  FastAPI initializes this layer during
+    application startup, so expose an explicit initializer rather than
+    relying on request-time initialization.
+    """
+    initialize_itsm_store()
+
+
 async def create_action_and_ticket(*, decision: dict[str, Any], owner: str, sla_hours: int, actor: str, provider: str, evidence: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return await create_case(
         decision=decision,
