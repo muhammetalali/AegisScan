@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440
 
+    # WebSocket authentication policy. Bearer subprotocol authentication is
+    # preferred; query-string tokens are opt-in for local compatibility only.
+    # Query-string credentials may leak through access logs, proxies, history,
+    # and telemetry, so production deployments must keep this disabled.
+    WS_ALLOW_QUERY_TOKEN: bool = False
+
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://aegis:aegis@localhost:5432/aegisdb")
 
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -60,6 +66,8 @@ class Settings(BaseSettings):
                 raise ValueError("Production Redis certificate verification must be required")
             if "localhost" in self.DATABASE_URL or "127.0.0.1" in self.DATABASE_URL:
                 raise ValueError("Production DATABASE_URL must not point to localhost")
+            if self.WS_ALLOW_QUERY_TOKEN:
+                raise ValueError("Production WebSocket query-token authentication must remain disabled")
         return self
 
 
