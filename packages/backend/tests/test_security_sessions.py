@@ -75,11 +75,21 @@ def test_sensitive_evidence_is_redacted():
 def test_security_session_routes_are_mounted():
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
-    paths = {route.path for route in app.routes}
-    assert "/api/v1/security-sessions" in paths
-    assert "/api/v1/security-sessions/{session_id}/evidence" in paths
-    assert "/api/v1/security-sessions/{session_id}/evidence/integrity" in paths
-    assert "/api/v1/security-sessions/{session_id}/execute" in paths
-    assert "/api/v1/security-sessions/{session_id}/identity/revoke" in paths
-    assert "/api/v1/security-sessions/{session_id}/cleanup" in paths
-    assert "/api/v1/security-sessions/{session_id}/cleanup/verify" in paths
+    paths = {
+        route.path
+        for route in app.routes
+        if hasattr(route, "path")
+    }
+    expected_paths = {
+        "/api/v1/security-sessions",
+        "/api/v1/security-sessions/{session_id}",
+        "/api/v1/security-sessions/{session_id}/report",
+        "/api/v1/security-sessions/{session_id}/evidence",
+        "/api/v1/security-sessions/{session_id}/evidence/integrity",
+        "/api/v1/security-sessions/{session_id}/execute",
+        "/api/v1/security-sessions/{session_id}/close",
+        "/api/v1/security-sessions/{session_id}/identity/revoke",
+        "/api/v1/security-sessions/{session_id}/cleanup",
+        "/api/v1/security-sessions/{session_id}/cleanup/verify",
+    }
+    assert expected_paths.issubset(paths)
