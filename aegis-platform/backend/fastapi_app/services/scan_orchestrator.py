@@ -8,7 +8,6 @@ from ..core.config import settings
 from ..tasks.security_scan import run_nmap_scan
 from ..services.websocket_manager import WebSocketManager
 
-
 ENGINES = [
     {'name': 'nmap', 'display_name': 'Nmap Service Discovery', 'category': 'network', 'order': 1, 'timeout': 300, 'execution': 'real'},
     {'name': 'web', 'display_name': 'Web Scanner Provider', 'category': 'web', 'order': 2, 'timeout': 600, 'execution': 'provider-required'},
@@ -16,32 +15,17 @@ ENGINES = [
     {'name': 'exploitation', 'display_name': 'Safe Exploitation Assessment', 'category': 'exploitation', 'order': 4, 'timeout': 900, 'execution': 'non-destructive-only'},
 ]
 
-
 class ScanOrchestrator:
-    """Single orchestration surface for authorized security assessment jobs.
-
-    The orchestrator never treats an unsupported provider as successful. Network
-    discovery is currently backed by the real Nmap Celery task. Web/AD and
-    exploitation categories are explicit extension points and remain blocked
-    until a real, approved, non-destructive provider is configured.
-    """
+    """Single orchestration surface for authorized security assessment jobs."""
 
     def __init__(self, websocket_manager: WebSocketManager):
         self.websocket_manager = websocket_manager
-        self.engine_status = {
-            'nmap': 'active',
-            'web': 'inactive',
-            'ad': 'inactive',
-            'exploitation': 'inactive',
-        }
+        self.engine_status = {'nmap': 'active', 'web': 'inactive', 'ad': 'inactive', 'exploitation': 'inactive'}
         self.running = False
         self.max_concurrent = settings.MAX_CONCURRENT_SCANS
 
-    async def start(self):
-        self.running = True
-
-    async def stop(self):
-        self.running = False
+    async def start(self): self.running = True
+    async def stop(self): self.running = False
 
     async def list_engines(self) -> List[Dict]:
         return [{**engine, 'status': self.engine_status[engine['name']]} for engine in ENGINES]
@@ -59,6 +43,12 @@ class ScanOrchestrator:
             return {'status': 'error', 'message': 'Engine not found'}
         self.engine_status[engine_name] = 'inactive'
         return {'status': 'disabled', 'engine': engine_name}
+
+    @sync_to_async
+    def _has_scan_access(self, scan_id: str, user_id: str):
+        from scans.models import Scan
+        scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
+        return bool(scan and (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()))
 
     @sync_to_async
     def _queue_scan(self, scan_id: str, user_id: str):
@@ -86,45 +76,36 @@ class ScanOrchestrator:
 
     async def start_scan(self, scan_id: str, user: Dict) -> Dict:
         user_id = user.get('user_id') or user.get('sub')
-        if not user_id:
-            return {'status': 'error', 'message': 'Invalid authenticated user'}
+        if not user_id: return {'status': 'error', 'message': 'Invalid authenticated user'}
         return await self._queue_scan(scan_id, str(user_id))
 
     async def run_scan(self, scan_id: str, user: Dict) -> Dict:
-        """Compatibility alias for clients using the public run_scan name."""
         return await self.start_scan(scan_id, user)
 
     @sync_to_async
-    def _get_progress(self, scan_id: str):
+    def _get_progress(self, scan_id: str, user_id: str):
         from scans.models import Scan
         scan = Scan.objects.filter(pk=scan_id).first()
-        if not scan:
-            return {'status': 'error', 'message': 'Scan not found'}
-        return {
-            'scan_id': str(scan.id),
-            'status': scan.status,
-            'progress': round(scan.progress),
-            'current_phase': scan.current_phase,
-            'current_engine': scan.current_engine,
-            'celery_task_id': scan.celery_task_id,
-            'started_at': scan.started_at.isoformat() if scan.started_at else None,
-            'completed_at': scan.completed_at.isoformat() if scan.completed_at else None,
-            'error_message': scan.error_message,
-        }
+        if not scan: return {'status': 'error', 'message': 'Scan not found'}
+        if not (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()):
+            return {'status': 'error', 'message': 'Scan access denied'}
+        return {'scan_id': str(scan.id), 'status': scan.status, 'progress': round(scan.progress), 'current_phase': scan.current_phase, 'current_engine': scan.current_engine, 'celery_task_id': scan.celery_task_id, 'started_at': scan.started_at.isoformat() if scan.started_at else None, 'completed_at': scan.completed_at.isoformat() if scan.completed_at else None, 'error_message': scan.error_message}
 
-    async def get_progress(self, scan_id: str) -> Dict:
-        return await self._get_progress(scan_id)
+    async def get_progress(self, scan_id: str, user: Dict | None = None) -> Dict:
+        user_id = (user or {}).get('user_id') or (user or {}).get('sub')
+        if not user_id: return {'status': 'error', 'message': 'Invalid authenticated user'}
+        return await self._get_progress(scan_id, str(user_id))
 
-    async def get_scan_status(self, scan_id: str) -> Dict:
-        """Compatibility alias for clients using get_scan_status."""
-        return await self.get_progress(scan_id)
+    async def get_scan_status(self, scan_id: str, user: Dict | None = None) -> Dict:
+        return await self.get_progress(scan_id, user)
 
     @sync_to_async
-    def _set_status(self, scan_id: str, status: str):
+    def _set_status(self, scan_id: str, user_id: str, status: str):
         from scans.models import Scan
-        scan = Scan.objects.filter(pk=scan_id).first()
-        if not scan:
-            return {'status': 'error', 'message': 'Scan not found'}
+        scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
+        if not scan: return {'status': 'error', 'message': 'Scan not found'}
+        if not (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()):
+            return {'status': 'error', 'message': 'Scan access denied'}
         if status == Scan.Status.CANCELLED and scan.status in [Scan.Status.QUEUED, Scan.Status.RUNNING, Scan.Status.PAUSED]:
             scan.status = status
             scan.completed_at = datetime.now(timezone.utc)
@@ -134,20 +115,19 @@ class ScanOrchestrator:
                 AsyncResult(scan.celery_task_id).revoke(terminate=False)
             return {'status': 'cancelled'}
         if status == Scan.Status.PAUSED and scan.status == Scan.Status.RUNNING:
-            scan.status = status
-            scan.save(update_fields=['status', 'updated_at'])
-            return {'status': 'paused'}
+            scan.status = status; scan.save(update_fields=['status', 'updated_at']); return {'status': 'paused'}
         if status == Scan.Status.RUNNING and scan.status == Scan.Status.PAUSED:
-            scan.status = status
-            scan.save(update_fields=['status', 'updated_at'])
-            return {'status': 'resumed'}
+            scan.status = status; scan.save(update_fields=['status', 'updated_at']); return {'status': 'resumed'}
         return {'status': 'error', 'message': 'Invalid scan state transition'}
 
-    async def pause_scan(self, scan_id: str) -> Dict:
-        return await self._set_status(scan_id, 'paused')
+    async def pause_scan(self, scan_id: str, user: Dict) -> Dict:
+        user_id = user.get('user_id') or user.get('sub')
+        return await self._set_status(scan_id, str(user_id), 'paused') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
 
-    async def resume_scan(self, scan_id: str) -> Dict:
-        return await self._set_status(scan_id, 'running')
+    async def resume_scan(self, scan_id: str, user: Dict) -> Dict:
+        user_id = user.get('user_id') or user.get('sub')
+        return await self._set_status(scan_id, str(user_id), 'running') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
 
-    async def cancel_scan(self, scan_id: str) -> Dict:
-        return await self._set_status(scan_id, 'cancelled')
+    async def cancel_scan(self, scan_id: str, user: Dict) -> Dict:
+        user_id = user.get('user_id') or user.get('sub')
+        return await self._set_status(scan_id, str(user_id), 'cancelled') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
