@@ -1,9 +1,10 @@
-from django.contrib import admin
-from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
-from core.views import health_check, readiness_check
+from django.contrib import admin
+from django.urls import include, path
+from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
+
+from django_project.core.views import health_check, readiness_check
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -12,7 +13,7 @@ urlpatterns = [
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     path('health/', health_check, name='health-check'),
     path('ready/', readiness_check, name='readiness-check'),
-    path('api/v1/auth/', include('users.urls')),
+    path('api/v1/auth/', include('django_project.users.urls')),
 ]
 
 if settings.DEBUG:
