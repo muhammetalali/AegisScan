@@ -22,14 +22,17 @@ beforeEach(() => {
 })
 
 describe('authentication lifecycle', () => {
-  it('returns explicit 2FA state without authenticating the session', async () => {
-    post.mockResolvedValueOnce({ data: { detail: 'Two-factor authentication code required', two_factor_required: true } } as never)
+  it('returns explicit 2FA state when the API uses HTTP 401 for the challenge', async () => {
+    post.mockRejectedValueOnce({
+      response: { status: 401, data: { detail: 'Two-factor authentication code required', two_factor_required: true } },
+    })
 
     const requires2FA = await useAuthStore.getState().login('analyst@example.com', 'password123', true)
 
     expect(requires2FA).toBe(true)
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
     expect(useAuthStore.getState().accessToken).toBeNull()
+    expect(useAuthStore.getState().error).toBeNull()
   })
 
   it('stores a rotated refresh token when the server returns one', async () => {
