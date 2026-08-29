@@ -10,14 +10,30 @@ from ..services.websocket_manager import WebSocketManager
 
 
 ENGINES = [
-    {'name': 'nmap', 'display_name': 'Nmap Service Discovery', 'category': 'recon', 'order': 1, 'timeout': 300},
+    {'name': 'nmap', 'display_name': 'Nmap Service Discovery', 'category': 'network', 'order': 1, 'timeout': 300, 'execution': 'real'},
+    {'name': 'web', 'display_name': 'Web Scanner Provider', 'category': 'web', 'order': 2, 'timeout': 600, 'execution': 'provider-required'},
+    {'name': 'ad', 'display_name': 'Active Directory Scanner Provider', 'category': 'active_directory', 'order': 3, 'timeout': 600, 'execution': 'provider-required'},
+    {'name': 'exploitation', 'display_name': 'Safe Exploitation Assessment', 'category': 'exploitation', 'order': 4, 'timeout': 900, 'execution': 'non-destructive-only'},
 ]
 
 
 class ScanOrchestrator:
+    """Single orchestration surface for authorized security assessment jobs.
+
+    The orchestrator never treats an unsupported provider as successful. Network
+    discovery is currently backed by the real Nmap Celery task. Web/AD and
+    exploitation categories are explicit extension points and remain blocked
+    until a real, approved, non-destructive provider is configured.
+    """
+
     def __init__(self, websocket_manager: WebSocketManager):
         self.websocket_manager = websocket_manager
-        self.engine_status = {'nmap': 'active'}
+        self.engine_status = {
+            'nmap': 'active',
+            'web': 'inactive',
+            'ad': 'inactive',
+            'exploitation': 'inactive',
+        }
         self.running = False
         self.max_concurrent = settings.MAX_CONCURRENT_SCANS
 
@@ -33,6 +49,8 @@ class ScanOrchestrator:
     async def enable_engine(self, engine_name: str) -> Dict:
         if engine_name not in self.engine_status:
             return {'status': 'error', 'message': 'Engine not found'}
+        if engine_name != 'nmap':
+            return {'status': 'error', 'message': 'No real approved provider is configured for this engine'}
         self.engine_status[engine_name] = 'active'
         return {'status': 'enabled', 'engine': engine_name}
 
@@ -72,6 +90,10 @@ class ScanOrchestrator:
             return {'status': 'error', 'message': 'Invalid authenticated user'}
         return await self._queue_scan(scan_id, str(user_id))
 
+    async def run_scan(self, scan_id: str, user: Dict) -> Dict:
+        """Compatibility alias for clients using the public run_scan name."""
+        return await self.start_scan(scan_id, user)
+
     @sync_to_async
     def _get_progress(self, scan_id: str):
         from scans.models import Scan
@@ -92,6 +114,10 @@ class ScanOrchestrator:
 
     async def get_progress(self, scan_id: str) -> Dict:
         return await self._get_progress(scan_id)
+
+    async def get_scan_status(self, scan_id: str) -> Dict:
+        """Compatibility alias for clients using get_scan_status."""
+        return await self.get_progress(scan_id)
 
     @sync_to_async
     def _set_status(self, scan_id: str, status: str):
