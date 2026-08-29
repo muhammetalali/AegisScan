@@ -29,4 +29,5 @@ venv/
 packages/web/node_modules/
 packages/web/coverage/
 packages/web/.vite/
+packages/web/dist/
 *.egg-info/
