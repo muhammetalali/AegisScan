@@ -7,7 +7,10 @@ import type { CorrelationConflict } from '@/components/security/CorrelationConfl
 
 export const CorrelatedEvidenceGraphPage = () => {
   const query = useQuery({ queryKey: ['correlated-evidence-graph'], queryFn: () => apiHelpers.get<any>('/assurance/correlations/conflicts') })
-  const conflicts: CorrelationConflict[] = Array.isArray(query.data) ? query.data : query.data?.items ?? query.data?.results ?? []
+  const conflicts = useMemo<CorrelationConflict[]>(
+    () => Array.isArray(query.data) ? query.data : query.data?.items ?? query.data?.results ?? [],
+    [query.data],
+  )
   const nodes = useMemo<EvidenceGraphNode[]>(() => conflicts.flatMap((conflict) => [
     { id: `finding:${conflict.entityId}`, label: conflict.entityLabel, type: 'finding', status: 'unverified', conflictCount: conflict.signals.length, confidence: conflict.confidenceAfter },
     ...conflict.signals.map((signal) => ({ id: `evidence:${signal.id}`, label: signal.source, type: 'evidence' as const, status: 'unverified' as const, conflictCount: 1, confidence: signal.confidence, meta: `${signal.claim}: ${signal.value}` })),
