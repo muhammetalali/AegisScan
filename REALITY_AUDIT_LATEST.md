@@ -3,48 +3,95 @@
 Date: 2026-08-29
 Branch: `main`
 
-## Completed in this pass
+## Audit scope
 
-- Kept the existing Django project identity as `django_project`; settings and URL root remain aligned with the repository.
-- Confirmed `rest_framework_simplejwt.token_blacklist` is installed and SimpleJWT rotation/blacklisting is enabled.
-- Confirmed `django-ratelimit` is already installed and Login/Refresh are rate-limited.
-- Hardened production cookie behavior: HttpOnly + SameSite=Lax, Secure defaults to true when `DEBUG=False`, and Django production HTTPS/HSTS settings are enabled.
-- Kept CORS explicit and disabled wildcard CORS. CSRF trusted origins are derived from the configured explicit origins.
-- Kept JWT in HttpOnly cookies; frontend auth continues to use credentials and CSRF handling.
-- Replaced client-trusted scan authorization with a server-side `AUTHORIZED_SCAN_TARGETS` allow-list. Empty scope denies real execution.
-- Enforced scope authorization twice: API boundary and Celery worker boundary. A direct task call cannot bypass the scope check.
-- Dashboard compliance score now comes from real `ComplianceAssessment` aggregates instead of a constant.
-- Real Nmap/Nuclei execution remains asynchronous through Celery with persisted Evidence.
-- Evidence stores raw output, metadata, timestamps and SHA-256 integrity data.
-- Added CI automation that provisions PostgreSQL + Redis, runs `makemigrations`, applies migrations to clean PostgreSQL, and verifies no pending migrations.
-- Corrected the frontend CI command to use the repository's actual TypeScript command (`npx tsc --noEmit`).
-- Added `.env.example` documentation for production secrets and explicit authorized scan scope. No real `.env` or secrets are committed.
+This pass audits the repository from the root with priority:
 
-## Current CI state
+1. Database / Django migrations
+2. Authentication / JWT
+3. Frontend / mock-data sweep
 
-The migration workflow was triggered on `main` and is currently running against PostgreSQL/Redis. It is responsible for generating and committing the initial Django migration files, then applying them to a clean PostgreSQL database and running a no-pending-migrations check.
+Only repository evidence is treated as fact. A feature is not marked operational merely because a file or UI exists.
 
-The same push exposed a frontend CI configuration error: the workflow called a nonexistent `npm run typecheck` script. That workflow has now been corrected to run `npx tsc --noEmit`; the subsequent build remains enabled.
+## Database / Django findings
 
-## Security boundary
+### Confirmed real
 
-AegisScan may perform authorized reconnaissance, vulnerability scanning, evidence collection, attack-path analysis and non-destructive validation. It does **not** implement automated credential theft, malware deployment, persistence, unrestricted exploitation, post-exploitation payload delivery or automated compromise.
+- The active Django project is `aegis-platform/backend/django_project` and `ROOT_URLCONF`, WSGI and ASGI paths consistently use `django_project`.
+- `rest_framework_simplejwt.token_blacklist` is present in `INSTALLED_APPS`.
+- Django apps have committed migration files, including `users`, `projects`, `scans`, `vulnerabilities`, `assets`, `compliance`, `knowledge`, `notifications`, `audit`, `system` and `evidence`.
+- The repository contains an automated migration consistency workflow that runs Django checks, migration generation/checks, applies migrations to clean PostgreSQL, verifies the `users_user` table, and checks for pending migrations.
+- `Evidence` is a real Django model with persisted raw output, SHA-256, metadata, collection timestamp and relationships to scan/asset/finding.
+- PostgreSQL and Redis are configured through environment variables rather than being simulated in application code.
 
-For those scenarios the platform should produce a controlled validation/detection result rather than executing a reusable compromise mechanism.
+### Important verification boundary
 
-## Remaining production gates
+The repository proves that migration files exist and that CI is designed to validate them. It does **not** by itself prove that a live institutional PostgreSQL instance has been migrated successfully. That requires an actual runtime/CI result. No live database claim is made here without that evidence.
 
-1. Confirm the migration workflow finishes successfully and committed migrations appear on `main`.
-2. Confirm the corrected frontend CI run passes typecheck and build.
-3. Complete persisted Organization/Tenant isolation if multiple organizations will share one deployment.
-4. Normalize Nuclei JSONL into persisted Vulnerability/Finding records.
-5. Complete NVD/OSV/CISA KEV/EPSS ingestion and FusionEngine persistence/correlation.
-6. Complete remediation proof-of-fix and report generation from persisted evidence.
-7. Run an end-to-end test against an explicitly authorized institutional test target.
-8. Production deployment must set real HTTPS origins, `AUTH_COOKIE_SECURE=True`, strong secrets, PostgreSQL/Redis credentials, backups and monitoring.
+## Authentication / JWT findings
 
-## Definition of Done
+### Confirmed real
 
-`Login -> authorized scope -> asset -> Celery job -> real provider -> evidence -> normalized finding -> intelligence -> risk -> remediation -> re-validation -> audit -> report`
+- Access and refresh JWTs are issued by Django SimpleJWT.
+- Refresh-token rotation and blacklist-after-rotation are enabled.
+- `CookieJWTAuthentication` reads the access token from an HttpOnly cookie.
+- Login and refresh endpoints are rate-limited with `django-ratelimit`, which is present in backend requirements.
+- CORS credentials are enabled with an explicit origin allow-list and wildcard CORS is disabled.
+- Session/auth cookies use HttpOnly and SameSite=Lax; Secure is enabled automatically when `DEBUG=False`.
+- The frontend Axios client uses `withCredentials: true` and CSRF cookie/header configuration.
 
-Every success state must be backed by persisted evidence or a persisted database result. Unsupported capabilities must fail explicitly instead of returning simulated success.
+### Fixed in this pass
+
+- Removed the refresh-token request-body fallback. Refresh now requires the HttpOnly refresh cookie.
+- Removed the logout request-body refresh-token fallback. Logout now uses the HttpOnly refresh cookie.
+- Fixed an authentication bootstrap race: `initAuth()` now sets the store to loading before the first async request and clears loading in `finally`, preventing protected routes from redirecting before server-side authentication initialization finishes.
+- Production startup now fails closed when `DEBUG=False` and `SECRET_KEY` or `JWT_SECRET_KEY` is missing or still set to known placeholder values.
+
+## Celery / execution findings
+
+- The canonical Celery configuration is under `fastapi_app/celery_app.py`.
+- The legacy `celery_app` compatibility entrypoint was unified with the canonical configuration.
+- Legacy simulated Celery tasks were removed; real security tasks are kept under `fastapi_app.tasks.security_scan`.
+- Real Nmap/Nuclei execution is asynchronous through Celery and is protected by server-side scope authorization.
+
+## Frontend reality findings
+
+### Confirmed real architecture
+
+- The frontend has a real Axios API client with credentials and CSRF configuration.
+- Authentication state is not persisted as access/refresh tokens in localStorage; the store keeps token fields null and relies on cookies.
+- `initAuth()` is called from `main.tsx`.
+- Protected routes are enforced by a React route guard.
+
+### Still requiring the dedicated sweep
+
+The repository is large and contains both source and generated `dist` output. The remaining frontend pass must inspect source files endpoint-by-endpoint for mock arrays, hardcoded metrics, random values, artificial timers, placeholder states and unused/orphaned screens. Generated `dist` files are not treated as source-of-truth for this audit.
+
+## Current remediation commits
+
+- `b9af0f0b6ecefab06eb8c7f927566c7ce3864ea6` — removed legacy simulated Celery task implementations.
+- `867f1312dc0ccfe8083e01223cd3c48e47401590` — enforced HttpOnly cookie-only refresh/logout handling.
+- `45e7d6de0a4d2621c2f84b545998a1ac582834d0` — fixed authentication initialization race.
+- `6976e819b66d92bf586c44960fe6d5d427374839` — fail-closed production signing-secret validation.
+
+## Remaining gates
+
+1. Obtain a successful runtime/CI result for the migration workflow against clean PostgreSQL and Redis.
+2. Verify every Django model has no pending migration with `makemigrations --check --dry-run` in CI/runtime.
+3. Complete the source-level frontend mock/fake sweep.
+4. Verify API-level tenant isolation and RBAC on every protected resource.
+5. Verify real scanner output normalization into persisted findings.
+6. Verify real intelligence ingestion and FusionEngine persistence.
+7. Verify remediation proof-of-fix and report generation from persisted evidence.
+
+## Reality rule
+
+`Code exists != operational`.
+
+`Configuration is valid != external service is connected`.
+
+`Sandbox output != real output`.
+
+`A success state is valid only when backed by a persisted database result, external provider response, or persisted evidence.`
+
+Unsupported capabilities must fail explicitly instead of returning simulated success.
