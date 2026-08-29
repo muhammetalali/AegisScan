@@ -72,22 +72,12 @@ def test_sensitive_evidence_is_redacted():
     assert payload["items"][0]["api_key"] == "[REDACTED]"
 
 
-def _route_paths(routes, prefix: str = "") -> set[str]:
-    paths: set[str] = set()
-    for route in routes:
-        path = getattr(route, "path", None)
-        if isinstance(path, str):
-            paths.add(f"{prefix}{path}")
-        nested = getattr(route, "routes", None)
-        if nested:
-            paths.update(_route_paths(nested, prefix))
-    return paths
-
-
 def test_security_session_routes_are_mounted():
+    """Validate the public mounted route contract through OpenAPI."""
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
-    paths = _route_paths(app.routes)
+
+    paths = set(app.openapi().get("paths", {}))
     expected_paths = {
         "/api/v1/security-sessions",
         "/api/v1/security-sessions/{session_id}",
