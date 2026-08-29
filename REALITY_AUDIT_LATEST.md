@@ -62,10 +62,20 @@ The repository proves that migration files exist and that CI is designed to vali
 - Authentication state is not persisted as access/refresh tokens in localStorage; the store keeps token fields null and relies on cookies.
 - `initAuth()` is called from `main.tsx`.
 - Protected routes are enforced by a React route guard.
+- A source-level sweep found no confirmed `localStorage`, `setTimeout`, `Math.random`, `random.randint`, `TODO`, `COMING SOON`, `mock`, `dummy`, `sample`, or `fake` matches through the repository code-search interface.
 
-### Still requiring the dedicated sweep
+### Confirmed frontend mock removed
 
-The repository is large and contains both source and generated `dist` output. The remaining frontend pass must inspect source files endpoint-by-endpoint for mock arrays, hardcoded metrics, random values, artificial timers, placeholder states and unused/orphaned screens. Generated `dist` files are not treated as source-of-truth for this audit.
+- `aegis-platform/frontend/src/pages/assets/Assets.tsx` contained a hardcoded `ASSETS` array with invented/example records such as `api.example.local`, `192.168.1.10`, local Windows paths and fixed project/team metadata. This was a confirmed source-of-truth violation and has been removed.
+- The Assets page now loads records through the authenticated API only and displays an explicit unavailable/empty state rather than fallback records.
+- The FastAPI Assets router previously returned synthetic IDs such as `new-asset-id` and `new-scan-id`, always returned an empty list, and returned success for deletion without touching the database. These confirmed synthetic behaviors were replaced for asset CRUD, technology records and relationships with Django ORM persistence and project-scope authorization.
+- The canonical `/api/v1/assets` route is now exposed for the frontend client.
+- Unsupported asset scan and bulk-import endpoints now fail explicitly with HTTP 501 instead of returning fabricated success.
+- Production frontend builds now fail closed at runtime when `VITE_API_URL`/`VITE_WS_URL` are not configured; localhost defaults remain limited to development mode.
+
+### Remaining frontend work
+
+The remaining frontend pass must continue endpoint-by-endpoint for every page, especially screens whose backend endpoints may themselves still return empty or synthetic data. Generated `dist` output is not treated as source-of-truth for this audit.
 
 ## Current remediation commits
 
@@ -73,16 +83,28 @@ The repository is large and contains both source and generated `dist` output. Th
 - `867f1312dc0ccfe8083e01223cd3c48e47401590` — enforced HttpOnly cookie-only refresh/logout handling.
 - `45e7d6de0a4d2621c2f84b545998a1ac582834d0` — fixed authentication initialization race.
 - `6976e819b66d92bf586c44960fe6d5d427374839` — fail-closed production signing-secret validation.
+- `99ae89896942fdb737627635bd2f395e827ce20d` — fail-closed production frontend API/WebSocket configuration.
+- `1a0691ea7aa90db352943534d8fe5777eb189059` — replaced synthetic asset API behavior with database-backed persistence.
+- `fedaa1c5d315372295252ed8b4be7de9288d1ca4` — corrected lazy Django model loading in the FastAPI asset router.
+- `ea0c7b426966d78d1078509caaa337c9200e3abd` — exposed the database-backed Assets router under the canonical v1 API path.
+- `d8659b772c4d493143552989a8f83da55e3f883c` — removed the frontend hardcoded asset dataset and switched the page to real API data.
+
+## Verification status
+
+- GitHub confirms the commits are on `main`.
+- No external CI status is attached to the latest frontend remediation commit through the available status endpoint at the time of this audit.
+- Therefore build/test success for these newest changes is **not claimed** until a CI/runtime result is available.
 
 ## Remaining gates
 
 1. Obtain a successful runtime/CI result for the migration workflow against clean PostgreSQL and Redis.
 2. Verify every Django model has no pending migration with `makemigrations --check --dry-run` in CI/runtime.
-3. Complete the source-level frontend mock/fake sweep.
+3. Continue the source-level frontend mock/fake sweep endpoint-by-endpoint.
 4. Verify API-level tenant isolation and RBAC on every protected resource.
-5. Verify real scanner output normalization into persisted findings.
-6. Verify real intelligence ingestion and FusionEngine persistence.
-7. Verify remediation proof-of-fix and report generation from persisted evidence.
+5. Remove any confirmed synthetic backend responses discovered while tracing frontend endpoints.
+6. Verify real scanner output normalization into persisted findings.
+7. Verify real intelligence ingestion and FusionEngine persistence.
+8. Verify remediation proof-of-fix and report generation from persisted evidence.
 
 ## Reality rule
 
