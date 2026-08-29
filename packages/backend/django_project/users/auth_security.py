@@ -233,7 +233,7 @@ def disable_2fa(request):
         record_user_audit(request=request, action='auth.2fa.disable', result='failure', user=request.user, resource_id=request.user.pk, metadata={'reason': 'invalid_password'})
         return Response({'detail': 'Current password is incorrect'}, status=status.HTTP_400_BAD_REQUEST)
     if not verify_totp(request.user.two_factor_secret, request.data.get('code', '')):
-        record_user_audit(request=request, action='auth.2fa.disable', result='failure', user=request.user, resource_id=request.user.pk, metadata={'reason': 'invalid_code'}, start=started)
+        record_user_audit(request=request, action='auth.2fa.disable', result='failure', user=request.user, resource_id=request.user.pk, metadata={'reason': 'invalid_code'})
         return Response({'detail': 'Valid two-factor authentication code required'}, status=status.HTTP_400_BAD_REQUEST)
     request.user.two_factor_enabled = False
     request.user.two_factor_secret = ''
