@@ -12,6 +12,18 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      DEBUG: 'True'
+      SECRET_KEY: ci-only-secret
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      JWT_SECRET_KEY: ci-only-jwt-secret
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      PYTHONPATH: .
     services:
       postgres:
         image: postgres:16
@@ -37,107 +49,84 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install Nmap
         run: sudo apt-get update && sudo apt-get install -y nmap
+
       - name: Install dependencies
         working-directory: aegis-platform/backend
         run: python -m pip install -r requirements.txt
+
+      - name: Verify Django project import path
+        working-directory: aegis-platform/backend
+        run: python -c "import django_project; import django_project.settings; print('Django project import: OK')"
+
       - name: Django check
         working-directory: aegis-platform/backend
-        env:
-          DEBUG: 'True'
-          SECRET_KEY: ci-only-secret
-          DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
-          REDIS_URL: redis://127.0.0.1:6379/0
-          CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-          CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
-          JWT_SECRET_KEY: ci-only-jwt-secret
-          ALLOWED_HOSTS: localhost,127.0.0.1
-          CORS_ALLOWED_ORIGINS: http://localhost:5173
         run: python manage.py check
-      - name: Migration check
+
+      - name: Migration check and database bootstrap
+        working-directory: aegis-platform/backend
+        run: |
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Verify users table exists
         working-directory: aegis-platform/backend
         env:
-          DEBUG: 'True'
-          SECRET_KEY: ci-only-secret
-          DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
-          REDIS_URL: redis://127.0.0.1:6379/0
-          CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-          CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
-          JWT_SECRET_KEY: ci-only-jwt-secret
-          ALLOWED_HOSTS: localhost,127.0.0.1
-          CORS_ALLOWED_ORIGINS: http://localhost:5173
-        run: python manage.py makemigrations --check --dry-run && python manage.py migrate --noinput
+          PGPASSWORD: aegis
+        run: |
+          psql "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb" -tAc "SELECT to_regclass('public.users_user');" | grep -Fx 'users_user'
+
       - name: Production Django checks
         working-directory: aegis-platform/backend
         env:
           DEBUG: 'False'
           SECRET_KEY: ci-production-secret-not-used-at-runtime
-          DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
-          REDIS_URL: redis://127.0.0.1:6379/0
-          CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-          CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
           JWT_SECRET_KEY: ci-production-jwt-secret-not-used-at-runtime
-          ALLOWED_HOSTS: localhost,127.0.0.1
-          CORS_ALLOWED_ORIGINS: http://localhost:5173
           AUTH_COOKIE_SECURE: 'True'
         run: python manage.py check --deploy
+
       - name: Python compile check
         working-directory: aegis-platform/backend
         run: python -m compileall -q django_project fastapi_app celery_app
+
       - name: Redis connectivity smoke test
         working-directory: aegis-platform/backend
-        env:
-          REDIS_URL: redis://127.0.0.1:6379/0
-        run: python -c "import os, redis; r=redis.from_url(os.environ['REDIS_URL']); assert r.ping() is True; print('Redis: OK')"
+        run: python -c "import redis; r=redis.from_url('redis://127.0.0.1:6379/0'); assert r.ping() is True; print('Redis: OK')"
+
       - name: Celery configuration smoke test
         working-directory: aegis-platform/backend
-        env:
-          DEBUG: 'True'
-          SECRET_KEY: ci-only-secret
-          DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
-          REDIS_URL: redis://127.0.0.1:6379/0
-          CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-          CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
-          JWT_SECRET_KEY: ci-only-jwt-secret
-          ALLOWED_HOSTS: localhost,127.0.0.1
-          CORS_ALLOWED_ORIGINS: http://localhost:5173
-          PYTHONPATH: django_project
-        run: python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','django_project.settings'); import django; django.setup(); from django.conf import settings; from celery import Celery; app=Celery('aegis'); app.conf.broker_url=settings.CELERY_BROKER_URL; print('Celery broker:', app.conf.broker_url)"
+        run: |
+          python -c "import django; django.setup(); from django.conf import settings; from celery import Celery; app=Celery('aegis'); app.conf.broker_url=settings.CELERY_BROKER_URL; assert app.conf.broker_url == 'redis://127.0.0.1:6379/0'; print('Celery broker: OK')"
+
       - name: Tests
         working-directory: aegis-platform/backend
-        env:
-          DEBUG: 'True'
-          SECRET_KEY: ci-only-secret
-          DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
-          REDIS_URL: redis://127.0.0.1:6379/0
-          CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-          CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
-          JWT_SECRET_KEY: ci-only-jwt-secret
-          ALLOWED_HOSTS: localhost,127.0.0.1
-          CORS_ALLOWED_ORIGINS: http://localhost:5173
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: django_project
         run: python -m pytest -q ../../tests/test_integration.py ../../tests/test_platform.py --ds=django_project.settings
 
   frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: aegis-platform/frontend/package-lock.json
+
       - name: Install dependencies
         working-directory: aegis-platform/frontend
         run: npm ci
+
       - name: Typecheck
         working-directory: aegis-platform/frontend
         run: npx tsc --noEmit
+
       - name: Build
         working-directory: aegis-platform/frontend
         run: npm run build
