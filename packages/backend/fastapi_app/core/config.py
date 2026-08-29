@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # and telemetry, so production deployments must keep this disabled.
     WS_ALLOW_QUERY_TOKEN: bool = False
 
+    # Established WebSockets must revalidate the authoritative Django session
+    # state so a session_version bump can revoke an already-open connection.
+    # A short interval bounds revocation latency without requiring a database
+    # lookup for every WebSocket frame.
+    WS_SESSION_CHECK_INTERVAL_SECONDS: int = Field(default=5, ge=1, le=60)
+
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://aegis:aegis@localhost:5432/aegisdb")
 
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
