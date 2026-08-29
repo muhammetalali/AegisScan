@@ -60,8 +60,6 @@ class RefreshView(APIView):
     def post(self, request):
         refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE)
         if not refresh:
-            refresh = request.data.get('refresh')
-        if not refresh:
             return Response({'detail': 'Refresh token is required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         serializer = TokenRefreshSerializer(data={'refresh': refresh})
@@ -77,11 +75,12 @@ class LogoutView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE) or request.data.get('refresh_token')
+        refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE)
         if refresh:
             try:
                 RefreshToken(refresh).blacklist()
             except Exception:
+                # Logout remains idempotent even when the token is already expired/blacklisted.
                 pass
         response = Response({'message': 'Logged out successfully'})
         response.delete_cookie(settings.AUTH_ACCESS_COOKIE, path='/')
