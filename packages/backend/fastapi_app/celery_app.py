@@ -63,6 +63,11 @@ celery_app.conf.update(
             "options": {"queue": "reports", "routing_key": "reports"},
         },
     },
+    # PersistentScheduler must not write into /app: Docker bind-mounts the source
+    # tree there and the runtime user is intentionally non-root. A writable tmp
+    # path keeps Beat state local to the container while the actual schedule
+    # remains defined declaratively in this application configuration.
+    beat_schedule_filename="/tmp/aegisscan-celerybeat-schedule",
 )
 
 if redis_tls:
