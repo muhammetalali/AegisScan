@@ -96,16 +96,6 @@ async def websocket_user(websocket: WebSocket) -> dict | None:
     return await verify_token(token) if token else None
 
 
-def _session_guard(user: dict) -> asyncio.Task[None]:
-    return asyncio.create_task(
-        __import__("fastapi_app.services.websocket_session_guard", fromlist=["monitor_websocket_session"]).monitor_websocket_session(
-            websocket=_CURRENT_WEBSOCKET,
-            user_id=str(user["id"]),
-            session_version=int(user.get("session_version", 0)),
-        )
-    )
-
-
 @sync_to_async
 def scan_accessible(user_id: str, scan_id: str, is_superuser: bool = False) -> bool:
     from django_project.scans.models import Scan
