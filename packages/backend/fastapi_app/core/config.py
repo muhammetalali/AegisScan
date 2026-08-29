@@ -2,7 +2,7 @@ from typing import List
 import os
 import tempfile
 
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +11,13 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
 
-    SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", os.getenv("SECRET_KEY", ""))
+    # JWT signing/verification must use the shared JWT_SECRET_KEY across
+    # Django and FastAPI. Prefer the dedicated JWT secret over the generic
+    # application SECRET_KEY when both are present (as in Docker Compose).
+    SECRET_KEY: str = Field(
+        default="",
+        validation_alias=AliasChoices("JWT_SECRET_KEY", "SECRET_KEY"),
+    )
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440
