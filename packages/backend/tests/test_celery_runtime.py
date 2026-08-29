@@ -1,9 +1,15 @@
+import os
+
 import pytest
 
 from fastapi_app.celery_app import celery_app
 from fastapi_app.tasks.health_tasks import celery_health
 
 
+@pytest.mark.skipif(
+    os.getenv("AEGIS_CELERY_RUNTIME") != "1",
+    reason="Live broker/worker round-trip is verified by the runtime gate",
+)
 @pytest.mark.integration
 @pytest.mark.timeout(30)
 def test_celery_redis_live_round_trip():
