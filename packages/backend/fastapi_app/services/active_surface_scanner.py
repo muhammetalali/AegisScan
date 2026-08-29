@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
-import os
 import shutil
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -18,49 +17,43 @@ class ActiveScanResult:
 
 
 class ScanAuthorizationError(ValueError):
-    pass
+    """Raised when an active-scan target or provider is invalid."""
 
 
 class ActiveSurfaceScanner:
-    """Executes installed network scanners only when explicitly enabled and scoped."""
+    """Run an installed network scanner for an explicitly supplied target.
+
+    Active scanning is intentionally controlled by the caller rather than by
+    environment toggles or a second CIDR allow-list. Target validation happens
+    once here, and the selected provider must be locally installed.
+    """
 
     def __init__(self) -> None:
-        self.enabled = os.getenv("AEGIS_ACTIVE_SCAN_ENABLED", "false").lower() == "true"
-        self.timeout = int(os.getenv("AEGIS_ACTIVE_SCAN_TIMEOUT", "120"))
-        self.allowed_networks = self._load_allowed_networks()
+        self.timeout = 120
 
     @staticmethod
-    def _load_allowed_networks() -> tuple[ipaddress._BaseNetwork, ...]:
-        raw = os.getenv("AEGIS_ACTIVE_SCAN_CIDRS", "")
-        networks: list[ipaddress._BaseNetwork] = []
-        for value in raw.split(","):
-            value = value.strip()
-            if not value:
-                continue
-            try:
-                networks.append(ipaddress.ip_network(value, strict=False))
-            except ValueError as exc:
-                raise ScanAuthorizationError(f"Invalid configured CIDR: {value}") from exc
-        return tuple(networks)
-
-    def _authorize_target(self, target: str) -> None:
-        if not self.enabled:
-            raise ScanAuthorizationError("Active scanning is disabled by policy")
-        if not self.allowed_networks:
-            raise ScanAuthorizationError("No active-scan CIDR scope is configured")
+    def _validate_target(target: str) -> None:
+        value = str(target or "").strip()
+        if not value:
+            raise ScanAuthorizationError("Active scan target is required")
         try:
-            network = ipaddress.ip_network(target, strict=False)
-            candidates = list(network.hosts()) if network.num_addresses <= 256 else [network.network_address]
+            network = ipaddress.ip_network(value, strict=False)
+            if network.version not in {4, 6}:
+                raise ScanAuthorizationError("Only IPv4 and IPv6 targets are allowed")
+            return
         except ValueError:
             try:
-                candidates = [ipaddress.ip_address(target)]
+                address = ipaddress.ip_address(value)
+                if address.version not in {4, 6}:
+                    raise ScanAuthorizationError("Only IPv4 and IPv6 targets are allowed")
+                return
             except ValueError as exc:
                 raise ScanAuthorizationError("Only IP addresses and CIDRs are allowed for active scans") from exc
-        if not candidates or not all(any(candidate in allowed for allowed in self.allowed_networks) for candidate in candidates):
-            raise ScanAuthorizationError("Target is outside the configured active-scan scope")
 
     async def scan(self, target: str, provider: Literal["nmap", "masscan"] = "nmap") -> ActiveScanResult:
-        self._authorize_target(target)
+        self._validate_target(target)
+        if provider not in {"nmap", "masscan"}:
+            raise ScanAuthorizationError("Unsupported active scan provider")
         if shutil.which(provider) is None:
             raise RuntimeError(f"{provider} executable is not installed or not on PATH")
         if provider == "nmap":
