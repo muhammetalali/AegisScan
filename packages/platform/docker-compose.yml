@@ -56,6 +56,7 @@ services:
       EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
       EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
       DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-AegisScan <noreply@aegisscan.local>}
+      LOG_TO_FILE: ${LOG_TO_FILE:-0}
     volumes:
       - ../backend:/app
       - media_data:/app/media
@@ -91,6 +92,7 @@ services:
       DJANGO_API_URL: http://django:8000/api/v1
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      LOG_TO_FILE: ${LOG_TO_FILE:-0}
     volumes:
       - ../backend:/app
     ports:
@@ -124,6 +126,7 @@ services:
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      LOG_TO_FILE: ${LOG_TO_FILE:-0}
     volumes:
       - ../backend:/app
     depends_on:
@@ -156,6 +159,7 @@ services:
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      LOG_TO_FILE: ${LOG_TO_FILE:-0}
     volumes:
       - ../backend:/app
     depends_on:
@@ -188,6 +192,7 @@ services:
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      LOG_TO_FILE: ${LOG_TO_FILE:-0}
     volumes:
       - ../backend:/app
     depends_on:
@@ -220,6 +225,7 @@ services:
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      LOG_TO_FILE: ${LOG_TO_FILE:-0}
     volumes:
       - ../backend:/app
     depends_on:
