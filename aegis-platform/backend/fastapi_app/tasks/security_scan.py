@@ -12,6 +12,7 @@ from django.db import transaction
 
 from evidence.models import Evidence, ValidationRun
 from scans.models import Scan
+from ..services.scope_authorization import is_target_authorized
 from ..services.nmap_parser import parse_nmap_xml
 from ..services.tool_abstraction import ToolRequest, get_tool
 from ..services.scanner_adapters import run_nuclei
@@ -32,6 +33,12 @@ def run_nmap_scan(self, scan_id: str) -> dict:
     target = configuration.get('host') or configuration.get('ip') or configuration.get('domain') or configuration.get('url')
     if not target:
         raise ValueError('Authorized asset has no host/ip/domain/url target')
+    if not is_target_authorized(target):
+        scan.status = Scan.Status.FAILED
+        scan.error_message = 'Execution blocked: target is outside the server-side authorized scan scope.'
+        scan.completed_at = datetime.now(timezone.utc)
+        scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
+        return {'status': 'blocked', 'scan_id': scan_id}
     scan.status = Scan.Status.RUNNING
     scan.started_at = datetime.now(timezone.utc)
     scan.current_phase = 'nmap'
@@ -74,6 +81,12 @@ def run_nuclei_scan(self, scan_id: str) -> dict:
     target = configuration.get('url')
     if not target:
         raise ValueError('Nuclei requires an authorized http/https URL target')
+    if not is_target_authorized(target):
+        scan.status = Scan.Status.FAILED
+        scan.error_message = 'Execution blocked: target is outside the server-side authorized scan scope.'
+        scan.completed_at = datetime.now(timezone.utc)
+        scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
+        return {'status': 'blocked', 'scan_id': scan_id}
     scan.status = Scan.Status.RUNNING
     scan.started_at = datetime.now(timezone.utc)
     scan.current_phase = 'nuclei'
@@ -109,6 +122,12 @@ def validate_finding_task(self, validation_id: str) -> dict:
     if not validation.authorized:
         validation.status = ValidationRun.Status.FAILED
         validation.error_message = 'Execution blocked: validation is not explicitly authorized.'
+        validation.completed_at = datetime.now(timezone.utc)
+        validation.save(update_fields=['status', 'error_message', 'completed_at'])
+        return {'status': 'blocked', 'validation_id': validation_id}
+    if not is_target_authorized(validation.scope or validation.target_value):
+        validation.status = ValidationRun.Status.FAILED
+        validation.error_message = 'Execution blocked: target is outside the server-side authorized scan scope.'
         validation.completed_at = datetime.now(timezone.utc)
         validation.save(update_fields=['status', 'error_message', 'completed_at'])
         return {'status': 'blocked', 'validation_id': validation_id}
