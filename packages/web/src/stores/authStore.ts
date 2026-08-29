@@ -72,6 +72,12 @@ const extractApiMessage = (error: unknown, fallback: string): string => {
   return fallback
 }
 
+const isTwoFactorChallenge = (error: unknown): boolean => {
+  const response = (error as { response?: { status?: number; data?: unknown } })?.response
+  if (response?.status !== 401 || !response.data || typeof response.data !== 'object') return false
+  return (response.data as Record<string, unknown>).two_factor_required === true
+}
+
 export const useAuthStore = create<AuthState>()(persist((set, get) => ({
   user: null, accessToken: null, refreshToken: null, isAuthenticated: false, loading: false, error: null,
   setLoading: (loading) => set({ loading }), setError: (error) => set({ error }),
@@ -84,12 +90,18 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
       if (!data?.access || !data?.refresh || !data?.user) throw new Error('Invalid login response')
 
       browserStorage.setPreference(rememberMe ? 'local' : 'session')
-      // Remove the opposite persistence bucket so an older session cannot resurrect.
       ;(rememberMe ? window.sessionStorage : window.localStorage).removeItem(AUTH_STORAGE_KEY)
       applyAuthorization(data.access)
       set({ user: data.user, accessToken: data.access, refreshToken: data.refresh, isAuthenticated: true, loading: false })
       return false
     } catch (error) {
+      // A 401 with two_factor_required is an authentication challenge, not a failed login.
+      // Keep the session unauthenticated and let the UI collect the OTP before retrying.
+      if (isTwoFactorChallenge(error)) {
+        clearAuthorization()
+        set({ loading: false, error: null, isAuthenticated: false })
+        return true
+      }
       clearAuthorization()
       set({ loading: false, isAuthenticated: false, error: extractApiMessage(error, 'Login failed') })
       throw error
