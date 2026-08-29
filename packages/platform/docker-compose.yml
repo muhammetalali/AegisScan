@@ -4,15 +4,15 @@ services:
     container_name: aegis-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: aegisdb
-      POSTGRES_USER: aegis
-      POSTGRES_PASSWORD: aegis
+      POSTGRES_DB: ${POSTGRES_DB:-aegisdb}
+      POSTGRES_USER: ${POSTGRES_USER:-aegis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aegis}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aegis -d aegisdb"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -37,25 +37,25 @@ services:
       dockerfile: Dockerfile.django
     container_name: aegis-django
     restart: unless-stopped
-    command: gunicorn django_project.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn django_project.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
     environment:
       DJANGO_SETTINGS_MODULE: django_project.settings
       DEBUG: ${DJANGO_DEBUG:-1}
       SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
-      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
-      FRONTEND_URL: http://localhost:5173
-      EMAIL_HOST: smtp.gmail.com
-      EMAIL_PORT: "587"
-      EMAIL_USE_TLS: "1"
-      EMAIL_HOST_USER: ""
-      EMAIL_HOST_PASSWORD: ""
-      DEFAULT_FROM_EMAIL: AegisScan <noreply@aegisscan.local>
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-1}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-AegisScan <noreply@aegisscan.local>}
     volumes:
       - ../backend:/app
       - media_data:/app/media
@@ -86,7 +86,7 @@ services:
       SECRET_KEY: ${FASTAPI_SECRET_KEY:-aegisscan-local-fastapi-secret-change-me}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
       REDIS_URL: redis://redis:6379/0
       DJANGO_API_URL: http://django:8000/api/v1
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -117,7 +117,7 @@ services:
       AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
       DEBUG: ${DJANGO_DEBUG:-1}
-      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
@@ -149,7 +149,7 @@ services:
       AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
       DEBUG: ${DJANGO_DEBUG:-1}
-      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
@@ -181,7 +181,7 @@ services:
       AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
       DEBUG: ${DJANGO_DEBUG:-1}
-      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
@@ -213,7 +213,7 @@ services:
       AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
       DEBUG: ${DJANGO_DEBUG:-1}
-      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
