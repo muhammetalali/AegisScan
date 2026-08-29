@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import suppress
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -40,24 +42,20 @@ async def monitor_websocket_session(
     interval = max(1, int(settings.WS_SESSION_CHECK_INTERVAL_SECONDS))
 
     while True:
-        await __import__("asyncio").sleep(interval)
+        await asyncio.sleep(interval)
 
         try:
             state = await _load_session_state(user_id)
         except Exception:
             logger.exception("WebSocket session revalidation failed for user %s", user_id)
-            try:
+            with suppress(Exception):
                 await websocket.close(code=1011, reason="Authentication state unavailable")
-            except Exception:
-                logger.debug("WebSocket already closed for user %s", user_id)
             return
 
         if state is None:
             logger.warning("Closing WebSocket for deleted user %s", user_id)
-            try:
+            with suppress(Exception):
                 await websocket.close(code=4001, reason="Authentication revoked")
-            except Exception:
-                logger.debug("WebSocket already closed for deleted user %s", user_id)
             return
 
         active, current_version = state
@@ -69,17 +67,39 @@ async def monitor_websocket_session(
                 current_version,
                 session_version,
             )
-            try:
+            with suppress(Exception):
                 await websocket.send_json(
                     {
                         "type": "auth.revoked",
                         "reason": "session_revoked",
                     }
                 )
-            except Exception:
-                logger.debug("Could not send revocation event to user %s", user_id)
-            try:
+            with suppress(Exception):
                 await websocket.close(code=4001, reason="Authentication revoked")
-            except Exception:
-                logger.debug("WebSocket already closed for revoked user %s", user_id)
             return
+
+
+async def start_websocket_session_guard(
+    websocket: WebSocket,
+    user: dict[str, Any],
+) -> asyncio.Task[None]:
+    """Start live session-version enforcement for an authenticated socket."""
+    return asyncio.create_task(
+        monitor_websocket_session(
+            websocket,
+            user_id=str(user["id"]),
+            session_version=int(user.get("session_version", 0)),
+        ),
+        name=f"ws-session-guard:{user['id']}",
+    )
+
+
+async def stop_websocket_session_guard(task: asyncio.Task[None]) -> None:
+    """Stop a session guard when its WebSocket closes for another reason."""
+    if task.done():
+        with suppress(asyncio.CancelledError, Exception):
+            task.result()
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
