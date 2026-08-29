@@ -14,7 +14,7 @@ from .serializers import (
     ChangePasswordSerializer, TeamSerializer, TeamCreateSerializer, TeamMembershipSerializer,
     APIKeySerializer, APIKeyCreateSerializer, UserSessionSerializer, LoginAttemptSerializer
 )
-from .permissions import IsOwnerOrReadOnly, HasPermission
+from .permissions import IsOwnerOrReadOnly, HasPermission, IsTeamAdmin
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -29,7 +29,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             user.last_activity = timezone.now()
             user.save(update_fields=['last_login_ip', 'last_activity'])
 
-            # Log successful login
             LoginAttempt.objects.create(
                 email=request.data.get('email'),
                 ip_address=self.get_client_ip(request),
@@ -140,7 +139,12 @@ class TeamViewSet(viewsets.ModelViewSet):
         team = serializer.save(owner=self.request.user)
         TeamMembership.objects.create(team=team, user=self.request.user, role=TeamMembership.Role.OWNER)
 
-    @action(detail=True, methods=['post'])
+    @action(
+        detail=True,
+        methods=['post'],
+        permission_classes=[permissions.IsAuthenticated, HasPermission, IsTeamAdmin],
+        required_permissions=['user.update'],
+    )
     def add_member(self, request, pk=None):
         team = self.get_object()
         user_id = request.data.get('user_id')
@@ -161,7 +165,12 @@ class TeamViewSet(viewsets.ModelViewSet):
 
         return Response(TeamMembershipSerializer(membership).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
-    @action(detail=True, methods=['delete'])
+    @action(
+        detail=True,
+        methods=['delete'],
+        permission_classes=[permissions.IsAuthenticated, HasPermission, IsTeamAdmin],
+        required_permissions=['user.update'],
+    )
     def remove_member(self, request, pk=None):
         team = self.get_object()
         user_id = request.data.get('user_id')
@@ -175,7 +184,12 @@ class TeamViewSet(viewsets.ModelViewSet):
         except TeamMembership.DoesNotExist:
             return Response({'error': 'Member not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    @action(detail=True, methods=['patch'])
+    @action(
+        detail=True,
+        methods=['patch'],
+        permission_classes=[permissions.IsAuthenticated, HasPermission, IsTeamAdmin],
+        required_permissions=['user.update'],
+    )
     def update_member_role(self, request, pk=None):
         team = self.get_object()
         user_id = request.data.get('user_id')
@@ -186,6 +200,8 @@ class TeamViewSet(viewsets.ModelViewSet):
 
         try:
             membership = TeamMembership.objects.get(team=team, user_id=user_id)
+            if membership.role == TeamMembership.Role.OWNER:
+                return Response({'error': 'Cannot change owner role'}, status=status.HTTP_400_BAD_REQUEST)
             membership.role = role
             membership.save()
             return Response(TeamMembershipSerializer(membership).data)
