@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.middleware.csrf import get_token
+from django.middleware.csrf import csrf_protect, get_token
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
@@ -39,6 +39,7 @@ def _set_auth_cookies(response, access: str, refresh: str | None = None) -> None
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
+    @method_decorator(csrf_protect)
     @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=True))
     def post(self, request):
         serializer = TokenObtainPairSerializer(data=request.data)
@@ -56,6 +57,7 @@ class LoginView(APIView):
 class RefreshView(APIView):
     permission_classes = [AllowAny]
 
+    @method_decorator(csrf_protect)
     @method_decorator(ratelimit(key='ip', rate='20/m', method='POST', block=True))
     def post(self, request):
         refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE)
@@ -74,6 +76,7 @@ class RefreshView(APIView):
 class LogoutView(APIView):
     permission_classes = [AllowAny]
 
+    @method_decorator(csrf_protect)
     def post(self, request):
         refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE)
         if refresh:
