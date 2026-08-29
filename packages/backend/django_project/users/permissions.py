@@ -13,7 +13,6 @@ class HasPermission(permissions.BasePermission):
             return False
         if request.user.is_superuser:
             return True
-
         required = getattr(view, 'required_permissions', {})
         action = getattr(view, 'action', None) or request.method.lower()
         if isinstance(required, dict):
@@ -29,6 +28,14 @@ class HasPermission(permissions.BasePermission):
         return request.user.has_any_permission(*perms)
 
     def has_object_permission(self, request, view, obj):
+        if request.user.is_superuser:
+            return True
+        action = getattr(view, 'action', None)
+        if action in {'add_member', 'remove_member', 'update_member_role'}:
+            return obj.memberships.filter(
+                user=request.user,
+                role__in=['owner', 'admin'],
+            ).exists()
         return True
 
 
