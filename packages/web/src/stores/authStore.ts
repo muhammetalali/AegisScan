@@ -38,24 +38,19 @@ interface RegisterData {
   phone?: string
 }
 
-type PersistedAuth = Pick<AuthState, 'user' | 'accessToken' | 'refreshToken' | 'isAuthenticated'>
-const AUTH_STORAGE_PREFERENCE = 'aegis-auth-storage'
+type PersistedAuth = Pick<AuthState, 'user' | 'isAuthenticated'>
 const AUTH_STORAGE_KEY = 'aegis-auth'
 
-const browserStorage = {
-  get preferred() {
-    return window.localStorage.getItem(AUTH_STORAGE_PREFERENCE) === 'session' ? window.sessionStorage : window.localStorage
-  },
-  setPreference(mode: 'local' | 'session') { window.localStorage.setItem(AUTH_STORAGE_PREFERENCE, mode) },
-  clearAll() {
-    window.localStorage.removeItem(AUTH_STORAGE_KEY)
-    window.sessionStorage.removeItem(AUTH_STORAGE_KEY)
-    window.localStorage.removeItem(AUTH_STORAGE_PREFERENCE)
-  },
+const clearPersistedAuth = () => {
+  window.localStorage.removeItem(AUTH_STORAGE_KEY)
+  window.sessionStorage.removeItem(AUTH_STORAGE_KEY)
 }
 
 const clearAuthorization = () => { delete api.defaults.headers.common.Authorization }
-const applyAuthorization = (token: string) => { api.defaults.headers.common.Authorization = `Bearer ${token}` }
+const applyAuthorization = (token: string | null) => {
+  if (token) api.defaults.headers.common.Authorization = `Bearer ${token}`
+  else clearAuthorization()
+}
 
 const extractApiMessage = (error: unknown, fallback: string): string => {
   const response = (error as { response?: { data?: unknown } })?.response?.data
@@ -82,28 +77,33 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
   user: null, accessToken: null, refreshToken: null, isAuthenticated: false, loading: false, error: null,
   setLoading: (loading) => set({ loading }), setError: (error) => set({ error }),
 
-  login: async (email, password, rememberMe = true, otp) => {
+  login: async (email, password, _rememberMe = true, otp) => {
     set({ loading: true, error: null })
     try {
       const { data } = await api.post('/auth/login/', { email: email.trim().toLowerCase(), password, ...(otp ? { otp } : {}) })
-      if (data?.two_factor_required && !data?.access) { set({ loading: false }); return true }
-      if (!data?.access || !data?.refresh || !data?.user) throw new Error('Invalid login response')
+      if (data?.two_factor_required && !data?.access && !data?.user) { set({ loading: false }); return true }
 
-      browserStorage.setPreference(rememberMe ? 'local' : 'session')
-      ;(rememberMe ? window.sessionStorage : window.localStorage).removeItem(AUTH_STORAGE_KEY)
-      applyAuthorization(data.access)
-      set({ user: data.user, accessToken: data.access, refreshToken: data.refresh, isAuthenticated: true, loading: false })
+      // Authentication tokens are delivered by the server in HttpOnly cookies.
+      // Accept a legacy response token only long enough to configure the current
+      // in-memory request header; never persist either token in browser storage.
+      const access = typeof data?.access === 'string' ? data.access : null
+      const refresh = typeof data?.refresh === 'string' ? data.refresh : null
+      let user = data?.user as User | undefined
+      if (!user) {
+        const response = await api.get('/users/me/')
+        user = response.data as User
+      }
+      applyAuthorization(access)
+      set({ user, accessToken: access, refreshToken: refresh, isAuthenticated: true, loading: false })
       return false
     } catch (error) {
-      // A 401 with two_factor_required is an authentication challenge, not a failed login.
-      // Keep the session unauthenticated and let the UI collect the OTP before retrying.
       if (isTwoFactorChallenge(error)) {
         clearAuthorization()
-        set({ loading: false, error: null, isAuthenticated: false })
+        set({ loading: false, error: null, isAuthenticated: false, user: null, accessToken: null, refreshToken: null })
         return true
       }
       clearAuthorization()
-      set({ loading: false, isAuthenticated: false, error: extractApiMessage(error, 'Login failed') })
+      set({ loading: false, isAuthenticated: false, user: null, accessToken: null, refreshToken: null, error: extractApiMessage(error, 'Login failed') })
       throw error
     }
   },
@@ -112,35 +112,34 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
     set({ loading: true, error: null })
     try {
       const { data: response } = await api.post('/auth/register/', data)
-      if (!response?.access || !response?.refresh || !response?.user) throw new Error('Invalid registration response')
-      browserStorage.setPreference('local'); window.sessionStorage.removeItem(AUTH_STORAGE_KEY)
-      applyAuthorization(response.access)
-      set({ user: response.user, accessToken: response.access, refreshToken: response.refresh, isAuthenticated: true, loading: false })
+      const access = typeof response?.access === 'string' ? response.access : null
+      const refresh = typeof response?.refresh === 'string' ? response.refresh : null
+      const user = response?.user ?? (await api.get('/users/me/')).data
+      applyAuthorization(access)
+      set({ user, accessToken: access, refreshToken: refresh, isAuthenticated: true, loading: false })
     } catch (error) {
-      clearAuthorization(); set({ loading: false, isAuthenticated: false, error: extractApiMessage(error, 'Registration failed') }); throw error
+      clearAuthorization(); set({ loading: false, isAuthenticated: false, user: null, accessToken: null, refreshToken: null, error: extractApiMessage(error, 'Registration failed') }); throw error
     }
   },
 
   logout: async () => {
-    const { refreshToken } = get()
-    try { if (refreshToken) await api.post('/users/logout/', { refresh_token: refreshToken }) }
+    try { await api.post('/users/logout/', {}) }
     catch { /* client teardown must not depend on network availability */ }
     finally {
-      clearAuthorization(); browserStorage.clearAll()
+      clearAuthorization(); clearPersistedAuth()
       set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false, loading: false, error: null })
     }
   },
 
   refreshAccessToken: async () => {
-    const { refreshToken } = get()
-    if (!refreshToken) throw new Error('No refresh token available')
     try {
-      const { data } = await api.post('/auth/refresh/', { refresh: refreshToken })
-      if (!data?.access) throw new Error('Invalid refresh response')
-      applyAuthorization(data.access)
-      set({ accessToken: data.access, refreshToken: data.refresh ?? refreshToken, isAuthenticated: true, error: null })
+      // Refresh token is an HttpOnly cookie; the browser sends it automatically.
+      const { data } = await api.post('/auth/refresh/', {})
+      const access = typeof data?.access === 'string' ? data.access : null
+      if (access) applyAuthorization(access)
+      set({ accessToken: access, refreshToken: null, isAuthenticated: true, error: null })
     } catch (error) {
-      clearAuthorization(); browserStorage.clearAll()
+      clearAuthorization(); clearPersistedAuth()
       set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false }); throw error
     }
   },
@@ -158,11 +157,14 @@ export const useAuthStore = create<AuthState>()(persist((set, get) => ({
 }), {
   name: AUTH_STORAGE_KEY,
   storage: createJSONStorage<PersistedAuth>(() => ({
-    getItem: () => browserStorage.preferred.getItem(AUTH_STORAGE_KEY),
-    setItem: (_name, value) => browserStorage.preferred.setItem(AUTH_STORAGE_KEY, value),
-    removeItem: () => browserStorage.preferred.removeItem(AUTH_STORAGE_KEY),
+    getItem: (_name) => {
+      const raw = window.localStorage.getItem(AUTH_STORAGE_KEY) ?? window.sessionStorage.getItem(AUTH_STORAGE_KEY)
+      return raw
+    },
+    setItem: (_name, value) => window.sessionStorage.setItem(AUTH_STORAGE_KEY, value),
+    removeItem: () => clearPersistedAuth(),
   })),
-  partialize: (state) => ({ user: state.user, accessToken: state.accessToken, refreshToken: state.refreshToken, isAuthenticated: state.isAuthenticated }),
+  partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated }),
 }))
 
 export const useAuth = () => useAuthStore()
@@ -172,14 +174,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let active = true
     const bootstrap = async () => {
-      const { accessToken, refreshToken, fetchUser, refreshAccessToken, logout, setLoading } = useAuthStore.getState()
+      const { fetchUser, refreshAccessToken, logout, setLoading } = useAuthStore.getState()
       setLoading(true)
       try {
-        if (accessToken) {
-          applyAuthorization(accessToken)
-          try { await fetchUser() }
-          catch { if (refreshToken) { await refreshAccessToken(); await fetchUser() } else await logout() }
-        } else clearAuthorization()
+        // Cookies are the source of truth. Probe the server on every startup.
+        try {
+          await fetchUser()
+        } catch {
+          await refreshAccessToken()
+          await fetchUser()
+        }
       } catch { await logout() }
       finally { if (active) { setLoading(false); setReady(true) } }
     }
@@ -189,9 +193,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 }
 
 export const initAuth = async () => {
-  const { accessToken, refreshToken, fetchUser, refreshAccessToken, logout } = useAuthStore.getState()
-  if (!accessToken) { clearAuthorization(); return }
-  applyAuthorization(accessToken)
-  try { await fetchUser() }
-  catch { if (refreshToken) { try { await refreshAccessToken(); await fetchUser() } catch { await logout() } } else await logout() }
+  const { fetchUser, refreshAccessToken, logout, setLoading } = useAuthStore.getState()
+  setLoading(true)
+  try {
+    await fetchUser()
+  } catch {
+    try {
+      await refreshAccessToken()
+      await fetchUser()
+    } catch {
+      await logout()
+    }
+  } finally {
+    setLoading(false)
+  }
 }
