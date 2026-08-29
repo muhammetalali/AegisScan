@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
+from psycopg2 import sql
 from psycopg2.pool import ThreadedConnectionPool
 
 from ..core.config import settings
@@ -236,12 +237,13 @@ def _update_record(record_id: int, **fields: Any) -> None:
     allowed = {"integration_state","external_state","external_id","external_url","response","last_error","attempt_count","validation"}
     updates = [(k, v) for k, v in fields.items() if k in allowed]
     if not updates: return
-    set_sql = ", ".join(f"{k}=%s" for k, _ in updates) + ", updated_at=%s"
     values = [json.dumps(v) if isinstance(v, (dict, list)) else v for _, v in updates] + [_now(), record_id]
+    assignments = [sql.SQL("{}=%s").format(sql.Identifier(k)) for k, _ in updates]
+    statement = sql.SQL("UPDATE remediation_integration_records SET {} , updated_at=%s WHERE record_id=%s").format(sql.SQL(", ").join(assignments))
     pool = _db(); conn = pool.getconn()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"UPDATE remediation_integration_records SET {set_sql} WHERE record_id=%s", values); conn.commit()
+            cur.execute(statement, values); conn.commit()
     finally: pool.putconn(conn)
 
 
@@ -253,103 +255,13 @@ async def sync_case(action_id: str, actor: str, providers: list[str] | None = No
     for rec in case["integrations"]:
         if rec["provider"] not in requested or rec.get("external_id") or not _configured(rec["provider"]):
             results.append(rec); continue
-        decision = {"decisionId": case["action"]["decisionId"], "label": case["action"]["title"], "final_score": case["action"]["riskBefore"], "confidence": case["action"]["confidenceBefore"] / 100, "severity": "critical" if case["action"]["riskBefore"] >= 85 else "high" if case["action"]["riskBefore"] >= 70 else "medium"}
-        _update_record(rec["record_id"], integration_state="creating", attempt_count=rec["attempt_count"] + 1, last_error=None)
         try:
-            result = await _create_provider(rec["provider"], decision, case["action"], [], rec["idempotency_key"])
-            _update_record(rec["record_id"], integration_state=result["status"], external_id=result.get("external_id"), external_url=result.get("external_url"), response=result.get("response") or {}, external_state="created", last_error=None)
-            _audit(action_id, "itsm.sync", actor, f"Retried {rec['provider']} ticket synchronization", {"provider": rec["provider"]})
+            decision = case["decision"]
+            result = await _create_provider(rec["provider"], decision, case["action"], case.get("evidence", []), rec["idempotency_key"])
+            _update_record(rec["record_id"], integration_state=result["status"], external_id=result.get("external_id"), external_url=result.get("external_url"), response=result.get("response") or {}, external_state="created", last_error=None, attempt_count=rec["attempt_count"] + 1)
+            results.append(_record_dict(_get_record(rec["record_id"])))
+            _audit(action_id, "itsm.synced", actor, f"Synchronized {rec['provider']} remediation ticket", {"provider": rec["provider"], "external_id": result.get("external_id")})
         except Exception as exc:
-            _update_record(rec["record_id"], integration_state="sync_error", last_error=f"{type(exc).__name__}: {exc}")
-        results.append(_record_dict(_get_record(rec["record_id"])))
+            _update_record(rec["record_id"], integration_state="sync_error", last_error=f"{type(exc).__name__}: {exc}", attempt_count=rec["attempt_count"] + 1)
+            results.append(_record_dict(_get_record(rec["record_id"])))
     return get_case(action_id)
-
-
-def get_case(action_id: str) -> dict[str, Any] | None:
-    action = get_action(action_id)
-    if action is None: return None
-    initialize_itsm_store(); pool = _db(); conn = pool.getconn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT record_id,action_id,provider,idempotency_key,request_hash,external_id,external_url,integration_state,external_state,response,last_error,attempt_count,validation,created_at,updated_at FROM remediation_integration_records WHERE action_id=%s ORDER BY provider", (action_id,))
-            integrations = [_record_dict(_row(row)) for row in cur.fetchall()]
-    finally: pool.putconn(conn)
-    return {"action": action, "integrations": integrations, "required_providers": list(PROVIDERS), "all_required_created": bool(integrations) and all(i.get("external_id") for i in integrations if i["provider"] in PROVIDERS), "idempotency_keys": sorted({i["idempotency_key"] for i in integrations})}
-
-
-async def transition_case(action_id: str, target_state: str, actor: str, note: str | None = None) -> dict[str, Any]:
-    case = get_case(action_id)
-    if not case: raise KeyError(action_id)
-    updated = transition(action_id, target_state, actor, note)
-    await _sync_external_states(action_id, target_state, actor, note)
-    return get_case(action_id)
-
-
-async def verify_case(action_id: str, actor: str, candidate: dict[str, Any], tools: list[str] | None = None, timeout: int = 180) -> dict[str, Any]:
-    case = get_case(action_id)
-    if not case: raise KeyError(action_id)
-    action = case["action"]
-    if action["state"] == "in_progress":
-        transition(action_id, "awaiting_revalidation", actor, "Automatic remediation revalidation started")
-    elif action["state"] != "awaiting_revalidation":
-        raise ValueError(f"Action must be in_progress or awaiting_revalidation, got {action['state']}")
-    result = await RemediationValidationSuite().validate_workspace(candidate, tools=tools, timeout=timeout)
-    before = float(candidate.get("risk_before", action.get("riskBefore", 0)))
-    after = float(candidate.get("risk_after", before))
-    result["risk_diff"] = RemediationValidationSuite.compare_scores(before, after)
-    passed = bool(result.get("passed")) and not result["risk_diff"].get("regressed")
-    target = "verified" if passed else "in_progress"
-    if passed:
-        updated = transition(action_id, "verified", actor, "Real validation passed; remediation verified")
-    else:
-        updated = transition(action_id, "in_progress", actor, "Validation failed or risk regressed; remediation reopened")
-    pool = _db(); conn = pool.getconn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE remediation_integration_records SET validation=%s, integration_state=CASE WHEN %s='verified' THEN integration_state ELSE 'sync_pending' END, updated_at=%s WHERE action_id=%s", (json.dumps(result), target, _now(), action_id)); conn.commit()
-    finally: pool.putconn(conn)
-    await _sync_external_states(action_id, target, actor, json.dumps(result.get("summary", {})))
-    _audit(action_id, "itsm.verified" if passed else "itsm.reopened", actor, "Remediation lifecycle verification decision recorded", {"passed": passed, "validation": result})
-    return {"action": updated, "validation": result, "case": get_case(action_id)}
-
-
-async def _sync_external_states(action_id: str, state: str, actor: str, note: str | None) -> None:
-    case = get_case(action_id)
-    if not case: return
-    for rec in case["integrations"]:
-        if not rec.get("external_id"): continue
-        try:
-            if rec["provider"] == "jira":
-                await _jira_transition(rec["external_id"], state)
-            else:
-                await _servicenow_transition(rec["external_id"], state, note)
-            _update_record(rec["record_id"], integration_state="synced", external_state=state, last_error=None)
-            _audit(action_id, "itsm.state_synced", actor, f"Synchronized {rec['provider']} ticket to {state}", {"provider": rec["provider"], "external_id": rec["external_id"]})
-        except Exception as exc:
-            _update_record(rec["record_id"], integration_state="sync_error", last_error=f"{type(exc).__name__}: {exc}")
-            _audit(action_id, "itsm.state_sync_failed", actor, f"Failed to synchronize {rec['provider']} ticket", {"provider": rec["provider"], "error": type(exc).__name__})
-
-
-async def _jira_transition(issue_key: str, state: str) -> None:
-    base = os.getenv("JIRA_BASE_URL", "").rstrip("/"); token, email = os.getenv("JIRA_API_TOKEN"), os.getenv("JIRA_USER_EMAIL")
-    if not all((base, token, email)): raise RuntimeError("Jira credentials are not configured")
-    wanted_map = {"pending": os.getenv("JIRA_STATUS_PENDING", "To Do"), "approved": os.getenv("JIRA_STATUS_APPROVED", "In Progress"), "assigned": os.getenv("JIRA_STATUS_ASSIGNED", "In Progress"), "in_progress": os.getenv("JIRA_STATUS_IN_PROGRESS", "In Progress"), "awaiting_revalidation": os.getenv("JIRA_STATUS_REVALIDATION", "In Review"), "verified": os.getenv("JIRA_STATUS_VERIFIED", "Done"), "rejected": os.getenv("JIRA_STATUS_REJECTED", "Won't Do"), "deferred": os.getenv("JIRA_STATUS_DEFERRED", "To Do")}
-    target = wanted_map.get(state, "In Progress")
-    async with httpx.AsyncClient(timeout=20, auth=(email, token), headers={"Accept":"application/json","Content-Type":"application/json"}) as client:
-        r = await client.get(f"{base}/rest/api/3/issue/{issue_key}/transitions"); r.raise_for_status(); data = r.json()
-        match = next((str(x.get("id")) for x in data.get("transitions", []) if str(x.get("to",{}).get("name","")).lower() == target.lower()), None)
-        if not match: raise RuntimeError(f"No Jira transition available to '{target}'")
-        p = await client.post(f"{base}/rest/api/3/issue/{issue_key}/transitions", json={"transition":{"id":match}}); p.raise_for_status()
-
-
-async def _servicenow_transition(sys_id: str, state: str, note: str | None) -> None:
-    base = os.getenv("SERVICENOW_BASE_URL", "").rstrip("/"); table = os.getenv("SERVICENOW_TABLE", "incident")
-    headers = {"Accept":"application/json","Content-Type":"application/json"}
-    token = os.getenv("SERVICENOW_API_TOKEN"); username, password = os.getenv("SERVICENOW_USERNAME"), os.getenv("SERVICENOW_PASSWORD")
-    auth = None if token else (username, password)
-    if token: headers["Authorization"] = f"Bearer {token}"
-    state_map = {"pending": os.getenv("SERVICENOW_STATE_PENDING", "1"), "approved": os.getenv("SERVICENOW_STATE_APPROVED", "2"), "assigned": os.getenv("SERVICENOW_STATE_ASSIGNED", "2"), "in_progress": os.getenv("SERVICENOW_STATE_IN_PROGRESS", "2"), "awaiting_revalidation": os.getenv("SERVICENOW_STATE_REVALIDATION", "2"), "verified": os.getenv("SERVICENOW_STATE_VERIFIED", "7"), "rejected": os.getenv("SERVICENOW_STATE_REJECTED", "8"), "deferred": os.getenv("SERVICENOW_STATE_DEFERRED", "3")}
-    if not base or not (token or (username and password)): raise RuntimeError("ServiceNow credentials are not configured")
-    payload = {"state": state_map.get(state, "2"), "comments": note or f"AegisScan lifecycle state: {state}"}
-    async with httpx.AsyncClient(timeout=20, headers=headers, auth=auth) as client:
-        r = await client.patch(f"{base}/api/now/table/{table}/{sys_id}", json=payload); r.raise_for_status()
