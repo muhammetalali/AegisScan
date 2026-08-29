@@ -1,10 +1,33 @@
 import os
 from pathlib import Path
+from datetime import timedelta
 import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-env = environ.Env(DEBUG=(bool, False), SECRET_KEY=(str, 'django-insecure-change-me-in-production'), ALLOWED_HOSTS=(list, ['localhost', '127.0.0.1']), CORS_ALLOWED_ORIGINS=(list, ['http://localhost:5173', 'http://127.0.0.1:5173']), DATABASE_URL=(str, 'postgresql://aegis:aegis@localhost:5432/aegisdb'), REDIS_URL=(str, 'redis://localhost:6379/0'), CELERY_BROKER_URL=(str, 'redis://localhost:6379/0'), CELERY_RESULT_BACKEND=(str, 'redis://localhost:6379/0'), JWT_SECRET_KEY=(str, 'jwt-secret-change-me'), JWT_ACCESS_TOKEN_LIFETIME=(int, 60), JWT_REFRESH_TOKEN_LIFETIME=(int, 1440), AUTH_COOKIE_SECURE=(bool, False), EMAIL_HOST=(str, 'smtp.gmail.com'), EMAIL_PORT=(int, 587), EMAIL_HOST_USER=(str, ''), EMAIL_HOST_PASSWORD=(str, ''), EMAIL_USE_TLS=(bool, True), DEFAULT_FROM_EMAIL=(str, 'AegisScan <noreply@aegisscan.local>'), FRONTEND_URL=(str, 'http://localhost:5173'), SENTRY_DSN=(str, ''), LOG_LEVEL=(str, 'INFO'))
+env = environ.Env(
+    DEBUG=(bool, False),
+    SECRET_KEY=(str, 'django-insecure-change-me-in-production'),
+    ALLOWED_HOSTS=(list, ['localhost', '127.0.0.1']),
+    CORS_ALLOWED_ORIGINS=(list, ['http://localhost:5173', 'http://127.0.0.1:5173']),
+    DATABASE_URL=(str, 'postgresql://aegis:aegis@localhost:5432/aegisdb'),
+    REDIS_URL=(str, 'redis://localhost:6379/0'),
+    CELERY_BROKER_URL=(str, 'redis://localhost:6379/0'),
+    CELERY_RESULT_BACKEND=(str, 'redis://localhost:6379/0'),
+    JWT_SECRET_KEY=(str, 'jwt-secret-change-me'),
+    JWT_ACCESS_TOKEN_LIFETIME=(int, 60),
+    JWT_REFRESH_TOKEN_LIFETIME=(int, 1440),
+    AUTH_COOKIE_SECURE=(bool, False),
+    EMAIL_HOST=(str, 'smtp.gmail.com'),
+    EMAIL_PORT=(int, 587),
+    EMAIL_HOST_USER=(str, ''),
+    EMAIL_HOST_PASSWORD=(str, ''),
+    EMAIL_USE_TLS=(bool, True),
+    DEFAULT_FROM_EMAIL=(str, 'AegisScan <noreply@aegisscan.local>'),
+    FRONTEND_URL=(str, 'http://localhost:5173'),
+    SENTRY_DSN=(str, ''),
+    LOG_LEVEL=(str, 'INFO'),
+)
 environ.Env.read_env(BASE_DIR / '.env')
 
 SECRET_KEY = env('SECRET_KEY')
@@ -29,11 +52,15 @@ DATABASES['default']['OPTIONS'] = {'connect_timeout': 10}
 CACHES = {'default': {'BACKEND': 'django_redis.cache.RedisCache', 'LOCATION': env('REDIS_URL'), 'OPTIONS': {'CLIENT_CLASS': 'django_redis.client.DefaultClient', 'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor'}, 'KEY_PREFIX': 'aegis'}}
 SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
 SESSION_CACHE_ALIAS = 'default'
+
+# Explicit origin allow-list. Never enable wildcard CORS for this platform.
 CORS_ALLOWED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False
 CSRF_TRUSTED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
-AUTH_COOKIE_SECURE = env('AUTH_COOKIE_SECURE')
+
+# JWT remains the authentication mechanism; cookies only change where the tokens live.
+AUTH_COOKIE_SECURE = env('AUTH_COOKIE_SECURE') or not DEBUG
 AUTH_COOKIE_SAMESITE = 'Lax'
 AUTH_COOKIE_HTTPONLY = True
 AUTH_ACCESS_COOKIE = 'aegis_access'
@@ -44,9 +71,17 @@ SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SECURE = AUTH_COOKIE_SECURE
 CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_HTTPONLY = False
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = 'DENY'
+
 REST_FRAMEWORK = {'DEFAULT_AUTHENTICATION_CLASSES': ('users.authentication.CookieJWTAuthentication', 'rest_framework_simplejwt.authentication.JWTAuthentication', 'rest_framework.authentication.SessionAuthentication'), 'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAuthenticated',), 'DEFAULT_FILTER_BACKENDS': ('django_filters.rest_framework.DjangoFilterBackend', 'rest_framework.filters.SearchFilter', 'rest_framework.filters.OrderingFilter'), 'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination', 'PAGE_SIZE': 20, 'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema', 'EXCEPTION_HANDLER': 'core.exceptions.custom_exception_handler', 'DATETIME_FORMAT': '%Y-%m-%dT%H:%M:%S.%fZ'}
 SPECTACULAR_SETTINGS = {'TITLE': 'AegisScan Platform API', 'DESCRIPTION': 'Security Validation Platform API Documentation', 'VERSION': '1.0.0', 'SERVE_INCLUDE_SCHEMA': False, 'COMPONENT_SPLIT_REQUEST': True, 'SCHEMA_PATH_PREFIX': '/api/v1', 'TAGS': [{'name': 'Authentication', 'description': 'User authentication and authorization'}, {'name': 'Projects', 'description': 'Project management'}, {'name': 'Scans', 'description': 'Security scan operations'}, {'name': 'Vulnerabilities', 'description': 'Vulnerability management'}, {'name': 'Reports', 'description': 'Report generation and management'}, {'name': 'Assets', 'description': 'Asset discovery and management'}, {'name': 'Compliance', 'description': 'Compliance and policy checking'}, {'name': 'Knowledge', 'description': 'Knowledge base and lessons learned'}, {'name': 'Notifications', 'description': 'Real-time notifications'}, {'name': 'Audit', 'description': 'Audit trail and logging'}, {'name': 'System', 'description': 'System monitoring and health'}, {'name': 'Users', 'description': 'User and role management'}]}
-from datetime import timedelta
 SIMPLE_JWT = {'ACCESS_TOKEN_LIFETIME': timedelta(minutes=env('JWT_ACCESS_TOKEN_LIFETIME')), 'REFRESH_TOKEN_LIFETIME': timedelta(minutes=env('JWT_REFRESH_TOKEN_LIFETIME')), 'ROTATE_REFRESH_TOKENS': True, 'BLACKLIST_AFTER_ROTATION': True, 'UPDATE_LAST_LOGIN': True, 'ALGORITHM': 'HS256', 'SIGNING_KEY': env('JWT_SECRET_KEY'), 'VERIFYING_KEY': None, 'AUDIENCE': None, 'ISSUER': 'aegisscan', 'JWK_URL': None, 'LEEWAY': 0, 'AUTH_HEADER_TYPES': ('Bearer',), 'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION', 'USER_ID_FIELD': 'id', 'USER_ID_CLAIM': 'user_id', 'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule', 'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',), 'TOKEN_TYPE_CLAIM': 'token_type', 'TOKEN_USER_CLASS': 'rest_framework_simplejwt.models.TokenUser', 'JTI_CLAIM': 'jti', 'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp', 'SLIDING_TOKEN_LIFETIME': timedelta(minutes=env('JWT_ACCESS_TOKEN_LIFETIME')), 'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(minutes=env('JWT_REFRESH_TOKEN_LIFETIME'))}
 CELERY_BROKER_URL = env('CELERY_BROKER_URL')
 CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND')
