@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from evidence.models import ValidationRun
 from ..core.dependencies import get_current_user
+from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 from ..tasks.security_scan import validate_finding_task
 
 router = APIRouter()
@@ -68,7 +69,7 @@ def _create(body: ValidationCreate, user_id: str):
         scope=(body.scope or body.target_value).strip(),
         profile=body.profile,
         engines=body.engines,
-        authorized=body.authorized,
+        authorized=True,
     )
     task = validate_finding_task.delay(str(v.id))
     v.celery_task_id = task.id
@@ -84,10 +85,15 @@ async def create_validation(body: ValidationCreate, user=Depends(get_current_use
         raise HTTPException(status_code=400, detail=f'profile must be one of {sorted(ALLOWED_PROFILES)}')
     if not body.authorized:
         raise HTTPException(status_code=400, detail='authorized must be true for real security execution')
-    if not body.target_value.strip():
+    target = (body.scope or body.target_value).strip()
+    if not target:
         raise HTTPException(status_code=400, detail='target_value is required')
     if not body.engines or any(engine != 'nmap' for engine in body.engines):
         raise HTTPException(status_code=400, detail='Only the real nmap engine is enabled in this execution phase')
+    try:
+        require_authorized_target(target)
+    except ScopeAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return await _serialize(await _create(body, str(user.get('user_id'))))
 
 
