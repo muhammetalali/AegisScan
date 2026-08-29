@@ -151,15 +151,20 @@ export const useAuth = () => useAuthStore()
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => children as React.ReactElement
 
 export const initAuth = async () => {
+  const store = useAuthStore.getState()
+  store.setLoading(true)
+  store.setError(null)
   try {
     await api.get('/auth/csrf/')
-    await useAuthStore.getState().fetchUser()
+    await store.fetchUser()
   } catch {
     try {
-      await useAuthStore.getState().refreshAccessToken()
-      await useAuthStore.getState().fetchUser()
+      await store.refreshAccessToken()
+      await store.fetchUser()
     } catch {
       useAuthStore.setState({ user: null, isAuthenticated: false })
     }
+  } finally {
+    useAuthStore.setState({ loading: false })
   }
 }
