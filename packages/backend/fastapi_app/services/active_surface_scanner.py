@@ -21,15 +21,14 @@ class ScanAuthorizationError(ValueError):
 
 
 class ActiveSurfaceScanner:
-    """Run an installed network scanner for an explicitly supplied target.
-
-    Active scanning is intentionally controlled by the caller rather than by
-    environment toggles or a second CIDR allow-list. Target validation happens
-    once here, and the selected provider must be locally installed.
-    """
+    """Run an installed network scanner for an explicitly supplied target."""
 
     def __init__(self) -> None:
         self.timeout = 120
+
+    @staticmethod
+    def is_provider_available(provider: str) -> bool:
+        return provider in {"nmap", "masscan"} and shutil.which(provider) is not None
 
     @staticmethod
     def _validate_target(target: str) -> None:
@@ -54,7 +53,7 @@ class ActiveSurfaceScanner:
         self._validate_target(target)
         if provider not in {"nmap", "masscan"}:
             raise ScanAuthorizationError("Unsupported active scan provider")
-        if shutil.which(provider) is None:
+        if not self.is_provider_available(provider):
             raise RuntimeError(f"{provider} executable is not installed or not on PATH")
         if provider == "nmap":
             return await self._nmap(target)
