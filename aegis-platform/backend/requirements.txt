@@ -22,6 +22,7 @@ python-jose[cryptography]>=3.3
 passlib[bcrypt]>=1.7.4
 pyyaml>=6.0
 defusedxml>=0.7.1
+Pillow>=10.0
 requests>=2.31
 aiohttp>=3.9
 websockets>=12.0
