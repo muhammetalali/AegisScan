@@ -1,0 +1,19 @@
+services:
+  nginx:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx-ssl.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+      - static_data:/usr/share/nginx/html/static:ro
+      - media_data:/usr/share/nginx/html/media:ro
+
+  django:
+    environment:
+      DEBUG: "False"
+      AUTH_COOKIE_SECURE: "True"
+
+volumes:
+  static_data:
+  media_data:
