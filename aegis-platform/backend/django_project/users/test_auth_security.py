@@ -58,8 +58,8 @@ def test_login_accepts_csrf_token_and_sets_httponly_jwt_cookies(settings):
     assert response.cookies['aegis_refresh']['httponly'] is True
     assert response.cookies['aegis_access']['samesite'].lower() == 'lax'
     assert response.cookies['aegis_refresh']['samesite'].lower() == 'lax'
-    assert response.cookies['aegis_access']['secure'] == settings.AUTH_COOKIE_SECURE
-    assert response.cookies['aegis_refresh']['secure'] == settings.AUTH_COOKIE_SECURE
+    assert bool(response.cookies['aegis_access']['secure']) == settings.AUTH_COOKIE_SECURE
+    assert bool(response.cookies['aegis_refresh']['secure']) == settings.AUTH_COOKIE_SECURE
 
 
 @pytest.mark.django_db
