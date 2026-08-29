@@ -62,30 +62,39 @@ jobs:
       - name: Validate Django configuration
         working-directory: aegis-platform/backend
         run: python manage.py check
-      - name: Generate migrations from current models
+      - name: Generate initial migrations for project apps
         working-directory: aegis-platform/backend
-        run: python manage.py makemigrations --noinput
+        run: |
+          set -e
+          python manage.py makemigrations users projects scans vulnerabilities assets compliance knowledge notifications audit system evidence core --noinput --verbosity 2
+          echo 'Generated migration files:'
+          find django_project -path '*/migrations/*.py' -type f -print | sort
+          test -f django_project/users/migrations/0001_initial.py
       - name: Commit generated migrations before database validation
         run: |
           set -e
           files=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep '/migrations/.*\.py$' || true)
           if [ -z "$files" ]; then
             echo 'No migration changes.'
-            exit 0
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -- $files
+            git commit -m 'chore(django): generate model migrations [skip ci]'
+            git push origin HEAD:main
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add $(printf '%s\n' "$files")
-          git commit -m 'chore(django): generate model migrations'
-          git push origin HEAD:main
       - name: Apply migrations to clean PostgreSQL
         working-directory: aegis-platform/backend
         run: python manage.py migrate --noinput
+      - name: Verify users table exists
+        working-directory: aegis-platform/backend
+        env:
+          PGPASSWORD: aegis
+        run: |
+          psql "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb" -tAc "SELECT to_regclass('public.users_user');" | grep -Fx 'users_user'
       - name: Verify no pending model migrations
         working-directory: aegis-platform/backend
         run: python manage.py makemigrations --check --dry-run
-      - name: Verify migration plan is empty
+      - name: Verify migration plan
         working-directory: aegis-platform/backend
-        run: |
-          set -e
-          python manage.py showmigrations --plan
+        run: python manage.py showmigrations --plan
