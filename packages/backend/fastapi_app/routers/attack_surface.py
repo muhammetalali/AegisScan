@@ -34,12 +34,13 @@ async def require_user(credentials: HTTPAuthorizationCredentials = Depends(secur
 
 @router.get("/attack-surface/providers")
 async def providers(user: dict = Depends(require_user)):
+    available = {provider: scanner.is_provider_available(provider) for provider in ("nmap", "masscan")}
     return {
         "providers": [
-            {"id": "nmap", "mode": "active", "enabled": scanner.enabled, "installed": scanner.enabled and scanner.allowed_networks != ()},
-            {"id": "masscan", "mode": "active", "enabled": scanner.enabled, "installed": scanner.enabled and scanner.allowed_networks != ()},
+            {"id": "nmap", "mode": "active", "enabled": available["nmap"], "installed": available["nmap"]},
+            {"id": "masscan", "mode": "active", "enabled": available["masscan"], "installed": available["masscan"]},
         ],
-        "scope_configured": bool(scanner.allowed_networks),
+        "authorization_mode": "explicit-target",
     }
 
 
@@ -72,7 +73,7 @@ async def active_scan(body: ActiveScanRequest, user: dict = Depends(require_user
                 status="blocked",
                 data={"error": str(exc)},
             )
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         if body.session_id is not None:
             await run_in_threadpool(
