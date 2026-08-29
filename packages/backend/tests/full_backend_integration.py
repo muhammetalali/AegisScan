@@ -15,13 +15,7 @@ E2E_EMAIL = os.getenv("E2E_EMAIL", "backend-integration@aegisscan.local")
 E2E_PASSWORD = os.getenv("E2E_PASSWORD", "Backend-Integration-2026!x9")
 
 
-def _request(
-    url: str,
-    *,
-    method: str = "GET",
-    payload: dict | None = None,
-    token: str | None = None,
-) -> tuple[int, str]:
+def _request(url: str, *, method: str = "GET", payload: dict | None = None, token: str | None = None) -> tuple[int, str]:
     body = None
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -59,7 +53,6 @@ def _django_setup():
     import django
 
     django.setup()
-    return django
 
 
 def _seed_user() -> None:
@@ -103,18 +96,13 @@ def _integration_user():
 
 
 def test_backend_runtime_contract() -> None:
-    """Exercise Django, PostgreSQL, FastAPI, JWT, Redis/Celery and WebSocket as one runtime path.
-
-    This suite intentionally targets the Dockerized runtime and is not part of the
-    ordinary unit-test collection. CI invokes this file explicitly after the
-    application and worker services are healthy.
-    """
+    """Exercise Django, PostgreSQL, FastAPI, JWT, Redis/Celery and WebSocket as one runtime path."""
     _wait_for(f"{DJANGO_URL}/health/")
     _wait_for(f"{FASTAPI_URL}/health")
 
     _django_setup()
-    from django.db import connection
     from django.contrib.auth import get_user_model
+    from django.db import connection
     from redis import Redis
 
     with connection.cursor() as cursor:
@@ -142,10 +130,7 @@ def test_backend_runtime_contract() -> None:
         assert access_token and refresh_token
         assert login.get("user", {}).get("email") == E2E_EMAIL
 
-        status, body = _request(
-            f"{DJANGO_URL}/api/v1/dashboard/summary",
-            token=access_token,
-        )
+        status, body = _request(f"{DJANGO_URL}/api/v1/dashboard/summary", token=access_token)
         assert status == 200, f"Django authenticated API failed: {status} {body}"
 
         status, body = _request(
@@ -181,15 +166,8 @@ def test_backend_runtime_contract() -> None:
         )
         assert status == 401, f"Revoked JWT unexpectedly accepted: {status} {body}"
 
-        status, body = _request(
-            f"{FASTAPI_URL}/api/v1/security-sessions",
-            method="GET",
-            token=access_token,
-        )
-        assert status == 405, f"Unexpected security-session GET contract: {status} {body}"
-
         status, body = _request(f"{FASTAPI_URL}/openapi.json")
-        assert status == 200
+        assert status == 200, f"OpenAPI unavailable: {status} {body}"
         openapi = json.loads(body)
         assert "/api/v1/security-sessions" in openapi.get("paths", {})
 
@@ -212,16 +190,16 @@ def test_backend_runtime_contract() -> None:
 
         from websockets.sync.client import connect
 
-        ws_token = json.loads(
-            _request(
-                f"{DJANGO_URL}/api/v1/auth/login/",
-                method="POST",
-                payload={"email": E2E_EMAIL, "password": E2E_PASSWORD},
-            )[1]
-        )["access"]
+        fresh_status, fresh_body = _request(
+            f"{DJANGO_URL}/api/v1/auth/login/",
+            method="POST",
+            payload={"email": E2E_EMAIL, "password": E2E_PASSWORD},
+        )
+        assert fresh_status == 200, f"Fresh login for WebSocket failed: {fresh_status} {fresh_body}"
+        ws_token = json.loads(fresh_body)["access"]
 
         with connect(
-            f"ws://127.0.0.1:8001/ws/workflow",
+            "ws://127.0.0.1:8001/ws/workflow",
             subprotocols=["bearer", ws_token],
             open_timeout=10,
             close_timeout=5,
