@@ -51,6 +51,7 @@ include = ["aegis*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+django_find_project = false
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
