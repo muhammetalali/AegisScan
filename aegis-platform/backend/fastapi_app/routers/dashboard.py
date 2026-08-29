@@ -1,8 +1,21 @@
-from fastapi import APIRouter, Depends, Query
-from typing import Optional, List
+import os
+from datetime import datetime, timedelta, timezone
+from typing import List
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+import django
+
+django.setup()
+
+from asgiref.sync import sync_to_async
+from django.db.models import Avg, Count, Q
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
-from datetime import datetime, timedelta
-import random
+
+from assets.models import Asset
+from projects.models import Project
+from scans.models import Scan
+from vulnerabilities.models import Vulnerability
 
 router = APIRouter()
 
@@ -43,73 +56,88 @@ class TrendPoint(BaseModel):
     validations: int
 
 
-@router.get("/dashboard/summary", response_model=DashboardSummary)
-async def dashboard_summary():
-    """Get dashboard summary statistics"""
+@sync_to_async
+def _summary():
+    counts = Vulnerability.objects.values('severity').annotate(count=Count('id'))
+    by_severity = {row['severity']: row['count'] for row in counts}
+    avg_score = Scan.objects.filter(status=Scan.Status.COMPLETED).aggregate(value=Avg('security_score'))['value']
     return DashboardSummary(
-        total_projects=random.randint(5, 25),
-        total_assets=random.randint(15, 80),
-        total_validations=random.randint(20, 150),
-        critical=random.randint(1, 10),
-        high=random.randint(5, 25),
-        medium=random.randint(15, 45),
-        low=random.randint(20, 60),
-        security_score=random.randint(60, 95),
-        compliance_score=random.randint(75, 98),
+        total_projects=Project.objects.count(),
+        total_assets=Asset.objects.filter(is_active=True).count(),
+        total_validations=Scan.objects.count(),
+        critical=by_severity.get(Vulnerability.Severity.CRITICAL, 0),
+        high=by_severity.get(Vulnerability.Severity.HIGH, 0),
+        medium=by_severity.get(Vulnerability.Severity.MEDIUM, 0),
+        low=by_severity.get(Vulnerability.Severity.LOW, 0),
+        security_score=round(avg_score or 0),
+        compliance_score=0,
     )
 
 
-@router.get("/dashboard/risk-distribution", response_model=RiskDistribution)
-async def dashboard_risk_distribution():
-    """Get risk distribution across all validations"""
+@router.get('/dashboard/summary', response_model=DashboardSummary)
+async def dashboard_summary():
+    return await _summary()
+
+
+@sync_to_async
+def _risk_distribution():
+    rows = Vulnerability.objects.values('severity').annotate(count=Count('id'))
+    counts = {row['severity']: row['count'] for row in rows}
     return RiskDistribution(
-        critical=random.randint(1, 10),
-        high=random.randint(5, 25),
-        medium=random.randint(15, 45),
-        low=random.randint(20, 60),
-        informational=random.randint(30, 80),
+        critical=counts.get(Vulnerability.Severity.CRITICAL, 0),
+        high=counts.get(Vulnerability.Severity.HIGH, 0),
+        medium=counts.get(Vulnerability.Severity.MEDIUM, 0),
+        low=counts.get(Vulnerability.Severity.LOW, 0),
+        informational=counts.get(Vulnerability.Severity.INFO, 0),
     )
 
 
-@router.get("/dashboard/recent-validations", response_model=List[RecentValidation])
-async def dashboard_recent_validations(
-    limit: int = Query(10, le=50),
-):
-    """Get recent validations for dashboard sidebar"""
-    statuses = ["completed", "running", "failed", "pending"]
-    risk_levels = ["critical", "high", "medium", "low"]
-    projects = ["Website A", "API B", "Project C", "Mobile App", "E-Commerce"]
-
-    results = []
-    for i in range(min(limit, 8)):
-        results.append(
-            RecentValidation(
-                id=f"val-{i+1:03d}",
-                project_name=projects[i % len(projects)],
-                status=statuses[i % len(statuses)],
-                risk_level=risk_levels[i % len(risk_levels)],
-                progress=random.randint(50, 100),
-                created_at=(datetime.now() - timedelta(days=i+1)).strftime("%Y-%m-%d"),
-                security_score=random.randint(50, 100),
-            )
-        )
-    return results
+@router.get('/dashboard/risk-distribution', response_model=RiskDistribution)
+async def dashboard_risk_distribution():
+    return await _risk_distribution()
 
 
-@router.get("/dashboard/trends", response_model=List[TrendPoint])
-async def dashboard_trends(
-    days: int = Query(30, ge=7, le=90),
-):
-    """Get security score trends over time"""
-    results = []
-    base_date = datetime.now() - timedelta(days=days)
-    base_score = random.randint(50, 80)
+@sync_to_async
+def _recent(limit: int):
+    scans = Scan.objects.select_related('project').order_by('-created_at')[:limit]
+    return [RecentValidation(
+        id=str(scan.id),
+        project_name=scan.project.name,
+        status=scan.status,
+        risk_level=scan.risk_level or 'unknown',
+        progress=round(scan.progress),
+        created_at=scan.created_at.astimezone(timezone.utc).isoformat(),
+        security_score=round(scan.security_score),
+    ) for scan in scans]
 
+
+@router.get('/dashboard/recent-validations', response_model=List[RecentValidation])
+async def dashboard_recent_validations(limit: int = Query(10, le=50)):
+    return await _recent(limit)
+
+
+@sync_to_async
+def _trends(days: int):
+    start = datetime.now(timezone.utc) - timedelta(days=days - 1)
+    scans = Scan.objects.filter(created_at__gte=start).values('created_at', 'security_score')
+    buckets = {}
+    for row in scans:
+        day = row['created_at'].astimezone(timezone.utc).date().isoformat()
+        bucket = buckets.setdefault(day, {'scores': [], 'count': 0})
+        bucket['scores'].append(row['security_score'])
+        bucket['count'] += 1
+    result = []
     for i in range(days):
-        date = (base_date + timedelta(days=i)).strftime("%Y-%m-%d")
-        # Score tends to fluctuate around a mean
-        score = max(20, min(100, base_score + random.randint(-10, 10)))
-        validations = random.randint(1, 5)
-        results.append(TrendPoint(date=date, score=score, validations=validations))
+        day = (start + timedelta(days=i)).date().isoformat()
+        bucket = buckets.get(day, {'scores': [], 'count': 0})
+        result.append(TrendPoint(
+            date=day,
+            score=round(sum(bucket['scores']) / len(bucket['scores'])) if bucket['scores'] else 0,
+            validations=bucket['count'],
+        ))
+    return result
 
-    return results
+
+@router.get('/dashboard/trends', response_model=List[TrendPoint])
+async def dashboard_trends(days: int = Query(30, ge=7, le=90)):
+    return await _trends(days)
