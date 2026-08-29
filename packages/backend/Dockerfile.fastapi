@@ -16,7 +16,12 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY . /app
 
-RUN mkdir -p /app/logs /app/media /app/staticfiles /app/fastapi_uploads
+RUN mkdir -p /app/logs /app/media /app/staticfiles /app/fastapi_uploads \
+    && groupadd --system --gid 10001 aegis \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /app --shell /usr/sbin/nologin aegis \
+    && chown -R 10001:10001 /app/logs /app/media /app/staticfiles /app/fastapi_uploads
+
+USER 10001:10001
 
 EXPOSE 8001
 
