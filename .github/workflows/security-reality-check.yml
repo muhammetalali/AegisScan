@@ -114,6 +114,13 @@ jobs:
           result=$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('public.users_user');")
           test "$result" = 'users_user'
 
+      - name: Authentication and CSRF security tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q django_project/users/test_auth_security.py
+
       - name: Production Django checks
         working-directory: aegis-platform/backend
         env:
