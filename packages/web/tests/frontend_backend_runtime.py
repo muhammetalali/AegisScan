@@ -61,7 +61,7 @@ def _ensure_user() -> None:
         "User=get_user_model(); "
         f"u,_=User.objects.update_or_create(email='{values['email']}', defaults={{"
         f"'role':'{values['role']}','is_active':True,'is_verified':True"
-        "}}); "
+        "}); "
         f"u.set_password('{values['password']}'); u.save(update_fields=['password']); "
         "print(u.email)"
     )
