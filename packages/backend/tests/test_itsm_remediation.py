@@ -31,62 +31,64 @@ def test_ticket_payload_priority_bands():
         assert f"SLA target: {sla}h" in description
 
 
-@pytest.mark.asyncio
-async def test_verify_case_only_reaches_verified_with_success(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        itsm,
-        "get_case",
-        lambda action_id: {
-            "action": {
-                "actionId": action_id,
-                "state": "awaiting_revalidation",
-                "riskBefore": 80,
-            },
-            "integrations": [],
+class _FakeCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, *args, **kwargs):
+        return None
+
+    def fetchone(self):
+        return None
+
+
+class _FakeConn:
+    def cursor(self):
+        return _FakeCursor()
+
+    def commit(self):
+        return None
+
+
+class _FakePool:
+    def getconn(self):
+        return _FakeConn()
+
+    def putconn(self, conn):
+        return None
+
+
+def _install_verify_mocks(monkeypatch, *, passed: bool, regressed: bool):
+    case = {
+        "action": {
+            "actionId": "act-1",
+            "state": "awaiting_revalidation",
+            "riskBefore": 80,
         },
-    )
-    monkeypatch.setattr(
-        itsm,
-        "transition",
-        lambda action_id, state, actor, note=None, **kwargs: (
-            calls.append((action_id, state, kwargs)),
-            {"actionId": action_id, "state": state},
-        )[1],
-    )
+        "integrations": [],
+    }
+    calls = []
 
-    class _FakeCursor:
-        def __enter__(self):
-            return self
+    def fake_get_case(action_id):
+        return case
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+    def fake_transition(action_id, state, actor, note=None, **kwargs):
+        calls.append((action_id, state, kwargs))
+        case["action"] = {**case["action"], "state": state}
+        return {"actionId": action_id, "state": state}
 
-        def execute(self, *args, **kwargs):
-            return None
-
-        def fetchone(self):
-            return None
-
-    class _FakeConn:
-        def cursor(self):
-            return _FakeCursor()
-
-        def commit(self):
-            return None
-
-    class _FakePool:
-        def getconn(self):
-            return _FakeConn()
-
-        def putconn(self, conn):
-            return None
-
+    monkeypatch.setattr(itsm, "get_case", fake_get_case)
+    monkeypatch.setattr(itsm, "transition", fake_transition)
     monkeypatch.setattr(itsm, "_db", lambda: _FakePool())
+    monkeypatch.setattr(itsm, "_sync_external_states", lambda *args, **kwargs: _async_noop())
+    monkeypatch.setattr(itsm, "_audit", lambda *args, **kwargs: None)
 
     class FakeSuite:
         async def validate_workspace(self, candidate, tools=None, timeout=180):
-            return {"passed": True, "summary": {"requested": 1, "available": 1}}
+            return {"passed": passed, "summary": {"requested": 1, "available": 1}}
 
         @staticmethod
         def compare_scores(before, after):
@@ -94,13 +96,17 @@ async def test_verify_case_only_reaches_verified_with_success(monkeypatch):
                 "before": before,
                 "after": after,
                 "delta": after - before,
-                "regressed": False,
+                "regressed": regressed,
                 "improvement": max(0, before - after),
             }
 
     monkeypatch.setattr(itsm, "RemediationValidationSuite", FakeSuite)
-    monkeypatch.setattr(itsm, "_sync_external_states", lambda *args, **kwargs: _async_noop())
-    monkeypatch.setattr(itsm, "_audit", lambda *args, **kwargs: None)
+    return case, calls
+
+
+@pytest.mark.asyncio
+async def test_verify_case_only_reaches_verified_with_success(monkeypatch):
+    case, calls = _install_verify_mocks(monkeypatch, passed=True, regressed=False)
 
     result = await itsm.verify_case(
         "act-1",
@@ -108,77 +114,15 @@ async def test_verify_case_only_reaches_verified_with_success(monkeypatch):
         {"approval_id": "a-1", "authorized": True, "workspace": ".", "risk_before": 80, "risk_after": 30},
         tools=["semgrep"],
     )
+
     assert result["action"]["state"] == "verified"
     assert any(item[1] == "verified" for item in calls)
+    assert case["action"]["state"] == "verified"
 
 
 @pytest.mark.asyncio
 async def test_verify_case_reopens_when_validation_fails(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        itsm,
-        "get_case",
-        lambda action_id: {
-            "action": {
-                "actionId": action_id,
-                "state": "awaiting_revalidation",
-                "riskBefore": 80,
-            },
-            "integrations": [],
-        },
-    )
-    monkeypatch.setattr(
-        itsm,
-        "transition",
-        lambda action_id, state, actor, note=None, **kwargs: (
-            calls.append((action_id, state, kwargs)),
-            {"actionId": action_id, "state": state},
-        )[1],
-    )
-
-    class _FakeCursor:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def execute(self, *args, **kwargs):
-            return None
-
-    class _FakeConn:
-        def cursor(self):
-            return _FakeCursor()
-
-        def commit(self):
-            return None
-
-    class _FakePool:
-        def getconn(self):
-            return _FakeConn()
-
-        def putconn(self, conn):
-            return None
-
-    monkeypatch.setattr(itsm, "_db", lambda: _FakePool())
-
-    class FakeSuite:
-        async def validate_workspace(self, candidate, tools=None, timeout=180):
-            return {"passed": False, "summary": {"requested": 1, "available": 1}}
-
-        @staticmethod
-        def compare_scores(before, after):
-            return {
-                "before": before,
-                "after": after,
-                "delta": after - before,
-                "regressed": True,
-                "improvement": 0,
-            }
-
-    monkeypatch.setattr(itsm, "RemediationValidationSuite", FakeSuite)
-    monkeypatch.setattr(itsm, "_sync_external_states", lambda *args, **kwargs: _async_noop())
-    monkeypatch.setattr(itsm, "_audit", lambda *args, **kwargs: None)
+    case, calls = _install_verify_mocks(monkeypatch, passed=False, regressed=True)
 
     result = await itsm.verify_case(
         "act-1",
@@ -186,8 +130,11 @@ async def test_verify_case_reopens_when_validation_fails(monkeypatch):
         {"approval_id": "a-1", "authorized": True, "workspace": ".", "risk_before": 80, "risk_after": 85},
         tools=["semgrep"],
     )
+
     assert result["action"]["state"] == "in_progress"
+    assert any(item[1] == "in_progress" for item in calls)
     assert not any(item[1] == "verified" for item in calls)
+    assert case["action"]["state"] == "in_progress"
 
 
 def test_jira_configuration_requires_all_credentials(monkeypatch):
