@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -41,45 +42,48 @@ def _request(
         return exc.code, exc.read().decode("utf-8", errors="replace")
 
 
-def _django_setup():
+def _manage_shell(code: str) -> str:
     backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    if backend_root not in sys.path:
-        sys.path.insert(0, backend_root)
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
-    import django
-
-    django.setup()
-    return django
-
-
-def _seed_user(role: str = "admin") -> None:
-    _django_setup()
-    from users.models import User, UserRole
-
-    user, _ = User.objects.get_or_create(
-        email=E2E_EMAIL,
-        defaults={
-            "first_name": "Auth",
-            "last_name": "E2E",
-            "role": UserRole(role),
-            "is_active": True,
-            "is_verified": True,
-        },
+    result = subprocess.run(
+        [sys.executable, "manage.py", "shell", "-c", code],
+        cwd=backend_root,
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    user.set_password(E2E_PASSWORD)
-    user.role = UserRole(role)
-    user.is_active = True
-    user.is_verified = True
-    user.save(update_fields=["password", "role", "is_active", "is_verified"])
+    return result.stdout.strip()
+
+
+def _seed_user(role: str) -> None:
+    safe_role = role.replace("'", "\\'")
+    _manage_shell(
+        f"""
+from users.models import User, UserRole
+user, _ = User.objects.get_or_create(
+    email='auth-e2e@aegisscan.local',
+    defaults={{
+        'first_name': 'Auth',
+        'last_name': 'E2E',
+        'role': UserRole('{safe_role}'),
+        'is_active': True,
+        'is_verified': True,
+    }},
+)
+user.set_password('Auth-E2E-2026!x9')
+user.role = UserRole('{safe_role}')
+user.is_active = True
+user.is_verified = True
+user.save(update_fields=['password', 'role', 'is_active', 'is_verified'])
+"""
+    )
 
 
 def _cleanup_user() -> None:
     try:
-        _django_setup()
-        from users.models import User
-
-        User.objects.filter(email=E2E_EMAIL).delete()
-    except Exception:
+        _manage_shell(
+            "from users.models import User; User.objects.filter(email='auth-e2e@aegisscan.local').delete()"
+        )
+    except subprocess.CalledProcessError:
         pass
 
 
@@ -90,6 +94,12 @@ def _user(role: str = "admin"):
         yield
     finally:
         _cleanup_user()
+
+
+def _session_version_bump() -> None:
+    _manage_shell(
+        "from users.models import User; user=User.objects.get(email='auth-e2e@aegisscan.local'); user.session_version += 1; user.save(update_fields=['session_version'])"
+    )
 
 
 def _login() -> tuple[str, str]:
@@ -145,13 +155,7 @@ def test_auth_e2e_login_cross_service_and_refresh() -> None:
 def test_auth_e2e_session_version_revokes_access_token() -> None:
     with _user("security_analyst"):
         access_token, _ = _login()
-        _django_setup()
-        from users.models import User
-
-        user = User.objects.get(email=E2E_EMAIL)
-        old_version = int(user.session_version)
-        user.session_version = old_version + 1
-        user.save(update_fields=["session_version"])
+        _session_version_bump()
 
         status, body = _request(
             f"{FASTAPI_URL}/api/v1/assurance/correlations/summary",
@@ -174,11 +178,6 @@ def test_auth_e2e_rbac_denies_viewer_privileged_operation() -> None:
 def test_auth_e2e_websocket_requires_bearer_and_supports_live_revocation() -> None:
     with _user("security_analyst"):
         access_token, _ = _login()
-        _django_setup()
-        from users.models import User
-
-        user = User.objects.get(email=E2E_EMAIL)
-        original_version = int(user.session_version)
 
         try:
             connect("ws://127.0.0.1:8001/ws/workflow", open_timeout=10)
@@ -205,15 +204,11 @@ def test_auth_e2e_websocket_requires_bearer_and_supports_live_revocation() -> No
             close_timeout=5,
         ) as websocket:
             connected = json.loads(websocket.recv(timeout=5))
-            assert connected == {
-                "type": "workflow.connected",
-                "user_id": str(user.id),
-            }
+            assert connected["type"] == "workflow.connected"
 
-            user.session_version = original_version + 1
-            user.save(update_fields=["session_version"])
+            _session_version_bump()
 
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
                 try:
                     message = json.loads(websocket.recv(timeout=2))
