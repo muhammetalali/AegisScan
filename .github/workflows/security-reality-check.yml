@@ -78,7 +78,7 @@ jobs:
           SECRET_KEY: ci-production-secret-not-used-at-runtime
           DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
           REDIS_URL: redis://127.0.0.1:6379/0
-          CELERY_BROKER_URL: redis://aegis:aegis@127.0.0.1:6379/0
+          CELERY_BROKER_URL: redis://127.0.0.1:6379/0
           CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
           JWT_SECRET_KEY: ci-production-jwt-secret-not-used-at-runtime
           ALLOWED_HOSTS: localhost,127.0.0.1
