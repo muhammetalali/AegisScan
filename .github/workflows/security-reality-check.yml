@@ -118,7 +118,9 @@ jobs:
           JWT_SECRET_KEY: ci-only-jwt-secret
           ALLOWED_HOSTS: localhost,127.0.0.1
           CORS_ALLOWED_ORIGINS: http://localhost:5173
-        run: pytest -q
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: .
+        run: python -m pytest -q
 
   frontend:
     runs-on: ubuntu-latest
