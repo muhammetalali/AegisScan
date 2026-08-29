@@ -5,6 +5,13 @@ import time
 import urllib.error
 import urllib.request
 
+import pytest
+
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("AEGIS_RUNTIME_E2E") != "1",
+    reason="Service E2E smoke tests require the running CI/runtime stack",
+)
 
 DJANGO_URL = os.getenv("E2E_DJANGO_URL", "http://127.0.0.1:8000")
 FASTAPI_URL = os.getenv("E2E_FASTAPI_URL", "http://127.0.0.1:8001")
@@ -74,14 +81,12 @@ def _seed_e2e_tenant() -> None:
             "is_active": True,
         },
     )
-    if created:
-        user.set_password(E2E_PASSWORD)
-        user.save(update_fields=["password"])
-    else:
-        user.set_password(E2E_PASSWORD)
-        user.role = UserRole.ADMIN
-        user.is_active = True
-        user.save(update_fields=["password", "role", "is_active"])
+    user.set_password(E2E_PASSWORD)
+    user.role = UserRole.ADMIN
+    user.is_active = True
+    if created or not user.is_verified:
+        user.is_verified = True
+    user.save(update_fields=["password", "role", "is_active", "is_verified"])
 
     Project.objects.update_or_create(
         slug="e2e-runtime-project",
