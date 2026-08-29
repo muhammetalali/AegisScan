@@ -17,6 +17,40 @@ permissions:
 jobs:
   migrations:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      SECRET_KEY: ci-only-secret-key-not-for-production
+      JWT_SECRET_KEY: ci-only-jwt-secret-key-not-for-production
+      DEBUG: 'False'
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AUTH_COOKIE_SECURE: 'False'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,6 +64,12 @@ jobs:
       - name: Generate migrations
         working-directory: aegis-platform/backend
         run: python manage.py makemigrations
+      - name: Apply migrations to clean PostgreSQL
+        working-directory: aegis-platform/backend
+        run: python manage.py migrate --noinput
+      - name: Verify no pending model migrations
+        working-directory: aegis-platform/backend
+        run: python manage.py makemigrations --check --dry-run
       - name: Commit generated migrations
         run: |
           git config user.name 'github-actions[bot]'
@@ -39,5 +79,5 @@ jobs:
             exit 0
           fi
           git add aegis-platform/backend/django_project
-          git commit -m 'chore(django): generate model migrations'
+          git commit -m 'chore(django): generate and verify model migrations'
           git push
