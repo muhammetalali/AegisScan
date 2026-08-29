@@ -1,0 +1,164 @@
+name: AegisScan Backend Runtime Gate
+
+on:
+  push:
+    branches:
+      - main
+      - feature/enterprise-platform-ui-v2
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aegisscan-backend-runtime-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-runtime:
+    name: Full backend runtime integration
+    runs-on: ubuntu-latest
+    env:
+      AEGIS_ENV: ci
+      DJANGO_DEBUG: "0"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      DJANGO_SECRET_KEY: ${{ secrets.AEGIS_CI_DJANGO_SECRET || 'ci-django-secret-key-012345678901234567890123' }}
+      JWT_SECRET_KEY: ${{ secrets.AEGIS_CI_JWT_SECRET || 'ci-jwt-secret-key-012345678901234567890123' }}
+      FASTAPI_SECRET_KEY: ${{ secrets.AEGIS_CI_FASTAPI_SECRET || 'ci-fastapi-secret-key-012345678901234567890123' }}
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      WS_ALLOW_QUERY_TOKEN: "0"
+      WS_SESSION_CHECK_INTERVAL_SECONDS: "1"
+      LOG_TO_FILE: "0"
+      E2E_DJANGO_URL: http://127.0.0.1:8000
+      E2E_FASTAPI_URL: http://127.0.0.1:8001
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: packages/backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile backend
+        run: python -m compileall -q packages/backend
+
+      - name: Django system and migration checks
+        working-directory: packages/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+
+      - name: Apply migrations
+        working-directory: packages/backend
+        run: python manage.py migrate --noinput
+
+      - name: Start Redis-backed Celery worker
+        working-directory: packages/backend
+        run: |
+          nohup celery -A fastapi_app.celery_app worker -l warning -Q default,health,workflow,reports -c 2 --hostname=ci-worker@%h > "$RUNNER_TEMP/celery-worker.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/celery-worker.pid"
+
+      - name: Start Django
+        working-directory: packages/backend
+        run: |
+          nohup python manage.py runserver 127.0.0.1:8000 --noreload > "$RUNNER_TEMP/django.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/django.pid"
+
+      - name: Start FastAPI
+        working-directory: packages/backend
+        run: |
+          nohup uvicorn fastapi_app.main:app --host 127.0.0.1 --port 8001 --workers 1 > "$RUNNER_TEMP/fastapi.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/fastapi.pid"
+
+      - name: Wait for backend services
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..60}; do
+            django=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health/ || true)
+            fastapi=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/health || true)
+            if [ "$django" = "200" ] && [ "$fastapi" = "200" ]; then exit 0; fi
+            sleep 2
+          done
+          echo 'Django log:'
+          cat "$RUNNER_TEMP/django.log" || true
+          echo 'FastAPI log:'
+          cat "$RUNNER_TEMP/fastapi.log" || true
+          echo 'Celery log:'
+          cat "$RUNNER_TEMP/celery-worker.log" || true
+          exit 1
+
+      - name: Verify Celery worker
+        working-directory: packages/backend
+        run: python -m pytest -q tests/test_celery_routing.py tests/test_celery_runtime.py
+
+      - name: Verify full backend runtime contract
+        run: python -m pytest -q packages/backend/tests/full_backend_integration.py
+
+      - name: Verify authentication E2E contract
+        run: python -m pytest -q packages/backend/tests/auth_e2e.py
+
+      - name: Verify Django RBAC matrix
+        working-directory: packages/backend
+        run: python manage.py test users.test_rbac_matrix -v 2
+
+      - name: Verify WebSocket authentication unit contract
+        working-directory: packages/backend
+        run: python -m pytest -q tests/test_websocket_auth.py
+
+      - name: Collect runtime logs
+        if: always()
+        shell: bash
+        run: |
+          echo '--- Django ---'
+          cat "$RUNNER_TEMP/django.log" || true
+          echo '--- FastAPI ---'
+          cat "$RUNNER_TEMP/fastapi.log" || true
+          echo '--- Celery ---'
+          cat "$RUNNER_TEMP/celery-worker.log" || true
+
+      - name: Stop local services
+        if: always()
+        shell: bash
+        run: |
+          for file in "$RUNNER_TEMP/django.pid" "$RUNNER_TEMP/fastapi.pid" "$RUNNER_TEMP/celery-worker.pid"; do
+            if [ -f "$file" ]; then
+              kill "$(cat "$file")" 2>/dev/null || true
+            fi
+          done
