@@ -11,8 +11,8 @@ class HasPermission(permissions.BasePermission):
     Enforce the permission contract declared by a DRF ViewSet/action.
 
     ``@action`` can override ``required_permissions`` with a list/string while
-    the ViewSet normally declares a mapping.  Normalize all supported forms
-    here so custom actions cannot crash or accidentally bypass authorization.
+    the ViewSet normally declares a mapping. Normalize all supported forms so
+    custom actions cannot crash or accidentally bypass authorization.
     Missing declarations fail closed.
     """
     message = 'You do not have permission to perform this action.'
@@ -51,16 +51,14 @@ class HasPermission(permissions.BasePermission):
         return request.user.has_any_permission(*required_permissions)
 
     def has_object_permission(self, request, view, obj):
-        # Querysets are responsible for tenant/object scoping.  This permission
+        # Querysets are responsible for tenant/object scoping. This permission
         # class only enforces the declared capability; object scope is enforced
         # by get_queryset/get_object and dedicated object permissions.
         return True
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
-    """
-    Object-level permission to only allow owners of an object to edit it.
-    """
+    """Object-level permission to only allow owners to edit an object."""
     def has_object_permission(self, request, view, obj):
         if request.method in permissions.SAFE_METHODS:
             return True
@@ -68,14 +66,16 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
 
 
 class IsProjectMember(permissions.BasePermission):
-    """Check if user is a member of the project."""
+    """Check if the authenticated user belongs to the requested project."""
+    message = 'You are not a member of this project.'
+
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
 
         project_id = view.kwargs.get('project_pk') or request.data.get('project')
         if not project_id:
-            return True
+            return False
 
         from projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
@@ -85,14 +85,16 @@ class IsProjectMember(permissions.BasePermission):
 
 
 class IsProjectAdmin(permissions.BasePermission):
-    """Check if user is admin/owner of the project."""
+    """Check if user is an admin/owner of the requested project."""
+    message = 'You must be a project owner or admin.'
+
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
 
         project_id = view.kwargs.get('project_pk') or request.data.get('project')
         if not project_id:
-            return True
+            return False
 
         from projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
@@ -139,7 +141,7 @@ class IsScanOwnerOrProjectMember(permissions.BasePermission):
 
 
 class IsVulnerabilityAssigneeOrProjectMember(permissions.BasePermission):
-    """Check if user is assigned to vulnerability or is project member."""
+    """Check if user is assigned to vulnerability or is a project member."""
     def has_object_permission(self, request, view, obj):
         if request.user.is_superuser:
             return True
