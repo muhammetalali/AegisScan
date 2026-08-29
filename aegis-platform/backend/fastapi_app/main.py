@@ -1,10 +1,9 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 import asyncio
 import logging
-import os
 from datetime import datetime
 
 from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
@@ -38,10 +37,9 @@ app = FastAPI(title='AegisScan Platform API', description='Security Validation P
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 security = HTTPBearer(auto_error=False)
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials if credentials else None
+async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials if credentials else request.cookies.get('aegis_access')
     if not token:
-        from fastapi import Request
         raise HTTPException(status_code=401, detail='Not authenticated')
     user = await verify_token(token)
     if not user:
