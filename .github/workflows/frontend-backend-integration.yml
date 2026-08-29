@@ -1,0 +1,103 @@
+name: AegisScan Frontend Backend Integration
+
+on:
+  push:
+    branches:
+      - main
+      - feature/enterprise-platform-ui-v2
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aegisscan-frontend-backend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-backend-runtime:
+    name: Frontend ↔ Backend runtime integration
+    runs-on: ubuntu-latest
+    env:
+      AEGIS_ENV: ci
+      DJANGO_DEBUG: "0"
+      SECRET_KEY: ci-frontend-backend-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
+      DJANGO_SECRET_KEY: ci-frontend-backend-django-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
+      JWT_SECRET_KEY: ci-frontend-backend-jwt-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
+      FASTAPI_SECRET_KEY: ci-frontend-backend-fastapi-secret-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      FRONTEND_URL: http://localhost:5173
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      WS_ALLOW_QUERY_TOKEN: "0"
+      WS_SESSION_CHECK_INTERVAL_SECONDS: "1"
+      FRONTEND_E2E_EMAIL: frontend-backend-e2e@local.test
+      FRONTEND_E2E_PASSWORD: Frontend-Backend-E2E-2026!x9
+      FRONTEND_E2E_ROLE: security_analyst
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install backend dependencies
+        working-directory: packages/backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: packages/web
+        run: npm ci
+
+      - name: Frontend typecheck and build
+        working-directory: packages/web
+        run: npm run build
+
+      - name: Start full platform stack
+        run: docker compose -f packages/platform/docker-compose.yml up -d --build
+
+      - name: Wait for runtime services
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..90}; do
+            frontend=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5173/health || true)
+            django=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health/ || true)
+            fastapi=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/health || true)
+            if [ "$frontend" = "200" ] && [ "$django" = "200" ] && [ "$fastapi" = "200" ]; then exit 0; fi
+            sleep 2
+          done
+          docker compose -f packages/platform/docker-compose.yml ps
+          docker compose -f packages/platform/docker-compose.yml logs --tail=120 django fastapi frontend || true
+          exit 1
+
+      - name: Verify frontend/backend black-box contract
+        run: python -m pytest -q packages/web/tests/frontend_backend_runtime.py
+
+      - name: Verify frontend lint and tests
+        working-directory: packages/web
+        run: npm run check
+
+      - name: Collect platform logs
+        if: always()
+        run: |
+          docker compose -f packages/platform/docker-compose.yml ps
+          docker compose -f packages/platform/docker-compose.yml logs --tail=160 django fastapi frontend celery_worker celery_workflow celery_reports || true
+
+      - name: Tear down platform stack
+        if: always()
+        run: docker compose -f packages/platform/docker-compose.yml down -v
