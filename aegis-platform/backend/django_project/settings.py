@@ -18,18 +18,11 @@ env = environ.Env(
     JWT_ACCESS_TOKEN_LIFETIME=(int, 60),
     JWT_REFRESH_TOKEN_LIFETIME=(int, 1440),
     AUTH_COOKIE_SECURE=(bool, False),
-    EMAIL_HOST=(str, 'smtp.gmail.com'),
-    EMAIL_PORT=(int, 587),
-    EMAIL_HOST_USER=(str, ''),
-    EMAIL_HOST_PASSWORD=(str, ''),
-    EMAIL_USE_TLS=(bool, True),
-    DEFAULT_FROM_EMAIL=(str, 'AegisScan <noreply@aegisscan.local>'),
-    FRONTEND_URL=(str, 'http://localhost:5173'),
-    SENTRY_DSN=(str, ''),
-    LOG_LEVEL=(str, 'INFO'),
+    EMAIL_HOST=(str, 'smtp.gmail.com'), EMAIL_PORT=(int, 587), EMAIL_HOST_USER=(str, ''), EMAIL_HOST_PASSWORD=(str, ''),
+    EMAIL_USE_TLS=(bool, True), DEFAULT_FROM_EMAIL=(str, 'AegisScan <noreply@aegisscan.local>'),
+    FRONTEND_URL=(str, 'http://localhost:5173'), SENTRY_DSN=(str, ''), LOG_LEVEL=(str, 'INFO'),
 )
 environ.Env.read_env(BASE_DIR / '.env')
-
 SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
@@ -37,10 +30,8 @@ ALLOWED_HOSTS = env('ALLOWED_HOSTS')
 INSTALLED_APPS = [
     'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions', 'django.contrib.messages', 'django.contrib.staticfiles',
     'rest_framework', 'rest_framework_simplejwt', 'rest_framework_simplejwt.token_blacklist', 'corsheaders', 'django_filters', 'django_celery_beat', 'django_celery_results', 'channels', 'drf_spectacular',
-    'health_check', 'health_check.db', 'health_check.cache', 'health_check.storage',
     'core', 'users', 'projects', 'scans', 'vulnerabilities', 'assets', 'compliance', 'knowledge', 'notifications', 'audit', 'system', 'evidence',
 ]
-
 MIDDLEWARE = ['corsheaders.middleware.CorsMiddleware', 'django.middleware.security.SecurityMiddleware', 'django.contrib.sessions.middleware.SessionMiddleware', 'django.middleware.common.CommonMiddleware', 'django.middleware.csrf.CsrfViewMiddleware', 'django.contrib.auth.middleware.AuthenticationMiddleware', 'django.contrib.messages.middleware.MessageMiddleware', 'django.middleware.clickjacking.XFrameOptionsMiddleware']
 ROOT_URLCONF = 'django_project.urls'
 TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIRS': [BASE_DIR / 'templates'], 'APP_DIRS': True, 'OPTIONS': {'context_processors': ['django.template.context_processors.debug', 'django.template.context_processors.request', 'django.contrib.auth.context_processors.auth', 'django.contrib.messages.context_processors.messages']}}]
@@ -53,13 +44,11 @@ CACHES = {'default': {'BACKEND': 'django_redis.cache.RedisCache', 'LOCATION': en
 SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
 SESSION_CACHE_ALIAS = 'default'
 
-# Explicit origin allow-list. Never enable wildcard CORS for this platform.
 CORS_ALLOWED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False
 CSRF_TRUSTED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 
-# JWT remains the authentication mechanism; cookies only change where the tokens live.
 AUTH_COOKIE_SECURE = env('AUTH_COOKIE_SECURE') or not DEBUG
 AUTH_COOKIE_SAMESITE = 'Lax'
 AUTH_COOKIE_HTTPONLY = True
