@@ -1,142 +1,139 @@
-# دليل التشغيل على Windows 11 + VS Code - AegisScan Platform
+# AegisScan Platform — Windows local runtime
 
-## المتطلبات
-- Windows 11
-- Python 3.14.3 (مثبت في C:\Python314)
-- Node.js 25.7.0 + npm 11.10.1
-- VS Code في C:\Users\muham\AppData\Local\Programs\Microsoft VS Code
-- Git 2.55
+هذا الدليل هو المسار المعتمد لتشغيل المنصة الحالية من المستودع. لا تشغّل `docker compose` من جذر المستودع؛ ملف Compose موجود هنا تحديداً:
 
----
+`packages/platform/docker-compose.yml`
 
-## 1. تشغيل النواة (Core Engine) - يعمل الآن 100%
+## 1. المتطلبات
 
-### في VS Code Terminal (Ctrl + `):
+- Windows 10/11
+- Python 3.14.x
+- Node.js + npm
+- Docker Desktop مع Docker Compose
+- Git
+
+## 2. Core / tests
+
+من جذر المستودع:
 
 ```powershell
-# تفعيل البيئة
 .\.venv\Scripts\Activate.ps1
-
-# التشغيل
-$env:PYTHONIOENCODING='utf-8'; $env:PATH += ";C:\Users\muham\AppData\Roaming\Python\Python314\Scripts"
-
-aegis init
-aegis scan --code . --markdown report.md --output report.json
-aegis validate --code . --markdown platform_report.md --output platform_report.json
-aegis findings --severity critical
-aegis status
-aegis version
-
-# الاختبارات
 python -m pytest tests/ -q
-# النتيجة المتوقعة: جميع اختبارات النواة ناجحة، مع تخطي اختبارات Docker إذا لم يكن المحرك جاهزاً
 ```
 
-### المشاكل التي تم حلها:
-- تم إنشاء `pyproject.toml` لتعريف الحزمة
-- تم إصلاح `requirements.txt` (إزالة [dev] غير الصالح)
-- تم تثبيت الحزمة عبر `pip install -e .`
-- تم إصلاح ترميز Windows (استبدال ✅ بـ [OK])
-- تم حل مشكلة PATH عبر `$env:PATH += ";...Scripts"`
-
----
-
-## 2. تشغيل الواجهة الاحترافية (Frontend)
+## 3. Frontend development
 
 ```powershell
 cd C:\Users\muham\Desktop\AegisScan-1\packages\web
-
-# التثبيت (قد يستغرق 2-3 دقائق)
 npm install
-
-# التشغيل للتطوير
 npm run dev
-# افتح http://localhost:5173
-
-# البناء للإنتاج
-npm run build
-npm run preview
 ```
 
-### الميزات المنفذة:
-- React 19 + TypeScript + Vite
-- Tailwind CSS 4 + Dark Theme
-- 23 صفحة (Login, Register, Dashboard, Projects, Assets, Scan, Progress, Results, Vulnerabilities, Reports, Compliance, Knowledge, Digital Twin, Posture, Users, Settings, System, Audit, Notifications)
-- Layout مع Sidebar + Header + RTL
-- Zustand + TanStack Query + React Hook Form + Zod + Sonner + Framer Motion + ECharts + Monaco Editor
-- WebSocket للتقدم اللحظي
+ثم افتح `http://localhost:5173`.
 
----
+## 4. Backend + PostgreSQL + Redis عبر Docker
 
-## 3. تشغيل الخلفية الكاملة (Backend) عبر Docker
+انتقل أولاً إلى مجلد Compose الصحيح:
 
 ```powershell
 cd C:\Users\muham\Desktop\AegisScan-1\packages\platform
-
-# إنشاء ملف البيئة
 copy .env.example .env
-
-# التشغيل
-docker-compose up -d
-docker-compose ps
-docker-compose logs -f django
-docker-compose logs -f fastapi
-docker-compose logs -f celery_worker
-
-# الخدمات:
-# - Django (Gunicorn) على 8000
-# - FastAPI (Uvicorn) على 8001
-# - PostgreSQL على 5432
-# - Redis على 6379
-# - Celery Worker + Beat
-# - Frontend (Nginx) على 80
-# - Nginx Proxy على 80/443
+docker compose config
+docker compose up -d postgres redis
+docker compose ps
 ```
 
----
-
-## 4. فتح في VS Code
-
-1. افتح VS Code: `code C:\Users\muham\Desktop\AegisScan-1`
-2. افتح مجلد `packages/platform`
-3. استخدم `Ctrl+Shift+P` → `Tasks: Run Task` → اختر `Start AegisScan`
-
-### VS Code Tasks (تم إنشاؤها في .vscode/tasks.json):
-- Start Backend (Django + FastAPI)
-- Start Frontend (npm run dev)
-- Run Tests (pytest)
-- Build Frontend (npm run build)
-
----
-
-## 5. تسلسل الواجهات
-
-```
-Login → Dashboard → Projects → Assets → New Validation → Progress Live → Results → Findings → Reports → Security Posture → Digital Twin → Users → Settings
-```
-
-كل زر له وظيفة واضحة ومحددة ضمن المنصة.
-
----
-
-## 6. التحقق من الجاهزية
+بعد نجاح PostgreSQL وRedis:
 
 ```powershell
-# Backend Django Models: 11 تطبيق (users, projects, assets, scans, vulnerabilities, reports, compliance, knowledge, notifications, audit, system)
-# Frontend Pages: 23 صفحة
-# Engines: 20 محرك (15 الأصلي + 5 إضافي)
-# Tests: شغّل `python -m pytest -q` للحصول على العدد الحالي
-# CLI: scan + validate + findings + status + version (كلها تعمل)
+docker compose up -d --build
+docker compose ps
+docker compose logs -f django
+docker compose logs -f fastapi
 ```
 
----
+الخدمات المحلية:
 
-## 7. الإنتاج
+- PostgreSQL: `localhost:5432`
+- Redis: `localhost:6379`
+- Django: `localhost:8000`
+- FastAPI: `localhost:8001`
+- Frontend container: `localhost:5173`
+- Celery workers + beat
+
+## 5. مشكلة PostgreSQL: password authentication failed
+
+إذا ظهر:
+
+`FATAL: password authentication failed for user "aegis"`
+
+فهذا يعني أن Django وصل فعلياً إلى PostgreSQL على `localhost:5432`، لكن كلمة مرور مستخدم قاعدة البيانات الموجودة على ذلك الخادم لا تطابق إعداد AegisScan. هذه ليست مشكلة migrations أو Django code.
+
+لا تحذف قاعدة البيانات ولا تستخدم `docker compose down -v` لحلها.
+
+أولاً اعرف من يستخدم المنفذ 5432:
 
 ```powershell
-docker-compose -f docker-compose.prod.yml up -d --build
+Get-NetTCPConnection -LocalPort 5432 -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess
+Get-Process -Id (Get-NetTCPConnection -LocalPort 5432 -State Listen).OwningProcess
 ```
 
----
+إذا كان PostgreSQL يعمل كخدمة Windows خارج Docker، وحساب `postgres` الإداري متاح، غيّر كلمة مرور مستخدم التطبيق فقط دون حذف أي بيانات:
 
-**المنصة قابلة للتشغيل على Windows 11 بعد إعداد المتطلبات وتشغيل فحوصات الجاهزية.**
+```powershell
+psql -h localhost -U postgres -d postgres -c "ALTER ROLE aegis WITH LOGIN PASSWORD 'aegis';"
+```
+
+ثم تحقق:
+
+```powershell
+python manage.py showmigrations
+python manage.py migrate
+```
+
+إذا كان PostgreSQL المطلوب هو حاوية AegisScan، شغّل Compose من `packages/platform` وليس من جذر المستودع. إعداد Compose يحدد نفس `POSTGRES_DB`, `POSTGRES_USER`, و`POSTGRES_PASSWORD` التي تستخدمها خدمات Django/FastAPI.
+
+> مهم: متغير `POSTGRES_PASSWORD` في Docker Compose يُستخدم لإنشاء كلمة مرور الدور عند تهيئة volume لأول مرة. تغيير المتغير لاحقاً لا يغيّر كلمة مرور role موجودة داخل volume قديم.
+
+## 6. Django مباشرة على Windows
+
+إذا كنت تشغّل Django خارج Docker، نفّذ من:
+
+```powershell
+cd C:\Users\muham\Desktop\AegisScan-1\packages\backend
+```
+
+ثم:
+
+```powershell
+python manage.py check
+python manage.py showmigrations
+python manage.py migrate
+python manage.py runserver 127.0.0.1:8000
+```
+
+يجب أن تكون `DATABASE_URL` في `packages/backend/.env` متوافقة مع PostgreSQL الفعلي الذي يعمل على `localhost:5432`.
+
+## 7. ملاحظة مهمة عن ملفات البيئة
+
+`packages/platform/.env.example` هو عقد إعداد التشغيل المحلي لـ Compose.
+
+`packages/backend/.env.example` هو قالب إعداد التطبيق نفسه.
+
+لا تضع أسرار الإنتاج في Git. استخدم `.env` محلياً أو أسرار CI/CD.
+
+## 8. تسلسل التحقق النهائي
+
+```powershell
+cd C:\Users\muham\Desktop\AegisScan-1\packages\platform
+docker compose config
+docker compose up -d postgres redis
+docker compose ps
+
+cd ..\backend
+python manage.py check
+python manage.py showmigrations
+python manage.py migrate
+```
+
+بعد نجاح قاعدة البيانات فقط انتقل إلى تشغيل Django/FastAPI/Celery والواجهة.
