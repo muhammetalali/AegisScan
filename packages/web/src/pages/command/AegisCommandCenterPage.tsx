@@ -19,8 +19,8 @@ export function AegisCommandCenterPage() {
 
   const summary = summaryQuery.data
   const risk = riskQuery.data
-  const recent = Array.isArray(recentQuery.data) ? recentQuery.data : []
   const posture = typeof summary?.security_score === 'number' ? summary.security_score : 0
+  const recent = useMemo(() => Array.isArray(recentQuery.data) ? recentQuery.data : [], [recentQuery.data])
 
   const signals = useMemo<AegisCommandSignal[]>(() => {
     const result: AegisCommandSignal[] = []
