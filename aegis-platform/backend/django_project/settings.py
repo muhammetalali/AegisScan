@@ -2,18 +2,20 @@ import environ
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(
     DEBUG=(bool, False),
-    SECRET_KEY=(str, 'django-insecure-change-me-in-production'),
+    SECRET_KEY=(str, ''),
     ALLOWED_HOSTS=(list, ['localhost', '127.0.0.1']),
     CORS_ALLOWED_ORIGINS=(list, ['http://localhost:5173', 'http://127.0.0.1:5173']),
     DATABASE_URL=(str, 'postgresql://aegis:aegis@localhost:5432/aegisdb'),
     REDIS_URL=(str, 'redis://localhost:6379/0'),
     CELERY_BROKER_URL=(str, 'redis://localhost:6379/0'),
     CELERY_RESULT_BACKEND=(str, 'redis://localhost:6379/0'),
-    JWT_SECRET_KEY=(str, 'jwt-secret-change-me'),
+    JWT_SECRET_KEY=(str, ''),
     JWT_ACCESS_TOKEN_LIFETIME=(int, 60),
     JWT_REFRESH_TOKEN_LIFETIME=(int, 1440),
     AUTH_COOKIE_SECURE=(bool, False),
@@ -32,6 +34,13 @@ environ.Env.read_env(BASE_DIR / '.env')
 SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
+JWT_SECRET_KEY = env('JWT_SECRET_KEY')
+
+if not DEBUG:
+    if not SECRET_KEY or SECRET_KEY in {'django-insecure-change-me', 'replace-with-a-long-random-secret'}:
+        raise ImproperlyConfigured('SECRET_KEY must be explicitly configured when DEBUG=False.')
+    if not JWT_SECRET_KEY or JWT_SECRET_KEY in {'jwt-secret-change-me', 'replace-with-a-separate-long-random-secret'}:
+        raise ImproperlyConfigured('JWT_SECRET_KEY must be explicitly configured when DEBUG=False.')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -168,7 +177,7 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
     'ALGORITHM': 'HS256',
-    'SIGNING_KEY': env('JWT_SECRET_KEY'),
+    'SIGNING_KEY': JWT_SECRET_KEY,
     'AUTH_HEADER_TYPES': ('Bearer',),
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
     'USER_ID_FIELD': 'id',
