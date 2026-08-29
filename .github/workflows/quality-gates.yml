@@ -63,7 +63,14 @@ jobs:
           python-version: "3.12"
       - name: Install backend dependencies
         working-directory: packages/backend
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt ruff bandit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt ruff bandit
+      - name: Verify critical runtime dependencies
+        working-directory: packages/backend
+        run: |
+          python -c "import defusedxml; print('DEFUSEDXML_OK', defusedxml.__version__)"
+          python -c "import fastapi; import django; import redis; import celery; print('BACKEND_DEPS_OK')"
       - name: Ruff lint
         run: |
           ruff check packages/backend --select E9
@@ -170,6 +177,9 @@ jobs:
       - name: Install backend dependencies
         working-directory: packages/backend
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest
+      - name: Verify critical runtime dependencies
+        working-directory: packages/backend
+        run: python -c "import defusedxml; print('DEFUSEDXML_OK', defusedxml.__version__)"
       - name: Start data services
         run: docker compose -f packages/platform/docker-compose.yml up -d postgres redis
       - name: Wait for data services
