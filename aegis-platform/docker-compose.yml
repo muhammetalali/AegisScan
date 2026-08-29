@@ -7,128 +7,79 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-aegisdb}
       POSTGRES_USER: ${POSTGRES_USER:-aegis}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
-
   redis:
     image: redis:7-alpine
     container_name: aegis-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+    ports: ["6379:6379"]
+    volumes: [redis_data:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-
   django:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.django
+    build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-django
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn django_project.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120"
-    volumes:
-      - ./backend:/app
-      - media_data:/app/media
-      - static_data:/app/staticfiles
-    ports:
-      - "8000:8000"
+    volumes: [./backend:/app, media_data:/app/media, static_data:/app/staticfiles]
+    ports: ["8000:8000"]
     env_file: ./backend/.env
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
       interval: 30s
       timeout: 10s
       retries: 3
-
   fastapi:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.fastapi
+    build: {context: ./backend, dockerfile: Dockerfile.fastapi}
     container_name: aegis-fastapi
     restart: unless-stopped
     command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers 2
-    volumes:
-      - ./backend:/app
-    ports:
-      - "8001:8001"
+    volumes: [./backend:/app]
+    ports: ["8001:8001"]
     env_file: ./backend/.env
-    depends_on:
-      - django
-      - redis
-
+    depends_on: [django, redis]
   celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.django
+    build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-worker
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app worker -l info -c 4
-    volumes:
-      - ./backend:/app
+    volumes: [./backend:/app]
     env_file: ./backend/.env
-    depends_on:
-      - redis
-      - postgres
-
+    depends_on: [redis, postgres]
   celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.django
+    build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-beat
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app beat -l info
-    volumes:
-      - ./backend:/app
+    volumes: [./backend:/app]
     env_file: ./backend/.env
-    depends_on:
-      - redis
-      - postgres
-
+    depends_on: [redis, postgres]
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    build: {context: ./frontend, dockerfile: Dockerfile}
     container_name: aegis-frontend
     restart: unless-stopped
-    ports:
-      - "5173:80"
-    depends_on:
-      - django
-      - fastapi
-
+    expose: ["80"]
+    depends_on: [django, fastapi]
   nginx:
     image: nginx:alpine
     container_name: aegis-nginx
     restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
+    ports: ["80:80"]
     volumes:
       - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docker/ssl:/etc/nginx/ssl:ro
-      - static_data:/usr/share/nginx/html/static:ro
-      - media_data:/usr/share/nginx/html/media:ro
-    depends_on:
-      - django
-      - fastapi
-      - frontend
-
+    depends_on: [django, fastapi, frontend]
 volumes:
   postgres_data:
   redis_data:
