@@ -55,9 +55,35 @@ def _apply_identity_claims(token, user: User) -> None:
     token['permissions'] = [p.value if hasattr(p, 'value') else p for p in ROLE_PERMISSIONS.get(user.role, [])]
 
 
-class AegisTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """Issue short-lived access tokens with a revocable session-version claim."""
+def _cookie_kwargs(name: str) -> dict:
+    return {
+        'key': name,
+        'value': '',
+        'httponly': getattr(settings, f'{name.upper()}_HTTPONLY', True),
+        'secure': getattr(settings, f'{name.upper()}_SECURE', not settings.DEBUG),
+        'samesite': getattr(settings, f'{name.upper()}_SAMESITE', 'Lax'),
+        'path': '/',
+    }
 
+
+def _set_auth_cookie(response: Response, name: str, token: str, max_age: int) -> None:
+    response.set_cookie(
+        key=name,
+        value=token,
+        max_age=max_age,
+        httponly=True,
+        secure=(not settings.DEBUG),
+        samesite='Lax',
+        path='/',
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(settings.AUTH_ACCESS_COOKIE, path='/', samesite='Lax')
+    response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path='/', samesite='Lax')
+
+
+class AegisTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user: User):
         token = super().get_token(user)
@@ -66,14 +92,8 @@ class AegisTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class AegisTokenRefreshSerializer(TokenRefreshSerializer):
-    """Reject stale sessions and mint refreshed access tokens from current identity state."""
-
     def validate(self, attrs):
-        # Parse the submitted refresh token explicitly. Recent SimpleJWT releases
-        # do not guarantee that ``self.token`` is exposed by TokenRefreshSerializer,
-        # while AegisScan needs the refresh claims before rotation/blacklisting.
         refresh_token = self.token_class(attrs['refresh'])
-
         user_id = refresh_token.get('user_id') or refresh_token.get('sub')
         if user_id is None:
             raise AuthenticationFailed('Refresh token is missing user identity')
@@ -85,11 +105,7 @@ class AegisTokenRefreshSerializer(TokenRefreshSerializer):
         if int(refresh_token.get('session_version', 1)) != int(user.session_version):
             raise AuthenticationFailed('Refresh token has been revoked')
 
-        # Delegate rotation and blacklist semantics to SimpleJWT only after the
-        # AegisScan session-version check succeeds. This keeps a stale refresh
-        # token from being mutated while preserving normal rotation behaviour.
         data = super().validate(attrs)
-
         access = AccessToken(data['access'])
         _apply_identity_claims(access, user)
         data['access'] = str(access)
@@ -123,10 +139,18 @@ class SecureTokenObtainPairView(TokenObtainPairView):
 
         response = super().post(request, *args, **kwargs)
         if response.status_code == status.HTTP_200_OK and user:
+            access_token = response.data.get('access')
+            refresh_token = response.data.get('refresh')
             user.last_login_ip = request.META.get('REMOTE_ADDR')
             user.last_activity = timezone.now()
             user.save(update_fields=['last_login_ip', 'last_activity'])
             response.data['user'] = UserSerializer(user, context={'request': request}).data
+            # JWTs are authentication credentials, never persistent browser data.
+            if access_token and refresh_token:
+                _set_auth_cookie(response, settings.AUTH_ACCESS_COOKIE, access_token, int(settings.JWT_ACCESS_TOKEN_LIFETIME.total_seconds()))
+                _set_auth_cookie(response, settings.AUTH_REFRESH_COOKIE, refresh_token, int(settings.JWT_REFRESH_TOKEN_LIFETIME.total_seconds()))
+                response.data.pop('access', None)
+                response.data.pop('refresh', None)
             record_user_audit(request=request, action='auth.login', result='success', user=user, resource_id=user.pk, metadata={'two_factor': bool(user.two_factor_enabled)}, start=started)
         elif response.status_code != status.HTTP_200_OK:
             record_user_audit(request=request, action='auth.login', result='failure', user=user, resource_id=user.pk if user else '', metadata={'reason': 'authentication_failed'}, start=started)
@@ -135,6 +159,27 @@ class SecureTokenObtainPairView(TokenObtainPairView):
 
 class SecureTokenRefreshView(TokenRefreshView):
     serializer_class = AegisTokenRefreshSerializer
+
+    def post(self, request, *args, **kwargs):
+        refresh_token = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE)
+        if not refresh_token:
+            return Response({'detail': 'Refresh token is required'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        data = request.data.copy()
+        data['refresh'] = refresh_token
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
+
+        access_token = response.data.get('access')
+        rotated_refresh = response.data.get('refresh')
+        if access_token:
+            _set_auth_cookie(response, settings.AUTH_ACCESS_COOKIE, access_token, int(settings.JWT_ACCESS_TOKEN_LIFETIME.total_seconds()))
+            response.data.pop('access', None)
+        if rotated_refresh:
+            _set_auth_cookie(response, settings.AUTH_REFRESH_COOKIE, rotated_refresh, int(settings.JWT_REFRESH_TOKEN_LIFETIME.total_seconds()))
+            response.data.pop('refresh', None)
+        return response
 
 
 @api_view(['POST'])
