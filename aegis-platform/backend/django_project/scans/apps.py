@@ -1,9 +1,11 @@
 from django.apps import AppConfig
 
+
 class ScansConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'scans'
+    name = 'django_project.scans'
+    label = 'scans'
     verbose_name = 'Scans'
 
     def ready(self):
-        import scans.signals  # noqa
+        from django_project.scans import signals  # noqa: F401
