@@ -45,7 +45,7 @@ Django and FastAPI both expose `/api/v1`. A production reverse proxy must route 
 
 ## Token lifecycle
 
-- Access tokens are short-lived and should not be treated as revocable durable credentials.
+- Access tokens are bounded by the configured `JWT_ACCESS_TOKEN_LIFETIME` and should not be treated as revocable durable credentials.
 - Refresh tokens use rotation and blacklist-after-rotation.
 - The SimpleJWT blacklist application must be migrated in every environment before refresh-token revocation is considered operational.
 - Password changes, account deactivation, and disabling 2FA trigger refresh-token revocation through the Users pre-save security signal.
