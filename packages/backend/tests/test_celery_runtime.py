@@ -12,7 +12,10 @@ def test_celery_redis_live_round_trip():
     ping = inspector.ping() or {}
 
     assert ping, "No live Celery workers responded to inspect ping"
-    assert any("pong" in response for response in ping.values())
+    assert any(
+        isinstance(response, dict) and response.get("ok") == "pong"
+        for response in ping.values()
+    ), f"Live Celery workers did not return pong: {ping!r}"
 
     result = celery_health.apply_async(queue="health", routing_key="health")
     payload = result.get(timeout=20, propagate=True)
