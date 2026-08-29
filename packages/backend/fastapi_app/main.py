@@ -28,6 +28,7 @@ from .services.policy_engine import initialize_policy_store  # noqa: E402
 from .services.scan_orchestrator import ScanOrchestrator  # noqa: E402
 from .services.validation_state import get_validation  # noqa: E402
 from .services.websocket_manager import WebSocketManager  # noqa: E402
+from .services.websocket_session_guard import start_websocket_session_guard, stop_websocket_session_guard  # noqa: E402
 from .services.workflow_live_bridge import WorkflowLiveBridge  # noqa: E402
 from .core.config import settings  # noqa: E402
 from .core.security import verify_token  # noqa: E402
@@ -95,6 +96,16 @@ async def websocket_user(websocket: WebSocket) -> dict | None:
     return await verify_token(token) if token else None
 
 
+def _session_guard(user: dict) -> asyncio.Task[None]:
+    return asyncio.create_task(
+        __import__("fastapi_app.services.websocket_session_guard", fromlist=["monitor_websocket_session"]).monitor_websocket_session(
+            websocket=_CURRENT_WEBSOCKET,
+            user_id=str(user["id"]),
+            session_version=int(user.get("session_version", 0)),
+        )
+    )
+
+
 @sync_to_async
 def scan_accessible(user_id: str, scan_id: str, is_superuser: bool = False) -> bool:
     from django_project.scans.models import Scan
@@ -122,11 +133,15 @@ async def websocket_workflow(websocket: WebSocket):
         await websocket.close(code=4001)
         return
     await websocket_manager.connect("workflow", websocket, subprotocol="bearer")
+    guard_task = await start_websocket_session_guard(websocket, user)
     try:
         await websocket.send_json({"type": "workflow.connected", "user_id": user.get("id")})
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
+        await stop_websocket_session_guard(guard_task)
         websocket_manager.disconnect("workflow", websocket)
 
 
@@ -139,10 +154,14 @@ async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
     await websocket_manager.connect(scan_id, websocket, subprotocol="bearer")
     await websocket_manager.connect(f"scan_{scan_id}", websocket, subprotocol="bearer")
     await websocket_manager.connect(f"validation_{scan_id}", websocket, subprotocol="bearer")
+    guard_task = await start_websocket_session_guard(websocket, user)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
+        await stop_websocket_session_guard(guard_task)
         websocket_manager.disconnect(scan_id, websocket)
         websocket_manager.disconnect(f"scan_{scan_id}", websocket)
         websocket_manager.disconnect(f"validation_{scan_id}", websocket)
@@ -157,16 +176,19 @@ async def websocket_validation_progress(websocket: WebSocket, validation_id: str
     await websocket_manager.connect(validation_id, websocket, subprotocol="bearer")
     await websocket_manager.connect(f"validation_{validation_id}", websocket, subprotocol="bearer")
     await websocket_manager.connect(f"scan_{validation_id}", websocket, subprotocol="bearer")
+    guard_task = await start_websocket_session_guard(websocket, user)
     try:
         validation = get_validation(validation_id)
         if validation:
             await websocket.send_json({"type": "snapshot", "validation_id": validation_id, "status": validation["status"], "progress": validation["progress"], "current_phase": validation["current_phase"]})
-    except Exception:
-        pass
-    try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await stop_websocket_session_guard(guard_task)
         websocket_manager.disconnect(validation_id, websocket)
         websocket_manager.disconnect(f"scan_{validation_id}", websocket)
         websocket_manager.disconnect(f"validation_{validation_id}", websocket)
@@ -179,10 +201,14 @@ async def websocket_notifications(websocket: WebSocket):
         await websocket.close(code=4001)
         return
     await websocket_manager.connect(f"user_{user['id']}", websocket, subprotocol="bearer")
+    guard_task = await start_websocket_session_guard(websocket, user)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
+        await stop_websocket_session_guard(guard_task)
         websocket_manager.disconnect(f"user_{user['id']}", websocket)
 
 
@@ -194,10 +220,14 @@ async def websocket_system_monitor(websocket: WebSocket):
         return
     require_permission(user, "system.monitor")
     await websocket_manager.connect("system_monitor", websocket, subprotocol="bearer")
+    guard_task = await start_websocket_session_guard(websocket, user)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
+        await stop_websocket_session_guard(guard_task)
         websocket_manager.disconnect("system_monitor", websocket)
 
 
