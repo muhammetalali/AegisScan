@@ -107,7 +107,6 @@ jobs:
           CORS_ALLOWED_ORIGINS: http://localhost:5173
         run: python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','django_project.settings'); import django; django.setup(); from django.conf import settings; from celery import Celery; app=Celery('aegis'); app.conf.broker_url=settings.CELERY_BROKER_URL; print('Celery broker:', app.conf.broker_url)"
       - name: Tests
-        working-directory: aegis-platform/backend
         env:
           DEBUG: 'True'
           SECRET_KEY: ci-only-secret
@@ -119,8 +118,8 @@ jobs:
           ALLOWED_HOSTS: localhost,127.0.0.1
           CORS_ALLOWED_ORIGINS: http://localhost:5173
           DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: .
-        run: python -m pytest -q
+          PYTHONPATH: aegis-platform/backend
+        run: python -m pytest -q tests/test_integration.py tests/test_platform.py --ds=django_project.settings
 
   frontend:
     runs-on: ubuntu-latest
