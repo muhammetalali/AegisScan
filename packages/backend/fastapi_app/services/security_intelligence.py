@@ -131,7 +131,7 @@ async def analyze_dependency_manifest(content: str, filename: str) -> ExecutionR
 
     try:
         osv_results = await _query_osv(dependencies, ecosystem)
-    except (httpx.HTTPError, ValueError) as exc:
+    except Exception as exc:
         return ExecutionResult("completed", [], [{"id": evidence_id, "type": "dependency_manifest", "engine": "dependency_risk", "created_at": _utc(), "data": {"filename": filename, "ecosystem": ecosystem, "dependency_count": len(dependencies), "registry": "OSV", "registry_status": "error", "error": str(exc)}}], {"engine": "dependency_risk", "dependency_count": len(dependencies), "cve_correlation": False, "registry_status": "error"})
 
     findings: list[dict[str, Any]] = []
