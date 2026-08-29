@@ -1,9 +1,11 @@
 from django.apps import AppConfig
 
+
 class SystemConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'system'
+    name = 'django_project.system'
+    label = 'system'
     verbose_name = 'System Management'
 
     def ready(self):
-        import system.signals  # noqa
+        from django_project.system import signals  # noqa: F401
