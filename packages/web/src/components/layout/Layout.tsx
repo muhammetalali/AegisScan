@@ -7,8 +7,6 @@ import { NAV_GROUPS, type NavItem } from './navConfig'
 import { useAuthStore } from '@/stores/authStore'
 import { hasPermission } from '@/auth/rbac'
 
-export { NAV_GROUPS }
-
 type NavGroup = { label: string; items: NavItem[] }
 
 export const Layout = () => {
