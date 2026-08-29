@@ -1,5 +1,6 @@
 from typing import Dict, Set
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 import logging
 
 logger = logging.getLogger(__name__)
@@ -11,7 +12,8 @@ class WebSocketManager:
         self.user_connections: Dict[str, Set[WebSocket]] = {}
 
     async def connect(self, channel: str, websocket: WebSocket, subprotocol: str | None = None):
-        await websocket.accept(subprotocol=subprotocol)
+        if websocket.client_state == WebSocketState.CONNECTING:
+            await websocket.accept(subprotocol=subprotocol)
         if channel not in self.connections:
             self.connections[channel] = set()
         self.connections[channel].add(websocket)
