@@ -69,15 +69,26 @@ class AegisTokenRefreshSerializer(TokenRefreshSerializer):
     """Reject stale sessions and mint refreshed access tokens from current identity state."""
 
     def validate(self, attrs):
-        data = super().validate(attrs)
-        user_id = self.token.get('user_id') or self.token.get('sub')
+        # Parse the submitted refresh token explicitly. Recent SimpleJWT releases
+        # do not guarantee that ``self.token`` is exposed by TokenRefreshSerializer,
+        # while AegisScan needs the refresh claims before rotation/blacklisting.
+        refresh_token = self.token_class(attrs['refresh'])
+
+        user_id = refresh_token.get('user_id') or refresh_token.get('sub')
         if user_id is None:
             raise AuthenticationFailed('Refresh token is missing user identity')
+
         user = User.objects.filter(pk=user_id).first()
         if not user or not user.is_active:
             raise AuthenticationFailed('User account is inactive or unavailable')
-        if int(self.token.get('session_version', 1)) != int(user.session_version):
+
+        if int(refresh_token.get('session_version', 1)) != int(user.session_version):
             raise AuthenticationFailed('Refresh token has been revoked')
+
+        # Delegate rotation and blacklist semantics to SimpleJWT only after the
+        # AegisScan session-version check succeeds. This keeps a stale refresh
+        # token from being mutated while preserving normal rotation behaviour.
+        data = super().validate(attrs)
 
         access = AccessToken(data['access'])
         _apply_identity_claims(access, user)
