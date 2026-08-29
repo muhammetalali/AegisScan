@@ -1,9 +1,11 @@
 from django.apps import AppConfig
 
+
 class KnowledgeConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'knowledge'
+    name = 'django_project.knowledge'
+    label = 'knowledge'
     verbose_name = 'Knowledge Base'
 
     def ready(self):
-        import knowledge.signals  # noqa
+        from django_project.knowledge import signals  # noqa: F401
