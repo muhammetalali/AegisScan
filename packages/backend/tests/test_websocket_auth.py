@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 
 from fastapi_app.core.config import settings
 from fastapi_app.main import app
-from django_project.users.auth_security import AegisTokenObtainPairSerializer
+from users.auth_security import AegisTokenObtainPairSerializer
 
 
 @pytest.mark.django_db
