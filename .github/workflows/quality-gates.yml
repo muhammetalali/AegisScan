@@ -51,9 +51,9 @@ jobs:
       LOG_TO_FILE: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install backend dependencies
@@ -95,34 +95,21 @@ jobs:
     name: Frontend quality
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     defaults:
       run:
         working-directory: packages/web
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: packages/web/package-lock.json
-      - name: Synchronize npm lockfile
-        run: npm install --package-lock-only --ignore-scripts
-      - name: Persist synchronized lockfile
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/enterprise-platform-ui-v2'
-        working-directory: ${{ github.workspace }}
-        run: |
-          if git diff --quiet -- packages/web/package-lock.json; then
-            echo 'package-lock.json already synchronized.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add packages/web/package-lock.json
-          git commit -m 'chore(web): synchronize npm lockfile [lock-sync]'
-          git push origin HEAD:${GITHUB_REF_NAME}
+      - name: Verify npm lockfile is synchronized
+        run: npm install --package-lock-only --ignore-scripts --dry-run
       - name: Clean install from lockfile
         run: npm ci
       - name: TypeScript typecheck
@@ -141,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Validate Compose
         run: docker compose -f packages/platform/docker-compose.yml config
       - name: Verify service definitions
@@ -170,9 +157,9 @@ jobs:
       LOG_TO_FILE: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install backend dependencies
