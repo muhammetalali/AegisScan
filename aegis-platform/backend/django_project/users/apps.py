@@ -1,9 +1,11 @@
 from django.apps import AppConfig
 
+
 class UsersConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'users'
+    name = 'django_project.users'
+    label = 'users'
     verbose_name = 'Users & Authentication'
 
     def ready(self):
-        import users.signals  # noqa
+        from django_project.users import signals  # noqa: F401
