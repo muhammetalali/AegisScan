@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env(
     DEBUG=(bool, False),
     SECRET_KEY=(str, 'django-insecure-change-me-in-production'),
-    ALLOWED_HOSTS=(list, ['*']),
+    ALLOWED_HOSTS=(list, ['localhost', '127.0.0.1']),
     CORS_ALLOWED_ORIGINS=(list, ['http://localhost:5173', 'http://127.0.0.1:5173']),
     DATABASE_URL=(str, 'postgresql://aegis:aegis@localhost:5432/aegisdb'),
     REDIS_URL=(str, 'redis://localhost:6379/0'),
@@ -16,6 +16,7 @@ env = environ.Env(
     JWT_SECRET_KEY=(str, 'jwt-secret-change-me'),
     JWT_ACCESS_TOKEN_LIFETIME=(int, 60),
     JWT_REFRESH_TOKEN_LIFETIME=(int, 1440),
+    AUTH_COOKIE_SECURE=(bool, False),
     EMAIL_HOST=(str, 'smtp.gmail.com'),
     EMAIL_PORT=(int, 587),
     EMAIL_HOST_USER=(str, ''),
@@ -40,9 +41,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # Third party
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
     'django_celery_beat',
@@ -53,13 +54,11 @@ INSTALLED_APPS = [
     'health_check.db',
     'health_check.cache',
     'health_check.storage',
-    # Local apps
     'core',
     'users',
     'projects',
     'scans',
     'vulnerabilities',
-    'reports',
     'assets',
     'compliance',
     'knowledge',
@@ -79,7 +78,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'aegis_core.urls'
+ROOT_URLCONF = 'django_project.urls'
 
 TEMPLATES = [
     {
@@ -97,8 +96,8 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'aegis_core.wsgi.application'
-ASGI_APPLICATION = 'aegis_core.asgi.application'
+WSGI_APPLICATION = 'django_project.wsgi.application'
+ASGI_APPLICATION = 'django_project.asgi.application'
 
 DATABASES = {
     'default': env.db('DATABASE_URL'),
@@ -123,12 +122,25 @@ SESSION_CACHE_ALIAS = 'default'
 
 CORS_ALLOWED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = DEBUG
-
+CORS_ALLOW_ALL_ORIGINS = False
 CSRF_TRUSTED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
+
+AUTH_COOKIE_SECURE = env('AUTH_COOKIE_SECURE')
+AUTH_COOKIE_SAMESITE = 'Lax'
+AUTH_COOKIE_HTTPONLY = True
+AUTH_ACCESS_COOKIE = 'aegis_access'
+AUTH_REFRESH_COOKIE = 'aegis_refresh'
+
+SESSION_COOKIE_SECURE = AUTH_COOKIE_SECURE
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SECURE = AUTH_COOKIE_SECURE
+CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_HTTPONLY = False
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        'users.authentication.CookieJWTAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ),
