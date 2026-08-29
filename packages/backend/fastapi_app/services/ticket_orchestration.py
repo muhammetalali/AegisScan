@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
+
 
 @dataclass(frozen=True)
 class TicketResult:
@@ -14,69 +16,285 @@ class TicketResult:
     url: str | None
     response: dict[str, Any]
 
+
 class TicketProvider:
     name: str
-    async def create(self, *, title: str, description: str, priority: str, evidence: list[dict[str, Any]], finding: dict[str, Any]) -> TicketResult:
+
+    async def create(
+        self,
+        *,
+        title: str,
+        description: str,
+        priority: str,
+        evidence: list[dict[str, Any]],
+        finding: dict[str, Any],
+    ) -> TicketResult:
         raise NotImplementedError
+
 
 class JiraProvider(TicketProvider):
     name = "jira"
 
-    async def create(self, *, title: str, description: str, priority: str, evidence: list[dict[str, Any]], finding: dict[str, Any]) -> TicketResult:
-        base, token, email, project = (os.getenv("JIRA_BASE_URL", "").rstrip("/"), os.getenv("JIRA_API_TOKEN"), os.getenv("JIRA_USER_EMAIL"), os.getenv("JIRA_PROJECT_KEY"))
-        if not all((base, token, email, project)):
-            return TicketResult(self.name, "not_configured", None, None, {"required": ["JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_USER_EMAIL", "JIRA_PROJECT_KEY"]})
-        adf = {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in description.splitlines() if line]}
-        payload = {"fields": {"project": {"key": project}, "summary": title[:255], "issuetype": {"name": os.getenv("JIRA_ISSUE_TYPE", "Task")}, "description": adf, "priority": {"name": priority.title()}, "labels": ["aegisscan", "security-validation"]}}
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True, auth=(email, token), headers={"Accept": "application/json", "Content-Type": "application/json"}) as client:
-            response = await client.post(f"{base}/rest/api/3/issue", json=payload)
+    @staticmethod
+    def _is_valid_base_url(base: str) -> bool:
+        """Reject unset/placeholder Jira URLs before any network request."""
+        if not base:
+            return False
+
+        parsed = urlparse(base)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return False
+
+        hostname = (parsed.hostname or "").lower()
+        placeholder_hosts = {
+            "your-instance.atlassian.net",
+            "example.atlassian.net",
+            "localhost",
+            "127.0.0.1",
+        }
+        return hostname not in placeholder_hosts
+
+    async def create(
+        self,
+        *,
+        title: str,
+        description: str,
+        priority: str,
+        evidence: list[dict[str, Any]],
+        finding: dict[str, Any],
+    ) -> TicketResult:
+        base, token, email, project = (
+            os.getenv("JIRA_BASE_URL", "").rstrip("/"),
+            os.getenv("JIRA_API_TOKEN"),
+            os.getenv("JIRA_USER_EMAIL"),
+            os.getenv("JIRA_PROJECT_KEY"),
+        )
+        required = [
+            "JIRA_BASE_URL",
+            "JIRA_API_TOKEN",
+            "JIRA_USER_EMAIL",
+            "JIRA_PROJECT_KEY",
+        ]
+        if not (
+            self._is_valid_base_url(base)
+            and token
+            and email
+            and project
+        ):
+            return TicketResult(
+                self.name,
+                "not_configured",
+                None,
+                None,
+                {"required": required},
+            )
+
+        adf = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": line}],
+                }
+                for line in description.splitlines()
+                if line
+            ],
+        }
+        payload = {
+            "fields": {
+                "project": {"key": project},
+                "summary": title[:255],
+                "issuetype": {
+                    "name": os.getenv("JIRA_ISSUE_TYPE", "Task")
+                },
+                "description": adf,
+                "priority": {"name": priority.title()},
+                "labels": ["aegisscan", "security-validation"],
+            }
+        }
+        async with httpx.AsyncClient(
+            timeout=15,
+            follow_redirects=True,
+            auth=(email, token),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+        ) as client:
+            response = await client.post(
+                f"{base}/rest/api/3/issue",
+                json=payload,
+            )
             response.raise_for_status()
             data = response.json()
+
         key = data.get("key")
-        return TicketResult(self.name, "created", key, f"{base}/browse/{key}" if key else None, data)
+        return TicketResult(
+            self.name,
+            "created",
+            key,
+            f"{base}/browse/{key}" if key else None,
+            data,
+        )
+
 
 class ServiceNowProvider(TicketProvider):
     name = "servicenow"
 
-    async def create(self, *, title: str, description: str, priority: str, evidence: list[dict[str, Any]], finding: dict[str, Any]) -> TicketResult:
-        base, token = os.getenv("SERVICENOW_BASE_URL", "").rstrip("/"), os.getenv("SERVICENOW_API_TOKEN")
+    async def create(
+        self,
+        *,
+        title: str,
+        description: str,
+        priority: str,
+        evidence: list[dict[str, Any]],
+        finding: dict[str, Any],
+    ) -> TicketResult:
+        base, token = (
+            os.getenv("SERVICENOW_BASE_URL", "").rstrip("/"),
+            os.getenv("SERVICENOW_API_TOKEN"),
+        )
         if not base or not token:
-            return TicketResult(self.name, "not_configured", None, None, {"required": ["SERVICENOW_BASE_URL", "SERVICENOW_API_TOKEN"]})
-        urgency = {"critical": "1", "high": "1", "medium": "2", "low": "3"}.get(priority.lower(), "3")
-        payload = {"short_description": title[:160], "description": description, "urgency": urgency, "impact": urgency, "category": "Security", "u_aegisscan_finding_id": str(finding.get("id") or finding.get("finding_id") or "")}
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers={"Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json"}) as client:
-            response = await client.post(f"{base}/api/now/table/{os.getenv('SERVICENOW_TABLE', 'incident')}", json=payload)
+            return TicketResult(
+                self.name,
+                "not_configured",
+                None,
+                None,
+                {
+                    "required": [
+                        "SERVICENOW_BASE_URL",
+                        "SERVICENOW_API_TOKEN",
+                    ]
+                },
+            )
+
+        urgency = {
+            "critical": "1",
+            "high": "1",
+            "medium": "2",
+            "low": "3",
+        }.get(priority.lower(), "3")
+        payload = {
+            "short_description": title[:160],
+            "description": description,
+            "urgency": urgency,
+            "impact": urgency,
+            "category": "Security",
+            "u_aegisscan_finding_id": str(
+                finding.get("id") or finding.get("finding_id") or ""
+            ),
+        }
+        async with httpx.AsyncClient(
+            timeout=15,
+            follow_redirects=True,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+        ) as client:
+            response = await client.post(
+                f"{base}/api/now/table/{os.getenv('SERVICENOW_TABLE', 'incident')}",
+                json=payload,
+            )
             response.raise_for_status()
             wrapper = response.json()
             data = wrapper.get("result", wrapper)
+
         number, sys_id = data.get("number"), data.get("sys_id")
         response_payload = dict(data)
         if number:
             response_payload["number"] = number
         if sys_id:
             response_payload["sys_id"] = sys_id
-        return TicketResult(self.name, "created", sys_id or number, f"{base}/nav_to.do?uri=incident.do?sys_id={sys_id}" if sys_id else None, response_payload)
+        return TicketResult(
+            self.name,
+            "created",
+            sys_id or number,
+            f"{base}/nav_to.do?uri=incident.do?sys_id={sys_id}"
+            if sys_id
+            else None,
+            response_payload,
+        )
+
 
 class TicketOrchestrator:
     def __init__(self, providers: list[TicketProvider] | None = None) -> None:
         self.providers = providers or [JiraProvider(), ServiceNowProvider()]
 
-    async def create_from_decision(self, *, provider: str, decision: dict[str, Any], evidence: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        matched = next((item for item in self.providers if item.name == provider.lower().strip()), None)
-        if not matched: raise ValueError(f"unsupported ticket provider: {provider}")
-        finding = decision.get("finding") if isinstance(decision.get("finding"), dict) else decision
-        title = str(decision.get("title") or finding.get("title") or "AegisScan Security Remediation")
-        severity = str(decision.get("severity") or finding.get("severity") or "medium").lower()
+    async def create_from_decision(
+        self,
+        *,
+        provider: str,
+        decision: dict[str, Any],
+        evidence: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        matched = next(
+            (
+                item
+                for item in self.providers
+                if item.name == provider.lower().strip()
+            ),
+            None,
+        )
+        if not matched:
+            raise ValueError(f"unsupported ticket provider: {provider}")
+        finding = (
+            decision.get("finding")
+            if isinstance(decision.get("finding"), dict)
+            else decision
+        )
+        title = str(
+            decision.get("title")
+            or finding.get("title")
+            or "AegisScan Security Remediation"
+        )
+        severity = str(
+            decision.get("severity")
+            or finding.get("severity")
+            or "medium"
+        ).lower()
         description = self._description(decision, evidence or [])
-        result = await matched.create(title=title, description=description, priority=severity, evidence=evidence or [], finding=finding)
-        return {"provider": result.provider, "status": result.status, "external_id": result.external_id, "url": result.url, "response": result.response}
+        result = await matched.create(
+            title=title,
+            description=description,
+            priority=severity,
+            evidence=evidence or [],
+            finding=finding,
+        )
+        return {
+            "provider": result.provider,
+            "status": result.status,
+            "external_id": result.external_id,
+            "url": result.url,
+            "response": result.response,
+        }
 
     @staticmethod
-    def _description(decision: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
-        fusion = decision.get("fusion") if isinstance(decision.get("fusion"), dict) else {}
-        risk = decision.get("dynamic_risk") if isinstance(decision.get("dynamic_risk"), dict) else {}
-        lines = ["AegisScan automated remediation ticket.", f"Severity: {decision.get('severity', 'unknown')}", f"Risk score: {decision.get('final_score', risk.get('score', 'unknown'))}", f"Fusion confidence: {decision.get('confidence', fusion.get('confidence', 'unknown'))}", f"Recommended action: {decision.get('recommended_action', 'Investigate and remediate the finding.')}"]
-        if fusion.get("rationale"): lines.append(f"Fusion rationale: {fusion['rationale']}")
-        if risk.get("rationale"): lines.append(f"Dynamic risk rationale: {risk['rationale']}")
+    def _description(
+        decision: dict[str, Any], evidence: list[dict[str, Any]]
+    ) -> str:
+        fusion = (
+            decision.get("fusion")
+            if isinstance(decision.get("fusion"), dict)
+            else {}
+        )
+        risk = (
+            decision.get("dynamic_risk")
+            if isinstance(decision.get("dynamic_risk"), dict)
+            else {}
+        )
+        lines = [
+            "AegisScan automated remediation ticket.",
+            f"Severity: {decision.get('severity', 'unknown')}",
+            f"Risk score: {decision.get('final_score', risk.get('score', 'unknown'))}",
+            f"Fusion confidence: {decision.get('confidence', fusion.get('confidence', 'unknown'))}",
+            f"Recommended action: {decision.get('recommended_action', 'Investigate and remediate the finding.')}",
+        ]
+        if fusion.get("rationale"):
+            lines.append(f"Fusion rationale: {fusion['rationale']}")
+        if risk.get("rationale"):
+            lines.append(f"Dynamic risk rationale: {risk['rationale']}")
         lines.append(f"Evidence items: {len(evidence)}")
         return "\n".join(lines)
