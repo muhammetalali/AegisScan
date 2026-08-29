@@ -62,7 +62,7 @@ if not DEBUG:
 INSTALLED_APPS = [
     "django.contrib.admin", "django.contrib.auth", "django.contrib.contenttypes",
     "django.contrib.sessions", "django.contrib.messages", "django.contrib.staticfiles",
-    "rest_framework", "rest_framework_simplejwt", "corsheaders", "django_filters",
+    "rest_framework", "rest_framework_simplejwt", "rest_framework_simplejwt.token_blacklist", "corsheaders", "django_filters",
     "django_celery_beat", "django_celery_results", "channels", "drf_spectacular",
     "health_check", "core", "users", "projects", "scans", "vulnerabilities", "reports",
     "assets", "compliance", "knowledge", "notifications", "audit", "system", "security_sessions",
@@ -95,9 +95,6 @@ ASGI_APPLICATION = "django_project.asgi.application"
 
 DATABASES = {"default": env.db("DATABASE_URL")}
 DATABASES["default"]["CONN_MAX_AGE"] = 60
-# Let Django verify persistent PostgreSQL connections before reusing them.
-# This is important for Celery/long-lived workers and test runs where a
-# PostgreSQL connection can be closed outside Django's normal lifecycle.
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 if DATABASES["default"]["ENGINE"].endswith("postgresql"):
     DATABASES["default"]["OPTIONS"] = {"connect_timeout": 10}
