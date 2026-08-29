@@ -58,6 +58,7 @@ def _load_active_user(user_id: Any) -> Optional[Dict[str, Any]]:
         "role": user.role,
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
+        "session_version": user.session_version,
         "permissions": [p.value if hasattr(p, "value") else p for p in ROLE_PERMISSIONS.get(user.role, [])],
     }
 
@@ -73,8 +74,10 @@ async def verify_token(token: str) -> Optional[Dict[str, Any]]:
         user = await _load_active_user(user_id)
         if not user:
             return None
+        if int(payload.get("session_version", 0)) != int(user["session_version"]):
+            return None
         return {**payload, **user}
-    except JWTError:
+    except (JWTError, TypeError, ValueError):
         return None
 
 
@@ -89,6 +92,8 @@ async def verify_refresh_token(token: str) -> Optional[Dict[str, Any]]:
         user = await _load_active_user(user_id)
         if not user:
             return None
+        if int(payload.get("session_version", 0)) != int(user["session_version"]):
+            return None
         return {**payload, **user}
-    except JWTError:
+    except (JWTError, TypeError, ValueError):
         return None
