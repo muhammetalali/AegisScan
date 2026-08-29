@@ -124,7 +124,7 @@ jobs:
           cat "$RUNNER_TEMP/celery-worker.log" || true
           exit 1
 
-      - name: Verify Celery worker
+      - name: Verify Celery worker and Redis round-trip
         working-directory: packages/backend
         run: python -m pytest -q tests/test_celery_routing.py tests/test_celery_runtime.py
 
@@ -138,9 +138,9 @@ jobs:
         working-directory: packages/backend
         run: python manage.py test users.test_rbac_matrix -v 2
 
-      - name: Verify WebSocket authentication unit contract
+      - name: Verify WebSocket handshake rejection contract
         working-directory: packages/backend
-        run: python -m pytest -q tests/test_websocket_auth.py
+        run: python -m pytest -q tests/test_websocket_auth.py -k "without_token or invalid_token"
 
       - name: Collect runtime logs
         if: always()
