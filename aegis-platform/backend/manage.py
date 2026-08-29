@@ -4,9 +4,8 @@ import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-DJANGO_PROJECT_DIR = BASE_DIR / 'django_project'
-if str(DJANGO_PROJECT_DIR) not in sys.path:
-    sys.path.insert(0, str(DJANGO_PROJECT_DIR))
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 
