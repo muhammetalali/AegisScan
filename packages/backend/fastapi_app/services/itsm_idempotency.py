@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
-from . import itsm_remediation_v2 as core
+from . import itsm_remediation as core
 
 
 class ProviderReconciliationError(RuntimeError):
@@ -134,7 +134,7 @@ async def create_or_reconcile(
     idempotency_key: str,
 ) -> dict[str, Any]:
     """Retry-safe provider operation: reconcile before and between create attempts."""
-    request_hash = core._request_hash(decision, evidence)
+    request_hash = core._request_hash(action, decision, evidence)
     record = core._get_or_create_record(action["actionId"], provider, idempotency_key, request_hash)
 
     if record.get("request_hash") != request_hash:
@@ -152,7 +152,13 @@ async def create_or_reconcile(
     with lock:
         fresh = core._get_record(record["record_id"])
         if fresh.get("external_id"):
-            return {"status": "existing", "provider": provider, "external_id": fresh["external_id"], "external_url": fresh.get("external_url"), "response": fresh.get("response") or {}}
+            return {
+                "status": "existing",
+                "provider": provider,
+                "external_id": fresh["external_id"],
+                "external_url": fresh.get("external_url"),
+                "response": fresh.get("response") or {},
+            }
 
         found = await reconcile(provider, idempotency_key)
         if found:
@@ -165,19 +171,48 @@ async def create_or_reconcile(
                 response=found.get("response") or {},
                 last_error=None,
             )
-            core._audit(action["actionId"], "itsm.reconciled", action.get("requestedBy", "system"), f"Reconciled existing {provider} ticket before create", {"provider": provider, "external_id": found["external_id"]})
+            core._audit(
+                action["actionId"],
+                "itsm.reconciled",
+                action.get("requestedBy", "system"),
+                f"Reconciled existing {provider} ticket before create",
+                {"provider": provider, "external_id": found["external_id"]},
+            )
             return found
 
         last_error: Exception | None = None
         for attempt in range(1, 4):
-            core._update_record(record["record_id"], integration_state="creating", attempt_count=attempt, last_error=None)
+            core._update_record(
+                record["record_id"],
+                integration_state="creating",
+                attempt_count=attempt,
+                last_error=None,
+            )
             try:
-                result = await core._create_provider(provider, decision, action, evidence, idempotency_key)
+                result = await core._create_provider(
+                    provider, decision, action, evidence, idempotency_key
+                )
                 if result.get("external_id"):
-                    core._update_record(record["record_id"], integration_state="created", external_state="created", external_id=result["external_id"], external_url=result.get("external_url"), response=result.get("response") or {}, last_error=None)
-                    core._audit(action["actionId"], "itsm.created", action.get("requestedBy", "system"), f"Created {provider} remediation ticket", {"provider": provider, "external_id": result["external_id"], "attempt": attempt})
+                    core._update_record(
+                        record["record_id"],
+                        integration_state="created",
+                        external_state="created",
+                        external_id=result["external_id"],
+                        external_url=result.get("external_url"),
+                        response=result.get("response") or {},
+                        last_error=None,
+                    )
+                    core._audit(
+                        action["actionId"],
+                        "itsm.created",
+                        action.get("requestedBy", "system"),
+                        f"Created {provider} remediation ticket",
+                        {"provider": provider, "external_id": result["external_id"], "attempt": attempt},
+                    )
                     return result
-                last_error = ProviderReconciliationError(f"{provider} returned no external_id")
+                last_error = ProviderReconciliationError(
+                    f"{provider} returned no external_id"
+                )
             except Exception as exc:
                 last_error = exc
 
@@ -188,11 +223,35 @@ async def create_or_reconcile(
                 last_error = reconcile_exc
                 found = None
             if found:
-                core._update_record(record["record_id"], integration_state="synced", external_state="created", external_id=found["external_id"], external_url=found.get("external_url"), response=found.get("response") or {}, last_error=None)
-                core._audit(action["actionId"], "itsm.reconciled_after_retry", action.get("requestedBy", "system"), f"Reconciled {provider} ticket after create attempt", {"provider": provider, "external_id": found["external_id"], "attempt": attempt})
+                core._update_record(
+                    record["record_id"],
+                    integration_state="synced",
+                    external_state="created",
+                    external_id=found["external_id"],
+                    external_url=found.get("external_url"),
+                    response=found.get("response") or {},
+                    last_error=None,
+                )
+                core._audit(
+                    action["actionId"],
+                    "itsm.reconciled_after_retry",
+                    action.get("requestedBy", "system"),
+                    f"Reconciled {provider} ticket after create attempt",
+                    {"provider": provider, "external_id": found["external_id"], "attempt": attempt},
+                )
                 return found
             if attempt < 3:
                 await asyncio.sleep(2 ** (attempt - 1))
 
-        core._update_record(record["record_id"], integration_state="sync_error", last_error=f"{type(last_error).__name__}: {last_error}" if last_error else "Unknown provider error")
-        raise ProviderReconciliationError(f"Unable to create or reconcile {provider} ticket") from last_error
+        core._update_record(
+            record["record_id"],
+            integration_state="sync_error",
+            last_error=(
+                f"{type(last_error).__name__}: {last_error}"
+                if last_error
+                else "Unknown provider error"
+            ),
+        )
+        raise ProviderReconciliationError(
+            f"Unable to create or reconcile {provider} ticket"
+        ) from last_error
