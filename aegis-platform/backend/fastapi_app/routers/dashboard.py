@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from assets.models import Asset
+from compliance.models import ComplianceAssessment
 from projects.models import Project
 from scans.models import Scan
 from vulnerabilities.models import Vulnerability
@@ -61,6 +62,13 @@ def _summary():
     counts = Vulnerability.objects.values('severity').annotate(count=Count('id'))
     by_severity = {row['severity']: row['count'] for row in counts}
     avg_score = Scan.objects.filter(status=Scan.Status.COMPLETED).aggregate(value=Avg('security_score'))['value']
+    compliance = ComplianceAssessment.objects.aggregate(
+        compliant=Count('id', filter=Q(status=ComplianceAssessment.Status.COMPLIANT)),
+        partial=Count('id', filter=Q(status=ComplianceAssessment.Status.PARTIAL)),
+        non_compliant=Count('id', filter=Q(status=ComplianceAssessment.Status.NON_COMPLIANT)),
+    )
+    assessed = compliance['compliant'] + compliance['partial'] + compliance['non_compliant']
+    compliance_score = round(((compliance['compliant'] + (compliance['partial'] * 0.5)) / assessed) * 100) if assessed else 0
     return DashboardSummary(
         total_projects=Project.objects.count(),
         total_assets=Asset.objects.filter(is_active=True).count(),
@@ -70,7 +78,7 @@ def _summary():
         medium=by_severity.get(Vulnerability.Severity.MEDIUM, 0),
         low=by_severity.get(Vulnerability.Severity.LOW, 0),
         security_score=round(avg_score or 0),
-        compliance_score=0,
+        compliance_score=compliance_score,
     )
 
 
