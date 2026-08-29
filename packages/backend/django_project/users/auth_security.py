@@ -18,7 +18,7 @@ from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.response import Response
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import AccessToken
 
 from .audit import record_user_audit
 from .models import ROLE_PERMISSIONS, User
@@ -46,34 +46,39 @@ def _send_message(subject: str, body: str, recipient: str) -> None:
     send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [recipient], fail_silently=True)
 
 
+def _apply_identity_claims(token, user: User) -> None:
+    token['email'] = user.email
+    token['role'] = user.role
+    token['is_staff'] = user.is_staff
+    token['is_superuser'] = user.is_superuser
+    token['session_version'] = user.session_version
+    token['permissions'] = [p.value if hasattr(p, 'value') else p for p in ROLE_PERMISSIONS.get(user.role, [])]
+
+
 class AegisTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """Issue a short-lived access token with a revocable session-version claim."""
+    """Issue short-lived access tokens with a revocable session-version claim."""
 
     @classmethod
     def get_token(cls, user: User):
         token = super().get_token(user)
-        token['email'] = user.email
-        token['role'] = user.role
-        token['is_staff'] = user.is_staff
-        token['is_superuser'] = user.is_superuser
-        token['session_version'] = user.session_version
-        token['permissions'] = [
-            permission.value if hasattr(permission, 'value') else permission
-            for permission in ROLE_PERMISSIONS.get(user.role, [])
-        ]
+        _apply_identity_claims(token, user)
         return token
 
 
 class AegisTokenRefreshSerializer(TokenRefreshSerializer):
-    """Reject refresh tokens issued for an older user session version."""
+    """Reject stale sessions and mint refreshed access tokens from current identity state."""
 
     def validate(self, attrs):
         data = super().validate(attrs)
         user = User.objects.filter(pk=self.user_id).first()
         if not user or not user.is_active:
             raise AuthenticationFailed('User account is inactive or unavailable')
-        if int(self.token.get('session_version', 0)) != user.session_version:
+        if int(self.token.get('session_version', 1)) != user.session_version:
             raise AuthenticationFailed('Refresh token has been revoked')
+
+        access = AccessToken(data['access'])
+        _apply_identity_claims(access, user)
+        data['access'] = str(access)
         return data
 
 
@@ -230,4 +235,5 @@ def disable_2fa(request):
     request.user.two_factor_enabled = False
     request.user.two_factor_secret = ''
     request.user.save(update_fields=['two_factor_enabled', 'two_factor_secret'])
+    record_user_audit(request=request, action='auth.2fa.disable', result='success', user=request.user, resource_id=request.user.pk)
     return Response({'message': 'Two-factor authentication disabled', 'two_factor_enabled': False})
