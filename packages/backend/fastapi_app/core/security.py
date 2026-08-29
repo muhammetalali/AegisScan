@@ -43,7 +43,7 @@ def _token_type(payload: Dict[str, Any]) -> Optional[str]:
 @sync_to_async
 def _load_active_user(user_id: Any) -> Optional[Dict[str, Any]]:
     from django.contrib.auth import get_user_model
-    from django_project.users.models import ROLE_PERMISSIONS
+    from users.models import ROLE_PERMISSIONS
 
     User = get_user_model()
     try:
