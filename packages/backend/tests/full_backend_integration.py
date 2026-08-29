@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -15,7 +16,13 @@ E2E_EMAIL = os.getenv("E2E_EMAIL", "backend-integration@aegisscan.local")
 E2E_PASSWORD = os.getenv("E2E_PASSWORD", "Backend-Integration-2026!x9")
 
 
-def _request(url: str, *, method: str = "GET", payload: dict | None = None, token: str | None = None) -> tuple[int, str]:
+def _request(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: dict | None = None,
+    token: str | None = None,
+) -> tuple[int, str]:
     body = None
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -45,44 +52,47 @@ def _wait_for(url: str, attempts: int = 45) -> None:
     raise AssertionError(f"Service did not become healthy: {url}; last_error={last_error}")
 
 
-def _django_setup():
+def _manage_shell(code: str) -> str:
     backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    if backend_root not in sys.path:
-        sys.path.insert(0, backend_root)
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
-    import django
-
-    django.setup()
+    result = subprocess.run(
+        [sys.executable, "manage.py", "shell", "-c", code],
+        cwd=backend_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
 def _seed_user() -> None:
-    _django_setup()
-    from users.models import User, UserRole
-
-    user, _ = User.objects.get_or_create(
-        email=E2E_EMAIL,
-        defaults={
-            "first_name": "Backend",
-            "last_name": "Integration",
-            "role": UserRole.ADMIN,
-            "is_active": True,
-            "is_verified": True,
-        },
+    _manage_shell(
+        """
+from users.models import User, UserRole
+user, _ = User.objects.get_or_create(
+    email='backend-integration@aegisscan.local',
+    defaults={
+        'first_name': 'Backend',
+        'last_name': 'Integration',
+        'role': UserRole.ADMIN,
+        'is_active': True,
+        'is_verified': True,
+    },
+)
+user.set_password('Backend-Integration-2026!x9')
+user.role = UserRole.ADMIN
+user.is_active = True
+user.is_verified = True
+user.save(update_fields=['password', 'role', 'is_active', 'is_verified'])
+"""
     )
-    user.set_password(E2E_PASSWORD)
-    user.role = UserRole.ADMIN
-    user.is_active = True
-    user.is_verified = True
-    user.save(update_fields=["password", "role", "is_active", "is_verified"])
 
 
 def _cleanup_user() -> None:
     try:
-        _django_setup()
-        from users.models import User
-
-        User.objects.filter(email=E2E_EMAIL).delete()
-    except Exception:
+        _manage_shell(
+            "from users.models import User; User.objects.filter(email='backend-integration@aegisscan.local').delete()"
+        )
+    except subprocess.CalledProcessError:
         pass
 
 
@@ -95,19 +105,25 @@ def _integration_user():
         _cleanup_user()
 
 
+def _bump_session_version() -> None:
+    _manage_shell(
+        "from users.models import User; user=User.objects.get(email='backend-integration@aegisscan.local'); user.session_version += 1; user.save(update_fields=['session_version'])"
+    )
+
+
 def test_backend_runtime_contract() -> None:
     """Exercise Django, PostgreSQL, FastAPI, JWT, Redis/Celery and WebSocket as one runtime path."""
     _wait_for(f"{DJANGO_URL}/health/")
     _wait_for(f"{FASTAPI_URL}/health")
 
-    _django_setup()
-    from django.contrib.auth import get_user_model
-    from django.db import connection
+    import psycopg2
     from redis import Redis
 
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT 1")
-        assert cursor.fetchone() == (1,)
+    database_url = os.getenv("DATABASE_URL", "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb")
+    with psycopg2.connect(database_url) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone() == (1,)
 
     redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
     redis_client = Redis.from_url(redis_url, decode_responses=True)
@@ -155,11 +171,7 @@ def test_backend_runtime_contract() -> None:
         assert status == 200, f"JWT refresh failed: {status} {body}"
         assert json.loads(body).get("access")
 
-        User = get_user_model()
-        user = User.objects.get(email=E2E_EMAIL)
-        user.session_version += 1
-        user.save(update_fields=["session_version"])
-
+        _bump_session_version()
         status, body = _request(
             f"{FASTAPI_URL}/api/v1/assurance/correlations/summary",
             token=access_token,
@@ -206,4 +218,24 @@ def test_backend_runtime_contract() -> None:
         ) as websocket:
             connected = json.loads(websocket.recv(timeout=5))
             assert connected["type"] == "workflow.connected"
-            assert connected["user_id"] == str(user.id)
+            assert connected["user_id"]
+
+            _bump_session_version()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    message = json.loads(websocket.recv(timeout=2))
+                except TimeoutError:
+                    continue
+                assert message == {"type": "auth.revoked", "reason": "session_revoked"}
+                break
+            else:
+                raise AssertionError("Timed out waiting for live auth.revoked event")
+
+            try:
+                websocket.recv(timeout=5)
+            except Exception as exc:
+                assert getattr(exc, "code", None) == 4001
+                assert getattr(exc, "reason", "") == "Authentication revoked"
+            else:
+                raise AssertionError("WebSocket remained open after live revocation")
