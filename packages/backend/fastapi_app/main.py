@@ -1,27 +1,35 @@
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-import asyncio
-import logging
+import os
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
 
-from .routers import attack_surface, assurance, assurance_graph, capability_control, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, security_sessions, system, validation_runtime
-from .services.celery_monitoring import get_task_metrics
-from .services.observability import metrics_payload, configure_tracing
-from .services.decision_action_orchestration import initialize_action_store
-from .services.remediation_lifecycle import initialize_lifecycle_store
-from .services.itsm_remediation_v2 import initialize_itsm_store
-from .services.itsm_configuration import startup_validation
-from .services.policy_engine import initialize_policy_store
-from .services.scan_orchestrator import ScanOrchestrator
-from .services.validation_state import get_validation
-from .services.websocket_manager import WebSocketManager
-from .services.workflow_live_bridge import WorkflowLiveBridge
-from .core.config import settings
-from .core.security import verify_token
+import django  # noqa: E402
+
+django.setup()
+
+from contextlib import asynccontextmanager  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import Response  # noqa: E402
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer  # noqa: E402
+
+from .routers import attack_surface, assurance, assurance_graph, capability_control, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, security_sessions, system, validation_runtime  # noqa: E402
+from .services.celery_monitoring import get_task_metrics  # noqa: E402
+from .services.observability import metrics_payload, configure_tracing  # noqa: E402
+from .services.decision_action_orchestration import initialize_action_store  # noqa: E402
+from .services.remediation_lifecycle import initialize_lifecycle_store  # noqa: E402
+from .services.itsm_remediation import initialize_itsm_store  # noqa: E402
+from .services.itsm_configuration import startup_validation  # noqa: E402
+from .services.policy_engine import initialize_policy_store  # noqa: E402
+from .services.scan_orchestrator import ScanOrchestrator  # noqa: E402
+from .services.validation_state import get_validation  # noqa: E402
+from .services.websocket_manager import WebSocketManager  # noqa: E402
+from .services.workflow_live_bridge import WorkflowLiveBridge  # noqa: E402
+from .core.config import settings  # noqa: E402
+from .core.security import verify_token  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -214,7 +222,8 @@ async def enable_engine(engine_name: str, user=Depends(get_current_user)):
     return await scan_orchestrator.enable_engine(engine_name)
 
 @app.post("/api/v1/engines/{engine_name}/disable")
-async def disable_engine(engine_name: str, user=Depends(get_current_user)):
+async def disable_engine(engine_name: str, user=Depends(get_current_user))
+    :
     return await scan_orchestrator.disable_engine(engine_name)
 
 if __name__ == "__main__":
