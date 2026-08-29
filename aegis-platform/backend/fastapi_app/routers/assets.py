@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import List, Optional
 
 from asgiref.sync import sync_to_async
@@ -7,9 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from fastapi_app.core.config import settings
 from fastapi_app.core.security import verify_token
-from django_project.assets.models import Asset, AssetRelationship, TechnologyFingerprint
 
 router = APIRouter()
 _bearer = HTTPBearer(auto_error=False)
@@ -63,7 +60,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_
     return user
 
 
-def _asset_response(asset: Asset) -> AssetResponse:
+def _asset_response(asset) -> AssetResponse:
     return AssetResponse(
         id=str(asset.id),
         project_id=str(asset.project_id),
@@ -85,12 +82,11 @@ def _asset_response(asset: Asset) -> AssetResponse:
 
 @sync_to_async
 def _accessible_assets(user_id: str, project_id: Optional[str] = None):
-    qs = Asset.objects.select_related("project", "owner").filter(
-        project__owner_id=user_id
-    ) | Asset.objects.select_related("project", "owner").filter(
-        project__members__id=user_id
-    )
-    qs = qs.distinct()
+    from django_project.assets.models import Asset
+
+    owner_qs = Asset.objects.select_related("project", "owner").filter(project__owner_id=user_id)
+    member_qs = Asset.objects.select_related("project", "owner").filter(project__members__id=user_id)
+    qs = (owner_qs | member_qs).distinct()
     if project_id:
         qs = qs.filter(project_id=project_id)
     return list(qs.order_by("-created_at"))
@@ -99,19 +95,18 @@ def _accessible_assets(user_id: str, project_id: Optional[str] = None):
 @sync_to_async
 def _has_project_access(project_id: str, user_id: str) -> bool:
     from django_project.projects.models import Project
-    return Project.objects.filter(id=project_id).filter(
-        owner_id=user_id
-    ).exists() or Project.objects.filter(id=project_id, members__id=user_id).exists()
+
+    return Project.objects.filter(id=project_id).filter(owner_id=user_id).exists() or Project.objects.filter(id=project_id, members__id=user_id).exists()
 
 
 @sync_to_async
 def _get_asset(asset_id: str, user_id: str):
-    return (Asset.objects.select_related("project", "owner")
-            .filter(pk=asset_id)
-            .filter(project__owner_id=user_id)
-            .first()) or (Asset.objects.select_related("project", "owner")
-            .filter(pk=asset_id, project__members__id=user_id)
-            .first())
+    from django_project.assets.models import Asset
+
+    owner_asset = Asset.objects.select_related("project", "owner").filter(pk=asset_id, project__owner_id=user_id).first()
+    if owner_asset:
+        return owner_asset
+    return Asset.objects.select_related("project", "owner").filter(pk=asset_id, project__members__id=user_id).first()
 
 
 @router.get("/", response_model=List[AssetResponse])
@@ -134,7 +129,7 @@ async def list_assets(
     if criticality:
         assets = [a for a in assets if a.criticality == criticality]
     if is_active is not None:
-        assets = [a for a in assets if a.is_active is is_active]
+        assets = [a for a in assets if a.is_active == is_active]
     if search:
         needle = search.casefold()
         assets = [a for a in assets if needle in a.name.casefold() or needle in a.description.casefold() or any(needle in str(t).casefold() for t in (a.tags or []))]
@@ -142,12 +137,11 @@ async def list_assets(
 
 
 @sync_to_async
-
 def _create_asset(data: AssetCreate, user_id: str):
+    from django_project.assets.models import Asset
     from django_project.projects.models import Project
-    project = Project.objects.filter(id=data.project_id).filter(
-        owner_id=user_id
-    ).first() or Project.objects.filter(id=data.project_id, members__id=user_id).first()
+
+    project = Project.objects.filter(id=data.project_id).filter(owner_id=user_id).first() or Project.objects.filter(id=data.project_id, members__id=user_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
     base_slug = slugify(data.name) or "asset"
@@ -156,7 +150,7 @@ def _create_asset(data: AssetCreate, user_id: str):
     while Asset.objects.filter(project=project, slug=slug).exists():
         slug = f"{base_slug}-{suffix}"
         suffix += 1
-    asset = Asset.objects.create(
+    return Asset.objects.create(
         project=project,
         owner_id=user_id,
         name=data.name,
@@ -168,7 +162,6 @@ def _create_asset(data: AssetCreate, user_id: str):
         configuration=data.configuration,
         tags=data.tags,
     )
-    return asset
 
 
 @router.post("/", response_model=AssetResponse, status_code=201)
@@ -185,10 +178,10 @@ async def get_asset(asset_id: str, user=Depends(get_current_user)):
 
 
 @sync_to_async
-
 def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
-    asset = (Asset.objects.filter(pk=asset_id, project__owner_id=user_id).first()
-             or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first())
+    from django_project.assets.models import Asset
+
+    asset = Asset.objects.filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     data = update.model_dump(exclude_unset=True)
@@ -206,10 +199,10 @@ async def update_asset(asset_id: str, update: AssetUpdate, user=Depends(get_curr
 
 
 @sync_to_async
-
 def _delete_asset(asset_id: str, user_id: str):
-    asset = (Asset.objects.filter(pk=asset_id, project__owner_id=user_id).first()
-             or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first())
+    from django_project.assets.models import Asset
+
+    asset = Asset.objects.filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     asset.delete()
@@ -230,25 +223,32 @@ async def scan_asset(asset_id: str, scan_type: str = "full_validation", depth: s
 
 
 @sync_to_async
-
 def _technologies(asset_id: str, user_id: str):
-    asset = (Asset.objects.filter(pk=asset_id, project__owner_id=user_id).first()
-             or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first())
-    if not asset:
-        raise HTTPException(status_code=404, detail="Asset not found")
-    return list(asset.technologies.all())
+    asset = _get_asset_sync(asset_id, user_id)
+    return list(asset.technologies.all()) if asset else None
+
+
+def _get_asset_sync(asset_id: str, user_id: str):
+    from django_project.assets.models import Asset
+
+    return Asset.objects.filter(pk=asset_id).filter(project__owner_id=user_id).first() or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first()
 
 
 @router.get("/{asset_id}/technologies")
 async def get_asset_technologies(asset_id: str, user=Depends(get_current_user)):
+    technologies = await _technologies(asset_id, str(user.get("user_id")))
+    if technologies is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
     return [
         {"id": str(t.id), "name": t.name, "version": t.version, "category": t.category, "confidence": t.confidence, "source": t.source, "evidence": t.evidence, "detected_at": t.detected_at.isoformat()}
-        for t in await _technologies(asset_id, str(user.get("user_id")))
+        for t in technologies
     ]
 
 
 @router.post("/{asset_id}/technologies")
 async def add_technology(asset_id: str, name: str, version: str = "", category: str = "unknown", confidence: float = 0.0, user=Depends(get_current_user)):
+    from django_project.assets.models import TechnologyFingerprint
+
     asset = await _get_asset(asset_id, str(user.get("user_id")))
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -258,6 +258,8 @@ async def add_technology(asset_id: str, name: str, version: str = "", category: 
 
 @router.get("/{asset_id}/relationships")
 async def get_asset_relationships(asset_id: str, user=Depends(get_current_user)):
+    from django_project.assets.models import AssetRelationship
+
     asset = await _get_asset(asset_id, str(user.get("user_id")))
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -267,16 +269,13 @@ async def get_asset_relationships(asset_id: str, user=Depends(get_current_user))
 
 @router.post("/{asset_id}/relationships")
 async def add_relationship(asset_id: str, target_id: str, relationship_type: str, user=Depends(get_current_user)):
+    from django_project.assets.models import AssetRelationship
+
     source = await _get_asset(asset_id, str(user.get("user_id")))
     target = await _get_asset(target_id, str(user.get("user_id")))
     if not source or not target or source.project_id != target.project_id:
         raise HTTPException(status_code=404, detail="Source or target asset not found")
-    relationship, created = await sync_to_async(AssetRelationship.objects.get_or_create)(
-        project_id=source.project_id,
-        source=source,
-        target=target,
-        relationship_type=relationship_type,
-    )
+    relationship, created = await sync_to_async(AssetRelationship.objects.get_or_create)(project_id=source.project_id, source=source, target=target, relationship_type=relationship_type)
     return {"id": str(relationship.id), "created": created}
 
 
