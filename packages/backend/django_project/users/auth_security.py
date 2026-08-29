@@ -14,9 +14,11 @@ from django.core.mail import send_mail
 from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.response import Response
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .audit import record_user_audit
 from .models import ROLE_PERMISSIONS, User
@@ -45,7 +47,7 @@ def _send_message(subject: str, body: str, recipient: str) -> None:
 
 
 class AegisTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """Issue JWTs with a stable claim contract shared with FastAPI."""
+    """Issue a short-lived access token with a revocable session-version claim."""
 
     @classmethod
     def get_token(cls, user: User):
@@ -54,11 +56,25 @@ class AegisTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['role'] = user.role
         token['is_staff'] = user.is_staff
         token['is_superuser'] = user.is_superuser
+        token['session_version'] = user.session_version
         token['permissions'] = [
             permission.value if hasattr(permission, 'value') else permission
             for permission in ROLE_PERMISSIONS.get(user.role, [])
         ]
         return token
+
+
+class AegisTokenRefreshSerializer(TokenRefreshSerializer):
+    """Reject refresh tokens issued for an older user session version."""
+
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        user = User.objects.filter(pk=self.user_id).first()
+        if not user or not user.is_active:
+            raise AuthenticationFailed('User account is inactive or unavailable')
+        if int(self.token.get('session_version', 0)) != user.session_version:
+            raise AuthenticationFailed('Refresh token has been revoked')
+        return data
 
 
 class SecureTokenObtainPairView(TokenObtainPairView):
@@ -72,33 +88,18 @@ class SecureTokenObtainPairView(TokenObtainPairView):
 
         if user and not user.check_password(password):
             response = super().post(request, *args, **kwargs)
-            record_user_audit(
-                request=request, action='auth.login', result='failure', user=user,
-                resource_id=user.pk, metadata={'reason': 'invalid_credentials'}, start=started,
-            )
+            record_user_audit(request=request, action='auth.login', result='failure', user=user, resource_id=user.pk, metadata={'reason': 'invalid_credentials'}, start=started)
             return response
 
         if user and user.two_factor_enabled:
             otp = request.data.get('otp')
             if not otp:
-                response = Response(
-                    {'detail': 'Two-factor authentication code required', 'two_factor_required': True},
-                    status=status.HTTP_401_UNAUTHORIZED,
-                )
-                record_user_audit(
-                    request=request, action='auth.login_2fa', result='failure', user=user,
-                    resource_id=user.pk, metadata={'reason': 'otp_required'}, start=started,
-                )
+                response = Response({'detail': 'Two-factor authentication code required', 'two_factor_required': True}, status=status.HTTP_401_UNAUTHORIZED)
+                record_user_audit(request=request, action='auth.login_2fa', result='failure', user=user, resource_id=user.pk, metadata={'reason': 'otp_required'}, start=started)
                 return response
             if not verify_totp(user.two_factor_secret, otp):
-                response = Response(
-                    {'detail': 'Invalid two-factor authentication code', 'two_factor_required': True},
-                    status=status.HTTP_401_UNAUTHORIZED,
-                )
-                record_user_audit(
-                    request=request, action='auth.login_2fa', result='failure', user=user,
-                    resource_id=user.pk, metadata={'reason': 'invalid_otp'}, start=started,
-                )
+                response = Response({'detail': 'Invalid two-factor authentication code', 'two_factor_required': True}, status=status.HTTP_401_UNAUTHORIZED)
+                record_user_audit(request=request, action='auth.login_2fa', result='failure', user=user, resource_id=user.pk, metadata={'reason': 'invalid_otp'}, start=started)
                 return response
 
         response = super().post(request, *args, **kwargs)
@@ -107,16 +108,14 @@ class SecureTokenObtainPairView(TokenObtainPairView):
             user.last_activity = timezone.now()
             user.save(update_fields=['last_login_ip', 'last_activity'])
             response.data['user'] = UserSerializer(user, context={'request': request}).data
-            record_user_audit(
-                request=request, action='auth.login', result='success', user=user,
-                resource_id=user.pk, metadata={'two_factor': bool(user.two_factor_enabled)}, start=started,
-            )
+            record_user_audit(request=request, action='auth.login', result='success', user=user, resource_id=user.pk, metadata={'two_factor': bool(user.two_factor_enabled)}, start=started)
         elif response.status_code != status.HTTP_200_OK:
-            record_user_audit(
-                request=request, action='auth.login', result='failure', user=user,
-                resource_id=user.pk if user else '', metadata={'reason': 'authentication_failed'}, start=started,
-            )
+            record_user_audit(request=request, action='auth.login', result='failure', user=user, resource_id=user.pk if user else '', metadata={'reason': 'authentication_failed'}, start=started)
         return response
+
+
+class SecureTokenRefreshView(TokenRefreshView):
+    serializer_class = AegisTokenRefreshSerializer
 
 
 @api_view(['POST'])
@@ -231,5 +230,4 @@ def disable_2fa(request):
     request.user.two_factor_enabled = False
     request.user.two_factor_secret = ''
     request.user.save(update_fields=['two_factor_enabled', 'two_factor_secret'])
-    record_user_audit(request=request, action='auth.2fa.disable', result='success', user=request.user, resource_id=request.user.pk)
     return Response({'message': 'Two-factor authentication disabled', 'two_factor_enabled': False})
