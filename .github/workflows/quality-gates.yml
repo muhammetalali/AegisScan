@@ -158,6 +158,7 @@ jobs:
     name: Service E2E
     runs-on: ubuntu-latest
     env:
+      AEGIS_RUNTIME_E2E: "1"
       DJANGO_SETTINGS_MODULE: django_project.settings
       SECRET_KEY: "ci-e2e-secret-key-012345678901234567890123"
       JWT_SECRET_KEY: "ci-e2e-jwt-secret-012345678901234567890123"
@@ -167,6 +168,10 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       WS_ALLOW_QUERY_TOKEN: "0"
       LOG_TO_FILE: "0"
+      E2E_DJANGO_URL: http://127.0.0.1:8000
+      E2E_FASTAPI_URL: http://127.0.0.1:8001
+      E2E_EMAIL: e2e@aegisscan.local
+      E2E_PASSWORD: "E2E-Password-12345!"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
