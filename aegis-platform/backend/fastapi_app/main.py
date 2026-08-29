@@ -2,9 +2,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
-import asyncio
+from asgiref.sync import sync_to_async
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
 from .services.scan_orchestrator import ScanOrchestrator
@@ -38,7 +38,7 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_cr
 security = HTTPBearer(auto_error=False)
 
 async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials if credentials else request.cookies.get('aegis_access')
+    token = credentials.credentials if credentials else request.cookies.get(settings.AUTH_ACCESS_COOKIE)
     if not token:
         raise HTTPException(status_code=401, detail='Not authenticated')
     user = await verify_token(token)
@@ -46,12 +46,32 @@ async def get_current_user(request: Request, credentials: HTTPAuthorizationCrede
         raise HTTPException(status_code=401, detail='Invalid token')
     return user
 
-@app.websocket('/ws/workflow')
-async def websocket_workflow(websocket: WebSocket, token: str = None):
-    token = token or websocket.cookies.get('aegis_access')
-    user = await verify_token(token) if token else None
+@sync_to_async
+def _scan_access(scan_id: str, user_id: str) -> bool:
+    from scans.models import Scan
+    scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
+    return bool(scan and (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()))
+
+@sync_to_async
+def _validation_access(validation_id: str, user_id: str) -> bool:
+    from evidence.models import ValidationRun
+    return ValidationRun.objects.filter(pk=validation_id, user_id=user_id).exists()
+
+async def _authenticate_socket(websocket: WebSocket):
+    token = websocket.cookies.get(settings.AUTH_ACCESS_COOKIE)
+    if not token:
+        await websocket.close(code=4001)
+        return None
+    user = await verify_token(token)
     if not user:
         await websocket.close(code=4001)
+        return None
+    return user
+
+@app.websocket('/ws/workflow')
+async def websocket_workflow(websocket: WebSocket):
+    user = await _authenticate_socket(websocket)
+    if not user:
         return
     await websocket_manager.connect('workflow', websocket)
     try:
@@ -63,36 +83,40 @@ async def websocket_workflow(websocket: WebSocket, token: str = None):
 
 @app.websocket('/ws/scan/{scan_id}')
 async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
+    user = await _authenticate_socket(websocket)
+    if not user or not await _scan_access(scan_id, str(user.get('user_id'))):
+        if user:
+            await websocket.close(code=4003)
+        return
     await websocket_manager.connect(scan_id, websocket)
     await websocket_manager.connect(f'scan_{scan_id}', websocket)
-    await websocket_manager.connect(f'validation_{scan_id}', websocket)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         websocket_manager.disconnect(scan_id, websocket)
         websocket_manager.disconnect(f'scan_{scan_id}', websocket)
-        websocket_manager.disconnect(f'validation_{scan_id}', websocket)
 
 @app.websocket('/ws/validations/{validation_id}')
 async def websocket_validation_progress(websocket: WebSocket, validation_id: str):
+    user = await _authenticate_socket(websocket)
+    if not user or not await _validation_access(validation_id, str(user.get('user_id'))):
+        if user:
+            await websocket.close(code=4003)
+        return
     await websocket_manager.connect(validation_id, websocket)
     await websocket_manager.connect(f'validation_{validation_id}', websocket)
-    await websocket_manager.connect(f'scan_{validation_id}', websocket)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         websocket_manager.disconnect(validation_id, websocket)
         websocket_manager.disconnect(f'validation_{validation_id}', websocket)
-        websocket_manager.disconnect(f'scan_{validation_id}', websocket)
 
 @app.websocket('/ws/notifications')
-async def websocket_notifications(websocket: WebSocket, token: str = None):
-    token = token or websocket.cookies.get('aegis_access')
-    user = await verify_token(token) if token else None
+async def websocket_notifications(websocket: WebSocket):
+    user = await _authenticate_socket(websocket)
     if not user:
-        await websocket.close(code=4001)
         return
     await websocket_manager.connect(f"user_{user.get('user_id')}", websocket)
     try:
@@ -102,11 +126,11 @@ async def websocket_notifications(websocket: WebSocket, token: str = None):
         websocket_manager.disconnect(f"user_{user.get('user_id')}", websocket)
 
 @app.websocket('/ws/system/monitor')
-async def websocket_system_monitor(websocket: WebSocket, token: str = None):
-    token = token or websocket.cookies.get('aegis_access')
-    user = await verify_token(token) if token else None
+async def websocket_system_monitor(websocket: WebSocket):
+    user = await _authenticate_socket(websocket)
     if not user or not user.get('is_staff'):
-        await websocket.close(code=4003)
+        if user:
+            await websocket.close(code=4003)
         return
     await websocket_manager.connect('system_monitor', websocket)
     try:
@@ -117,11 +141,11 @@ async def websocket_system_monitor(websocket: WebSocket, token: str = None):
 
 @app.get('/health')
 async def health_check():
-    return {'status': 'healthy', 'timestamp': datetime.utcnow().isoformat()}
+    return {'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat()}
 
 @app.get('/ready')
 async def readiness_check():
-    return {'ready': True, 'timestamp': datetime.utcnow().isoformat()}
+    return {'ready': True, 'timestamp': datetime.now(timezone.utc).isoformat()}
 
 app.include_router(scans.router, prefix='/scans', tags=['Scans'])
 app.include_router(vulnerabilities.router, prefix='/vulnerabilities', tags=['Vulnerabilities'])
@@ -151,15 +175,15 @@ async def start_scan(scan_id: str, user=Depends(get_current_user)):
 
 @app.post('/scans/{scan_id}/pause')
 async def pause_scan(scan_id: str, user=Depends(get_current_user)):
-    return await scan_orchestrator.pause_scan(scan_id)
+    return await scan_orchestrator.pause_scan(scan_id, user)
 
 @app.post('/scans/{scan_id}/resume')
 async def resume_scan(scan_id: str, user=Depends(get_current_user)):
-    return await scan_orchestrator.resume_scan(scan_id)
+    return await scan_orchestrator.resume_scan(scan_id, user)
 
 @app.post('/scans/{scan_id}/cancel')
 async def cancel_scan(scan_id: str, user=Depends(get_current_user)):
-    return await scan_orchestrator.cancel_scan(scan_id)
+    return await scan_orchestrator.cancel_scan(scan_id, user)
 
 @app.get('/scans/{scan_id}/progress')
 async def get_scan_progress(scan_id: str, user=Depends(get_current_user)):
