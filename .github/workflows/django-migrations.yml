@@ -98,3 +98,5 @@ jobs:
       - name: Verify migration plan
         working-directory: aegis-platform/backend
         run: python manage.py showmigrations --plan
+
+# This workflow intentionally owns migration generation and validation; other CI gates remain read-only.
