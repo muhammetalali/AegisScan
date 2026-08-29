@@ -4,9 +4,10 @@ import asyncio
 import ipaddress
 import json
 import shutil
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Literal
+
+from defusedxml import ElementTree as ET
 
 
 @dataclass(frozen=True)
