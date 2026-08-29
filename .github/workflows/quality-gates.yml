@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: aegisscan-quality-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend-quality:
     name: Backend quality
@@ -83,7 +87,7 @@ jobs:
       - name: Django application audit
         working-directory: packages/backend
         run: python -c "import django; django.setup(); print('DJANGO_SETUP_OK')"
-      - name: Django API tests
+      - name: Full Django pytest suite
         working-directory: packages/backend
         run: python -m pytest -q tests
       - name: Core pytest suite
@@ -152,7 +156,7 @@ jobs:
       JWT_SECRET_KEY: "ci-e2e-jwt-secret-012345678901234567890123"
       DEBUG: "1"
       ALLOWED_HOSTS: "localhost,127.0.0.1"
-      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegis
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
       REDIS_URL: redis://localhost:6379/0
       WS_ALLOW_QUERY_TOKEN: "0"
       LOG_TO_FILE: "0"
@@ -188,7 +192,7 @@ jobs:
       - name: Wait for application services
         run: |
           set -euo pipefail
-          for i in {1..60}; do
+          for i in {1..90}; do
             django=$(docker inspect --format='{{.State.Health.Status}}' aegis-django 2>/dev/null || true)
             fastapi=$(docker inspect --format='{{.State.Health.Status}}' aegis-fastapi 2>/dev/null || true)
             if [ "$django" = "healthy" ] && [ "$fastapi" = "healthy" ]; then exit 0; fi
