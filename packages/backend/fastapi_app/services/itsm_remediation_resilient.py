@@ -11,7 +11,7 @@ PROVIDERS = core.PROVIDERS
 initialize_itsm_store = core.initialize_itsm_store
 get_case = core.get_case
 sync_case = core.sync_case
-transition_case = core.transition_case
+transition_case = core.transition
 verify_case = core.verify_case
 
 
@@ -157,7 +157,7 @@ async def create_case(
     if approved and case and case.get("all_required_created") and case["action"].get("state") == "approved":
         core.transition(action["actionId"], "assigned", actor, "All required ITSM records created")
         core.transition(action["actionId"], "in_progress", actor, "Remediation work opened across all required ITSM records")
-        await core._sync_external_states(action["actionId"], "in_progress", actor, "Remediation work opened")
+        await core._sync_external_states(action["actionId"], actor)
 
     return core.get_case(action["actionId"])
 
