@@ -23,9 +23,9 @@ jobs:
       AEGIS_ENV: ci
       DJANGO_DEBUG: "0"
       ALLOWED_HOSTS: localhost,127.0.0.1
-      DJANGO_SECRET_KEY: ${{ secrets.AEGIS_CI_DJANGO_SECRET || 'ci-django-secret-key-012345678901234567890123' }}
-      JWT_SECRET_KEY: ${{ secrets.AEGIS_CI_JWT_SECRET || 'ci-jwt-secret-key-012345678901234567890123' }}
-      FASTAPI_SECRET_KEY: ${{ secrets.AEGIS_CI_FASTAPI_SECRET || 'ci-fastapi-secret-key-012345678901234567890123' }}
+      DJANGO_SECRET_KEY: ${{ secrets.AEGIS_CI_DJANGO_SECRET || 'a5b3c9d7e1f40618273a9bcdef0123456789abcdef0123456789abcdef01234567' }}
+      JWT_SECRET_KEY: ${{ secrets.AEGIS_CI_JWT_SECRET || 'b6c4d8e2f5071938274badcef123456789abcdef123456789abcdef12345678' }}
+      FASTAPI_SECRET_KEY: ${{ secrets.AEGIS_CI_FASTAPI_SECRET || 'c7d5e9f3a6182a49385bcdef23456789abcdef0123456789abcdef0123456789' }}
       DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
       REDIS_URL: redis://localhost:6379/0
       CELERY_BROKER_URL: redis://localhost:6379/0
