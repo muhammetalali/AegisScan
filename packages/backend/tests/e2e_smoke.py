@@ -57,8 +57,8 @@ def _wait_for(url: str, attempts: int = 30) -> None:
     raise AssertionError(f"Service did not become healthy: {url}; last_error={last_error}")
 
 
-def _seed_e2e_tenant() -> None:
-    """Create an isolated CI tenant used only by this runtime smoke suite."""
+def _seed_e2e_tenant(django_db_blocker) -> None:
+    """Create the ephemeral runtime tenant in the live CI database."""
     backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if backend_root not in sys.path:
         sys.path.insert(0, backend_root)
@@ -72,31 +72,32 @@ def _seed_e2e_tenant() -> None:
     from projects.models import Project
     from users.models import User, UserRole
 
-    user, created = User.objects.get_or_create(
-        email=E2E_EMAIL,
-        defaults={
-            "first_name": "E2E",
-            "last_name": "Runner",
-            "role": UserRole.ADMIN,
-            "is_active": True,
-        },
-    )
-    user.set_password(E2E_PASSWORD)
-    user.role = UserRole.ADMIN
-    user.is_active = True
-    if created or not user.is_verified:
-        user.is_verified = True
-    user.save(update_fields=["password", "role", "is_active", "is_verified"])
+    with django_db_blocker.unblock():
+        user, created = User.objects.get_or_create(
+            email=E2E_EMAIL,
+            defaults={
+                "first_name": "E2E",
+                "last_name": "Runner",
+                "role": UserRole.ADMIN,
+                "is_active": True,
+            },
+        )
+        user.set_password(E2E_PASSWORD)
+        user.role = UserRole.ADMIN
+        user.is_active = True
+        if created or not user.is_verified:
+            user.is_verified = True
+        user.save(update_fields=["password", "role", "is_active", "is_verified"])
 
-    Project.objects.update_or_create(
-        slug="e2e-runtime-project",
-        defaults={
-            "name": "E2E Runtime Project",
-            "description": "Ephemeral tenant used by runtime E2E verification",
-            "owner": user,
-            "updated_at": timezone.now(),
-        },
-    )
+        Project.objects.update_or_create(
+            slug="e2e-runtime-project",
+            defaults={
+                "name": "E2E Runtime Project",
+                "description": "Ephemeral tenant used by runtime E2E verification",
+                "owner": user,
+                "updated_at": timezone.now(),
+            },
+        )
 
 
 def test_django_and_fastapi_health_contract():
@@ -104,8 +105,8 @@ def test_django_and_fastapi_health_contract():
     _wait_for(f"{FASTAPI_URL}/health")
 
 
-def test_jwt_login_refresh_and_dashboard_contract():
-    _seed_e2e_tenant()
+def test_jwt_login_refresh_and_dashboard_contract(django_db_blocker):
+    _seed_e2e_tenant(django_db_blocker)
 
     status, body = _request(
         f"{DJANGO_URL}/api/v1/auth/login/",
