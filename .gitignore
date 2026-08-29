@@ -1,9 +1,12 @@
-# أسرار ومفاتيح — لا تُرفع أبداً
+# Secrets and private keys
 .aegis.key
 .aegis_audit.key
 *.key
+.env
+.env.*
+!.env.example
 
-# بيانات محلية حساسة
+# Local sensitive data
 aegis.db
 *.log
 audit.log
@@ -14,3 +17,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 venv/
+.venv/
+node_modules/
+dist/
+
+# Runtime certificates/private TLS material
+aegis-platform/docker/ssl/*.pem
+aegis-platform/docker/ssl/*.key
