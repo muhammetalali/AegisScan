@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -46,6 +47,12 @@ def _target_in_scope(session: SecurityTestSession, target: str) -> bool:
 
 def _truncate(value: str, limit: int = 12000) -> str:
     return value if len(value) <= limit else value[:limit] + "\n[TRUNCATED]"
+
+
+def _shell_argv(command: str) -> list[str]:
+    if os.name == "nt":
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
+    return ["/bin/sh", "-c", command]
 
 
 def execute_with_identity(
@@ -115,12 +122,12 @@ def execute_with_identity(
 
     try:
         completed = subprocess.run(
-            command,
+            _shell_argv(command),
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
             check=False,
-            shell=True,
+            shell=False,
             cwd=cwd or None,
         )
         exit_code = completed.returncode
