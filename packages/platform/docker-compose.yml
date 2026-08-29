@@ -81,7 +81,11 @@ services:
     restart: unless-stopped
     command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers 2
     environment:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      DEBUG: ${DJANGO_DEBUG:-1}
       SECRET_KEY: ${FASTAPI_SECRET_KEY:-aegisscan-local-fastapi-secret-change-me}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-change-me}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
       DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
       REDIS_URL: redis://redis:6379/0
       DJANGO_API_URL: http://django:8000/api/v1
