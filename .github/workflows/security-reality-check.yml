@@ -1,10 +1,12 @@
 name: Security Reality Check
 
-on:
+'on':
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -15,15 +17,15 @@ jobs:
     env:
       DEBUG: 'True'
       SECRET_KEY: ci-only-secret
-      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
-      REDIS_URL: redis://127.0.0.1:6379/0
-      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
-      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
+      REDIS_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
       JWT_SECRET_KEY: ci-only-jwt-secret
-      ALLOWED_HOSTS: localhost,127.0.0.1
-      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
       DJANGO_SETTINGS_MODULE: django_project.settings
-      PYTHONPATH: .
+      PYTHONPATH: '.'
     services:
       postgres:
         image: postgres:16
@@ -32,7 +34,7 @@ jobs:
           POSTGRES_USER: aegis
           POSTGRES_PASSWORD: aegis
         ports:
-          - 5432:5432
+          - '5432:5432'
         options: >-
           --health-cmd "pg_isready -U aegis -d aegisdb"
           --health-interval 10s
@@ -41,46 +43,54 @@ jobs:
       redis:
         image: redis:7
         ports:
-          - 6379:6379
+          - '6379:6379'
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install Nmap
-        run: sudo apt-get update && sudo apt-get install -y nmap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nmap
 
       - name: Install dependencies
         working-directory: aegis-platform/backend
         run: python -m pip install -r requirements.txt
 
-      - name: Verify Django project import path
+      - name: Verify Django project import
         working-directory: aegis-platform/backend
-        run: python -c "import django_project; import django_project.settings; print('Django project import: OK')"
+        run: |
+          python -c "import django_project; import django_project.settings; print('Django project import: OK')"
 
       - name: Django check
         working-directory: aegis-platform/backend
         run: python manage.py check
 
-      - name: Migration check and database bootstrap
+      - name: Migration check
         working-directory: aegis-platform/backend
-        run: |
-          python manage.py makemigrations --check --dry-run
-          python manage.py migrate --noinput
+        run: python manage.py makemigrations --check --dry-run
 
-      - name: Verify users table exists
+      - name: Apply migrations
+        working-directory: aegis-platform/backend
+        run: python manage.py migrate --noinput
+
+      - name: Verify users table
         working-directory: aegis-platform/backend
         env:
           PGPASSWORD: aegis
         run: |
-          psql "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb" -tAc "SELECT to_regclass('public.users_user');" | grep -Fx 'users_user'
+          result=$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('public.users_user');")
+          test "$result" = 'users_user'
 
       - name: Production Django checks
         working-directory: aegis-platform/backend
@@ -97,7 +107,8 @@ jobs:
 
       - name: Redis connectivity smoke test
         working-directory: aegis-platform/backend
-        run: python -c "import redis; r=redis.from_url('redis://127.0.0.1:6379/0'); assert r.ping() is True; print('Redis: OK')"
+        run: |
+          python -c "import redis; r=redis.from_url('redis://127.0.0.1:6379/0'); assert r.ping() is True; print('Redis: OK')"
 
       - name: Celery configuration smoke test
         working-directory: aegis-platform/backend
@@ -106,16 +117,19 @@ jobs:
 
       - name: Tests
         working-directory: aegis-platform/backend
-        run: python -m pytest -q ../../tests/test_integration.py ../../tests/test_platform.py --ds=django_project.settings
+        run: |
+          python -m pytest -q ../../tests/test_integration.py ../../tests/test_platform.py --ds=django_project.settings
 
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
           cache: npm
           cache-dependency-path: aegis-platform/frontend/package-lock.json
 
