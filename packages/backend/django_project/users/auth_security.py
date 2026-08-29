@@ -70,10 +70,13 @@ class AegisTokenRefreshSerializer(TokenRefreshSerializer):
 
     def validate(self, attrs):
         data = super().validate(attrs)
-        user = User.objects.filter(pk=self.user_id).first()
+        user_id = self.token.get('user_id') or self.token.get('sub')
+        if user_id is None:
+            raise AuthenticationFailed('Refresh token is missing user identity')
+        user = User.objects.filter(pk=user_id).first()
         if not user or not user.is_active:
             raise AuthenticationFailed('User account is inactive or unavailable')
-        if int(self.token.get('session_version', 1)) != user.session_version:
+        if int(self.token.get('session_version', 1)) != int(user.session_version):
             raise AuthenticationFailed('Refresh token has been revoked')
 
         access = AccessToken(data['access'])
@@ -230,7 +233,7 @@ def disable_2fa(request):
         record_user_audit(request=request, action='auth.2fa.disable', result='failure', user=request.user, resource_id=request.user.pk, metadata={'reason': 'invalid_password'})
         return Response({'detail': 'Current password is incorrect'}, status=status.HTTP_400_BAD_REQUEST)
     if not verify_totp(request.user.two_factor_secret, request.data.get('code', '')):
-        record_user_audit(request=request, action='auth.2fa.disable', result='failure', user=request.user, resource_id=request.user.pk, metadata={'reason': 'invalid_code'})
+        record_user_audit(request=request, action='auth.2fa.disable', result='failure', user=request.user, resource_id=request.user.pk, metadata={'reason': 'invalid_code'}, start=started)
         return Response({'detail': 'Valid two-factor authentication code required'}, status=status.HTTP_400_BAD_REQUEST)
     request.user.two_factor_enabled = False
     request.user.two_factor_secret = ''
