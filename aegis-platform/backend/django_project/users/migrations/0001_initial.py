@@ -39,7 +39,7 @@ class Migration(migrations.Migration):
                 ('theme', models.CharField(choices=[('dark', 'Dark'), ('light', 'Light')], default='dark', max_length=10, verbose_name='theme')),
                 ('timezone', models.CharField(default='UTC', max_length=50, verbose_name='timezone')),
                 ('two_factor_enabled', models.BooleanField(default=False, verbose_name='2FA enabled')),
-                ('two_factor_secret', models.CharField(blank=True, max_length=32, verbose_name='2FA secret')),
+                ('two_factor_secret', models.CharField(blank=True, max_length=32, verbose_name='two_factor_secret')),
                 ('password_reset_token', models.UUIDField(default=uuid.uuid4, editable=False, verbose_name='password reset token')),
                 ('password_reset_expires', models.DateTimeField(blank=True, null=True, verbose_name='password reset expires')),
                 ('email_verification_token', models.UUIDField(default=uuid.uuid4, editable=False, verbose_name='email verification token')),
