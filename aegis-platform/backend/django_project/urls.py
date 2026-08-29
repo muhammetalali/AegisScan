@@ -13,14 +13,6 @@ urlpatterns = [
     path('health/', health_check, name='health-check'),
     path('ready/', readiness_check, name='readiness-check'),
     path('api/v1/auth/', include('users.urls')),
-    path('api/v1/scans/', include('scans.urls')),
-    path('api/v1/vulnerabilities/', include('vulnerabilities.urls')),
-    path('api/v1/assets/', include('assets.urls')),
-    path('api/v1/compliance/', include('compliance.urls')),
-    path('api/v1/knowledge/', include('knowledge.urls')),
-    path('api/v1/notifications/', include('notifications.urls')),
-    path('api/v1/audit/', include('audit.urls')),
-    path('api/v1/system/', include('system.urls')),
 ]
 
 if settings.DEBUG:
