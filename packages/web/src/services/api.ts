@@ -8,6 +8,8 @@ export const api = axios.create({
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
   withCredentials: true,
+  xsrfCookieName: 'csrftoken',
+  xsrfHeaderName: 'X-CSRFToken',
 })
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
@@ -17,10 +19,10 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 }, (error) => Promise.reject(error))
 
 let isRefreshing = false
-let failedQueue: Array<{ resolve: (value: unknown) => void; reject: (reason: unknown) => void }> = []
+let failedQueue: Array<{ resolve: () => void; reject: (reason: unknown) => void }> = []
 
-const processQueue = (error: Error | null, token: string | null = null) => {
-  failedQueue.forEach(({ resolve, reject }) => error ? reject(error) : resolve(token))
+const processQueue = (error: Error | null) => {
+  failedQueue.forEach(({ resolve, reject }) => error ? reject(error) : resolve())
   failedQueue = []
 }
 
@@ -40,22 +42,13 @@ api.interceptors.response.use(
     originalRequest._retry = true
 
     if (isRefreshing) {
-      return new Promise((resolve, reject) => failedQueue.push({ resolve, reject })).then((token) => {
-        if (!token || !originalRequest.headers) return Promise.reject(error)
-        originalRequest.headers.Authorization = `Bearer ${String(token)}`
-        return api(originalRequest)
-      })
+      return new Promise<void>((resolve, reject) => failedQueue.push({ resolve, reject })).then(() => api(originalRequest))
     }
 
     isRefreshing = true
     try {
-      const { refreshToken, refreshAccessToken } = useAuthStore.getState()
-      if (!refreshToken) throw new Error('Session expired')
-      await refreshAccessToken()
-      const { accessToken } = useAuthStore.getState()
-      if (!accessToken) throw new Error('Session refresh failed')
-      processQueue(null, accessToken)
-      if (originalRequest.headers) originalRequest.headers.Authorization = `Bearer ${accessToken}`
+      await useAuthStore.getState().refreshAccessToken()
+      processQueue(null)
       return api(originalRequest)
     } catch (refreshError) {
       const reason = refreshError instanceof Error ? refreshError : new Error('Session expired')
@@ -94,9 +87,6 @@ export const createWebSocket = (url: string, protocols?: string | string[]) => {
   const browserWs = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
   const wsUrl = `${browserWs}${url}`
   const existingProtocols = protocols ? (Array.isArray(protocols) ? protocols : [protocols]) : []
-  // Browser WebSockets cannot set Authorization headers. Use the negotiated
-  // subprotocol instead of putting the JWT in the URL, where it can leak into
-  // access logs, browser history, proxies, and monitoring systems.
   const wsProtocols = accessToken ? ['bearer', accessToken, ...existingProtocols] : existingProtocols
   return new WebSocket(wsUrl, wsProtocols.length ? wsProtocols : undefined)
 }
