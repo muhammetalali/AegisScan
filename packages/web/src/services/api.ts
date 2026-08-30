@@ -12,11 +12,7 @@ export const api = axios.create({
   xsrfHeaderName: 'X-CSRFToken',
 })
 
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const { accessToken } = useAuthStore.getState()
-  if (accessToken && config.headers) config.headers.Authorization = `Bearer ${accessToken}`
-  return config
-}, (error) => Promise.reject(error))
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => config, (error) => Promise.reject(error))
 
 let isRefreshing = false
 let failedQueue: Array<{ resolve: () => void; reject: (reason: unknown) => void }> = []
@@ -40,7 +36,6 @@ api.interceptors.response.use(
     }
 
     originalRequest._retry = true
-
     if (isRefreshing) {
       return new Promise<void>((resolve, reject) => failedQueue.push({ resolve, reject })).then(() => api(originalRequest))
     }
@@ -83,11 +78,9 @@ export const uploadFile = async (file: File, onProgress?: (progress: number) => 
 }
 
 export const createWebSocket = (url: string, protocols?: string | string[]) => {
-  const { accessToken } = useAuthStore.getState()
   const browserWs = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
   const wsUrl = `${browserWs}${url}`
-  const existingProtocols = protocols ? (Array.isArray(protocols) ? protocols : [protocols]) : []
-  const wsProtocols = accessToken ? ['bearer', accessToken, ...existingProtocols] : existingProtocols
+  const wsProtocols = protocols ? (Array.isArray(protocols) ? protocols : [protocols]) : []
   return new WebSocket(wsUrl, wsProtocols.length ? wsProtocols : undefined)
 }
 

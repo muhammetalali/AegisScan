@@ -28,14 +28,20 @@ export function DashboardRealtime() {
       socket.onopen = () => { reconnectDelay = 1000 }
       socket.onmessage = (event) => {
         try {
-          const message = JSON.parse(event.data) as { type?: string; data?: DashboardSnapshot }
-          if (message.type !== 'dashboard_snapshot' || !message.data) return
-          queryClient.setQueryData(['dash-summary'], message.data.summary)
-          queryClient.setQueryData(['dash-risk'], message.data.risk_distribution)
-          queryClient.setQueryData(['dash-trends'], message.data.trends)
-          queryClient.setQueryData(['dash-recent'], message.data.recent_validations)
+          const message = JSON.parse(event.data) as { type?: string; data?: DashboardSnapshot } & Partial<DashboardSnapshot>
+          const snapshot = message.type === 'dashboard.snapshot' ? {
+            summary: message.summary,
+            risk_distribution: message.risk_distribution,
+            trends: message.trends,
+            recent_validations: message.recent_validations,
+          } : message.type === 'dashboard_snapshot' ? message.data : undefined
+          if (!snapshot) return
+          queryClient.setQueryData(['dash-summary'], snapshot.summary)
+          queryClient.setQueryData(['dash-risk'], snapshot.risk_distribution)
+          queryClient.setQueryData(['dash-trends'], snapshot.trends)
+          queryClient.setQueryData(['dash-recent'], snapshot.recent_validations)
         } catch {
-          // Ignore malformed frames; the HTTP queries remain the source of truth.
+          // HTTP queries remain the source of truth when a frame is invalid.
         }
       }
       socket.onclose = () => {
