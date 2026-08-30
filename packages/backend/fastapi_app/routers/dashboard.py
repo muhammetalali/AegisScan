@@ -7,13 +7,12 @@ from asgiref.sync import sync_to_async
 from django.db.models import Avg, Count, Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..core.security import verify_token
 
 router = APIRouter()
-
 OPEN_STATUSES = ("open", "confirmed", "in_progress")
 
 
@@ -53,21 +52,19 @@ class TrendPoint(BaseModel):
     validations: int
 
 
+def _access_cookie_name() -> str:
+    from django.conf import settings
+    return settings.AUTH_ACCESS_COOKIE
+
+
 async def current_user_id(request: Request) -> str:
-    token = request.cookies.get(settings_access_cookie_name())
+    token = request.cookies.get(_access_cookie_name())
     if not token:
-        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="Not authenticated")
     payload = await verify_token(token)
     if not payload:
-        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return str(payload["user_id"])
-
-
-def settings_access_cookie_name() -> str:
-    from django.conf import settings
-    return settings.AUTH_ACCESS_COOKIE
 
 
 @sync_to_async
@@ -76,11 +73,12 @@ def _dashboard_snapshot(user_id: str, days: int = 30, limit: int = 5) -> dict:
     from scans.models import Scan
     from assets.models import Asset
     from vulnerabilities.models import Vulnerability
+    from compliance.models import ComplianceAssessment
 
     projects = Project.objects.filter(Q(owner_id=user_id) | Q(memberships__user_id=user_id)).distinct()
     scans = Scan.objects.filter(project__in=projects)
     completed = scans.filter(status=Scan.Status.COMPLETED)
-    scores = list(completed.exclude(security_score__isnull=True).order_by("-created_at").values_list("security_score", flat=True)[:10])
+    scores = list(completed.order_by("-created_at").values_list("security_score", flat=True)[:10])
 
     vulnerabilities = Vulnerability.objects.filter(project__in=projects, status__in=OPEN_STATUSES)
     risk = vulnerabilities.aggregate(
@@ -90,6 +88,14 @@ def _dashboard_snapshot(user_id: str, days: int = 30, limit: int = 5) -> dict:
         low=Count("id", filter=Q(severity=Vulnerability.Severity.LOW)),
         informational=Count("id", filter=Q(severity=Vulnerability.Severity.INFO)),
     )
+
+    compliance = ComplianceAssessment.objects.filter(project__in=projects).aggregate(
+        compliant=Count("id", filter=Q(status=ComplianceAssessment.Status.COMPLIANT)),
+        non_compliant=Count("id", filter=Q(status=ComplianceAssessment.Status.NON_COMPLIANT)),
+        partial=Count("id", filter=Q(status=ComplianceAssessment.Status.PARTIAL)),
+    )
+    assessed_controls = compliance["compliant"] + compliance["non_compliant"] + compliance["partial"]
+    compliance_score = round((compliance["compliant"] / assessed_controls) * 100) if assessed_controls else None
 
     days = min(max(int(days), 7), 90)
     start = timezone.now() - timedelta(days=days - 1)
@@ -112,6 +118,9 @@ def _dashboard_snapshot(user_id: str, days: int = 30, limit: int = 5) -> dict:
             "total_validations": scans.count(),
             "critical": risk["critical"] or 0,
             "high": risk["high"] or 0,
+            "medium": risk["medium"] or 0,
+            "low": risk["low"] or 0,
+            "compliance_score": compliance_score,
         },
         "risk_distribution": {key: value or 0 for key, value in risk.items()},
         "trends": [
@@ -136,15 +145,8 @@ def _dashboard_snapshot(user_id: str, days: int = 30, limit: int = 5) -> dict:
 
 @router.get("/dashboard/summary", response_model=DashboardSummary)
 async def dashboard_summary(user_id: str = Depends(current_user_id)):
-    snapshot = await _dashboard_snapshot(user_id)
-    score = snapshot["summary"]["security_score"]
-    return DashboardSummary(
-        **snapshot["summary"],
-        medium=snapshot["risk_distribution"]["medium"],
-        low=snapshot["risk_distribution"]["low"],
-        security_score=score if score is not None else 0,
-        compliance_score=score if score is not None else 0,
-    )
+    summary = (await _dashboard_snapshot(user_id))["summary"]
+    return DashboardSummary(**summary)
 
 
 @router.get("/dashboard/risk-distribution", response_model=RiskDistribution)
@@ -160,9 +162,3 @@ async def dashboard_recent_validations(limit: int = Query(5, ge=1, le=20), user_
 @router.get("/dashboard/trends", response_model=List[TrendPoint])
 async def dashboard_trends(days: int = Query(30, ge=7, le=90), user_id: str = Depends(current_user_id)):
     return [TrendPoint(**item) for item in (await _dashboard_snapshot(user_id, days=days))["trends"]]
-
-
-@router.get("/dashboard/live")
-async def dashboard_live(user_id: str = Depends(current_user_id)):
-    snapshot = await _dashboard_snapshot(user_id, days=30, limit=10)
-    return snapshot
