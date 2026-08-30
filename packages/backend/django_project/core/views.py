@@ -2,6 +2,8 @@ from django.conf import settings
 from django.http import JsonResponse
 from django.db import connection
 from django.core.cache import cache
+from django.middleware.csrf import get_token
+from django.views.decorators.http import require_GET
 import redis
 
 
@@ -71,3 +73,8 @@ def readiness_check(request):
         'ready': ready,
         'checks': checks,
     }, status=status_code)
+
+
+@require_GET
+def csrf_token(request):
+    return JsonResponse({'csrfToken': get_token(request)})
