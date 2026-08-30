@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: aegis-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-aegisdb}
@@ -19,7 +18,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: aegis-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -35,7 +33,6 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.django
-    container_name: aegis-django
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn django_project.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
     environment:
@@ -78,7 +75,6 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.fastapi
-    container_name: aegis-fastapi
     restart: unless-stopped
     command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers 2
     environment:
@@ -112,7 +108,6 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.django
-    container_name: aegis-celery-worker
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app worker -l info -Q default,health -c ${CELERY_DEFAULT_WORKER_CONCURRENCY:-2} --hostname=core@%h
     environment:
@@ -145,7 +140,6 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.django
-    container_name: aegis-celery-workflow
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app worker -l info -Q workflow -c ${CELERY_WORKFLOW_WORKER_CONCURRENCY:-2} --hostname=workflow@%h
     environment:
@@ -178,7 +172,6 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.django
-    container_name: aegis-celery-reports
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app worker -l info -Q reports -c ${CELERY_REPORT_WORKER_CONCURRENCY:-2} --hostname=reports@%h
     environment:
@@ -211,9 +204,8 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.django
-    container_name: aegis-celery-beat
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app beat -l info --max-interval=30
+    command: celery -A fastapi_app.celery_app beat -l info --max-interval=30 --schedule=/tmp/aegisscan-celerybeat-schedule
     environment:
       AEGIS_ENV: ${AEGIS_ENV:-development}
       DJANGO_SETTINGS_MODULE: django_project.settings
@@ -240,7 +232,6 @@ services:
     build:
       context: ../web
       dockerfile: Dockerfile
-    container_name: aegis-frontend
     restart: unless-stopped
     ports:
       - "5173:80"
