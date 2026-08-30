@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.db.models import Q
@@ -97,15 +98,15 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def logout(self, request):
         try:
-            refresh_token = request.COOKIES.get('aegis_refresh')
+            refresh_token = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE)
             if refresh_token:
                 RefreshToken(refresh_token).blacklist()
         except Exception:
             logger.exception('Unable to blacklist refresh token during logout')
         record_user_audit(request=request, action='auth.logout', result='success', user=request.user, resource_id=request.user.pk)
         response = Response({'message': 'Logged out successfully'})
-        response.delete_cookie('aegis_access', path='/', samesite='Lax')
-        response.delete_cookie('aegis_refresh', path='/', samesite='Lax')
+        response.delete_cookie(settings.AUTH_ACCESS_COOKIE, path='/', samesite='Lax')
+        response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path='/', samesite='Lax')
         return response
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission], required_permissions=['user.update'])
