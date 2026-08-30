@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import UserViewSet, TeamViewSet, APIKeyViewSet, UserSessionViewSet
 from .auth_security import SecureTokenObtainPairView, SecureTokenRefreshView, request_password_reset, confirm_password_reset, enable_2fa, verify_2fa, disable_2fa
 from .email_security import register_user, verify_email, resend_verification
+from core.views import csrf_token
 from core.dashboard import DashboardRecentValidationsView, DashboardRiskDistributionView, DashboardSummaryView, DashboardTrendsView
 
 router = DefaultRouter()
@@ -12,6 +13,7 @@ router.register(r'api-keys', APIKeyViewSet, basename='api-key')
 router.register(r'sessions', UserSessionViewSet, basename='session')
 
 urlpatterns = [
+    path('auth/csrf/', csrf_token, name='csrf_token'),
     path('auth/login/', SecureTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/refresh/', SecureTokenRefreshView.as_view(), name='token_refresh'),
     path('auth/register/', register_user, name='register'),
