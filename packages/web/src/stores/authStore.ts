@@ -39,6 +39,10 @@ interface RegisterData {
 
 const clearAuthorization = () => { delete api.defaults.headers.common.Authorization }
 
+const ensureCsrfCookie = async () => {
+  await api.get('/auth/csrf/')
+}
+
 const extractApiMessage = (error: unknown, fallback: string): string => {
   const response = (error as { response?: { data?: unknown } })?.response?.data
   if (typeof response === 'string' && response.trim()) return response
@@ -74,6 +78,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   login: async (email, password, _rememberMe = true, otp) => {
     set({ loading: true, error: null })
     try {
+      await ensureCsrfCookie()
       const { data } = await api.post('/auth/login/', {
         email: email.trim().toLowerCase(),
         password,
@@ -102,6 +107,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   register: async (data) => {
     set({ loading: true, error: null })
     try {
+      await ensureCsrfCookie()
       const { data: response } = await api.post('/auth/register/', data)
       const user = response?.user ?? (await api.get('/users/me/')).data
       clearAuthorization()
@@ -114,8 +120,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
-    try { await api.post('/users/logout/') } catch { /* client teardown must not depend on network availability */ }
-    finally {
+    try {
+      await ensureCsrfCookie()
+      await api.post('/users/logout/')
+    } catch {
+      // Client teardown must not depend on network availability.
+    } finally {
       clearAuthorization()
       set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false, loading: false, error: null })
     }
@@ -123,6 +133,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   refreshAccessToken: async () => {
     try {
+      await ensureCsrfCookie()
       await api.post('/auth/refresh/')
       set({ isAuthenticated: true, error: null })
     } catch (error) {
@@ -154,6 +165,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const { fetchUser, refreshAccessToken, logout, setLoading } = useAuthStore.getState()
       setLoading(true)
       try {
+        await ensureCsrfCookie()
         await fetchUser()
       } catch {
         try {
@@ -175,6 +187,7 @@ export const initAuth = async () => {
   const { fetchUser, refreshAccessToken, logout, setLoading } = useAuthStore.getState()
   setLoading(true)
   try {
+    await ensureCsrfCookie()
     await fetchUser()
   } catch {
     try {
