@@ -136,6 +136,27 @@ async def websocket_workflow(websocket: WebSocket):
         websocket_manager.disconnect("workflow", websocket)
 
 
+@app.websocket("/ws/dashboard/")
+async def websocket_dashboard(websocket: WebSocket):
+    user = await websocket_user(websocket)
+    if not user:
+        await websocket.close(code=4001)
+        return
+    await websocket_manager.connect("dashboard", websocket, subprotocol="bearer")
+    guard_task = await start_websocket_session_guard(websocket, user)
+    try:
+        from .routers.dashboard import _dashboard_snapshot
+        snapshot = await _dashboard_snapshot(str(user["id"]), days=30, limit=10)
+        await websocket.send_json({"type": "dashboard.snapshot", **snapshot})
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await stop_websocket_session_guard(guard_task)
+        websocket_manager.disconnect("dashboard", websocket)
+
+
 @app.websocket("/ws/scan/{scan_id}")
 async def websocket_scan_progress(websocket: WebSocket, scan_id: str):
     user = await websocket_user(websocket)
