@@ -7,7 +7,7 @@ from asgiref.sync import sync_to_async
 from django.db.models import Avg, Count, Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
 from ..core.security import verify_token
@@ -24,8 +24,8 @@ class DashboardSummary(BaseModel):
     high: int
     medium: int
     low: int
-    security_score: int
-    compliance_score: int
+    security_score: int | None = None
+    compliance_score: int | None = None
 
 
 class RiskDistribution(BaseModel):
@@ -60,18 +60,18 @@ def _access_cookie_name() -> str:
 async def current_user_id(request: Request) -> str:
     token = request.cookies.get(_access_cookie_name())
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise PermissionError("Not authenticated")
     payload = await verify_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if not payload or "user_id" not in payload:
+        raise PermissionError("Invalid or expired token")
     return str(payload["user_id"])
 
 
 @sync_to_async
-def _dashboard_snapshot(user_id: str, days: int = 30, limit: int = 5) -> dict:
+ def _dashboard_snapshot(user_id: str, days: int = 30, limit: int = 5) -> dict:
+    from assets.models import Asset
     from projects.models import Project
     from scans.models import Scan
-    from assets.models import Asset
     from vulnerabilities.models import Vulnerability
     from compliance.models import ComplianceAssessment
 
@@ -108,7 +108,7 @@ def _dashboard_snapshot(user_id: str, days: int = 30, limit: int = 5) -> dict:
     )
 
     recent = scans.select_related("project", "asset").order_by("-created_at")[:limit]
-    latest_score = round(sum(float(v) for v in scores) / len(scores)) if scores else None
+    latest_score = round(sum(float(v) for v in scores if v is not None) / len([v for v in scores if v is not None])) if any(v is not None for v in scores) else None
 
     return {
         "summary": {
@@ -145,20 +145,36 @@ def _dashboard_snapshot(user_id: str, days: int = 30, limit: int = 5) -> dict:
 
 @router.get("/dashboard/summary", response_model=DashboardSummary)
 async def dashboard_summary(user_id: str = Depends(current_user_id)):
-    summary = (await _dashboard_snapshot(user_id))["summary"]
-    return DashboardSummary(**summary)
+    try:
+        summary = (await _dashboard_snapshot(user_id))["summary"]
+        return DashboardSummary(**summary)
+    except PermissionError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 @router.get("/dashboard/risk-distribution", response_model=RiskDistribution)
 async def dashboard_risk_distribution(user_id: str = Depends(current_user_id)):
-    return RiskDistribution(**(await _dashboard_snapshot(user_id))["risk_distribution"])
+    try:
+        return RiskDistribution(**(await _dashboard_snapshot(user_id))["risk_distribution"])
+    except PermissionError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 @router.get("/dashboard/recent-validations", response_model=List[RecentValidation])
 async def dashboard_recent_validations(limit: int = Query(5, ge=1, le=20), user_id: str = Depends(current_user_id)):
-    return [RecentValidation(**item) for item in (await _dashboard_snapshot(user_id, limit=limit))["recent_validations"]]
+    try:
+        return [RecentValidation(**item) for item in (await _dashboard_snapshot(user_id, limit=limit))["recent_validations"]]
+    except PermissionError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 @router.get("/dashboard/trends", response_model=List[TrendPoint])
 async def dashboard_trends(days: int = Query(30, ge=7, le=90), user_id: str = Depends(current_user_id)):
-    return [TrendPoint(**item) for item in (await _dashboard_snapshot(user_id, days=days))["trends"]]
+    try:
+        return [TrendPoint(**item) for item in (await _dashboard_snapshot(user_id, days=days))["trends"]]
+    except PermissionError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
