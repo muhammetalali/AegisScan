@@ -2,7 +2,7 @@ services:
   celery_worker:
     environment:
       AEGIS_LAB_EXECUTOR_URL: http://aegisscan-network-lab:9000
-      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:?AEGIS_LAB_EXECUTOR_TOKEN is required for network lab execution}
+      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:-}
     networks:
       - default
       - aegisscan_lab
@@ -24,7 +24,7 @@ services:
       - /run:rw,noexec,nosuid,size=32m
     command: ["python3", "/home/aegislab/agent.py"]
     environment:
-      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:?AEGIS_LAB_EXECUTOR_TOKEN is required for network lab execution}
+      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:-}
       LAB_EXECUTOR_PORT: "9000"
     expose:
       - "9000"
