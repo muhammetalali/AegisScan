@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import traceback
-from datetime import timedelta
+import uuid
 from typing import Any
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
-
 import django
 
 django.setup()
@@ -19,26 +19,23 @@ from django.utils import timezone
 
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityEvidence
-
 from fastapi_app.services.engine_adapters import SUPPORTED_REAL_ENGINES, execute_engine
 
-
 ENGINE_META = {
-    "recon": ("Recon & Asset Discovery", "recon"),
-    "evidence_collection": ("Evidence Collection", "analysis"),
-    "vuln_intelligence": ("Vulnerability Intelligence", "intelligence"),
-    "validation": ("Security Validation", "validation"),
-    "control_validation": ("Control Validation", "control"),
-    "endpoint_discovery": ("Endpoint Discovery", "recon"),
-    "tls_intelligence": ("TLS Intelligence", "intelligence"),
-    "dependency_risk": ("Dependency Risk", "analysis"),
-    "code_quality": ("Code Quality Analysis", "analysis"),
-    "runtime_analysis": ("Runtime Log Analysis", "analysis"),
+    "recon": ("Recon & Asset Discovery", "recon", 1, 60),
+    "evidence_collection": ("Evidence Collection", "analysis", 2, 60),
+    "code_quality": ("Code Quality Analysis", "analysis", 3, 120),
+    "runtime_analysis": ("Runtime Log Analysis", "analysis", 4, 60),
+    "dependency_risk": ("Dependency Risk", "analysis", 5, 120),
+    "vuln_intelligence": ("Vulnerability Intelligence", "intelligence", 6, 120),
+    "validation": ("Security Validation", "validation", 7, 180),
+    "control_validation": ("Control Validation", "control", 8, 180),
+    "endpoint_discovery": ("Endpoint Discovery", "recon", 9, 120),
+    "tls_intelligence": ("TLS Intelligence", "intelligence", 10, 120),
 }
 
 
-def _stable_uuid(seed: str):
-    import uuid
+def _stable_uuid(seed: str) -> uuid.UUID:
     return uuid.UUID(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32])
 
 
@@ -49,31 +46,31 @@ def _target_from_scan(scan: Scan) -> tuple[str, str]:
     if not target_value and scan.asset_id:
         asset = scan.asset
         asset_cfg = asset.configuration or {}
-        candidates = {
-            "website": asset_cfg.get("url"),
-            "api_endpoint": asset_cfg.get("base_url") or asset_cfg.get("spec_url"),
-            "ip_address": asset_cfg.get("ip"),
-            "domain": asset_cfg.get("domain"),
-        }
-        target_value = str(candidates.get(asset.type) or "").strip()
-    if not target_value:
-        raise ValueError("Scan target is missing: set config.target_value or attach an asset with a concrete target")
+        target_value = str(
+            asset_cfg.get("url")
+            or asset_cfg.get("base_url")
+            or asset_cfg.get("spec_url")
+            or asset_cfg.get("ip")
+            or asset_cfg.get("domain")
+            or ""
+        ).strip()
     if target_type == "full_validation":
         target_type = str(config.get("target_type") or "").strip().lower()
+    if not target_value:
+        raise ValueError("Scan target is missing; AegisScan refuses to invent a target")
     if target_type not in {"url", "ip", "api", "code"}:
         raise ValueError(f"Unsupported real scan target_type: {target_type}")
     return target_type, target_value
 
 
 def _engine_names(scan: Scan) -> list[str]:
-    configured = scan.engines or []
-    if not isinstance(configured, list):
+    if not isinstance(scan.engines, list):
         raise ValueError("Scan engines configuration must be a JSON array")
-    return [str(name).strip() for name in configured if str(name).strip()]
+    return [str(name).strip() for name in scan.engines if str(name).strip()]
 
 
 def _evidence_model_type(evidence_type: str) -> str:
-    mapping = {
+    return {
         "http_response": VulnerabilityEvidence.Type.DYNAMIC_ANALYSIS,
         "dns_resolution": VulnerabilityEvidence.Type.VALIDATION_TEST,
         "dependency_manifest": VulnerabilityEvidence.Type.DEPENDENCY_SCAN,
@@ -82,8 +79,7 @@ def _evidence_model_type(evidence_type: str) -> str:
         "threat_intelligence": VulnerabilityEvidence.Type.EXTERNAL_INTEL,
         "config_check": VulnerabilityEvidence.Type.CONFIG_CHECK,
         "validation_test": VulnerabilityEvidence.Type.VALIDATION_TEST,
-    }
-    return mapping.get(evidence_type, VulnerabilityEvidence.Type.VALIDATION_TEST)
+    }.get(evidence_type, VulnerabilityEvidence.Type.VALIDATION_TEST)
 
 
 def _confidence_value(raw: Any) -> str:
@@ -104,37 +100,40 @@ def _risk_score(severity: str, confidence: Any) -> float:
 
 
 def _publish_event(scan_id: str, payload: dict[str, Any]) -> None:
-    # The event is emitted to Redis so FastAPI and any WebSocket client can observe
-    # progress from a different process/container without relying on local memory.
     try:
         import redis
         from fastapi_app.core.config import settings
         client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-        client.publish(f"aegis:scan-events:{scan_id}", __import__('json').dumps(payload, default=str))
+        client.publish(f"aegis:scan-events:{scan_id}", json.dumps(payload, default=str))
     except Exception:
-        # Failure to publish must never turn a successful DB-backed scan into a fake failure.
-        pass
+        return
 
 
 def _log(scan: Scan, message: str, level: str = ScanLog.Level.INFO, execution=None, context=None) -> None:
-    ScanLog.objects.create(scan=scan, engine_execution=execution, level=level, message=message, context=context or {})
+    ScanLog.objects.create(
+        scan=scan,
+        engine_execution=execution,
+        level=level,
+        message=message,
+        context=context or {},
+    )
 
 
-def _persist_findings(scan: Scan, engine_execution: ScanEngineExecution, findings: list[dict[str, Any]], evidence: list[dict[str, Any]]) -> int:
+def _persist_findings(scan: Scan, execution: ScanEngineExecution, findings: list[dict[str, Any]], evidence: list[dict[str, Any]]) -> int:
     evidence_by_id = {str(item.get("id")): item for item in evidence if isinstance(item, dict) and item.get("id")}
     count = 0
     for finding in findings:
-        if not isinstance(finding, dict):
+        if not isinstance(finding, dict) or not finding.get("id"):
             continue
-        finding_id = str(finding.get("id") or "")
-        if not finding_id:
-            continue
+        finding_key = str(finding["id"])
         severity = str(finding.get("severity") or "info").lower()
-        if severity not in {choice[0] for choice in Vulnerability.Severity.choices}:
-            severity = "info"
-        raw_confidence = finding.get("confidence", 0)
-        vuln, created = Vulnerability.objects.update_or_create(
-            id=_stable_uuid(f"{scan.pk}:{finding_id}"),
+        if severity not in {value for value, _ in Vulnerability.Severity.choices}:
+            severity = Vulnerability.Severity.INFO
+        confidence = finding.get("confidence", 0)
+        raw_url = str(finding.get("url") or "")
+        safe_url = raw_url if raw_url.startswith(("http://", "https://")) else ""
+        vuln, _ = Vulnerability.objects.update_or_create(
+            id=_stable_uuid(f"scan:{scan.pk}:finding:{finding_key}"),
             defaults={
                 "scan": scan,
                 "project": scan.project,
@@ -143,7 +142,7 @@ def _persist_findings(scan: Scan, engine_execution: ScanEngineExecution, finding
                 "description": str(finding.get("description") or "Live engine finding"),
                 "severity": severity,
                 "status": Vulnerability.Status.OPEN,
-                "confidence": _confidence_value(raw_confidence),
+                "confidence": _confidence_value(confidence),
                 "category": str(finding.get("category") or "")[:50],
                 "cwe_id": str(finding.get("cwe_id") or "")[:20],
                 "cve_ids": finding.get("cve_ids") if isinstance(finding.get("cve_ids"), list) else [],
@@ -154,131 +153,148 @@ def _persist_findings(scan: Scan, engine_execution: ScanEngineExecution, finding
                 "line_end": finding.get("line_end"),
                 "function_name": str(finding.get("function_name") or "")[:200],
                 "code_snippet": str(finding.get("code_snippet") or ""),
-                "url": str(finding.get("url") or finding.get("asset") or ""),
+                "url": safe_url,
                 "parameter": str(finding.get("parameter") or "")[:200],
                 "method": str(finding.get("method") or "")[:10],
-                "risk_score": _risk_score(severity, raw_confidence),
-                "evidence_count": 0,
+                "risk_score": _risk_score(severity, confidence),
                 "validation_status": "observed",
-                "source_engine": engine_execution.engine.name,
+                "source_engine": execution.engine.name,
                 "raw_data": finding,
             },
         )
-        attached = 0
         for evidence_id in finding.get("evidence_ids") or []:
-            item = evidence_by_id.get(str(evidence_id))
-            if not item:
+            evidence_item = evidence_by_id.get(str(evidence_id))
+            if not evidence_item:
                 continue
-            evidence_obj, _ = VulnerabilityEvidence.objects.get_or_create(
-                vulnerability=vuln,
-                id=_stable_uuid(f"{vuln.pk}:{evidence_id}"),
+            VulnerabilityEvidence.objects.update_or_create(
+                id=_stable_uuid(f"vuln:{vuln.pk}:evidence:{evidence_id}"),
                 defaults={
-                    "type": _evidence_model_type(str(item.get("type") or "")),
+                    "vulnerability": vuln,
+                    "type": _evidence_model_type(str(evidence_item.get("type") or "")),
                     "quality": VulnerabilityEvidence.Quality.UNVERIFIED,
-                    "source": str(item.get("engine") or engine_execution.engine.name)[:100],
-                    "description": str(item.get("description") or f"Evidence emitted by {engine_execution.engine.name}"),
-                    "location": str(item.get("data", {}).get("final_url") or item.get("data", {}).get("requested_url") or "")[:500],
-                    "raw_data": __import__('json').dumps(item, ensure_ascii=False, default=str),
-                    "confidence": max(0.0, min(1.0, float(raw_confidence or 0) / 100.0)),
-                    "tags": [engine_execution.engine.name],
+                    "source": str(evidence_item.get("engine") or execution.engine.name)[:100],
+                    "description": str(evidence_item.get("description") or f"Evidence emitted by {execution.engine.name}"),
+                    "location": str(evidence_item.get("data", {}).get("final_url") or evidence_item.get("data", {}).get("requested_url") or "")[:500],
+                    "raw_data": json.dumps(evidence_item, ensure_ascii=False, default=str),
+                    "confidence": max(0.0, min(1.0, float(confidence or 0) / 100.0)),
+                    "tags": [execution.engine.name],
                     "metadata": {"evidence_id": str(evidence_id), "scan_id": str(scan.pk)},
                 },
             )
-            attached += 1
-        if vuln.evidence_count != attached:
-            vuln.evidence_count = vuln.evidences.count()
-            vuln.save(update_fields=["evidence_count", "updated_at"])
+        vuln.evidence_count = vuln.evidences.count()
+        vuln.save(update_fields=["evidence_count", "updated_at"])
         count += 1
     return count
 
 
 def _aggregate_scan(scan: Scan) -> None:
-    qs = scan.vulnerabilities.all()
+    qs = Vulnerability.objects.filter(scan=scan)
     counts = {key: qs.filter(severity=key).count() for key in ["critical", "high", "medium", "low", "info"]}
-    total = sum(counts.values())
-    weighted = counts["critical"] * 10 + counts["high"] * 6 + counts["medium"] * 3 + counts["low"] * 1
-    score = max(0.0, min(100.0, 100.0 - weighted * 2.5))
-    risk = "critical" if counts["critical"] else "high" if counts["high"] else "medium" if counts["medium"] else "low" if counts["low"] else "info"
-    scan.findings_count = total
+    weighted = counts["critical"] * 10 + counts["high"] * 6 + counts["medium"] * 3 + counts["low"]
+    scan.findings_count = sum(counts.values())
     scan.critical_count = counts["critical"]
     scan.high_count = counts["high"]
     scan.medium_count = counts["medium"]
     scan.low_count = counts["low"]
     scan.info_count = counts["info"]
-    scan.security_score = round(score, 2)
-    scan.risk_level = risk
+    scan.security_score = round(max(0.0, min(100.0, 100.0 - weighted * 2.5)), 2)
+    scan.risk_level = "critical" if counts["critical"] else "high" if counts["high"] else "medium" if counts["medium"] else "low" if counts["low"] else "info"
 
 
-@shared_task(bind=True, name="fastapi_app.tasks.scan_tasks.run_scan", acks_late=True, reject_on_worker_lost=True, time_limit=1800, soft_time_limit=1500)
+def _sync_validation_projection(scan: Scan) -> None:
+    validation_id = (scan.config or {}).get("validation_id")
+    if not validation_id:
+        return
+    _publish_event(
+        str(scan.pk),
+        {
+            "type": "validation.progress",
+            "validation_id": str(validation_id),
+            "scan_id": str(scan.pk),
+            "status": scan.status,
+            "progress": scan.progress,
+            "current_phase": scan.current_phase,
+            "current_engine": scan.current_engine,
+            "findings_count": scan.findings_count,
+            "security_score": scan.security_score,
+            "risk_level": scan.risk_level,
+        },
+    )
+
+
+@shared_task(
+    bind=True,
+    name="fastapi_app.tasks.scan_tasks.run_scan",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    time_limit=1800,
+    soft_time_limit=1500,
+)
 def run_scan(self, scan_id: str) -> dict[str, Any]:
     scan = Scan.objects.select_related("project", "asset", "initiated_by").get(pk=scan_id)
     started = timezone.now()
     engines = _engine_names(scan)
-    supported = set(SUPPORTED_REAL_ENGINES)
+    unsupported = sorted(set(engines) - set(SUPPORTED_REAL_ENGINES))
+    if unsupported:
+        raise ValueError(f"No real executor registered for engines: {', '.join(unsupported)}")
+    target_type, target_value = _target_from_scan(scan)
 
     with transaction.atomic():
         scan.status = Scan.Status.RUNNING
         scan.started_at = started
         scan.progress = 0
         scan.current_phase = "initializing"
+        scan.current_engine = ""
         scan.error_message = ""
         scan.error_traceback = ""
-        scan.save(update_fields=["status", "started_at", "progress", "current_phase", "error_message", "error_traceback", "updated_at"])
-        _log(scan, "Scan started with real execution adapters", context={"celery_task_id": self.request.id, "engines": engines})
-
-    _publish_event(str(scan.pk), {"type": "scan.started", "scan_id": str(scan.pk), "task_id": self.request.id})
+        scan.save(update_fields=["status", "started_at", "progress", "current_phase", "current_engine", "error_message", "error_traceback", "updated_at"])
+        _log(scan, "Real scan task started", context={"celery_task_id": self.request.id, "engines": engines, "target_type": target_type, "target_value": target_value})
+    _sync_validation_projection(scan)
 
     try:
         if not engines:
             raise ValueError("No scan engines are configured; refusing to fabricate scan results")
-        target_type, target_value = _target_from_scan(scan)
         total = len(engines)
-        engine_results: dict[str, Any] = {}
+        results_summary: dict[str, Any] = {}
 
         for index, engine_name in enumerate(engines):
-            with transaction.atomic():
-                if Scan.objects.filter(pk=scan.pk, status=Scan.Status.CANCELLED).exists():
-                    _log(scan, "Scan cancelled before next engine", ScanLog.Level.WARNING)
-                    return {"status": "cancelled", "scan_id": str(scan.pk)}
+            scan.refresh_from_db(fields=["status", "progress", "current_phase", "current_engine"])
+            if scan.status == Scan.Status.CANCELLED:
+                return {"status": "cancelled", "scan_id": str(scan.pk)}
+            while scan.status == Scan.Status.PAUSED:
+                import time
+                time.sleep(1)
                 scan.refresh_from_db(fields=["status", "progress", "current_phase", "current_engine"])
-                while scan.status == Scan.Status.PAUSED:
-                    import time
-                    time.sleep(1)
-                    scan.refresh_from_db(fields=["status", "progress", "current_phase", "current_engine"])
-                if scan.status == Scan.Status.CANCELLED:
-                    return {"status": "cancelled", "scan_id": str(scan.pk)}
+            if scan.status == Scan.Status.CANCELLED:
+                return {"status": "cancelled", "scan_id": str(scan.pk)}
 
-                engine_obj, _ = ScanEngine.objects.get_or_create(
-                    name=engine_name,
-                    defaults={
-                        "display_name": ENGINE_META.get(engine_name, (engine_name, "analysis"))[0],
-                        "description": "Registered real execution adapter",
-                        "category": ENGINE_META.get(engine_name, (engine_name, "analysis"))[1],
-                        "version": "1.0.0",
-                        "is_core": engine_name in supported,
-                        "timeout": 300,
-                        "order": index + 1,
-                    },
-                )
-                execution, _ = ScanEngineExecution.objects.get_or_create(scan=scan, engine=engine_obj)
-                execution.status = ScanEngineExecution.ExecutionStatus.RUNNING
-                execution.started_at = timezone.now()
-                execution.progress = 1
-                execution.logs = f"Celery task {self.request.id} started engine {engine_name}"
-                execution.save(update_fields=["status", "started_at", "progress", "logs", "updated_at"])
-                scan.current_engine = engine_name
-                scan.current_phase = engine_obj.category
-                scan.progress = round((index / total) * 100, 2)
-                scan.save(update_fields=["current_engine", "current_phase", "progress", "updated_at"])
-
+            meta = ENGINE_META[engine_name]
+            engine_obj, _ = ScanEngine.objects.get_or_create(
+                name=engine_name,
+                defaults={
+                    "display_name": meta[0],
+                    "description": "Registered real execution adapter",
+                    "category": meta[1],
+                    "version": "1.0.0",
+                    "is_core": True,
+                    "timeout": meta[3],
+                    "order": meta[2],
+                },
+            )
+            execution, _ = ScanEngineExecution.objects.get_or_create(scan=scan, engine=engine_obj)
+            execution.status = ScanEngineExecution.ExecutionStatus.RUNNING
+            execution.started_at = timezone.now()
+            execution.progress = 1
+            execution.error_message = ""
+            execution.save(update_fields=["status", "started_at", "progress", "error_message", "updated_at"])
+            scan.current_engine = engine_name
+            scan.current_phase = engine_obj.category
+            scan.progress = round(index / total * 100, 2)
+            scan.save(update_fields=["current_engine", "current_phase", "progress", "updated_at"])
             _publish_event(str(scan.pk), {"type": "engine.started", "scan_id": str(scan.pk), "engine": engine_name, "progress": scan.progress})
-            _log(scan, f"Engine {engine_name} started", context={"target_type": target_type, "target_value": target_value}, execution=execution)
+            _sync_validation_projection(scan)
 
-            if engine_name not in supported:
-                result = type("UnsupportedResult", (), {"status": "skipped", "findings": [], "evidence": [], "metrics": {"engine": engine_name, "execution": "unsupported"}, "error": "No real execution adapter is registered for this engine"})()
-            else:
-                result = asyncio.run(execute_engine(engine_name, target_type, target_value, scan.config or {}))
-
+            result = asyncio.run(execute_engine(engine_name, target_type, target_value, scan.config or {}))
             finished = timezone.now()
             duration = (finished - (execution.started_at or finished)).total_seconds()
             with transaction.atomic():
@@ -290,18 +306,17 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
                 execution.evidences_collected = len(result.evidence)
                 execution.result_data = {"status": result.status, "metrics": result.metrics, "error": result.error, "evidence": result.evidence}
                 execution.error_message = result.error or ""
-                execution.logs = f"Completed real engine execution in {duration:.3f}s"
+                execution.logs = f"Real execution completed in {duration:.3f}s"
                 execution.save()
                 persisted = _persist_findings(scan, execution, result.findings, result.evidence)
-                engine_results[engine_name] = {"status": result.status, "metrics": result.metrics, "error": result.error, "findings_count": len(result.findings), "persisted_findings": persisted, "evidence_count": len(result.evidence)}
-                scan.engine_results = engine_results
-                scan.progress = round(((index + 1) / total) * 100, 2)
+                results_summary[engine_name] = {"status": result.status, "metrics": result.metrics, "error": result.error, "findings_count": len(result.findings), "evidence_count": len(result.evidence), "persisted_findings": persisted}
+                scan.engine_results = results_summary
+                scan.progress = round((index + 1) / total * 100, 2)
                 scan.current_phase = "completed" if index + 1 == total else engine_obj.category
                 scan.save(update_fields=["engine_results", "progress", "current_phase", "updated_at"])
-                _log(scan, f"Engine {engine_name} completed", context=engine_results[engine_name], execution=execution)
-
+                _log(scan, f"Real engine {engine_name} completed", context=results_summary[engine_name], execution=execution)
             _publish_event(str(scan.pk), {"type": "engine.completed", "scan_id": str(scan.pk), "engine": engine_name, "progress": scan.progress, "findings": len(result.findings), "evidence": len(result.evidence), "status": result.status})
-
+            _sync_validation_projection(scan)
             if result.status == "failed":
                 raise RuntimeError(result.error or f"Real engine {engine_name} failed")
 
@@ -315,14 +330,10 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
             scan.completed_at = timezone.now()
             scan.duration = (scan.completed_at - started).total_seconds()
             scan.save()
-            if scan.asset_id:
-                scan.asset.scan_count = scan.asset.scan_count + 1
-                scan.asset.last_scanned_at = scan.completed_at
-                scan.asset.save(update_fields=["scan_count", "last_scanned_at", "updated_at"])
-            _log(scan, "Scan completed from real engine execution", context={"findings": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level})
-
+            _log(scan, "Real scan completed", context={"findings": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level})
         payload = {"status": "completed", "scan_id": str(scan.pk), "findings_count": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level}
         _publish_event(str(scan.pk), {"type": "scan.completed", **payload})
+        _sync_validation_projection(scan)
         return payload
     except Exception as exc:
         tb = traceback.format_exc()
@@ -331,10 +342,11 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
             scan.status = Scan.Status.FAILED
             scan.completed_at = timezone.now()
             scan.duration = (scan.completed_at - started).total_seconds()
+            scan.current_phase = "failed"
             scan.error_message = str(exc)
             scan.error_traceback = tb
-            scan.current_phase = "failed"
             scan.save()
             _log(scan, "Real scan execution failed", ScanLog.Level.ERROR, context={"error": str(exc), "task_id": self.request.id})
         _publish_event(str(scan.pk), {"type": "scan.failed", "scan_id": str(scan.pk), "error": str(exc)})
+        _sync_validation_projection(scan)
         raise
