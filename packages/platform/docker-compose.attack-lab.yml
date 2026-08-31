@@ -1,0 +1,15 @@
+# Optional attack/assurance lab profile.
+# The platform remains the source of truth; tool execution stays isolated from core services.
+services:
+  attack-lab-agent:
+    image: kalilinux/kali-rolling:latest
+    profiles: [security-lab]
+    restart: "no"
+    command: ["bash", "-lc", "sleep infinity"]
+    networks:
+      - aegisscan_lab
+    volumes: []
+
+networks:
+  aegisscan_lab:
+    name: aegisscan_lab
