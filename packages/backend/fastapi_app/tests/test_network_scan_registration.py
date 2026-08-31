@@ -20,6 +20,6 @@ class NetworkEngineRegistrationTests(SimpleTestCase):
                 self.assertIn(engine_name, ENGINE_META)
                 display_name, category, order, timeout = ENGINE_META[engine_name]
                 self.assertTrue(display_name)
-                self.assertEqual(category, "recon")
+                self.assertEqual(category, "network")
                 self.assertGreater(order, 0)
                 self.assertGreater(timeout, 0)
