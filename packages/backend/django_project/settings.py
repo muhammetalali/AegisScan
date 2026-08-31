@@ -14,24 +14,24 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 env = environ.Env(
     DEBUG=(bool, False),
-    SECRET_KEY=(str, "django-insecure-change-me"),
+    SECRET_KEY=(str, None),
     ALLOWED_HOSTS=(list, ["*"]),
     CORS_ALLOWED_ORIGINS=(list, ["http://localhost:5173", "http://127.0.0.1:5173"]),
-    DATABASE_URL=(str, "postgresql://aegis:aegis@localhost:5432/aegisdb"),
-    REDIS_URL=(str, "redis://localhost:6379/0"),
-    CELERY_BROKER_URL=(str, "redis://localhost:6379/0"),
-    CELERY_RESULT_BACKEND=(str, "redis://localhost:6379/0"),
-    JWT_SECRET_KEY=(str, "jwt-secret-change-me"),
+    DATABASE_URL=(str, None),
+    REDIS_URL=(str, None),
+    CELERY_BROKER_URL=(str, None),
+    CELERY_RESULT_BACKEND=(str, None),
+    JWT_SECRET_KEY=(str, None),
     JWT_ACCESS_TOKEN_LIFETIME=(int, 60),
     JWT_REFRESH_TOKEN_LIFETIME=(int, 1440),
     AUTH_ACCESS_COOKIE=(str, "aegis_access"),
     AUTH_REFRESH_COOKIE=(str, "aegis_refresh"),
-    EMAIL_HOST=(str, "smtp.gmail.com"),
+    EMAIL_HOST=(str, None),
     EMAIL_PORT=(int, 587),
     EMAIL_HOST_USER=(str, ""),
     EMAIL_HOST_PASSWORD=(str, ""),
     EMAIL_USE_TLS=(bool, True),
-    DEFAULT_FROM_EMAIL=(str, "AegisScan <noreply@aegisscan.local>"),
+    DEFAULT_FROM_EMAIL=(str, ""),
     FRONTEND_URL=(str, "http://localhost:5173"),
     SENTRY_DSN=(str, ""),
     LOG_LEVEL=(str, "INFO"),
@@ -56,11 +56,23 @@ AUTH_REFRESH_COOKIE = env("AUTH_REFRESH_COOKIE")
 WS_ALLOW_QUERY_TOKEN = env("WS_ALLOW_QUERY_TOKEN")
 LOG_TO_FILE = env("LOG_TO_FILE")
 
+required_runtime_settings = {
+    "SECRET_KEY": SECRET_KEY,
+    "DATABASE_URL": DATABASE_URL,
+    "REDIS_URL": REDIS_URL,
+    "CELERY_BROKER_URL": CELERY_BROKER_URL,
+    "CELERY_RESULT_BACKEND": CELERY_RESULT_BACKEND,
+    "JWT_SECRET_KEY": JWT_SECRET_KEY,
+}
+missing_runtime_settings = [name for name, value in required_runtime_settings.items() if not value]
+if missing_runtime_settings:
+    raise RuntimeError("Required runtime settings are missing: " + ", ".join(missing_runtime_settings))
+
+if len(SECRET_KEY) < 32:
+    raise RuntimeError("SECRET_KEY must be at least 32 characters")
+if len(JWT_SECRET_KEY) < 32:
+    raise RuntimeError("JWT_SECRET_KEY must be at least 32 characters")
 if not DEBUG:
-    if SECRET_KEY.startswith("django-insecure-") or len(SECRET_KEY) < 32:
-        raise RuntimeError("A strong SECRET_KEY is required when DEBUG=0")
-    if JWT_SECRET_KEY.startswith("jwt-secret-") or len(JWT_SECRET_KEY) < 32:
-        raise RuntimeError("A strong JWT_SECRET_KEY is required when DEBUG=0")
     if not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS:
         raise RuntimeError("Explicit ALLOWED_HOSTS are required when DEBUG=0")
     WS_ALLOW_QUERY_TOKEN = False
