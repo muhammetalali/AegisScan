@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from ..core.config import settings
 from ..core.security import verify_token
 from ..services.advanced_intelligence import ADIProvider, BTEProvider, CorrelationEngine, ScannerAdapter
 from ..services.assurance_risk_pipeline import AssuranceRiskPipeline
@@ -18,7 +19,7 @@ from ..services.intelligence_fabric import IntelligenceFabric, ProviderUnavailab
 from ..services.risk_engine import assess_risk
 
 router = APIRouter()
-security = HTTPBearer(auto_error=True)
+security = HTTPBearer(auto_error=False)
 fabric = IntelligenceFabric()
 external_fabric = ExternalIntelligenceFabric()
 advanced_correlation = CorrelationEngine()
@@ -117,8 +118,14 @@ class RemediationRequest(BaseModel):
     evidence: list[dict[str, object]] = Field(default_factory=list, max_length=100)
 
 
-async def require_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    user = await verify_token(credentials.credentials)
+async def require_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> dict:
+    token = credentials.credentials if credentials else request.cookies.get(settings.AUTH_ACCESS_COOKIE)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user = await verify_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
