@@ -3,11 +3,9 @@ services:
     environment:
       AEGIS_LAB_EXECUTOR_URL: http://aegisscan-network-lab:9000
       AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:?AEGIS_LAB_EXECUTOR_TOKEN is required for network lab execution}
-
-  fastapi:
-    environment:
-      AEGIS_LAB_EXECUTOR_URL: http://aegisscan-network-lab:9000
-      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:?AEGIS_LAB_EXECUTOR_TOKEN is required for network lab execution}
+    networks:
+      - default
+      - aegisscan_lab
 
   aegisscan-network-lab:
     build:
@@ -30,3 +28,9 @@ services:
       LAB_EXECUTOR_PORT: "9000"
     expose:
       - "9000"
+    networks:
+      - aegisscan_lab
+
+networks:
+  aegisscan_lab:
+    name: aegisscan_lab
