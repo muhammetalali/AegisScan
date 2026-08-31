@@ -144,7 +144,7 @@ class ScanOrchestrator:
 
     async def pause_scan(self, scan_id: str) -> dict[str, Any]:
         from scans.models import Scan
-        updated = Scan.objects.filter(scan_id=scan_id, status__in=["queued", "running"]).update(status="paused", updated_at=timezone.now())
+        updated = Scan.objects.filter(pk=scan_id, status__in=["queued", "running"]).update(status="paused", updated_at=timezone.now())
         return {"status": "paused", "scan_id": scan_id} if updated else {"status": "error", "message": "Scan not running or not found"}
 
     async def resume_scan(self, scan_id: str) -> dict[str, Any]:
