@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import socket
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,6 @@ from urllib.parse import urlparse
 from .code_quality_executor import analyze_code
 from .endpoint_discovery import discover_endpoints
 from .manifest_discovery import discover_dependency_manifests
-from .runtime_analysis_executor import analyze_runtime
 from .security_intelligence import analyze_dependency_manifest, execute_tls_intelligence
 from .validation_executor import ExecutionResult, execute_http_probe, normalize_target
 from .vulnerability_intelligence import analyze_response
@@ -21,7 +21,8 @@ SUPPORTED_REAL_ENGINES = {
 
 
 def _socket_evidence(hostname: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    evidence_id = f"ev-dns-{abs(hash(hostname)) & 0xffffffff:08x}"
+    digest = hashlib.sha256(hostname.encode("utf-8")).hexdigest()[:12]
+    evidence_id = f"ev-dns-{digest}"
     try:
         addresses = sorted({item[4][0] for item in socket.getaddrinfo(hostname, None) if item[4]})
         return [{"id": evidence_id, "type": "dns_resolution", "engine": "recon", "data": {"hostname": hostname, "addresses": addresses}}], {"hostname": hostname, "resolved_addresses": addresses, "resolution_status": "resolved"}
@@ -131,9 +132,7 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
             return probe
         if probe.metrics.get("access_limited"):
             return ExecutionResult(
-                "completed",
-                [],
-                probe.evidence,
+                "completed", [], probe.evidence,
                 {
                     "engine": engine,
                     "access_limited": True,
