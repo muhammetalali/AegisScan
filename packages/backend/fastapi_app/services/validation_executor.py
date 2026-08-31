@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -22,6 +23,27 @@ class ExecutionResult:
 
 def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _containerized() -> bool:
+    return os.getenv("AEGIS_CONTAINERIZED", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _connect_target(target: str) -> tuple[str, str | None]:
+    """Resolve browser-local loopback targets when execution happens in Docker."""
+    parsed = urlparse(target)
+    hostname = (parsed.hostname or "").lower()
+    if not _containerized() or hostname not in {"localhost", "127.0.0.1", "::1"}:
+        return target, None
+    if parsed.username or parsed.password:
+        raise ValueError("Credentials embedded in scan target URLs are not supported")
+
+    host_gateway = os.getenv("AEGIS_HOST_GATEWAY", "host.docker.internal").strip() or "host.docker.internal"
+    port = f":{parsed.port}" if parsed.port else ""
+    connection_target = urlunparse(
+        (parsed.scheme, f"{host_gateway}{port}", parsed.path, parsed.params, parsed.query, parsed.fragment)
+    )
+    return connection_target, target
 
 
 def normalize_target(target_type: str, target_value: str) -> str:
@@ -46,18 +68,48 @@ async def execute_http_probe(target_type: str, target_value: str, timeout: float
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return ExecutionResult("failed", [], [], {}, "target_value must be a valid HTTP or HTTPS target")
 
+    try:
+        connection_target, original_target = _connect_target(target)
+    except ValueError as exc:
+        return ExecutionResult("failed", [], [], {"target": target}, str(exc))
+
+    connection_parsed = urlparse(connection_target)
     headers = {"User-Agent": "AegisScan/real-executor"}
     started = datetime.now(timezone.utc)
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers=headers, verify=True) as client:
-            response = await client.get(target)
+            response = await client.get(connection_target)
+    except httpx.ConnectError as exc:
+        return ExecutionResult(
+            "failed",
+            [],
+            [],
+            {
+                "target": target,
+                "connection_target": connection_target,
+                "connection_host": connection_parsed.hostname,
+                "containerized_target_translation": bool(original_target),
+            },
+            f"Unable to connect to target {target} from the scan worker. Connection target: {connection_target}. {exc}",
+        )
     except httpx.HTTPError as exc:
-        return ExecutionResult("failed", [], [], {"target": target}, str(exc))
+        return ExecutionResult(
+            "failed",
+            [],
+            [],
+            {
+                "target": target,
+                "connection_target": connection_target,
+                "connection_host": connection_parsed.hostname,
+                "containerized_target_translation": bool(original_target),
+            },
+            f"HTTP execution failed for {target}. {exc}",
+        )
 
     finished = datetime.now(timezone.utc)
     duration_ms = round((finished - started).total_seconds() * 1000, 2)
     response_headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
-    evidence_id = f"ev-http-{abs(hash((target, response.status_code))) & 0xffffffff:08x}"
+    evidence_id = f"ev-http-{abs(hash((target, response.status_code, response.url))) & 0xffffffff:08x}"
 
     evidence = [{
         "id": evidence_id,
@@ -66,6 +118,7 @@ async def execute_http_probe(target_type: str, target_value: str, timeout: float
         "created_at": _utc(),
         "data": {
             "requested_url": target,
+            "connection_target": connection_target,
             "final_url": str(response.url),
             "method": "GET",
             "status_code": response.status_code,
@@ -106,6 +159,8 @@ async def execute_http_probe(target_type: str, target_value: str, timeout: float
         metrics={
             "engine": SUPPORTED_ENGINE,
             "target": target,
+            "connection_target": connection_target,
+            "containerized_target_translation": bool(original_target),
             "status_code": response.status_code,
             "duration_ms": duration_ms,
             "final_url": str(response.url),
