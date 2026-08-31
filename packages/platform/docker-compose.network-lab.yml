@@ -1,0 +1,32 @@
+services:
+  celery_worker:
+    environment:
+      AEGIS_LAB_EXECUTOR_URL: http://aegisscan-network-lab:9000
+      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:?AEGIS_LAB_EXECUTOR_TOKEN is required for network lab execution}
+
+  fastapi:
+    environment:
+      AEGIS_LAB_EXECUTOR_URL: http://aegisscan-network-lab:9000
+      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:?AEGIS_LAB_EXECUTOR_TOKEN is required for network lab execution}
+
+  aegisscan-network-lab:
+    build:
+      context: ../labs/network
+      dockerfile: Dockerfile.kali
+    image: aegisscan-network-lab:local
+    profiles: [security-lab]
+    restart: "no"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+      - /run:rw,noexec,nosuid,size=32m
+    command: ["python3", "/home/aegislab/agent.py"]
+    environment:
+      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:?AEGIS_LAB_EXECUTOR_TOKEN is required for network lab execution}
+      LAB_EXECUTOR_PORT: "9000"
+    expose:
+      - "9000"
