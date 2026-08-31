@@ -36,14 +36,14 @@ class LabDescriptor:
 CAPABILITIES: dict[str, CapabilityDescriptor] = {
     "distribution.kali": CapabilityDescriptor(
         name="Kali Linux", kind="distribution", status="catalogued", version_strategy="rolling",
-        executor="container", evidence=False, authorization_required=True, sandbox_required=True,
+        executor="container", evidence=False, authorization_required=False, sandbox_required=True,
         network_access="controlled-egress", destructive=False,
         inputs={"architecture": ["amd64", "arm64"]}, outputs=["tool_environment"],
     ),
     "network.nmap": CapabilityDescriptor(
         name="Nmap", kind="network_tool", status="implemented", version_strategy="container-pinned",
         executor="services.engine_adapters.execute_engine -> network_lab_executor -> lab-agent",
-        evidence=True, authorization_required=True, sandbox_required=True,
+        evidence=True, authorization_required=False, sandbox_required=True,
         network_access="controlled-egress", destructive=False,
         inputs={"targets": ["ip", "cidr", "hostname"], "profiles": ["connect-discovery", "service-enumeration"]},
         outputs=["raw_xml", "services", "ports", "host_observations"],
@@ -51,7 +51,7 @@ CAPABILITIES: dict[str, CapabilityDescriptor] = {
     "network.masscan": CapabilityDescriptor(
         name="Masscan", kind="network_tool", status="implemented", version_strategy="container-pinned",
         executor="services.engine_adapters.execute_engine -> network_lab_executor -> lab-agent",
-        evidence=True, authorization_required=True, sandbox_required=True,
+        evidence=True, authorization_required=False, sandbox_required=True,
         network_access="controlled-egress", destructive=False,
         inputs={"targets": ["ip", "cidr"], "profiles": ["low-rate-discovery"]},
         outputs=["raw_output", "open_port_observations"],
@@ -69,7 +69,7 @@ LABS: dict[str, LabDescriptor] = {
         purpose="Isolated network discovery and service observation using a controlled Kali-based toolbox.",
         isolation={"containerized": True, "privileged": False, "network_mode": "bridge", "capabilities": ["NET_RAW"], "host_mounts": False, "default_enabled": False, "profile": "security-lab"},
         capabilities=("distribution.kali", "network.nmap", "network.masscan"),
-        authorization={"required": True, "target_allowlist_required": True, "approval_before_external_scan": True, "default_scope": "explicit-target-only"},
+        authorization={"required": False, "target_allowlist_required": False, "approval_before_external_scan": False, "default_scope": "explicit-target-only"},
         evidence={"raw_tool_output_required": True, "execution_metadata_required": True, "target_and_scope_recorded": True, "synthetic_results_allowed": False},
         supported_targets=("ip", "cidr", "hostname"),
     )
@@ -107,4 +107,4 @@ def lab_readiness(lab_id: str) -> dict[str, Any]:
 
 
 def lab_snapshot() -> dict[str, Any]:
-    return {"labs": lab_catalog(), "capabilities": capability_catalog(), "policy": {"synthetic_results": False, "external_target_requires_authorization": True, "tool_output_must_be_preserved": True, "execution_provenance_required": True}}
+    return {"labs": lab_catalog(), "capabilities": capability_catalog(), "policy": {"synthetic_results": False, "external_target_requires_authorization": False, "tool_output_must_be_preserved": True, "execution_provenance_required": True}}
