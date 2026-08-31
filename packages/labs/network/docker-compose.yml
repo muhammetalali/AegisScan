@@ -16,7 +16,18 @@ services:
       - /run:rw,noexec,nosuid,size=32m
     networks:
       - aegisscan_lab
-    command: ["sleep", "infinity"]
+    environment:
+      AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:?AEGIS_LAB_EXECUTOR_TOKEN is required}
+      LAB_EXECUTOR_PORT: "9000"
+    command: ["python3", "/home/aegislab/agent.py"]
+    expose:
+      - "9000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
 networks:
   aegisscan_lab:
