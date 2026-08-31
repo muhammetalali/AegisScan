@@ -13,11 +13,8 @@ RUN apt-get update \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --uid 10001 --shell /bin/bash aegislab
-COPY --chown=10001:10001 agent.py /home/aegislab/agent.py
-
-USER 10001:10001
+COPY agent.py /home/aegislab/agent.py
 WORKDIR /home/aegislab
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sleep", "infinity"]
+CMD ["python3", "/home/aegislab/agent.py"]
