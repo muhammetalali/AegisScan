@@ -51,7 +51,7 @@ class Vulnerability(models.Model):
         FIXED = 'fixed', _('Fixed')
         FALSE_POSITIVE = 'false_positive', _('False Positive')
         ACCEPTED_RISK = 'accepted_risk', _('Accepted Risk')
-        WONT_FIX = 'wont_fix', _('Won\'t Fix')
+        WONT_FIX = 'wont_fix', _("Won't Fix")
         DUPLICATE = 'duplicate', _('Duplicate')
 
     class Confidence(models.TextChoices):
@@ -164,8 +164,7 @@ class VulnerabilityEvidence(models.Model):
     vulnerability = models.ForeignKey(Vulnerability, on_delete=models.CASCADE, related_name='evidences')
     type = models.CharField(_('type'), max_length=30, choices=Type.choices)
     quality = models.CharField(_('quality'), max_length=15, choices=Quality.choices, default=Quality.UNVERIFIED)
-    source = models.CharField(max_length=100)
-    # Engine/process that actually collected or emitted this evidence. This is distinct from the engine that asserted the Finding.
+    source = models.CharField(_('source'), max_length=100)
     collector_engine = models.CharField(_('collector engine'), max_length=100, blank=True)
     description = models.TextField()
     location = models.CharField(max_length=500, blank=True)
@@ -182,3 +181,49 @@ class VulnerabilityEvidence(models.Model):
         verbose_name = _('Vulnerability Evidence')
         verbose_name_plural = _('Vulnerability Evidences')
         ordering = ['-quality', '-confidence']
+
+
+class VulnerabilityNote(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    vulnerability = models.ForeignKey(Vulnerability, on_delete=models.CASCADE, related_name='notes')
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='vulnerability_notes')
+    content = models.TextField(_('content'))
+    is_private = models.BooleanField(_('private'), default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _('Vulnerability Note')
+        verbose_name_plural = _('Vulnerability Notes')
+        ordering = ['-created_at']
+
+
+class VulnerabilityAttachment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    vulnerability = models.ForeignKey(Vulnerability, on_delete=models.CASCADE, related_name='attachments')
+    file = models.FileField(_('file'), upload_to='vulnerability_attachments/')
+    filename = models.CharField(_('filename'), max_length=255)
+    content_type = models.CharField(_('content type'), max_length=100)
+    size = models.PositiveIntegerField(_('size'))
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='vulnerability_attachments')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _('Vulnerability Attachment')
+        verbose_name_plural = _('Vulnerability Attachments')
+        ordering = ['-created_at']
+
+
+class VulnerabilityStatusHistory(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    vulnerability = models.ForeignKey(Vulnerability, on_delete=models.CASCADE, related_name='status_history')
+    old_status = models.CharField(_('old status'), max_length=20, choices=Vulnerability.Status.choices)
+    new_status = models.CharField(_('new status'), max_length=20, choices=Vulnerability.Status.choices)
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='vulnerability_status_changes')
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _('Vulnerability Status History')
+        verbose_name_plural = _('Vulnerability Status History')
+        ordering = ['-created_at']
