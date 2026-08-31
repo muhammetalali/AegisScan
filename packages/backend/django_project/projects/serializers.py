@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+import re
+import uuid
+
+from django.utils.text import slugify
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
@@ -7,6 +13,11 @@ from .models import Project
 
 
 class ProjectSerializer(serializers.ModelSerializer):
+    # SlugField performs Django's ASCII slug validation before validate_slug(),
+    # which caused valid project creation requests to fail before our custom
+    # normalization could run. Treat the API boundary as the canonical place
+    # to normalize an optional client-provided slug.
+    slug = serializers.CharField(required=False, allow_blank=True, max_length=220)
     owner = serializers.UUIDField(source="owner_id", read_only=True)
     member_count = serializers.IntegerField(source="get_member_count", read_only=True)
 
@@ -26,13 +37,28 @@ class ProjectSerializer(serializers.ModelSerializer):
             user = request.user
             if not user.has_permission(Permission.PROJECT_CREATE):
                 raise PermissionDenied("You do not have permission to create projects.")
-        return attrs
 
-    def validate_slug(self, value):
-        value = value.strip().lower()
-        if not value:
-            raise serializers.ValidationError("Slug cannot be empty.")
-        return value
+        raw_slug = str(attrs.get("slug") or "").strip()
+        name = str(attrs.get("name") or "").strip()
+        normalized_slug = slugify(raw_slug, allow_unicode=False) if raw_slug else slugify(name, allow_unicode=False)
+
+        if not normalized_slug:
+            normalized_slug = f"project-{uuid.uuid4().hex[:12]}"
+
+        normalized_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", normalized_slug).strip("-_").lower()
+        normalized_slug = normalized_slug[:220].strip("-_")
+        if not normalized_slug:
+            normalized_slug = f"project-{uuid.uuid4().hex[:12]}"
+
+        candidate = normalized_slug
+        suffix = 1
+        while Project.objects.filter(slug=candidate).exclude(pk=getattr(self.instance, "pk", None)).exists():
+            suffix_text = f"-{suffix}"
+            candidate = f"{normalized_slug[:220 - len(suffix_text)]}{suffix_text}"
+            suffix += 1
+
+        attrs["slug"] = candidate
+        return attrs
 
     def validate_status(self, value):
         if value == Project.Status.ARCHIVED:
