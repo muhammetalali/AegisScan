@@ -8,7 +8,7 @@ from .models import Notification
 
 
 class NotificationSerializer(serializers.ModelSerializer):
-    project_id = serializers.IntegerField(read_only=True)
+    project_id = serializers.UUIDField(read_only=True)
 
     class Meta:
         model = Notification
