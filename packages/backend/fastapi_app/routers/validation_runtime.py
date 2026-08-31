@@ -16,6 +16,7 @@ from vulnerabilities.serializers import VulnerabilitySerializer
 from ..core.security import verify_token
 from ..services.engine_adapters import SUPPORTED_REAL_ENGINES
 from ..services.remediation_validation import RemediationValidationSuite
+from ..services.scan_orchestrator import ENGINE_METADATA
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -75,26 +76,88 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _progress_engines(scan: Scan) -> list[dict[str, Any]]:
+    executions = {str(item.engine.name): item for item in scan.engine_executions.all()}
+    states: list[dict[str, Any]] = []
+    for engine_name in scan.engines or []:
+        name = str(engine_name)
+        item = executions.get(name)
+        metadata = ENGINE_METADATA.get(name, (name, "analysis", 999, 300))
+        states.append(
+            {
+                "id": name,
+                "phase": metadata[1],
+                "status": item.status if item else ("queued" if scan.status not in {"completed", "failed", "cancelled"} else scan.status),
+                "progress": float(item.progress) if item else 0,
+                "findings": int(item.findings_found) if item else 0,
+            }
+        )
+    return states
+
+
+def _progress_groups(engine_states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    labels = {
+        "recon": ("Reconnaissance", "Target and surface discovery"),
+        "analysis": ("Analysis", "Evidence and security analysis"),
+        "intelligence": ("Intelligence", "Vulnerability and TLS intelligence"),
+        "validation": ("Validation", "Security validation controls"),
+        "control": ("Control Validation", "Control and policy validation"),
+    }
+    for engine in engine_states:
+        category = str(engine["phase"])
+        label, desc = labels.get(category, (category.replace("_", " ").title(), "Execution group"))
+        group = groups.setdefault(
+            category,
+            {"id": category, "label": label, "desc": desc, "status": "queued", "engines": []},
+        )
+        group["engines"].append(
+            {
+                "id": engine["id"],
+                "label": ENGINE_METADATA.get(engine["id"], (engine["id"], category, 999, 300))[0],
+                "status": engine["status"],
+                "progress": engine["progress"],
+                "findings": engine["findings"],
+            }
+        )
+
+    ordered: list[dict[str, Any]] = []
+    for _, group in sorted(
+        groups.items(),
+        key=lambda pair: min(
+            ENGINE_METADATA.get(item["id"], (item["id"], pair[0], 999, 300))[2]
+            for item in pair[1]["engines"]
+        ),
+    ):
+        statuses = [item["status"] for item in group["engines"]]
+        if any(status == "running" for status in statuses):
+            group["status"] = "running"
+        elif statuses and all(status in {"completed", "unsupported"} for status in statuses):
+            group["status"] = "completed"
+        elif any(status == "failed" for status in statuses):
+            group["status"] = "failed"
+        elif any(status == "cancelled" for status in statuses):
+            group["status"] = "cancelled"
+        else:
+            group["status"] = "queued"
+        ordered.append(group)
+    return ordered
+
+
 @sync_to_async
 def _project_accessible(project_id: str, user: dict) -> bool:
     from projects.models import Project, ProjectMembership
 
     if user.get("is_superuser"):
         return Project.objects.filter(pk=project_id).exists()
-    return Project.objects.filter(pk=project_id).filter(
-        owner=user.get("id")
-    ).exists() or ProjectMembership.objects.filter(
+    return Project.objects.filter(owner=user.get("id"), pk=project_id).exists() or ProjectMembership.objects.filter(
         project_id=project_id,
         user_id=user.get("id"),
     ).exists()
 
 
 @sync_to_async
-def _create_scan(
-    body: ValidationCreate,
-    user: dict,
-    validation_id: str,
-) -> tuple[Scan, str]:
+def _create_scan(body: ValidationCreate, user: dict, validation_id: str) -> tuple[Scan, str]:
     from projects.models import Project
 
     try:
@@ -104,10 +167,7 @@ def _create_scan(
 
     if not user.get("is_superuser"):
         is_owner = str(project.owner_id) == str(user.get("id"))
-        is_admin = project.memberships.filter(
-            user_id=user.get("id"),
-            role__in=["owner", "admin"],
-        ).exists()
+        is_admin = project.memberships.filter(user_id=user.get("id"), role__in=["owner", "admin"]).exists()
         if not (is_owner or is_admin):
             raise PermissionError("Only project owners and administrators can start validations")
 
@@ -139,6 +199,7 @@ def _create_scan(
 @sync_to_async
 def _queue_scan(scan_id: str):
     from ..tasks.scan_tasks import run_scan
+
     task = run_scan.delay(scan_id)
     Scan.objects.filter(pk=scan_id).update(celery_task_id=task.id)
     return task.id
@@ -146,15 +207,20 @@ def _queue_scan(scan_id: str):
 
 @sync_to_async
 def _get_validation(vid: str, user: dict) -> dict[str, Any] | None:
-    scan = Scan.objects.select_related("project").prefetch_related("engine_executions__engine").filter(
-        config__validation_id=vid,
-    ).first()
+    scan = (
+        Scan.objects.select_related("project")
+        .prefetch_related("engine_executions__engine")
+        .filter(config__validation_id=vid)
+        .first()
+    )
     if not scan:
         return None
     if not user.get("is_superuser"):
         allowed = scan.project.owner_id == user.get("id") or scan.project.memberships.filter(user_id=user.get("id")).exists()
         if not allowed:
             return None
+
+    engine_states = _progress_engines(scan)
     return {
         "id": vid,
         "scan_id": str(scan.pk),
@@ -162,7 +228,11 @@ def _get_validation(vid: str, user: dict) -> dict[str, Any] | None:
         "target_type": scan.config.get("target_type", scan.scan_type),
         "target_value": scan.config.get("target_value", ""),
         "profile": scan.config.get("profile", "full"),
-        "engines": scan.engines or [],
+        "engines_requested": [str(name) for name in (scan.engines or [])],
+        "engines": engine_states,
+        "groups": _progress_groups(engine_states),
+        "phases": ["queued", "recon", "analysis", "intelligence", "validation", "control", "completed"],
+        "live_events": [],
         "scope": scan.config.get("scope"),
         "status": scan.status,
         "progress": float(scan.progress),
@@ -203,12 +273,7 @@ def _get_findings(vid: str, user: dict) -> tuple[dict[str, Any], list[dict[str, 
             return None
     findings = Vulnerability.objects.filter(scan=scan).select_related("asset").order_by("-risk_score", "-created_at")
     return (
-        {
-            "validation_id": vid,
-            "scan_id": str(scan.pk),
-            "status": scan.status,
-            "count": findings.count(),
-        },
+        {"validation_id": vid, "scan_id": str(scan.pk), "status": scan.status, "count": findings.count()},
         VulnerabilitySerializer(findings, many=True).data,
     )
 
