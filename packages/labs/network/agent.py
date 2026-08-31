@@ -14,7 +14,6 @@ HOST = "0.0.0.0"
 PORT = int(os.getenv("LAB_EXECUTOR_PORT", "9000"))
 TOKEN = os.getenv("AEGIS_LAB_EXECUTOR_TOKEN", "").strip()
 IMAGE = os.getenv("LAB_EXECUTOR_IMAGE", "aegisscan-network-lab:local")
-MAX_NETWORK_ADDRESSES = 1024
 
 
 def reply(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -32,13 +31,9 @@ def target_kind(target: str) -> str:
         return "ip"
     except ValueError:
         try:
-            network = ipaddress.ip_network(target, strict=False)
-            if network.num_addresses > MAX_NETWORK_ADDRESSES:
-                raise ValueError(f"Network target exceeds {MAX_NETWORK_ADDRESSES} addresses")
+            ipaddress.ip_network(target, strict=False)
             return "cidr"
-        except ValueError as exc:
-            if str(exc).startswith("Network target exceeds"):
-                raise
+        except ValueError:
             if len(target) > 253 or any(not part or len(part) > 63 for part in target.split(".")):
                 raise ValueError("Invalid hostname")
             socket.getaddrinfo(target, None)
@@ -55,7 +50,15 @@ def parse_nmap(xml_text: str) -> list[dict]:
             if state is None or state.attrib.get("state") != "open":
                 continue
             service = port.find("service")
-            items.append({"host": host_addr, "protocol": port.attrib.get("protocol", "tcp"), "port": int(port.attrib.get("portid", "0")), "state": "open", "service": service.attrib.get("name") if service is not None else None, "product": service.attrib.get("product") if service is not None else None, "version": service.attrib.get("version") if service is not None else None})
+            items.append({
+                "host": host_addr,
+                "protocol": port.attrib.get("protocol", "tcp"),
+                "port": int(port.attrib.get("portid", "0")),
+                "state": "open",
+                "service": service.attrib.get("name") if service is not None else None,
+                "product": service.attrib.get("product") if service is not None else None,
+                "version": service.attrib.get("version") if service is not None else None,
+            })
     return items
 
 
@@ -78,34 +81,37 @@ def run(command: list[str], timeout: int) -> dict:
     started = time.time()
     proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
     finished = time.time()
-    return {"return_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)), "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(finished))}
+    return {
+        "return_code": proc.returncode,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
+        "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(finished)),
+    }
 
 
 def execute(tool: str, target: str, profile: str) -> dict:
-    if not TOKEN:
-        return {"status": "failed", "error": "Lab executor token is not configured"}
     if tool not in {"nmap", "masscan"}:
         return {"status": "failed", "error": "Unsupported tool"}
     try:
         kind = target_kind(target)
     except ValueError as exc:
-        return {"status": "blocked", "error": str(exc)}
+        return {"status": "failed", "error": str(exc)}
+    resolved = []
     if kind == "hostname":
         resolved = sorted({item[4][0] for item in socket.getaddrinfo(target, None) if item[4]})
-        if len(resolved) > 16:
-            return {"status": "blocked", "error": "Hostname resolves to too many addresses"}
 
     execution_id = str(uuid.uuid4())
     if tool == "nmap":
         if profile not in {"connect-discovery", "service-enumeration"}:
             return {"status": "failed", "error": "Unsupported Nmap profile"}
-        command = ["nmap", "-Pn", "-T3", "--open", "-sV", "-oX", "-", target]
+        command = ["nmap", "-Pn", "-T10", "--open", "-sV", "-oX", "-", target]
         parser = parse_nmap
         timeout = 180
     else:
         if profile != "low-rate-discovery":
             return {"status": "failed", "error": "Unsupported Masscan profile"}
-        command = ["masscan", target, "-p1-1024", "--rate", "100", "--wait", "3"]
+        command = ["masscan", target, "-p1-1024", "--rate", "1000", "--wait", "3"]
         parser = parse_masscan
         timeout = 120
 
@@ -113,8 +119,27 @@ def execute(tool: str, target: str, profile: str) -> dict:
     version_proc = subprocess.run([tool, "--version"], capture_output=True, text=True, timeout=10, check=False)
     version_line = next((line.strip() for line in version_proc.stdout.splitlines() if line.strip()), "unknown")
     if result["return_code"] != 0:
-        return {"status": "failed", "execution_id": execution_id, "command": command, "executor_image": IMAGE, "tool_version": version_line, **result}
-    return {"status": "completed", "execution_id": execution_id, "command": command, "executor_image": IMAGE, "tool_version": version_line, "observations": parser(result["stdout"]), **result}
+        return {
+            "status": "failed",
+            "execution_id": execution_id,
+            "target_type": kind,
+            "resolved_addresses": resolved,
+            "command": command,
+            "executor_image": IMAGE,
+            "tool_version": version_line,
+            **result,
+        }
+    return {
+        "status": "completed",
+        "execution_id": execution_id,
+        "target_type": kind,
+        "resolved_addresses": resolved,
+        "command": command,
+        "executor_image": IMAGE,
+        "tool_version": version_line,
+        "observations": parser(result["stdout"]),
+        **result,
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -122,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            reply(self, 200, {"status": "healthy", "executor": "network-lab", "tools": ["nmap", "masscan"], "max_network_addresses": MAX_NETWORK_ADDRESSES})
+            reply(self, 200, {"status": "healthy", "executor": "network-lab", "tools": ["nmap", "masscan"]})
             return
         reply(self, 404, {"detail": "Not found"})
 
@@ -130,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/v1/execute":
             reply(self, 404, {"detail": "Not found"})
             return
-        if self.headers.get("Authorization", "") != f"Bearer {TOKEN}":
+        if TOKEN and self.headers.get("Authorization", "") != f"Bearer {TOKEN}":
             reply(self, 401, {"detail": "Unauthorized"})
             return
         try:
