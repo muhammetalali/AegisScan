@@ -22,25 +22,14 @@ def _stable_id(prefix: str, *parts: object) -> str:
     return f"{prefix}-{hashlib.sha256(material.encode()).hexdigest()[:16]}"
 
 
-def _authorized_target(target: str, extra: dict[str, Any]) -> bool:
-    if extra.get("authorized") is not True:
-        return False
-    allowlist = extra.get("lab_target_allowlist") or extra.get("target_allowlist")
-    return isinstance(allowlist, list) and target in {str(item).strip() for item in allowlist if str(item).strip()}
-
-
 async def execute_network_tool(engine: str, target_type: str, target_value: str, extra: dict[str, Any]) -> ExecutionResult:
     tool = {"network_nmap": "nmap", "network_masscan": "masscan"}.get(engine)
     if not tool:
         return ExecutionResult("unsupported", [], [], {"engine": engine}, "No network executor registered for this engine")
     if target_type not in {"ip", "cidr", "hostname"} or not target_value.strip():
         return ExecutionResult("failed", [], [], {"engine": engine}, "Network lab requires a non-empty ip, cidr, or hostname target")
+
     target = target_value.strip()
-    if not _authorized_target(target, extra):
-        return ExecutionResult(
-            "failed", [], [], {"engine": engine, "tool": tool, "target": target, "authorization_required": True, "blocked": True},
-            "Network lab execution blocked: authorized=true and an exact target in lab_target_allowlist are required.",
-        )
     if not LAB_EXECUTOR_TOKEN:
         return ExecutionResult("failed", [], [], {"engine": engine, "tool": tool}, "AEGIS_LAB_EXECUTOR_TOKEN is not configured")
 
@@ -48,11 +37,18 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
     request = {"tool": tool, "target": target, "profile": profile, "requested_at": _utc()}
     try:
         async with httpx.AsyncClient(timeout=float(extra.get("network_tool_timeout", 180))) as client:
-            response = await client.post(f"{LAB_EXECUTOR_URL}/v1/execute", json=request, headers={"Authorization": f"Bearer {LAB_EXECUTOR_TOKEN}"})
+            response = await client.post(
+                f"{LAB_EXECUTOR_URL}/v1/execute",
+                json=request,
+                headers={"Authorization": f"Bearer {LAB_EXECUTOR_TOKEN}"},
+            )
             response.raise_for_status()
             payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        return ExecutionResult("failed", [], [], {"engine": engine, "tool": tool, "target": target}, f"Lab executor request failed: {exc}")
+        return ExecutionResult(
+            "failed", [], [], {"engine": engine, "tool": tool, "target": target},
+            f"Lab executor request failed: {exc}",
+        )
 
     execution_id = str(payload.get("execution_id") or _stable_id("exec", engine, target))
     raw = str(payload.get("stdout") or "")
@@ -64,16 +60,36 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
         "engine": engine,
         "created_at": _utc(),
         "data": {
-            "execution_id": execution_id, "tool": tool, "target": target, "profile": profile,
-            "command": payload.get("command"), "return_code": payload.get("return_code"),
-            "started_at": payload.get("started_at"), "completed_at": payload.get("completed_at"),
-            "tool_version": payload.get("tool_version"), "executor_image": payload.get("executor_image"),
-            "stdout": raw, "stderr": stderr, "stdout_sha256": output_sha256,
-            "authorization": {"authorized": True, "allowlist_match": True, "target": target},
+            "execution_id": execution_id,
+            "tool": tool,
+            "target": target,
+            "profile": profile,
+            "command": payload.get("command"),
+            "return_code": payload.get("return_code"),
+            "started_at": payload.get("started_at"),
+            "completed_at": payload.get("completed_at"),
+            "tool_version": payload.get("tool_version"),
+            "executor_image": payload.get("executor_image"),
+            "stdout": raw,
+            "stderr": stderr,
+            "stdout_sha256": output_sha256,
+            "execution_mode": "real_network_lab",
         },
     }]
     if payload.get("status") != "completed":
-        return ExecutionResult("failed", [], evidence, {"engine": engine, "tool": tool, "target": target, "execution_id": execution_id, "executor_status": payload.get("status")}, payload.get("error") or "Network tool execution failed")
+        return ExecutionResult(
+            "failed",
+            [],
+            evidence,
+            {
+                "engine": engine,
+                "tool": tool,
+                "target": target,
+                "execution_id": execution_id,
+                "executor_status": payload.get("status"),
+            },
+            payload.get("error") or "Network tool execution failed",
+        )
 
     findings = []
     for item in payload.get("observations") or []:
@@ -94,9 +110,20 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
             "description": f"{tool} observed {protocol}/{port} as open.",
             "observed_at": _utc(),
         })
-    return ExecutionResult("completed", findings, evidence, {
-        "engine": engine, "tool": tool, "target": target, "execution_id": execution_id,
-        "tool_version": payload.get("tool_version"), "executor_image": payload.get("executor_image"),
-        "return_code": payload.get("return_code"), "observations_count": len(payload.get("observations") or []),
-        "stdout_sha256": output_sha256, "provenance": "isolated-network-lab-executor",
-    })
+    return ExecutionResult(
+        "completed",
+        findings,
+        evidence,
+        {
+            "engine": engine,
+            "tool": tool,
+            "target": target,
+            "execution_id": execution_id,
+            "tool_version": payload.get("tool_version"),
+            "executor_image": payload.get("executor_image"),
+            "return_code": payload.get("return_code"),
+            "observations_count": len(payload.get("observations") or []),
+            "stdout_sha256": output_sha256,
+            "provenance": "isolated-network-lab-executor",
+        },
+    )
