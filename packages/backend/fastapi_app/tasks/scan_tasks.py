@@ -10,7 +10,6 @@ from typing import Any
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
 import django
-
 django.setup()
 
 from celery import shared_task
@@ -46,14 +45,7 @@ def _target_from_scan(scan: Scan) -> tuple[str, str]:
     if not target_value and scan.asset_id:
         asset = scan.asset
         asset_cfg = asset.configuration or {}
-        target_value = str(
-            asset_cfg.get("url")
-            or asset_cfg.get("base_url")
-            or asset_cfg.get("spec_url")
-            or asset_cfg.get("ip")
-            or asset_cfg.get("domain")
-            or ""
-        ).strip()
+        target_value = str(asset_cfg.get("url") or asset_cfg.get("base_url") or asset_cfg.get("spec_url") or asset_cfg.get("ip") or asset_cfg.get("domain") or "").strip()
     if target_type == "full_validation":
         target_type = str(config.get("target_type") or "").strip().lower()
     if not target_value:
@@ -104,19 +96,17 @@ def _publish_event(scan_id: str, payload: dict[str, Any]) -> None:
         import redis
         from fastapi_app.core.config import settings
         client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-        client.publish(f"aegis:scan-events:{scan_id}", json.dumps(payload, default=str))
+        message = json.dumps(payload, default=str)
+        client.publish(f"aegis:scan-events:{scan_id}", message)
+        validation_id = payload.get("validation_id")
+        if validation_id:
+            client.publish(f"aegis:validation-events:{validation_id}", message)
     except Exception:
         return
 
 
 def _log(scan: Scan, message: str, level: str = ScanLog.Level.INFO, execution=None, context=None) -> None:
-    ScanLog.objects.create(
-        scan=scan,
-        engine_execution=execution,
-        level=level,
-        message=message,
-        context=context or {},
-    )
+    ScanLog.objects.create(scan=scan, engine_execution=execution, level=level, message=message, context=context or {})
 
 
 def _persist_findings(scan: Scan, execution: ScanEngineExecution, findings: list[dict[str, Any]], evidence: list[dict[str, Any]]) -> int:
@@ -222,14 +212,7 @@ def _sync_validation_projection(scan: Scan) -> None:
     )
 
 
-@shared_task(
-    bind=True,
-    name="fastapi_app.tasks.scan_tasks.run_scan",
-    acks_late=True,
-    reject_on_worker_lost=True,
-    time_limit=1800,
-    soft_time_limit=1500,
-)
+@shared_task(bind=True, name="fastapi_app.tasks.scan_tasks.run_scan", acks_late=True, reject_on_worker_lost=True, time_limit=1800, soft_time_limit=1500)
 def run_scan(self, scan_id: str) -> dict[str, Any]:
     scan = Scan.objects.select_related("project", "asset", "initiated_by").get(pk=scan_id)
     started = timezone.now()
@@ -271,15 +254,7 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
             meta = ENGINE_META[engine_name]
             engine_obj, _ = ScanEngine.objects.get_or_create(
                 name=engine_name,
-                defaults={
-                    "display_name": meta[0],
-                    "description": "Registered real execution adapter",
-                    "category": meta[1],
-                    "version": "1.0.0",
-                    "is_core": True,
-                    "timeout": meta[3],
-                    "order": meta[2],
-                },
+                defaults={"display_name": meta[0], "description": "Registered real execution adapter", "category": meta[1], "version": "1.0.0", "is_core": True, "timeout": meta[3], "order": meta[2]},
             )
             execution, _ = ScanEngineExecution.objects.get_or_create(scan=scan, engine=engine_obj)
             execution.status = ScanEngineExecution.ExecutionStatus.RUNNING
@@ -291,9 +266,7 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
             scan.current_phase = engine_obj.category
             scan.progress = round(index / total * 100, 2)
             scan.save(update_fields=["current_engine", "current_phase", "progress", "updated_at"])
-            _publish_event(str(scan.pk), {"type": "engine.started", "scan_id": str(scan.pk), "engine": engine_name, "progress": scan.progress})
-            _sync_validation_projection(scan)
-
+            _publish_event(str(scan.pk), {"type": "engine.started", "scan_id": str(scan.pk), "validation_id": (scan.config or {}).get("validation_id"), "engine": engine_name, "progress": scan.progress})
             result = asyncio.run(execute_engine(engine_name, target_type, target_value, scan.config or {}))
             finished = timezone.now()
             duration = (finished - (execution.started_at or finished)).total_seconds()
@@ -315,7 +288,7 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
                 scan.current_phase = "completed" if index + 1 == total else engine_obj.category
                 scan.save(update_fields=["engine_results", "progress", "current_phase", "updated_at"])
                 _log(scan, f"Real engine {engine_name} completed", context=results_summary[engine_name], execution=execution)
-            _publish_event(str(scan.pk), {"type": "engine.completed", "scan_id": str(scan.pk), "engine": engine_name, "progress": scan.progress, "findings": len(result.findings), "evidence": len(result.evidence), "status": result.status})
+            _publish_event(str(scan.pk), {"type": "engine.completed", "scan_id": str(scan.pk), "validation_id": (scan.config or {}).get("validation_id"), "engine": engine_name, "progress": scan.progress, "findings": len(result.findings), "evidence": len(result.evidence), "status": result.status})
             _sync_validation_projection(scan)
             if result.status == "failed":
                 raise RuntimeError(result.error or f"Real engine {engine_name} failed")
@@ -331,7 +304,7 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
             scan.duration = (scan.completed_at - started).total_seconds()
             scan.save()
             _log(scan, "Real scan completed", context={"findings": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level})
-        payload = {"status": "completed", "scan_id": str(scan.pk), "findings_count": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level}
+        payload = {"status": "completed", "scan_id": str(scan.pk), "validation_id": (scan.config or {}).get("validation_id"), "findings_count": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level}
         _publish_event(str(scan.pk), {"type": "scan.completed", **payload})
         _sync_validation_projection(scan)
         return payload
@@ -347,6 +320,6 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
             scan.error_traceback = tb
             scan.save()
             _log(scan, "Real scan execution failed", ScanLog.Level.ERROR, context={"error": str(exc), "task_id": self.request.id})
-        _publish_event(str(scan.pk), {"type": "scan.failed", "scan_id": str(scan.pk), "error": str(exc)})
+        _publish_event(str(scan.pk), {"type": "scan.failed", "scan_id": str(scan.pk), "validation_id": (scan.config or {}).get("validation_id"), "error": str(exc)})
         _sync_validation_projection(scan)
         raise
