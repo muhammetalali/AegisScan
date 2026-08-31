@@ -129,6 +129,19 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
     if engine == "vuln_intelligence":
         if probe.status != "completed" or not probe.evidence:
             return probe
+        if probe.metrics.get("access_limited"):
+            return ExecutionResult(
+                "completed",
+                [],
+                probe.evidence,
+                {
+                    "engine": engine,
+                    "access_limited": True,
+                    "access_limited_by": probe.metrics.get("access_limited_by"),
+                    "assessment_scope": "edge_response_only",
+                    "vulnerability_intelligence_skipped": True,
+                },
+            )
         class ResponseView:
             status_code = probe.evidence[0]["data"]["status_code"]
             headers = probe.evidence[0]["data"]["headers"]
