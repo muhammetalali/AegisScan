@@ -4,6 +4,7 @@ from django.test import SimpleTestCase
 
 from fastapi_app.services.engine_adapters import SUPPORTED_REAL_ENGINES
 from fastapi_app.services.network_lab_executor import _authorized_target
+from fastapi_app.services import network_lab_executor
 
 
 class NetworkLabAdapterTests(SimpleTestCase):
@@ -16,3 +17,15 @@ class NetworkLabAdapterTests(SimpleTestCase):
         self.assertFalse(_authorized_target("127.0.0.2", {"authorized": True, "lab_target_allowlist": ["127.0.0.1"]}))
         self.assertFalse(_authorized_target("127.0.0.1", {"authorized": False, "lab_target_allowlist": ["127.0.0.1"]}))
         self.assertFalse(_authorized_target("127.0.0.1", {"authorized": True}))
+
+    def test_nmap_parser_only_returns_open_ports_present_in_xml(self):
+        xml = '<nmaprun><host><address addr="127.0.0.1" addrtype="ipv4"/><ports><port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="9"/></port><port protocol="tcp" portid="80"><state state="closed"/></port></ports></host></nmaprun>'
+        observations = network_lab_executor._parse_nmap(xml)
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0]["port"], 22)
+        self.assertEqual(observations[0]["service"], "ssh")
+
+    def test_masscan_parser_only_returns_discovered_ports(self):
+        output = "Discovered open port 443/tcp on 192.0.2.10\nnot-a-discovery-line\n"
+        observations = network_lab_executor._parse_masscan(output)
+        self.assertEqual(observations, [{"host": "192.0.2.10", "protocol": "tcp", "port": 443, "state": "open"}])
