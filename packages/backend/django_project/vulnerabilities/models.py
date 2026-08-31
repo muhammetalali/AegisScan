@@ -8,11 +8,7 @@ class CanonicalFinding(models.Model):
     """Project-scoped logical finding shared by observations across scans/engines."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    project = models.ForeignKey(
-        'projects.Project',
-        on_delete=models.CASCADE,
-        related_name='canonical_findings',
-    )
+    project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='canonical_findings')
     fingerprint = models.CharField(_('canonical fingerprint'), max_length=64)
     rule_key = models.CharField(_('rule key'), max_length=200)
     title = models.CharField(_('canonical title'), max_length=300)
@@ -31,12 +27,12 @@ class CanonicalFinding(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=['project', 'fingerprint'],
-                name='uniq_canonical_finding_project_fingerprint',
+                name='canonical_project_fp_uniq',
             ),
         ]
         indexes = [
-            models.Index(fields=['project', 'rule_key']),
-            models.Index(fields=['project', 'category']),
+            models.Index(fields=['project', 'rule_key'], name='canonical_project_rule_idx'),
+            models.Index(fields=['project', 'category'], name='canonical_project_cat_idx'),
         ]
 
     def __str__(self):
@@ -72,13 +68,7 @@ class Vulnerability(models.Model):
     scan = models.ForeignKey('scans.Scan', on_delete=models.CASCADE, related_name='vulnerabilities')
     project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='vulnerabilities')
     asset = models.ForeignKey('assets.Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='vulnerabilities')
-    canonical_finding = models.ForeignKey(
-        CanonicalFinding,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='observations',
-    )
+    canonical_finding = models.ForeignKey(CanonicalFinding, on_delete=models.SET_NULL, null=True, blank=True, related_name='observations')
 
     # Identification
     title = models.CharField(_('title'), max_length=300)
@@ -158,7 +148,7 @@ class Vulnerability(models.Model):
             models.Index(fields=['asset', 'status']),
             models.Index(fields=['assigned_to', 'status']),
             models.Index(fields=['cve_ids']),
-            models.Index(fields=['canonical_finding']),
+            models.Index(fields=['canonical_finding'], name='vulnerability_canonical_idx'),
         ]
 
     def __str__(self):
@@ -227,7 +217,7 @@ class VulnerabilityAttachment(models.Model):
     filename = models.CharField(_('filename'), max_length=255)
     content_type = models.CharField(_('content type'), max_length=100)
     size = models.PositiveIntegerField(_('size'))
-    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='vulnerability_attachments')
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='uploaded_vulnerability_attachments')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
