@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from .code_quality_executor import analyze_code
 from .endpoint_discovery import discover_endpoints
 from .manifest_discovery import discover_dependency_manifests
+from .network_lab_executor import execute_network_tool
 from .runtime_analysis_executor import analyze_runtime
 from .security_intelligence import analyze_dependency_manifest, execute_tls_intelligence
 from .validation_executor import ExecutionResult, execute_http_probe, normalize_target
@@ -17,7 +18,7 @@ from .vulnerability_intelligence import analyze_response
 SUPPORTED_REAL_ENGINES = {
     "recon", "evidence_collection", "control_validation", "endpoint_discovery",
     "vuln_intelligence", "tls_intelligence", "dependency_risk", "code_quality",
-    "runtime_analysis",
+    "runtime_analysis", "network_nmap", "network_masscan",
 }
 
 
@@ -36,8 +37,10 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
         return ExecutionResult("unavailable", [], [], {"engine": engine, "execution": "not_implemented"}, "No real executor is registered for this engine yet.")
 
     extra = extra or {}
-    target = normalize_target(target_type, target_value)
-    hostname = urlparse(target).hostname
+    target = normalize_target(target_type, target_value) if target_type not in {"cidr", "hostname"} else target_value.strip()
+
+    if engine in {"network_nmap", "network_masscan"}:
+        return await execute_network_tool(engine, target_type, target_value, extra)
 
     if engine == "code_quality":
         return await analyze_code(extra)
@@ -64,12 +67,7 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
                 max_files=int(extra.get("manifest_max_files", 25)),
             )
             if not manifests:
-                return ExecutionResult(
-                    "unsupported", [], [],
-                    {"engine": engine, "reason": "dependency_manifest_missing", "workspace_discovery": True, "manifests_found": 0},
-                    "No supported dependency manifest was discovered inside the authorized workspace.",
-                )
-
+                return ExecutionResult("unsupported", [], [], {"engine": engine, "reason": "dependency_manifest_missing", "workspace_discovery": True, "manifests_found": 0}, "No supported dependency manifest was discovered inside the authorized workspace.")
             combined_findings: list[dict[str, Any]] = []
             combined_evidence: list[dict[str, Any]] = []
             combined_metrics: list[dict[str, Any]] = []
@@ -77,74 +75,34 @@ async def execute_engine(engine: str, target_type: str, target_value: str, extra
                 result = await analyze_dependency_manifest(manifest_item["content"], manifest_item["filename"])
                 combined_findings.extend(result.findings)
                 combined_evidence.extend(result.evidence)
-                combined_metrics.append({
-                    **result.metrics,
-                    "manifest_sha256": manifest_item["sha256"],
-                    "bytes": manifest_item["bytes"],
-                    "filename": manifest_item["filename"],
-                })
+                combined_metrics.append({**result.metrics, "manifest_sha256": manifest_item["sha256"], "bytes": manifest_item["bytes"], "filename": manifest_item["filename"]})
                 if result.error and result.status == "failed":
-                    return ExecutionResult(
-                        "failed", combined_findings, combined_evidence,
-                        {"engine": engine, "manifests_found": len(manifests), "manifests": combined_metrics},
-                        result.error,
-                    )
+                    return ExecutionResult("failed", combined_findings, combined_evidence, {"engine": engine, "manifests_found": len(manifests), "manifests": combined_metrics}, result.error)
+            return ExecutionResult("completed", combined_findings, combined_evidence, {"engine": engine, "workspace_discovery": True, "workspace": str(Path(workspace).expanduser().resolve()), "manifests_found": len(manifests), "manifests": combined_metrics, "vulnerability_matches": sum(int(m.get("vulnerability_matches", 0)) for m in combined_metrics), "cve_correlation": True})
+        return ExecutionResult("unsupported", [], [], {"engine": engine, "reason": "dependency_manifest_missing", "workspace_discovery": True}, "Dependency risk requires manifest content or an authorized code workspace.")
 
-            return ExecutionResult(
-                "completed", combined_findings, combined_evidence,
-                {
-                    "engine": engine,
-                    "workspace_discovery": True,
-                    "workspace": str(Path(workspace).expanduser().resolve()),
-                    "manifests_found": len(manifests),
-                    "manifests": combined_metrics,
-                    "vulnerability_matches": sum(int(m.get("vulnerability_matches", 0)) for m in combined_metrics),
-                    "cve_correlation": True,
-                },
-            )
-
-        return ExecutionResult(
-            "unsupported", [], [],
-            {"engine": engine, "reason": "dependency_manifest_missing", "workspace_discovery": True},
-            "Dependency risk requires manifest content or an authorized code workspace.",
-        )
-
+    hostname = urlparse(target).hostname
     if not hostname:
         return ExecutionResult("failed", [], [], {"engine": engine}, "Unable to determine target hostname")
-
     if engine == "endpoint_discovery":
         return await discover_endpoints(target_type, target_value)
-
     if engine == "tls_intelligence":
         return await execute_tls_intelligence(target_type, target_value)
 
     probe = await execute_http_probe(target_type, target_value)
-
     if engine == "recon":
         dns_evidence, dns_metrics = _socket_evidence(hostname)
         return ExecutionResult(probe.status, probe.findings, dns_evidence + probe.evidence, {"engine": engine, **dns_metrics, "http": probe.metrics}, probe.error)
-
     if engine == "evidence_collection":
         dns_evidence, dns_metrics = _socket_evidence(hostname)
         return ExecutionResult(probe.status, [], dns_evidence + probe.evidence, {"engine": engine, **dns_metrics, "evidence_count": len(dns_evidence) + len(probe.evidence), "http": probe.metrics}, probe.error)
-
     if engine == "vuln_intelligence":
         if probe.status != "completed" or not probe.evidence:
             return probe
         if probe.metrics.get("access_limited"):
-            return ExecutionResult(
-                "completed", [], probe.evidence,
-                {
-                    "engine": engine,
-                    "access_limited": True,
-                    "access_limited_by": probe.metrics.get("access_limited_by"),
-                    "assessment_scope": "edge_response_only",
-                    "vulnerability_intelligence_skipped": True,
-                },
-            )
+            return ExecutionResult("completed", [], probe.evidence, {"engine": engine, "access_limited": True, "access_limited_by": probe.metrics.get("access_limited_by"), "assessment_scope": "edge_response_only", "vulnerability_intelligence_skipped": True})
         class ResponseView:
             status_code = probe.evidence[0]["data"]["status_code"]
             headers = probe.evidence[0]["data"]["headers"]
         return analyze_response(ResponseView(), target)
-
     return ExecutionResult(probe.status, [f for f in probe.findings if f.get("category") == "security_headers"], probe.evidence, {"engine": engine, "validated_controls": ["security_headers"], "http": probe.metrics}, probe.error)
