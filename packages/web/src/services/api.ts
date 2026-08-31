@@ -78,8 +78,30 @@ export const uploadFile = async (file: File, onProgress?: (progress: number) => 
 }
 
 export const createWebSocket = (url: string, protocols?: string | string[]) => {
-  const browserWs = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-  const wsUrl = `${browserWs}${url}`
+  const configuredWs = String(import.meta.env.VITE_WS_URL || '').trim()
+  let browserWs = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+
+  // Same-origin WebSockets keep the HttpOnly auth cookie attached to the
+  // connection. In local development this also prevents localhost/127.0.0.1
+  // cookie-domain mismatches.
+  if (configuredWs) {
+    try {
+      const parsed = new URL(configuredWs)
+      const configuredHost = parsed.hostname.toLowerCase()
+      const browserHost = window.location.hostname.toLowerCase()
+      const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+      if (loopbackHosts.has(configuredHost) || loopbackHosts.has(browserHost)) {
+        parsed.hostname = window.location.hostname
+        parsed.port = window.location.port || parsed.port
+      }
+      browserWs = `${parsed.protocol}//${parsed.host}`
+    } catch {
+      browserWs = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+    }
+  }
+
+  const normalizedPath = url.startsWith('/') ? url : `/${url}`
+  const wsUrl = `${browserWs}${normalizedPath}`
   const wsProtocols = protocols ? (Array.isArray(protocols) ? protocols : [protocols]) : []
   return new WebSocket(wsUrl, wsProtocols.length ? wsProtocols : undefined)
 }
