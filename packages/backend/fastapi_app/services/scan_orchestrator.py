@@ -42,7 +42,7 @@ class ScanOrchestrator:
         logger.info("Scan Orchestrator stopped")
 
     async def list_engines(self) -> list[dict[str, Any]]:
-        from django_project.scans.models import ScanEngine
+        from scans.models import ScanEngine
 
         configured = {item.name: item for item in ScanEngine.objects.all()}
         result: list[dict[str, Any]] = []
@@ -62,7 +62,7 @@ class ScanOrchestrator:
         return result
 
     async def enable_engine(self, engine_name: str) -> dict[str, Any]:
-        from django_project.scans.models import ScanEngine
+        from scans.models import ScanEngine
 
         if engine_name not in SUPPORTED_REAL_ENGINES:
             return {"status": "error", "message": "No real execution adapter is registered for this engine"}
@@ -84,7 +84,7 @@ class ScanOrchestrator:
         return {"status": "enabled", "engine": engine_name}
 
     async def disable_engine(self, engine_name: str) -> dict[str, Any]:
-        from django_project.scans.models import ScanEngine
+        from scans.models import ScanEngine
 
         engine = ScanEngine.objects.filter(name=engine_name).first()
         if not engine:
@@ -94,7 +94,7 @@ class ScanOrchestrator:
         return {"status": "disabled", "engine": engine_name}
 
     async def start_scan(self, scan_id: str, user: dict[str, Any]) -> dict[str, Any]:
-        from django_project.scans.models import Scan, ScanEngine
+        from scans.models import Scan, ScanEngine
         from ..tasks.scan_tasks import run_scan
 
         scan = Scan.objects.select_related("project").filter(pk=scan_id).first()
@@ -137,12 +137,12 @@ class ScanOrchestrator:
         return {"status": "queued", "scan_id": scan_id, "task_id": task.id}
 
     async def pause_scan(self, scan_id: str) -> dict[str, Any]:
-        from django_project.scans.models import Scan
+        from scans.models import Scan
         updated = Scan.objects.filter(pk=scan_id, status__in=["queued", "running"]).update(status="paused", updated_at=timezone.now())
         return {"status": "paused", "scan_id": scan_id} if updated else {"status": "error", "message": "Scan not running or not found"}
 
     async def resume_scan(self, scan_id: str) -> dict[str, Any]:
-        from django_project.scans.models import Scan
+        from scans.models import Scan
         scan = Scan.objects.filter(pk=scan_id).first()
         if not scan:
             return {"status": "error", "message": "Scan not found"}
@@ -153,7 +153,7 @@ class ScanOrchestrator:
         return {"status": "resumed", "scan_id": scan_id}
 
     async def cancel_scan(self, scan_id: str) -> dict[str, Any]:
-        from django_project.scans.models import Scan
+        from scans.models import Scan
         scan = Scan.objects.filter(pk=scan_id).first()
         if not scan:
             return {"status": "error", "message": "Scan not found"}
@@ -166,7 +166,7 @@ class ScanOrchestrator:
         return {"status": "cancelled", "scan_id": scan_id}
 
     async def get_progress(self, scan_id: str) -> dict[str, Any]:
-        from django_project.scans.models import Scan
+        from scans.models import Scan
         scan = Scan.objects.prefetch_related("engine_executions__engine").filter(pk=scan_id).first()
         if not scan:
             return {"status": "error", "message": "Scan not found"}
