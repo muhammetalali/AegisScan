@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from .code_quality_executor import analyze_code
 from .endpoint_discovery import discover_endpoints
 from .manifest_discovery import discover_dependency_manifests
+from .runtime_analysis_executor import analyze_runtime
 from .security_intelligence import analyze_dependency_manifest, execute_tls_intelligence
 from .validation_executor import ExecutionResult, execute_http_probe, normalize_target
 from .vulnerability_intelligence import analyze_response
