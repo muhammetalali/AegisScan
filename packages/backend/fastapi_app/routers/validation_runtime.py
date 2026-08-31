@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from django_project.scans.models import Scan
-from django_project.vulnerabilities.models import Vulnerability
-from django_project.vulnerabilities.serializers import VulnerabilitySerializer
+from scans.models import Scan
+from vulnerabilities.models import Vulnerability
+from vulnerabilities.serializers import VulnerabilitySerializer
 
 from ..core.security import verify_token
 from ..services.engine_adapters import SUPPORTED_REAL_ENGINES
@@ -90,7 +90,6 @@ def _project_accessible(project_id: str, user: dict) -> bool:
 
 
 @sync_to_async
-
 def _create_scan(
     body: ValidationCreate,
     user: dict,
