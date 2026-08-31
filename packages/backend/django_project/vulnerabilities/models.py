@@ -25,10 +25,7 @@ class CanonicalFinding(models.Model):
         verbose_name = _('Canonical Finding')
         verbose_name_plural = _('Canonical Findings')
         constraints = [
-            models.UniqueConstraint(
-                fields=['project', 'fingerprint'],
-                name='canonical_project_fp_uniq',
-            ),
+            models.UniqueConstraint(fields=['project', 'fingerprint'], name='canonical_project_fp_uniq'),
         ]
         indexes = [
             models.Index(fields=['project', 'rule_key'], name='canonical_project_rule_idx'),
@@ -217,7 +214,7 @@ class VulnerabilityAttachment(models.Model):
     filename = models.CharField(_('filename'), max_length=255)
     content_type = models.CharField(_('content type'), max_length=100)
     size = models.PositiveIntegerField(_('size'))
-    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='uploaded_vulnerability_attachments')
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='vulnerability_attachments')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
