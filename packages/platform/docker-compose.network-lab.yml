@@ -17,15 +17,47 @@ services:
     cap_add:
       - NET_RAW
       - NET_ADMIN
-    command: ["python3", "/home/aegislab/agent.py"]
     environment:
       AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:-}
       LAB_EXECUTOR_PORT: "9000"
     expose:
       - "9000"
     networks:
-      - aegisscan_lab
+      aegisscan_lab:
+        ipv4_address: 10.250.10.2
+
+  network-web-target:
+    image: nginx:alpine
+    profiles: [security-lab]
+    restart: unless-stopped
+    networks:
+      aegisscan_lab:
+        ipv4_address: 10.250.10.10
+
+  network-api-target:
+    image: python:3.12-alpine
+    profiles: [security-lab]
+    restart: unless-stopped
+    command: ["python", "-m", "http.server", "8080", "--bind", "0.0.0.0"]
+    networks:
+      aegisscan_lab:
+        ipv4_address: 10.250.10.11
+
+  network-ssh-target:
+    build:
+      context: ../labs/network/targets/ssh
+      dockerfile: Dockerfile
+    image: aegisscan-network-ssh-target:local
+    profiles: [security-lab]
+    restart: unless-stopped
+    networks:
+      aegisscan_lab:
+        ipv4_address: 10.250.10.12
 
 networks:
   aegisscan_lab:
     name: aegisscan_lab
+    ipam:
+      config:
+        - subnet: 10.250.10.0/27
+          gateway: 10.250.10.1
