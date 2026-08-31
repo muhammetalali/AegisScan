@@ -95,6 +95,7 @@ class ScanOrchestrator:
 
     async def start_scan(self, scan_id: str, user: dict[str, Any]) -> dict[str, Any]:
         from scans.models import Scan, ScanEngine
+        from ..celery_app import celery_app
         from ..tasks.scan_tasks import run_scan
 
         scan = Scan.objects.select_related("project").filter(pk=scan_id).first()
@@ -127,18 +128,23 @@ class ScanOrchestrator:
                 },
             )
 
-        task = run_scan.delay(str(scan.pk))
+        task = celery_app.send_task(
+            run_scan.name,
+            args=[str(scan.pk)],
+            queue="default",
+            routing_key="default",
+        )
         scan.celery_task_id = task.id
         scan.status = "queued"
         scan.current_phase = "queued"
         scan.progress = 0
         scan.save(update_fields=["celery_task_id", "status", "current_phase", "progress", "updated_at"])
-        logger.info("Queued real scan %s as Celery task %s", scan_id, task.id)
+        logger.info("Queued real scan %s as Celery task %s on default queue", scan_id, task.id)
         return {"status": "queued", "scan_id": scan_id, "task_id": task.id}
 
     async def pause_scan(self, scan_id: str) -> dict[str, Any]:
         from scans.models import Scan
-        updated = Scan.objects.filter(pk=scan_id, status__in=["queued", "running"]).update(status="paused", updated_at=timezone.now())
+        updated = Scan.objects.filter(scan_id=scan_id, status__in=["queued", "running"]).update(status="paused", updated_at=timezone.now())
         return {"status": "paused", "scan_id": scan_id} if updated else {"status": "error", "message": "Scan not running or not found"}
 
     async def resume_scan(self, scan_id: str) -> dict[str, Any]:
