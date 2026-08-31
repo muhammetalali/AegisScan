@@ -30,27 +30,37 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
         return ExecutionResult("failed", [], [], {"engine": engine}, "Network lab requires a non-empty ip, cidr, or hostname target")
 
     target = target_value.strip()
-    if not LAB_EXECUTOR_TOKEN:
-        return ExecutionResult("failed", [], [], {"engine": engine, "tool": tool}, "AEGIS_LAB_EXECUTOR_TOKEN is not configured")
+    allowlist = extra.get("lab_target_allowlist") or extra.get("target_allowlist") or []
+    allowlist_values = [str(item).strip() for item in allowlist if str(item).strip()] if isinstance(allowlist, list) else []
+    authorization = {
+        "authorized": bool(extra.get("authorized", False)),
+        "allowlist_present": bool(allowlist_values),
+        "allowlist_match": target in allowlist_values if allowlist_values else None,
+        "target": target,
+        "mode": "institution_responsibility",
+    }
 
     profile = str(extra.get("network_profile") or ("service-enumeration" if tool == "nmap" else "low-rate-discovery"))
-    request = {"tool": tool, "target": target, "profile": profile, "requested_at": _utc()}
+    request = {
+        "tool": tool,
+        "target": target,
+        "profile": profile,
+        "requested_at": _utc(),
+        "authorization": authorization,
+    }
+    headers = {"Authorization": f"Bearer {LAB_EXECUTOR_TOKEN}" } if LAB_EXECUTOR_TOKEN else {}
     try:
         async with httpx.AsyncClient(timeout=float(extra.get("network_tool_timeout", 180))) as client:
-            response = await client.post(
-                f"{LAB_EXECUTOR_URL}/v1/execute",
-                json=request,
-                headers={"Authorization": f"Bearer {LAB_EXECUTOR_TOKEN}"},
-            )
+            response = await client.post(f"{LAB_EXECUTOR_URL}/v1/execute", json=request, headers=headers)
             response.raise_for_status()
             payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         return ExecutionResult(
-            "failed", [], [], {"engine": engine, "tool": tool, "target": target},
+            "failed", [], [], {"engine": engine, "tool": tool, "target": target, "authorization": authorization},
             f"Lab executor request failed: {exc}",
         )
 
-    execution_id = str(payload.get("execution_id") or _stable_id("exec", engine, target))
+    execution_id = str(payload.get("execution_id") or _stable_id("exec", engine, target, payload.get("return_code")))
     raw = str(payload.get("stdout") or "")
     stderr = str(payload.get("stderr") or "")
     output_sha256 = hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -74,20 +84,14 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
             "stderr": stderr,
             "stdout_sha256": output_sha256,
             "execution_mode": "real_network_lab",
+            "authorization": authorization,
+            "resolved_addresses": payload.get("resolved_addresses") or [],
         },
     }]
     if payload.get("status") != "completed":
         return ExecutionResult(
-            "failed",
-            [],
-            evidence,
-            {
-                "engine": engine,
-                "tool": tool,
-                "target": target,
-                "execution_id": execution_id,
-                "executor_status": payload.get("status"),
-            },
+            "failed", [], evidence,
+            {"engine": engine, "tool": tool, "target": target, "execution_id": execution_id, "executor_status": payload.get("status"), "authorization": authorization},
             payload.get("error") or "Network tool execution failed",
         )
 
@@ -111,9 +115,7 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
             "observed_at": _utc(),
         })
     return ExecutionResult(
-        "completed",
-        findings,
-        evidence,
+        "completed", findings, evidence,
         {
             "engine": engine,
             "tool": tool,
@@ -125,5 +127,6 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
             "observations_count": len(payload.get("observations") or []),
             "stdout_sha256": output_sha256,
             "provenance": "isolated-network-lab-executor",
+            "authorization": authorization,
         },
     )
