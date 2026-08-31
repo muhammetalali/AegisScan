@@ -8,7 +8,7 @@ ALL_CONTRACT_ENGINES = [
     "recon", "evidence_collection", "code_quality", "runtime_analysis", "performance",
     "dependency_risk", "config_check", "vuln_intelligence", "tls_intelligence", "correlation", "validation",
     "control_validation", "coverage_gap", "endpoint_discovery", "attack_path", "evidence_graph", "knowledge",
-    "ai_explain", "posture", "compliance", "digital_twin", "reporting",
+    "ai_explain", "posture", "compliance", "digital_twin", "reporting", "network_nmap", "network_masscan",
 ]
 
 CAPABILITY = {engine: {"status": "unavailable", "executor": None, "evidence": False} for engine in ALL_CONTRACT_ENGINES}
@@ -25,6 +25,8 @@ CAPABILITY["dependency_risk"]["evidence"] = True
 CAPABILITY["dependency_risk"]["scope"] = "resolved dependency manifest parsing plus live OSV package/version vulnerability correlation with evidence lineage"
 CAPABILITY["code_quality"]["scope"] = "bounded static analysis of supplied code_content/code_files snapshots"
 CAPABILITY["runtime_analysis"]["scope"] = "bounded pattern analysis of supplied runtime_logs; no host-level telemetry access"
+CAPABILITY["network_nmap"]["scope"] = "isolated network lab execution; Nmap service/port observations only; authorization and exact target allowlist required"
+CAPABILITY["network_masscan"]["scope"] = "isolated network lab execution; low-rate ports 1-1024 discovery only; authorization and exact target allowlist required"
 
 
 def list_capabilities() -> list[dict[str, Any]]:
