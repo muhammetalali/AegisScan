@@ -83,8 +83,8 @@ def run(command: list[str], timeout: int) -> dict:
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
         return_code = proc.returncode
-        stdout = proc.stdout
-        stderr = proc.stderr
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
     except subprocess.TimeoutExpired as exc:
         return_code = 124
         stdout = exc.stdout or ""
@@ -106,22 +106,19 @@ def execute(tool: str, target: str, profile: str) -> dict:
         kind = target_kind(target)
     except ValueError as exc:
         return {"status": "failed", "error": str(exc)}
+
     resolved = []
     if kind == "hostname":
         resolved = sorted({item[4][0] for item in socket.getaddrinfo(target, None) if item[4]})
 
     execution_id = str(uuid.uuid4())
     if tool == "nmap":
-        if profile not in {"connect-discovery", "service-enumeration"}:
-            return {"status": "failed", "error": "Unsupported Nmap profile"}
-        # Use a TCP connect scan so the lab agent can run Nmap as its non-root user.
-        # Service/version detection remains real (-sV); no synthetic observations are created.
+        # The executor deliberately keeps Nmap invocation simple and real.
+        # Profile is retained as provenance metadata and does not block execution.
         command = ["nmap", "-Pn", "-T10", "--open", "-sT", "-sV", "-oX", "-", target]
         parser = parse_nmap
-        timeout = 180
+        timeout = 1800
     else:
-        if profile != "low-rate-discovery":
-            return {"status": "failed", "error": "Unsupported Masscan profile"}
         command = ["masscan", target, "-p1-1024", "--rate", "1000", "--wait", "3"]
         parser = parse_masscan
         timeout = 120
@@ -137,10 +134,12 @@ def execute(tool: str, target: str, profile: str) -> dict:
             "target_type": kind,
             "resolved_addresses": resolved,
             "command": command,
+            "profile": profile,
             "executor_image": IMAGE,
             "tool_version": version_line,
             **result,
         }
+
     raw_sha256 = hashlib.sha256(result["stdout"].encode("utf-8")).hexdigest()
     return {
         "status": "completed",
@@ -148,6 +147,7 @@ def execute(tool: str, target: str, profile: str) -> dict:
         "target_type": kind,
         "resolved_addresses": resolved,
         "command": command,
+        "profile": profile,
         "executor_image": IMAGE,
         "tool_version": version_line,
         "observations": parser(result["stdout"]),
@@ -157,7 +157,7 @@ def execute(tool: str, target: str, profile: str) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AegisScanLabExecutor/1.1"
+    server_version = "AegisScanLabExecutor/1.2"
 
     def do_GET(self) -> None:
         if self.path == "/health":
@@ -179,7 +179,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(size))
             target = str(body.get("target", "")).strip()
             tool = str(body.get("tool", "")).strip()
-            profile = str(body.get("profile", "")).strip()
+            profile = str(body.get("profile", "")).strip() or "default"
             if not target:
                 raise ValueError("Target is required")
             reply(self, 200, execute(tool, target, profile))
