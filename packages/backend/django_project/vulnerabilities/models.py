@@ -4,6 +4,45 @@ from django.utils.translation import gettext_lazy as _
 import uuid
 
 
+class CanonicalFinding(models.Model):
+    """Project-scoped logical finding shared by observations across scans/engines."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        'projects.Project',
+        on_delete=models.CASCADE,
+        related_name='canonical_findings',
+    )
+    fingerprint = models.CharField(_('canonical fingerprint'), max_length=64)
+    rule_key = models.CharField(_('rule key'), max_length=200)
+    title = models.CharField(_('canonical title'), max_length=300)
+    category = models.CharField(_('category'), max_length=50, blank=True)
+    normalized_target = models.CharField(_('normalized target'), max_length=1000, blank=True)
+    source_engines = models.JSONField(_('source engines'), default=list, blank=True)
+    observation_count = models.PositiveIntegerField(_('observation count'), default=0)
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _('Canonical Finding')
+        verbose_name_plural = _('Canonical Findings')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['project', 'fingerprint'],
+                name='uniq_canonical_finding_project_fingerprint',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['project', 'rule_key']),
+            models.Index(fields=['project', 'category']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.fingerprint[:12]})"
+
+
 class Vulnerability(models.Model):
     class Severity(models.TextChoices):
         CRITICAL = 'critical', _('Critical')
@@ -19,7 +58,7 @@ class Vulnerability(models.Model):
         FIXED = 'fixed', _('Fixed')
         FALSE_POSITIVE = 'false_positive', _('False Positive')
         ACCEPTED_RISK = 'accepted_risk', _('Accepted Risk')
-        WONT_FIX = 'wont_fix', _('Won\'t Fix')
+        WONT_FIX = 'wont_fix', _("Won't Fix")
         DUPLICATE = 'duplicate', _('Duplicate')
 
     class Confidence(models.TextChoices):
@@ -33,6 +72,13 @@ class Vulnerability(models.Model):
     scan = models.ForeignKey('scans.Scan', on_delete=models.CASCADE, related_name='vulnerabilities')
     project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='vulnerabilities')
     asset = models.ForeignKey('assets.Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='vulnerabilities')
+    canonical_finding = models.ForeignKey(
+        CanonicalFinding,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='observations',
+    )
 
     # Identification
     title = models.CharField(_('title'), max_length=300)
@@ -94,9 +140,9 @@ class Vulnerability(models.Model):
     # Metadata
     source_engine = models.CharField(_('source engine'), max_length=100, blank=True)
     raw_data = models.JSONField(_('raw data'), default=dict, blank=True)
-    first_seen = models.DateTimeField(_('first seen'), auto_now_add=True)
-    last_seen = models.DateTimeField(_('last seen'), auto_now=True)
-    fixed_at = models.DateTimeField(_('fixed at'), blank=True, null=True)
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+    fixed_at = models.DateTimeField(blank=True, null=True)
     fixed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='fixed_vulnerabilities')
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -112,6 +158,7 @@ class Vulnerability(models.Model):
             models.Index(fields=['asset', 'status']),
             models.Index(fields=['assigned_to', 'status']),
             models.Index(fields=['cve_ids']),
+            models.Index(fields=['canonical_finding']),
         ]
 
     def __str__(self):
