@@ -24,10 +24,14 @@ class ProvenanceAndCanonicalRegressionTests(TestCase):
         cls.scan = Scan.objects.create(
             project=cls.project,
             initiated_by=cls.user,
-            status="completed",
-            target_type="url",
-            target_value="https://example.com",
+            name="Provenance Regression Scan",
+            scan_type=Scan.Type.URL,
+            status=Scan.Status.COMPLETED,
             engines=["recon"],
+            config={
+                "target_type": "url",
+                "target_value": "https://example.com",
+            },
         )
 
     def _create_vulnerability(self, title, category="security_headers", raw=None, source_engine="recon"):
