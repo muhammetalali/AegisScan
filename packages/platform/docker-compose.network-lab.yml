@@ -14,14 +14,9 @@ services:
     image: aegisscan-network-lab:local
     profiles: [security-lab]
     restart: "no"
-    cap_drop:
-      - ALL
     cap_add:
       - NET_RAW
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=128m
-      - /run:rw,noexec,nosuid,size=32m
+      - NET_ADMIN
     command: ["python3", "/home/aegislab/agent.py"]
     environment:
       AEGIS_LAB_EXECUTOR_TOKEN: ${AEGIS_LAB_EXECUTOR_TOKEN:-}
