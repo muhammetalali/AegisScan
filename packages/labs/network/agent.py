@@ -106,20 +106,21 @@ def execute(tool: str, target: str, profile: str) -> dict:
         if profile not in {"connect-discovery", "service-enumeration"}:
             return {"status": "failed", "error": "Unsupported Nmap profile"}
         command = ["nmap", "-Pn", "-T3", "--open", "-sV", "-oX", "-", target]
-        parsed = parse_nmap(run(command, 180)["stdout"])
-        result = run(command, 180)
+        parser = parse_nmap
+        timeout = 180
     else:
         if profile != "low-rate-discovery":
             return {"status": "failed", "error": "Unsupported Masscan profile"}
         command = ["masscan", target, "-p1-1024", "--rate", "100", "--wait", "3"]
-        result = run(command, 120)
-        parsed = parse_masscan(result["stdout"])
+        parser = parse_masscan
+        timeout = 120
 
-    version_cmd = [tool, "--version"]
-    version = subprocess.run(version_cmd, capture_output=True, text=True, timeout=10, check=False).stdout.splitlines()
+    result = run(command, timeout)
+    version_proc = subprocess.run([tool, "--version"], capture_output=True, text=True, timeout=10, check=False)
+    version_line = next((line.strip() for line in version_proc.stdout.splitlines() if line.strip()), "unknown")
     if result["return_code"] != 0:
-        return {"status": "failed", "execution_id": execution_id, "command": command, "executor_image": IMAGE, "tool_version": version[0] if version else "unknown", **result}
-    return {"status": "completed", "execution_id": execution_id, "command": command, "executor_image": IMAGE, "tool_version": version[0] if version else "unknown", "observations": parsed, **result}
+        return {"status": "failed", "execution_id": execution_id, "command": command, "executor_image": IMAGE, "tool_version": version_line, **result}
+    return {"status": "completed", "execution_id": execution_id, "command": command, "executor_image": IMAGE, "tool_version": version_line, "observations": parser(result["stdout"]), **result}
 
 
 class Handler(BaseHTTPRequestHandler):
