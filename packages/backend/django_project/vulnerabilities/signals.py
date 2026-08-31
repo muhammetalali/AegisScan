@@ -1,3 +1,4 @@
+from django.db.models import F
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -27,15 +28,21 @@ def attach_canonical_finding(sender, instance: Vulnerability, **kwargs) -> None:
     if instance.source_engine and instance.source_engine not in source_engines:
         source_engines.append(instance.source_engine)
 
-    # Avoid saving the Vulnerability instance again; this signal must never recurse.
-    CanonicalFinding.objects.filter(pk=canonical.pk).update(
-        rule_key=rule_key,
-        title=canonical.title or canonical_title,
-        category=canonical.category or instance.category or "",
-        normalized_target=canonical.normalized_target or normalized_target,
-        source_engines=source_engines,
-        last_seen=instance.last_seen,
-    )
+    is_new_observation = instance.canonical_finding_id != canonical.pk
 
-    if instance.canonical_finding_id != canonical.pk:
+    update_fields = {
+        "rule_key": canonical.rule_key or rule_key,
+        "title": canonical.title or canonical_title,
+        "category": canonical.category or instance.category or "",
+        "normalized_target": canonical.normalized_target or normalized_target,
+        "source_engines": source_engines,
+        "last_seen": instance.last_seen,
+    }
+    if is_new_observation:
+        update_fields["observation_count"] = F("observation_count") + 1
+
+    # Avoid saving the Vulnerability instance again; this signal must never recurse.
+    CanonicalFinding.objects.filter(pk=canonical.pk).update(**update_fields)
+
+    if is_new_observation:
         sender.objects.filter(pk=instance.pk).update(canonical_finding_id=canonical.pk)
