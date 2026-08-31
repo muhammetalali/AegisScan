@@ -66,13 +66,20 @@ def _cookie_kwargs(name: str) -> dict:
     }
 
 
+def _auth_cookie_secure() -> bool:
+    configured = getattr(settings, 'AUTH_COOKIE_SECURE', None)
+    if configured is not None:
+        return bool(configured)
+    return str(getattr(settings, 'FRONTEND_URL', '')).lower().startswith('https://')
+
+
 def _set_auth_cookie(response: Response, name: str, token: str, max_age: int) -> None:
     response.set_cookie(
         key=name,
         value=token,
         max_age=max_age,
         httponly=True,
-        secure=(not settings.DEBUG),
+        secure=_auth_cookie_secure(),
         samesite='Lax',
         path='/',
     )
@@ -145,7 +152,6 @@ class SecureTokenObtainPairView(TokenObtainPairView):
             user.last_activity = timezone.now()
             user.save(update_fields=['last_login_ip', 'last_activity'])
             response.data['user'] = UserSerializer(user, context={'request': request}).data
-            # JWTs are authentication credentials, never persistent browser data.
             if access_token and refresh_token:
                 _set_auth_cookie(response, settings.AUTH_ACCESS_COOKIE, access_token, int(settings.JWT_ACCESS_TOKEN_LIFETIME.total_seconds()))
                 _set_auth_cookie(response, settings.AUTH_REFRESH_COOKIE, refresh_token, int(settings.JWT_REFRESH_TOKEN_LIFETIME.total_seconds()))
