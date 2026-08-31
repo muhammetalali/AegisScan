@@ -1,1 +1,1 @@
-export { ValidationResults as ScanResults } from '@/pages/validations/ValidationResults'
+export { ValidationCommandCenter as ScanResults } from '@/pages/validations/ValidationCommandCenter'
