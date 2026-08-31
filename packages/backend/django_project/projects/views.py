@@ -28,6 +28,11 @@ def _request_ip(request) -> str:
     return (forwarded.split(",", 1)[0].strip() if forwarded else request.META.get("REMOTE_ADDR")) or "unknown"
 
 
+def _session_key(request) -> str:
+    session = getattr(request, "session", None)
+    return getattr(session, "session_key", None) or ""
+
+
 def _audit(request, *, action: str, project: Project, changes=None, result=AuditLog.Result.SUCCESS, error_message=""):
     return append_audit(
         action=action,
@@ -40,7 +45,7 @@ def _audit(request, *, action: str, project: Project, changes=None, result=Audit
         changes=changes or {},
         metadata={"environment": project.environment, "status": project.status},
         user_agent=request.META.get("HTTP_USER_AGENT", "")[:1000],
-        session_id=request.session.session_key or "",
+        session_id=_session_key(request),
         error_message=error_message[:500],
         request_id=getattr(request, "request_id", None),
     )
