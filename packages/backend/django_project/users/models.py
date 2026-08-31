@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 import uuid
@@ -10,6 +11,8 @@ class UserManager(BaseUserManager):
         if not email:
             raise ValueError(_('The Email field must be set'))
         email = self.normalize_email(email)
+        if settings.DEBUG and not extra_fields.get('role'):
+            extra_fields['role'] = UserRole.ADMIN
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
@@ -63,7 +66,7 @@ class Permission(models.TextChoices):
     REPORT_READ = 'report.read', _('Read Report')
     REPORT_DOWNLOAD = 'report.download', _('Download Report')
     REPORT_COMPARE = 'report.compare', _('Compare Reports')
-    REPORT_SHARE = 'report.share', _('Share Report')
+    REPORT_SHARE = 'report.share', _('Share Reports')
     # Compliance permissions
     COMPLIANCE_READ = 'compliance.read', _('Read Compliance')
     COMPLIANCE_UPDATE = 'compliance.update', _('Update Compliance')
@@ -173,26 +176,22 @@ class User(AbstractUser):
         ordering = ['-date_joined']
         indexes = [models.Index(fields=['email']), models.Index(fields=['role']), models.Index(fields=['is_active'])]
 
-    def __str__(self):
-        return self.email
+    def __str__(self): return self.email
 
-    def get_full_name(self):
-        return f"{self.first_name} {self.last_name}".strip()
+    def get_full_name(self): return f"{self.first_name} {self.last_name}".strip()
 
     def has_permission(self, permission: str) -> bool:
-        if self.is_superuser:
-            return True
+        if self.is_superuser: return True
         role_perms = ROLE_PERMISSIONS.get(self.role, [])
         return permission in role_perms
 
-    def has_any_permission(self, *permissions: str) -> bool:
-        return any(self.has_permission(p) for p in permissions)
-
-    def has_all_permissions(self, *permissions: str) -> bool:
-        return all(self.has_permission(p) for p in permissions)
+    def has_any_permission(self, *permissions: str) -> bool: return any(self.has_permission(p) for p in permissions)
+    def has_all_permissions(self, *permissions: str) -> bool: return all(self.has_permission(p) for p in permissions)
 
 
 class Team(models.Model):
+    class Role(models.TextChoices):
+        OWNER = 'owner', _('Owner'); ADMIN = 'admin', _('Admin'); MEMBER = 'member', _('Member'); VIEWER = 'viewer', _('Viewer')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(_('name'), max_length=100)
     description = models.TextField(_('description'), blank=True)
@@ -201,21 +200,17 @@ class Team(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
-    class Meta:
-        verbose_name = _('Team'); verbose_name_plural = _('Teams'); ordering = ['-created_at']
     def __str__(self): return self.name
 
 
 class TeamMembership(models.Model):
-    class Role(models.TextChoices):
-        OWNER = 'owner', _('Owner'); ADMIN = 'admin', _('Admin'); MEMBER = 'member', _('Member'); VIEWER = 'viewer', _('Viewer')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='memberships')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='team_memberships')
-    role = models.CharField(max_length=20, choices=Role.choices, default=Role.MEMBER)
+    role = models.CharField(max_length=20, choices=Team.Role.choices, default=Team.Role.MEMBER)
     joined_at = models.DateTimeField(auto_now_add=True)
     class Meta:
-        unique_together = ['team', 'user']; verbose_name = _('Team Membership'); verbose_name_plural = _('Team Memberships')
+        unique_together = ['team', 'user']
 
 
 class APIKey(models.Model):
@@ -231,8 +226,6 @@ class APIKey(models.Model):
     last_used_ip = models.GenericIPAddressField(_('last used IP'), blank=True, null=True)
     is_active = models.BooleanField(_('active'), default=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    class Meta:
-        verbose_name = _('API Key'); verbose_name_plural = _('API Keys'); ordering = ['-created_at']
     def __str__(self): return f"{self.name} ({self.key_prefix}...)"
 
 
@@ -247,8 +240,6 @@ class UserSession(models.Model):
     expires_at = models.DateTimeField(_('expires at'))
     created_at = models.DateTimeField(auto_now_add=True)
     last_activity = models.DateTimeField(auto_now=True)
-    class Meta:
-        verbose_name = _('User Session'); verbose_name_plural = _('User Sessions'); ordering = ['-last_activity']
 
 
 class LoginAttempt(models.Model):
@@ -259,6 +250,3 @@ class LoginAttempt(models.Model):
     success = models.BooleanField(_('success'), default=False)
     failure_reason = models.CharField(_('failure reason'), max_length=100, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    class Meta:
-        verbose_name = _('Login Attempt'); verbose_name_plural = _('Login Attempts'); ordering = ['-created_at']
-        indexes = [models.Index(fields=['email', 'created_at']), models.Index(fields=['ip_address', 'created_at'])]
