@@ -69,7 +69,7 @@ def backfill_canonical_findings(apps, schema_editor):
 
     for vulnerability in Vulnerability.objects.all().iterator():
         fingerprint, rule_key, normalized_target = _fingerprint(vulnerability)
-        canonical, created = CanonicalFinding.objects.get_or_create(
+        canonical, _ = CanonicalFinding.objects.get_or_create(
             project_id=vulnerability.project_id,
             fingerprint=fingerprint,
             defaults={
@@ -82,14 +82,13 @@ def backfill_canonical_findings(apps, schema_editor):
             },
         )
 
-        if vulnerability.source_engine:
-            source_engines = list(canonical.source_engines or [])
-            if vulnerability.source_engine not in source_engines:
-                source_engines.append(vulnerability.source_engine)
-                canonical.source_engines = source_engines
-                canonical.save(update_fields=["source_engines", "updated_at", "last_seen"])
+        source_engines = list(canonical.source_engines or [])
+        if vulnerability.source_engine and vulnerability.source_engine not in source_engines:
+            source_engines.append(vulnerability.source_engine)
+            canonical.source_engines = source_engines
+            canonical.save(update_fields=["source_engines", "updated_at", "last_seen"])
 
-        if not vulnerability.canonical_finding_id:
+        if vulnerability.canonical_finding_id != canonical.pk:
             vulnerability.canonical_finding_id = canonical.pk
             vulnerability.save(update_fields=["canonical_finding"])
 
@@ -133,15 +132,15 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name="canonicalfinding",
-            constraint=models.UniqueConstraint(fields=("project", "fingerprint"), name="uniq_canonical_finding_project_fingerprint"),
+            constraint=models.UniqueConstraint(fields=("project", "fingerprint"), name="canonical_project_fp_uniq"),
         ),
         migrations.AddIndex(
             model_name="canonicalfinding",
-            index=models.Index(fields=["project", "rule_key"], name="vulnerabili_project_canon_rule_idx"),
+            index=models.Index(fields=["project", "rule_key"], name="canonical_project_rule_idx"),
         ),
         migrations.AddIndex(
             model_name="canonicalfinding",
-            index=models.Index(fields=["project", "category"], name="vulnerabili_project_canon_cat_idx"),
+            index=models.Index(fields=["project", "category"], name="canonical_project_cat_idx"),
         ),
         migrations.AddField(
             model_name="vulnerability",
@@ -150,7 +149,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name="vulnerability",
-            index=models.Index(fields=["canonical_finding"], name="vulnerabili_canon_id_idx"),
+            index=models.Index(fields=["canonical_finding"], name="vulnerability_canonical_idx"),
         ),
         migrations.RunPython(backfill_canonical_findings, reverse_backfill),
     ]
