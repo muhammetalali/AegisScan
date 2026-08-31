@@ -1,237 +1,190 @@
-import asyncio
-import logging
-from typing import Dict, List, Optional, Any
-from datetime import datetime
-from uuid import uuid4
+from __future__ import annotations
 
+import logging
+from typing import Any
+
+from django.utils import timezone
+
+from .engine_adapters import SUPPORTED_REAL_ENGINES
 from .websocket_manager import WebSocketManager
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Define the 15 engines with their categories and order
-ENGINES = [
-    {"name": "recon", "display_name": "Recon & Asset Discovery", "category": "recon", "order": 1, "timeout": 60},
-    {"name": "evidence_collection", "display_name": "Evidence Collection", "category": "analysis", "order": 2, "timeout": 60},
-    {"name": "code_quality", "display_name": "Code Quality Analysis", "category": "analysis", "order": 3, "timeout": 120},
-    {"name": "runtime_analysis", "display_name": "Runtime Log Analysis", "category": "analysis", "order": 4, "timeout": 60},
-    {"name": "performance", "display_name": "Performance Analysis", "category": "analysis", "order": 5, "timeout": 60},
-    {"name": "dependency_risk", "display_name": "Dependency Risk", "category": "analysis", "order": 6, "timeout": 120},
-    {"name": "config_check", "display_name": "Configuration Check", "category": "analysis", "order": 7, "timeout": 60},
-    {"name": "vuln_intelligence", "display_name": "Vulnerability Intelligence", "category": "intelligence", "order": 8, "timeout": 120},
-    {"name": "correlation", "display_name": "Correlation Engine", "category": "validation", "order": 9, "timeout": 60},
-    {"name": "validation", "display_name": "Security Validation", "category": "validation", "order": 10, "timeout": 180},
-    {"name": "control_validation", "display_name": "Control Validation (WAF/EDR/IDS)", "category": "control", "order": 11, "timeout": 180},
-    {"name": "coverage_gap", "display_name": "Coverage Gap Analyzer", "category": "coverage", "order": 12, "timeout": 60},
-    {"name": "attack_path", "display_name": "Attack Path Analyzer", "category": "attack_path", "order": 13, "timeout": 120},
-    {"name": "evidence_graph", "display_name": "Evidence Graph", "category": "evidence_graph", "order": 14, "timeout": 60},
-    {"name": "knowledge", "display_name": "Knowledge Management", "category": "knowledge", "order": 15, "timeout": 60},
-    {"name": "ai_explain", "display_name": "AI Explanation Engine", "category": "ai_explain", "order": 16, "timeout": 60},
-    {"name": "posture", "display_name": "Security Posture", "category": "posture", "order": 17, "timeout": 60},
-    {"name": "compliance", "display_name": "Compliance Checker", "category": "compliance", "order": 18, "timeout": 60},
-    {"name": "digital_twin", "display_name": "Digital Twin Simulation", "category": "digital_twin", "order": 19, "timeout": 180},
-    {"name": "reporting", "display_name": "Report Generation", "category": "reporting", "order": 20, "timeout": 60},
-]
+ENGINE_METADATA = {
+    "recon": ("Recon & Asset Discovery", "recon", 1, 60),
+    "evidence_collection": ("Evidence Collection", "analysis", 2, 60),
+    "code_quality": ("Code Quality Analysis", "analysis", 3, 120),
+    "runtime_analysis": ("Runtime Log Analysis", "analysis", 4, 60),
+    "dependency_risk": ("Dependency Risk", "analysis", 5, 120),
+    "vuln_intelligence": ("Vulnerability Intelligence", "intelligence", 6, 120),
+    "validation": ("Security Validation", "validation", 7, 180),
+    "control_validation": ("Control Validation", "control", 8, 180),
+    "endpoint_discovery": ("Endpoint Discovery", "recon", 9, 120),
+    "tls_intelligence": ("TLS Intelligence", "intelligence", 10, 120),
+}
+
 
 class ScanOrchestrator:
+    """Thin orchestration layer. Durable state is PostgreSQL; execution is Celery."""
+
     def __init__(self, websocket_manager: WebSocketManager):
         self.websocket_manager = websocket_manager
-        self.active_scans: Dict[str, Dict] = {}
-        self.engine_status: Dict[str, str] = {e["name"]: "active" for e in ENGINES}
-        self.scan_queues: Dict[str, asyncio.Queue] = {}
         self.max_concurrent = settings.MAX_CONCURRENT_SCANS
         self.running = False
 
-    async def start(self):
+    async def start(self) -> None:
         self.running = True
-        logger.info("Scan Orchestrator started")
+        logger.info("Scan Orchestrator started (Celery-backed, PostgreSQL state)")
 
-    async def stop(self):
+    async def stop(self) -> None:
         self.running = False
-        # Cancel all running scans
-        for scan_id, scan_data in self.active_scans.items():
-            if scan_data.get("task"):
-                scan_data["task"].cancel()
         logger.info("Scan Orchestrator stopped")
 
-    async def list_engines(self) -> List[Dict]:
-        return [
-            {
-                "name": e["name"],
-                "display_name": e["display_name"],
-                "category": e["category"],
-                "order": e["order"],
-                "status": self.engine_status.get(e["name"], "active"),
-                "timeout": e["timeout"],
-            }
-            for e in ENGINES
-        ]
+    async def list_engines(self) -> list[dict[str, Any]]:
+        from django_project.scans.models import ScanEngine
 
-    async def enable_engine(self, engine_name: str) -> Dict:
-        if engine_name in self.engine_status:
-            self.engine_status[engine_name] = "active"
-            return {"status": "enabled", "engine": engine_name}
-        return {"status": "error", "message": "Engine not found"}
-
-    async def disable_engine(self, engine_name: str) -> Dict:
-        if engine_name in self.engine_status:
-            self.engine_status[engine_name] = "inactive"
-            return {"status": "disabled", "engine": engine_name}
-        return {"status": "error", "message": "Engine not found"}
-
-    async def start_scan(self, scan_id: str, user: Dict) -> Dict:
-        if scan_id in self.active_scans:
-            return {"status": "error", "message": "Scan already running"}
-
-        # Check concurrent scan limit
-        running_count = sum(1 for s in self.active_scans.values() if s["status"] == "running")
-        if running_count >= self.max_concurrent:
-            return {"status": "error", "message": "Max concurrent scans reached"}
-
-        # Create scan task
-        scan_data = {
-            "id": scan_id,
-            "user_id": user.get("sub") or user.get("user_id"),
-            "status": "queued",
-            "progress": 0,
-            "current_phase": "initializing",
-            "current_engine": "",
-            "engines": [],
-            "started_at": datetime.utcnow().isoformat(),
-            "task": None,
-        }
-        self.active_scans[scan_id] = scan_data
-
-        # Start scan in background
-        task = asyncio.create_task(self._run_scan(scan_id))
-        scan_data["task"] = task
-
-        return {"status": "started", "scan_id": scan_id}
-
-    async def _run_scan(self, scan_id: str):
-        scan_data = self.active_scans[scan_id]
-        scan_data["status"] = "running"
-
-        try:
-            # Get engines to run (filter by status)
-            engines_to_run = [e for e in ENGINES if self.engine_status.get(e["name"]) == "active"]
-            scan_data["engines"] = [e["name"] for e in engines_to_run]
-
-            total_engines = len(engines_to_run)
-            for i, engine in enumerate(engines_to_run):
-                if scan_data["status"] == "cancelled":
-                    break
-
-                engine_name = engine["name"]
-                scan_data["current_engine"] = engine_name
-                scan_data["current_phase"] = f"Running {engine['display_name']}"
-
-                # Notify progress
-                await self.websocket_manager.broadcast_scan_progress(scan_id, {
-                    "phase": engine["category"],
-                    "progress": int((i / total_engines) * 100),
-                    "message": f"Running {engine['display_name']}...",
-                    "current_engine": engine_name,
-                    "engines_completed": i,
-                    "total_engines": total_engines,
-                })
-
-                # Simulate engine execution
-                await self._run_engine(scan_id, engine)
-
-                # Update progress
-                scan_data["progress"] = int(((i + 1) / total_engines) * 100)
-
-            if scan_data["status"] != "cancelled":
-                scan_data["status"] = "completed"
-                scan_data["completed_at"] = datetime.utcnow().isoformat()
-                scan_data["progress"] = 100
-
-                # Final result
-                result = {
-                    "security_score": 85.5,
-                    "risk_level": "medium",
-                    "findings_count": 12,
-                    "critical_count": 2,
-                    "high_count": 4,
-                    "medium_count": 4,
-                    "low_count": 2,
-                }
-                await self.websocket_manager.broadcast_scan_completed(scan_id, result)
-
-        except asyncio.CancelledError:
-            scan_data["status"] = "cancelled"
-            await self.websocket_manager.broadcast_scan_error(scan_id, "Scan cancelled by user")
-        except Exception as e:
-            logger.exception(f"Scan {scan_id} failed")
-            scan_data["status"] = "failed"
-            await self.websocket_manager.broadcast_scan_error(scan_id, str(e))
-
-    async def _run_engine(self, scan_id: str, engine: Dict):
-        """Simulate engine execution with progress updates"""
-        engine_name = engine["name"]
-        timeout = engine["timeout"]
-
-        # Simulate work in chunks
-        chunks = 5
-        for chunk in range(chunks):
-            scan_data = self.active_scans.get(scan_id)
-            if not scan_data or scan_data["status"] == "cancelled":
-                break
-
-            await asyncio.sleep(timeout / chunks / 10)  # Speed up for demo
-
-            # Send engine progress
-            await self.websocket_manager.broadcast_scan_progress(scan_id, {
-                "phase": engine["category"],
-                "progress": scan_data["progress"],
-                "message": f"{engine['display_name']} - Step {chunk + 1}/{chunks}",
-                "current_engine": engine_name,
+        configured = {item.name: item for item in ScanEngine.objects.all()}
+        result: list[dict[str, Any]] = []
+        for name in sorted(SUPPORTED_REAL_ENGINES, key=lambda value: ENGINE_METADATA.get(value, (value, "analysis", 999, 300))[2]):
+            display_name, category, order, timeout = ENGINE_METADATA.get(name, (name, "analysis", 999, 300))
+            db_engine = configured.get(name)
+            result.append({
+                "name": name,
+                "display_name": db_engine.display_name if db_engine else display_name,
+                "category": db_engine.category if db_engine else category,
+                "order": db_engine.order if db_engine else order,
+                "status": db_engine.status if db_engine else "active",
+                "timeout": db_engine.timeout if db_engine else timeout,
+                "real_executor_registered": True,
+                "configured_in_database": db_engine is not None,
             })
+        return result
 
-    async def pause_scan(self, scan_id: str) -> Dict:
-        scan_data = self.active_scans.get(scan_id)
-        if not scan_data:
+    async def enable_engine(self, engine_name: str) -> dict[str, Any]:
+        from django_project.scans.models import ScanEngine
+
+        if engine_name not in SUPPORTED_REAL_ENGINES:
+            return {"status": "error", "message": "No real execution adapter is registered for this engine"}
+        defaults = ENGINE_METADATA.get(engine_name, (engine_name, "analysis", 999, 300))
+        engine, _ = ScanEngine.objects.get_or_create(
+            name=engine_name,
+            defaults={
+                "display_name": defaults[0],
+                "description": "Registered real execution adapter",
+                "category": defaults[1],
+                "version": "1.0.0",
+                "is_core": True,
+                "timeout": defaults[3],
+                "order": defaults[2],
+            },
+        )
+        engine.status = "active"
+        engine.save(update_fields=["status", "updated_at"])
+        return {"status": "enabled", "engine": engine_name}
+
+    async def disable_engine(self, engine_name: str) -> dict[str, Any]:
+        from django_project.scans.models import ScanEngine
+
+        engine = ScanEngine.objects.filter(name=engine_name).first()
+        if not engine:
+            return {"status": "error", "message": "Engine is not configured in the database"}
+        engine.status = "inactive"
+        engine.save(update_fields=["status", "updated_at"])
+        return {"status": "disabled", "engine": engine_name}
+
+    async def start_scan(self, scan_id: str, user: dict[str, Any]) -> dict[str, Any]:
+        from django_project.scans.models import Scan, ScanEngine
+        from ..tasks.scan_tasks import run_scan
+
+        scan = Scan.objects.select_related("project").filter(pk=scan_id).first()
+        if not scan:
             return {"status": "error", "message": "Scan not found"}
+        if scan.status == "running":
+            return {"status": "error", "message": "Scan already running", "scan_id": scan_id}
+        if scan.status == "completed":
+            return {"status": "error", "message": "Completed scans are immutable; create a new scan", "scan_id": scan_id}
 
-        if scan_data["status"] == "running":
-            scan_data["status"] = "paused"
-            return {"status": "paused"}
-        return {"status": "error", "message": "Scan not running"}
+        engines = [str(value).strip() for value in (scan.engines or []) if str(value).strip()]
+        if not engines:
+            return {"status": "error", "message": "No real execution engines configured; refusing to fabricate results", "scan_id": scan_id}
+        unsupported = sorted(set(engines) - set(SUPPORTED_REAL_ENGINES))
+        if unsupported:
+            return {"status": "error", "message": "Scan contains engines without real executors", "unsupported_engines": unsupported, "scan_id": scan_id}
 
-    async def resume_scan(self, scan_id: str) -> Dict:
-        scan_data = self.active_scans.get(scan_id)
-        if not scan_data:
+        for index, engine_name in enumerate(engines, start=1):
+            defaults = ENGINE_METADATA.get(engine_name, (engine_name, "analysis", index, 300))
+            ScanEngine.objects.get_or_create(
+                name=engine_name,
+                defaults={
+                    "display_name": defaults[0],
+                    "description": "Registered real execution adapter",
+                    "category": defaults[1],
+                    "version": "1.0.0",
+                    "is_core": True,
+                    "timeout": defaults[3],
+                    "order": defaults[2],
+                },
+            )
+
+        task = run_scan.delay(str(scan.pk))
+        scan.celery_task_id = task.id
+        scan.status = "queued"
+        scan.current_phase = "queued"
+        scan.progress = 0
+        scan.save(update_fields=["celery_task_id", "status", "current_phase", "progress", "updated_at"])
+        logger.info("Queued real scan %s as Celery task %s", scan_id, task.id)
+        return {"status": "queued", "scan_id": scan_id, "task_id": task.id}
+
+    async def pause_scan(self, scan_id: str) -> dict[str, Any]:
+        from django_project.scans.models import Scan
+        updated = Scan.objects.filter(pk=scan_id, status__in=["queued", "running"]).update(status="paused", updated_at=timezone.now())
+        return {"status": "paused", "scan_id": scan_id} if updated else {"status": "error", "message": "Scan not running or not found"}
+
+    async def resume_scan(self, scan_id: str) -> dict[str, Any]:
+        from django_project.scans.models import Scan
+        scan = Scan.objects.filter(pk=scan_id).first()
+        if not scan:
             return {"status": "error", "message": "Scan not found"}
+        if scan.status != "paused":
+            return {"status": "error", "message": "Scan is not paused"}
+        scan.status = "running"
+        scan.save(update_fields=["status", "updated_at"])
+        return {"status": "resumed", "scan_id": scan_id}
 
-        if scan_data["status"] == "paused":
-            scan_data["status"] = "running"
-            return {"status": "resumed"}
-        return {"status": "error", "message": "Scan not paused"}
-
-    async def cancel_scan(self, scan_id: str) -> Dict:
-        scan_data = self.active_scans.get(scan_id)
-        if not scan_data:
+    async def cancel_scan(self, scan_id: str) -> dict[str, Any]:
+        from django_project.scans.models import Scan
+        scan = Scan.objects.filter(pk=scan_id).first()
+        if not scan:
             return {"status": "error", "message": "Scan not found"}
+        if scan.status in {"completed", "failed", "cancelled"}:
+            return {"status": "error", "message": "Scan is already finished", "scan_id": scan_id}
+        scan.status = "cancelled"
+        scan.completed_at = timezone.now()
+        scan.current_phase = "cancelled"
+        scan.save(update_fields=["status", "completed_at", "current_phase", "updated_at"])
+        return {"status": "cancelled", "scan_id": scan_id}
 
-        if scan_data["status"] in ["running", "paused", "queued"]:
-            scan_data["status"] = "cancelled"
-            if scan_data.get("task"):
-                scan_data["task"].cancel()
-            return {"status": "cancelled"}
-        return {"status": "error", "message": "Scan cannot be cancelled"}
-
-    async def get_progress(self, scan_id: str) -> Dict:
-        scan_data = self.active_scans.get(scan_id)
-        if not scan_data:
+    async def get_progress(self, scan_id: str) -> dict[str, Any]:
+        from django_project.scans.models import Scan
+        scan = Scan.objects.prefetch_related("engine_executions__engine").filter(pk=scan_id).first()
+        if not scan:
             return {"status": "error", "message": "Scan not found"}
-
         return {
-            "scan_id": scan_id,
-            "status": scan_data["status"],
-            "progress": scan_data["progress"],
-            "current_phase": scan_data["current_phase"],
-            "current_engine": scan_data["current_engine"],
-            "engines": scan_data["engines"],
-            "started_at": scan_data["started_at"],
+            "scan_id": str(scan.pk),
+            "status": scan.status,
+            "progress": scan.progress,
+            "current_phase": scan.current_phase,
+            "current_engine": scan.current_engine,
+            "engines": [
+                {"name": execution.engine.name, "status": execution.status, "progress": execution.progress, "findings": execution.findings_found, "evidence": execution.evidences_collected}
+                for execution in scan.engine_executions.all()
+            ],
+            "started_at": scan.started_at.isoformat() if scan.started_at else None,
+            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+            "celery_task_id": scan.celery_task_id,
+            "findings_count": scan.findings_count,
+            "security_score": scan.security_score,
+            "risk_level": scan.risk_level,
+            "error": scan.error_message or None,
         }
