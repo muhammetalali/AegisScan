@@ -12,9 +12,13 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
 import django
 django.setup()
 
-from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
+
+# Bind scan execution tasks to the canonical AegisScan Celery application.
+# This prevents Celery's implicit/default app from changing task routing
+# depending on import order or process initialization.
+from fastapi_app.celery_app import celery_app
 
 # Import Django apps through the same module names used by INSTALLED_APPS.
 # Importing the same model package as django_project.scans would create a
@@ -216,7 +220,7 @@ def _sync_validation_projection(scan: Scan) -> None:
     )
 
 
-@shared_task(bind=True, name="fastapi_app.tasks.scan_tasks.run_scan", acks_late=True, reject_on_worker_lost=True, time_limit=1800, soft_time_limit=1500)
+@celery_app.task(bind=True, name="fastapi_app.tasks.scan_tasks.run_scan", acks_late=True, reject_on_worker_lost=True, time_limit=1800, soft_time_limit=1500)
 def run_scan(self, scan_id: str) -> dict[str, Any]:
     scan = Scan.objects.select_related("project", "asset", "initiated_by").get(pk=scan_id)
     started = timezone.now()

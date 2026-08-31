@@ -13,6 +13,7 @@ from scans.models import Scan
 from vulnerabilities.models import Vulnerability
 from vulnerabilities.serializers import VulnerabilitySerializer
 
+from ..celery_app import celery_app
 from ..core.security import verify_token
 from ..services.engine_adapters import SUPPORTED_REAL_ENGINES
 from ..services.remediation_validation import RemediationValidationSuite
@@ -200,7 +201,12 @@ def _create_scan(body: ValidationCreate, user: dict, validation_id: str) -> tupl
 def _queue_scan(scan_id: str):
     from ..tasks.scan_tasks import run_scan
 
-    task = run_scan.delay(scan_id)
+    task = celery_app.send_task(
+        run_scan.name,
+        args=[scan_id],
+        queue="default",
+        routing_key="default",
+    )
     Scan.objects.filter(pk=scan_id).update(celery_task_id=task.id)
     return task.id
 
