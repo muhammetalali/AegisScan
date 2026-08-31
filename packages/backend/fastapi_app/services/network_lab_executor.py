@@ -38,8 +38,8 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
     target = target_value.strip()
     if not _authorized_target(target, extra):
         return ExecutionResult(
-            "blocked", [], [], {"engine": engine, "tool": tool, "target": target, "authorization_required": True},
-            "Network lab execution requires authorized=true and an exact target in lab_target_allowlist.",
+            "failed", [], [], {"engine": engine, "tool": tool, "target": target, "authorization_required": True, "blocked": True},
+            "Network lab execution blocked: authorized=true and an exact target in lab_target_allowlist are required.",
         )
     if not LAB_EXECUTOR_TOKEN:
         return ExecutionResult("failed", [], [], {"engine": engine, "tool": tool}, "AEGIS_LAB_EXECUTOR_TOKEN is not configured")
@@ -64,35 +64,26 @@ async def execute_network_tool(engine: str, target_type: str, target_value: str,
         "engine": engine,
         "created_at": _utc(),
         "data": {
-            "execution_id": execution_id,
-            "tool": tool,
-            "target": target,
-            "profile": profile,
-            "command": payload.get("command"),
-            "return_code": payload.get("return_code"),
-            "started_at": payload.get("started_at"),
-            "completed_at": payload.get("completed_at"),
-            "tool_version": payload.get("tool_version"),
-            "executor_image": payload.get("executor_image"),
-            "stdout": raw,
-            "stderr": stderr,
-            "stdout_sha256": output_sha256,
+            "execution_id": execution_id, "tool": tool, "target": target, "profile": profile,
+            "command": payload.get("command"), "return_code": payload.get("return_code"),
+            "started_at": payload.get("started_at"), "completed_at": payload.get("completed_at"),
+            "tool_version": payload.get("tool_version"), "executor_image": payload.get("executor_image"),
+            "stdout": raw, "stderr": stderr, "stdout_sha256": output_sha256,
             "authorization": {"authorized": True, "allowlist_match": True, "target": target},
         },
     }]
     if payload.get("status") != "completed":
-        return ExecutionResult(str(payload.get("status") or "failed"), [], evidence, {"engine": engine, "tool": tool, "target": target, "execution_id": execution_id}, payload.get("error") or "Network tool execution failed")
+        return ExecutionResult("failed", [], evidence, {"engine": engine, "tool": tool, "target": target, "execution_id": execution_id, "executor_status": payload.get("status")}, payload.get("error") or "Network tool execution failed")
 
     findings = []
     for item in payload.get("observations") or []:
         port = item.get("port")
         protocol = str(item.get("protocol") or "tcp").lower()
         title = f"Open {protocol.upper()} port {port}"
-        service = item.get("service")
-        if service:
-            title += f" ({service})"
+        if item.get("service"):
+            title += f" ({item['service']})"
         findings.append({
-            "id": _stable_id("finding-net", engine, target, protocol, port, service),
+            "id": _stable_id("finding-net", engine, target, protocol, port, item.get("service")),
             "title": title,
             "severity": "info",
             "status": "open",
