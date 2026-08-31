@@ -165,7 +165,7 @@ CELERY_TASK_TIME_LIMIT = 3600
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
-CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.RedisChannelLayer", "CONFIG": {"hosts": [REDIS_URL]}}}
+CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer", "CONFIG": {"hosts": [REDIS_URL]}}}
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
