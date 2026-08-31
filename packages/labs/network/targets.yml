@@ -1,0 +1,37 @@
+version: 1
+lab:
+  id: network-lab-v1
+  network: 10.250.10.0/27
+  gateway: 10.250.10.1
+  purpose: controlled network validation
+  targets:
+    - id: web-01
+      address: 10.250.10.10
+      type: service-host
+      services:
+        - tcp/80
+      image: nginx:alpine
+      scan_capabilities: [network_nmap, network_masscan]
+
+    - id: api-01
+      address: 10.250.10.11
+      type: service-host
+      services:
+        - tcp/8080
+      image: python:3.12-alpine
+      scan_capabilities: [network_nmap, network_masscan]
+
+    - id: ssh-01
+      address: 10.250.10.12
+      type: service-host
+      services:
+        - tcp/22
+      image: aegisscan-network-ssh-target:local
+      scan_capabilities: [network_nmap, network_masscan]
+
+external_targets:
+  - id: scanme-nmap-org
+    address: scanme.nmap.org
+    type: nmap-test-target
+    scan_capabilities: [network_nmap]
+    notes: Use only for Nmap testing in accordance with Nmap's published guidance.
