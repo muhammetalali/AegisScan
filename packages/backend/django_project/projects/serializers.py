@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 
@@ -10,6 +11,8 @@ from rest_framework.exceptions import PermissionDenied
 from users.models import Permission
 
 from .models import Project
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectSerializer(serializers.ModelSerializer):
@@ -35,6 +38,15 @@ class ProjectSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if self.instance is None and request is not None:
             user = request.user
+            logger.info(
+                "PROJECT_CREATE_AUTH user_id=%s role=%s superuser=%s staff=%s project_create=%s authenticated=%s",
+                getattr(user, "pk", None),
+                getattr(user, "role", None),
+                getattr(user, "is_superuser", False),
+                getattr(user, "is_staff", False),
+                bool(getattr(user, "has_permission", lambda _permission: False)(Permission.PROJECT_CREATE)),
+                bool(getattr(user, "is_authenticated", False)),
+            )
             if not user.has_permission(Permission.PROJECT_CREATE):
                 raise PermissionDenied("You do not have permission to create projects.")
 
