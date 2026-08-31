@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -79,12 +80,20 @@ def parse_masscan(text: str) -> list[dict]:
 
 def run(command: list[str], timeout: int) -> dict:
     started = time.time()
-    proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        return_code = proc.returncode
+        stdout = proc.stdout
+        stderr = proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        return_code = 124
+        stdout = exc.stdout or ""
+        stderr = (exc.stderr or "") + "\nCommand timed out"
     finished = time.time()
     return {
-        "return_code": proc.returncode,
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
+        "return_code": return_code,
+        "stdout": stdout,
+        "stderr": stderr,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
         "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(finished)),
     }
@@ -105,7 +114,9 @@ def execute(tool: str, target: str, profile: str) -> dict:
     if tool == "nmap":
         if profile not in {"connect-discovery", "service-enumeration"}:
             return {"status": "failed", "error": "Unsupported Nmap profile"}
-        command = ["nmap", "-Pn", "-T10", "--open", "-sV", "-oX", "-", target]
+        # Use a TCP connect scan so the lab agent can run Nmap as its non-root user.
+        # Service/version detection remains real (-sV); no synthetic observations are created.
+        command = ["nmap", "-Pn", "-T10", "--open", "-sT", "-sV", "-oX", "-", target]
         parser = parse_nmap
         timeout = 180
     else:
@@ -117,7 +128,8 @@ def execute(tool: str, target: str, profile: str) -> dict:
 
     result = run(command, timeout)
     version_proc = subprocess.run([tool, "--version"], capture_output=True, text=True, timeout=10, check=False)
-    version_line = next((line.strip() for line in version_proc.stdout.splitlines() if line.strip()), "unknown")
+    version_text = version_proc.stdout.strip() or version_proc.stderr.strip()
+    version_line = next((line.strip() for line in version_text.splitlines() if line.strip()), "unknown")
     if result["return_code"] != 0:
         return {
             "status": "failed",
@@ -129,6 +141,7 @@ def execute(tool: str, target: str, profile: str) -> dict:
             "tool_version": version_line,
             **result,
         }
+    raw_sha256 = hashlib.sha256(result["stdout"].encode("utf-8")).hexdigest()
     return {
         "status": "completed",
         "execution_id": execution_id,
@@ -138,12 +151,13 @@ def execute(tool: str, target: str, profile: str) -> dict:
         "executor_image": IMAGE,
         "tool_version": version_line,
         "observations": parser(result["stdout"]),
+        "stdout_sha256": raw_sha256,
         **result,
     }
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AegisScanLabExecutor/1.0"
+    server_version = "AegisScanLabExecutor/1.1"
 
     def do_GET(self) -> None:
         if self.path == "/health":
