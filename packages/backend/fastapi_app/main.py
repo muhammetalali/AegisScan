@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import Response  # noqa: E402
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer  # noqa: E402
 
-from .routers import attack_surface, assurance, assurance_graph, capability_control, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, security_sessions, system, validation_runtime  # noqa: E402
+from .routers import attack_surface, assurance, assurance_graph, capability_control, dashboard, dashboard_live, decision_actions, digital_twin, engine_capabilities, governance, intelligence, knowledge, orchestration, posture, policy, remediation_itsm, remediation_lifecycle, security_decision, security_sessions, system, validation_runtime, validation_findings  # noqa: E402
 from .services.celery_monitoring import get_task_metrics  # noqa: E402
 from .services.observability import metrics_payload, configure_tracing  # noqa: E402
 from .services.decision_action_orchestration import initialize_action_store  # noqa: E402
@@ -300,6 +300,7 @@ app.include_router(security_sessions.router, prefix="/api/v1", tags=["Security T
 app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
 app.include_router(dashboard_live.router, prefix="/api/v1", tags=["Dashboard Live"])
 app.include_router(validation_runtime.router, prefix="/api/v1", tags=["Validation Runtime"])
+app.include_router(validation_findings.router, prefix="/api/v1", tags=["Validation Findings"])
 app.include_router(intelligence.router, prefix="/api/v1", tags=["Security Intelligence"])
 app.include_router(attack_surface.router, prefix="/api/v1", tags=["Attack Surface"])
 app.include_router(orchestration.router, prefix="/api/v1/orchestration", tags=["External Orchestration"])
