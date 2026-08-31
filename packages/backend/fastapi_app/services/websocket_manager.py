@@ -1,4 +1,5 @@
 from typing import Dict, Set
+
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 import logging
@@ -13,7 +14,16 @@ class WebSocketManager:
 
     async def connect(self, channel: str, websocket: WebSocket, subprotocol: str | None = None):
         if websocket.client_state == WebSocketState.CONNECTING:
-            await websocket.accept(subprotocol=subprotocol)
+            negotiated_subprotocol = None
+            if subprotocol:
+                offered = {
+                    part.strip()
+                    for part in websocket.headers.get("sec-websocket-protocol", "").split(",")
+                    if part.strip()
+                }
+                if subprotocol in offered:
+                    negotiated_subprotocol = subprotocol
+            await websocket.accept(subprotocol=negotiated_subprotocol)
         if channel not in self.connections:
             self.connections[channel] = set()
         self.connections[channel].add(websocket)
