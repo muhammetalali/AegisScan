@@ -8,7 +8,7 @@ class VulnerabilitySerializer(serializers.ModelSerializer):
         model = Vulnerability
         fields = "__all__"
         read_only_fields = (
-            "id", "project", "created_at", "updated_at", "first_seen", "last_seen",
+            "id", "project", "canonical_finding", "created_at", "updated_at", "first_seen", "last_seen",
             "validated_at", "validated_by", "fixed_at", "fixed_by", "assigned_at",
         )
 
