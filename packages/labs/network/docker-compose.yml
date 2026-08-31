@@ -1,0 +1,23 @@
+services:
+  aegisscan-network-lab:
+    build:
+      context: .
+      dockerfile: Dockerfile.kali
+    image: aegisscan-network-lab:local
+    profiles: [security-lab]
+    restart: "no"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+      - /run:rw,noexec,nosuid,size=32m
+    networks:
+      - aegisscan_lab
+    command: ["sleep", "infinity"]
+
+networks:
+  aegisscan_lab:
+    name: aegisscan_lab
