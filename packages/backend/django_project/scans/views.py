@@ -13,7 +13,9 @@ from .serializers import ScanSerializer, ScanEngineSerializer, ScanEngineExecuti
 def visible_projects(user):
     if user.is_superuser:
         return None
-    return Q(owner=user) | Q(members=user)
+    # Scan does not have an owner/members relation of its own. Tenant scope
+    # must be applied through the owning Project relationship.
+    return Q(project__owner=user) | Q(project__members=user)
 
 
 class ScanViewSet(viewsets.ModelViewSet):
