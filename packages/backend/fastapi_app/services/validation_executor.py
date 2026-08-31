@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +24,12 @@ class ExecutionResult:
 
 def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _stable_id(prefix: str, *parts: object) -> str:
+    material = "\x1f".join(str(part) for part in parts)
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}-{digest}"
 
 
 def _containerized() -> bool:
@@ -109,7 +116,7 @@ async def execute_http_probe(target_type: str, target_value: str, timeout: float
     finished = datetime.now(timezone.utc)
     duration_ms = round((finished - started).total_seconds() * 1000, 2)
     response_headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
-    evidence_id = f"ev-http-{abs(hash((target, response.status_code, response.url))) & 0xffffffff:08x}"
+    evidence_id = _stable_id("ev-http", target, response.status_code, response.url)
 
     evidence = [{
         "id": evidence_id,
@@ -140,7 +147,7 @@ async def execute_http_probe(target_type: str, target_value: str, timeout: float
     for header, title, severity in security_headers:
         if header not in response_headers:
             findings.append({
-                "id": f"finding-{abs(hash((target, header))) & 0xffffffff:08x}",
+                "id": _stable_id("finding", target, header),
                 "title": title,
                 "severity": severity,
                 "status": "open",
