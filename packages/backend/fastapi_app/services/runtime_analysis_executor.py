@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -12,6 +13,12 @@ MAX_LOG_CHARS = 300_000
 
 def _utc() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _stable_id(prefix: str, *parts: object) -> str:
+    material = "\x1f".join(str(part) for part in parts)
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}-{digest}"
 
 
 async def analyze_runtime(extra: dict[str, Any]) -> ExecutionResult:
@@ -27,7 +34,7 @@ async def analyze_runtime(extra: dict[str, Any]) -> ExecutionResult:
 
     log_text = log_text[:MAX_LOG_CHARS]
     source = str(extra.get("runtime_log_source") or "<inline-runtime-log>")
-    evidence_id = f"ev-runtime-{abs(hash((source, log_text[:3000]))) & 0xffffffff:08x}"
+    evidence_id = _stable_id("ev-runtime", source, log_text[:3000])
     evidence = [{
         "id": evidence_id,
         "type": "runtime_log_snapshot",
@@ -53,7 +60,7 @@ async def analyze_runtime(extra: dict[str, Any]) -> ExecutionResult:
         for line_no, line in enumerate(lines, start=1):
             if pattern.search(line):
                 findings.append({
-                    "id": f"finding-runtime-{abs(hash((source, rule, line_no))) & 0xffffffff:08x}",
+                    "id": _stable_id("finding-runtime", source, rule, line_no, line.strip()),
                     "title": title,
                     "severity": severity,
                     "status": "open",
