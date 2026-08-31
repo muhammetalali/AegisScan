@@ -118,7 +118,7 @@ async def websocket_user(websocket: WebSocket) -> dict | None:
 
 @sync_to_async
 def scan_accessible(user_id: str, scan_id: str, is_superuser: bool = False) -> bool:
-    from django_project.scans.models import Scan
+    from scans.models import Scan
     from projects.models import ProjectMembership
     if is_superuser:
         return Scan.objects.filter(pk=scan_id).exists()
