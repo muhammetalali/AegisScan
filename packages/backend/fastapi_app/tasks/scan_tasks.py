@@ -39,6 +39,11 @@ ENGINE_META = {
     "control_validation": ("Control Validation", "control", 8, 180),
     "endpoint_discovery": ("Endpoint Discovery", "recon", 9, 120),
     "tls_intelligence": ("TLS Intelligence", "intelligence", 10, 120),
+    # Network lab engines must be represented here as well as in the real
+    # executor registry. Otherwise run_scan reaches execute_engine() but
+    # crashes before execution with KeyError(engine_name).
+    "network_nmap": ("Network Nmap", "network", 11, 900),
+    "network_masscan": ("Network Masscan", "network", 12, 900),
 }
 
 
@@ -172,7 +177,7 @@ def _persist_findings(scan: Scan, execution: ScanEngineExecution, findings: list
                     "quality": VulnerabilityEvidence.Quality.UNVERIFIED,
                     "source": str(evidence_item.get("engine") or execution.engine.name)[:100],
                     "description": str(evidence_item.get("description") or f"Evidence emitted by {execution.engine.name}"),
-                    "location": str(evidence_item.get("data", {}).get("final_url") or evidence_item.get("data", {}).get("requested_url") or "")[:500],
+                    "location": str(evidence_item.get("data", {}).get("final_url") or evidence_item.get("data", {}).get("requested_url") or evidence_item.get("data", {}).get("target") or "")[:500],
                     "raw_data": json.dumps(evidence_item, ensure_ascii=False, default=str),
                     "confidence": max(0.0, min(1.0, float(confidence or 0) / 100.0)),
                     "tags": [execution.engine.name],
@@ -278,8 +283,9 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
             result = asyncio.run(execute_engine(engine_name, target_type, target_value, scan.config or {}))
             finished = timezone.now()
             duration = (finished - (execution.started_at or finished)).total_seconds()
+            terminal_failure = result.status in {"failed", "unsupported", "unavailable"}
             with transaction.atomic():
-                execution.status = ScanEngineExecution.ExecutionStatus.FAILED if result.status == "failed" else ScanEngineExecution.ExecutionStatus.COMPLETED
+                execution.status = ScanEngineExecution.ExecutionStatus.FAILED if terminal_failure else ScanEngineExecution.ExecutionStatus.COMPLETED
                 execution.progress = 100
                 execution.completed_at = finished
                 execution.duration = duration
@@ -298,8 +304,8 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
                 _log(scan, f"Real engine {engine_name} completed", context=results_summary[engine_name], execution=execution)
             _publish_event(str(scan.pk), {"type": "engine.completed", "scan_id": str(scan.pk), "validation_id": (scan.config or {}).get("validation_id"), "engine": engine_name, "progress": scan.progress, "findings": len(result.findings), "evidence": len(result.evidence), "status": result.status})
             _sync_validation_projection(scan)
-            if result.status == "failed":
-                raise RuntimeError(result.error or f"Real engine {engine_name} failed")
+            if terminal_failure:
+                raise RuntimeError(result.error or f"Real engine {engine_name} failed with status {result.status}")
 
         _aggregate_scan(scan)
         scan.status = Scan.Status.COMPLETED
