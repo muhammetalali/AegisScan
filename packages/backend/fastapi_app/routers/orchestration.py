@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from ..core.config import settings
 from ..core.security import verify_token
 from ..services.itsm_capability import all_provider_capabilities
 from ..services.itsm_configuration import validate_itsm_configuration
@@ -13,11 +14,17 @@ from ..services.itsm_provider_health import check_all_providers, check_provider
 from ..services.itsm_remediation_resilient import create_case
 
 router = APIRouter()
-security = HTTPBearer(auto_error=True)
+security = HTTPBearer(auto_error=False)
 
 
-async def current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict[str, Any]:
-    user = await verify_token(credentials.credentials)
+async def current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> dict[str, Any]:
+    token = credentials.credentials if credentials else request.cookies.get(settings.AUTH_ACCESS_COOKIE)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user = await verify_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
