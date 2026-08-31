@@ -3,9 +3,9 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-aegisdb}
-      POSTGRES_USER: ${POSTGRES_USER:-aegis}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aegis}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
       - "5432:5432"
     volumes:
@@ -37,23 +37,23 @@ services:
     command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn django_project.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
     environment:
       DJANGO_SETTINGS_MODULE: django_project.settings
-      DEBUG: ${DJANGO_DEBUG:-1}
-      SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
+      DEBUG: ${DJANGO_DEBUG:?DJANGO_DEBUG is required}
+      SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
-      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
-      EMAIL_PORT: ${EMAIL_PORT:-587}
-      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-1}
-      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
-      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
-      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-AegisScan <noreply@aegisscan.local>}
-      LOG_TO_FILE: ${LOG_TO_FILE:-0}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
+      FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required}
+      EMAIL_HOST: ${EMAIL_HOST:?EMAIL_HOST is required}
+      EMAIL_PORT: ${EMAIL_PORT:?EMAIL_PORT is required}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:?EMAIL_USE_TLS is required}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:?EMAIL_HOST_USER is required}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:?EMAIL_HOST_PASSWORD is required}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:?DEFAULT_FROM_EMAIL is required}
+      LOG_TO_FILE: ${LOG_TO_FILE:?LOG_TO_FILE is required}
     volumes:
       - ../backend:/app
       - media_data:/app/media
@@ -81,18 +81,18 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       DJANGO_SETTINGS_MODULE: django_project.settings
-      DEBUG: ${DJANGO_DEBUG:-1}
-      SECRET_KEY: ${FASTAPI_SECRET_KEY:-aegisscan-local-fastapi-secret-change-me}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
+      DEBUG: ${DJANGO_DEBUG:?DJANGO_DEBUG is required}
+      SECRET_KEY: ${FASTAPI_SECRET_KEY:?FASTAPI_SECRET_KEY is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       REDIS_URL: redis://redis:6379/0
       DJANGO_API_URL: http://django:8000/api/v1
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      AEGIS_CONTAINERIZED: ${AEGIS_CONTAINERIZED:-1}
-      AEGIS_HOST_GATEWAY: ${AEGIS_HOST_GATEWAY:-host.docker.internal}
-      LOG_TO_FILE: ${LOG_TO_FILE:-0}
+      AEGIS_CONTAINERIZED: ${AEGIS_CONTAINERIZED:?AEGIS_CONTAINERIZED is required}
+      AEGIS_HOST_GATEWAY: ${AEGIS_HOST_GATEWAY:?AEGIS_HOST_GATEWAY is required}
+      LOG_TO_FILE: ${LOG_TO_FILE:?LOG_TO_FILE is required}
     volumes:
       - ../backend:/app
     ports:
@@ -113,19 +113,19 @@ services:
       context: ../backend
       dockerfile: Dockerfile.django
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app worker -l info -Q default,health -c ${CELERY_DEFAULT_WORKER_CONCURRENCY:-2} --hostname=core@%h
+    command: celery -A fastapi_app.celery_app worker -l info -Q default,health -c ${CELERY_DEFAULT_WORKER_CONCURRENCY:?CELERY_DEFAULT_WORKER_CONCURRENCY is required} --hostname=core@%h
     environment:
-      AEGIS_ENV: ${AEGIS_ENV:-development}
+      AEGIS_ENV: ${AEGIS_ENV:?AEGIS_ENV is required}
       DJANGO_SETTINGS_MODULE: django_project.settings
-      DEBUG: ${DJANGO_DEBUG:-1}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
+      DEBUG: ${DJANGO_DEBUG:?DJANGO_DEBUG is required}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      LOG_TO_FILE: ${LOG_TO_FILE:-0}
+      SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required}
+      LOG_TO_FILE: ${LOG_TO_FILE:?LOG_TO_FILE is required}
     volumes:
       - ../backend:/app
     depends_on:
@@ -145,19 +145,19 @@ services:
       context: ../backend
       dockerfile: Dockerfile.django
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app worker -l info -Q workflow -c ${CELERY_WORKFLOW_WORKER_CONCURRENCY:-2} --hostname=workflow@%h
+    command: celery -A fastapi_app.celery_app worker -l info -Q workflow -c ${CELERY_WORKFLOW_WORKER_CONCURRENCY:?CELERY_WORKFLOW_WORKER_CONCURRENCY is required} --hostname=workflow@%h
     environment:
-      AEGIS_ENV: ${AEGIS_ENV:-development}
+      AEGIS_ENV: ${AEGIS_ENV:?AEGIS_ENV is required}
       DJANGO_SETTINGS_MODULE: django_project.settings
-      DEBUG: ${DJANGO_DEBUG:-1}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
+      DEBUG: ${DJANGO_DEBUG:?DJANGO_DEBUG is required}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      LOG_TO_FILE: ${LOG_TO_FILE:-0}
+      SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required}
+      LOG_TO_FILE: ${LOG_TO_FILE:?LOG_TO_FILE is required}
     volumes:
       - ../backend:/app
     depends_on:
@@ -177,19 +177,19 @@ services:
       context: ../backend
       dockerfile: Dockerfile.django
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app worker -l info -Q reports -c ${CELERY_REPORT_WORKER_CONCURRENCY:-2} --hostname=reports@%h
+    command: celery -A fastapi_app.celery_app worker -l info -Q reports -c ${CELERY_REPORT_WORKER_CONCURRENCY:?CELERY_REPORT_WORKER_CONCURRENCY is required} --hostname=reports@%h
     environment:
-      AEGIS_ENV: ${AEGIS_ENV:-development}
+      AEGIS_ENV: ${AEGIS_ENV:?AEGIS_ENV is required}
       DJANGO_SETTINGS_MODULE: django_project.settings
-      DEBUG: ${DJANGO_DEBUG:-1}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
+      DEBUG: ${DJANGO_DEBUG:?DJANGO_DEBUG is required}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      LOG_TO_FILE: ${LOG_TO_FILE:-0}
+      SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required}
+      LOG_TO_FILE: ${LOG_TO_FILE:?LOG_TO_FILE is required}
     volumes:
       - ../backend:/app
     depends_on:
@@ -211,17 +211,17 @@ services:
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app beat -l info --max-interval=30 --schedule=/tmp/aegisscan-celerybeat-schedule
     environment:
-      AEGIS_ENV: ${AEGIS_ENV:-development}
+      AEGIS_ENV: ${AEGIS_ENV:?AEGIS_ENV is required}
       DJANGO_SETTINGS_MODULE: django_project.settings
-      DEBUG: ${DJANGO_DEBUG:-1}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegisdb}
+      DEBUG: ${DJANGO_DEBUG:?DJANGO_DEBUG is required}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      SECRET_KEY: ${DJANGO_SECRET_KEY:-aegisscan-local-dev-secret-change-me}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-aegisscan-local-jwt-secret-change-me-0123456789}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      LOG_TO_FILE: ${LOG_TO_FILE:-0}
+      SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required}
+      LOG_TO_FILE: ${LOG_TO_FILE:?LOG_TO_FILE is required}
     volumes:
       - ../backend:/app
     depends_on:
