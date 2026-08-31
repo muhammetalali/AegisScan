@@ -8,7 +8,6 @@ django.setup()
 
 from contextlib import asynccontextmanager  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
-import asyncio  # noqa: E402
 import logging  # noqa: E402
 
 from asgiref.sync import sync_to_async  # noqa: E402
@@ -67,6 +66,26 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AegisScan Platform API", description="Security Validation Platform - High Performance API Layer", version="1.0.0", lifespan=lifespan, docs_url="/docs", redoc_url="/redoc")
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def bridge_cookie_jwt_to_bearer(request: Request, call_next):
+    """Make the HttpOnly access cookie available to legacy HTTPBearer dependencies.
+
+    The browser never exposes the JWT to JavaScript. The middleware only injects
+    an Authorization header into the internal ASGI request scope when a cookie
+    is present and no Authorization header was supplied by the client.
+    """
+    has_authorization = any(name.lower() == b"authorization" for name, _ in request.scope.get("headers", []))
+    if not has_authorization:
+        token = request.cookies.get(settings.AUTH_ACCESS_COOKIE)
+        if token:
+            headers = list(request.scope.get("headers", []))
+            headers.append((b"authorization", f"Bearer {token}".encode("ascii")))
+            request.scope["headers"] = headers
+    return await call_next(request)
+
+
 security = HTTPBearer(auto_error=False)
 
 
