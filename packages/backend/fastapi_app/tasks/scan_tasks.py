@@ -16,8 +16,12 @@ from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
-from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
-from django_project.vulnerabilities.models import Vulnerability, VulnerabilityEvidence
+# Import Django apps through the same module names used by INSTALLED_APPS.
+# Importing the same model package as django_project.scans would create a
+# second Python module identity and Django would reject those model classes
+# as belonging to an uninstalled application in Celery workers.
+from scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
+from vulnerabilities.models import Vulnerability, VulnerabilityEvidence
 from fastapi_app.services.engine_adapters import SUPPORTED_REAL_ENGINES, execute_engine
 
 ENGINE_META = {
@@ -293,33 +297,27 @@ def run_scan(self, scan_id: str) -> dict[str, Any]:
             if result.status == "failed":
                 raise RuntimeError(result.error or f"Real engine {engine_name} failed")
 
-        with transaction.atomic():
-            scan.refresh_from_db()
-            _aggregate_scan(scan)
-            scan.status = Scan.Status.COMPLETED
-            scan.progress = 100
-            scan.current_phase = "completed"
-            scan.current_engine = ""
-            scan.completed_at = timezone.now()
-            scan.duration = (scan.completed_at - started).total_seconds()
-            scan.save()
-            _log(scan, "Real scan completed", context={"findings": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level})
-        payload = {"status": "completed", "scan_id": str(scan.pk), "validation_id": (scan.config or {}).get("validation_id"), "findings_count": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level}
-        _publish_event(str(scan.pk), {"type": "scan.completed", **payload})
+        _aggregate_scan(scan)
+        scan.status = Scan.Status.COMPLETED
+        scan.completed_at = timezone.now()
+        scan.current_phase = "completed"
+        scan.current_engine = ""
+        scan.progress = 100
+        scan.save(update_fields=["status", "completed_at", "current_phase", "current_engine", "progress", "findings_count", "critical_count", "high_count", "medium_count", "low_count", "info_count", "security_score", "risk_level", "updated_at"])
+        _log(scan, "Real scan task completed", context={"security_score": scan.security_score, "risk_level": scan.risk_level, "findings_count": scan.findings_count})
         _sync_validation_projection(scan)
-        return payload
+        return {"status": "completed", "scan_id": str(scan.pk), "findings_count": scan.findings_count, "security_score": scan.security_score, "risk_level": scan.risk_level}
     except Exception as exc:
-        tb = traceback.format_exc()
+        error_text = str(exc)
         with transaction.atomic():
-            scan.refresh_from_db()
             scan.status = Scan.Status.FAILED
             scan.completed_at = timezone.now()
-            scan.duration = (scan.completed_at - started).total_seconds()
+            scan.error_message = error_text
+            scan.error_traceback = traceback.format_exc()
             scan.current_phase = "failed"
-            scan.error_message = str(exc)
-            scan.error_traceback = tb
-            scan.save()
-            _log(scan, "Real scan execution failed", ScanLog.Level.ERROR, context={"error": str(exc), "task_id": self.request.id})
-        _publish_event(str(scan.pk), {"type": "scan.failed", "scan_id": str(scan.pk), "validation_id": (scan.config or {}).get("validation_id"), "error": str(exc)})
+            scan.current_engine = ""
+            _aggregate_scan(scan)
+            scan.save(update_fields=["status", "completed_at", "error_message", "error_traceback", "current_phase", "current_engine", "findings_count", "critical_count", "high_count", "medium_count", "low_count", "info_count", "security_score", "risk_level", "updated_at"])
+            _log(scan, "Real scan task failed", level=ScanLog.Level.ERROR, context={"error": error_text})
         _sync_validation_projection(scan)
         raise
