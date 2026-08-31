@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440
 
+    # Shared authentication cookie names. These must match Django so FastAPI
+    # can authenticate the same browser session during API and WebSocket
+    # requests without requiring JWTs in local/session storage.
+    AUTH_ACCESS_COOKIE: str = os.getenv("AUTH_ACCESS_COOKIE", "aegis_access")
+    AUTH_REFRESH_COOKIE: str = os.getenv("AUTH_REFRESH_COOKIE", "aegis_refresh")
+
     # WebSocket authentication policy. Bearer subprotocol authentication is
     # preferred; query-string tokens are opt-in for local compatibility only.
     # Query-string credentials may leak through access logs, proxies, history,
