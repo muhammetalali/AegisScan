@@ -14,7 +14,7 @@ HOST = "0.0.0.0"
 PORT = int(os.getenv("LAB_EXECUTOR_PORT", "9000"))
 TOKEN = os.getenv("AEGIS_LAB_EXECUTOR_TOKEN", "").strip()
 IMAGE = os.getenv("LAB_EXECUTOR_IMAGE", "aegisscan-network-lab:local")
-MAX_NETWORK_ADDRESSES = 256
+MAX_NETWORK_ADDRESSES = 1024
 
 
 def reply(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
