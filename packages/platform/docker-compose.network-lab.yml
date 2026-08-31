@@ -57,6 +57,8 @@ services:
 networks:
   aegisscan_lab:
     name: aegisscan_lab
+    driver: bridge
+    internal: true
     ipam:
       config:
         - subnet: 10.250.10.0/27
