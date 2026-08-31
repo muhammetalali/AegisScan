@@ -29,6 +29,27 @@ async def engine_capabilities(user: dict = Depends(require_user)):
     return {"engines": list_capabilities()}
 
 
+@router.get("/engines")
+async def engines(user: dict = Depends(require_user)):
+    """Compatibility registry for the validation wizard.
+
+    Expose only engines known by the backend capability registry and normalize
+    the response shape consumed by the web UI. No static/fallback engines are
+    introduced here.
+    """
+    return [
+        {
+            "name": item["engine"],
+            "display_name": item["engine"],
+            "real_executor_registered": item.get("status") == "implemented" and bool(item.get("executor")),
+            "status": item.get("status", "unavailable"),
+            "executor": item.get("executor"),
+            "evidence": bool(item.get("evidence")),
+        }
+        for item in list_capabilities()
+    ]
+
+
 @router.get("/engine-capabilities/{engine}")
 async def engine_capability(engine: str, user: dict = Depends(require_user)):
     return capability_for(engine)
