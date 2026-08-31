@@ -4,7 +4,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from .identity import build_canonical_identity
-from .models import CanonicalFinding, Vulnerability
+from .models import CanonicalFinding, Vulnerability, VulnerabilityEvidence
 
 
 def _decrement_observation_count(canonical_id):
@@ -14,6 +14,26 @@ def _decrement_observation_count(canonical_id):
         pk=canonical_id,
         observation_count__gt=0,
     ).update(observation_count=F("observation_count") - 1)
+
+
+def _infer_collector_engine(instance: VulnerabilityEvidence) -> str:
+    raw = instance.raw_data or ""
+    if isinstance(raw, str):
+        try:
+            import json
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = {}
+    if isinstance(raw, dict):
+        value = raw.get("engine") or raw.get("collector_engine")
+        if value:
+            return str(value).strip()
+
+    metadata = instance.metadata or {}
+    value = metadata.get("collector_engine") if isinstance(metadata, dict) else ""
+    if value:
+        return str(value).strip()
+    return str(instance.source or "").strip()
 
 
 @receiver(post_save, sender=Vulnerability)
@@ -64,17 +84,31 @@ def attach_canonical_finding(sender, instance: Vulnerability, created: bool, **k
             if is_new_observation:
                 update_fields["observation_count"] = F("observation_count") + 1
 
-            # Avoid saving the Vulnerability instance again; this signal must never recurse.
             CanonicalFinding.objects.filter(pk=canonical.pk).update(**update_fields)
 
             if is_new_observation or moved_between_canonicals:
                 sender.objects.filter(pk=instance.pk).update(canonical_finding_id=canonical.pk)
                 instance.canonical_finding_id = canonical.pk
     except IntegrityError:
-        # A concurrent engine may have inserted the same canonical fingerprint.
         canonical = CanonicalFinding.objects.get(
             project_id=instance.project_id,
             fingerprint=fingerprint,
         )
         sender.objects.filter(pk=instance.pk).update(canonical_finding_id=canonical.pk)
         instance.canonical_finding_id = canonical.pk
+
+
+@receiver(post_save, sender=VulnerabilityEvidence)
+def populate_evidence_collector_engine(sender, instance: VulnerabilityEvidence, created: bool, **kwargs) -> None:
+    """Persist the engine that actually emitted/collected evidence.
+
+    `source` remains the source label for compatibility. `collector_engine`
+    explicitly records the producing engine and is inferred from raw evidence
+    first, then metadata, then source as a final compatibility fallback.
+    """
+    if instance.collector_engine:
+        return
+    collector = _infer_collector_engine(instance)
+    if collector:
+        sender.objects.filter(pk=instance.pk).update(collector_engine=collector)
+        instance.collector_engine = collector
