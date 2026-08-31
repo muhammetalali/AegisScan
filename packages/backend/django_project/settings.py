@@ -1,6 +1,7 @@
 import sys
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 import environ
 
@@ -38,6 +39,7 @@ env = environ.Env(
     LOG_TO_FILE=(bool, True),
     WS_ALLOW_QUERY_TOKEN=(bool, False),
     SECURE_SSL_REDIRECT=(bool, False),
+    AUTH_COOKIE_SECURE=(bool, False),
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
@@ -76,6 +78,10 @@ if not DEBUG:
     if not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS:
         raise RuntimeError("Explicit ALLOWED_HOSTS are required when DEBUG=0")
     WS_ALLOW_QUERY_TOKEN = False
+
+FRONTEND_URL = env("FRONTEND_URL")
+frontend_scheme = urlparse(FRONTEND_URL).scheme.lower()
+AUTH_COOKIE_SECURE = env("AUTH_COOKIE_SECURE", default=(frontend_scheme == "https"))
 
 INSTALLED_APPS = [
     "django.contrib.admin", "django.contrib.auth", "django.contrib.contenttypes",
@@ -195,7 +201,6 @@ EMAIL_PORT = env("EMAIL_PORT")
 EMAIL_HOST_USER = env("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
 EMAIL_USE_TLS = env("EMAIL_USE_TLS")
-FRONTEND_URL = env("FRONTEND_URL")
 
 _handlers = {
     "console": {"class": "logging.StreamHandler", "formatter": "verbose"},
