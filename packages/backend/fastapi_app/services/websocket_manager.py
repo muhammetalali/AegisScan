@@ -15,13 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class WebSocketManager:
-    """WebSocket registry with Redis-backed cross-process event delivery.
-
-    FastAPI and Celery run in separate containers/processes. In-memory broadcast
-    is therefore insufficient for scan/validation progress. This manager keeps
-    the connection registry local but consumes authoritative Redis event
-    channels for scan and validation streams.
-    """
+    """WebSocket registry with Redis-backed cross-process event delivery."""
 
     def __init__(self):
         self.connections: Dict[str, Set[WebSocket]] = {}
@@ -40,30 +34,23 @@ class WebSocketManager:
                 if subprotocol in offered:
                     negotiated_subprotocol = subprotocol
             await websocket.accept(subprotocol=negotiated_subprotocol)
-        if channel not in self.connections:
-            self.connections[channel] = set()
-        self.connections[channel].add(websocket)
+        self.connections.setdefault(channel, set()).add(websocket)
         logger.info("WebSocket connected to %s. Total connections: %s", channel, len(self.connections[channel]))
         self._ensure_redis_stream(websocket, channel)
 
     def _ensure_redis_stream(self, websocket: WebSocket, channel: str) -> None:
         if websocket in self._redis_tasks:
             return
-        task = asyncio.create_task(self._redis_stream(websocket, channel))
-        self._redis_tasks[websocket] = task
+        self._redis_tasks[websocket] = asyncio.create_task(self._redis_stream(websocket, channel))
 
     async def _redis_stream(self, websocket: WebSocket, channel: str) -> None:
+        client = None
         pubsub = None
         try:
             client = redis_async.Redis.from_url(settings.REDIS_URL, decode_responses=True, health_check_interval=30)
             pubsub = client.pubsub()
-            await pubsub.subscribe(
-                f"aegis:scan-events:{channel}",
-                f"aegis:validation-events:{channel}",
-            )
-            while True:
-                if websocket.client_state != WebSocketState.CONNECTED:
-                    return
+            await pubsub.subscribe(f"aegis:scan-events:{channel}", f"aegis:validation-events:{channel}")
+            while websocket.client_state == WebSocketState.CONNECTED:
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if not message or message.get("type") != "message":
                     await asyncio.sleep(0.05)
@@ -72,14 +59,13 @@ class WebSocketManager:
                 try:
                     payload = json.loads(raw) if isinstance(raw, str) else raw
                 except (TypeError, json.JSONDecodeError):
-                    logger.warning("Ignoring malformed Redis WebSocket event on %s", channel)
+                    logger.warning("Ignoring malformed Redis event on WebSocket channel %s", channel)
                     continue
-                if not isinstance(payload, dict):
-                    continue
-                try:
-                    await websocket.send_json(payload)
-                except Exception:
-                    return
+                if isinstance(payload, dict):
+                    try:
+                        await websocket.send_json(payload)
+                    except Exception:
+                        return
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -90,18 +76,18 @@ class WebSocketManager:
                     await pubsub.close()
                 except Exception:
                     pass
-            try:
-                await client.close()
-            except Exception:
-                pass
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
 
     def disconnect(self, channel: str, websocket: WebSocket):
-        if channel in self.connections:
-            self.connections[channel].discard(websocket)
-            if not self.connections[channel]:
-                del self.connections[channel]
-        # Do not cancel the Redis stream until the socket is no longer registered
-        # on any local channel (validation routes intentionally use aliases).
+        sockets = self.connections.get(channel)
+        if sockets is not None:
+            sockets.discard(websocket)
+            if not sockets:
+                self.connections.pop(channel, None)
         still_registered = any(websocket in sockets for sockets in self.connections.values())
         if not still_registered:
             task = self._redis_tasks.pop(websocket, None)
@@ -116,17 +102,16 @@ class WebSocketManager:
             logger.error("Error sending personal message: %s", exc)
 
     async def broadcast(self, channel: str, message: dict):
-        if channel not in self.connections:
-            return
+        sockets = list(self.connections.get(channel, set()))
         disconnected = set()
-        for websocket in list(self.connections[channel]):
+        for websocket in sockets:
             try:
                 await websocket.send_json(message)
             except Exception as exc:
                 logger.error("Error broadcasting to %s: %s", channel, exc)
                 disconnected.add(websocket)
-        for ws in disconnected:
-            self.disconnect(channel, ws)
+        for websocket in disconnected:
+            self.disconnect(channel, websocket)
 
     async def broadcast_to_user(self, user_id: str, message: dict):
         await self.broadcast(f"user_{user_id}", message)
