@@ -2,7 +2,10 @@
 
 Date: 2026-09-01
 Branch: `main`
-HEAD: `b9d3835ce7bdbbf323a3f37476cc2c6410470d52`
+Latest verified audit/remediation commits:
+- `b82db434350f00634fdcbafb1bd2b056c9ee0e26` — master reality baseline update
+- `83fb0cc1d95c5e4e73860cc2c75616ddba28e2fe` — FastAPI production signing-secret fail-closed hardening
+- `ca113d9c333dd48c9b6440fa7262dfbc215defbf` — real FastAPI readiness dependency checks
 
 ## 1. Audit rule
 
@@ -21,10 +24,10 @@ Core rules:
 
 - Repository: `muhammetalali/AegisScan`.
 - Default branch: `main`.
-- Current HEAD: `b9d3835ce7bdbbf323a3f37476cc2c6410470d52`.
-- Latest commit: `fix(authz): require staff privileges for engine administration and clean route registration`.
+- Before this audit HEAD was `b9d3835ce7bdbbf323a3f37476cc2c6410470d52`.
 - `main` is currently not branch-protected and has no required status checks configured.
 - The connected GitHub integration reports admin/maintain/push/pull/triage access.
+- The audit itself and the two security/readiness remediations have now been committed directly to `main`.
 
 ## 3. Root structure confirmed
 
@@ -37,7 +40,7 @@ The repository root contains CI/reality-audit documentation and the `aegis-platf
 - GitHub Actions workflows
 - Windows startup/documentation helpers
 
-The backend currently contains both `django_project` and `fastapi_app`, plus a legacy `celery_app` compatibility package. The canonical Celery configuration is `fastapi_app/celery_app.py`.
+The backend contains both `django_project` and `fastapi_app`, plus a legacy `celery_app` compatibility package. The canonical Celery configuration is `fastapi_app/celery_app.py`.
 
 ## 4. Database / Django
 
@@ -69,7 +72,8 @@ The repository proves the implementation and CI design, but does not prove that 
 - Login/refresh rate limiting dependency and implementation path.
 - Frontend Axios `withCredentials` and CSRF configuration.
 - Authentication initialization race fix.
-- Production fail-closed validation for missing/placeholder signing secrets.
+- Django production fail-closed validation for missing/placeholder signing secrets.
+- FastAPI production fail-closed validation was added in this audit; placeholder `SECRET_KEY` is now rejected when `DEBUG` is not enabled.
 - Authorization normalization and fail-closed permission behavior.
 - Tenant/project scope checks and protection of team membership mutations.
 - Engine administration requires staff privileges.
@@ -102,6 +106,12 @@ The page inventory is broad, but every page still needs endpoint-by-endpoint ver
 The current FastAPI application has dedicated routers for major platform areas, including assets, assurance, assurance graph, audit, compliance, dashboard, decision actions, digital twin, governance, knowledge, policy, posture and reports. Services include assurance correlation/graph aggregation, autonomous triage, decision/action orchestration, governance, graph intelligence, Nmap parsing, policy engines, scan orchestration, scanner adapters, scope authorization and security decision logic.
 
 This demonstrates substantial platform architecture. It does not, by itself, prove every route is backed by real data or a real external provider.
+
+### Readiness correction performed in this audit
+
+The previous `/ready` endpoint returned `{'ready': True}` without checking dependencies. That violated the project reality rule because it could report readiness while PostgreSQL or Redis was unavailable.
+
+It now performs real PostgreSQL `SELECT 1` and Redis `PING` checks. Dependency failure returns HTTP 503 with an explicit unavailable state. This is a verified code-level remediation; live runtime success still requires execution in the deployed environment.
 
 ## 8. Asset management
 
@@ -152,7 +162,7 @@ Masscan remains a planned capability unless a real provider implementation is ve
 
 The architecture contains assurance correlation and graph-intelligence services and historical commits show substantial work around correlation/conflict intelligence, autonomous triage, governance and executive intelligence.
 
-However, the current `main` branch must not be declared complete for external vulnerability intelligence merely because intelligence-oriented code exists. The following provider integrations still require explicit current-branch verification and E2E evidence:
+However, `main` must not be declared complete for external vulnerability intelligence merely because intelligence-oriented code exists. The following provider integrations still require explicit current-branch verification and E2E evidence:
 
 - NVD
 - OSV
@@ -271,7 +281,7 @@ The repository contains a `Security Reality Check` workflow that tests backend/p
 
 The repository also contains dedicated migration and ITSM workflows.
 
-Current limitation: the available GitHub status endpoint reports no statuses for the current `main` HEAD, and the available commit-workflow lookup does not provide a successful run for that commit. Therefore CI success is **not claimed** for the current HEAD.
+Current limitation: the available GitHub status endpoint reports no statuses for the pre-audit `main` HEAD, and the available commit-workflow lookup did not provide a successful run for that commit. Therefore CI success is **not claimed** for the current changes until an actual workflow result is observed.
 
 ## 20. Confirmed historical remediation work
 
@@ -294,6 +304,8 @@ The current history confirms major remediation in these areas:
 - Engine administration staff authorization.
 - JWT issuer alignment.
 - ITSM contract/provider/configuration test restoration.
+- FastAPI production signing-secret fail-closed behavior.
+- Real dependency-based FastAPI readiness checks.
 
 ## 21. What has explicitly been removed/rejected
 
@@ -306,6 +318,7 @@ Confirmed rejected implementation patterns include:
 - Synthetic compliance endpoint behavior.
 - Legacy simulated Celery tasks.
 - Refresh/logout token request-body fallback.
+- Unconditional FastAPI readiness success.
 
 The project rule is now to replace unsupported fake success with explicit failure such as HTTP 501 where a capability is intentionally not implemented.
 
@@ -314,7 +327,7 @@ The project rule is now to replace unsupported fake success with explicit failur
 ### Gate A — Repository/runtime integrity
 
 - [ ] Confirm clean working tree in the developer runtime.
-- [ ] Confirm local source equals `main` HEAD.
+- [ ] Confirm local source equals latest `main` HEAD.
 - [ ] Confirm Docker-mounted source equals current source.
 - [ ] Clean-stack Compose startup.
 - [ ] All health checks green.
