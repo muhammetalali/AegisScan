@@ -101,12 +101,11 @@ def _create_scan(scan: ScanCreate, user_id: str):
 
 @router.post('/', response_model=ScanResponse, status_code=201)
 async def create_scan(scan: ScanCreate, user=Depends(get_current_user)):
-    created = await _create_scan(scan, str(user.get('user_id')))
     engines = {engine.strip().lower() for engine in (scan.engines or ['nmap']) if engine.strip()}
-    if engines == {'nmap'}:
-        run_nmap_scan.delay(str(created.id))
-    elif 'nmap' in engines:
-        raise HTTPException(status_code=400, detail='Mixed scan engines are not supported by the current execution workflow')
+    if engines != {'nmap'}:
+        raise HTTPException(status_code=400, detail='The current real network scan workflow supports Nmap only')
+    created = await _create_scan(scan, str(user.get('user_id')))
+    run_nmap_scan.delay(str(created.id))
     return await _serialize_scan(created)
 
 
