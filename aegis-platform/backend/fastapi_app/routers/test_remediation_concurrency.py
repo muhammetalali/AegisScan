@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
+from django.db import close_old_connections
 
 from django_project.assets.models import Asset
 from django_project.projects.models import Project
@@ -77,11 +78,14 @@ def test_remediation_create_run_allows_only_one_active_run(monkeypatch):
     )
 
     def invoke():
+        close_old_connections()
         try:
             validation = create_run(**kwargs)
             return ('created', str(validation.id))
         except remediation_router.RemediationValidationConflict as exc:
             return ('conflict', str(exc.validation.id))
+        finally:
+            close_old_connections()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda _: invoke(), range(2)))
