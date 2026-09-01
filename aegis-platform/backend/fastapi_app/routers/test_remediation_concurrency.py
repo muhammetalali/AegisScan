@@ -75,6 +75,8 @@ def test_remediation_create_run_allows_only_one_active_run(monkeypatch):
         profile='quick',
         engine='nmap',
         reason='concurrency regression',
+        duration_minutes=5,
+        rate_limit=5,
     )
 
     def invoke():
