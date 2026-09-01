@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from typing import List, Optional
+from uuid import UUID
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 import django
@@ -109,14 +110,14 @@ async def list_vulnerabilities(
 
 
 @sync_to_async
-def _get_vulnerability(vuln_id: str, user_id: str):
+def _get_vulnerability(vuln_id: UUID, user_id: str):
     return Vulnerability.objects.select_related('scan', 'project', 'asset', 'assigned_to').filter(id=vuln_id).filter(
         project__owner_id=user_id,
     ).first() or Vulnerability.objects.select_related('scan', 'project', 'asset', 'assigned_to').filter(id=vuln_id, project__members__id=user_id).first()
 
 
 @router.get('/{vuln_id}', response_model=VulnerabilityResponse)
-async def get_vulnerability(vuln_id: str, user=Depends(get_current_user)):
+async def get_vulnerability(vuln_id: UUID, user=Depends(get_current_user)):
     vulnerability = await _get_vulnerability(vuln_id, str(user.get('user_id')))
     if not vulnerability:
         raise HTTPException(status_code=404, detail='Vulnerability not found')
@@ -124,7 +125,7 @@ async def get_vulnerability(vuln_id: str, user=Depends(get_current_user)):
 
 
 @sync_to_async
-def _update_vulnerability(vuln_id: str, user_id: str, update: VulnerabilityUpdate):
+def _update_vulnerability(vuln_id: UUID, user_id: str, update: VulnerabilityUpdate):
     vulnerability = Vulnerability.objects.filter(id=vuln_id).filter(project__owner_id=user_id).first()
     if not vulnerability:
         vulnerability = Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
@@ -150,7 +151,7 @@ def _update_vulnerability(vuln_id: str, user_id: str, update: VulnerabilityUpdat
 
 
 @router.patch('/{vuln_id}', response_model=VulnerabilityResponse)
-async def update_vulnerability(vuln_id: str, update: VulnerabilityUpdate, user=Depends(get_current_user)):
+async def update_vulnerability(vuln_id: UUID, update: VulnerabilityUpdate, user=Depends(get_current_user)):
     try:
         vulnerability = await _update_vulnerability(vuln_id, str(user.get('user_id')), update)
     except ValueError as exc:
@@ -161,7 +162,7 @@ async def update_vulnerability(vuln_id: str, update: VulnerabilityUpdate, user=D
 
 
 @sync_to_async
-def _add_note(vuln_id: str, user_id: str, content: str, is_private: bool):
+def _add_note(vuln_id: UUID, user_id: str, content: str, is_private: bool):
     vulnerability = Vulnerability.objects.filter(id=vuln_id).filter(project__owner_id=user_id).first()
     if not vulnerability:
         vulnerability = Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
@@ -171,17 +172,17 @@ def _add_note(vuln_id: str, user_id: str, content: str, is_private: bool):
 
 
 @router.post('/{vuln_id}/notes')
-async def add_note(vuln_id: str, content: str, is_private: bool = False, user=Depends(get_current_user)):
+async def add_note(vuln_id: UUID, content: str, is_private: bool = False, user=Depends(get_current_user)):
     if not content.strip():
         raise HTTPException(status_code=400, detail='content is required')
     note = await _add_note(vuln_id, str(user.get('user_id')), content.strip(), is_private)
     if not note:
         raise HTTPException(status_code=404, detail='Vulnerability not found')
-    return {'id': str(note.id), 'vulnerability_id': vuln_id, 'content': note.content, 'is_private': note.is_private, 'created_at': note.created_at.astimezone(timezone.utc).isoformat()}
+    return {'id': str(note.id), 'vulnerability_id': str(vuln_id), 'content': note.content, 'is_private': note.is_private, 'created_at': note.created_at.astimezone(timezone.utc).isoformat()}
 
 
 @sync_to_async
-def _get_evidences(vuln_id: str, user_id: str):
+def _get_evidences(vuln_id: UUID, user_id: str):
     vulnerability = Vulnerability.objects.filter(id=vuln_id).filter(project__owner_id=user_id).first()
     if not vulnerability:
         vulnerability = Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
@@ -191,7 +192,7 @@ def _get_evidences(vuln_id: str, user_id: str):
 
 
 @router.get('/{vuln_id}/evidences')
-async def get_evidences(vuln_id: str, user=Depends(get_current_user)):
+async def get_evidences(vuln_id: UUID, user=Depends(get_current_user)):
     vulnerability, evidences = await _get_evidences(vuln_id, str(user.get('user_id')))
     if not vulnerability:
         raise HTTPException(status_code=404, detail='Vulnerability not found')
@@ -212,7 +213,7 @@ async def get_evidences(vuln_id: str, user=Depends(get_current_user)):
 
 
 @sync_to_async
-def _verify_fix(vuln_id: str, user_id: str):
+def _verify_fix(vuln_id: UUID, user_id: str):
     vulnerability = Vulnerability.objects.filter(id=vuln_id, project__owner_id=user_id).first()
     if not vulnerability:
         vulnerability = Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
@@ -252,7 +253,7 @@ def _verify_fix(vuln_id: str, user_id: str):
 
 
 @router.post('/{vuln_id}/verify')
-async def verify_fix(vuln_id: str, user=Depends(get_current_user)):
+async def verify_fix(vuln_id: UUID, user=Depends(get_current_user)):
     vulnerability, validation, error = await _verify_fix(vuln_id, str(user.get('user_id')))
     if not vulnerability:
         raise HTTPException(status_code=404, detail=error or 'Vulnerability not found')
