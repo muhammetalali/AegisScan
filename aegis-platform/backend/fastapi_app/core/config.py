@@ -7,6 +7,10 @@ def _origins() -> List[str]:
     return [x.strip() for x in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',') if x.strip()]
 
 
+def _is_debug() -> bool:
+    return os.getenv('DEBUG', 'False').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = 'AegisScan Platform'
     VERSION: str = '1.0.0'
@@ -35,3 +39,6 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if not _is_debug() and settings.SECRET_KEY.strip().lower() in {'', 'change-me', 'changeme', 'secret', 'secret-key'}:
+    raise RuntimeError('Production FastAPI startup requires a real JWT_SECRET_KEY/SECRET_KEY; refusing to run with a placeholder value.')
