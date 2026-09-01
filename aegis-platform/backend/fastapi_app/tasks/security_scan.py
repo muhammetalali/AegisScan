@@ -11,11 +11,48 @@ from celery import shared_task
 from django.db import transaction
 
 from django_project.evidence.models import Evidence, ValidationRun
-from django_project.scans.models import Scan
+from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from ..services.scope_authorization import is_target_authorized
 from ..services.nmap_parser import parse_nmap_xml
 from ..services.tool_abstraction import ToolRequest, get_tool
 from ..services.scanner_adapters import run_nuclei
+
+
+def _ensure_engine(name: str, display_name: str, category: str, timeout: int) -> ScanEngine:
+    engine, _ = ScanEngine.objects.get_or_create(
+        name=name,
+        defaults={
+            'display_name': display_name,
+            'description': f'{display_name} scanner engine',
+            'category': category,
+            'version': '1.0.0',
+            'status': ScanEngine.EngineStatus.ACTIVE,
+            'is_core': True,
+            'timeout': timeout,
+        },
+    )
+    return engine
+
+
+def _start_execution(scan: Scan, engine: ScanEngine) -> ScanEngineExecution:
+    now = datetime.now(timezone.utc)
+    execution, _ = ScanEngineExecution.objects.get_or_create(
+        scan=scan,
+        engine=engine,
+        defaults={'status': ScanEngineExecution.ExecutionStatus.PENDING},
+    )
+    execution.status = ScanEngineExecution.ExecutionStatus.RUNNING
+    execution.progress = 10
+    execution.started_at = now
+    execution.completed_at = None
+    execution.duration = 0
+    execution.findings_found = 0
+    execution.evidences_collected = 0
+    execution.error_message = ''
+    execution.logs = ''
+    execution.save(update_fields=['status', 'progress', 'started_at', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'error_message', 'logs', 'updated_at'])
+    ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message=f'{engine.name} execution started', context={'engine': engine.name})
+    return execution
 
 
 @shared_task(bind=True, name='fastapi_app.tasks.security_scan.run_nmap_scan', max_retries=1, default_retry_delay=30)
@@ -45,23 +82,45 @@ def run_nmap_scan(self, scan_id: str) -> dict:
     scan.current_engine = 'nmap'
     scan.progress = 10
     scan.save(update_fields=['status', 'started_at', 'current_phase', 'current_engine', 'progress', 'updated_at'])
+    engine = _ensure_engine('nmap', 'Nmap', ScanEngine.EngineCategory.RECON, 300)
+    execution = _start_execution(scan, engine)
     try:
+        started = scan.started_at
         timeout = 120 if scan.depth == Scan.Depth.QUICK else 300
         result = get_tool('nmap').run(ToolRequest(target=target, authorized=True), timeout=timeout)
         parsed = parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts': [], 'host_count': 0, 'open_ports': 0}
+        completed_at = datetime.now(timezone.utc)
+        duration = max(0, (completed_at - started).total_seconds()) if started else 0
         with transaction.atomic():
-            Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed}, collected_by=scan.initiated_by)
+            evidence = Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed}, collected_by=scan.initiated_by)
+            execution.status = ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code == 0 else ScanEngineExecution.ExecutionStatus.FAILED
+            execution.progress = 100
+            execution.completed_at = completed_at
+            execution.duration = duration
+            execution.findings_found = 0
+            execution.evidences_collected = 1
+            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'parsed': parsed, 'evidence_id': str(evidence.id)}
+            execution.logs = result.stderr or ''
+            execution.save(update_fields=['status', 'progress', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'result_data', 'logs', 'updated_at'])
+            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nmap execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'host_count': parsed.get('host_count', 0), 'open_ports': parsed.get('open_ports', 0), 'evidence_id': str(evidence.id)})
             scan.status = Scan.Status.COMPLETED if result.exit_code == 0 else Scan.Status.PARTIAL
             scan.progress = 100
-            scan.completed_at = datetime.now(timezone.utc)
+            scan.completed_at = completed_at
             scan.findings_count = 0
             scan.engine_results = {**(scan.engine_results or {}), 'nmap': {'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed}}
             scan.save(update_fields=['status', 'progress', 'completed_at', 'findings_count', 'engine_results', 'updated_at'])
         return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nmap', 'target': result.target, 'parsed': parsed}
     except Exception as exc:
+        completed_at = datetime.now(timezone.utc)
+        execution.status = ScanEngineExecution.ExecutionStatus.FAILED
+        execution.progress = 100
+        execution.completed_at = completed_at
+        execution.error_message = str(exc)
+        execution.save(update_fields=['status', 'progress', 'completed_at', 'error_message', 'updated_at'])
+        ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.ERROR, message='nmap execution failed', context={'error': str(exc)})
         scan.status = Scan.Status.FAILED
         scan.error_message = str(exc)
-        scan.completed_at = datetime.now(timezone.utc)
+        scan.completed_at = completed_at
         scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
         raise
 
@@ -93,20 +152,44 @@ def run_nuclei_scan(self, scan_id: str) -> dict:
     scan.current_engine = 'nuclei'
     scan.progress = 10
     scan.save(update_fields=['status', 'started_at', 'current_phase', 'current_engine', 'progress', 'updated_at'])
+    engine = _ensure_engine('nuclei', 'Nuclei', ScanEngine.EngineCategory.ANALYSIS, 600)
+    execution = _start_execution(scan, engine)
     try:
+        started = scan.started_at
         result = run_nuclei(target, timeout=600)
+        completed_at = datetime.now(timezone.utc)
+        duration = max(0, (completed_at - started).total_seconds()) if started else 0
+        result_count = len([line for line in result.stdout.splitlines() if line.strip()])
         with transaction.atomic():
-            Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'format': 'jsonl'}, collected_by=scan.initiated_by)
+            evidence = Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'format': 'jsonl'}, collected_by=scan.initiated_by)
+            execution.status = ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code == 0 else ScanEngineExecution.ExecutionStatus.FAILED
+            execution.progress = 100
+            execution.completed_at = completed_at
+            execution.duration = duration
+            execution.findings_found = result_count
+            execution.evidences_collected = 1
+            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'result_count': result_count, 'evidence_id': str(evidence.id)}
+            execution.logs = result.stderr or ''
+            execution.save(update_fields=['status', 'progress', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'result_data', 'logs', 'updated_at'])
+            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nuclei execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'result_count': result_count, 'evidence_id': str(evidence.id)})
             scan.status = Scan.Status.COMPLETED if result.exit_code == 0 else Scan.Status.PARTIAL
             scan.progress = 100
-            scan.completed_at = datetime.now(timezone.utc)
-            scan.engine_results = {**(scan.engine_results or {}), 'nuclei': {'exit_code': result.exit_code, 'target': result.target, 'result_count': len([line for line in result.stdout.splitlines() if line.strip()])}}
-            scan.save(update_fields=['status', 'progress', 'completed_at', 'engine_results', 'updated_at'])
+            scan.completed_at = completed_at
+            scan.engine_results = {**(scan.engine_results or {}), 'nuclei': {'exit_code': result.exit_code, 'target': result.target, 'result_count': result_count}}
+            scan.findings_count = result_count
+            scan.save(update_fields=['status', 'progress', 'completed_at', 'engine_results', 'findings_count', 'updated_at'])
         return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nuclei', 'target': result.target}
     except Exception as exc:
+        completed_at = datetime.now(timezone.utc)
+        execution.status = ScanEngineExecution.ExecutionStatus.FAILED
+        execution.progress = 100
+        execution.completed_at = completed_at
+        execution.error_message = str(exc)
+        execution.save(update_fields=['status', 'progress', 'completed_at', 'error_message', 'updated_at'])
+        ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.ERROR, message='nuclei execution failed', context={'error': str(exc)})
         scan.status = Scan.Status.FAILED
         scan.error_message = str(exc)
-        scan.completed_at = datetime.now(timezone.utc)
+        scan.completed_at = completed_at
         scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
         raise
 
