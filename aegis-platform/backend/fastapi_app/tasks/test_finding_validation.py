@@ -7,8 +7,8 @@ from django_project.scans.models import Scan
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability
 from django_project.evidence.models import Evidence, ValidationRun
-from django_project.fastapi_app.tasks import nmap_finding_validation
-from django_project.fastapi_app.routers.vulnerabilities import _verify_fix
+from fastapi_app.tasks import nmap_finding_validation
+from fastapi_app.routers.vulnerabilities import _verify_fix
 
 
 OPEN_NMAP_XML = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -245,9 +245,5 @@ def test_nmap_validation_requires_exact_target(finding_fixture):
         authorized=True,
     )
 
-    result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
-    validation.refresh_from_db()
-
-    assert result is None or result["status"] == ValidationRun.Status.FAILED
-    assert validation.status == ValidationRun.Status.FAILED
-    assert "target must exactly match" in validation.error_message
+    with pytest.raises(ValueError, match="target must exactly match"):
+        nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
