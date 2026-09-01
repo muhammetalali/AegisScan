@@ -37,7 +37,7 @@ class ValidationCreate(BaseModel):
     duration_minutes: int = 60
     rate_limit: int = 5
     extra: dict = Field(default_factory=dict)
-    finding_id: Optional[str] = None
+    finding_id: Optional[UUID] = None
 
 
 class ValidationOut(BaseModel):
@@ -69,7 +69,7 @@ def _serialize(v: ValidationRun):
 
 
 @sync_to_async
-def _get_finding(finding_id: str, user_id: str):
+def _get_finding(finding_id: UUID, user_id: str):
     return Vulnerability.objects.filter(id=finding_id).filter(
         project__owner_id=user_id,
     ).select_related('asset', 'scan').first() or Vulnerability.objects.filter(
