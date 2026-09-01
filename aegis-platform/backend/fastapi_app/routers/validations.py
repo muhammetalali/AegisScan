@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import List, Optional
+from uuid import UUID
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 import django
@@ -156,12 +157,12 @@ async def list_validations(limit: int = Query(20, le=100), user=Depends(get_curr
 
 
 @sync_to_async
-def _get(vid: str, user_id: str):
+def _get(vid: UUID, user_id: str):
     return ValidationRun.objects.filter(id=vid, user_id=user_id).first()
 
 
 @router.get('/validations/{vid}', response_model=ValidationOut)
-async def get_validation(vid: str, user=Depends(get_current_user)):
+async def get_validation(vid: UUID, user=Depends(get_current_user)):
     v = await _get(vid, str(user.get('user_id')))
     if not v:
         raise HTTPException(status_code=404, detail='Validation not found')
@@ -169,7 +170,7 @@ async def get_validation(vid: str, user=Depends(get_current_user)):
 
 
 @router.get('/validations/{vid}/progress')
-async def get_validation_progress(vid: str, user=Depends(get_current_user)):
+async def get_validation_progress(vid: UUID, user=Depends(get_current_user)):
     v = await _get(vid, str(user.get('user_id')))
     if not v:
         raise HTTPException(status_code=404, detail='Validation not found')
@@ -184,7 +185,7 @@ async def get_validation_progress(vid: str, user=Depends(get_current_user)):
 
 
 @sync_to_async
-def _cancel(vid: str, user_id: str):
+def _cancel(vid: UUID, user_id: str):
     v = ValidationRun.objects.filter(id=vid, user_id=user_id).first()
     if not v:
         return None
@@ -199,7 +200,7 @@ def _cancel(vid: str, user_id: str):
 
 
 @router.post('/validations/{vid}/cancel')
-async def cancel_validation(vid: str, user=Depends(get_current_user)):
+async def cancel_validation(vid: UUID, user=Depends(get_current_user)):
     v = await _cancel(vid, str(user.get('user_id')))
     if not v:
         raise HTTPException(status_code=404, detail='Validation not found')
@@ -207,10 +208,10 @@ async def cancel_validation(vid: str, user=Depends(get_current_user)):
 
 
 @router.post('/validations/{vid}/pause')
-async def pause_validation(vid: str, user=Depends(get_current_user)):
+async def pause_validation(vid: UUID, user=Depends(get_current_user)):
     raise HTTPException(status_code=409, detail='Pause is not supported by the real Nmap/Nuclei worker; cancel and start a new authorized run instead.')
 
 
 @router.post('/validations/{vid}/resume')
-async def resume_validation(vid: str, user=Depends(get_current_user)):
+async def resume_validation(vid: UUID, user=Depends(get_current_user)):
     raise HTTPException(status_code=409, detail='Resume is not supported by the real Nmap/Nuclei worker; start a new authorized run instead.')
