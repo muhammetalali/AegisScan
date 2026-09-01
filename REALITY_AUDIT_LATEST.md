@@ -1,119 +1,444 @@
-# AegisScan — Reality Audit (Latest Remediation Pass)
+# AegisScan — Reality Audit (Master Continuation Baseline)
 
-Date: 2026-08-29
+Date: 2026-09-01
 Branch: `main`
+HEAD: `b9d3835ce7bdbbf323a3f37476cc2c6410470d52`
 
-## Audit scope
+## 1. Audit rule
 
-This pass audits the repository from the root with priority:
+This document is the current repository-grounded continuation baseline. Repository evidence is treated as fact; historical plans and UI presence are not treated as proof of operational completion.
 
-1. Database / Django migrations
-2. Authentication / JWT
-3. Frontend / mock-data sweep
+Core rules:
 
-Only repository evidence is treated as fact. A feature is not marked operational merely because a file or UI exists.
+- `Code exists != operational`.
+- `Endpoint exists != E2E complete`.
+- `Configuration is valid != external service is connected`.
+- `UI success state != persisted real result`.
+- Unsupported capabilities must fail explicitly rather than simulate success.
+- Generated `dist` output is not a source-of-truth.
 
-## Database / Django findings
+## 2. Repository / branch reality
 
-### Confirmed real
+- Repository: `muhammetalali/AegisScan`.
+- Default branch: `main`.
+- Current HEAD: `b9d3835ce7bdbbf323a3f37476cc2c6410470d52`.
+- Latest commit: `fix(authz): require staff privileges for engine administration and clean route registration`.
+- `main` is currently not branch-protected and has no required status checks configured.
+- The connected GitHub integration reports admin/maintain/push/pull/triage access.
 
-- The active Django project is `aegis-platform/backend/django_project` and `ROOT_URLCONF`, WSGI and ASGI paths consistently use `django_project`.
-- `rest_framework_simplejwt.token_blacklist` is present in `INSTALLED_APPS`.
-- Django apps have committed migration files, including `users`, `projects`, `scans`, `vulnerabilities`, `assets`, `compliance`, `knowledge`, `notifications`, `audit`, `system` and `evidence`.
-- The repository contains an automated migration consistency workflow that runs Django checks, migration generation/checks, applies migrations to clean PostgreSQL, verifies the `users_user` table, and checks for pending migrations.
-- `Evidence` is a real Django model with persisted raw output, SHA-256, metadata, collection timestamp and relationships to scan/asset/finding.
-- PostgreSQL and Redis are configured through environment variables rather than being simulated in application code.
+## 3. Root structure confirmed
 
-### Important verification boundary
+The repository root contains CI/reality-audit documentation and the `aegis-platform` application. The platform is split into:
 
-The repository proves that migration files exist and that CI is designed to validate them. It does **not** by itself prove that a live institutional PostgreSQL instance has been migrated successfully. That requires an actual runtime/CI result. No live database claim is made here without that evidence.
+- `aegis-platform/frontend`
+- `aegis-platform/backend`
+- Docker Compose and Docker configuration
+- Nginx configuration
+- GitHub Actions workflows
+- Windows startup/documentation helpers
 
-## Authentication / JWT findings
+The backend currently contains both `django_project` and `fastapi_app`, plus a legacy `celery_app` compatibility package. The canonical Celery configuration is `fastapi_app/celery_app.py`.
 
-### Confirmed real
+## 4. Database / Django
 
-- Access and refresh JWTs are issued by Django SimpleJWT.
-- Refresh-token rotation and blacklist-after-rotation are enabled.
-- `CookieJWTAuthentication` reads the access token from an HttpOnly cookie.
-- Login and refresh endpoints are rate-limited with `django-ratelimit`, which is present in backend requirements.
-- CORS credentials are enabled with an explicit origin allow-list and wildcard CORS is disabled.
-- Session/auth cookies use HttpOnly and SameSite=Lax; Secure is enabled automatically when `DEBUG=False`.
-- The frontend Axios client uses `withCredentials: true` and CSRF cookie/header configuration.
+### Confirmed implemented in repository
 
-### Fixed in this pass
+- Active Django project: `aegis-platform/backend/django_project`.
+- Consistent Django settings, URL, WSGI and ASGI package paths.
+- Django migrations exist for the principal platform applications, including users, projects, scans, vulnerabilities, assets, compliance, knowledge, notifications, audit, system and evidence.
+- JWT blacklist app is installed.
+- Evidence is a persisted Django model containing raw output, SHA-256, metadata, collection timestamp and relationships to scan/asset/finding.
+- PostgreSQL and Redis are configured through environment variables.
+- A migration-consistency workflow exists and checks Django consistency, applies migrations against PostgreSQL, verifies `users_user`, and checks for pending migrations.
 
-- Removed the refresh-token request-body fallback. Refresh now requires the HttpOnly refresh cookie.
-- Removed the logout request-body refresh-token fallback. Logout now uses the HttpOnly refresh cookie.
-- Fixed an authentication bootstrap race: `initAuth()` now sets the store to loading before the first async request and clears loading in `finally`, preventing protected routes from redirecting before server-side authentication initialization finishes.
-- Production startup now fails closed when `DEBUG=False` and `SECRET_KEY` or `JWT_SECRET_KEY` is missing or still set to known placeholder values.
+### Verification boundary
 
-## Celery / execution findings
+The repository proves the implementation and CI design, but does not prove that a live institutional PostgreSQL deployment has successfully completed migrations unless a successful runtime/CI result is observed.
 
-- The canonical Celery configuration is under `fastapi_app/celery_app.py`.
-- The legacy `celery_app` compatibility entrypoint was unified with the canonical configuration.
-- Legacy simulated Celery tasks were removed; real security tasks are kept under `fastapi_app.tasks.security_scan`.
-- Real Nmap/Nuclei execution is asynchronous through Celery and is protected by server-side scope authorization.
+## 5. Authentication / JWT / authorization
 
-## Frontend reality findings
+### Implemented / materially hardened
 
-### Confirmed real architecture
+- Django SimpleJWT access and refresh tokens.
+- Refresh rotation and blacklist-after-rotation.
+- HttpOnly cookie-based access authentication.
+- Cookie-only refresh/logout handling; request-body refresh-token fallback was removed.
+- CSRF enforcement for cookie JWT authentication endpoints.
+- Explicit CORS origin allow-list and credentials support; wildcard CORS disabled.
+- Secure cookie behavior for production.
+- Login/refresh rate limiting dependency and implementation path.
+- Frontend Axios `withCredentials` and CSRF configuration.
+- Authentication initialization race fix.
+- Production fail-closed validation for missing/placeholder signing secrets.
+- Authorization normalization and fail-closed permission behavior.
+- Tenant/project scope checks and protection of team membership mutations.
+- Engine administration requires staff privileges.
 
-- The frontend has a real Axios API client with credentials and CSRF configuration.
-- Authentication state is not persisted as access/refresh tokens in localStorage; the store keeps token fields null and relies on cookies.
-- `initAuth()` is called from `main.tsx`.
-- Protected routes are enforced by a React route guard.
-- A source-level sweep found no confirmed `localStorage`, `setTimeout`, `Math.random`, `random.randint`, `TODO`, `COMING SOON`, `mock`, `dummy`, `sample`, or `fake` matches through the repository code-search interface.
+### Still requires runtime proof
 
-### Confirmed frontend mock removed
+- Full login → refresh → protected API → logout E2E.
+- Negative authorization tests for every protected resource.
+- Cross-project/tenant isolation proof across all routers.
+- Production deployment with real secrets and TLS.
 
-- `aegis-platform/frontend/src/pages/assets/Assets.tsx` contained a hardcoded `ASSETS` array with invented/example records such as `api.example.local`, `192.168.1.10`, local Windows paths and fixed project/team metadata. This was a confirmed source-of-truth violation and has been removed.
-- The Assets page now loads records through the authenticated API only and displays an explicit unavailable/empty state rather than fallback records.
-- The FastAPI Assets router previously returned synthetic IDs such as `new-asset-id` and `new-scan-id`, always returned an empty list, and returned success for deletion without touching the database. These confirmed synthetic behaviors were replaced for asset CRUD, technology records and relationships with Django ORM persistence and project-scope authorization.
-- The canonical `/api/v1/assets` route is now exposed for the frontend client.
-- Unsupported asset scan and bulk-import endpoints now fail explicitly with HTTP 501 instead of returning fabricated success.
-- Production frontend builds now fail closed at runtime when `VITE_API_URL`/`VITE_WS_URL` are not configured; localhost defaults remain limited to development mode.
+## 6. Frontend
 
-### Remaining frontend work
+### Confirmed architecture
 
-The remaining frontend pass must continue endpoint-by-endpoint for every page, especially screens whose backend endpoints may themselves still return empty or synthetic data. Generated `dist` output is not treated as source-of-truth for this audit.
+- React/TypeScript/Vite application.
+- `App.tsx`, `main.tsx`, pages, services, stores, types, utilities and reusable components are present.
+- Auth state is cookie-based rather than storing access/refresh tokens in localStorage.
+- Protected routing and authentication bootstrap exist.
+- Dashboard, assets, assurance, audit, authentication, compliance, digital twin, executive, knowledge, notifications, posture, projects, reports, scans and settings page areas exist in the source tree.
+- A confirmed hardcoded asset dataset was removed.
+- Assets now use authenticated API data and explicit unavailable/empty states.
 
-## Current remediation commits
+### Frontend reality gap
 
-- `b9af0f0b6ecefab06eb8c7f927566c7ce3864ea6` — removed legacy simulated Celery task implementations.
-- `867f1312dc0ccfe8083e01223cd3c48e47401590` — enforced HttpOnly cookie-only refresh/logout handling.
-- `45e7d6de0a4d2621c2f84b545998a1ac582834d0` — fixed authentication initialization race.
-- `6976e819b66d92bf586c44960fe6d5d427374839` — fail-closed production signing-secret validation.
-- `99ae89896942fdb737627635bd2f395e827ce20d` — fail-closed production frontend API/WebSocket configuration.
-- `1a0691ea7aa90db352943534d8fe5777eb189059` — replaced synthetic asset API behavior with database-backed persistence.
-- `fedaa1c5d315372295252ed8b4be7de9288d1ca4` — corrected lazy Django model loading in the FastAPI asset router.
-- `ea0c7b426966d78d1078509caaa337c9200e3abd` — exposed the database-backed Assets router under the canonical v1 API path.
-- `d8659b772c4d493143552989a8f83da55e3f883c` — removed the frontend hardcoded asset dataset and switched the page to real API data.
+The page inventory is broad, but every page still needs endpoint-by-endpoint verification. A page being present does not prove that its API returns real persisted data. Synthetic responses must continue to be removed wherever discovered.
 
-## Verification status
+## 7. FastAPI / API surface
 
-- GitHub confirms the commits are on `main`.
-- No external CI status is attached to the latest frontend remediation commit through the available status endpoint at the time of this audit.
-- Therefore build/test success for these newest changes is **not claimed** until a CI/runtime result is available.
+The current FastAPI application has dedicated routers for major platform areas, including assets, assurance, assurance graph, audit, compliance, dashboard, decision actions, digital twin, governance, knowledge, policy, posture and reports. Services include assurance correlation/graph aggregation, autonomous triage, decision/action orchestration, governance, graph intelligence, Nmap parsing, policy engines, scan orchestration, scanner adapters, scope authorization and security decision logic.
 
-## Remaining gates
+This demonstrates substantial platform architecture. It does not, by itself, prove every route is backed by real data or a real external provider.
 
-1. Obtain a successful runtime/CI result for the migration workflow against clean PostgreSQL and Redis.
-2. Verify every Django model has no pending migration with `makemigrations --check --dry-run` in CI/runtime.
-3. Continue the source-level frontend mock/fake sweep endpoint-by-endpoint.
-4. Verify API-level tenant isolation and RBAC on every protected resource.
-5. Remove any confirmed synthetic backend responses discovered while tracing frontend endpoints.
-6. Verify real scanner output normalization into persisted findings.
-7. Verify real intelligence ingestion and FusionEngine persistence.
-8. Verify remediation proof-of-fix and report generation from persisted evidence.
+## 8. Asset management
 
-## Reality rule
+### Confirmed remediation
 
-`Code exists != operational`.
+- Synthetic asset IDs and no-op CRUD behavior were removed.
+- Asset CRUD, technology records and relationships use Django ORM persistence with project-scope authorization.
+- Canonical `/api/v1/assets` exposure exists.
+- Unsupported asset scan and bulk-import capabilities fail explicitly with HTTP 501 instead of fabricated success.
+- Frontend hardcoded asset records were removed.
 
-`Configuration is valid != external service is connected`.
+### Remaining
 
-`Sandbox output != real output`.
+- Real asset discovery provider workflow.
+- Full scan/import execution where supported.
+- E2E proof from asset creation/discovery through persisted records and UI.
 
-`A success state is valid only when backed by a persisted database result, external provider response, or persisted evidence.`
+## 9. Celery / Redis / execution
 
-Unsupported capabilities must fail explicitly instead of returning simulated success.
+### Confirmed
+
+- Canonical Celery configuration: `fastapi_app/celery_app.py`.
+- Legacy Celery compatibility entrypoint was unified with the canonical configuration.
+- Legacy simulated Celery task implementations were removed.
+- Real security scan tasks are under `fastapi_app/tasks/security_scan.py`.
+- Celery worker and Beat services are defined in Docker Compose.
+- Redis is a real service with health checks.
+- The project has an SLA periodic-workflow concept and task wiring.
+
+### Remaining
+
+- Live worker execution proof.
+- Live Beat scheduling proof.
+- Durable task/result verification.
+- End-to-end scan job progress and failure recovery.
+
+## 10. Real scanner capability
+
+Repository evidence shows Nmap/Nuclei execution paths, asynchronous Celery execution, Nmap parsing and server-side scope authorization.
+
+This is not yet equivalent to production-complete scanner validation. Remaining proof must establish:
+
+`authorized target -> queued job -> real tool execution -> raw output -> parser -> persisted finding/evidence -> UI result`.
+
+Masscan remains a planned capability unless a real provider implementation is verified in the current tree.
+
+## 11. Intelligence / Fusion
+
+The architecture contains assurance correlation and graph-intelligence services and historical commits show substantial work around correlation/conflict intelligence, autonomous triage, governance and executive intelligence.
+
+However, the current `main` branch must not be declared complete for external vulnerability intelligence merely because intelligence-oriented code exists. The following provider integrations still require explicit current-branch verification and E2E evidence:
+
+- NVD
+- OSV
+- CISA KEV
+- EPSS
+- GreyNoise
+- Shodan
+- Censys
+
+Required provider lifecycle:
+
+`credentials/config -> client -> real request -> rate/retry handling -> normalization -> persistence -> provenance/evidence -> correlation/fusion -> API -> UI`.
+
+## 12. Assurance / graph / autonomous triage
+
+Present architectural areas include assurance, assurance graph, graph intelligence, correlation, autonomous triage, governance and decision/action orchestration.
+
+Remaining verification:
+
+- Prove calculations against persisted real inputs.
+- Prove conflict detection from multiple real sources.
+- Prove confidence changes are derived rather than hardcoded.
+- Prove graph relationships originate from real assets/findings/evidence.
+- Prove autonomous triage produces auditable decisions.
+
+## 13. Digital Twin / Attack Path / Blast Radius
+
+Digital Twin and assurance graph routes exist in the current source tree.
+
+These remain **not complete by existence alone**. Completion requires a real relationship graph built from persisted assets, identities, services, findings and evidence, plus deterministic attack-path/risk calculations and auditable provenance.
+
+Required chain:
+
+`real assets + identities + services + findings + relationships -> graph -> path calculation -> blast radius -> persisted result -> UI`.
+
+## 14. Remediation / validation loop
+
+Decision actions, SLA/governance orchestration and workflow infrastructure exist.
+
+Still required for full completion:
+
+`finding -> remediation action -> controlled fix -> re-validation -> new evidence -> before/after risk diff -> audit trail`.
+
+A status change such as `fixed` is not accepted as proof without re-validation evidence.
+
+Nuclei/Semgrep controlled validation and any remediation automation must remain authorization-bound and auditable.
+
+## 15. Evidence
+
+Evidence is a real persisted model with raw output, hash, metadata, timestamp and relationships.
+
+Remaining requirement is to prove the full evidence chain for each provider/tool:
+
+`real source -> raw result -> normalized result -> Evidence -> finding/risk -> UI/report`.
+
+## 16. Posture / executive / reporting
+
+Posture, executive and reports page areas and corresponding API routers exist.
+
+They remain conditionally incomplete until metrics are demonstrably computed from persisted real records. No hardcoded executive risk, trend or remediation metrics are acceptable.
+
+Required:
+
+- Current posture from DB.
+- Historical posture from persisted snapshots/events.
+- Risk trend from real observations.
+- SLA/remediation metrics from real actions.
+- Executive view from the same source of truth.
+- Reports generated from persisted data and evidence.
+
+## 17. Compliance / governance / knowledge
+
+Compliance endpoints have already undergone a synthetic-to-database-backed remediation commit. Governance and knowledge architecture also exist.
+
+Remaining completion gates:
+
+- Real control/requirement catalog.
+- Evidence-to-control mapping.
+- Real compliance calculations.
+- Gap/remediation lifecycle.
+- Auditable policy/approval/escalation behavior.
+- Knowledge records connected to findings, sources, remediation and validation.
+
+## 18. Docker / infrastructure
+
+### Confirmed in repository
+
+- PostgreSQL 16 service.
+- Redis 7 service.
+- Django service.
+- FastAPI service.
+- Celery worker.
+- Celery Beat.
+- Frontend service.
+- Nginx service.
+- Development and production Compose files.
+- Nginx SSL configuration path.
+- Persistent Docker volumes for database/Redis/media/static data.
+- Django startup migration/collectstatic command.
+
+### Important risk
+
+The development Compose file contains development fallback credentials such as `change-me`. This is acceptable only as an explicitly development-only configuration and must never be used as production credentials. Production must fail closed and obtain real secrets externally.
+
+### Remaining
+
+- Live clean-stack startup proof.
+- Container health proof for every service.
+- Network/routing proof through Nginx.
+- Real WebSocket proof.
+- Production secrets/TLS/deployment/backup/recovery proof.
+
+## 19. CI / quality gates
+
+The repository contains a `Security Reality Check` workflow that tests backend/platform code, Django imports/checks, migration consistency, PostgreSQL migration, authentication/CSRF security, deployment checks, compilation, Redis and Celery smoke checks, plus frontend npm install/typecheck/build.
+
+The repository also contains dedicated migration and ITSM workflows.
+
+Current limitation: the available GitHub status endpoint reports no statuses for the current `main` HEAD, and the available commit-workflow lookup does not provide a successful run for that commit. Therefore CI success is **not claimed** for the current HEAD.
+
+## 20. Confirmed historical remediation work
+
+The current history confirms major remediation in these areas:
+
+- Django package/import path stabilization.
+- Pytest/Django environment isolation.
+- User role migration correction.
+- Legacy Celery unification and removal of simulated tasks.
+- HttpOnly cookie-only refresh/logout.
+- Authentication bootstrap race fix.
+- Production signing-secret fail-closed behavior.
+- Production frontend API/WebSocket fail-closed configuration.
+- Database-backed asset CRUD and canonical routing.
+- Frontend synthetic asset removal.
+- Compliance synthetic endpoint removal.
+- Tenant-scoped dashboard data.
+- Permission normalization and fail-closed authorization.
+- Tenant scoping and team membership authorization tests.
+- Engine administration staff authorization.
+- JWT issuer alignment.
+- ITSM contract/provider/configuration test restoration.
+
+## 21. What has explicitly been removed/rejected
+
+Confirmed rejected implementation patterns include:
+
+- Hardcoded example asset records.
+- Synthetic asset IDs.
+- No-op asset deletion success.
+- Always-empty fabricated asset listing behavior.
+- Synthetic compliance endpoint behavior.
+- Legacy simulated Celery tasks.
+- Refresh/logout token request-body fallback.
+
+The project rule is now to replace unsupported fake success with explicit failure such as HTTP 501 where a capability is intentionally not implemented.
+
+## 22. Master completion backlog
+
+### Gate A — Repository/runtime integrity
+
+- [ ] Confirm clean working tree in the developer runtime.
+- [ ] Confirm local source equals `main` HEAD.
+- [ ] Confirm Docker-mounted source equals current source.
+- [ ] Clean-stack Compose startup.
+- [ ] All health checks green.
+
+### Gate B — Database
+
+- [ ] Clean PostgreSQL migration run.
+- [ ] `makemigrations --check --dry-run` clean.
+- [ ] Schema/model/constraint/index review.
+- [ ] Runtime persistence proof.
+
+### Gate C — Auth/RBAC
+
+- [ ] Login E2E.
+- [ ] Refresh rotation E2E.
+- [ ] Logout/blacklist E2E.
+- [ ] CSRF negative tests.
+- [ ] Tenant isolation matrix.
+- [ ] RBAC matrix across every protected endpoint.
+
+### Gate D — API/frontend reality
+
+- [ ] Inventory every frontend endpoint.
+- [ ] Trace every endpoint to real persistence/provider.
+- [ ] Remove every remaining synthetic response.
+- [ ] Explicit unavailable states for intentionally unsupported features.
+
+### Gate E — Asset / scan
+
+- [ ] Real asset discovery.
+- [ ] Real Nmap E2E.
+- [ ] Nuclei validation E2E.
+- [ ] Parser normalization.
+- [ ] Persist findings/evidence.
+- [ ] Job progress/retry/failure handling.
+- [ ] Masscan only after real controlled provider implementation.
+
+### Gate F — Intelligence
+
+- [ ] NVD real ingestion.
+- [ ] OSV real ingestion.
+- [ ] CISA KEV real ingestion.
+- [ ] EPSS real ingestion.
+- [ ] Normalize sources.
+- [ ] Provenance/evidence.
+- [ ] FusionEngine.
+- [ ] Conflict intelligence.
+- [ ] Confidence/explanation.
+- [ ] GreyNoise/Shodan/Censys only after credentialed, authorized integration is implemented.
+
+### Gate G — Investigation/graph
+
+- [ ] Evidence graph from real records.
+- [ ] Investigation workspace from real records.
+- [ ] Node inspector.
+- [ ] Attack path calculation.
+- [ ] Blast radius.
+- [ ] Digital Twin backed by persisted relationships.
+
+### Gate H — Remediation
+
+- [ ] Action lifecycle.
+- [ ] SLA evaluation.
+- [ ] Controlled remediation.
+- [ ] Nuclei/Semgrep re-validation where applicable.
+- [ ] Before/after risk diff.
+- [ ] Proof-of-fix evidence.
+
+### Gate I — Governance/compliance/reporting
+
+- [ ] Audit trail coverage.
+- [ ] Compliance control/evidence mapping.
+- [ ] Knowledge lifecycle.
+- [ ] Executive dashboard from DB.
+- [ ] Technical/Executive/Compliance/Evidence reports from DB.
+
+### Gate J — Production
+
+- [ ] Real secrets.
+- [ ] TLS.
+- [ ] Secure deployment configuration.
+- [ ] Backups.
+- [ ] Restore test.
+- [ ] Monitoring.
+- [ ] Structured logging.
+- [ ] Alerting.
+- [ ] Scaling/worker operations.
+- [ ] Rollback/recovery.
+
+### Gate K — Final Reality Proof
+
+- [ ] No mock/demo/fake/simulated/fallback business data.
+- [ ] Full real E2E scenario passes.
+- [ ] Security audit passes.
+- [ ] CI green on the final commit.
+- [ ] Production deployment verified.
+
+## 23. Required final E2E scenario
+
+`login -> JWT -> project -> asset -> real assessment -> real provider/tool -> finding -> validation -> evidence -> risk -> remediation -> re-validation -> risk diff -> report`.
+
+AegisScan is not declared enterprise-complete until this chain is demonstrably executable with real persisted data.
+
+## 24. Next execution order
+
+1. Runtime/CI integrity.
+2. Database and migration proof.
+3. Authentication/RBAC E2E.
+4. Endpoint-by-endpoint frontend/API reality sweep.
+5. Real scanner pipeline.
+6. Real intelligence providers.
+7. Fusion/conflict/confidence.
+8. Evidence and investigation graph.
+9. Remediation/re-validation.
+10. Attack path/Digital Twin/blast radius.
+11. Posture/executive/reporting/compliance.
+12. Full E2E.
+13. Security audit.
+14. Production hardening and deployment.
+
+## 25. Current verdict
+
+**AegisScan has a substantial real platform foundation and has undergone meaningful anti-synthetic remediation, but it is not yet proven Enterprise-complete.**
+
+The largest remaining risk is not missing UI. It is unverified E2E reality across the complete data path and external-provider lifecycle.
+
+No new feature should be declared complete until its real data path is demonstrated.
