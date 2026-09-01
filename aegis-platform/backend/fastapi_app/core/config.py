@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "AegisScan Platform"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
-    SECRET_KEY: str = getenv("JWT_SECRET_KEY", getenv("SECRET_KEY", "change-me"))
+    SECRET_KEY: str = getenv("SECRET_KEY", "change-me")
+    JWT_SECRET_KEY: str = getenv("JWT_SECRET_KEY", "")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440
@@ -52,14 +53,26 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-if not _is_debug() and settings.SECRET_KEY.strip().lower() in {
-    "",
-    "change-me",
-    "changeme",
-    "secret",
-    "secret-key",
-}:
-    raise RuntimeError(
-        "Production FastAPI startup requires a real JWT_SECRET_KEY/SECRET_KEY; "
-        "refusing to run with a placeholder value."
-    )
+if not _is_debug():
+    if settings.SECRET_KEY.strip().lower() in {
+        "",
+        "change-me",
+        "changeme",
+        "secret",
+        "secret-key",
+    }:
+        raise RuntimeError(
+            "Production FastAPI startup requires a real SECRET_KEY; "
+            "refusing to run with a placeholder value."
+        )
+    if settings.JWT_SECRET_KEY.strip().lower() in {
+        "",
+        "change-me",
+        "changeme",
+        "secret",
+        "secret-key",
+    }:
+        raise RuntimeError(
+            "Production FastAPI startup requires a real JWT_SECRET_KEY; "
+            "refusing to run with a placeholder value."
+        )
