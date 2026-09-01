@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
+from typing import Any
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 import django
@@ -12,6 +14,7 @@ from django.db import transaction
 
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
+from django_project.vulnerabilities.models import Vulnerability
 from ..services.scope_authorization import is_target_authorized
 from ..services.nmap_parser import parse_nmap_xml
 from ..services.tool_abstraction import ToolRequest, get_tool
@@ -53,6 +56,120 @@ def _start_execution(scan: Scan, engine: ScanEngine) -> ScanEngineExecution:
     execution.save(update_fields=['status', 'progress', 'started_at', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'error_message', 'logs', 'updated_at'])
     ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message=f'{engine.name} execution started', context={'engine': engine.name})
     return execution
+
+
+def _first_string(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    return ''
+
+
+def _severity(value: Any) -> str:
+    normalized = _first_string(value).lower()
+    return normalized if normalized in set(Vulnerability.Severity.values) else Vulnerability.Severity.INFO
+
+
+def _risk_score(severity: str) -> float:
+    return {
+        Vulnerability.Severity.CRITICAL: 95.0,
+        Vulnerability.Severity.HIGH: 80.0,
+        Vulnerability.Severity.MEDIUM: 60.0,
+        Vulnerability.Severity.LOW: 35.0,
+        Vulnerability.Severity.INFO: 10.0,
+    }[severity]
+
+
+def _parse_nuclei_findings(raw_output: str) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for line in raw_output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        info = record.get('info') if isinstance(record.get('info'), dict) else {}
+        classification = info.get('classification') if isinstance(info.get('classification'), dict) else {}
+        severity = _severity(info.get('severity'))
+        title = _first_string(info.get('name')) or _first_string(record.get('template-id')) or 'Nuclei finding'
+        description = _first_string(info.get('description')) or 'Finding reported by Nuclei.'
+        remediation = _first_string(info.get('remediation'))
+        references = info.get('reference') if isinstance(info.get('reference'), list) else []
+        cve_ids = classification.get('cve-id') if isinstance(classification.get('cve-id'), list) else []
+        cwe_ids = classification.get('cwe-id') if isinstance(classification.get('cwe-id'), list) else []
+        matched_at = _first_string(record.get('matched-at')) or _first_string(record.get('host'))
+        findings.append({
+            'record': record,
+            'title': title,
+            'description': description,
+            'remediation': remediation,
+            'severity': severity,
+            'references': references,
+            'cve_ids': [str(x) for x in cve_ids if str(x).strip()],
+            'cwe_id': _first_string(cwe_ids),
+            'url': matched_at,
+            'method': _first_string(record.get('type')).upper(),
+            'template_id': _first_string(record.get('template-id')),
+            'matcher_name': _first_string(record.get('matcher-name')),
+            'extracted_results': record.get('extracted-results') if isinstance(record.get('extracted-results'), list) else [],
+        })
+    return findings
+
+
+def _ingest_nuclei_findings(scan: Scan, evidence: Evidence, raw_output: str) -> list[Vulnerability]:
+    findings: list[Vulnerability] = []
+    for item in _parse_nuclei_findings(raw_output):
+        existing = Vulnerability.objects.filter(
+            scan=scan,
+            asset=scan.asset,
+            source_engine='nuclei',
+            title=item['title'],
+            url=item['url'][:500],
+        ).first()
+        if existing:
+            vulnerability = existing
+            vulnerability.last_seen = datetime.now(timezone.utc)
+            vulnerability.raw_data = item['record']
+            vulnerability.save(update_fields=['last_seen', 'raw_data', 'updated_at'])
+        else:
+            vulnerability = Vulnerability.objects.create(
+                scan=scan,
+                project=scan.project,
+                asset=scan.asset,
+                title=item['title'],
+                description=item['description'],
+                severity=item['severity'],
+                status=Vulnerability.Status.OPEN,
+                confidence=Vulnerability.Confidence.HIGH,
+                category='web',
+                cwe_id=item['cwe_id'],
+                cve_ids=item['cve_ids'],
+                tags=[x for x in [item['template_id'], item['matcher_name']] if x],
+                url=item['url'][:500],
+                method=item['method'][:10],
+                risk_score=_risk_score(item['severity']),
+                evidence_count=0,
+                verified_evidence_count=0,
+                validation_status='unverified',
+                remediation=item['remediation'],
+                references=item['references'],
+                source_engine='nuclei',
+                raw_data=item['record'],
+            )
+        if not Evidence.objects.filter(pk=evidence.pk, finding=vulnerability).exists():
+            evidence.finding = vulnerability
+            evidence.save(update_fields=['finding'])
+        vulnerability.evidence_count = vulnerability.evidence_records.count()
+        vulnerability.save(update_fields=['evidence_count', 'updated_at'])
+        findings.append(vulnerability)
+    return findings
 
 
 @shared_task(bind=True, name='fastapi_app.tasks.security_scan.run_nmap_scan', max_retries=1, default_retry_delay=30)
@@ -127,7 +244,7 @@ def run_nmap_scan(self, scan_id: str) -> dict:
 
 @shared_task(bind=True, name='fastapi_app.tasks.security_scan.run_nuclei_scan', max_retries=1, default_retry_delay=30)
 def run_nuclei_scan(self, scan_id: str) -> dict:
-    scan = Scan.objects.select_related('asset', 'initiated_by').get(pk=scan_id)
+    scan = Scan.objects.select_related('asset', 'initiated_by', 'project').get(pk=scan_id)
     if not scan.asset:
         raise ValueError('A scan must reference an asset before execution')
     configuration = scan.asset.configuration or {}
@@ -159,26 +276,26 @@ def run_nuclei_scan(self, scan_id: str) -> dict:
         result = run_nuclei(target, timeout=600)
         completed_at = datetime.now(timezone.utc)
         duration = max(0, (completed_at - started).total_seconds()) if started else 0
-        result_count = len([line for line in result.stdout.splitlines() if line.strip()])
         with transaction.atomic():
             evidence = Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'format': 'jsonl'}, collected_by=scan.initiated_by)
+            findings = _ingest_nuclei_findings(scan, evidence, result.stdout)
             execution.status = ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code == 0 else ScanEngineExecution.ExecutionStatus.FAILED
             execution.progress = 100
             execution.completed_at = completed_at
             execution.duration = duration
-            execution.findings_found = result_count
+            execution.findings_found = len(findings)
             execution.evidences_collected = 1
-            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'result_count': result_count, 'evidence_id': str(evidence.id)}
+            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'result_count': len(findings), 'evidence_id': str(evidence.id), 'finding_ids': [str(v.id) for v in findings]}
             execution.logs = result.stderr or ''
             execution.save(update_fields=['status', 'progress', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'result_data', 'logs', 'updated_at'])
-            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nuclei execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'result_count': result_count, 'evidence_id': str(evidence.id)})
+            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nuclei execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'result_count': len(findings), 'evidence_id': str(evidence.id), 'finding_ids': [str(v.id) for v in findings]})
             scan.status = Scan.Status.COMPLETED if result.exit_code == 0 else Scan.Status.PARTIAL
             scan.progress = 100
             scan.completed_at = completed_at
-            scan.engine_results = {**(scan.engine_results or {}), 'nuclei': {'exit_code': result.exit_code, 'target': result.target, 'result_count': result_count}}
-            scan.findings_count = result_count
+            scan.engine_results = {**(scan.engine_results or {}), 'nuclei': {'exit_code': result.exit_code, 'target': result.target, 'result_count': len(findings), 'finding_ids': [str(v.id) for v in findings]}}
+            scan.findings_count = Vulnerability.objects.filter(scan=scan).count()
             scan.save(update_fields=['status', 'progress', 'completed_at', 'engine_results', 'findings_count', 'updated_at'])
-        return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nuclei', 'target': result.target}
+        return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nuclei', 'target': result.target, 'finding_count': len(findings), 'finding_ids': [str(v.id) for v in findings]}
     except Exception as exc:
         completed_at = datetime.now(timezone.utc)
         execution.status = ScanEngineExecution.ExecutionStatus.FAILED
