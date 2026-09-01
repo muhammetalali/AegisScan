@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from typing import Any
@@ -62,7 +63,9 @@ def _expected_signature(raw_data: dict[str, Any]) -> tuple[int, dict[str, str]]:
 
 
 def _run_nmap_exact(target: str, port: int, timeout: int) -> tuple[int, str, str]:
-    executable = 'nmap'
+    executable = shutil.which('nmap')
+    if not executable:
+        raise RuntimeError('Nmap is not installed on the worker')
     completed = subprocess.run(
         [executable, '-sV', '-p', str(port), '-oX', '-', '--', target],
         capture_output=True,
@@ -182,6 +185,7 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             validation.completed_at = now
             validation.save(update_fields=['status', 'progress', 'current_phase', 'result', 'completed_at'])
 
+            finding.evidence_count = finding.evidence_records.count()
             if exit_code == 0 and finding_present is False:
                 finding.validation_status = 'verified'
                 finding.validated_at = now
@@ -190,11 +194,12 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                     evidence_type='validation_output',
                     metadata__finding_present=False,
                 ).count()
+                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'evidence_count', 'updated_at'])
             else:
                 finding.validation_status = 'unverified'
                 finding.validated_at = now
                 finding.validated_by = validation.user
-            finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'updated_at'] if exit_code == 0 and finding_present is False else ['validation_status', 'validated_at', 'validated_by', 'updated_at'])
+                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'evidence_count', 'updated_at'])
 
         return {
             'status': validation.status,
