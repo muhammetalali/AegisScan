@@ -10,6 +10,7 @@ import django
 django.setup()
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,12 @@ class RemediationValidationRequest(BaseModel):
     reason: str = ''
 
 
+class RemediationValidationConflict(Exception):
+    def __init__(self, validation: ValidationRun):
+        self.validation = validation
+        super().__init__(f'A remediation validation is already running for this finding: {validation.id}')
+
+
 @sync_to_async
 def _get_finding(vuln_id: UUID, user_id: str) -> Optional[Vulnerability]:
     return Vulnerability.objects.select_related('asset', 'scan', 'project').filter(
@@ -42,13 +49,10 @@ def _get_finding(vuln_id: UUID, user_id: str) -> Optional[Vulnerability]:
     ).first()
 
 
-@sync_to_async
-def _get_active_run(vuln_id: UUID, user_id: str) -> Optional[ValidationRun]:
-    return ValidationRun.objects.filter(
-        finding_id=vuln_id,
-        user_id=user_id,
-        status__in=[ValidationRun.Status.QUEUED, ValidationRun.Status.RUNNING],
-    ).order_by('-created_at').first()
+def _dispatch_validation_task(validation_id: str, engine: str) -> None:
+    task = validate_nmap_finding_e2e if engine == 'nmap' else validate_finding_e2e
+    result = task.delay(validation_id)
+    ValidationRun.objects.filter(pk=validation_id).update(celery_task_id=result.id)
 
 
 @sync_to_async
@@ -62,26 +66,37 @@ def _create_run(
     engine: str,
     reason: str,
 ) -> ValidationRun:
-    workflow_result = {'workflow': 'remediation'}
-    if reason:
-        workflow_result['reason'] = reason
-    validation = ValidationRun.objects.create(
-        user_id=user_id,
-        finding=finding,
-        target_type=target_type,
-        target_value=target_value,
-        scope=scope,
-        profile=profile,
-        engines=[engine],
-        authorized=True,
-        current_phase='queued',
-        result=workflow_result,
-    )
-    task = validate_nmap_finding_e2e if engine == 'nmap' else validate_finding_e2e
-    result = task.delay(str(validation.id))
-    validation.celery_task_id = result.id
-    validation.save(update_fields=['celery_task_id'])
-    return validation
+    with transaction.atomic():
+        locked_finding = Vulnerability.objects.select_for_update().get(pk=finding.pk)
+        active = ValidationRun.objects.filter(
+            finding_id=locked_finding.pk,
+            user_id=user_id,
+            status__in=[ValidationRun.Status.QUEUED, ValidationRun.Status.RUNNING],
+        ).order_by('-created_at').first()
+        if active:
+            raise RemediationValidationConflict(active)
+
+        workflow_result = {'workflow': 'remediation'}
+        if reason:
+            workflow_result['reason'] = reason
+        validation = ValidationRun.objects.create(
+            user_id=user_id,
+            finding=locked_finding,
+            target_type=target_type,
+            target_value=target_value,
+            scope=scope,
+            profile=profile,
+            engines=[engine],
+            authorized=True,
+            current_phase='queued',
+            result=workflow_result,
+        )
+        transaction.on_commit(
+            lambda validation_id=str(validation.id), task_engine=engine: _dispatch_validation_task(
+                validation_id, task_engine
+            )
+        )
+        return validation
 
 
 @sync_to_async
@@ -123,16 +138,6 @@ async def request_remediation_validation(
     if not finding:
         raise HTTPException(status_code=404, detail='Vulnerability not found')
 
-    active = await _get_active_run(vuln_id, user_id)
-    if active:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                'message': 'A remediation validation is already running for this finding.',
-                'validation_id': str(active.id),
-            },
-        )
-
     engine = (finding.source_engine or '').strip().lower()
     if engine not in {'nmap', 'nuclei'}:
         raise HTTPException(status_code=400, detail=f'Remediation validation is not supported for engine: {engine or "unknown"}')
@@ -155,16 +160,26 @@ async def request_remediation_validation(
     except ScopeAuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    validation = await _create_run(
-        finding=finding,
-        user_id=user_id,
-        target_type=target_type,
-        target_value=target,
-        scope=target,
-        profile=body.profile,
-        engine=engine,
-        reason=body.reason.strip(),
-    )
+    try:
+        validation = await _create_run(
+            finding=finding,
+            user_id=user_id,
+            target_type=target_type,
+            target_value=target,
+            scope=target,
+            profile=body.profile,
+            engine=engine,
+            reason=body.reason.strip(),
+        )
+    except RemediationValidationConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'message': 'A remediation validation is already running for this finding.',
+                'validation_id': str(exc.validation.id),
+            },
+        ) from exc
+
     return {
         'workflow': 'remediation',
         'state': 'queued',
