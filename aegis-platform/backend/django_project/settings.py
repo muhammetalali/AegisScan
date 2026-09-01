@@ -35,6 +35,7 @@ SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
 JWT_SECRET_KEY = env('JWT_SECRET_KEY')
+REDIS_URL = env('REDIS_URL')
 
 if not DEBUG:
     if not SECRET_KEY or SECRET_KEY in {'django-insecure-change-me', 'replace-with-a-long-random-secret'}:
@@ -104,7 +105,7 @@ DATABASES['default']['OPTIONS'] = {'connect_timeout': 10}
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': env('REDIS_URL'),
+        'LOCATION': REDIS_URL,
         'OPTIONS': {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
             'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
@@ -199,7 +200,7 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.RedisChannelLayer',
-        'CONFIG': {'hosts': [env('REDIS_URL')]},
+        'CONFIG': {'hosts': [REDIS_URL]},
     }
 }
 
