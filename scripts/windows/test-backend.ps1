@@ -21,17 +21,24 @@ docker compose --env-file $EnvFile -f $ComposeFile config | Out-Null
 Write-Host "==> Starting PostgreSQL and Redis"
 docker compose --env-file $EnvFile -f $ComposeFile up -d --build postgres redis
 
+function Get-HealthStatus([string]$Service) {
+    $containerId = docker compose --env-file $EnvFile -f $ComposeFile ps -q $Service
+    if (-not $containerId) { return "missing" }
+    $status = docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $containerId
+    return ($status | Out-String).Trim()
+}
+
 Write-Host "==> Waiting for PostgreSQL and Redis health"
 $deadline = (Get-Date).AddMinutes(3)
 while ((Get-Date) -lt $deadline) {
-    $rows = docker compose --env-file $EnvFile -f $ComposeFile ps --format json postgres redis | ConvertFrom-Json
-    if ($rows -isnot [array]) { $rows = @($rows) }
-    $healthy = $rows.Count -ge 2 -and ($rows | Where-Object { $_.Name -match 'postgres' -and $_.Health -eq 'healthy' }) -and ($rows | Where-Object { $_.Name -match 'redis' -and $_.Health -eq 'healthy' })
-    if ($healthy) { break }
+    $postgresHealth = Get-HealthStatus "postgres"
+    $redisHealth = Get-HealthStatus "redis"
+    Write-Host "    postgres=$postgresHealth redis=$redisHealth"
+    if ($postgresHealth -eq "healthy" -and $redisHealth -eq "healthy") { break }
     Start-Sleep -Seconds 3
 }
 
-if ((Get-Date) -ge $deadline) {
+if ((Get-HealthStatus "postgres") -ne "healthy" -or (Get-HealthStatus "redis") -ne "healthy") {
     docker compose --env-file $EnvFile -f $ComposeFile ps
     throw "PostgreSQL/Redis did not become healthy within the expected window."
 }
@@ -39,10 +46,9 @@ if ((Get-Date) -ge $deadline) {
 Write-Host "==> Building the Django test image"
 docker compose --env-file $EnvFile -f $ComposeFile build django
 
-Write-Host "==> Running Django migrations in an isolated test container"
-docker compose --env-file $EnvFile -f $ComposeFile run --rm --no-deps django python manage.py migrate --noinput
-
-Write-Host "==> Running: $TestPath"
+Write-Host "==> Running Django tests in an isolated pytest database"
+# pytest-django creates and tears down a test database from DATABASE_URL.
+# We deliberately do not run migrate against the developer database here.
 docker compose --env-file $EnvFile -f $ComposeFile run --rm --no-deps django python -m pytest $TestPath -q
 
 Write-Host "==> Backend test completed successfully."
