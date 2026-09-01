@@ -14,6 +14,7 @@ audit.log
 /packages/backend/runtime/reports/
 aegis_sandbox/
 celerybeat-schedule
+packages/backend/.gunicorn/
 
 # Python caches and environments
 __pycache__/
