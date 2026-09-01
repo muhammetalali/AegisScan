@@ -146,7 +146,7 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                 'result_count': len(matching_records),
             }
         elif engine == 'nmap':
-            raise ValueError('Finding-specific Nmap verification is not enabled until an Nmap finding validator exists')
+            raise ValueError('Finding-specific Nmap verification is handled by the dedicated Nmap validator')
         else:
             raise ValueError(f'Unsupported finding validation engine: {engine}')
 
@@ -160,7 +160,7 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                 evidence_type='validation_output',
                 raw_output=evidence_raw,
                 metadata={
-                    'format': 'jsonl' if engine == 'nuclei' else 'text',
+                    'format': 'jsonl',
                     'stderr': stderr,
                     'target': result['target'],
                     'exit_code': result['exit_code'],
@@ -187,12 +187,14 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                     evidence_type='validation_output',
                     metadata__finding_present=False,
                 ).count()
-                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'updated_at'])
+                finding.evidence_count = finding.evidence_records.count()
+                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'evidence_count', 'updated_at'])
             else:
                 finding.validation_status = 'unverified'
                 finding.validated_at = now
                 finding.validated_by = validation.user
-                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'updated_at'])
+                finding.evidence_count = finding.evidence_records.count()
+                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'evidence_count', 'updated_at'])
 
         return {
             'status': validation.status,
