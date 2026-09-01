@@ -210,6 +210,27 @@ async def remediation_status(vuln_id: UUID, user=Depends(get_current_user)):
         validation = await sync_to_async(transition)(validation.id, RemediationState.VALIDATING, reason='Validation worker started')
         result = validation.result if isinstance(validation.result, dict) else {}
         state = RemediationState.VALIDATING
+
+    # A worker can finish before the first status poll observes the RUNNING
+    # state. Advance through the mandatory VALIDATING state before applying
+    # the terminal result rather than attempting REQUESTED -> terminal.
+    elif validation and validation.status == ValidationRun.Status.COMPLETED and result.get('finding_present') is True and state == RemediationState.REQUESTED:
+        validation = await sync_to_async(transition)(
+            validation.id,
+            RemediationState.VALIDATING,
+            reason='Validation worker completed before status poll observed running state',
+        )
+        result = validation.result if isinstance(validation.result, dict) else {}
+        state = RemediationState.VALIDATING
+        validation = await sync_to_async(transition)(
+            validation.id,
+            RemediationState.NOT_FIXED,
+            reason='Authorized validation still detects the finding',
+            evidence_id=result.get('evidence_id'),
+        )
+        result = validation.result if isinstance(validation.result, dict) else {}
+        state = RemediationState.NOT_FIXED
+
     elif validation and validation.status == ValidationRun.Status.COMPLETED and result.get('finding_present') is True and state != RemediationState.NOT_FIXED:
         validation = await sync_to_async(transition)(validation.id, RemediationState.NOT_FIXED, reason='Authorized validation still detects the finding', evidence_id=result.get('evidence_id'))
         result = validation.result if isinstance(validation.result, dict) else {}
