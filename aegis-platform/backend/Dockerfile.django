@@ -1,10 +1,15 @@
 FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
 
+FROM alpine/git:2.47.2 AS nuclei_templates
+RUN git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git /opt/nuclei-templates \
+    && rm -rf /opt/nuclei-templates/.git
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app:/app/django_project
+    PYTHONPATH=/app:/app/django_project \
+    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates
 
 WORKDIR /app
 
@@ -13,8 +18,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
+COPY --from=nuclei_templates /opt/nuclei-templates /opt/nuclei-templates
 RUN chmod 0755 /usr/local/bin/nuclei \
-    && /usr/local/bin/nuclei -version
+    && /usr/local/bin/nuclei -version \
+    && test -f /opt/nuclei-templates/http/misconfiguration/http-missing-security-headers.yaml
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
