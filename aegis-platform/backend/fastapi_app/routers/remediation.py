@@ -62,6 +62,9 @@ def _create_run(
     engine: str,
     reason: str,
 ) -> ValidationRun:
+    workflow_result = {'workflow': 'remediation'}
+    if reason:
+        workflow_result['reason'] = reason
     validation = ValidationRun.objects.create(
         user_id=user_id,
         finding=finding,
@@ -72,15 +75,12 @@ def _create_run(
         engines=[engine],
         authorized=True,
         current_phase='queued',
+        result=workflow_result,
     )
     task = validate_nmap_finding_e2e if engine == 'nmap' else validate_finding_e2e
     result = task.delay(str(validation.id))
     validation.celery_task_id = result.id
     validation.save(update_fields=['celery_task_id'])
-    if reason:
-        # Preserve operator intent in the validation result without affecting execution.
-        validation.result = {'workflow': 'remediation', 'reason': reason}
-        validation.save(update_fields=['result'])
     return validation
 
 
