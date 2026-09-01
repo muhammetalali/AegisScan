@@ -12,6 +12,7 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
     """Persist each real Nmap open-port observation as a scan-scoped finding."""
     findings: list[Vulnerability] = []
     now = datetime.now(timezone.utc)
+    primary_evidence_used = False
 
     for host in parsed.get('hosts', []):
         if not isinstance(host, dict):
@@ -83,8 +84,38 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
                 vulnerability.last_seen = now
                 vulnerability.save(update_fields=['title', 'description', 'raw_data', 'last_seen', 'updated_at'])
 
-            evidence.finding = vulnerability
-            evidence.save(update_fields=['finding'])
+            if not primary_evidence_used and evidence.finding_id in {None, vulnerability.id}:
+                evidence.finding = vulnerability
+                evidence.save(update_fields=['finding'])
+                primary_evidence_used = True
+            else:
+                finding_evidence = Evidence.objects.filter(
+                    scan=scan,
+                    asset=scan.asset,
+                    finding=vulnerability,
+                    source='nmap',
+                    evidence_type='scanner_output',
+                    metadata__observation_port=port_number,
+                    metadata__observation_protocol=protocol,
+                ).first()
+                if finding_evidence is None:
+                    Evidence.objects.create(
+                        scan=scan,
+                        asset=scan.asset,
+                        finding=vulnerability,
+                        source='nmap',
+                        evidence_type='scanner_output',
+                        raw_output=evidence.raw_output,
+                        metadata={
+                            **(evidence.metadata or {}),
+                            'observation_port': port_number,
+                            'observation_protocol': protocol,
+                            'observation_ip': ip,
+                            'finding_id': str(vulnerability.id),
+                        },
+                        collected_by=evidence.collected_by,
+                    )
+
             vulnerability.evidence_count = vulnerability.evidence_records.count()
             vulnerability.save(update_fields=['evidence_count', 'updated_at'])
             findings.append(vulnerability)
