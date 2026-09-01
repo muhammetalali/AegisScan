@@ -121,8 +121,7 @@ async def websocket_validation_progress(websocket: WebSocket, validation_id: str
     await websocket_manager.connect(validation_id, websocket); await websocket_manager.connect(f'validation_{validation_id}', websocket)
     try:
         while True: await websocket.receive_text()
-    except WebSocketDisconnect:
-        websocket_manager.disconnect(validation_id, websocket); websocket_manager.disconnect(f'validation_{validation_id}', websocket)
+    except WebSocketDisconnect: websocket_manager.disconnect(validation_id, websocket); websocket_manager.disconnect(f'validation_{validation_id}', websocket)
 
 
 @app.websocket('/ws/notifications')
@@ -194,7 +193,9 @@ async def readiness_check():
 
 app.include_router(scans.router, prefix='/scans', tags=['Scans'])
 app.include_router(vulnerabilities.router, prefix='/vulnerabilities', tags=['Vulnerabilities'])
+app.include_router(vulnerabilities.router, prefix='/api/v1/vulnerabilities', tags=['Vulnerabilities'])
 app.include_router(remediation.router, tags=['Remediation Workflow'])
+app.include_router(remediation.router, prefix='/api/v1', tags=['Remediation Workflow'])
 app.include_router(reports.router, prefix='/reports', tags=['Reports'])
 app.include_router(assets.router, prefix='/assets', tags=['Assets'])
 app.include_router(assets.router, prefix='/api/v1/assets', tags=['Assets'])
