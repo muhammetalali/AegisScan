@@ -10,8 +10,8 @@ django.setup()
 from celery import shared_task
 from django.db import transaction
 
-from evidence.models import Evidence, ValidationRun
-from scans.models import Scan
+from django_project.evidence.models import Evidence, ValidationRun
+from django_project.scans.models import Scan
 from ..services.scope_authorization import is_target_authorized
 from ..services.nmap_parser import parse_nmap_xml
 from ..services.tool_abstraction import ToolRequest, get_tool
