@@ -42,7 +42,7 @@ services:
     ports: ["8000:8000"]
     env_file: ./backend/.env
     environment:
-      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-django_project.settings}
+      DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -74,7 +74,7 @@ services:
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
-      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-django_project.settings}
+      DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
@@ -88,7 +88,7 @@ services:
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
-      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-django_project.settings}
+      DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
