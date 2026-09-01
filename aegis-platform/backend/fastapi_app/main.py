@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -135,8 +136,45 @@ async def websocket_system_monitor(websocket: WebSocket):
 async def health_check(): return {'status': 'healthy', 'timestamp': datetime.now(timezone.utc).isoformat()}
 
 
+async def _dependency_readiness() -> dict:
+    def check_dependencies():
+        from urllib.parse import urlparse
+        import redis
+        import psycopg2
+
+        database = urlparse(settings.DATABASE_URL)
+        if database.scheme not in {'postgresql', 'postgres'}:
+            raise RuntimeError(f'Unsupported DATABASE_URL scheme: {database.scheme}')
+
+        db_conn = psycopg2.connect(settings.DATABASE_URL, connect_timeout=3)
+        try:
+            with db_conn.cursor() as cursor:
+                cursor.execute('SELECT 1')
+                cursor.fetchone()
+        finally:
+            db_conn.close()
+
+        redis_client = redis.from_url(settings.REDIS_URL, socket_connect_timeout=3, socket_timeout=3)
+        try:
+            if redis_client.ping() is not True:
+                raise RuntimeError('Redis ping returned false')
+        finally:
+            redis_client.close()
+
+        return {'database': 'ok', 'redis': 'ok'}
+
+    return await asyncio.to_thread(check_dependencies)
+
+
 @app.get('/ready')
-async def readiness_check(): return {'ready': True, 'timestamp': datetime.now(timezone.utc).isoformat()}
+async def readiness_check():
+    try:
+        dependencies = await _dependency_readiness()
+    except Exception as exc:
+        logger.error('Readiness check failed: %s', exc)
+        raise HTTPException(status_code=503, detail={'ready': False, 'reason': 'dependency_unavailable'}) from exc
+
+    return {'ready': True, 'dependencies': dependencies, 'timestamp': datetime.now(timezone.utc).isoformat()}
 
 
 app.include_router(scans.router, prefix='/scans', tags=['Scans'])
