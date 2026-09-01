@@ -66,8 +66,8 @@ def _create_run(
     profile: str,
     engine: str,
     reason: str,
-    duration_minutes: int,
-    rate_limit: int,
+    duration_minutes: int = 5,
+    rate_limit: int = 5,
 ) -> ValidationRun:
     with transaction.atomic():
         locked_finding = Vulnerability.objects.select_for_update().get(pk=finding.pk)
@@ -89,7 +89,6 @@ def _create_run(
 
         workflow_result = {
             'workflow': 'remediation',
-            'remediation_state': RemediationState.REQUESTED,
             'requested_at': datetime.now(timezone.utc).isoformat(),
             'profile': profile,
             'duration_minutes': duration_minutes,
