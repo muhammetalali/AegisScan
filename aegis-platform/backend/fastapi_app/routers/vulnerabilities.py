@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityNote
 from ..core.dependencies import get_current_user
+from ..services.remediation_lifecycle import RemediationState, get_state, verify_validation
 
 router = APIRouter()
 
@@ -73,9 +74,7 @@ def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
 
 @sync_to_async
 def _list_vulnerabilities(user_id: str, project_id: Optional[str], scan_id: Optional[str], severity: Optional[str], status: Optional[str], assigned_to: Optional[str], search: Optional[str], limit: int, offset: int):
-    qs = Vulnerability.objects.filter(
-        project__owner_id=user_id,
-    ) | Vulnerability.objects.filter(project__members__id=user_id)
+    qs = Vulnerability.objects.filter(project__owner_id=user_id) | Vulnerability.objects.filter(project__members__id=user_id)
     qs = qs.select_related('scan', 'project', 'asset', 'assigned_to').distinct()
     if project_id:
         qs = qs.filter(project_id=project_id)
@@ -229,7 +228,7 @@ def _verify_fix(vuln_id: UUID, user_id: str):
     if not validation:
         return vulnerability, None, 'Fix verification requires a completed authorized finding-linked validation run.'
 
-    result = validation.result or {}
+    result = validation.result if isinstance(validation.result, dict) else {}
     if result.get('finding_present') is not False:
         return vulnerability, validation, 'The latest authorized validation still detects the finding; fix cannot be verified.'
 
@@ -241,6 +240,12 @@ def _verify_fix(vuln_id: UUID, user_id: str):
     if not evidence:
         return vulnerability, validation, 'Completed validation has no linked validation evidence; verification is not trusted.'
 
+    try:
+        validation = verify_validation(validation.id)
+    except ValueError as exc:
+        return vulnerability, validation, str(exc)
+
+    vulnerability.refresh_from_db()
     vulnerability.validation_status = 'verified'
     vulnerability.validated_at = validation.completed_at or datetime.now(timezone.utc)
     vulnerability.validated_by_id = user_id
@@ -261,6 +266,7 @@ async def verify_fix(vuln_id: UUID, user=Depends(get_current_user)):
         raise HTTPException(status_code=409, detail=error)
     return {
         'status': 'verified',
+        'remediation_state': RemediationState.VERIFIED,
         'vulnerability_id': str(vulnerability.id),
         'validation_id': str(validation.id),
         'verified_evidence_count': vulnerability.verified_evidence_count,
