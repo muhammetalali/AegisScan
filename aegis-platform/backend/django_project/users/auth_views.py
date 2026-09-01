@@ -1,7 +1,7 @@
 from django.conf import settings
-from django.middleware.csrf import csrf_protect, get_token
+from django.middleware.csrf import get_token
 from django.http import JsonResponse
-from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django_ratelimit.decorators import ratelimit
 from rest_framework import status
