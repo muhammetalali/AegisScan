@@ -1,3 +1,11 @@
+import os
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+
+import django
+
+django.setup()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -204,30 +212,23 @@ app.include_router(audit.router, prefix='/api/v1', tags=['Audit'])
 @app.post('/scans/{scan_id}/start')
 async def start_scan(scan_id: str, user=Depends(get_current_user)): return await scan_orchestrator.start_scan(scan_id, user)
 
-
 @app.post('/scans/{scan_id}/pause')
 async def pause_scan(scan_id: str, user=Depends(get_current_user)): return await scan_orchestrator.pause_scan(scan_id, user)
-
 
 @app.post('/scans/{scan_id}/resume')
 async def resume_scan(scan_id: str, user=Depends(get_current_user)): return await scan_orchestrator.resume_scan(scan_id, user)
 
-
 @app.post('/scans/{scan_id}/cancel')
 async def cancel_scan(scan_id: str, user=Depends(get_current_user)): return await scan_orchestrator.cancel_scan(scan_id, user)
-
 
 @app.get('/scans/{scan_id}/progress')
 async def get_scan_progress(scan_id: str, user=Depends(get_current_user)): return await scan_orchestrator.get_progress(scan_id, user)
 
-
 @app.get('/engines')
 async def list_engines(user=Depends(get_current_user)): return await scan_orchestrator.list_engines()
 
-
 @app.post('/engines/{engine_name}/enable')
 async def enable_engine(engine_name: str, user=Depends(require_staff)): return await scan_orchestrator.enable_engine(engine_name)
-
 
 @app.post('/engines/{engine_name}/disable')
 async def disable_engine(engine_name: str, user=Depends(require_staff)): return await scan_orchestrator.disable_engine(engine_name)
