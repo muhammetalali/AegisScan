@@ -18,7 +18,7 @@ from django_project.evidence.models import ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
-from ..services.remediation_lifecycle import RemediationState, get_state, transition
+from ..services.remediation_lifecycle import RemediationState, get_state, transition, verify_validation
 from ..tasks.finding_validation import validate_finding_e2e
 from ..tasks.nmap_finding_validation import validate_nmap_finding_e2e
 
@@ -211,9 +211,6 @@ async def remediation_status(vuln_id: UUID, user=Depends(get_current_user)):
         result = validation.result if isinstance(validation.result, dict) else {}
         state = RemediationState.VALIDATING
 
-    # A worker can finish before the first status poll observes the RUNNING
-    # state. Advance through the mandatory VALIDATING state before applying
-    # the terminal result rather than attempting REQUESTED -> terminal.
     elif validation and validation.status == ValidationRun.Status.COMPLETED and result.get('finding_present') is True and state == RemediationState.REQUESTED:
         validation = await sync_to_async(transition)(
             validation.id,
@@ -260,6 +257,38 @@ async def remediation_status(vuln_id: UUID, user=Depends(get_current_user)):
         'remediation_events': result.get('remediation_events', []),
         'completed_at': validation.completed_at.astimezone(timezone.utc).isoformat() if validation and validation.completed_at else None,
         'error_message': validation.error_message if validation else '',
+    }
+
+
+@router.post('/vulnerabilities/{vuln_id}/remediation/verify')
+async def verify_remediation(vuln_id: UUID, user=Depends(get_current_user)):
+    user_id = str(user.get('user_id'))
+    finding = await _get_finding(vuln_id, user_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail='Vulnerability not found')
+
+    validation = await _latest_run(vuln_id, user_id)
+    if not validation:
+        raise HTTPException(status_code=409, detail='Remediation cannot be verified without a validation run')
+
+    try:
+        verified = await sync_to_async(verify_validation)(validation.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    finding = await _get_finding(vuln_id, user_id)
+    result = verified.result if isinstance(verified.result, dict) else {}
+    return {
+        'workflow': 'remediation',
+        'state': get_state(verified),
+        'finding_id': str(vuln_id),
+        'validation_id': str(verified.id),
+        'validation_status': finding.validation_status if finding else None,
+        'vulnerability_status': finding.status if finding else Vulnerability.Status.IN_PROGRESS,
+        'finding_present': result.get('finding_present'),
+        'evidence_id': result.get('evidence_id'),
+        'remediation_events': result.get('remediation_events', []),
+        'verified_at': datetime.now(timezone.utc).isoformat(),
     }
 
 
