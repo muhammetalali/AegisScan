@@ -9,7 +9,12 @@ from django_project.vulnerabilities.models import Vulnerability
 
 
 def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any]) -> list[Vulnerability]:
-    """Persist each real Nmap open-port observation as a scan-scoped finding."""
+    """Persist each real Nmap open-port observation as a scan-scoped finding.
+
+    The scanner-level evidence can be linked to one finding for simple scans;
+    additional findings receive their own evidence records so evidence ownership
+    is never overwritten by the last observation in a multi-port scan.
+    """
     findings: list[Vulnerability] = []
     now = datetime.now(timezone.utc)
     primary_evidence_used = False
@@ -82,39 +87,35 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
                 vulnerability.description = description
                 vulnerability.raw_data = raw_data
                 vulnerability.last_seen = now
-                vulnerability.save(update_fields=['title', 'description', 'raw_data', 'last_seen', 'updated_at'])
+                if vulnerability.status == Vulnerability.Status.FIXED:
+                    vulnerability.status = Vulnerability.Status.OPEN
+                    vulnerability.fixed_at = None
+                    vulnerability.fixed_by = None
+                vulnerability.save(update_fields=['title', 'description', 'raw_data', 'last_seen', 'status', 'fixed_at', 'fixed_by', 'updated_at'])
 
             if not primary_evidence_used and evidence.finding_id in {None, vulnerability.id}:
                 evidence.finding = vulnerability
                 evidence.save(update_fields=['finding'])
                 primary_evidence_used = True
             else:
-                finding_evidence = Evidence.objects.filter(
+                Evidence.objects.get_or_create(
                     scan=scan,
                     asset=scan.asset,
                     finding=vulnerability,
                     source='nmap',
                     evidence_type='scanner_output',
-                    metadata__observation_port=port_number,
-                    metadata__observation_protocol=protocol,
-                ).first()
-                if finding_evidence is None:
-                    Evidence.objects.create(
-                        scan=scan,
-                        asset=scan.asset,
-                        finding=vulnerability,
-                        source='nmap',
-                        evidence_type='scanner_output',
-                        raw_output=evidence.raw_output,
-                        metadata={
+                    defaults={
+                        'raw_output': evidence.raw_output,
+                        'metadata': {
                             **(evidence.metadata or {}),
                             'observation_port': port_number,
                             'observation_protocol': protocol,
                             'observation_ip': ip,
                             'finding_id': str(vulnerability.id),
                         },
-                        collected_by=evidence.collected_by,
-                    )
+                        'collected_by': evidence.collected_by,
+                    },
+                )
 
             vulnerability.evidence_count = vulnerability.evidence_records.count()
             vulnerability.save(update_fields=['evidence_count', 'updated_at'])
