@@ -178,7 +178,8 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                 collected_by=validation.user,
             )
             result['evidence_id'] = str(evidence.id)
-            validation.result = result
+            existing_result = dict(validation.result) if isinstance(validation.result, dict) else {}
+            validation.result = {**existing_result, **result}
             validation.status = ValidationRun.Status.COMPLETED if exit_code == 0 else ValidationRun.Status.FAILED
             validation.progress = 100
             validation.current_phase = 'completed' if exit_code == 0 else 'failed'
@@ -187,7 +188,7 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
 
             finding.evidence_count = finding.evidence_records.count()
             if exit_code == 0 and finding_present is False:
-                finding.validation_status = 'verified'
+                finding.validation_status = 'validated'
                 finding.validated_at = now
                 finding.validated_by = validation.user
                 finding.verified_evidence_count = finding.evidence_records.filter(
