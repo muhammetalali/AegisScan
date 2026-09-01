@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .serializers import UserSerializer
+from .serializers import UserSerializer, UserCreateSerializer
 
 
 def _set_auth_cookies(response, access: str, refresh: str | None = None) -> None:
@@ -52,6 +52,29 @@ class LoginView(APIView):
         })
         _set_auth_cookies(response, data['access'], data['refresh'])
         return response
+
+
+class RegisterView(APIView):
+    """Public account bootstrap endpoint; newly registered users are always Viewers."""
+
+    permission_classes = [AllowAny]
+
+    @method_decorator(csrf_protect)
+    @method_decorator(ratelimit(key='ip', rate='5/h', method='POST', block=True))
+    def post(self, request):
+        payload = request.data.copy()
+        # Never accept a caller-supplied role on public registration.
+        payload.pop('role', None)
+        serializer = UserCreateSerializer(data=payload)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(
+            {
+                'user': UserSerializer(user, context={'request': request}).data,
+                'registered': True,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class RefreshView(APIView):
