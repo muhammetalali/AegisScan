@@ -24,7 +24,7 @@ class RemediationState:
 
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     RemediationState.NOT_REQUESTED: {RemediationState.REQUESTED},
-    RemediationState.REQUESTED: {RemediationState.VALIDATING, RemediationState.CANCELLED, RemediationState.FAILED},
+    RemediationState.REQUESTED: {RemediationState.VALIDATING, RemediationState.CANCELLED, RemediationState.FAILED, RemediationState.VALIDATION_PASSED},
     RemediationState.VALIDATING: {RemediationState.NOT_FIXED, RemediationState.VALIDATION_PASSED, RemediationState.CANCELLED, RemediationState.FAILED},
     RemediationState.NOT_FIXED: {RemediationState.REQUESTED, RemediationState.VALIDATING},
     RemediationState.VALIDATION_PASSED: {RemediationState.VERIFIED, RemediationState.REQUESTED, RemediationState.VALIDATING},
@@ -78,25 +78,27 @@ def transition(
         finding = Vulnerability.objects.select_for_update().get(pk=finding.pk)
 
         current = get_state(validation)
-        if current == to_state:
-            return validation
-        if to_state not in _ALLOWED_TRANSITIONS.get(current, set()):
-            raise ValueError(f'Invalid remediation transition: {current} -> {to_state}')
-
-        now = _utc_now()
         result: dict[str, Any] = dict(validation.result) if isinstance(validation.result, dict) else {}
         history = result.get('remediation_events')
         if not isinstance(history, list):
             history = []
-        event = {
+
+        if current == to_state:
+            if history:
+                return validation
+            current = RemediationState.NOT_REQUESTED
+        if to_state not in _ALLOWED_TRANSITIONS.get(current, set()):
+            raise ValueError(f'Invalid remediation transition: {current} -> {to_state}')
+
+        now = _utc_now()
+        history.append({
             'from': current,
             'to': to_state,
             'at': now,
             'reason': reason.strip(),
             'evidence_id': evidence_id,
             'user_id': str(validation.user_id),
-        }
-        history.append(event)
+        })
         result['remediation_state'] = to_state
         result['remediation_events'] = history
         validation.result = result
@@ -143,4 +145,23 @@ def verify_validation(validation_id: str | UUID) -> ValidationRun:
         raise ValueError('Completed validation has no linked validation evidence')
     if not Evidence.objects.filter(pk=evidence_id, finding=validation.finding).exists():
         raise ValueError('The linked validation evidence does not belong to this finding')
-    return transition(validation.id, RemediationState.VERIFIED, reason='Finding absence confirmed by completed authorized validation', evidence_id=str(evidence_id))
+
+    current = get_state(validation)
+    if current == RemediationState.REQUESTED:
+        validation = transition(
+            validation.id,
+            RemediationState.VALIDATION_PASSED,
+            reason='Completed authorized validation no longer detects the finding',
+            evidence_id=str(evidence_id),
+        )
+    elif current not in {RemediationState.VALIDATION_PASSED, RemediationState.VERIFIED}:
+        raise ValueError(f'Fix verification requires validation_passed state; current state is {current}')
+
+    if get_state(validation) != RemediationState.VERIFIED:
+        validation = transition(
+            validation.id,
+            RemediationState.VERIFIED,
+            reason='Finding absence confirmed by completed authorized validation',
+            evidence_id=str(evidence_id),
+        )
+    return validation
