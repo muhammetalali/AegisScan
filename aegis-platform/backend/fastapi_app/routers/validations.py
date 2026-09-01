@@ -17,6 +17,7 @@ from ..core.dependencies import get_current_user
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 from ..tasks.security_scan import validate_finding_task
 from ..tasks.finding_validation import validate_finding_e2e
+from ..tasks.nmap_finding_validation import validate_nmap_finding_e2e
 
 router = APIRouter()
 
@@ -87,8 +88,13 @@ def _create(body: ValidationCreate, user_id: str, finding: Optional[Vulnerabilit
         engines=body.engines,
         authorized=True,
     )
-    task = (validate_finding_e2e if finding else validate_finding_task).delay(str(v.id))
-    v.celery_task_id = task.id
+    if finding:
+        source_engine = (finding.source_engine or '').strip().lower()
+        task = validate_nmap_finding_e2e if source_engine == 'nmap' else validate_finding_e2e
+    else:
+        task = validate_finding_task
+    task_result = task.delay(str(v.id))
+    v.celery_task_id = task_result.id
     v.save(update_fields=['celery_task_id'])
     return v
 
@@ -122,6 +128,12 @@ async def create_validation(body: ValidationCreate, user=Depends(get_current_use
                 raise HTTPException(status_code=400, detail='Finding asset has no URL for Nuclei validation')
             if body.target_value.strip() != asset_url.strip():
                 raise HTTPException(status_code=400, detail='Finding validation target must exactly match the finding asset URL')
+        else:
+            asset_host = ((finding.asset.configuration or {}).get('host') or (finding.asset.configuration or {}).get('ip') or (finding.asset.configuration or {}).get('domain')) if finding.asset else None
+            if not asset_host:
+                raise HTTPException(status_code=400, detail='Finding asset has no host/ip/domain for Nmap validation')
+            if body.target_value.strip() != str(asset_host).strip():
+                raise HTTPException(status_code=400, detail='Finding validation target must exactly match the finding asset host')
     else:
         if not body.engines or any(engine != 'nmap' for engine in body.engines):
             raise HTTPException(status_code=400, detail='Only the real nmap engine is enabled for standalone validation')
