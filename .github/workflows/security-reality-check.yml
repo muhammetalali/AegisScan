@@ -126,7 +126,7 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/tasks/test_finding_validation.py
+        run: python -m pytest -q fastapi_app/tasks/test_finding_validation.py fastapi_app/routers/test_validation_api.py
 
       - name: Production Django checks
         working-directory: aegis-platform/backend
