@@ -14,7 +14,7 @@ django.setup()
 
 from django_project.assets.models import Asset
 from django_project.projects.models import Project
-from django_project.scans.models import Scan, ScanEngineExecution, ScanLog
+from django_project.scans.models import Scan
 
 from ..core.dependencies import get_current_user
 from ..tasks.security_scan import run_nmap_scan
@@ -101,7 +101,13 @@ def _create_scan(scan: ScanCreate, user_id: str):
 
 @router.post('/', response_model=ScanResponse, status_code=201)
 async def create_scan(scan: ScanCreate, user=Depends(get_current_user)):
-    return await _serialize_scan(await _create_scan(scan, str(user.get('user_id'))))
+    created = await _create_scan(scan, str(user.get('user_id')))
+    engines = {engine.strip().lower() for engine in (scan.engines or ['nmap']) if engine.strip()}
+    if engines == {'nmap'}:
+        run_nmap_scan.delay(str(created.id))
+    elif 'nmap' in engines:
+        raise HTTPException(status_code=400, detail='Mixed scan engines are not supported by the current execution workflow')
+    return await _serialize_scan(created)
 
 
 @sync_to_async
