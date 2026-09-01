@@ -56,7 +56,7 @@ services:
 
 networks:
   aegisscan_lab:
-    name: aegisscan_lab
+    name: ${COMPOSE_PROJECT_NAME:-platform}_aegisscan_lab
     driver: bridge
     internal: true
     ipam:
