@@ -6,7 +6,7 @@ from typing import Any
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from django_project.scans.models import Scan, ScanEngineExecution
+from django_project.scans.models import ScanEngineExecution
 from django_project.vulnerabilities.models import Vulnerability
 
 from .models import Evidence
@@ -56,11 +56,13 @@ def ingest_nmap_scanner_evidence(sender, instance: Evidence, created: bool, **kw
         return
     if not instance.scan or not instance.asset:
         return
+
     metadata = instance.metadata if isinstance(instance.metadata, dict) else {}
+    if metadata.get('derived_from_evidence_id'):
+        return
     parsed = metadata.get('parsed') if isinstance(metadata.get('parsed'), dict) else {}
     open_ports = _open_ports(parsed)
     now = datetime.now(timezone.utc)
-    findings_seen = 0
 
     for item in open_ports:
         title = _title(item)
@@ -71,25 +73,21 @@ def ingest_nmap_scanner_evidence(sender, instance: Evidence, created: bool, **kw
             'service': item['service'],
             'product': item['product'],
             'version': item['version'],
+            'ip': item['ip'],
         }
         vulnerability = Vulnerability.objects.filter(
             asset=instance.asset,
             source_engine='nmap',
             title=title,
         ).order_by('-updated_at').first()
+
         if vulnerability:
             vulnerability.scan = instance.scan
             vulnerability.project = instance.scan.project
             vulnerability.last_seen = now
-            vulnerability.raw_data = {
-                **(vulnerability.raw_data if isinstance(vulnerability.raw_data, dict) else {}),
-                **signature,
-                'ip': item['ip'],
-            }
+            vulnerability.raw_data = {**(vulnerability.raw_data if isinstance(vulnerability.raw_data, dict) else {}), **signature}
             vulnerability.validation_status = 'unverified'
-            vulnerability.save(update_fields=[
-                'scan', 'project', 'last_seen', 'raw_data', 'validation_status', 'updated_at',
-            ])
+            vulnerability.save(update_fields=['scan', 'project', 'last_seen', 'raw_data', 'validation_status', 'updated_at'])
         else:
             vulnerability = Vulnerability.objects.create(
                 scan=instance.scan,
@@ -101,7 +99,7 @@ def ingest_nmap_scanner_evidence(sender, instance: Evidence, created: bool, **kw
                 status=Vulnerability.Status.OPEN,
                 confidence=Vulnerability.Confidence.HIGH,
                 category='network',
-                tags=['nmap', 'exposed-port', item['protocol'], item['service']] if item['service'] else ['nmap', 'exposed-port', item['protocol']],
+                tags=['nmap', 'exposed-port', item['protocol']] + ([item['service']] if item['service'] else []),
                 url='',
                 method='NMAP',
                 risk_score=10.0,
@@ -110,22 +108,36 @@ def ingest_nmap_scanner_evidence(sender, instance: Evidence, created: bool, **kw
                 validation_status='unverified',
                 remediation='Restrict or close the service when it is not required; otherwise document the approved exposure and harden the service.',
                 source_engine='nmap',
-                raw_data={**signature, 'ip': item['ip']},
+                raw_data=signature,
                 first_seen=now,
                 last_seen=now,
             )
 
-        instance.finding_id = vulnerability.id if instance.finding_id is None else instance.finding_id
-        vulnerability.evidence_count = vulnerability.evidence_records.filter(pk=instance.pk).count() + vulnerability.evidence_records.exclude(pk=instance.pk).count()
-        vulnerability.evidence_count = vulnerability.evidence_records.count() + (0 if vulnerability.evidence_records.filter(pk=instance.pk).exists() else 1)
+        derived = Evidence.objects.create(
+            scan=instance.scan,
+            asset=instance.asset,
+            finding=vulnerability,
+            source='nmap',
+            evidence_type='scanner_output',
+            raw_output=instance.raw_output,
+            metadata={
+                'format': 'xml',
+                'target': metadata.get('target', ''),
+                'exit_code': metadata.get('exit_code', 0),
+                'derived_from_evidence_id': str(instance.id),
+                'finding_signature': signature,
+            },
+            collected_by=instance.collected_by,
+        )
+        vulnerability.evidence_count = vulnerability.evidence_records.count()
         vulnerability.save(update_fields=['evidence_count', 'updated_at'])
-        if instance.finding_id != vulnerability.id:
-            instance.finding_id = vulnerability.id
-            instance.save(update_fields=['finding'])
-        findings_seen += 1
 
-    if findings_seen:
-        execution = ScanEngineExecution.objects.filter(scan=instance.scan, engine__name='nmap').order_by('-created_at').first()
+    if open_ports:
+        execution = ScanEngineExecution.objects.filter(
+            scan=instance.scan,
+            engine__name='nmap',
+        ).order_by('-created_at').first()
         if execution:
-            execution.findings_found = findings_seen
-            execution.save(update_fields=['findings_found', 'updated_at'])
+            execution.findings_found = len(open_ports)
+            execution.evidences_collected = 1 + len(open_ports)
+            execution.save(update_fields=['findings_found', 'evidences_collected', 'updated_at'])
