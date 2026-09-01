@@ -15,11 +15,27 @@ if (-not (Test-Path $EnvFile)) {
     throw "Missing $EnvFile. Copy $EnvExample to $EnvFile and provide real local development secrets before starting the stack."
 }
 
+# Docker services use /app as the backend project root. Accept repository-relative
+# test paths for operator convenience, then normalize them to container-relative paths.
+$ContainerTestPath = $TestPath -replace '^[./\\]+', ''
+$ContainerTestPath = $ContainerTestPath -replace '^packages/backend/', ''
+if (-not (Test-Path (Join-Path $RepoRoot $TestPath))) {
+    throw "Local test path not found: $TestPath"
+}
+
+function Invoke-NativeChecked([string]$CommandLine) {
+    Write-Host ">>> $CommandLine"
+    cmd.exe /d /s /c $CommandLine
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code $($LASTEXITCODE): $CommandLine"
+    }
+}
+
 Write-Host "==> Validating Docker Compose configuration"
-docker compose --env-file $EnvFile -f $ComposeFile config | Out-Null
+Invoke-NativeChecked "docker compose --env-file `"$EnvFile`" -f `"$ComposeFile`" config"
 
 Write-Host "==> Starting PostgreSQL and Redis"
-docker compose --env-file $EnvFile -f $ComposeFile up -d --build postgres redis
+Invoke-NativeChecked "docker compose --env-file `"$EnvFile`" -f `"$ComposeFile`" up -d --build postgres redis"
 
 function Get-HealthStatus([string]$Service) {
     $containerId = docker compose --env-file $EnvFile -f $ComposeFile ps -q $Service
@@ -44,11 +60,12 @@ if ((Get-HealthStatus "postgres") -ne "healthy" -or (Get-HealthStatus "redis") -
 }
 
 Write-Host "==> Building the Django test image"
-docker compose --env-file $EnvFile -f $ComposeFile build django
+Invoke-NativeChecked "docker compose --env-file `"$EnvFile`" -f `"$ComposeFile`" build django"
 
 Write-Host "==> Running Django tests in an isolated pytest database"
 # pytest-django creates and tears down a test database from DATABASE_URL.
 # We deliberately do not run migrate against the developer database here.
-docker compose --env-file $EnvFile -f $ComposeFile run --rm --no-deps django python -m pytest $TestPath -q
+$pytestCommand = "docker compose --env-file `"$EnvFile`" -f `"$ComposeFile`" run --rm --no-deps django python -m pytest `"$ContainerTestPath`" -q"
+Invoke-NativeChecked $pytestCommand
 
 Write-Host "==> Backend test completed successfully."
