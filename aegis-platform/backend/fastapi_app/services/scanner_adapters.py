@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -19,6 +21,7 @@ class ScanResult:
 
 _HOST_RE = re.compile(r'^[A-Za-z0-9.-]+$')
 _URL_SCHEMES = {'http', 'https'}
+_DEFAULT_NUCLEI_TEMPLATES = '/opt/nuclei-templates'
 
 
 def validate_authorized_target(target: str) -> str:
@@ -66,8 +69,14 @@ def run_nuclei(target: str, timeout: int = 600) -> ScanResult:
     executable = shutil.which('nuclei')
     if not executable:
         raise RuntimeError('Nuclei is not installed on the worker')
+
+    templates_dir = os.getenv('NUCLEI_TEMPLATES_DIR', _DEFAULT_NUCLEI_TEMPLATES)
+    templates_path = Path(templates_dir)
+    if not templates_path.is_dir():
+        raise RuntimeError(f'Nuclei templates directory is missing: {templates_dir}')
+
     completed = subprocess.run(
-        [executable, '-u', url, '-jsonl', '-silent', '-no-color'],
+        [executable, '-u', url, '-t', str(templates_path), '-jsonl', '-silent', '-no-color'],
         capture_output=True,
         text=True,
         timeout=timeout,
