@@ -6,6 +6,13 @@ import django
 
 django.setup()
 
+from .django_compat import install_django_import_aliases
+
+# Normalize legacy Django app imports before loading FastAPI routers.
+# This keeps ``assets.models`` and friends bound to the canonical Django
+# modules under ``django_project`` and prevents duplicate model classes.
+install_django_import_aliases()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
