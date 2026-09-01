@@ -22,7 +22,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from .routers import scans, vulnerabilities, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
+from .routers import scans, vulnerabilities, remediation, reports, assets, compliance, knowledge, digital_twin, posture, system, dashboard, validations, audit, assurance, assurance_graph, security_decision, decision_actions, governance, policy
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -194,6 +194,7 @@ async def readiness_check():
 
 app.include_router(scans.router, prefix='/scans', tags=['Scans'])
 app.include_router(vulnerabilities.router, prefix='/vulnerabilities', tags=['Vulnerabilities'])
+app.include_router(remediation.router, tags=['Remediation Workflow'])
 app.include_router(reports.router, prefix='/reports', tags=['Reports'])
 app.include_router(assets.router, prefix='/assets', tags=['Assets'])
 app.include_router(assets.router, prefix='/api/v1/assets', tags=['Assets'])
