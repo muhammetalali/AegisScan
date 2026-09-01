@@ -7,7 +7,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-aegisdb}
       POSTGRES_USER: ${POSTGRES_USER:-aegis}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
-    ports: ["5432:5432"]
     volumes: [postgres_data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
@@ -18,7 +17,6 @@ services:
     image: redis:7-alpine
     container_name: aegis-redis
     restart: unless-stopped
-    ports: ["6379:6379"]
     volumes: [redis_data:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -49,7 +47,9 @@ services:
     volumes: [./backend:/app]
     ports: ["8001:8001"]
     env_file: ./backend/.env
-    depends_on: [django, redis]
+    depends_on:
+      django: {condition: service_started}
+      redis: {condition: service_healthy}
   celery_worker:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-worker
@@ -57,7 +57,9 @@ services:
     command: celery -A fastapi_app.celery_app worker -l info -c 4
     volumes: [./backend:/app]
     env_file: ./backend/.env
-    depends_on: [redis, postgres]
+    depends_on:
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
   celery_beat:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-beat
@@ -65,13 +67,17 @@ services:
     command: celery -A fastapi_app.celery_app beat -l info
     volumes: [./backend:/app]
     env_file: ./backend/.env
-    depends_on: [redis, postgres]
+    depends_on:
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
   frontend:
     build: {context: ./frontend, dockerfile: Dockerfile}
     container_name: aegis-frontend
     restart: unless-stopped
     expose: ["80"]
-    depends_on: [django, fastapi]
+    depends_on:
+      django: {condition: service_started}
+      fastapi: {condition: service_started}
   nginx:
     image: nginx:alpine
     container_name: aegis-nginx
@@ -79,7 +85,10 @@ services:
     ports: ["80:80"]
     volumes:
       - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on: [django, fastapi, frontend]
+    depends_on:
+      django: {condition: service_started}
+      fastapi: {condition: service_started}
+      frontend: {condition: service_started}
 volumes:
   postgres_data:
   redis_data:
