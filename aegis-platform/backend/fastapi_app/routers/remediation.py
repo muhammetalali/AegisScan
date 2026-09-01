@@ -18,6 +18,7 @@ from django_project.evidence.models import ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
+from ..services.remediation_lifecycle import RemediationState, get_state, transition
 from ..tasks.finding_validation import validate_finding_e2e
 from ..tasks.nmap_finding_validation import validate_nmap_finding_e2e
 
@@ -65,9 +66,19 @@ def _create_run(
     profile: str,
     engine: str,
     reason: str,
+    duration_minutes: int,
+    rate_limit: int,
 ) -> ValidationRun:
     with transaction.atomic():
         locked_finding = Vulnerability.objects.select_for_update().get(pk=finding.pk)
+        latest = ValidationRun.objects.filter(finding_id=locked_finding.pk, user_id=user_id).order_by('-created_at').first()
+        if latest:
+            latest_state = get_state(latest)
+            if latest_state == RemediationState.VERIFIED and locked_finding.status != Vulnerability.Status.FIXED:
+                raise RemediationValidationConflict(latest)
+            if latest_state == RemediationState.CLOSED:
+                raise ValueError('Remediation validation cannot be started after the finding has been closed.')
+
         active = ValidationRun.objects.filter(
             finding_id=locked_finding.pk,
             user_id=user_id,
@@ -76,7 +87,14 @@ def _create_run(
         if active:
             raise RemediationValidationConflict(active)
 
-        workflow_result = {'workflow': 'remediation'}
+        workflow_result = {
+            'workflow': 'remediation',
+            'remediation_state': RemediationState.REQUESTED,
+            'requested_at': datetime.now(timezone.utc).isoformat(),
+            'profile': profile,
+            'duration_minutes': duration_minutes,
+            'rate_limit': rate_limit,
+        }
         if reason:
             workflow_result['reason'] = reason
         validation = ValidationRun.objects.create(
@@ -91,37 +109,20 @@ def _create_run(
             current_phase='queued',
             result=workflow_result,
         )
+        transition(
+            validation.id,
+            RemediationState.REQUESTED,
+            reason=reason or 'Authorized remediation validation requested',
+        )
         transaction.on_commit(
-            lambda validation_id=str(validation.id), task_engine=engine: _dispatch_validation_task(
-                validation_id, task_engine
-            )
+            lambda validation_id=str(validation.id), task_engine=engine: _dispatch_validation_task(validation_id, task_engine)
         )
         return validation
 
 
 @sync_to_async
 def _latest_run(vuln_id: UUID, user_id: str) -> Optional[ValidationRun]:
-    return ValidationRun.objects.filter(
-        finding_id=vuln_id,
-        user_id=user_id,
-    ).order_by('-created_at').first()
-
-
-def _state(validation: Optional[ValidationRun]) -> str:
-    if not validation:
-        return 'not_requested'
-    if validation.status in {ValidationRun.Status.QUEUED, ValidationRun.Status.RUNNING}:
-        return 'validating'
-    if validation.status == ValidationRun.Status.CANCELLED:
-        return 'cancelled'
-    if validation.status == ValidationRun.Status.FAILED:
-        return 'validation_failed'
-    result = validation.result if isinstance(validation.result, dict) else {}
-    if result.get('finding_present') is False:
-        return 'verified'
-    if result.get('finding_present') is True:
-        return 'not_fixed'
-    return 'validation_failed'
+    return ValidationRun.objects.filter(finding_id=vuln_id, user_id=user_id).order_by('-created_at').first()
 
 
 @router.post('/vulnerabilities/{vuln_id}/remediation/validate', status_code=202)
@@ -170,19 +171,23 @@ async def request_remediation_validation(
             profile=body.profile,
             engine=engine,
             reason=body.reason.strip(),
+            duration_minutes=body.duration_minutes,
+            rate_limit=body.rate_limit,
         )
     except RemediationValidationConflict as exc:
         raise HTTPException(
             status_code=409,
             detail={
-                'message': 'A remediation validation is already running for this finding.',
+                'message': 'A remediation validation is already running or the finding still requires its current verification lifecycle to finish.',
                 'validation_id': str(exc.validation.id),
             },
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return {
         'workflow': 'remediation',
-        'state': 'queued',
+        'state': RemediationState.REQUESTED,
         'finding_id': str(vuln_id),
         'validation_id': str(validation.id),
         'engine': engine,
@@ -200,9 +205,28 @@ async def remediation_status(vuln_id: UUID, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail='Vulnerability not found')
     validation = await _latest_run(vuln_id, user_id)
     result: dict[str, Any] = validation.result if validation and isinstance(validation.result, dict) else {}
+    state = get_state(validation)
+
+    if validation and validation.status == ValidationRun.Status.RUNNING and state != RemediationState.VALIDATING:
+        validation = await sync_to_async(transition)(validation.id, RemediationState.VALIDATING, reason='Validation worker started')
+        result = validation.result if isinstance(validation.result, dict) else {}
+        state = RemediationState.VALIDATING
+    elif validation and validation.status == ValidationRun.Status.COMPLETED and result.get('finding_present') is True and state != RemediationState.NOT_FIXED:
+        validation = await sync_to_async(transition)(validation.id, RemediationState.NOT_FIXED, reason='Authorized validation still detects the finding', evidence_id=result.get('evidence_id'))
+        result = validation.result if isinstance(validation.result, dict) else {}
+        state = RemediationState.NOT_FIXED
+    elif validation and validation.status == ValidationRun.Status.COMPLETED and result.get('finding_present') is False and state not in {RemediationState.VALIDATION_PASSED, RemediationState.VERIFIED, RemediationState.CLOSED}:
+        validation = await sync_to_async(transition)(validation.id, RemediationState.VALIDATION_PASSED, reason='Authorized validation no longer detects the finding', evidence_id=result.get('evidence_id'))
+        result = validation.result if isinstance(validation.result, dict) else {}
+        state = RemediationState.VALIDATION_PASSED
+    elif validation and validation.status == ValidationRun.Status.FAILED and state != RemediationState.FAILED:
+        validation = await sync_to_async(transition)(validation.id, RemediationState.FAILED, reason=validation.error_message or 'Validation execution failed')
+        result = validation.result if isinstance(validation.result, dict) else {}
+        state = RemediationState.FAILED
+
     return {
         'workflow': 'remediation',
-        'state': _state(validation),
+        'state': state,
         'finding_id': str(vuln_id),
         'validation_status': finding.validation_status,
         'vulnerability_status': finding.status,
@@ -213,6 +237,40 @@ async def remediation_status(vuln_id: UUID, user=Depends(get_current_user)):
         'celery_task_id': validation.celery_task_id if validation else None,
         'finding_present': result.get('finding_present'),
         'evidence_id': result.get('evidence_id'),
+        'remediation_events': result.get('remediation_events', []),
         'completed_at': validation.completed_at.astimezone(timezone.utc).isoformat() if validation and validation.completed_at else None,
         'error_message': validation.error_message if validation else '',
+    }
+
+
+@router.post('/vulnerabilities/{vuln_id}/remediation/close')
+async def close_remediation(vuln_id: UUID, user=Depends(get_current_user)):
+    user_id = str(user.get('user_id'))
+    finding = await _get_finding(vuln_id, user_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail='Vulnerability not found')
+    validation = await _latest_run(vuln_id, user_id)
+    if not validation:
+        raise HTTPException(status_code=409, detail='Remediation cannot be closed without a validation run')
+    if get_state(validation) != RemediationState.VERIFIED:
+        raise HTTPException(status_code=409, detail='Remediation can only be closed after explicit fix verification')
+
+    try:
+        validation = await sync_to_async(transition)(
+            validation.id,
+            RemediationState.CLOSED,
+            reason='Finding remediation lifecycle closed after explicit verification',
+            evidence_id=(validation.result or {}).get('evidence_id') if isinstance(validation.result, dict) else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    finding = await _get_finding(vuln_id, user_id)
+    return {
+        'workflow': 'remediation',
+        'state': RemediationState.CLOSED,
+        'finding_id': str(vuln_id),
+        'validation_id': str(validation.id),
+        'vulnerability_status': finding.status if finding else Vulnerability.Status.FIXED,
+        'closed_at': datetime.now(timezone.utc).isoformat(),
     }
