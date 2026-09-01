@@ -30,13 +30,19 @@ _DJANGO_APPS = (
 
 def install_django_import_aliases() -> None:
     """Register legacy top-level app/module aliases to canonical Django apps."""
+    # Register every package alias first so model modules can safely import
+    # models from another Django app without depending on tuple order.
+    packages = {}
     for app_name in _DJANGO_APPS:
         canonical_package = f"django_project.{app_name}"
         package = importlib.import_module(canonical_package)
         sys.modules.setdefault(app_name, package)
+        packages[app_name] = canonical_package
 
-        # Eagerly alias models so ``app.models`` is the exact same module object
-        # as ``django_project.app.models`` and Django sees one model class.
+    # Alias the canonical model modules themselves. This guarantees that
+    # ``assets.models.Asset`` and ``django_project.assets.models.Asset`` resolve
+    # to the same Python class rather than duplicate model registrations.
+    for app_name, canonical_package in packages.items():
         models_name = f"{canonical_package}.models"
         models = importlib.import_module(models_name)
-        sys.modules[ f"{app_name}.models" ] = models
+        sys.modules[f"{app_name}.models"] = models
