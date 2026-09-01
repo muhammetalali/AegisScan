@@ -4,11 +4,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app:/app/django_project
 
+ARG NUCLEI_VERSION=3.11.1
+
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl nmap \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends curl nmap unzip ca-certificates \
+    && cd /tmp \
+    && curl -fsSLO "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" \
+    && curl -fsSLO "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/checksums.txt" \
+    && grep "nuclei_${NUCLEI_VERSION}_linux_amd64.zip" checksums.txt | sha256sum -c - \
+    && unzip -q "nuclei_${NUCLEI_VERSION}_linux_amd64.zip" nuclei -d /usr/local/bin \
+    && chmod 0755 /usr/local/bin/nuclei \
+    && /usr/local/bin/nuclei -version \
+    && rm -f "/tmp/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" /tmp/checksums.txt \
+    && apt-get purge -y --auto-remove unzip \
+    && rm -rf /var/lib/apt/lists/* /tmp/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
