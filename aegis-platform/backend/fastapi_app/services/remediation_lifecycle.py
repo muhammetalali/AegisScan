@@ -71,11 +71,11 @@ def transition(
         raise ValueError(f'Unsupported remediation state: {to_state}')
 
     with transaction.atomic():
-        validation = ValidationRun.objects.select_for_update().select_related('finding', 'user').get(pk=validation_id)
-        finding = validation.finding
-        if not finding:
+        # finding is nullable, so do not combine its relation with SELECT FOR UPDATE.
+        validation = ValidationRun.objects.select_for_update().get(pk=validation_id)
+        if not validation.finding_id:
             raise ValueError('Remediation transition requires a finding-linked validation run')
-        finding = Vulnerability.objects.select_for_update().get(pk=finding.pk)
+        finding = Vulnerability.objects.select_for_update().get(pk=validation.finding_id)
 
         current = get_state(validation)
         result: dict[str, Any] = dict(validation.result) if isinstance(validation.result, dict) else {}
@@ -90,11 +90,10 @@ def transition(
         if to_state not in _ALLOWED_TRANSITIONS.get(current, set()):
             raise ValueError(f'Invalid remediation transition: {current} -> {to_state}')
 
-        now = _utc_now()
         history.append({
             'from': current,
             'to': to_state,
-            'at': now,
+            'at': _utc_now(),
             'reason': reason.strip(),
             'evidence_id': evidence_id,
             'user_id': str(validation.user_id),
@@ -105,6 +104,7 @@ def transition(
         validation.save(update_fields=['result'])
 
         old_status = finding.status
+        user = validation.user
         if to_state in {
             RemediationState.REQUESTED,
             RemediationState.VALIDATING,
@@ -116,7 +116,7 @@ def transition(
         elif to_state == RemediationState.CLOSED:
             finding.status = Vulnerability.Status.FIXED
             finding.fixed_at = datetime.now(timezone.utc)
-            finding.fixed_by = validation.user
+            finding.fixed_by = user
 
         if finding.status != old_status:
             finding.save(update_fields=['status', 'fixed_at', 'fixed_by', 'updated_at'])
@@ -124,7 +124,7 @@ def transition(
                 vulnerability=finding,
                 old_status=old_status,
                 new_status=finding.status,
-                changed_by=validation.user,
+                changed_by=user,
                 reason=f'remediation_state={to_state}; {reason.strip()}'.strip(),
             )
         elif to_state == RemediationState.CLOSED:
@@ -134,7 +134,7 @@ def transition(
 
 
 def verify_validation(validation_id: str | UUID) -> ValidationRun:
-    validation = ValidationRun.objects.select_related('finding', 'user').get(pk=validation_id)
+    validation = ValidationRun.objects.get(pk=validation_id)
     if validation.status != ValidationRun.Status.COMPLETED:
         raise ValueError('Fix verification requires a completed validation run')
     result = validation.result if isinstance(validation.result, dict) else {}
