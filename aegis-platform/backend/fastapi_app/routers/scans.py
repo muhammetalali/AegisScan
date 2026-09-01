@@ -1,18 +1,21 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import os
+
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-import os
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 import django
+
 django.setup()
 
-from assets.models import Asset
-from projects.models import Project
-from scans.models import Scan, ScanEngineExecution, ScanLog
+from django_project.assets.models import Asset
+from django_project.projects.models import Project
+from django_project.scans.models import Scan, ScanEngineExecution, ScanLog
+
 from ..core.dependencies import get_current_user
 from ..tasks.security_scan import run_nmap_scan
 
