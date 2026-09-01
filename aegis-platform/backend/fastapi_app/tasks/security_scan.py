@@ -19,6 +19,7 @@ from ..services.scope_authorization import is_target_authorized
 from ..services.nmap_parser import parse_nmap_xml
 from ..services.tool_abstraction import ToolRequest, get_tool
 from ..services.scanner_adapters import run_nuclei
+from ..services.nmap_finding_ingestion import ingest_nmap_findings
 
 
 def _ensure_engine(name: str, display_name: str, category: str, timeout: int) -> ScanEngine:
@@ -174,7 +175,7 @@ def _ingest_nuclei_findings(scan: Scan, evidence: Evidence, raw_output: str) -> 
 
 @shared_task(bind=True, name='fastapi_app.tasks.security_scan.run_nmap_scan', max_retries=1, default_retry_delay=30)
 def run_nmap_scan(self, scan_id: str) -> dict:
-    scan = Scan.objects.select_related('asset', 'initiated_by').get(pk=scan_id)
+    scan = Scan.objects.select_related('asset', 'initiated_by', 'project').get(pk=scan_id)
     if not scan.asset:
         raise ValueError('A scan must reference an asset before execution')
     configuration = scan.asset.configuration or {}
@@ -210,23 +211,24 @@ def run_nmap_scan(self, scan_id: str) -> dict:
         duration = max(0, (completed_at - started).total_seconds()) if started else 0
         with transaction.atomic():
             evidence = Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed}, collected_by=scan.initiated_by)
+            findings = ingest_nmap_findings(scan, evidence, parsed)
             execution.status = ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code == 0 else ScanEngineExecution.ExecutionStatus.FAILED
             execution.progress = 100
             execution.completed_at = completed_at
             execution.duration = duration
-            execution.findings_found = 0
+            execution.findings_found = len(findings)
             execution.evidences_collected = 1
-            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'parsed': parsed, 'evidence_id': str(evidence.id)}
+            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'parsed': parsed, 'evidence_id': str(evidence.id), 'finding_ids': [str(v.id) for v in findings]}
             execution.logs = result.stderr or ''
             execution.save(update_fields=['status', 'progress', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'result_data', 'logs', 'updated_at'])
-            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nmap execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'host_count': parsed.get('host_count', 0), 'open_ports': parsed.get('open_ports', 0), 'evidence_id': str(evidence.id)})
+            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nmap execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'host_count': parsed.get('host_count', 0), 'open_ports': parsed.get('open_ports', 0), 'finding_count': len(findings), 'finding_ids': [str(v.id) for v in findings], 'evidence_id': str(evidence.id)})
             scan.status = Scan.Status.COMPLETED if result.exit_code == 0 else Scan.Status.PARTIAL
             scan.progress = 100
             scan.completed_at = completed_at
-            scan.findings_count = 0
-            scan.engine_results = {**(scan.engine_results or {}), 'nmap': {'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed}}
+            scan.findings_count = len(findings)
+            scan.engine_results = {**(scan.engine_results or {}), 'nmap': {'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed, 'finding_ids': [str(v.id) for v in findings], 'evidence_id': str(evidence.id)}}
             scan.save(update_fields=['status', 'progress', 'completed_at', 'findings_count', 'engine_results', 'updated_at'])
-        return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nmap', 'target': result.target, 'parsed': parsed}
+        return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nmap', 'target': result.target, 'parsed': parsed, 'finding_ids': [str(v.id) for v in findings]}
     except Exception as exc:
         completed_at = datetime.now(timezone.utc)
         execution.status = ScanEngineExecution.ExecutionStatus.FAILED
@@ -342,7 +344,7 @@ def validate_finding_task(self, validation_id: str) -> dict:
             validation.result = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'parsed': parsed}
             validation.completed_at = datetime.now(timezone.utc)
             validation.save(update_fields=['status', 'progress', 'current_phase', 'result', 'completed_at'])
-        return {'status': validation.status, 'validation_id': validation_id, 'tool': result.tool, 'target': result.target, 'parsed': parsed}
+        return {'status': validation.status, 'validation_id': validation_id, 'tool': 'nmap', 'target': result.target, 'parsed': parsed}
     except Exception as exc:
         validation.status = ValidationRun.Status.FAILED
         validation.error_message = str(exc)
