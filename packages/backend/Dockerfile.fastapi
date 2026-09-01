@@ -6,8 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Runtime-only image: psycopg2-binary ships its PostgreSQL client dependency,
+# so the compiler toolchain and libpq-dev are not required at runtime.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl build-essential libpq-dev \
+    && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt
