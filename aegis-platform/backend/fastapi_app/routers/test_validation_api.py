@@ -208,8 +208,8 @@ def test_validation_progress_api_rejects_malformed_uuid_without_orm_error(api_fi
 
 @pytest.mark.django_db
 def test_verify_api_returns_409_when_latest_validation_still_detects_finding(api_fixture):
-    client, _, finding = api_fixture
-    validation = _completed_validation(api_fixture[1], finding, finding_present=True)
+    client, user, finding = api_fixture
+    validation = _completed_validation(user, finding, finding_present=True)
 
     response = client.post(f"/vulnerabilities/{finding.id}/verify")
 
