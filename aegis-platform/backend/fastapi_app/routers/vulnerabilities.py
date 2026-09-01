@@ -12,7 +12,7 @@ from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from django_project.evidence.models import Evidence
+from django_project.evidence.models import Evidence, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityNote
 from ..core.dependencies import get_current_user
 
@@ -211,9 +211,60 @@ async def get_evidences(vuln_id: str, user=Depends(get_current_user)):
     ]
 
 
+@sync_to_async
+def _verify_fix(vuln_id: str, user_id: str):
+    vulnerability = Vulnerability.objects.filter(id=vuln_id, project__owner_id=user_id).first()
+    if not vulnerability:
+        vulnerability = Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
+    if not vulnerability:
+        return None, None, 'Vulnerability not found'
+
+    validation = ValidationRun.objects.filter(
+        finding=vulnerability,
+        user_id=user_id,
+        status=ValidationRun.Status.COMPLETED,
+        authorized=True,
+    ).order_by('-completed_at').first()
+    if not validation:
+        return vulnerability, None, 'Fix verification requires a completed authorized finding-linked validation run.'
+
+    result = validation.result or {}
+    if result.get('finding_present') is not False:
+        return vulnerability, validation, 'The latest authorized validation still detects the finding; fix cannot be verified.'
+
+    evidence = Evidence.objects.filter(
+        finding=vulnerability,
+        evidence_type='validation_output',
+        metadata__validation_id=str(validation.id),
+    ).order_by('-collected_at').first()
+    if not evidence:
+        return vulnerability, validation, 'Completed validation has no linked validation evidence; verification is not trusted.'
+
+    vulnerability.validation_status = 'verified'
+    vulnerability.validated_at = validation.completed_at or datetime.now(timezone.utc)
+    vulnerability.validated_by_id = user_id
+    vulnerability.verified_evidence_count = vulnerability.evidence_records.filter(
+        evidence_type='validation_output',
+        metadata__finding_present=False,
+    ).count()
+    vulnerability.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'updated_at'])
+    return vulnerability, validation, None
+
+
 @router.post('/{vuln_id}/verify')
 async def verify_fix(vuln_id: str, user=Depends(get_current_user)):
-    raise HTTPException(status_code=409, detail='Fix verification requires a completed authorized validation run; this endpoint does not fabricate verification state.')
+    vulnerability, validation, error = await _verify_fix(vuln_id, str(user.get('user_id')))
+    if not vulnerability:
+        raise HTTPException(status_code=404, detail=error or 'Vulnerability not found')
+    if error:
+        raise HTTPException(status_code=409, detail=error)
+    return {
+        'status': 'verified',
+        'vulnerability_id': str(vulnerability.id),
+        'validation_id': str(validation.id),
+        'verified_evidence_count': vulnerability.verified_evidence_count,
+        'validated_at': vulnerability.validated_at.astimezone(timezone.utc).isoformat() if vulnerability.validated_at else None,
+    }
 
 
 @sync_to_async
