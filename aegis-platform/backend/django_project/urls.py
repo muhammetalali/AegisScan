@@ -14,6 +14,7 @@ urlpatterns = [
     path('health/', health_check, name='health-check'),
     path('ready/', readiness_check, name='readiness-check'),
     path('api/v1/auth/', include('django_project.users.urls')),
+    path('api/v1/', include('django_project.projects.urls')),
 ]
 
 if settings.DEBUG:
