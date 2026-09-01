@@ -60,14 +60,14 @@ def require_staff(user: dict = Depends(get_current_user)):
 
 @sync_to_async
 def _scan_access(scan_id: str, user_id: str) -> bool:
-    from scans.models import Scan
+    from django_project.scans.models import Scan
     scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
     return bool(scan and (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()))
 
 
 @sync_to_async
 def _validation_access(validation_id: str, user_id: str) -> bool:
-    from evidence.models import ValidationRun
+    from django_project.evidence.models import ValidationRun
     return ValidationRun.objects.filter(pk=validation_id, user_id=user_id).exists()
 
 
