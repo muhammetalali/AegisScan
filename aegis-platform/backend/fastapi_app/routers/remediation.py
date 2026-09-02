@@ -208,7 +208,7 @@ async def request_remediation_validation(
             request=request,
         )
     except Exception:
-        pass
+        raise
 
     return {
         'workflow': 'remediation',
@@ -322,7 +322,7 @@ async def verify_remediation(vuln_id: UUID, request: Request, user=Depends(get_c
             request=request,
         )
     except Exception:
-        pass
+        raise
 
     return {
         'workflow': 'remediation',
@@ -379,7 +379,7 @@ async def close_remediation(vuln_id: UUID, request: Request, user=Depends(get_cu
             request=request,
         )
     except Exception:
-        pass
+        raise
 
     return {
         'workflow': 'remediation',
