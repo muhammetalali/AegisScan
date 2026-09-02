@@ -13,6 +13,7 @@ from ..services.autonomous_triage import build_triage
 from ..services.security_decision import build_decision_pack
 from ..services.decision_action_orchestration import create_action, get_action, list_actions, transition
 from ..services.workflow_intelligence import enrich_action, workflow_metrics
+from ..services.audit_writer import add_audit_entry
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -60,8 +61,7 @@ async def create_action_endpoint(body: ActionCreate, user: dict[str, Any] = Depe
     actor = str(user.get("id") or user.get("username") or "user")
     item = create_action(decision, body.owner, body.sla_hours, actor)
     try:
-        from .audit import add_audit_entry
-        add_audit_entry(user=actor, action="decision_action.create", target=item["actionId"], project="—", result="success")
+        add_audit_entry(user=actor, action="decision_action.create", target=item["actionId"], project="—", result="success", resource_type="decision_action")
     except Exception:
         pass
     return enrich_action(item)
@@ -79,8 +79,7 @@ async def action_transition(action_id: str, body: ActionTransition, user: dict[s
     try:
         item = transition(action_id, body.state, actor, body.note)
         try:
-            from .audit import add_audit_entry
-            add_audit_entry(user=actor, action=f"decision_action.{body.state}", target=action_id, project="—", result="success")
+            add_audit_entry(user=actor, action=f"decision_action.{body.state}", target=action_id, project="—", result="success", resource_type="decision_action", metadata={"note": body.note or ""})
         except Exception:
             pass
         return enrich_action(item)
