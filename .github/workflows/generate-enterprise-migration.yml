@@ -1,6 +1,8 @@
 name: Generate Enterprise Migration
 
 on:
+  push:
+    branches: [fix/finding-validation-loop]
   workflow_dispatch:
 
 jobs:
