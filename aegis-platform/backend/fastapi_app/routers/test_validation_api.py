@@ -83,12 +83,15 @@ def api_fixture(transactional_db):
         "is_staff": True,
     }
 
-    # Deterministically close the TestClient portal/thread after every test.
-    with TestClient(app) as client:
-        try:
-            yield client, user, finding
-        finally:
-            app.dependency_overrides.clear()
+    # Close the HTTP transport deterministically after each test, but do not
+    # enter the TestClient context manager because that would start the full
+    # application lifespan (background bridges/orchestrators) unnecessarily.
+    client = TestClient(app)
+    try:
+        yield client, user, finding
+    finally:
+        app.dependency_overrides.clear()
+        client.close()
 
 
 def _create_body(finding_id: str) -> dict:
