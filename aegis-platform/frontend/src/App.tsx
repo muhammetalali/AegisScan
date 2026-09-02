@@ -1,50 +1,6 @@
-import React, { Suspense, lazy } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
-import { AuthProvider, useAuth } from './stores/authStore'
-import { ThemeProvider } from './stores/themeStore'
-import { LanguageProvider } from './stores/languageStore'
-import { Layout } from './components/layout/Layout'
-import { LoadingScreen } from './components/ui/LoadingScreen'
-const Login = lazy(() => import('./pages/auth/Login').then(m => ({ default: m.Login })))
-const Register = lazy(() => import('./pages/auth/Register').then(m => ({ default: m.Register })))
-const ForgotPassword = lazy(() => import('./pages/auth/ForgotPassword').then(m => ({ default: m.ForgotPassword })))
-const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
-const Projects = lazy(() => import('./pages/projects/Projects').then(m => ({ default: m.Projects })))
-const ProjectDetail = lazy(() => import('./pages/projects/ProjectDetail').then(m => ({ default: m.ProjectDetail })))
-const Assets = lazy(() => import('./pages/assets/Assets').then(m => ({ default: m.Assets })))
-const ScanPage = lazy(() => import('./pages/scans/ScanPage').then(m => ({ default: m.ScanPage })))
-const ScanProgress = lazy(() => import('./pages/scans/ScanProgress').then(m => ({ default: m.ScanProgress })))
-const ScanResults = lazy(() => import('./pages/validations/ValidationCommandCenter').then(m => ({ default: m.ValidationCommandCenter })))
-const Vulnerabilities = lazy(() => import('./pages/vulnerabilities/Vulnerabilities').then(m => ({ default: m.Vulnerabilities })))
-const VulnerabilityDetail = lazy(() => import('./pages/vulnerabilities/VulnerabilityDetail').then(m => ({ default: m.VulnerabilityDetail })))
-const Reports = lazy(() => import('./pages/reports/Reports').then(m => ({ default: m.Reports })))
-const ReportDetail = lazy(() => import('./pages/reports/ReportDetail').then(m => ({ default: m.ReportDetail })))
-const Compliance = lazy(() => import('./pages/compliance/Compliance').then(m => ({ default: m.Compliance })))
-const ComplianceIntelligence = lazy(() => import('./pages/compliance/ComplianceIntelligencePage').then(m => ({ default: m.ComplianceIntelligencePage })))
-const SecurityAssurance = lazy(() => import('./pages/compliance/SecurityAssuranceCommandCenterPage').then(m => ({ default: m.SecurityAssuranceCommandCenterPage })))
-const ContinuousAssurance = lazy(() => import('./pages/assurance/ContinuousAssurancePage').then(m => ({ default: m.ContinuousAssurancePage })))
-const CorrelationConflict = lazy(() => import('./pages/compliance/CorrelationConflictPage').then(m => ({ default: m.CorrelationConflictPage })))
-const CorrelatedEvidenceGraph = lazy(() => import('./pages/compliance/CorrelatedEvidenceGraphPage').then(m => ({ default: m.CorrelatedEvidenceGraphPage })))
-const AssuranceGraphPage = lazy(() => import('./pages/assurance/AssuranceGraphPage').then(m => ({ default: m.AssuranceGraphPage })))
-const AutonomousTriagePage = lazy(() => import('./pages/assurance/AutonomousTriagePage').then(m => ({ default: m.AutonomousTriagePage })))
-const SecurityDecisionPage = lazy(() => import('./pages/assurance/SecurityDecisionPage').then(m => ({ default: m.SecurityDecisionPage })))
-const DecisionActionPage = lazy(() => import('./pages/assurance/DecisionActionPage').then(m => ({ default: m.DecisionActionPage })))
-const DecisionActionDetailPage = lazy(() => import('./pages/assurance/DecisionActionDetailPage').then(m => ({ default: m.DecisionActionDetailPage })))
-const WorkflowControlTowerPage = lazy(() => import('./pages/assurance/WorkflowControlTowerPage').then(m => ({ default: m.WorkflowControlTowerPage })))
-const GovernancePage = lazy(() => import('./pages/assurance/GovernancePage').then(m => ({ default: m.GovernancePage })))
-const PolicyStudioPage = lazy(() => import('./pages/assurance/PolicyStudioPage').then(m => ({ default: m.PolicyStudioPage })))
-const PolicySimulationPage = lazy(() => import('./pages/assurance/PolicySimulationPage').then(m => ({ default: m.PolicySimulationPage })))
-const KnowledgeBase = lazy(() => import('./pages/knowledge/KnowledgeBase').then(m => ({ default: m.KnowledgeBase })))
-const DigitalTwin = lazy(() => import('./pages/digital-twin/DigitalTwin').then(m => ({ default: m.DigitalTwin })))
-const SecurityPosture = lazy(() => import('./pages/posture/SecurityPosture').then(m => ({ default: m.SecurityPosture })))
-const CISOExecutivePage = lazy(() => import('./pages/executive/CISOExecutivePage').then(m => ({ default: m.CISOExecutivePage })))
-const Users = lazy(() => import('./pages/users/Users').then(m => ({ default: m.Users })))
-const Settings = lazy(() => import('./pages/settings/Settings').then(m => ({ default: m.Settings })))
-const SystemMonitor = lazy(() => import('./pages/system/SystemMonitor').then(m => ({ default: m.SystemMonitor })))
-const AuditLogs = lazy(() => import('./pages/audit/AuditLogs').then(m => ({ default: m.AuditLogs })))
-const Notifications = lazy(() => import('./pages/notifications/Notifications').then(m => ({ default: m.Notifications })))
-const NewValidation = lazy(() => import('./pages/validations/ValidationWizard').then(m => ({ default: m.ValidationWizard })))
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => { const { isAuthenticated, loading } = useAuth(); if (loading) return <LoadingScreen />; if (!isAuthenticated) return <Navigate to="/login" replace />; return <>{children}</> }
-const PublicRoute = ({ children }: { children: React.ReactNode }) => { const { isAuthenticated, loading } = useAuth(); if (loading) return <LoadingScreen />; if (isAuthenticated) return <Navigate to="/dashboard" replace />; return <>{children}</> }
-const App = () => <AuthProvider><ThemeProvider><LanguageProvider><Routes><Route path="/login" element={<PublicRoute><Suspense fallback={<LoadingScreen />}><Login /></Suspense></PublicRoute>} /><Route path="/register" element={<PublicRoute><Suspense fallback={<LoadingScreen />}><Register /></Suspense></PublicRoute>} /><Route path="/forgot-password" element={<PublicRoute><Suspense fallback={<LoadingScreen />}><ForgotPassword /></Suspense></PublicRoute>} /><Route element={<ProtectedRoute><Layout /></ProtectedRoute>}><Route path="/dashboard" element={<Suspense fallback={<LoadingScreen />}><Dashboard /></Suspense>} /><Route path="/projects" element={<Suspense fallback={<LoadingScreen />}><Projects /></Suspense>} /><Route path="/projects/:id" element={<Suspense fallback={<LoadingScreen />}><ProjectDetail /></Suspense>} /><Route path="/assets" element={<Suspense fallback={<LoadingScreen />}><Assets /></Suspense>} /><Route path="/validations/new" element={<Suspense fallback={<LoadingScreen />}><NewValidation /></Suspense>} /><Route path="/validations/:id/progress" element={<Suspense fallback={<LoadingScreen />}><ScanProgress /></Suspense>} /><Route path="/validations/:id/results" element={<Suspense fallback={<LoadingScreen />}><ScanResults /></Suspense>} /><Route path="/scan" element={<Suspense fallback={<LoadingScreen />}><ScanPage /></Suspense>} /><Route path="/scan/:id/progress" element={<Suspense fallback={<LoadingScreen />}><ScanProgress /></Suspense>} /><Route path="/scan/:id/results" element={<Suspense fallback={<LoadingScreen />}><ScanResults /></Suspense>} /><Route path="/vulnerabilities" element={<Suspense fallback={<LoadingScreen />}><Vulnerabilities /></Suspense>} /><Route path="/vulnerabilities/:id" element={<Suspense fallback={<LoadingScreen />}><VulnerabilityDetail /></Suspense>} /><Route path="/reports" element={<Suspense fallback={<LoadingScreen />}><Reports /></Suspense>} /><Route path="/reports/:id" element={<Suspense fallback={<LoadingScreen />}><ReportDetail /></Suspense>} /><Route path="/compliance" element={<Suspense fallback={<LoadingScreen />}><Compliance /></Suspense>} /><Route path="/compliance/intelligence" element={<Suspense fallback={<LoadingScreen />}><ComplianceIntelligence /></Suspense>} /><Route path="/assurance" element={<Suspense fallback={<LoadingScreen />}><SecurityAssurance /></Suspense>} /><Route path="/assurance/continuous" element={<Suspense fallback={<LoadingScreen />}><ContinuousAssurance /></Suspense>} /><Route path="/assurance/conflicts" element={<Suspense fallback={<LoadingScreen />}><CorrelationConflict /></Suspense>} /><Route path="/assurance/evidence" element={<Suspense fallback={<LoadingScreen />}><CorrelatedEvidenceGraph /></Suspense>} /><Route path="/assurance/graph" element={<Suspense fallback={<LoadingScreen />}><AssuranceGraphPage /></Suspense>} /><Route path="/assurance/triage" element={<Suspense fallback={<LoadingScreen />}><AutonomousTriagePage /></Suspense>} /><Route path="/assurance/decisions" element={<Suspense fallback={<LoadingScreen />}><SecurityDecisionPage /></Suspense>} /><Route path="/assurance/actions" element={<Suspense fallback={<LoadingScreen />}><DecisionActionPage /></Suspense>} /><Route path="/assurance/actions/:actionId" element={<Suspense fallback={<LoadingScreen />}><DecisionActionDetailPage /></Suspense>} /><Route path="/assurance/workflow" element={<Suspense fallback={<LoadingScreen />}><WorkflowControlTowerPage /></Suspense>} /><Route path="/assurance/governance" element={<Suspense fallback={<LoadingScreen />}><GovernancePage /></Suspense>} /><Route path="/assurance/policies" element={<Suspense fallback={<LoadingScreen />}><PolicyStudioPage /></Suspense>} /><Route path="/assurance/policies/simulate" element={<Suspense fallback={<LoadingScreen />}><PolicySimulationPage /></Suspense>} /><Route path="/knowledge" element={<Suspense fallback={<LoadingScreen />}><KnowledgeBase /></Suspense>} /><Route path="/digital-twin" element={<Suspense fallback={<LoadingScreen />}><DigitalTwin /></Suspense>} /><Route path="/posture" element={<Suspense fallback={<LoadingScreen />}><SecurityPosture /></Suspense>} /><Route path="/executive" element={<Suspense fallback={<LoadingScreen />}><CISOExecutivePage /></Suspense>} /><Route path="/users" element={<Suspense fallback={<LoadingScreen />}><Users /></Suspense>} /><Route path="/settings" element={<Suspense fallback={<LoadingScreen />}><Settings /></Suspense>} /><Route path="/system" element={<Suspense fallback={<LoadingScreen />}><SystemMonitor /></Suspense>} /><Route path="/audit" element={<Suspense fallback={<LoadingScreen />}><AuditLogs /></Suspense>} /><Route path="/notifications" element={<Suspense fallback={<LoadingScreen />}><Notifications /></Suspense>} /><Route path="/" element={<Navigate to="/dashboard" replace />} /></Route><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></LanguageProvider></ThemeProvider></AuthProvider>
+import React from 'react'
+import { Login } from './pages/auth/Login'
+
+const App = () => <Login />
+
 export default App
