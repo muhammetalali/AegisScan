@@ -9,15 +9,11 @@ from django_project.vulnerabilities.models import Vulnerability
 
 
 def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any]) -> list[Vulnerability]:
-    """Persist each real Nmap open-port observation as a scan-scoped finding.
-
-    The scanner-level evidence can be linked to one finding for simple scans;
-    additional findings receive their own evidence records so evidence ownership
-    is never overwritten by the last observation in a multi-port scan.
-    """
+    """Persist real Nmap observations as scan-scoped findings without duplicate evidence on retry."""
     findings: list[Vulnerability] = []
     now = datetime.now(timezone.utc)
     primary_evidence_used = False
+    duplicate_input_evidence = False
 
     for host in parsed.get('hosts', []):
         if not isinstance(host, dict):
@@ -45,42 +41,21 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
                 f'{ip or scan.asset.name}. Service={service_label}, '
                 f'product={product_label}, version={version or "unknown"}.'
             )
-            raw_data = {
-                'ip': ip,
-                'port': port_number,
-                'state': 'open',
-                'product': product,
-                'service': service,
-                'version': version,
-                'protocol': protocol,
-            }
+            raw_data = {'ip': ip, 'port': port_number, 'state': 'open', 'product': product, 'service': service, 'version': version, 'protocol': protocol}
 
             vulnerability = Vulnerability.objects.filter(
-                scan=scan,
-                asset=scan.asset,
-                source_engine='nmap',
-                raw_data__port=port_number,
-                raw_data__protocol=protocol,
+                scan=scan, asset=scan.asset, source_engine='nmap',
+                raw_data__port=port_number, raw_data__protocol=protocol,
             ).first()
-
             if vulnerability is None:
                 vulnerability = Vulnerability.objects.create(
-                    scan=scan,
-                    project=scan.project,
-                    asset=scan.asset,
-                    title=title,
-                    description=description,
-                    severity=Vulnerability.Severity.INFO,
-                    status=Vulnerability.Status.OPEN,
-                    confidence=Vulnerability.Confidence.HIGH,
-                    category='network',
+                    scan=scan, project=scan.project, asset=scan.asset,
+                    title=title, description=description,
+                    severity=Vulnerability.Severity.INFO, status=Vulnerability.Status.OPEN,
+                    confidence=Vulnerability.Confidence.HIGH, category='network',
                     tags=['nmap', protocol] + ([service] if service else []),
-                    risk_score=10.0,
-                    evidence_count=0,
-                    verified_evidence_count=0,
-                    validation_status='unverified',
-                    source_engine='nmap',
-                    raw_data=raw_data,
+                    risk_score=10.0, evidence_count=0, verified_evidence_count=0,
+                    validation_status='unverified', source_engine='nmap', raw_data=raw_data,
                 )
             else:
                 vulnerability.title = title
@@ -93,26 +68,23 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
                     vulnerability.fixed_by = None
                 vulnerability.save(update_fields=['title', 'description', 'raw_data', 'last_seen', 'status', 'fixed_at', 'fixed_by', 'updated_at'])
 
-            if not primary_evidence_used and evidence.finding_id in {None, vulnerability.id}:
+            existing = Evidence.objects.filter(
+                scan=scan, asset=scan.asset, finding=vulnerability,
+                source='nmap', evidence_type='scanner_output', sha256=evidence.sha256,
+            ).exclude(pk=evidence.pk).first()
+            if existing:
+                duplicate_input_evidence = True
+            elif not primary_evidence_used and evidence.finding_id in {None, vulnerability.id}:
                 evidence.finding = vulnerability
                 evidence.save(update_fields=['finding'])
                 primary_evidence_used = True
             else:
                 Evidence.objects.get_or_create(
-                    scan=scan,
-                    asset=scan.asset,
-                    finding=vulnerability,
-                    source='nmap',
-                    evidence_type='scanner_output',
+                    scan=scan, asset=scan.asset, finding=vulnerability,
+                    source='nmap', evidence_type='scanner_output', sha256=evidence.sha256,
                     defaults={
                         'raw_output': evidence.raw_output,
-                        'metadata': {
-                            **(evidence.metadata or {}),
-                            'observation_port': port_number,
-                            'observation_protocol': protocol,
-                            'observation_ip': ip,
-                            'finding_id': str(vulnerability.id),
-                        },
+                        'metadata': {**(evidence.metadata or {}), 'observation_port': port_number, 'observation_protocol': protocol, 'observation_ip': ip, 'finding_id': str(vulnerability.id)},
                         'collected_by': evidence.collected_by,
                     },
                 )
@@ -121,4 +93,6 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
             vulnerability.save(update_fields=['evidence_count', 'updated_at'])
             findings.append(vulnerability)
 
+    if duplicate_input_evidence and not primary_evidence_used:
+        evidence.delete()
     return findings
