@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE','django_project.settings')
 import django
+
 django.setup()
 from .django_compat import install_django_import_aliases
 install_django_import_aliases()
@@ -23,12 +24,17 @@ from .services.policy_engine import initialize_policy_store
 from .core.config import settings
 from .core.security import verify_token
 
-logging.basicConfig(level=logging.INFO); logger=logging.getLogger(__name__)
-websocket_manager=WebSocketManager(); scan_orchestrator=ScanOrchestrator(websocket_manager); workflow_bridge=WorkflowLiveBridge(lambda event:websocket_manager.broadcast('workflow',event))
+logging.basicConfig(level=logging.INFO)
+logger=logging.getLogger(__name__)
+websocket_manager=WebSocketManager()
+scan_orchestrator=ScanOrchestrator(websocket_manager)
+workflow_bridge=WorkflowLiveBridge(lambda event:websocket_manager.broadcast('workflow',event))
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
-    initialize_action_store(); initialize_policy_store(); await workflow_bridge.start(); await scan_orchestrator.start(); yield; await workflow_bridge.stop(); await scan_orchestrator.stop()
+    initialize_action_store(); initialize_policy_store(); await workflow_bridge.start(); await scan_orchestrator.start()
+    yield
+    await workflow_bridge.stop(); await scan_orchestrator.stop()
 
 app=FastAPI(title='AegisScan Platform API',description='Security Validation Platform - High Performance API Layer',version='1.0.0',lifespan=lifespan,docs_url='/docs',redoc_url='/redoc')
 app.add_middleware(CORSMiddleware,allow_origins=settings.CORS_ORIGINS,allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
@@ -50,6 +56,7 @@ def _scan_access(scan_id:str,user_id:str)->bool:
     from django_project.scans.models import Scan
     scan=Scan.objects.select_related('project').filter(pk=scan_id).first()
     return bool(scan and (str(scan.project.owner_id)==str(user_id) or scan.project.members.filter(pk=user_id).exists()))
+
 @sync_to_async
 def _validation_access(validation_id:str,user_id:str)->bool:
     from django_project.evidence.models import ValidationRun
@@ -68,7 +75,7 @@ async def websocket_workflow(websocket:WebSocket):
     if not user:return
     await websocket_manager.connect('workflow',websocket)
     try:
-        await websocket.send_json({'type':'workflow.connected','user_id':user.get('user_id')});
+        await websocket.send_json({'type':'workflow.connected','user_id':user.get('user_id')})
         while True: await websocket.receive_text()
     except WebSocketDisconnect: websocket_manager.disconnect('workflow',websocket)
 
@@ -91,16 +98,17 @@ async def websocket_validation_progress(websocket:WebSocket,validation_id:str):
         if user: await websocket.close(code=4003)
         return
     await websocket_manager.connect(validation_id,websocket); await websocket_manager.connect(f'validation_{validation_id}',websocket)
-    try: 
+    try:
         while True: await websocket.receive_text()
-    except WebSocketDisconnect: websocket_manager.disconnect(validation_id,websocket); websocket_manager.disconnect(f'validation_{validation_id}',websocket)
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(validation_id,websocket); websocket_manager.disconnect(f'validation_{validation_id}',websocket)
 
 @app.websocket('/ws/notifications')
 async def websocket_notifications(websocket:WebSocket):
     user=await _authenticate_socket(websocket)
     if not user:return
     key=f'user_{user.get("user_id")}'; await websocket_manager.connect(key,websocket)
-    try: 
+    try:
         while True: await websocket.receive_text()
     except WebSocketDisconnect: websocket_manager.disconnect(key,websocket)
 
@@ -111,12 +119,13 @@ async def websocket_system_monitor(websocket:WebSocket):
         if user: await websocket.close(code=4003)
         return
     await websocket_manager.connect('system_monitor',websocket)
-    try: 
+    try:
         while True: await websocket.receive_text()
     except WebSocketDisconnect: websocket_manager.disconnect('system_monitor',websocket)
 
 @app.get('/health')
-async def health_check():return {'status':'healthy','timestamp':datetime.now(timezone.utc).isoformat()}
+async def health_check():
+    return {'status':'healthy','timestamp':datetime.now(timezone.utc).isoformat()}
 
 async def _dependency_readiness()->dict:
     def check_dependencies():
@@ -141,7 +150,36 @@ async def readiness_check():
     except Exception as exc: raise HTTPException(status_code=503,detail={'ready':False,'reason':'dependency_unavailable'}) from exc
     return {'ready':True,'dependencies':dependencies,'timestamp':datetime.now(timezone.utc).isoformat()}
 
-app.include_router(scans.router,prefix='/scans',tags=['Scans']); app.include_router(vulnerabilities.router,prefix='/vulnerabilities',tags=['Vulnerabilities']); app.include_router(vulnerabilities.router,prefix='/api/v1/vulnerabilities',tags=['Vulnerabilities']); app.include_router(remediation.router,tags=['Remediation Workflow']); app.include_router(remediation.router,prefix='/api/v1',tags=['Remediation Workflow']); app.include_router(reports.router,prefix='/reports',tags=['Reports']); app.include_router(reports.router,prefix='/api/v1/reports',tags=['Reports']); app.include_router(assets.router,prefix='/assets',tags=['Assets']); app.include_router(assets.router,prefix='/api/v1/assets',tags=['Assets']); app.include_router(evidence.router,prefix='/api/v1/evidence',tags=['Evidence']); app.include_router(compliance.router,prefix='/compliance',tags=['Compliance']); app.include_router(knowledge.router,prefix='/knowledge',tags=['Knowledge']); app.include_router(digital_twin.router,prefix='/digital-twin',tags=['Digital Twin']); app.include_router(posture.router,prefix='/posture',tags=['Security Posture']); app.include_router(system.router,prefix='/system',tags=['System']); app.include_router(assurance.router,prefix='/api/v1/assurance',tags=['Assurance Correlation']); app.include_router(assurance_graph.router,prefix='/api/v1/assurance',tags=['Assurance Graph']); app.include_router(security_decision.router,prefix='/api/v1/assurance',tags=['Security Decision']); app.include_router(decision_actions.router,prefix='/api/v1/assurance',tags=['Decision Actions']); app.include_router(governance.router,prefix='/api/v1/assurance',tags=['Governance']); app.include_router(policy.router,prefix='/api/v1/assurance',tags=['Policy-as-Code']); app.include_router(dashboard.router,prefix='/api',tags=['Dashboard']); app.include_router(dashboard.router,prefix='/api/v1',tags=['Dashboard']); app.include_router(validations.router,prefix='/api',tags=['Validations']); app.include_router(validations.router,prefix='/api/v1',tags=['Validations']); app.include_router(audit.router,prefix='/api',tags=['Audit']); app.include_router(audit.router,prefix='/api/v1',tags=['Audit']); app.include_router(enterprise.router,prefix='/api/v1/enterprise',tags=['Enterprise']); app.include_router(enterprise_extra.router,prefix='/api/v1/enterprise',tags=['Enterprise Integrations'])
+# Canonical API surface. Legacy unversioned aliases are retained for compatibility.
+app.include_router(scans.router,prefix='/scans',tags=['Scans'])
+app.include_router(vulnerabilities.router,prefix='/vulnerabilities',tags=['Vulnerabilities'])
+app.include_router(vulnerabilities.router,prefix='/api/v1/vulnerabilities',tags=['Vulnerabilities'])
+app.include_router(remediation.router,tags=['Remediation Workflow'])
+app.include_router(remediation.router,prefix='/api/v1',tags=['Remediation Workflow'])
+app.include_router(reports.router,prefix='/reports',tags=['Reports'])
+app.include_router(reports.router,prefix='/api/v1/reports',tags=['Reports'])
+app.include_router(assets.router,prefix='/assets',tags=['Assets'])
+app.include_router(assets.router,prefix='/api/v1/assets',tags=['Assets'])
+app.include_router(evidence.router,prefix='/api/v1/evidence',tags=['Evidence'])
+app.include_router(compliance.router,prefix='/compliance',tags=['Compliance'])
+app.include_router(knowledge.router,prefix='/knowledge',tags=['Knowledge'])
+app.include_router(digital_twin.router,prefix='/digital-twin',tags=['Digital Twin'])
+app.include_router(posture.router,prefix='/posture',tags=['Security Posture'])
+app.include_router(system.router,prefix='/system',tags=['System'])
+app.include_router(assurance.router,prefix='/api/v1/assurance',tags=['Assurance Correlation'])
+app.include_router(assurance_graph.router,prefix='/api/v1/assurance',tags=['Assurance Graph'])
+app.include_router(security_decision.router,prefix='/api/v1/assurance',tags=['Security Decision'])
+app.include_router(decision_actions.router,prefix='/api/v1/assurance',tags=['Decision Actions'])
+app.include_router(governance.router,prefix='/api/v1/assurance',tags=['Governance'])
+app.include_router(policy.router,prefix='/api/v1/assurance',tags=['Policy-as-Code'])
+app.include_router(dashboard.router,prefix='/api',tags=['Dashboard'])
+app.include_router(dashboard.router,prefix='/api/v1',tags=['Dashboard'])
+app.include_router(validations.router,prefix='/api',tags=['Validations'])
+app.include_router(validations.router,prefix='/api/v1',tags=['Validations'])
+app.include_router(audit.router,prefix='/api',tags=['Audit'])
+app.include_router(audit.router,prefix='/api/v1',tags=['Audit'])
+app.include_router(enterprise.router,prefix='/api/v1/enterprise',tags=['Enterprise'])
+app.include_router(enterprise_extra.router,prefix='/api/v1/enterprise',tags=['Enterprise Integrations'])
 
 @app.post('/scans/{scan_id}/start')
 async def start_scan(scan_id:str,user=Depends(get_current_user)):return await scan_orchestrator.start_scan(scan_id,user)
@@ -153,12 +191,28 @@ async def resume_scan(scan_id:str,user=Depends(get_current_user)):return await s
 async def cancel_scan(scan_id:str,user=Depends(get_current_user)):return await scan_orchestrator.cancel_scan(scan_id,user)
 @app.get('/scans/{scan_id}/progress')
 async def get_scan_progress(scan_id:str,user=Depends(get_current_user)):return await scan_orchestrator.get_progress(scan_id,user)
+
+async def _list_engines(user=Depends(get_current_user)):
+    return await scan_orchestrator.list_engines()
+
+async def _enable_engine(engine_name:str,user=Depends(require_staff)):
+    return await scan_orchestrator.enable_engine(engine_name)
+
+async def _disable_engine(engine_name:str,user=Depends(require_staff)):
+    return await scan_orchestrator.disable_engine(engine_name)
+
 @app.get('/engines')
-async def list_engines(user=Depends(get_current_user)):return await scan_orchestrator.list_engines()
+async def list_engines_legacy(user=Depends(get_current_user)): return await _list_engines(user)
+@app.get('/api/v1/engines')
+async def list_engines_api(user=Depends(get_current_user)): return await _list_engines(user)
 @app.post('/engines/{engine_name}/enable')
-async def enable_engine(engine_name:str,user=Depends(require_staff)):return await scan_orchestrator.enable_engine(engine_name)
+async def enable_engine_legacy(engine_name:str,user=Depends(require_staff)): return await _enable_engine(engine_name,user)
+@app.post('/api/v1/engines/{engine_name}/enable')
+async def enable_engine_api(engine_name:str,user=Depends(require_staff)): return await _enable_engine(engine_name,user)
 @app.post('/engines/{engine_name}/disable')
-async def disable_engine(engine_name:str,user=Depends(require_staff)):return await scan_orchestrator.disable_engine(engine_name)
+async def disable_engine_legacy(engine_name:str,user=Depends(require_staff)): return await _disable_engine(engine_name,user)
+@app.post('/api/v1/engines/{engine_name}/disable')
+async def disable_engine_api(engine_name:str,user=Depends(require_staff)): return await _disable_engine(engine_name,user)
 
 if __name__=='__main__':
     import uvicorn; uvicorn.run(app,host='0.0.0.0',port=8001)
