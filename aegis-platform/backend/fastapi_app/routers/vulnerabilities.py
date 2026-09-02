@@ -25,6 +25,10 @@ class VulnerabilityResponse(BaseModel):
     id: str
     scan_id: str
     project_id: str
+    asset_id: Optional[str] = None
+    asset_name: Optional[str] = None
+    asset_target: Optional[str] = None
+    source_engine: str = ''
     title: str
     description: str
     severity: str
@@ -50,10 +54,22 @@ class VulnerabilityUpdate(BaseModel):
 
 @sync_to_async
 def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
+    config = (vulnerability.asset.configuration or {}) if vulnerability.asset else {}
+    source_engine = (vulnerability.source_engine or '').strip().lower()
+    asset_target = None
+    if source_engine == 'nuclei':
+        asset_target = config.get('url')
+    else:
+        asset_target = config.get('host') or config.get('ip') or config.get('domain') or vulnerability.url or None
+
     return VulnerabilityResponse(
         id=str(vulnerability.id),
         scan_id=str(vulnerability.scan_id),
         project_id=str(vulnerability.project_id),
+        asset_id=str(vulnerability.asset_id) if vulnerability.asset_id else None,
+        asset_name=vulnerability.asset.name if vulnerability.asset else None,
+        asset_target=str(asset_target) if asset_target else None,
+        source_engine=source_engine,
         title=vulnerability.title,
         description=vulnerability.description,
         severity=vulnerability.severity,
