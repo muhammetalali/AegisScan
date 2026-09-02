@@ -62,7 +62,11 @@ class ProjectSerializer(serializers.ModelSerializer):
 class ProjectCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
-        fields = ['name', 'description', 'status', 'environment', 'tags', 'settings', 'default_scan_config']
+        fields = [
+            'id', 'name', 'description', 'status', 'environment', 'tags',
+            'settings', 'default_scan_config',
+        ]
+        read_only_fields = ['id']
 
     def validate_name(self, value):
         value = value.strip()
