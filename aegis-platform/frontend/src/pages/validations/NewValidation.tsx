@@ -1,339 +1,168 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
-import { toast } from 'sonner'
+import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Globe, Server, Folder, Plug, Layers, AlertTriangle, Clock, Gauge, Check, Loader2, ArrowRight, ShieldCheck } from 'lucide-react'
+import { toast } from 'sonner'
+import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Loader2, Search, ShieldCheck, Target } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
 
-const targetTypeEnum = z.enum(['url', 'ip', 'code', 'api'])
-const profileEnum = z.enum(['quick', 'full', 'custom'])
+interface Finding {
+  id: string
+  title: string
+  severity: string
+  status: string
+  confidence: string
+  risk_score: number
+  asset_id?: string | null
+  asset_name?: string | null
+  asset_target?: string | null
+  source_engine?: string
+}
 
-const schema = z.object({
-  target_type: targetTypeEnum,
-  target_value: z.string().min(1, 'هذا الحقل مطلوب'),
-  profile: profileEnum,
-  engines: z.array(z.string()).min(1, 'اختر محركاً واحداً على الأقل'),
-  scope_text: z.string().optional(),
-  authorized: z.boolean().refine(v => v === true, { message: 'يجب تأكيد أن الهدف مصرح به' }),
-  include_subdomains: z.boolean().optional(),
-  duration_minutes: z.coerce.number().int().min(5).max(1440),
-  rate_limit: z.coerce.number().int().min(1).max(100),
-  custom_headers: z.string().optional(),
-  ports: z.string().optional(),
-  api_method: z.string().optional(),
-}).superRefine((data, ctx) => {
-  if (data.target_type === 'url' || data.target_type === 'api') {
-    try { new URL(data.target_value); } catch { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['target_value'], message: 'رابط غير صحيح (مثال: https://example.local)' }) }
-  }
-  if (data.target_type === 'ip') {
-    const ipRe = /^(\d{1,3}\.){3}\d{1,3}$/
-    const hostRe = /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/
-    if (!ipRe.test(data.target_value) && !hostRe.test(data.target_value)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['target_value'], message: 'IP أو Host غير صحيح' })
-    }
-  }
-})
-
-type FormValues = z.infer<typeof schema>
-
-const TARGETS = [
-  { value: 'url' as const, label: 'URL', sub: 'موقع / تطبيق ويب', icon: Globe, ph: 'https://example.local' },
-  { value: 'ip' as const, label: 'IP / Host', sub: 'خادم أو نطاق', icon: Server, ph: '192.168.1.10  أو  api.example.local' },
-  { value: 'code' as const, label: 'Source Code', sub: 'مسار الكود المصدري', icon: Folder, ph: 'C:\\Projects\\MyApp' },
-  { value: 'api' as const, label: 'API', sub: 'نقطة REST / GraphQL', icon: Plug, ph: 'https://api.example.local/v1/users' },
-]
-
-const PROFILES = [
-  { value: 'quick' as const, label: 'Quick Assessment', desc: 'فحص سريع 15-30 دقيقة', badge: '⚡ سريع', engines: ['recon', 'evidence_collection', 'vuln_intelligence', 'validation'] },
-  { value: 'full' as const, label: 'Full Validation', desc: 'تحقق شامل 1-2 ساعة — كل المحركات الـ15', badge: '🛡️ شامل', engines: ['recon','evidence_collection','vuln_intelligence','validation','control_validation','coverage_gap','attack_path','evidence_graph','knowledge','posture','policy_compliance','twin_engine','scenarios','dashboard','reporting'] },
-  { value: 'custom' as const, label: 'Custom', desc: 'اختيار يدوي للمحركات', badge: '⚙️ مخصص', engines: [] },
-]
-
-const ALL_ENGINES = [
-  { id: 'recon', name: 'Recon', desc: 'استطلاع' },
-  { id: 'evidence_collection', name: 'Evidence', desc: 'جمع الأدلة' },
-  { id: 'vuln_intelligence', name: 'Vuln Intel', desc: 'استخبارات الثغرات' },
-  { id: 'validation', name: 'Validation', desc: 'التحقق' },
-  { id: 'control_validation', name: 'Control', desc: 'فحص الضوابط' },
-  { id: 'coverage_gap', name: 'Coverage', desc: 'فجوات التغطية' },
-  { id: 'attack_path', name: 'Attack Path', desc: 'مسارات الهجوم' },
-  { id: 'evidence_graph', name: 'Evidence Graph', desc: 'رسم الأدلة' },
-  { id: 'knowledge', name: 'Knowledge', desc: 'قاعدة المعرفة' },
-  { id: 'posture', name: 'Posture', desc: 'وضع الحماية' },
-  { id: 'policy_compliance', name: 'Compliance', desc: 'الامتثال' },
-  { id: 'twin_engine', name: 'Twin', desc: 'التوأم الرقمي' },
-  { id: 'scenarios', name: 'Scenarios', desc: 'السيناريوهات' },
-  { id: 'dashboard', name: 'Dashboard', desc: 'لوحة التحكم' },
-  { id: 'reporting', name: 'Reporting', desc: 'التقارير' },
-]
+const severityTone: Record<string, string> = {
+  critical: 'border-red-500/30 bg-red-500/8 text-red-600 dark:text-red-400',
+  high: 'border-orange-500/30 bg-orange-500/8 text-orange-600 dark:text-orange-400',
+  medium: 'border-amber-500/30 bg-amber-500/8 text-amber-700 dark:text-amber-400',
+  low: 'border-emerald-500/30 bg-emerald-500/8 text-emerald-700 dark:text-emerald-400',
+  informational: 'border-slate-500/30 bg-slate-500/8 text-slate-600 dark:text-slate-400',
+}
 
 export const NewValidation = () => {
   const navigate = useNavigate()
+  const [selectedFindingId, setSelectedFindingId] = useState('')
+  const [authorized, setAuthorized] = useState(false)
+  const [scope, setScope] = useState('')
+  const [query, setQuery] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      target_type: 'url',
-      target_value: '',
-      profile: 'full',
-      engines: PROFILES[1].engines,
-      authorized: false,
-      include_subdomains: false,
-      duration_minutes: 60,
-      rate_limit: 5,
-      api_method: 'GET',
-    }
+  const findingsQuery = useQuery({
+    queryKey: ['validation-source-findings'],
+    queryFn: () => apiHelpers.get<Finding[]>('/vulnerabilities?limit=200'),
+    staleTime: 10_000,
   })
 
-  const targetType = watch('target_type')
-  const profile = watch('profile')
-  const engines = watch('engines')
-  const authorized = watch('authorized')
+  const findings = useMemo(() => {
+    const items = Array.isArray(findingsQuery.data) ? findingsQuery.data : []
+    const normalized = query.trim().toLowerCase()
+    return items
+      .filter((finding) => ['nmap', 'nuclei'].includes(String(finding.source_engine || '').toLowerCase()))
+      .filter((finding) => !['fixed', 'false_positive', 'accepted_risk', 'wont_fix', 'duplicate'].includes(finding.status))
+      .filter((finding) => {
+        if (!normalized) return true
+        return [finding.title, finding.asset_name, finding.asset_target, finding.source_engine, finding.severity].some(value => String(value || '').toLowerCase().includes(normalized))
+      })
+  }, [findingsQuery.data, query])
 
-  const selectProfile = (p: typeof profile) => {
-    setValue('profile', p, { shouldValidate: true })
-    const preset = PROFILES.find(x => x.value === p)!
-    if (p !== 'custom') setValue('engines', preset.engines, { shouldValidate: true })
-    else if (engines.length === 0) setValue('engines', ['recon', 'validation'], { shouldValidate: true })
-  }
+  const selectedFinding = useMemo(
+    () => (Array.isArray(findingsQuery.data) ? findingsQuery.data : []).find(item => item.id === selectedFindingId) || null,
+    [findingsQuery.data, selectedFindingId],
+  )
 
-  const toggleEngine = (id: string) => {
-    const next = engines.includes(id) ? engines.filter(e => e !== id) : [...engines, id]
-    setValue('engines', next, { shouldValidate: true })
-    setValue('profile', 'custom', { shouldValidate: true })
-  }
+  const targetType = selectedFinding?.source_engine === 'nmap' ? 'ip' : selectedFinding?.source_engine === 'nuclei' ? 'url' : ''
+  const targetValue = selectedFinding?.asset_target || ''
+  const effectiveScope = scope.trim() || targetValue
 
-  const onSubmit = async (data: FormValues) => {
+  const createValidation = async () => {
+    if (!selectedFinding) return toast.error('اختر Finding حقيقية قبل إنشاء مهمة التحقق')
+    if (!selectedFinding.source_engine || !['nmap', 'nuclei'].includes(selectedFinding.source_engine.toLowerCase())) {
+      return toast.error('هذه Finding لا تملك محرك تحقق مدعومًا')
+    }
+    if (!targetValue) return toast.error('الـFinding المختارة لا تحتوي على هدف مرتبط بالأصل')
+    if (!authorized) return toast.error('يجب تأكيد التفويض قبل التنفيذ')
+    if (!effectiveScope) return toast.error('نطاق التنفيذ مطلوب')
+
     setSubmitting(true)
     try {
-      // 1. Validate locally (zod already)
-      // 2. Scope/Authorization check is the `authorized` checkbox
-      // 3. Create validation job via API
-      const payload = {
-        target_type: data.target_type,
-        target_value: data.target_value,
-        profile: data.profile,
-        engines: data.engines,
-        scope: data.scope_text || (data.target_type === 'url' ? new URL(data.target_value).hostname : data.target_value),
-        authorized: data.authorized,
-        include_subdomains: data.include_subdomains,
-        duration_minutes: data.duration_minutes,
-        rate_limit: data.rate_limit,
-        extra: {
-          custom_headers: data.custom_headers,
-          ports: data.ports,
-          api_method: data.api_method,
-        }
+      const response = await apiHelpers.post<{ id: string; finding_id: string }>('/validations', {
+        finding_id: selectedFinding.id,
+        target_type: targetType,
+        target_value: targetValue,
+        profile: 'custom',
+        engines: [selectedFinding.source_engine.toLowerCase()],
+        scope: effectiveScope,
+        authorized: true,
+        duration_minutes: 60,
+        rate_limit: 5,
+        extra: { source: 'finding-investigation' },
+      })
+
+      if (!response?.id || response.finding_id !== selectedFinding.id) {
+        throw new Error('Validation service did not return a finding-linked job')
       }
 
-      // Try real API, fallback to mock if backend not running (so UI still works for demo)
-      let id: string
-      try {
-        const res = await apiHelpers.post<{ id: string }>('/validations', payload)
-        id = (res as any).id || (res as any).validation_id || `val-${Date.now().toString(36)}`
-      } catch {
-        // Backend not reachable (no Docker) — mock id and store in localStorage for Progress page
-        id = `val-${Date.now().toString(36)}`
-        localStorage.setItem(`validation:${id}`, JSON.stringify({ ...payload, id, status: 'queued', created_at: new Date().toISOString(), progress: 0 }))
-        // also queue a fake progression so Progress page has something
-      }
-
-      toast.success('تم إنشاء مهمة التحقق — جاري الانتقال للمتابعة')
-      // 4. Queue → 5. WebSocket Progress → 6. Results
-      navigate(`/validations/${id}/progress`, { replace: true, state: { payload, id } })
-    } catch (e: any) {
-      toast.error(e?.response?.data?.detail || e?.message || 'فشل إنشاء مهمة التحقق')
+      toast.success('تم إنشاء مهمة تحقق حقيقية مرتبطة بالـFinding')
+      navigate(`/validations/${response.id}/progress`, { replace: true })
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      toast.error(typeof detail === 'string' ? detail : error?.message || 'تعذر إنشاء مهمة التحقق')
     } finally {
       setSubmitting(false)
     }
   }
 
-  const targetMeta = TARGETS.find(t => t.value === targetType)!
+  if (findingsQuery.isLoading) {
+    return <div className="mx-auto w-full max-w-6xl space-y-6"><div className="h-32 animate-pulse rounded-3xl bg-muted" /><div className="h-80 animate-pulse rounded-3xl bg-muted" /></div>
+  }
+
+  if (findingsQuery.isError) {
+    return <div className="mx-auto flex min-h-[420px] w-full max-w-4xl items-center justify-center"><div className="w-full rounded-3xl border border-red-500/20 bg-card p-8 text-center shadow-xl"><AlertTriangle className="mx-auto h-10 w-10 text-red-500" /><h1 className="mt-4 text-xl font-semibold">تعذر تحميل Findings</h1><p className="mt-2 text-sm text-muted-foreground">لا يمكن إنشاء Real Validation بدون بيانات Finding حقيقية من الـAPI.</p><button onClick={() => findingsQuery.refetch()} className="mt-5 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">إعادة المحاولة</button></div></div>
+  }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
-      {/* Authorized banner */}
-      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="rounded-xl border border-amber-500/30 bg-amber-500/10 dark:bg-amber-500/10 p-4 flex gap-3 items-start">
-        <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-        <div className="text-sm">
-          <p className="font-semibold text-amber-700 dark:text-amber-300">Authorized Security Testing Only — اختبار مصرح به فقط</p>
-          <p className="text-muted-foreground mt-1 leading-relaxed">
-            هذه المنصة تنفذ محركات تحقق نشطة (Validation / Attack Path / Control Validation). تأكد أن الهدف مملوك لك أو لديك تصريح كتابي. سيتم تسجيل الـ scope والموافقة وسجل التدقيق (Audit Log) قبل بدء أي فحص.
-          </p>
+    <div className="mx-auto w-full max-w-6xl space-y-6 pb-10">
+      <section className="relative overflow-hidden rounded-[2rem] border bg-card p-6 shadow-[0_30px_90px_rgba(0,0,0,.14)] md:p-8">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_75%_0%,color-mix(in_srgb,var(--primary)_12%,transparent),transparent_32%)]" />
+        <div className="relative">
+          <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-primary"><ShieldCheck className="h-3.5 w-3.5" /> Real Validation</div>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight md:text-4xl">إنشاء تحقق مرتبط بدليل حقيقي</h1>
+          <p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">لا يسمح AegisScan بإنشاء Validation معزولة. يجب اختيار Finding موجودة من قاعدة البيانات، ثم يُشتق منها المحرك والهدف ويُرسل التنفيذ مع عقدة authorization قابلة للتدقيق.</p>
         </div>
-      </motion.div>
+      </section>
 
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ShieldCheck className="h-6 w-6 text-primary" /> New Security Validation</h1>
-        <p className="text-sm text-muted-foreground mt-1">اختر نوع الهدف، حدد النطاق المصرح به، واختر ملف التحقق — ثم ابدأ. سيتم إنشاء Job ومتابعته عبر WebSocket.</p>
-      </div>
-
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        {/* 1. Target Type */}
-        <section className="rounded-xl border bg-card p-5">
-          <h2 className="font-semibold flex items-center gap-2"><span className="h-6 w-6 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs">1</span> Target Type — نوع الهدف</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
-            {TARGETS.map(t => (
-              <button key={t.value} type="button" onClick={() => setValue('target_type', t.value, { shouldValidate: true })}
-                className={cn('rounded-xl border p-4 text-start transition-all hover:shadow-sm', targetType === t.value ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'bg-card hover:bg-muted/50')}>
-                <t.icon className={cn('h-6 w-6', targetType === t.value ? 'text-primary' : 'text-muted-foreground')} />
-                <div className="font-medium mt-2">{t.label}</div>
-                <div className="text-xs text-muted-foreground">{t.sub}</div>
-              </button>
-            ))}
-          </div>
-          {errors.target_type && <p className="text-xs text-destructive mt-2">{errors.target_type.message}</p>}
-        </section>
-
-        {/* 2. Target Configuration */}
-        <section className="rounded-xl border bg-card p-5 space-y-4">
-          <h2 className="font-semibold flex items-center gap-2"><span className="h-6 w-6 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs">2</span> Target Configuration — {targetMeta.label}</h2>
-
-          <div>
-            <label className="text-sm font-medium">الهدف *</label>
-            <div className="relative mt-1">
-              <targetMeta.icon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <input {...register('target_value')} placeholder={targetMeta.ph} dir="ltr"
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-sm" />
-            </div>
-            {errors.target_value && <p className="text-xs text-destructive mt-1">{errors.target_value.message}</p>}
-            <p className="text-xs text-muted-foreground mt-1">
-              {targetType === 'url' && 'مثال: https://example.local'}
-              {targetType === 'ip' && 'مثال: 192.168.1.10  أو  host.internal.local'}
-              {targetType === 'code' && 'مثال: C:\\Projects\\MyApp  أو  /home/app/src'}
-              {targetType === 'api' && 'مثال: https://api.example.local/v1/openapi.json'}
-            </p>
-          </div>
-
-          {targetType === 'url' && (
-            <div>
-              <label className="text-sm font-medium">Headers إضافية (اختياري)</label>
-              <input {...register('custom_headers')} placeholder="Authorization: Bearer ..." dir="ltr" className="mt-1 w-full px-3 py-2 rounded-lg border bg-background text-sm" />
-            </div>
-          )}
-          {targetType === 'ip' && (
-            <div>
-              <label className="text-sm font-medium">Ports (اختياري)</label>
-              <input {...register('ports')} placeholder="80,443,8080" dir="ltr" className="mt-1 w-full px-3 py-2 rounded-lg border bg-background text-sm" />
-            </div>
-          )}
-          {targetType === 'api' && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-sm font-medium">Method</label>
-                <select {...register('api_method')} className="mt-1 w-full px-3 py-2 rounded-lg border bg-background text-sm">
-                  <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-medium">Auth Header (اختياري)</label>
-                <input {...register('custom_headers')} placeholder="Bearer ..." dir="ltr" className="mt-1 w-full px-3 py-2 rounded-lg border bg-background text-sm" />
-              </div>
-            </div>
-          )}
-          {targetType === 'code' && (
-            <p className="text-xs text-muted-foreground">سيتم تمرير المسار إلى Aegis Core (scan --code). تأكد أن المسار موجود على جهاز الـ worker أو ارفع الملف عبر تبويب File لاحقاً.</p>
-          )}
-        </section>
-
-        {/* 3. Validation Profile */}
-        <section className="rounded-xl border bg-card p-5">
-          <h2 className="font-semibold flex items-center gap-2"><span className="h-6 w-6 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs">3</span> Validation Profile</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
-            {PROFILES.map(p => (
-              <button key={p.value} type="button" onClick={() => selectProfile(p.value)}
-                className={cn('rounded-xl border p-4 text-start', profile === p.value ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/50')}>
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-sm">{p.label}</span>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-muted">{p.badge}</span>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">{p.desc}</p>
-                {profile === p.value && <Check className="h-4 w-4 text-primary mt-2" />}
-              </button>
-            ))}
-          </div>
-          {errors.profile && <p className="text-xs text-destructive mt-2">{errors.profile.message}</p>}
-        </section>
-
-        {/* 4. Engines */}
-        <section className="rounded-xl border bg-card p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold flex items-center gap-2"><span className="h-6 w-6 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs">4</span> Engines — المحركات ({engines.length}/15)</h2>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setValue('engines', ALL_ENGINES.map(e => e.id), { shouldValidate: true })} className="text-xs px-2 py-1 rounded border hover:bg-muted">تحديد الكل</button>
-              <button type="button" onClick={() => setValue('engines', [], { shouldValidate: true })} className="text-xs px-2 py-1 rounded border hover:bg-muted">إلغاء</button>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mt-4">
-            {ALL_ENGINES.map(e => {
-              const on = engines.includes(e.id)
-              return (
-                <button key={e.id} type="button" onClick={() => toggleEngine(e.id)}
-                  className={cn('rounded-lg border px-3 py-2 text-start text-xs', on ? 'bg-primary text-primary-foreground border-primary' : 'bg-card hover:bg-muted')}>
-                  <div className="font-medium text-xs leading-none">{e.name}</div>
-                  <div className={cn('text-[11px]', on ? 'text-primary-foreground/80' : 'text-muted-foreground')}>{e.desc}</div>
-                </button>
-              )
-            })}
-          </div>
-          {errors.engines && <p className="text-xs text-destructive mt-2">{errors.engines.message}</p>}
-          <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1"><Layers className="h-3 w-3" /> الترتيب التنفيذي الحقيقي: Recon → Evidence → Vuln Intel → Validation → Control → Coverage → Attack Path → Graph → Knowledge → Posture → Compliance → Twin → Scenarios → Dashboard → Reporting</p>
-        </section>
-
-        {/* 5. Scope & Safety */}
-        <section className="rounded-xl border bg-card p-5 space-y-4">
-          <h2 className="font-semibold flex items-center gap-2"><span className="h-6 w-6 rounded-full bg-primary text-primary-foreground grid place-items-center text-xs">5</span> Scope & Safety — النطاق والسلامة</h2>
-
-          <div>
-            <label className="text-sm font-medium">Scope — النطاق المصرح به *</label>
-            <input {...register('scope_text')} placeholder={targetType === 'url' ? 'example.local, *.example.local' : targetType === 'ip' ? '192.168.1.0/24' : 'MyApp/src/**'} dir="ltr" className="mt-1 w-full px-3 py-2 rounded-lg border bg-background text-sm" />
-            <p className="text-xs text-muted-foreground mt-1">اتركه فارغاً لاستخدام قيمة الهدف تلقائياً. يتم تسجيله في Audit Log.</p>
-          </div>
-
-          <label className={cn('flex gap-3 p-3 rounded-lg border cursor-pointer', authorized ? 'bg-emerald-50 border-emerald-300 dark:bg-emerald-950/30 dark:border-emerald-800' : 'bg-card')}>
-            <input type="checkbox" {...register('authorized')} className="mt-1" />
-            <span className="text-sm">
-              <span className="font-medium flex items-center gap-1"><ShieldCheck className="h-4 w-4" /> أؤكد أن هذا الهدف مملوك لي / مصرح باختباره كتابياً</span>
-              <span className="text-muted-foreground">بدون هذا التأكيد لن يتم إنشاء الـ Job. هذا إجراء مؤسسي لتجنب الاستخدام غير المصرح به.</span>
-            </span>
-          </label>
-          {errors.authorized && <p className="text-xs text-destructive">{errors.authorized.message}</p>}
-
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" {...register('include_subdomains')} />
-            تضمين النطاقات الفرعية (URL فقط)
-          </label>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-sm font-medium flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> المدة القصوى (دقيقة)</label>
-              <input type="number" {...register('duration_minutes')} className="mt-1 w-full px-3 py-2 rounded-lg border bg-background text-sm" />
-              {errors.duration_minutes && <p className="text-xs text-destructive mt-1">{errors.duration_minutes.message}</p>}
-            </div>
-            <div>
-              <label className="text-sm font-medium flex items-center gap-1"><Gauge className="h-3.5 w-3.5" /> Rate limit (req/s)</label>
-              <input type="number" {...register('rate_limit')} className="mt-1 w-full px-3 py-2 rounded-lg border bg-background text-sm" />
-              {errors.rate_limit && <p className="text-xs text-destructive mt-1">{errors.rate_limit.message}</p>}
-            </div>
-          </div>
-        </section>
-
-        {/* Start */}
-        <div className="flex items-center justify-between gap-3 pt-2">
-          <p className="text-xs text-muted-foreground">
-            التدفق: Validate Configuration → Scope Check → Create Job → Queue → <span className="font-medium">WebSocket Progress</span> → Results
-          </p>
-          <button type="submit" disabled={submitting}
-            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 font-medium">
-            {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> جاري الإنشاء...</> : <>🚀 Start Validation <ArrowRight className="h-4 w-4" /></>}
-          </button>
+      <section className="rounded-3xl border bg-card p-5 shadow-sm md:p-7">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">01 / Finding source</p><h2 className="mt-1 text-xl font-semibold">اختر Finding حقيقية</h2><p className="mt-1 text-sm text-muted-foreground">المعروض هنا مصدره `/vulnerabilities` فقط. لا توجد نتائج تجريبية.</p></div>
+          <div className="relative w-full md:w-80"><Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="بحث بالاسم أو الأصل أو المحرك" className="h-10 w-full rounded-xl border bg-background ps-9 pe-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" /></div>
         </div>
-      </form>
+
+        <div className="mt-5 max-h-[430px] space-y-2 overflow-y-auto pe-1">
+          {findings.map(finding => (
+            <button key={finding.id} type="button" onClick={() => { setSelectedFindingId(finding.id); setScope(finding.asset_target || '') }} className={cn('w-full rounded-2xl border p-4 text-start transition-all', selectedFindingId === finding.id ? 'border-primary bg-primary/5 shadow-[0_12px_35px_color-mix(in_srgb,var(--primary)_12%,transparent)]' : 'border-border/70 hover:-translate-y-0.5 hover:bg-muted/30')}>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase', severityTone[finding.severity] || 'border-border bg-muted text-muted-foreground')}>{finding.severity}</span><span className="rounded-full border px-2 py-0.5 text-[10px] font-medium text-muted-foreground">{finding.source_engine}</span><span className="font-mono text-[10px] text-muted-foreground">{finding.id}</span></div><div className="mt-2 truncate text-sm font-semibold">{finding.title}</div><div className="mt-1 truncate text-xs text-muted-foreground">{finding.asset_name || finding.asset_target || 'Asset unavailable'}</div></div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground"><span>Risk {finding.risk_score}</span>{selectedFindingId === finding.id && <CheckCircle2 className="h-5 w-5 text-primary" />}</div>
+              </div>
+            </button>
+          ))}
+          {!findings.length && <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">لا توجد Findings قابلة للتحقق الفعلي ضمن البيانات الحالية.</div>}
+        </div>
+      </section>
+
+      <motion.section initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl border bg-card p-5 shadow-sm md:p-7">
+        <div className="flex items-center gap-2"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">02 / Execution contract</p></div>
+        {!selectedFinding ? (
+          <div className="mt-5 rounded-2xl border border-dashed p-10 text-center"><Target className="mx-auto h-8 w-8 text-muted-foreground" /><h3 className="mt-3 font-semibold">اختر Finding أولًا</h3><p className="mt-1 text-sm text-muted-foreground">لن يظهر زر التنفيذ قبل وجود Finding حقيقية مرتبطة بهدف ومحرك.</p></div>
+        ) : (
+          <>
+            <div className="mt-5 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <Fact label="Finding" value={selectedFinding.id} mono />
+              <Fact label="Engine" value={selectedFinding.source_engine} />
+              <Fact label="Target" value={targetValue} mono />
+              <Fact label="Target type" value={targetType.toUpperCase()} />
+            </div>
+            <div className="mt-5 rounded-2xl border bg-muted/20 p-4"><div className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Authorized scope</div><input value={scope} onChange={e => setScope(e.target.value)} dir="ltr" className="mt-3 h-11 w-full rounded-xl border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" placeholder={targetValue} /><p className="mt-2 text-[11px] text-muted-foreground">يُرسل النطاق إلى backend ليخضع للـserver-side authorization. لا يوجد bypass من الواجهة.</p></div>
+            <label className={cn('mt-5 flex cursor-pointer gap-3 rounded-2xl border p-4 transition', authorized ? 'border-emerald-500/30 bg-emerald-500/5' : 'hover:bg-muted/30')}><input type="checkbox" checked={authorized} onChange={e => setAuthorized(e.target.checked)} className="mt-1" /><span><span className="block text-sm font-semibold">أؤكد أن هذا الهدف مصرح به</span><span className="mt-1 block text-xs leading-5 text-muted-foreground">سيتم تسجيل التفويض ضمن ValidationRun، ولن يتم تجاوز فحص النطاق على الخادم.</span></span></label>
+
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <button type="button" onClick={() => navigate(-1)} className="rounded-xl border px-4 py-2.5 text-sm font-medium hover:bg-muted">إلغاء</button>
+              <button type="button" disabled={submitting || !authorized || !targetValue} onClick={createValidation} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-[0_12px_30px_color-mix(in_srgb,var(--primary)_25%,transparent)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50">{submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> جارٍ إنشاء المهمة…</> : <>Create Validation Job <ArrowRight className="h-4 w-4" /></>}</button>
+            </div>
+          </>
+        )}
+      </motion.section>
     </div>
   )
 }
+
+const Fact = ({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) => <div className="rounded-2xl border bg-muted/20 p-4"><div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</div><div dir={mono ? 'ltr' : undefined} className={cn('mt-2 truncate text-sm font-semibold', mono && 'font-mono text-[12px]')}>{value}</div></div>
