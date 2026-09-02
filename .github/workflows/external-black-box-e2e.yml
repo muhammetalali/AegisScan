@@ -39,9 +39,7 @@ jobs:
       AEGIS_FASTAPI_URL: http://nginx
       AEGIS_E2E_TARGET: aegis-scan-target
       AEGIS_E2E_TIMEOUT: '180'
-      AEGIS_VERIFY_TLS: 'false'
       AEGIS_E2E_EMAIL: e2e-operator@aegisscan.local
-      AEGIS_E2E_PASSWORD: Aegis-E2E-CI-StrongPass!9
     steps:
       - uses: actions/checkout@v4
       - name: Prepare CI environment
@@ -89,11 +87,19 @@ jobs:
           exit 1
       - name: Provision CI E2E operator
         working-directory: aegis-platform
+        shell: bash
         run: |
           set -euo pipefail
+          E2E_PASSWORD="$(python - <<'PY'
+          import secrets
+          print('Aegis-E2E-' + secrets.token_urlsafe(24))
+          PY
+          )"
+          printf 'AEGIS_E2E_PASSWORD=%s\n' "$E2E_PASSWORD" >> "$GITHUB_ENV"
+          echo "::add-mask::$E2E_PASSWORD"
           docker compose exec -T \
             -e E2E_EMAIL="$AEGIS_E2E_EMAIL" \
-            -e E2E_PASSWORD="$AEGIS_E2E_PASSWORD" \
+            -e E2E_PASSWORD="$E2E_PASSWORD" \
             django python manage.py shell <<'PY'
           import os
           from django.contrib.auth import get_user_model
