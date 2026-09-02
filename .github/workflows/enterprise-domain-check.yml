@@ -1,0 +1,55 @@
+name: Enterprise Domain Check
+
+on:
+  push:
+    branches: [fix/finding-validation-loop]
+    paths:
+      - 'aegis-platform/backend/enterprise/**'
+      - 'aegis-platform/backend/fastapi_app/**'
+      - 'aegis-platform/backend/django_project/settings.py'
+      - 'aegis-platform/backend/requirements.txt'
+      - '.github/workflows/enterprise-domain-check.yml'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: {POSTGRES_DB: aegisdb, POSTGRES_USER: aegis, POSTGRES_PASSWORD: aegis}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      SECRET_KEY: ci-secret
+      JWT_SECRET_KEY: ci-jwt-secret
+      DEBUG: 'True'
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Django check
+        working-directory: aegis-platform/backend
+        run: python manage.py check
+      - name: Generate/check migration state
+        working-directory: aegis-platform/backend
+        run: python manage.py makemigrations enterprise --check --dry-run
+      - name: Enterprise tests
+        working-directory: aegis-platform/backend
+        run: python -m pytest -q enterprise/test_models.py
+      - name: Import FastAPI application
+        working-directory: aegis-platform/backend
+        run: python -c "from fastapi_app.main import app; print(len(app.routes)); print([r.path for r in app.routes if '/enterprise' in getattr(r, 'path', '')])"
