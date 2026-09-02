@@ -16,6 +16,14 @@ from fastapi_app.main import app
 from fastapi_app.routers import validations as validations_router
 
 
+# FastAPI TestClient executes async endpoints outside pytest-django's main test
+# thread. The API handlers intentionally access Django ORM through
+# sync_to_async, so these regression tests must use a transactional database
+# fixture to make the fixture-created rows visible to the ORM connection used
+# by the request thread.
+pytestmark = pytest.mark.django_db(transaction=True)
+
+
 @pytest.fixture
 def api_fixture(db):
     user = User.objects.create_user(
