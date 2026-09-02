@@ -29,9 +29,11 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY . .
 
-RUN nmap --version >/dev/null \
-    && masscan --version >/dev/null \
-    && semgrep --version >/dev/null
+# Verify required scanner/analysis binaries are installed without relying on
+# non-zero CLI exit semantics (masscan prints its version but returns 1).
+RUN command -v nmap >/dev/null \
+    && command -v masscan >/dev/null \
+    && command -v semgrep >/dev/null
 
 EXPOSE 8000
 
