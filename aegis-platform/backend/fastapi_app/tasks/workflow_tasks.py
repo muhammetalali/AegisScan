@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..celery_app import celery_app
-from ..services.workflow_events import publish_workflow_events
-from ..services.workflow_sla import evaluate_sla_actions
+from fastapi_app.celery_app import celery_app
+from fastapi_app.services.workflow_events import publish_workflow_events
+from fastapi_app.services.workflow_sla import evaluate_sla_actions
 
 
 @celery_app.task(name="fastapi_app.tasks.workflow_tasks.evaluate_action_slas", bind=True, max_retries=3, default_retry_delay=30)
