@@ -21,6 +21,10 @@ jobs:
       POSTGRES_DB: aegisdb
       POSTGRES_USER: aegis
       POSTGRES_PASSWORD: aegis
+      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
       SECRET_KEY: ci-only-secret
       JWT_SECRET_KEY: ci-only-jwt-secret
       DEBUG: 'False'
@@ -28,6 +32,8 @@ jobs:
       CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
       AUTH_COOKIE_SECURE: 'False'
       AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      FRONTEND_URL: http://localhost
+      LOG_LEVEL: INFO
       AEGIS_BASE_URL: http://nginx
       AEGIS_DJANGO_URL: http://nginx/api/v1
       AEGIS_FASTAPI_URL: http://nginx
@@ -36,6 +42,32 @@ jobs:
       AEGIS_VERIFY_TLS: 'false'
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare CI environment
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backend/.env <<EOF
+          DEBUG=${DEBUG}
+          SECRET_KEY=${SECRET_KEY}
+          JWT_SECRET_KEY=${JWT_SECRET_KEY}
+          ALLOWED_HOSTS=${ALLOWED_HOSTS}
+          CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+          DATABASE_URL=${DATABASE_URL}
+          REDIS_URL=${REDIS_URL}
+          CELERY_BROKER_URL=${CELERY_BROKER_URL}
+          CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+          AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
+          FRONTEND_URL=${FRONTEND_URL}
+          AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          LOG_LEVEL=${LOG_LEVEL}
+          POSTGRES_DB=${POSTGRES_DB}
+          POSTGRES_USER=${POSTGRES_USER}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          EOF
+          test -s backend/.env
+          grep -q '^DATABASE_URL=' backend/.env
+          grep -q '^REDIS_URL=' backend/.env
       - name: Start real platform stack
         working-directory: aegis-platform
         run: docker compose up -d --build
