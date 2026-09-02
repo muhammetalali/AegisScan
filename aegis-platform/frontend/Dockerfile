@@ -2,8 +2,8 @@ FROM node:22-alpine AS build
 WORKDIR /app
 
 COPY package*.json ./
-# Install from package.json and reconcile the lockfile when the working tree adds
-# a dependency that was missing from an older lockfile.
+# Use the manifest as the source of truth while the lockfile is regenerated
+# by npm. This keeps Docker builds valid when frontend tooling is added.
 RUN npm install --no-audit --no-fund
 
 COPY . .
