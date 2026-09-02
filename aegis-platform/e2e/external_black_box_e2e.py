@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Real HTTP-only AegisScan E2E harness.
 
-The harness intentionally uses only public HTTP APIs. It creates a temporary
-user/project, starts a real Nmap scan against the authorized local target, and
-verifies the resulting finding/evidence provenance through the API.
+The harness intentionally uses only public HTTP APIs after an optional CI-only
+operator account has been provisioned outside the HTTP test boundary. This is
+necessary because public registration intentionally creates Viewer users, while
+project creation is restricted to users with the ``project.create`` capability.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ FASTAPI_URL = os.getenv("AEGIS_FASTAPI_URL", f"{BASE_URL}")
 TARGET = os.getenv("AEGIS_E2E_TARGET", "aegis-scan-target")
 TIMEOUT = int(os.getenv("AEGIS_E2E_TIMEOUT", "180"))
 VERIFY_TLS = os.getenv("AEGIS_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
+E2E_EMAIL = os.getenv("AEGIS_E2E_EMAIL")
+E2E_PASSWORD = os.getenv("AEGIS_E2E_PASSWORD")
 
 
 def require(response: requests.Response, expected: set[int], label: str) -> dict[str, Any]:
@@ -56,23 +59,30 @@ def main() -> int:
 
     csrf_token = csrf(session)
     unique = uuid.uuid4().hex[:12]
-    email = os.getenv("AEGIS_E2E_EMAIL", f"e2e-{unique}@aegisscan.local")
-    password = os.getenv("AEGIS_E2E_PASSWORD", f"Aegis-E2E-{unique}-StrongPass!9")
 
+    # Production registration intentionally creates Viewers. The real
+    # authorized workflow therefore logs in with a CI-only pre-provisioned
+    # operator when AEGIS_E2E_EMAIL/PASSWORD are supplied. Without those
+    # variables, retain the original public-registration coverage for local
+    # smoke runs, which should expect project creation to be forbidden.
+    email = E2E_EMAIL or f"e2e-{unique}@aegisscan.local"
+    password = E2E_PASSWORD or f"Aegis-E2E-{unique}-StrongPass!9"
     headers = {"X-CSRFToken": csrf_token, "Referer": f"{BASE_URL}/"}
-    registration = session.post(
-        f"{DJANGO_URL}/auth/register/",
-        json={
-            "email": email,
-            "first_name": "E2E",
-            "last_name": "Harness",
-            "password": password,
-            "password_confirm": password,
-        },
-        headers=headers,
-        timeout=20,
-    )
-    require(registration, {201}, "User registration")
+
+    if not (E2E_EMAIL and E2E_PASSWORD):
+        registration = session.post(
+            f"{DJANGO_URL}/auth/register/",
+            json={
+                "email": email,
+                "first_name": "E2E",
+                "last_name": "Harness",
+                "password": password,
+                "password_confirm": password,
+            },
+            headers=headers,
+            timeout=20,
+        )
+        require(registration, {201}, "User registration")
 
     csrf_token = csrf(session)
     headers["X-CSRFToken"] = csrf_token
