@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from datetime import timezone
 from uuid import UUID
@@ -9,9 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..core.dependencies import get_current_user
+from ..services.intelligence import IntelligenceFusion, IntelligenceFusionError
 from evidence.models import Evidence, ValidationRun
 
 router = APIRouter()
+_fusion = IntelligenceFusion()
 
 
 class AssuranceSummary(BaseModel):
@@ -96,4 +99,21 @@ async def validation_correlation(validation_id: UUID, current_user=Depends(get_c
         'evidence_id': str(evidence.id) if evidence else None,
         'evidence_valid': evidence is not None,
         'source': 'postgresql',
+    }
+
+
+@router.get('/intelligence/cve/{cve_id}')
+async def enrich_cve(cve_id: str, current_user=Depends(get_current_user)):
+    try:
+        result = _fusion.enrich_cve(cve_id, nvd_api_key=os.getenv('NVD_API_KEY'))
+    except IntelligenceFusionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        'cve_id': result.cve_id,
+        'confidence': result.confidence,
+        'conflicts': result.conflicts,
+        'recommendation': result.recommendation,
+        'explanation': result.explanation,
+        'sources': result.sources,
+        'live': True,
     }
