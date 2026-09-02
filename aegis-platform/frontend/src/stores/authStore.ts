@@ -43,6 +43,12 @@ const readError = (error: any, fallback: string) => {
   return fallback
 }
 
+const ME_ENDPOINT = '/auth/users/me/'
+const CHANGE_PASSWORD_ENDPOINT = '/auth/users/me/change_password/'
+const TWO_FA_ENABLE_ENDPOINT = '/auth/users/me/2fa/enable/'
+const TWO_FA_VERIFY_ENDPOINT = '/auth/users/me/2fa/verify/'
+const TWO_FA_DISABLE_ENDPOINT = '/auth/users/me/2fa/disable/'
+
 export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   accessToken: null,
@@ -128,7 +134,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   updateProfile: async (data) => {
     set({ loading: true, error: null })
     try {
-      const response = await api.patch('/users/me/', data)
+      const response = await api.patch(ME_ENDPOINT, data)
       set({ user: response.data, loading: false })
     } catch (error: any) {
       set({ loading: false, error: readError(error, 'تعذر تحديث الملف الشخصي') })
@@ -139,7 +145,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   changePassword: async (oldPassword, newPassword) => {
     set({ loading: true, error: null })
     try {
-      await api.post('/users/me/change_password/', { old_password: oldPassword, new_password: newPassword })
+      await api.post(CHANGE_PASSWORD_ENDPOINT, { old_password: oldPassword, new_password: newPassword })
       set({ loading: false })
     } catch (error: any) {
       set({ loading: false, error: readError(error, 'تعذر تغيير كلمة المرور') })
@@ -147,12 +153,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     }
   },
 
-  enable2FA: async () => (await api.post('/users/me/2fa/enable/')).data,
-  verify2FA: async (code) => { await api.post('/users/me/2fa/verify/', { code }) },
-  disable2FA: async () => { await api.post('/users/me/2fa/disable/') },
+  enable2FA: async () => (await api.post(TWO_FA_ENABLE_ENDPOINT)).data,
+  verify2FA: async (code) => { await api.post(TWO_FA_VERIFY_ENDPOINT, { code }) },
+  disable2FA: async () => { await api.post(TWO_FA_DISABLE_ENDPOINT) },
 
   fetchUser: async () => {
-    const response = await api.get('/users/me/')
+    const response = await api.get(ME_ENDPOINT)
     set({ user: response.data, isAuthenticated: true, error: null })
   },
 }))
