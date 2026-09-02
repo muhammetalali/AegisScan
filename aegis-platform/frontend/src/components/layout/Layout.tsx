@@ -57,7 +57,7 @@ export const Layout = () => {
     <div className="min-h-screen bg-background">
       {mobileOpen && <button aria-label="Close navigation" className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)} />}
       <Sidebar open={sidebarOpen} onOpenChange={setSidebarOpen} mobileOpen={mobileOpen} onMobileOpenChange={setMobileOpen} groups={filteredGroups} flatNavigation={flatForSidebar} currentPath={location.pathname} />
-      <div className={`min-h-screen flex flex-col min-w-0 transition-[margin] duration-200 ${sidebarOpen ? 'lg:ml-64' : 'lg:ml-[72px]'}`}>
+      <div className={`min-h-screen flex flex-col min-w-0 transition-[margin] duration-200 ${sidebarOpen ? 'lg:ms-64' : 'lg:ms-[72px]'}`}>
         <Header sidebarOpen={sidebarOpen} onSidebarToggle={() => setSidebarOpen(value => !value)} onMobileToggle={() => setMobileOpen(true)} onCommandOpen={() => setCommandOpen(true)} />
         <main className="flex-1 overflow-auto px-4 py-5 lg:px-7 lg:py-6">
           <div className="mx-auto w-full max-w-[1600px] animate-fade-in"><Outlet /></div>
