@@ -14,7 +14,6 @@ from celery import shared_task
 from django.db import transaction
 
 from django_project.evidence.models import Evidence, ValidationRun
-from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.services.nmap_parser import parse_nmap_xml
 from fastapi_app.services.scope_authorization import is_target_authorized
 
