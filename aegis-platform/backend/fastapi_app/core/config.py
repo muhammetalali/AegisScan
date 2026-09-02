@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440
+    AUTH_ACCESS_COOKIE: str = "aegis_access"
+    AUTH_REFRESH_COOKIE: str = "aegis_refresh"
     DATABASE_URL: str = getenv(
         "DATABASE_URL", "postgresql://aegis:aegis@localhost:5432/aegisdb"
     )

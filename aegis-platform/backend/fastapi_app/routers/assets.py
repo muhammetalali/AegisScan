@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from asgiref.sync import sync_to_async
 from django.utils.text import slugify
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -51,10 +51,14 @@ class AssetUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
-    if not credentials:
+async def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+):
+    token = credentials.credentials if credentials else request.cookies.get("aegis_access")
+    if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    user = await verify_token(credentials.credentials)
+    user = await verify_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
@@ -283,4 +287,4 @@ async def add_relationship(asset_id: str, target_id: str, relationship_type: str
 async def bulk_import_assets(project_id: str, file: UploadFile = File(...), user=Depends(get_current_user)):
     if not await _has_project_access(project_id, str(user.get("user_id"))):
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
-    raise HTTPException(status_code=501, detail="Bulk import is not implemented; no synthetic import result is returned")
+    raise HTTPException(status_code=501, detail="Bulk import is not implemented; no synthetic import result is returned here")
