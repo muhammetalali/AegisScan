@@ -6,7 +6,6 @@ import os
 import time
 from collections import defaultdict, deque
 from datetime import timedelta
-from typing import Any
 
 import requests
 from django.core.cache import cache
@@ -15,7 +14,6 @@ from django_celery_beat.models import IntervalSchedule, PeriodicTask
 
 from django_project.assets.models import Asset, AssetRelationship
 from django_project.compliance.models import ComplianceAssessment
-from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan
 from django_project.vulnerabilities.models import Vulnerability
 from .models import AttackPath, ComplianceMapping, DigitalTwin, ExecutiveSnapshot, FindingIntelligence, Organization, OrganizationMembership, ReportSchedule, ThreatIntelAudit, ThreatIntelCache, TwinNode, TwinRelationship
@@ -116,10 +114,7 @@ def fetch_intel(provider:str,key:str,cve:str|None=None,package:dict|None=None):
     now=timezone.now(); cached=ThreatIntelCache.objects.filter(provider=provider,key=key,expires_at__gt=now).first()
     if cached:return cached.payload
     throttle={'nvd':6,'epss':1,'kev':60,'osv':0}.get(provider,1)
-    if throttle:
-        throttle_key=f'aegis:intel:throttle:{provider}'
-        if not cache.add(throttle_key,1,timeout=throttle):
-            raise RuntimeError(f'{provider} provider is rate-limited; retry after the configured throttle window')
+    if throttle and not cache.add(f'aegis:intel:throttle:{provider}',1,timeout=throttle): raise RuntimeError(f'{provider} provider is rate-limited; retry after the configured throttle window')
     headers={}; params={}; body=None; method='GET'; url=PROVIDERS[provider]
     if provider=='nvd':
         params={'cveId':cve} if cve else {'resultsPerPage':1}
