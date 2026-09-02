@@ -61,18 +61,15 @@ async def create_action_endpoint(body: ActionCreate, request: Request, user: dic
         raise HTTPException(status_code=404, detail="Decision not found")
     actor = str(user.get("id") or user.get("username") or "user")
     item = create_action(decision, body.owner, body.sla_hours, actor)
-    try:
-        await sync_to_async(add_audit_entry)(
-            user=actor,
-            action="decision_action.create",
-            target=item["actionId"],
-            project="—",
-            result="success",
-            resource_type="decision_action",
-            request=request,
-        )
-    except Exception:
-        pass
+    await sync_to_async(add_audit_entry)(
+        user=actor,
+        action="decision_action.create",
+        target=item["actionId"],
+        project="—",
+        result="success",
+        resource_type="decision_action",
+        request=request,
+    )
     return enrich_action(item)
 
 @router.get("/actions/{action_id}")
@@ -87,19 +84,16 @@ async def action_transition(action_id: str, body: ActionTransition, request: Req
     actor = str(user.get("id") or user.get("username") or "user")
     try:
         item = transition(action_id, body.state, actor, body.note)
-        try:
-            await sync_to_async(add_audit_entry)(
-                user=actor,
-                action=f"decision_action.{body.state}",
-                target=action_id,
-                project="—",
-                result="success",
-                resource_type="decision_action",
-                metadata={"note": body.note or ""},
-                request=request,
-            )
-        except Exception:
-            pass
+        await sync_to_async(add_audit_entry)(
+            user=actor,
+            action=f"decision_action.{body.state}",
+            target=action_id,
+            project="—",
+            result="success",
+            resource_type="decision_action",
+            metadata={"note": body.note or ""},
+            request=request,
+        )
         return enrich_action(item)
     except KeyError:
         raise HTTPException(status_code=404, detail="Action not found")
