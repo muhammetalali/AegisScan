@@ -1,25 +1,30 @@
 export type SecurityAssuranceModel = {
-  securityScore: number
-  scoreDelta: number
-  critical: number
-  high: number
-  remediationRate: number
-  controlCoverage: number
-  validationCoverage: number
-  riskExposure: number
-  openExceptions: number
+  securityScore: number | null
+  scoreDelta: number | null
+  critical: number | null
+  high: number | null
+  remediationRate: number | null
+  controlCoverage: number | null
+  validationCoverage: number | null
+  riskExposure: number | null
+  openExceptions: number | null
+}
+
+const numberOrNull = (value: unknown): number | null => {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 export function normalizeAssuranceModel(summary: any, risk: any): SecurityAssuranceModel {
   return {
-    securityScore: Number(summary?.security_score ?? summary?.score ?? 0),
-    scoreDelta: Number(summary?.score_delta ?? 0),
-    critical: Number(risk?.critical ?? 0),
-    high: Number(risk?.high ?? 0),
-    remediationRate: Number(summary?.remediation_rate ?? 0),
-    controlCoverage: Number(summary?.control_coverage ?? 0),
-    validationCoverage: Number(summary?.validation_coverage ?? 0),
-    riskExposure: Number(summary?.risk_exposure ?? 0),
-    openExceptions: Number(summary?.open_exceptions ?? 0),
+    securityScore: numberOrNull(summary?.security_score ?? summary?.score),
+    scoreDelta: numberOrNull(summary?.score_delta),
+    critical: numberOrNull(risk?.critical),
+    high: numberOrNull(risk?.high),
+    remediationRate: numberOrNull(summary?.remediation_rate),
+    controlCoverage: numberOrNull(summary?.control_coverage),
+    validationCoverage: numberOrNull(summary?.validation_coverage),
+    riskExposure: numberOrNull(summary?.risk_exposure),
+    openExceptions: numberOrNull(summary?.open_exceptions),
   }
 }
