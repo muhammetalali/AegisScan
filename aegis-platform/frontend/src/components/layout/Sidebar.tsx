@@ -1,10 +1,13 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import { cn } from '@/utils/cn'
 import { useLanguageStore } from '@/stores/languageStore'
-import { ChevronLeft, ChevronRight, CircleDot } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { CheckCircle2, ChevronLeft, ChevronRight, CircleDot, ShieldAlert } from 'lucide-react'
 
 interface NavItem { name: string; href: string; icon: any }
 interface Group { label: string; items: NavItem[] }
+
+type HealthResponse = { status?: string }
 
 export const Sidebar = ({ open, onOpenChange, mobileOpen, onMobileOpenChange, groups }: {
   open: boolean; onOpenChange: (v: boolean) => void; mobileOpen: boolean; onMobileOpenChange: (v: boolean) => void
@@ -12,6 +15,18 @@ export const Sidebar = ({ open, onOpenChange, mobileOpen, onMobileOpenChange, gr
 }) => {
   const location = useLocation()
   const { t } = useLanguageStore()
+  const health = useQuery<HealthResponse>({
+    queryKey: ['platform-health'],
+    queryFn: async () => {
+      const response = await fetch('/health', { credentials: 'same-origin' })
+      if (!response.ok) throw new Error(`health status ${response.status}`)
+      return response.json() as Promise<HealthResponse>
+    },
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    retry: false,
+  })
+  const operational = health.data?.status === 'healthy'
 
   const renderGroups = (isMobile = false) => (
     <div className="flex-1 overflow-y-auto px-2.5 py-4 space-y-5">
@@ -45,14 +60,14 @@ export const Sidebar = ({ open, onOpenChange, mobileOpen, onMobileOpenChange, gr
         <div className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border border-primary/20 bg-background/50 shadow-[0_8px_24px_color-mix(in_srgb,var(--primary)_10%,transparent)]"><img src="/aegis-logo.svg" alt="AegisScan" className="h-7 w-7 object-contain" /><span className="absolute inset-0 rounded-xl bg-primary/5" /></div>
         {(open || mobile) && <div className="min-w-0"><div className="truncate text-sm font-bold tracking-tight">AegisScan</div><div className="truncate text-[8px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{t('Security Validation')}</div></div>}
       </NavLink>
-      {!mobile ? <button onClick={() => onOpenChange(!open)} className="enterprise-icon-button rounded-lg p-1.5 text-muted-foreground transition" aria-label="Toggle sidebar">{open ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button> : <button onClick={() => onMobileOpenChange(false)} className="enterprise-icon-button rounded-lg p-1.5 text-muted-foreground transition" aria-label="Close navigation"><ChevronLeft className="h-5 w-5" /></button>}
+      {!mobile ? <button onClick={() => onOpenChange(!open)} className="enterprise-icon-button rounded-lg p-1.5 text-muted-foreground transition" aria-label={t('Toggle sidebar')}>{open ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button> : <button onClick={() => onMobileOpenChange(false)} className="enterprise-icon-button rounded-lg p-1.5 text-muted-foreground transition" aria-label={t('Close navigation')}><ChevronLeft className="h-5 w-5" /></button>}
     </div>
   )
 
   return <>
     <aside className={cn('fixed inset-y-0 start-0 z-50 hidden flex-col border-e border-sidebar-border/70 bg-sidebar-background/92 text-sidebar-foreground shadow-[20px_0_70px_rgba(0,0,0,.18)] backdrop-blur-2xl transition-[width] duration-300 lg:flex', open ? 'w-64' : 'w-[76px]')}>
       <Brand />{renderGroups()}
-      <div className="shrink-0 border-t border-sidebar-border/70 p-3">{open ? <div className="enterprise-card rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/30 p-3 shadow-inner"><div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,.65)]" /><span className="text-[10px] font-semibold">{t('Platform operational')}</span></div><div className="mt-1 text-[9px] leading-4 text-muted-foreground">{t('Evidence-driven security validation')}</div></div> : <div className="text-center text-[9px] font-semibold text-muted-foreground">AS</div>}</div>
+      <div className="shrink-0 border-t border-sidebar-border/70 p-3">{open ? <div className="enterprise-card rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/30 p-3 shadow-inner"><div className="flex items-center gap-2"><span className={cn('grid h-6 w-6 place-items-center rounded-lg',operational?'bg-emerald-500/10 text-emerald-500':'bg-amber-500/10 text-amber-500')}>{operational?<CheckCircle2 className="h-3.5 w-3.5"/>:<ShieldAlert className="h-3.5 w-3.5"/>}</span><span className="text-[10px] font-semibold">{health.isError?t('Health unavailable'):operational?t('Platform operational'):t('Platform degraded')}</span></div><div className="mt-1 text-[9px] leading-4 text-muted-foreground">/health · {health.data?.status||t('Not reported')}</div></div> : <div className="text-center text-[9px] font-semibold text-muted-foreground">AS</div>}</div>
     </aside>
     {mobileOpen && <aside className="fixed inset-y-0 start-0 z-50 flex w-72 flex-col border-e border-sidebar-border bg-sidebar-background text-sidebar-foreground shadow-2xl backdrop-blur-2xl lg:hidden"><Brand mobile />{renderGroups(true)}</aside>}
   </>
