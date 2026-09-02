@@ -1,7 +1,8 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
+RUN npm install --no-save --package-lock=false --ignore-scripts @tailwindcss/vite@4.3.3
 COPY . .
 RUN npm run build
 
