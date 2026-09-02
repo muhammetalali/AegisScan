@@ -1,10 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
 export default defineConfig({
-  plugins: [tailwindcss(), react()],
+  plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -26,16 +25,5 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          charts: ['echarts', 'echarts-for-react'],
-          ui: ['framer-motion', 'lucide-react', 'sonner'],
-          forms: ['react-hook-form', '@hookform/resolvers', 'zod'],
-          editor: ['@monaco-editor/react'],
-        },
-      },
-    },
   },
 })
