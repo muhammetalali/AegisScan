@@ -16,6 +16,8 @@ const Projects = lazyWithRetry(() => import('./pages/projects/Projects').then(m 
 const ProjectDetail = lazyWithRetry(() => import('./pages/projects/ProjectDetail').then(m => ({ default: m.ProjectDetail })))
 const Assets = lazyWithRetry(() => import('./pages/assets/Assets').then(m => ({ default: m.Assets })))
 const ScanPage = lazyWithRetry(() => import('./pages/scans/ScanPage').then(m => ({ default: m.ScanPage })))
+const ScanProgress = lazyWithRetry(() => import('./pages/scans/ScanProgress').then(m => ({ default: m.ScanProgress })))
+const ScanResults = lazyWithRetry(() => import('./pages/scans/ScanResults').then(m => ({ default: m.ScanResults })))
 const ValidationProgress = lazyWithRetry(() => import('./pages/validations/ValidationProgress').then(m => ({ default: m.ValidationProgress })))
 const ValidationResults = lazyWithRetry(() => import('./pages/validations/ValidationResults').then(m => ({ default: m.ValidationResults })))
 const Vulnerabilities = lazyWithRetry(() => import('./pages/vulnerabilities/Vulnerabilities').then(m => ({ default: m.Vulnerabilities })))
@@ -95,8 +97,8 @@ const App = () => (
                   <Route path="/validations/:id/progress" element={page(<ValidationProgress />, 'Validation progress')} />
                   <Route path="/validations/:id/results" element={page(<ValidationResults />, 'Validation results')} />
                   <Route path="/scan" element={page(<ScanPage />, 'Scans')} />
-                  <Route path="/scan/:id/progress" element={page(<ValidationProgress />, 'Scan progress')} />
-                  <Route path="/scan/:id/results" element={page(<ValidationResults />, 'Scan results')} />
+                  <Route path="/scan/:id/progress" element={page(<ScanProgress />, 'Scan progress')} />
+                  <Route path="/scan/:id/results" element={page(<ScanResults />, 'Scan results')} />
                   <Route path="/vulnerabilities" element={page(<Vulnerabilities />, 'Vulnerabilities')} />
                   <Route path="/vulnerabilities/:id" element={page(<VulnerabilityDetail />, 'Vulnerability detail')} />
                   <Route path="/evidence" element={page(<Evidence />, 'Evidence')} />
