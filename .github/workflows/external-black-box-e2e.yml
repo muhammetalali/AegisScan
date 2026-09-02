@@ -133,7 +133,10 @@ jobs:
         working-directory: aegis-platform
         run: |
           set -euo pipefail
-          docker compose run --rm \
+          # Run the HTTP harness against the already-started stack. Without
+          # --no-deps, compose run may recreate dependency services (notably
+          # django), invalidating the readiness gate and causing transient 502s.
+          docker compose run --rm --no-deps \
             -v "$PWD/e2e:/e2e:ro" \
             -e AEGIS_BASE_URL=http://nginx \
             -e AEGIS_DJANGO_URL=http://nginx/api/v1 \
