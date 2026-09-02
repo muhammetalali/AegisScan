@@ -1,5 +1,6 @@
 import React, { FormEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Languages } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/authStore'
 import { useLanguageStore } from '@/stores/languageStore'
@@ -7,12 +8,15 @@ import { useLanguageStore } from '@/stores/languageStore'
 export const Login = () => {
   const navigate = useNavigate()
   const { login } = useAuthStore()
-  const t = useLanguageStore(s => s.t)
-  const language = useLanguageStore(s => s.language)
+  const { language, setLanguage, t } = useLanguageStore()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
+
+  const toggleLanguage = async () => {
+    await setLanguage(language === 'ar' ? 'en' : 'ar')
+  }
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -45,6 +49,10 @@ export const Login = () => {
       </div>
 
       <section className="login-surface" aria-labelledby="login-title">
+        <button type="button" className="language-switch enterprise-control" onClick={toggleLanguage} aria-label={language === 'ar' ? t('Switch to English') : t('Switch to Arabic')} title={language === 'ar' ? t('Switch to English') : t('Switch to Arabic')}>
+          <Languages className="h-4 w-4" />
+          <span>{language === 'ar' ? 'EN' : 'العربية'}</span>
+        </button>
         <div className="login-brand">
           <div className="login-logo-frame"><img src="/aegis-logo.svg" alt="AegisScan" className="login-logo" /></div>
           <div><strong>AegisScan</strong><span>{t('Security Validation Platform')}</span></div>
