@@ -70,13 +70,13 @@ describe('ValidationCommandCenter canonical evidence contract', () => {
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('Evidence')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Evidence')).toBeTruthy())
 
     const evidenceLabel = screen.getByText('Evidence')
     const evidenceCard = evidenceLabel.closest('div.rounded-2xl')
     expect(evidenceCard).not.toBeNull()
-    expect(evidenceCard).toHaveTextContent('3')
-    expect(evidenceCard).not.toHaveTextContent('4')
+    expect(evidenceCard?.textContent).toContain('3')
+    expect(evidenceCard?.textContent).not.toContain('4')
   })
 
   it('shows the real API error state instead of synthetic result data', async () => {
@@ -85,16 +85,16 @@ describe('ValidationCommandCenter canonical evidence contract', () => {
     renderPage()
 
     await waitFor(() => {
-      expect(screen.getByText('Results are unavailable')).toBeInTheDocument()
+      expect(screen.getByText('Results are unavailable')).toBeTruthy()
     })
 
-    expect(screen.getByText('The validation result could not be loaded from the API. No demo or fallback data is shown.')).toBeInTheDocument()
-    expect(screen.queryByText('Simulation / Demo Data')).not.toBeInTheDocument()
+    expect(screen.getByText('The validation result could not be loaded from the API. No demo or fallback data is shown.')).toBeTruthy()
+    expect(screen.queryByText('Simulation / Demo Data')).toBeNull()
   })
 })
 
 describe('ValidationCommandCenter interaction contract', () => {
-  it('does not query findings until a validation id exists', async () => {
+  it('queries findings with the selected severity filter', async () => {
     mockedGet.mockResolvedValue({
       id: 'validation-1',
       status: 'completed',
