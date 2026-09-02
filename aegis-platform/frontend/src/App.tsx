@@ -16,6 +16,7 @@ const ProjectDetail = lazyWithRetry(() => import('./pages/projects/ProjectDetail
 const Assets = lazyWithRetry(() => import('./pages/assets/Assets').then(m => ({ default: m.Assets })))
 const ScanPage = lazyWithRetry(() => import('./pages/scans/ScanPage').then(m => ({ default: m.ScanPage })))
 const ScanProgress = lazyWithRetry(() => import('./pages/scans/ScanProgress').then(m => ({ default: m.ScanProgress })))
+const ValidationProgress = lazyWithRetry(() => import('./pages/validations/ValidationProgress').then(m => ({ default: m.ValidationProgress })))
 const ScanResults = lazyWithRetry(() => import('./pages/validations/ValidationCommandCenter').then(m => ({ default: m.ValidationCommandCenter })))
 const Vulnerabilities = lazyWithRetry(() => import('./pages/vulnerabilities/Vulnerabilities').then(m => ({ default: m.Vulnerabilities })))
 const VulnerabilityDetail = lazyWithRetry(() => import('./pages/vulnerabilities/VulnerabilityDetail').then(m => ({ default: m.VulnerabilityDetail })))
@@ -97,7 +98,7 @@ const App = () => (
                 <Route path="/projects/:id" element={page(<ProjectDetail />, 'Project detail')} />
                 <Route path="/assets" element={page(<Assets />, 'Assets')} />
                 <Route path="/validations/new" element={page(<NewValidation />, 'New validation')} />
-                <Route path="/validations/:id/progress" element={page(<ScanProgress />, 'Validation progress')} />
+                <Route path="/validations/:id/progress" element={page(<ValidationProgress />, 'Validation progress')} />
                 <Route path="/validations/:id/results" element={page(<ScanResults />, 'Validation results')} />
                 <Route path="/scan" element={page(<ScanPage />, 'Scans')} />
                 <Route path="/scan/:id/progress" element={page(<ScanProgress />, 'Scan progress')} />
