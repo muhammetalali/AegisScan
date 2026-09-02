@@ -35,6 +35,14 @@ interface RegisterData {
   phone?: string
 }
 
+const readError = (error: any, fallback: string) => {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (detail?.message) return detail.message
+  if (error?.response?.data?.error?.message) return error.response.data.error.message
+  return fallback
+}
+
 export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   accessToken: null,
@@ -49,10 +57,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   login: async (email, password) => {
     set({ loading: true, error: null })
     try {
+      await api.get('/auth/csrf/')
       const response = await api.post('/auth/login/', { email, password })
-      set({ user: response.data.user, isAuthenticated: true, loading: false })
+      set({ user: response.data.user, isAuthenticated: true, loading: false, error: null })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Login failed' })
+      const message = readError(error, 'تعذر تسجيل الدخول')
+      set({ loading: false, error: message })
       throw error
     }
   },
@@ -60,11 +70,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   register: async (data) => {
     set({ loading: true, error: null })
     try {
+      await api.get('/auth/csrf/')
       await api.post('/auth/register/', data)
       await get().login(data.email, data.password)
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Registration failed' })
+      set({ loading: false, error: readError(error, 'تعذر إنشاء الحساب') })
       throw error
     }
   },
@@ -87,7 +98,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await api.post('/auth/password/reset/', { email })
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to send reset email' })
+      set({ loading: false, error: readError(error, 'تعذر إرسال رسالة إعادة التعيين') })
       throw error
     }
   },
@@ -98,7 +109,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await api.post('/auth/password/reset/confirm/', { token, password })
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to reset password' })
+      set({ loading: false, error: readError(error, 'تعذر إعادة تعيين كلمة المرور') })
       throw error
     }
   },
@@ -109,7 +120,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await api.post('/auth/verify-email/', { token })
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to verify email' })
+      set({ loading: false, error: readError(error, 'تعذر التحقق من البريد الإلكتروني') })
       throw error
     }
   },
@@ -120,7 +131,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       const response = await api.patch('/users/me/', data)
       set({ user: response.data, loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to update profile' })
+      set({ loading: false, error: readError(error, 'تعذر تحديث الملف الشخصي') })
       throw error
     }
   },
@@ -131,7 +142,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await api.post('/users/me/change_password/', { old_password: oldPassword, new_password: newPassword })
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to change password' })
+      set({ loading: false, error: readError(error, 'تعذر تغيير كلمة المرور') })
       throw error
     }
   },
@@ -142,7 +153,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
 
   fetchUser: async () => {
     const response = await api.get('/users/me/')
-    set({ user: response.data, isAuthenticated: true })
+    set({ user: response.data, isAuthenticated: true, error: null })
   },
 }))
 
@@ -162,7 +173,7 @@ export const initAuth = async () => {
       await store.refreshAccessToken()
       await store.fetchUser()
     } catch {
-      useAuthStore.setState({ user: null, isAuthenticated: false })
+      useAuthStore.setState({ user: null, isAuthenticated: false, error: null })
     }
   } finally {
     useAuthStore.setState({ loading: false })
