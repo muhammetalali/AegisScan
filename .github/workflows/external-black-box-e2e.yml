@@ -6,6 +6,7 @@ on:
     paths:
       - 'aegis-platform/e2e/**'
       - 'aegis-platform/backend/**'
+      - 'aegis-platform/frontend/**'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker/**'
       - '.github/workflows/external-black-box-e2e.yml'
@@ -104,19 +105,12 @@ jobs:
           import os
           from django.contrib.auth import get_user_model
           from django_project.users.models import UserRole
-
           User = get_user_model()
           email = os.environ['E2E_EMAIL']
           password = os.environ['E2E_PASSWORD']
           user, _ = User.objects.get_or_create(
               email=email,
-              defaults={
-                  'first_name': 'E2E',
-                  'last_name': 'Operator',
-                  'role': UserRole.SECURITY_MANAGER,
-                  'is_active': True,
-                  'is_verified': True,
-              },
+              defaults={'first_name':'E2E','last_name':'Operator','role':UserRole.SECURITY_MANAGER,'is_active':True,'is_verified':True},
           )
           user.first_name = 'E2E'
           user.last_name = 'Operator'
@@ -124,7 +118,7 @@ jobs:
           user.is_active = True
           user.is_verified = True
           user.set_password(password)
-          user.save(update_fields=['first_name', 'last_name', 'role', 'is_active', 'is_verified', 'password'])
+          user.save(update_fields=['first_name','last_name','role','is_active','is_verified','password'])
           assert user.has_permission('project.create')
           assert user.has_permission('scan.create')
           print(f'Provisioned E2E operator: {email} ({user.role})')
@@ -133,9 +127,6 @@ jobs:
         working-directory: aegis-platform
         run: |
           set -euo pipefail
-          # Run the HTTP harness against the already-started stack. Without
-          # --no-deps, compose run may recreate dependency services (notably
-          # django), invalidating the readiness gate and causing transient 502s.
           docker compose run --rm --no-deps \
             -v "$PWD/e2e:/e2e:ro" \
             -e AEGIS_BASE_URL=http://nginx \
