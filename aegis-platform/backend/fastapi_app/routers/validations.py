@@ -16,7 +16,6 @@ from evidence.models import ValidationRun
 from vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
-from ..tasks.security_scan import validate_finding_task
 from ..tasks.finding_validation import validate_finding_e2e
 from ..tasks.nmap_finding_validation import validate_nmap_finding_e2e
 
@@ -79,6 +78,8 @@ def _get_finding(finding_id: UUID, user_id: str):
 
 @sync_to_async
 def _create(body: ValidationCreate, user_id: str, finding: Optional[Vulnerability]):
+    if not finding:
+        raise ValueError('finding_id is required for real validation execution')
     v = ValidationRun.objects.create(
         user_id=user_id,
         finding=finding,
@@ -89,11 +90,8 @@ def _create(body: ValidationCreate, user_id: str, finding: Optional[Vulnerabilit
         engines=body.engines,
         authorized=True,
     )
-    if finding:
-        source_engine = (finding.source_engine or '').strip().lower()
-        task = validate_nmap_finding_e2e if source_engine == 'nmap' else validate_finding_e2e
-    else:
-        task = validate_finding_task
+    source_engine = (finding.source_engine or '').strip().lower()
+    task = validate_nmap_finding_e2e if source_engine == 'nmap' else validate_finding_e2e
     task_result = task.delay(str(v.id))
     v.celery_task_id = task_result.id
     v.save(update_fields=['celery_task_id'])
@@ -111,39 +109,40 @@ async def create_validation(body: ValidationCreate, user=Depends(get_current_use
     target = (body.scope or body.target_value).strip()
     if not target:
         raise HTTPException(status_code=400, detail='target_value is required')
+    if not body.finding_id:
+        raise HTTPException(status_code=400, detail='finding_id is required for real validation execution')
 
     user_id = str(user.get('user_id'))
-    finding = None
-    if body.finding_id:
-        finding = await _get_finding(body.finding_id, user_id)
-        if not finding:
-            raise HTTPException(status_code=404, detail='Finding not found')
-        source_engine = (finding.source_engine or '').strip().lower()
-        if source_engine not in {'nmap', 'nuclei'}:
-            raise HTTPException(status_code=400, detail=f'Finding source engine is not supported for validation: {source_engine}')
-        if len(body.engines) != 1 or body.engines[0].lower() != source_engine:
-            raise HTTPException(status_code=400, detail=f'Finding validation engine must be {source_engine}')
-        if body.engines[0].lower() == 'nuclei':
-            asset_url = ((finding.asset.configuration or {}).get('url') if finding.asset else None)
-            if not asset_url:
-                raise HTTPException(status_code=400, detail='Finding asset has no URL for Nuclei validation')
-            if body.target_value.strip() != asset_url.strip():
-                raise HTTPException(status_code=400, detail='Finding validation target must exactly match the finding asset URL')
-        else:
-            asset_host = ((finding.asset.configuration or {}).get('host') or (finding.asset.configuration or {}).get('ip') or (finding.asset.configuration or {}).get('domain')) if finding.asset else None
-            if not asset_host:
-                raise HTTPException(status_code=400, detail='Finding asset has no host/ip/domain for Nmap validation')
-            if body.target_value.strip() != str(asset_host).strip():
-                raise HTTPException(status_code=400, detail='Finding validation target must exactly match the finding asset host')
+    finding = await _get_finding(body.finding_id, user_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail='Finding not found')
+    source_engine = (finding.source_engine or '').strip().lower()
+    if source_engine not in {'nmap', 'nuclei'}:
+        raise HTTPException(status_code=400, detail=f'Finding source engine is not supported for validation: {source_engine}')
+    if len(body.engines) != 1 or body.engines[0].lower() != source_engine:
+        raise HTTPException(status_code=400, detail=f'Finding validation engine must be {source_engine}')
+    if body.engines[0].lower() == 'nuclei':
+        asset_url = ((finding.asset.configuration or {}).get('url') if finding.asset else None)
+        if not asset_url:
+            raise HTTPException(status_code=400, detail='Finding asset has no URL for Nuclei validation')
+        if body.target_value.strip() != asset_url.strip():
+            raise HTTPException(status_code=400, detail='Finding validation target must exactly match the finding asset URL')
     else:
-        if not body.engines or any(engine != 'nmap' for engine in body.engines):
-            raise HTTPException(status_code=400, detail='Only the real nmap engine is enabled for standalone validation')
+        asset_host = ((finding.asset.configuration or {}).get('host') or (finding.asset.configuration or {}).get('ip') or (finding.asset.configuration or {}).get('domain')) if finding.asset else None
+        if not asset_host:
+            raise HTTPException(status_code=400, detail='Finding asset has no host/ip/domain for Nmap validation')
+        if body.target_value.strip() != str(asset_host).strip():
+            raise HTTPException(status_code=400, detail='Finding validation target must exactly match the finding asset host')
 
     try:
         require_authorized_target(target)
     except ScopeAuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return await _serialize(await _create(body, user_id, finding))
+    try:
+        validation = await _create(body, user_id, finding)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await _serialize(validation)
 
 
 @sync_to_async
@@ -197,21 +196,3 @@ def _cancel(vid: UUID, user_id: str):
         from celery.result import AsyncResult
         AsyncResult(v.celery_task_id).revoke(terminate=False)
     return v
-
-
-@router.post('/validations/{vid}/cancel')
-async def cancel_validation(vid: UUID, user=Depends(get_current_user)):
-    v = await _cancel(vid, str(user.get('user_id')))
-    if not v:
-        raise HTTPException(status_code=404, detail='Validation not found')
-    return {'status': v.status}
-
-
-@router.post('/validations/{vid}/pause')
-async def pause_validation(vid: UUID, user=Depends(get_current_user)):
-    raise HTTPException(status_code=409, detail='Pause is not supported by the real Nmap/Nuclei worker; cancel and start a new authorized run instead.')
-
-
-@router.post('/validations/{vid}/resume')
-async def resume_validation(vid: UUID, user=Depends(get_current_user)):
-    raise HTTPException(status_code=409, detail='Resume is not supported by the real Nmap/Nuclei worker; start a new authorized run instead.')
