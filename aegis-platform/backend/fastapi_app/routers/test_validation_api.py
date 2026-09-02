@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from asgiref.sync import sync_to_async
+from django.db import connections
 from fastapi.testclient import TestClient
 
 from django_project.assets.models import Asset
@@ -24,8 +26,15 @@ from fastapi_app.routers import validations as validations_router
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
+async def _close_django_connections_for_testclient() -> None:
+    """Close the Django ORM connection held by TestClient's thread-sensitive worker."""
+    await sync_to_async(connections.close_all, thread_sensitive=True)()
+
+
 @pytest.fixture
-def api_fixture(transactional_db):
+def api_fixture(transactional_db, monkeypatch):
+    monkeypatch.setenv("AUTHORIZED_SCAN_TARGETS", "aegis-scan-target")
+
     user = User.objects.create_user(
         email="validation-api-regression@example.invalid",
         password="Strong-Test-Password-123!",
@@ -83,15 +92,19 @@ def api_fixture(transactional_db):
         "is_staff": True,
     }
 
-    # Close the HTTP transport deterministically after each test, but do not
-    # enter the TestClient context manager because that would start the full
-    # application lifespan (background bridges/orchestrators) unnecessarily.
+    # Close the HTTP transport and the thread-sensitive Django ORM connection
+    # deterministically after each test. Do not start the full application
+    # lifespan because these are API contract tests, not service orchestration tests.
     client = TestClient(app)
     try:
         yield client, user, finding
     finally:
-        app.dependency_overrides.clear()
-        client.close()
+        try:
+            if client.portal is not None:
+                client.portal.call(_close_django_connections_for_testclient)
+        finally:
+            app.dependency_overrides.clear()
+            client.close()
 
 
 def _create_body(finding_id: str) -> dict:
@@ -128,12 +141,9 @@ def _completed_validation(user, finding, *, finding_present: bool) -> Validation
             "target": "aegis-scan-target",
             "exit_code": 0,
             "finding_present": finding_present,
-            "evidence_id": "00000000-0000-0000-0000-000000000001",
         },
     )
-    validation.completed_at = validation.created_at
-    validation.save(update_fields=["completed_at"])
-    Evidence.objects.create(
+    evidence = Evidence.objects.create(
         scan=finding.scan,
         asset=finding.asset,
         finding=finding,
@@ -148,6 +158,13 @@ def _completed_validation(user, finding, *, finding_present: bool) -> Validation
         },
         collected_by=user,
     )
+    validation.result = {
+        **validation.result,
+        "evidence_id": str(evidence.id),
+    }
+    validation.save(update_fields=["result"])
+    validation.completed_at = validation.created_at
+    validation.save(update_fields=["completed_at"])
     return validation
 
 
