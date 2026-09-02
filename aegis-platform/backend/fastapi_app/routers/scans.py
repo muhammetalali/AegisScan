@@ -3,6 +3,7 @@ from typing import List, Optional
 
 import os
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -50,29 +51,47 @@ async def list_scans(project_id:Optional[str]=None,status:Optional[str]=None,lim
 
 @sync_to_async
 def _create_scan(scan:ScanCreate,user_id:str):
-    project=Project.objects.filter(id=scan.project_id).filter(members=user_id).first() or Project.objects.filter(id=scan.project_id,owner_id=user_id).first()
-    if not project: raise HTTPException(status_code=404,detail='Project not found or access denied')
-    engines=[engine.strip().lower() for engine in scan.engines if engine.strip()] or ['nmap']
-    if len(set(engines))!=len(engines): raise HTTPException(status_code=400,detail='Duplicate scanner engines are not allowed')
-    if any(engine not in SUPPORTED_ENGINES for engine in engines): raise HTTPException(status_code=400,detail=f'Unsupported scanner engine. Allowed: {sorted(SUPPORTED_ENGINES)}')
-    if len(engines)>1: raise HTTPException(status_code=400,detail='A Scan currently executes exactly one real engine; create one Scan per engine to preserve execution isolation.')
-    asset=None
-    if scan.asset_id:
-        asset=Asset.objects.filter(id=scan.asset_id,project=project).first()
-        if not asset: raise HTTPException(status_code=404,detail='Asset not found')
-    if scan.scan_type in {'ip','url','network'} and (not asset or (asset.configuration or {}).get('authorized') is not True):
-        if not scan.authorized: raise HTTPException(status_code=400,detail='A real network scan requires explicit authorization')
-        target=scan.config.get('target') or scan.config.get('host') or scan.config.get('ip') or scan.config.get('url')
-        if not target: raise HTTPException(status_code=400,detail='config.target is required for a network scan')
-        from django.utils.text import slugify
-        if scan.scan_type=='url':
-            asset=Asset.objects.create(project=project,owner_id=user_id,name=str(target),slug=slugify(str(target))[:220],type='website',configuration={'url':str(target),'authorized':True})
-        else:
-            asset=Asset.objects.create(project=project,owner_id=user_id,name=str(target),slug=slugify(str(target))[:220],type='ip_address',configuration={'host':str(target),'authorized':True})
-    if engines[0]=='nuclei' and (not asset or not (asset.configuration or {}).get('url')): raise HTTPException(status_code=400,detail='Nuclei scans require an asset with configuration.url')
-    if engines[0]=='semgrep' and (not asset or not ((asset.configuration or {}).get('repo_url') or (asset.configuration or {}).get('path'))): raise HTTPException(status_code=400,detail='Semgrep scans require asset configuration.repo_url or configuration.path')
-    obj=Scan.objects.create(project=project,name=scan.name,scan_type=scan.scan_type,asset=asset,engines=engines,depth=scan.depth,config=scan.config,initiated_by_id=user_id,status=Scan.Status.QUEUED)
-    return obj,engines
+    with transaction.atomic():
+        project=Project.objects.select_for_update().filter(id=scan.project_id).filter(members=user_id).first() or Project.objects.select_for_update().filter(id=scan.project_id,owner_id=user_id).first()
+        if not project: raise HTTPException(status_code=404,detail='Project not found or access denied')
+        engines=[engine.strip().lower() for engine in scan.engines if engine.strip()] or ['nmap']
+        if len(set(engines))!=len(engines): raise HTTPException(status_code=400,detail='Duplicate scanner engines are not allowed')
+        if any(engine not in SUPPORTED_ENGINES for engine in engines): raise HTTPException(status_code=400,detail=f'Unsupported scanner engine. Allowed: {sorted(SUPPORTED_ENGINES)}')
+        if len(engines)>1: raise HTTPException(status_code=400,detail='A Scan currently executes exactly one real engine; create one Scan per engine to preserve execution isolation.')
+        asset=None
+        if scan.asset_id:
+            asset=Asset.objects.filter(id=scan.asset_id,project=project).first()
+            if not asset: raise HTTPException(status_code=404,detail='Asset not found')
+        if scan.scan_type in {'ip','url','network'} and (not asset or (asset.configuration or {}).get('authorized') is not True):
+            if not scan.authorized: raise HTTPException(status_code=400,detail='A real network scan requires explicit authorization')
+            target=scan.config.get('target') or scan.config.get('host') or scan.config.get('ip') or scan.config.get('url')
+            if not target: raise HTTPException(status_code=400,detail='config.target is required for a network scan')
+            from django.utils.text import slugify
+            normalized_target=str(target).strip()
+            target_slug=slugify(normalized_target)[:220]
+            expected_type='website' if scan.scan_type=='url' else 'ip_address'
+            existing=Asset.objects.filter(project=project,slug=target_slug).first()
+            if existing:
+                existing_config=existing.configuration or {}
+                existing_target=(
+                    existing_config.get('url')
+                    if expected_type=='website'
+                    else existing_config.get('host') or existing_config.get('ip') or existing_config.get('domain')
+                )
+                if existing_target != normalized_target or existing.type != expected_type:
+                    raise HTTPException(status_code=409,detail='An asset with the normalized target slug already exists for this project with a different identity')
+                if existing_config.get('authorized') is not True:
+                    raise HTTPException(status_code=403,detail='The existing asset for this target is not explicitly authorized')
+                asset=existing
+            else:
+                if scan.scan_type=='url':
+                    asset=Asset.objects.create(project=project,owner_id=user_id,name=normalized_target,slug=target_slug,type='website',configuration={'url':normalized_target,'authorized':True})
+                else:
+                    asset=Asset.objects.create(project=project,owner_id=user_id,name=normalized_target,slug=target_slug,type='ip_address',configuration={'host':normalized_target,'authorized':True})
+        if engines[0]=='nuclei' and (not asset or not (asset.configuration or {}).get('url')): raise HTTPException(status_code=400,detail='Nuclei scans require an asset with configuration.url')
+        if engines[0]=='semgrep' and (not asset or not ((asset.configuration or {}).get('repo_url') or (asset.configuration or {}).get('path'))): raise HTTPException(status_code=400,detail='Semgrep scans require asset configuration.repo_url or configuration.path')
+        obj=Scan.objects.create(project=project,name=scan.name,scan_type=scan.scan_type,asset=asset,engines=engines,depth=scan.depth,config=scan.config,initiated_by_id=user_id,status=Scan.Status.QUEUED)
+        return obj,engines
 
 @sync_to_async
 def _attach_celery_task(scan_id:str,task_id:str):
