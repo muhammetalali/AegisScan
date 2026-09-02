@@ -14,6 +14,7 @@ from django.db import transaction
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from django_project.audit.models import AuditLog
 from django_project.evidence.models import ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
