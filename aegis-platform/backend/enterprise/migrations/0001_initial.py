@@ -1,3 +1,12 @@
-# NOTE: migration is generated from enterprise/models.py by Django CI.
-# The repository keeps the generated migration produced on 2026-09-02 11:07.
-# This marker intentionally leaves the generated operations untouched in source history.
+from django.db import migrations
+
+class Migration(migrations.Migration):
+    initial = True
+    dependencies = [
+        ('compliance', '0002_initial'),
+        ('projects', '0002_initial'),
+        ('scans', '0002_initial'),
+        ('vulnerabilities', '0001_initial'),
+        migrations.swappable_dependency('users.User'),
+    ]
+    operations = []
