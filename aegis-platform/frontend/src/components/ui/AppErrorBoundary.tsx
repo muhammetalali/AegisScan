@@ -65,14 +65,24 @@ export const isChunkLoadError = (error: unknown) => {
   return /failed to fetch dynamically imported module|importing a module script failed|chunkloaderror|loading chunk/i.test(message)
 }
 
+const CHUNK_RECOVERY_KEY = 'aegisscan:chunk-recovery'
+
 export function lazyWithRetry<T extends React.ComponentType<any>>(loader: () => Promise<{ default: T }>) {
   return React.lazy(async () => {
     try {
-      return await loader()
+      const result = await loader()
+      sessionStorage.removeItem(CHUNK_RECOVERY_KEY)
+      return result
     } catch (firstError) {
       if (!isChunkLoadError(firstError)) throw firstError
 
-      await new Promise(resolve => window.setTimeout(resolve, 150))
+      const alreadyRecovered = sessionStorage.getItem(CHUNK_RECOVERY_KEY) === '1'
+      if (!alreadyRecovered) {
+        sessionStorage.setItem(CHUNK_RECOVERY_KEY, '1')
+        window.location.reload()
+        return new Promise<{ default: T }>(() => undefined)
+      }
+
       return loader()
     }
   })
