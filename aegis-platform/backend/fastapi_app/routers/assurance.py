@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import timezone
-from typing import Optional
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
@@ -21,11 +20,6 @@ class AssuranceSummary(BaseModel):
     sources: int
     agreement: int
     confidence: int
-
-
-@sync_to_async
-def _validations(user_id: str):
-    return list(ValidationRun.objects.filter(user_id=user_id).select_related('finding').order_by('-created_at'))
 
 
 @sync_to_async
@@ -55,25 +49,19 @@ def _conflicts(user_id: str, limit: int):
 
 
 @sync_to_async
-def _summary(user_id: str):
+def _summary_data(user_id: str):
     runs = list(ValidationRun.objects.filter(user_id=user_id, status=ValidationRun.Status.COMPLETED).order_by('-completed_at')[:1000])
-    conflicts = 0
-    signal_values = set()
     sources = set()
     agreement = 0
     for run in runs:
+        sources.update(str(x) for x in (run.engines or []))
         result = run.result if isinstance(run.result, dict) else {}
-        if 'finding_present' in result:
-            signal_values.add(str(result.get('finding_present')).lower())
-        if run.engines:
-            sources.update(str(x) for x in run.engines)
         evidence_id = result.get('evidence_id')
         if evidence_id and Evidence.objects.filter(pk=evidence_id, finding=run.finding).exists():
             agreement += 1
-    conflicts = len(await _conflicts(user_id, 500))
     signal_count = len(runs)
     confidence = round(max(0.0, min(100.0, 50.0 + (agreement / signal_count * 50.0 if signal_count else 0.0))))
-    return {'conflicts': conflicts, 'signals': signal_count, 'sources': len(sources), 'agreement': agreement, 'confidence': confidence}
+    return {'signals': signal_count, 'sources': len(sources), 'agreement': agreement, 'confidence': confidence}
 
 
 @router.get('/correlations/conflicts')
@@ -84,7 +72,9 @@ async def list_conflicts(limit: int = Query(100, ge=1, le=500), current_user=Dep
 
 @router.get('/correlations/summary', response_model=AssuranceSummary)
 async def correlation_summary(current_user=Depends(get_current_user)):
-    return await _summary(str(current_user.get('user_id')))
+    data = await _summary_data(str(current_user.get('user_id')))
+    conflicts = len(await _conflicts(str(current_user.get('user_id')), 500))
+    return {**data, 'conflicts': conflicts}
 
 
 @router.get('/correlations/validations/{validation_id}')
