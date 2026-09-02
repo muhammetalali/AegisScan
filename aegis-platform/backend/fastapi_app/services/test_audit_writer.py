@@ -7,7 +7,7 @@ from starlette.requests import Request
 
 from django_project.audit.models import AuditLog
 from django_project.users.models import User
-from .audit_writer import add_audit_entry
+from fastapi_app.services.audit_writer import add_audit_entry
 
 
 class AuditWriterTests(TestCase):

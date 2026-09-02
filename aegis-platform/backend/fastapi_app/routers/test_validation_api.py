@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from types import SimpleNamespace
 
@@ -92,19 +92,14 @@ def api_fixture(transactional_db, monkeypatch):
         "is_staff": True,
     }
 
-    # Close the HTTP transport and the thread-sensitive Django ORM connection
-    # deterministically after each test. Do not start the full application
-    # lifespan because these are API contract tests, not service orchestration tests.
     client = TestClient(app)
-    try:
-        yield client, user, finding
-    finally:
+    with client:
         try:
+            yield client, user, finding
+        finally:
             if client.portal is not None:
                 client.portal.call(_close_django_connections_for_testclient)
-        finally:
             app.dependency_overrides.clear()
-            client.close()
 
 
 def _create_body(finding_id: str) -> dict:

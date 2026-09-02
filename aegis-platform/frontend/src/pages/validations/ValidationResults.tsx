@@ -85,17 +85,17 @@ export const ValidationResults = () => {
 
   const overview = results?.overview
   const findings = findingsData?.items || results?.findings || []
-  const evidences = evidenceData?.items || results?.evidences || []
+  const evidences = evidenceData?.items || []
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(results, null, 2)], {type:'application/json'})
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a'); a.href=url; a.download=`validation-${id}.json`; a.click(); URL.revokeObjectURL(url)
-    toast.success('تم تصدير JSON')
+    toast.success('طھظ… طھطµط¯ظٹط± JSON')
   }
 
   if (isLoading) return <div className="p-6 max-w-6xl mx-auto animate-pulse space-y-4"><div className="h-24 bg-muted rounded" /><div className="h-96 bg-muted rounded" /></div>
-  if (!results) return <div className="p-6 max-w-6xl mx-auto"><p className="text-muted-foreground">No results — validation may still be running.</p><Link to={`/validations/${id}/progress`} className="text-primary underline text-sm">View Progress</Link></div>
+  if (!results) return <div className="p-6 max-w-6xl mx-auto"><p className="text-muted-foreground">No results â€” validation may still be running.</p><Link to={`/validations/${id}/progress`} className="text-primary underline text-sm">View Progress</Link></div>
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-4">
@@ -103,7 +103,7 @@ export const ValidationResults = () => {
       {results.simulation && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 flex gap-2 items-start">
           <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5" />
-          <p className="text-xs text-amber-800 dark:text-amber-200"><span className="font-semibold">Simulation / Demo Data</span> — {results.notice}</p>
+          <p className="text-xs text-amber-800 dark:text-amber-200"><span className="font-semibold">Simulation / Demo Data</span> â€” {results.notice}</p>
         </div>
       )}
 
@@ -114,9 +114,9 @@ export const ValidationResults = () => {
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-primary" />
               <span className="font-mono text-sm font-semibold">Validation #{id}</span>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs">COMPLETED ✓</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs">COMPLETED âœ“</span>
             </div>
-            <div className="text-xs text-muted-foreground mt-1 font-mono" dir="ltr">{validationMeta?.target_value || results.assets?.[0]?.name} • {validationMeta?.created_at ? new Date(validationMeta.created_at).toLocaleString() : ''}</div>
+            <div className="text-xs text-muted-foreground mt-1 font-mono" dir="ltr">{validationMeta?.target_value || results.assets?.[0]?.name} â€¢ {validationMeta?.created_at ? new Date(validationMeta.created_at).toLocaleString() : ''}</div>
           </div>
           <div className="flex gap-2">
             <button onClick={exportJson} className="px-3 py-1.5 rounded-lg border bg-card text-xs inline-flex items-center gap-1 hover:bg-muted"><Download className="h-3 w-3" /> JSON</button>
@@ -133,7 +133,7 @@ export const ValidationResults = () => {
           {Object.entries(overview.severity_counts).map(([k,v])=> (
             <span key={k} className={cn('text-xs px-2 py-0.5 rounded-full font-medium capitalize', sevColor[k] || 'bg-muted')}>{k} {v as number}</span>
           ))}
-          <span className="text-xs text-muted-foreground ml-2">Engines {overview.engines_executed} • {overview.validation_summary}</span>
+          <span className="text-xs text-muted-foreground ml-2">Engines {overview.engines_executed} â€¢ {overview.validation_summary}</span>
         </div>
       </div>
 
@@ -196,7 +196,7 @@ export const ValidationResults = () => {
                 {findings.map((f:any)=> (
                   <tr key={f.id} onClick={()=>setSelectedFinding(f)} className="border-b hover:bg-muted/30 cursor-pointer">
                     <td className="px-3 py-2"><span className={cn('px-2 py-0.5 rounded text-[11px] font-medium', sevColor[f.severity])}>{f.severity}</span></td>
-                    <td className="px-3 py-2"><div className="font-medium">{f.title}</div><div className="text-muted-foreground text-[11px]">{f.category} • {f.cwe} • CVSS {f.cvss}</div></td>
+                    <td className="px-3 py-2"><div className="font-medium">{f.title}</div><div className="text-muted-foreground text-[11px]">{f.category} â€¢ {f.cwe} â€¢ CVSS {f.cvss}</div></td>
                     <td className="px-3 py-2 font-mono">{f.asset}</td>
                     <td className="px-3 py-2">{f.confidence}%</td>
                     <td className="px-3 py-2"><span className={cn('px-1.5 py-0.5 rounded text-[11px] border', f.status==='reviewed' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700')}>{f.status}</span></td>
@@ -217,7 +217,7 @@ export const ValidationResults = () => {
               {results.findings.map((f:any)=> <option key={f.id} value={f.id}>{f.title} ({f.id})</option>)}
             </select>
             <button onClick={()=>setEvidenceFinding('')} className="px-2 py-1 rounded border text-xs">Clear</button>
-            <span className="text-xs text-muted-foreground self-center ml-2">Finding → Evidence → Raw (Monaco) • {evidences.length} items</span>
+            <span className="text-xs text-muted-foreground self-center ml-2">Finding â†’ Evidence â†’ Raw (Monaco) â€¢ {evidences.length} items</span>
           </div>
           {/* Detail viewer for selected evidence */}
           <EvidenceMonacoViewer evidences={evidences} />
@@ -226,8 +226,8 @@ export const ValidationResults = () => {
 
       {tab==='graph' && (
         <div className="rounded-xl border bg-card p-4">
-          <h3 className="text-sm font-semibold mb-2">Evidence Graph — Target → Asset → Service → Finding → Evidence → Control</h3>
-          <p className="text-xs text-muted-foreground mb-3">Risk → Finding → Evidence → Asset → Control → Remediation بدون فقدان السياق</p>
+          <h3 className="text-sm font-semibold mb-2">Evidence Graph â€” Target â†’ Asset â†’ Service â†’ Finding â†’ Evidence â†’ Control</h3>
+          <p className="text-xs text-muted-foreground mb-3">Risk â†’ Finding â†’ Evidence â†’ Asset â†’ Control â†’ Remediation ط¨ط¯ظˆظ† ظپظ‚ط¯ط§ظ† ط§ظ„ط³ظٹط§ظ‚</p>
           <div className="rounded-lg border bg-muted/20 p-4 overflow-auto">
             <div className="flex flex-wrap gap-2 items-center text-xs">
               {graphData ? (
@@ -237,7 +237,7 @@ export const ValidationResults = () => {
                   ))}
                   <span className="text-muted-foreground">+ {graphData.graph.edges.length} relationships</span>
                 </>
-              ) : <span className="text-muted-foreground">Loading graph…</span>}
+              ) : <span className="text-muted-foreground">Loading graphâ€¦</span>}
             </div>
             {graphData && (
               <div className="mt-4 grid gap-1 text-[11px] font-mono">
@@ -261,7 +261,7 @@ export const ValidationResults = () => {
                 <span className="px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30">{ap.weakness}</span><ChevronRight className="h-3 w-3" />
                 <span className="px-2 py-1 rounded bg-destructive/10">{ap.impact}</span>
               </div>
-              <div className="mt-2 text-[11px] font-mono text-muted-foreground">Chain: {ap.chain.join(' → ')}</div>
+              <div className="mt-2 text-[11px] font-mono text-muted-foreground">Chain: {ap.chain.join(' â†’ ')}</div>
             </div>
           ))}
         </div>
@@ -309,15 +309,15 @@ export const ValidationResults = () => {
           <div className="flex-1 bg-black/40" onClick={()=>setSelectedFinding(null)} />
           <div className="w-full max-w-xl bg-card border-l overflow-auto p-5 space-y-4">
             <div className="flex justify-between items-start">
-              <div><span className={cn('px-2 py-0.5 rounded text-white text-xs', sevColor[selectedFinding.severity])}>{selectedFinding.severity}</span><h2 className="font-semibold mt-2">{selectedFinding.title}</h2><div className="text-xs text-muted-foreground">{selectedFinding.category} • {selectedFinding.cwe} • CVSS {selectedFinding.cvss} • Confidence {selectedFinding.confidence}%</div></div>
-              <button onClick={()=>setSelectedFinding(null)} className="p-1 rounded hover:bg-muted">✕</button>
+              <div><span className={cn('px-2 py-0.5 rounded text-white text-xs', sevColor[selectedFinding.severity])}>{selectedFinding.severity}</span><h2 className="font-semibold mt-2">{selectedFinding.title}</h2><div className="text-xs text-muted-foreground">{selectedFinding.category} â€¢ {selectedFinding.cwe} â€¢ CVSS {selectedFinding.cvss} â€¢ Confidence {selectedFinding.confidence}%</div></div>
+              <button onClick={()=>setSelectedFinding(null)} className="p-1 rounded hover:bg-muted">âœ•</button>
             </div>
             <div className="text-xs space-y-2">
               <div><div className="font-medium">Description</div><div className="text-muted-foreground">{selectedFinding.description}</div></div>
               <div><div className="font-medium">Impact</div><div className="text-muted-foreground">{selectedFinding.impact}</div></div>
               <div><div className="font-medium">Affected Asset</div><div className="font-mono">{selectedFinding.asset}</div></div>
               <div><div className="font-medium">Evidence ({selectedFinding.evidence_ids.length})</div><div className="space-y-1 mt-1">{selectedFinding.evidence_ids.map((eid:string)=> <div key={eid} className="rounded border px-2 py-1 font-mono text-[11px] flex justify-between"><span>{eid}</span><button onClick={()=>{navigator.clipboard.writeText(eid); toast.success('Copied')}} className="text-primary">Copy</button></div>)}</div></div>
-              <div><div className="font-medium">Attack Path</div><div className="font-mono text-[11px] text-muted-foreground">Target → Asset → Finding → Impact</div></div>
+              <div><div className="font-medium">Attack Path</div><div className="font-mono text-[11px] text-muted-foreground">Target â†’ Asset â†’ Finding â†’ Impact</div></div>
               <div><div className="font-medium">Remediation</div><div className="text-muted-foreground">{results.controls.find((c:any)=>c.finding_ids.includes(selectedFinding.id))?.remediation || 'See Controls tab'}</div></div>
             </div>
             <div className="flex gap-2">
@@ -350,7 +350,7 @@ const EvidenceMonacoViewer = ({ evidences }: { evidences: any[] }) => {
       </div>
       <div className="md:col-span-2 border rounded-lg overflow-hidden">
         <div className="px-3 py-2 border-b bg-muted/30 flex items-center justify-between">
-          <span className="text-xs font-mono font-medium flex items-center gap-1"><Braces className="h-3 w-3" />{ev.id} • {ev.engine} • {ev.type}</span>
+          <span className="text-xs font-mono font-medium flex items-center gap-1"><Braces className="h-3 w-3" />{ev.id} â€¢ {ev.engine} â€¢ {ev.type}</span>
           <div className="flex gap-1">
             <button onClick={()=>setViewMode('pretty')} className={cn('px-2 py-1 rounded text-[11px] border', viewMode==='pretty' ? 'bg-primary text-primary-foreground' : 'bg-card')}>Data</button>
             <button onClick={()=>setViewMode('raw')} className={cn('px-2 py-1 rounded text-[11px] border', viewMode==='raw' ? 'bg-primary text-primary-foreground' : 'bg-card')}>Raw</button>
@@ -360,7 +360,7 @@ const EvidenceMonacoViewer = ({ evidences }: { evidences: any[] }) => {
         <div className="h-[360px]">
           <Editor height="360px" language={lang} value={content} options={{ readOnly: true, minimap: {enabled:false}, fontSize: 12, scrollBeyondLastLine:false, wordWrap:'on' }} theme="vs-dark" />
         </div>
-        {ev.finding_id && <div className="px-3 py-1.5 bg-amber-50 dark:bg-amber-950/20 text-[11px]">Linked Finding: <span className="font-mono">{ev.finding_id}</span> — Finding → Evidence → Control</div>}
+        {ev.finding_id && <div className="px-3 py-1.5 bg-amber-50 dark:bg-amber-950/20 text-[11px]">Linked Finding: <span className="font-mono">{ev.finding_id}</span> â€” Finding â†’ Evidence â†’ Control</div>}
       </div>
     </div>
   )

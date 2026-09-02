@@ -1,8 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from types import SimpleNamespace
 
+from asgiref.sync import sync_to_async
+
 import pytest
+from django.db import connections
 from fastapi.testclient import TestClient
 
 from django_project.assets.models import Asset
@@ -14,6 +17,11 @@ from fastapi_app.main import app
 from fastapi_app.routers import scans as scans_router
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+async def _close_django_connections_for_testclient() -> None:
+    """Close the Django ORM connection held by TestClient's thread-sensitive worker."""
+    await sync_to_async(connections.close_all, thread_sensitive=True)()
 
 
 @pytest.fixture
@@ -49,11 +57,13 @@ def api_fixture(transactional_db, monkeypatch):
     monkeypatch.setattr(scans_router.run_nmap_scan, "delay", fake_delay)
 
     client = TestClient(app)
-    try:
-        yield client, user, project, asset
-    finally:
-        app.dependency_overrides.clear()
-        client.close()
+    with client:
+        try:
+            yield client, user, project, asset
+        finally:
+            if client.portal is not None:
+                client.portal.call(_close_django_connections_for_testclient)
+            app.dependency_overrides.clear()
 
 
 def _body(project_id: str) -> dict:

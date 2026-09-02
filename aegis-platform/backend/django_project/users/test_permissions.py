@@ -1,4 +1,5 @@
 import pytest
+from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from django_project.users.models import Team, TeamMembership, User, UserRole
@@ -28,6 +29,7 @@ def test_has_permission_accepts_mapping_and_string():
     )
     request = APIRequestFactory().get('/api/v1/users/')
     force_authenticate(request, user=user)
+    request = Request(request)
 
     permission = HasPermission()
     assert permission.has_permission(request, PermissionView()) is True
@@ -44,6 +46,7 @@ def test_has_permission_accepts_action_level_list_without_crashing():
     )
     request = APIRequestFactory().post('/api/v1/users/1/activate/')
     force_authenticate(request, user=user)
+    request = Request(request)
 
     permission = HasPermission()
     assert permission.has_permission(request, ListPermissionView()) is True
@@ -60,6 +63,7 @@ def test_has_permission_fails_closed_without_contract():
     )
     request = APIRequestFactory().get('/api/v1/unknown/')
     force_authenticate(request, user=user)
+    request = Request(request)
 
     class UnconfiguredView:
         action = 'list'
@@ -77,6 +81,7 @@ def test_project_permissions_fail_closed_without_project_scope():
     )
     request = APIRequestFactory().post('/api/v1/projects/')
     force_authenticate(request, user=user)
+    request = Request(request)
 
     class UnscopedView:
         kwargs = {}
@@ -116,6 +121,7 @@ def test_team_queryset_isolation_and_team_admin_gate():
     factory = APIRequestFactory()
     request = factory.get(f'/api/v1/teams/{team.pk}/')
     force_authenticate(request, user=outsider)
+    request = Request(request)
     view = TeamViewSet()
     view.request = request
 
@@ -124,6 +130,7 @@ def test_team_queryset_isolation_and_team_admin_gate():
 
     request = factory.get(f'/api/v1/teams/{team.pk}/')
     force_authenticate(request, user=owner)
+    request = Request(request)
     view.request = request
     assert view.get_queryset().filter(pk=team.pk).exists()
     assert IsTeamAdmin().has_permission(request, type('V', (), {'kwargs': {'pk': str(team.pk)}})()) is True
@@ -149,6 +156,7 @@ def test_project_membership_is_tenant_boundary():
     factory = APIRequestFactory()
     request = factory.get(f'/api/v1/projects/{project.pk}/')
     force_authenticate(request, user=outsider)
+    request = Request(request)
     view = type('V', (), {'kwargs': {'project_pk': str(project.pk)}})()
 
     assert IsProjectMember().has_permission(request, view) is False

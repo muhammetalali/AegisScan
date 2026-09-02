@@ -118,46 +118,6 @@ class Vulnerability(models.Model):
         return f"[{self.get_severity_display()}] {self.title}"
 
 
-class VulnerabilityEvidence(models.Model):
-    class Type(models.TextChoices):
-        STATIC_ANALYSIS = 'static_analysis', _('Static Analysis')
-        DYNAMIC_ANALYSIS = 'dynamic_analysis', _('Dynamic Analysis')
-        LOG_ANALYSIS = 'log_analysis', _('Log Analysis')
-        CONFIG_CHECK = 'config_check', _('Config Check')
-        DEPENDENCY_SCAN = 'dependency_scan', _('Dependency Scan')
-        EXTERNAL_INTEL = 'external_intel', _('External Intelligence')
-        MANUAL_REVIEW = 'manual_review', _('Manual Review')
-        VALIDATION_TEST = 'validation_test', _('Validation Test')
-
-    class Quality(models.TextChoices):
-        VERIFIED = 'verified', _('Verified')
-        HIGH = 'high', _('High')
-        MEDIUM = 'medium', _('Medium')
-        LOW = 'low', _('Low')
-        UNVERIFIED = 'unverified', _('Unverified')
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    vulnerability = models.ForeignKey(Vulnerability, on_delete=models.CASCADE, related_name='evidences')
-    type = models.CharField(_('type'), max_length=30, choices=Type.choices)
-    quality = models.CharField(_('quality'), max_length=15, choices=Quality.choices, default=Quality.UNVERIFIED)
-    source = models.CharField(_('source'), max_length=100)
-    description = models.TextField(_('description'))
-    location = models.CharField(_('location'), max_length=500, blank=True)
-    raw_data = models.TextField(_('raw data'), blank=True)
-    confidence = models.FloatField(_('confidence'), default=0.5)
-    corroboration_count = models.PositiveIntegerField(_('corroboration count'), default=0)
-    tags = models.JSONField(_('tags'), default=list, blank=True)
-    metadata = models.JSONField(_('metadata'), default=dict, blank=True)
-    collected_at = models.DateTimeField(auto_now_add=True)
-    verified_at = models.DateTimeField(_('verified at'), blank=True, null=True)
-    verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='verified_evidences')
-
-    class Meta:
-        verbose_name = _('Vulnerability Evidence')
-        verbose_name_plural = _('Vulnerability Evidences')
-        ordering = ['-quality', '-confidence']
-
-
 class VulnerabilityNote(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     vulnerability = models.ForeignKey(Vulnerability, on_delete=models.CASCADE, related_name='notes')
