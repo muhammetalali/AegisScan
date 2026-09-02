@@ -1,0 +1,64 @@
+/* AegisScan global interaction language: restrained, tactile and consistent across the product. */
+
+button:not(:disabled), a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled) {
+  position: relative;
+  transform: translateZ(0);
+  transition: transform 180ms cubic-bezier(.2,.75,.25,1), filter 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease, color 180ms ease;
+}
+
+button:not(:disabled):hover {
+  transform: translate3d(0, -1px, 4px);
+  filter: brightness(1.06) saturate(1.12);
+  border-color: color-mix(in srgb, var(--primary) 38%, var(--border));
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+button:not(:disabled):active {
+  transform: translate3d(0, 0, 0) scale(.985);
+  filter: brightness(.99) saturate(1.04);
+  box-shadow: 0 5px 13px color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 72%, transparent);
+  outline-offset: 2px;
+}
+
+.enterprise-icon-button:hover {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 9%, var(--background));
+}
+
+.enterprise-control:hover {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 5%, var(--background));
+}
+
+.enterprise-menu-item:hover {
+  background: color-mix(in srgb, var(--primary) 9%, var(--background));
+  color: var(--foreground);
+}
+
+.enterprise-nav:hover {
+  background: color-mix(in srgb, var(--primary) 8%, var(--sidebar-accent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 10%, transparent), 0 8px 22px color-mix(in srgb, black 10%, transparent);
+}
+
+main section, main article {
+  transform-style: preserve-3d;
+  transition: transform 220ms cubic-bezier(.2,.75,.25,1), box-shadow 220ms ease, border-color 220ms ease;
+}
+
+main section:hover, main article:hover {
+  border-color: color-mix(in srgb, var(--primary) 15%, var(--border));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled), a, main section, main article { transition: none !important; }
+  button:not(:disabled):hover { transform: none !important; }
+}
