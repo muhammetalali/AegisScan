@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -61,7 +62,14 @@ async def create_action_endpoint(body: ActionCreate, user: dict[str, Any] = Depe
     actor = str(user.get("id") or user.get("username") or "user")
     item = create_action(decision, body.owner, body.sla_hours, actor)
     try:
-        add_audit_entry(user=actor, action="decision_action.create", target=item["actionId"], project="—", result="success", resource_type="decision_action")
+        await sync_to_async(add_audit_entry)(
+            user=actor,
+            action="decision_action.create",
+            target=item["actionId"],
+            project="—",
+            result="success",
+            resource_type="decision_action",
+        )
     except Exception:
         pass
     return enrich_action(item)
@@ -79,7 +87,15 @@ async def action_transition(action_id: str, body: ActionTransition, user: dict[s
     try:
         item = transition(action_id, body.state, actor, body.note)
         try:
-            add_audit_entry(user=actor, action=f"decision_action.{body.state}", target=action_id, project="—", result="success", resource_type="decision_action", metadata={"note": body.note or ""})
+            await sync_to_async(add_audit_entry)(
+                user=actor,
+                action=f"decision_action.{body.state}",
+                target=action_id,
+                project="—",
+                result="success",
+                resource_type="decision_action",
+                metadata={"note": body.note or ""},
+            )
         except Exception:
             pass
         return enrich_action(item)
