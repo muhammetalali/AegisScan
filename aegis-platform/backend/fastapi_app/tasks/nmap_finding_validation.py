@@ -19,9 +19,7 @@ from fastapi_app.services.scope_authorization import is_target_authorized
 
 
 def _string(value: Any) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    return ''
+    return value.strip() if isinstance(value, str) else ''
 
 
 def _first_expected_port(raw_data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -94,6 +92,16 @@ def _matches_signature(parsed: dict[str, Any], expected_port: int, signature: di
     return False, None
 
 
+def _fail_validation(validation: ValidationRun, message: str, status: str = 'failed') -> dict[str, Any]:
+    validation.status = ValidationRun.Status.FAILED
+    validation.progress = 100
+    validation.current_phase = status
+    validation.error_message = message
+    validation.completed_at = datetime.now(timezone.utc)
+    validation.save(update_fields=['status', 'progress', 'current_phase', 'error_message', 'completed_at'])
+    return {'status': status, 'validation_id': str(validation.id)}
+
+
 @shared_task(bind=True, name='fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e', max_retries=1, default_retry_delay=30)
 def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
     validation = ValidationRun.objects.select_related('finding', 'finding__asset', 'finding__scan', 'user').get(pk=validation_id)
@@ -103,43 +111,37 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
 
     validation.status = ValidationRun.Status.RUNNING
     validation.progress = 10
-    validation.current_phase = 'nmap'
+    validation.current_phase = 'preflight'
     validation.started_at = datetime.now(timezone.utc)
     validation.error_message = ''
     validation.save(update_fields=['status', 'progress', 'current_phase', 'started_at', 'error_message'])
 
-    if not validation.authorized:
-        validation.status = ValidationRun.Status.FAILED
-        validation.error_message = 'Execution blocked: validation is not explicitly authorized.'
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'error_message', 'completed_at'])
-        return {'status': 'blocked', 'validation_id': validation_id}
-
-    asset = finding.asset
-    asset_config = (asset.configuration or {}) if asset else {}
-    if asset_config.get('authorized') is not True:
-        validation.status = ValidationRun.Status.FAILED
-        validation.error_message = 'Execution blocked: finding asset is not explicitly marked authorized.'
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'error_message', 'completed_at'])
-        return {'status': 'blocked', 'validation_id': validation_id}
-
-    engine = (validation.engines or [finding.source_engine])[0].strip().lower()
-    if engine != 'nmap' or (finding.source_engine or '').strip().lower() != 'nmap':
-        raise ValueError('Nmap finding validation requires source engine nmap and validation engine nmap')
-
-    target = _string(asset_config.get('host') or asset_config.get('ip') or asset_config.get('domain'))
-    if not target:
-        raise ValueError('Finding asset does not contain an authorized host/ip/domain for Nmap validation')
-    if validation.target_value.strip() != target:
-        raise ValueError('Nmap finding validation target must exactly match the finding asset host')
-    if not is_target_authorized(validation.scope or validation.target_value):
-        raise ValueError('Execution blocked: target is outside the server-side authorized scan scope.')
-
-    raw_data = finding.raw_data or {}
-    port, signature = _expected_signature(raw_data)
-
     try:
+        if not validation.authorized:
+            return _fail_validation(validation, 'Execution blocked: validation is not explicitly authorized.', 'blocked')
+
+        asset = finding.asset
+        asset_config = (asset.configuration or {}) if asset else {}
+        if asset_config.get('authorized') is not True:
+            return _fail_validation(validation, 'Execution blocked: finding asset is not explicitly marked authorized.', 'blocked')
+
+        engine = (validation.engines or [finding.source_engine])[0].strip().lower()
+        if engine != 'nmap' or (finding.source_engine or '').strip().lower() != 'nmap':
+            raise ValueError('Nmap finding validation requires source engine nmap and validation engine nmap')
+
+        target = _string(asset_config.get('host') or asset_config.get('ip') or asset_config.get('domain'))
+        if not target:
+            raise ValueError('Finding asset does not contain an authorized host/ip/domain for Nmap validation')
+        if validation.target_value.strip() != target:
+            raise ValueError('Nmap finding validation target must exactly match the finding asset host')
+        if not is_target_authorized(validation.scope or validation.target_value):
+            raise ValueError('Execution blocked: target is outside the server-side authorized scan scope.')
+
+        port, signature = _expected_signature(finding.raw_data or {})
+        validation.current_phase = 'nmap'
+        validation.progress = 20
+        validation.save(update_fields=['current_phase', 'progress'])
+
         exit_code, evidence_raw, stderr = _run_nmap_exact(target, port, timeout=300)
         parsed = parse_nmap_xml(evidence_raw) if evidence_raw.strip() else {'hosts': [], 'host_count': 0, 'open_ports': 0}
         finding_present, observed = _matches_signature(parsed, port, signature)
@@ -187,7 +189,7 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
 
             finding.evidence_count = finding.evidence_records.count()
             if exit_code == 0 and finding_present is False:
-                finding.validation_status = 'validated'
+                finding.validation_status = 'verified'
                 finding.validated_at = now
                 finding.validated_by = validation.user
                 finding.verified_evidence_count = finding.evidence_records.filter(
@@ -199,7 +201,11 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                 finding.validation_status = 'unverified'
                 finding.validated_at = now
                 finding.validated_by = validation.user
-                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'evidence_count', 'updated_at'])
+                finding.verified_evidence_count = finding.evidence_records.filter(
+                    evidence_type='validation_output',
+                    metadata__finding_present=False,
+                ).count()
+                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'evidence_count', 'updated_at'])
 
         return {
             'status': validation.status,
