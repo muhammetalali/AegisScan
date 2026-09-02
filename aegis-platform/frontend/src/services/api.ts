@@ -2,11 +2,7 @@ import axios, { AxiosError, AxiosRequestConfig, InternalAxiosRequestConfig } fro
 import { useAuthStore } from '@/stores/authStore'
 
 const configuredApiUrl = String(import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '')
-const API_BASE_URL = configuredApiUrl || (import.meta.env.DEV ? 'http://localhost:8000/api/v1' : '')
-
-if (!API_BASE_URL) {
-  throw new Error('VITE_API_URL must be configured for production builds')
-}
+const API_BASE_URL = configuredApiUrl || (import.meta.env.DEV ? 'http://localhost:8000/api/v1' : '/api/v1')
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -84,9 +80,10 @@ export const uploadFile = async (file: File, onProgress?: (progress: number) => 
 
 export const createWebSocket = (url: string, protocols?: string | string[]) => {
   const configuredWsUrl = String(import.meta.env.VITE_WS_URL || '').trim().replace(/\/$/, '')
-  const defaultWsUrl = import.meta.env.DEV ? 'ws://localhost:8000' : ''
+  const defaultWsUrl = import.meta.env.DEV
+    ? 'ws://localhost:8000'
+    : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
   const wsBaseUrl = configuredWsUrl || defaultWsUrl
-  if (!wsBaseUrl) throw new Error('VITE_WS_URL must be configured for production builds')
   return new WebSocket(`${wsBaseUrl}${url}`, protocols)
 }
 
