@@ -40,6 +40,8 @@ jobs:
       AEGIS_E2E_TARGET: aegis-scan-target
       AEGIS_E2E_TIMEOUT: '180'
       AEGIS_VERIFY_TLS: 'false'
+      AEGIS_E2E_EMAIL: e2e-operator@aegisscan.local
+      AEGIS_E2E_PASSWORD: Aegis-E2E-CI-StrongPass!9
     steps:
       - uses: actions/checkout@v4
       - name: Prepare CI environment
@@ -85,9 +87,44 @@ jobs:
           docker compose ps
           docker compose logs --tail=200 django fastapi celery_worker scan_target nginx
           exit 1
+      - name: Provision CI E2E operator
+        working-directory: aegis-platform
+        run: |
+          set -euo pipefail
+          docker compose exec -T \
+            -e E2E_EMAIL="$AEGIS_E2E_EMAIL" \
+            -e E2E_PASSWORD="$AEGIS_E2E_PASSWORD" \
+            django python manage.py shell <<'PY'
+          import os
+          from django.contrib.auth import get_user_model
+          from django_project.users.models import UserRole
+
+          User = get_user_model()
+          email = os.environ['E2E_EMAIL']
+          password = os.environ['E2E_PASSWORD']
+          user, _ = User.objects.get_or_create(
+              email=email,
+              defaults={
+                  'first_name': 'E2E',
+                  'last_name': 'Operator',
+                  'role': UserRole.SECURITY_MANAGER,
+                  'is_active': True,
+                  'is_verified': True,
+              },
+          )
+          user.first_name = 'E2E'
+          user.last_name = 'Operator'
+          user.role = UserRole.SECURITY_MANAGER
+          user.is_active = True
+          user.is_verified = True
+          user.set_password(password)
+          user.save(update_fields=['first_name', 'last_name', 'role', 'is_active', 'is_verified', 'password'])
+          assert user.has_permission('project.create')
+          assert user.has_permission('scan.create')
+          print(f'Provisioned E2E operator: {email} ({user.role})')
+          PY
       - name: Run HTTP-only black-box E2E
         working-directory: aegis-platform
-        shell: bash
         run: |
           set -euo pipefail
           docker compose run --rm \
@@ -98,6 +135,8 @@ jobs:
             -e AEGIS_E2E_TARGET=aegis-scan-target \
             -e AEGIS_E2E_TIMEOUT=180 \
             -e AEGIS_VERIFY_TLS=false \
+            -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" \
+            -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" \
             fastapi python /e2e/external_black_box_e2e.py
       - name: Print stack state
         if: always()
