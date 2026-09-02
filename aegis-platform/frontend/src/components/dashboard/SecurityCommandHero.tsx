@@ -1,6 +1,6 @@
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion'
-import { Activity, AlertTriangle, ArrowUpRight, Gauge, ShieldCheck } from 'lucide-react'
-import { useRef } from 'react'
+import { Activity, ArrowUpRight, Gauge, ShieldCheck } from 'lucide-react'
+import { type PointerEvent, useRef } from 'react'
 
 type RecentValidation = {
   id?: string
@@ -29,7 +29,7 @@ export const SecurityCommandHero = ({ score, critical, high, assets, validations
   const rotateY = useSpring(useTransform(pointerX, [-1, 1], [-8, 8]), { stiffness: 180, damping: 22 })
   const rotateX = useSpring(useTransform(pointerY, [-1, 1], [7, -7]), { stiffness: 180, damping: 22 })
 
-  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const rect = stageRef.current?.getBoundingClientRect()
     if (!rect) return
     pointerX.set((event.clientX - rect.left) / rect.width * 2 - 1)
