@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 @sync_to_async
- def _audit_logs(user_id: str, limit: int, action: Optional[str], actor: Optional[str]):
+def _audit_logs(user_id: str, limit: int, action: Optional[str], actor: Optional[str]):
     current = User.objects.filter(pk=user_id).first()
     if not current:
         raise HTTPException(status_code=401, detail='User not found')
@@ -36,7 +36,7 @@ router = APIRouter()
 
 
 @sync_to_async
- def _users(user_id: str):
+def _users(user_id: str):
     current = User.objects.get(pk=user_id)
     qs = User.objects.order_by('email')
     if not current.is_staff:
@@ -47,7 +47,7 @@ router = APIRouter()
 
 
 @sync_to_async
- def _teams(user_id: str):
+def _teams(user_id: str):
     current = User.objects.get(pk=user_id)
     qs = Team.objects.prefetch_related('members').order_by('name')
     if not current.is_staff:
@@ -57,7 +57,7 @@ router = APIRouter()
 
 
 @sync_to_async
- def _api_keys(user_id: str):
+def _api_keys(user_id: str):
     current = User.objects.get(pk=user_id)
     qs = APIKey.objects.order_by('-created_at')
     if not current.is_staff:
@@ -71,7 +71,7 @@ router = APIRouter()
 
 
 @sync_to_async
- def _sessions(user_id: str):
+def _sessions(user_id: str):
     current = User.objects.get(pk=user_id)
     qs = UserSession.objects.select_related('user').order_by('-last_activity')
     if not current.is_staff:
@@ -84,7 +84,7 @@ router = APIRouter()
 
 
 @sync_to_async
- def _login_attempts(user_id: str, limit: int):
+def _login_attempts(user_id: str, limit: int):
     current = User.objects.get(pk=user_id)
     qs = LoginAttempt.objects.order_by('-created_at')
     if not current.is_staff:
@@ -94,39 +94,46 @@ router = APIRouter()
              'timestamp': item.created_at.astimezone(timezone.utc).isoformat()} for item in qs[:limit]]
 
 
-_AUDIT = Depends(require_permission(Permission.AUDIT_READ))
+async def _require_audit(user=Depends(get_current_user)):
+    user_id = str(user.get('user_id'))
+    if not user_id:
+        raise HTTPException(status_code=401, detail='Invalid token subject')
+    allowed = await sync_to_async(lambda: User.objects.filter(pk=user_id, is_active=True).first())()
+    if not allowed or not allowed.has_permission(Permission.AUDIT_READ):
+        raise HTTPException(status_code=403, detail=f'Permission required: {Permission.AUDIT_READ}')
+    return user
 
 
 @router.get('/audit/logs')
-async def list_audit_logs(limit: int = Query(20, ge=1, le=100), action: Optional[str] = None, user: Optional[str] = None, current_user=_AUDIT):
+async def list_audit_logs(limit: int = Query(20, ge=1, le=100), action: Optional[str] = None, user: Optional[str] = None, current_user=Depends(_require_audit)):
     return {'items': await _audit_logs(str(current_user.get('user_id')), limit, action, user), 'limit': limit}
 
 
 @router.get('/audit/roles')
-async def list_roles(current_user=_AUDIT):
+async def list_roles(current_user=Depends(_require_audit)):
     return {'items': [{'id': value, 'name': label} for value, label in UserRole.choices]}
 
 
 @router.get('/audit/users')
-async def list_users(current_user=_AUDIT):
+async def list_users(current_user=Depends(_require_audit)):
     return {'items': await _users(str(current_user.get('user_id')))}
 
 
 @router.get('/audit/teams')
-async def list_teams(current_user=_AUDIT):
+async def list_teams(current_user=Depends(_require_audit)):
     return {'items': await _teams(str(current_user.get('user_id')))}
 
 
 @router.get('/audit/api-keys')
-async def list_api_keys(current_user=_AUDIT):
+async def list_api_keys(current_user=Depends(_require_audit)):
     return {'items': await _api_keys(str(current_user.get('user_id')))}
 
 
 @router.get('/audit/sessions')
-async def list_sessions(current_user=_AUDIT):
+async def list_sessions(current_user=Depends(_require_audit)):
     return {'items': await _sessions(str(current_user.get('user_id')))}
 
 
 @router.get('/audit/login-attempts')
-async def list_login_attempts(limit: int = Query(20, ge=1, le=100), current_user=_AUDIT):
+async def list_login_attempts(limit: int = Query(20, ge=1, le=100), current_user=Depends(_require_audit)):
     return {'items': await _login_attempts(str(current_user.get('user_id')), limit)}
