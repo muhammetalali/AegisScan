@@ -19,10 +19,9 @@ _fusion = IntelligenceFusion()
 
 class AssuranceSummary(BaseModel):
     conflicts: int
-    signals: int
+    validations: int
     sources: int
-    agreement: int
-    confidence: int
+    evidence_backed: int
 
 
 @sync_to_async
@@ -41,10 +40,15 @@ def _conflicts(user_id: str, limit: int):
         items.append({
             'finding_id': finding_id,
             'type': 'validation_conflict',
-            'confidence_impact': -20,
-            'recommendation': 'Investigate conflicting validation results and rerun an authorized validation.',
+            'recommendation': 'Investigate the conflicting authorized validation results and rerun validation with the recorded scope.',
             'validations': [
-                {'id': str(run.id), 'finding_present': run.result.get('finding_present'), 'engine': (run.engines or [None])[0], 'completed_at': run.completed_at.astimezone(timezone.utc).isoformat() if run.completed_at else None}
+                {
+                    'id': str(run.id),
+                    'finding_present': run.result.get('finding_present'),
+                    'engine': (run.engines or [None])[0],
+                    'evidence_id': str(run.result.get('evidence_id')) if run.result.get('evidence_id') else None,
+                    'completed_at': run.completed_at.astimezone(timezone.utc).isoformat() if run.completed_at else None,
+                }
                 for run in history[:10]
             ],
         })
@@ -54,17 +58,14 @@ def _conflicts(user_id: str, limit: int):
 @sync_to_async
 def _summary_data(user_id: str):
     runs = list(ValidationRun.objects.filter(user_id=user_id, status=ValidationRun.Status.COMPLETED).order_by('-completed_at')[:1000])
-    sources = set()
-    agreement = 0
+    sources = {str(engine) for run in runs for engine in (run.engines or [])}
+    evidence_backed = 0
     for run in runs:
-        sources.update(str(x) for x in (run.engines or []))
         result = run.result if isinstance(run.result, dict) else {}
         evidence_id = result.get('evidence_id')
         if evidence_id and Evidence.objects.filter(pk=evidence_id, finding=run.finding).exists():
-            agreement += 1
-    signal_count = len(runs)
-    confidence = round(max(0.0, min(100.0, 50.0 + (agreement / signal_count * 50.0 if signal_count else 0.0))))
-    return {'signals': signal_count, 'sources': len(sources), 'agreement': agreement, 'confidence': confidence}
+            evidence_backed += 1
+    return {'validations': len(runs), 'sources': len(sources), 'evidence_backed': evidence_backed}
 
 
 @router.get('/correlations/conflicts')
@@ -75,45 +76,24 @@ async def list_conflicts(limit: int = Query(100, ge=1, le=500), current_user=Dep
 
 @router.get('/correlations/summary', response_model=AssuranceSummary)
 async def correlation_summary(current_user=Depends(get_current_user)):
-    data = await _summary_data(str(current_user.get('user_id')))
-    conflicts = len(await _conflicts(str(current_user.get('user_id')), 500))
+    user_id = str(current_user.get('user_id'))
+    data = await _summary_data(user_id)
+    conflicts = len(await _conflicts(user_id, 500))
     return {**data, 'conflicts': conflicts}
 
 
 @router.get('/correlations/validations/{validation_id}')
 async def validation_correlation(validation_id: UUID, current_user=Depends(get_current_user)):
     run = await sync_to_async(lambda: ValidationRun.objects.filter(id=validation_id, user_id=str(current_user.get('user_id'))).first())()
-    if not run:
-        raise HTTPException(status_code=404, detail='Validation not found')
+    if not run: raise HTTPException(status_code=404, detail='Validation not found')
     result = run.result if isinstance(run.result, dict) else {}
     evidence_id = result.get('evidence_id')
-    evidence = None
-    if evidence_id:
-        evidence = await sync_to_async(lambda: Evidence.objects.filter(pk=evidence_id, finding=run.finding).first())()
-    return {
-        'validation_id': str(run.id),
-        'finding_id': str(run.finding_id) if run.finding_id else None,
-        'status': run.status,
-        'engine': (run.engines or [None])[0],
-        'finding_present': result.get('finding_present'),
-        'evidence_id': str(evidence.id) if evidence else None,
-        'evidence_valid': evidence is not None,
-        'source': 'postgresql',
-    }
+    evidence = await sync_to_async(lambda: Evidence.objects.filter(pk=evidence_id, finding=run.finding).first())() if evidence_id else None
+    return {'validation_id':str(run.id),'finding_id':str(run.finding_id) if run.finding_id else None,'status':run.status,'engine':(run.engines or [None])[0],'finding_present':result.get('finding_present'),'evidence_id':str(evidence.id) if evidence else None,'evidence_valid':evidence is not None,'source':'postgresql'}
 
 
 @router.get('/intelligence/cve/{cve_id}')
 async def enrich_cve(cve_id: str, current_user=Depends(get_current_user)):
-    try:
-        result = _fusion.enrich_cve(cve_id, nvd_api_key=os.getenv('NVD_API_KEY'))
-    except IntelligenceFusionError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {
-        'cve_id': result.cve_id,
-        'confidence': result.confidence,
-        'conflicts': result.conflicts,
-        'recommendation': result.recommendation,
-        'explanation': result.explanation,
-        'sources': result.sources,
-        'live': True,
-    }
+    try: result = _fusion.enrich_cve(cve_id, nvd_api_key=os.getenv('NVD_API_KEY'))
+    except IntelligenceFusionError as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {'cve_id':result.cve_id,'confidence':result.confidence,'conflicts':result.conflicts,'recommendation':result.recommendation,'explanation':result.explanation,'sources':result.sources,'live':True}
