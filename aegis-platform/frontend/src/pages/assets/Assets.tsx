@@ -1,119 +1,36 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Server, Search, Globe, Code2, Network, File, Container, Tag, Play, RefreshCw, AlertTriangle } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Server, Search, Globe, Code2, Network, File, Container, Tag, Play, RefreshCw, AlertTriangle, MoreHorizontal, Pencil, Trash2, ExternalLink, X, Loader2 } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useLanguageStore } from '@/stores/languageStore'
+import { toast } from 'sonner'
 
-type Asset = {
-  id: string
-  name: string
-  type: string
-  environment: string
-  project_id: string
-  criticality: string
-  configuration: Record<string, unknown>
-  tags: string[]
-  is_active: boolean
-  scan_count: number
-  last_scanned_at?: string | null
-  created_at: string
-  updated_at: string
-}
+type Asset={id:string;name:string;slug:string;type:string;environment:string;project_id:string;criticality:string;configuration:Record<string,unknown>;tags:string[];metadata?:Record<string,unknown>;is_active:boolean;status?:string;scan_count:number;last_scanned_at?:string|null;created_at:string;updated_at:string}
+type Engine={name?:string;slug?:string;enabled?:boolean;id?:string}
+const TYPES=[['source_code','Source Code',Code2],['website','Website URL',Globe],['ip_address','IP Address',Network],['domain','Domain',Globe],['api_endpoint','API Endpoint',Server],['file','Uploaded File',File],['docker_image','Docker Image',Container],['network_range','Network Range',Network]] as const
+const scanTypeFor=(type:string)=>type==='website'||type==='domain'?'url':type==='network_range'?'network':type==='source_code'?'code':type==='file'?'file':type==='docker_image'?'docker':type==='api_endpoint'?'api':'ip'
+const defaultEngineFor=(type:string)=>['website','domain','api_endpoint'].includes(type)?'nuclei':['source_code','file','docker_image'].includes(type)?'semgrep':'nmap'
 
-const TYPES = [
-  { id: 'source_code', label: 'Source Code', icon: Code2 },
-  { id: 'website', label: 'Website URL', icon: Globe },
-  { id: 'ip_address', label: 'IP Address', icon: Network },
-  { id: 'domain', label: 'Domain', icon: Globe },
-  { id: 'api_endpoint', label: 'API Endpoint', icon: Server },
-  { id: 'file', label: 'Uploaded File', icon: File },
-  { id: 'docker_image', label: 'Docker Image', icon: Container },
-  { id: 'network_range', label: 'Network Range', icon: Network },
-]
+export const Assets=()=>{
+  const t=useLanguageStore(s=>s.t); const qc=useQueryClient(); const [q,setQ]=useState(''); const [type,setType]=useState(''); const [env,setEnv]=useState(''); const [selected,setSelected]=useState<Asset|null>(null); const [editOpen,setEditOpen]=useState(false); const [editName,setEditName]=useState(''); const [scanOpen,setScanOpen]=useState(false); const [scanAsset,setScanAsset]=useState<Asset|null>(null); const [engine,setEngine]=useState(''); const [busy,setBusy]=useState(false)
+  const assetsQuery=useQuery<Asset[]>({queryKey:['assets',{q,type,env}],queryFn:()=>apiHelpers.get<Asset[]>('/assets/',{params:{search:q||undefined,asset_type:type||undefined,environment:env||undefined}})})
+  const enginesQuery=useQuery<Engine[]>({queryKey:['engines'],queryFn:()=>apiHelpers.get<Engine[]>('/engines'),staleTime:60_000})
+  const assets=useMemo(()=>Array.isArray(assetsQuery.data)?assetsQuery.data:[],[assetsQuery.data])
+  const deleteMutation=useMutation({mutationFn:(id:string)=>apiHelpers.delete(`/assets/${id}`),onSuccess:async()=>{await qc.invalidateQueries({queryKey:['assets']});setSelected(null);toast.success(t('Asset deleted'))},onError:(e:any)=>toast.error(e?.response?.data?.detail||e?.message||t('Unable to delete asset'))})
+  const saveEdit=async()=>{if(!selected||!editName.trim())return;setBusy(true);try{await apiHelpers.patch(`/assets/${selected.id}`,{name:editName.trim()});await qc.invalidateQueries({queryKey:['assets']});setEditOpen(false);toast.success(t('Asset updated'))}catch(e:any){toast.error(e?.response?.data?.detail||e?.message||t('Unable to update asset'))}finally{setBusy(false)}}
+  const createScan=async()=>{if(!scanAsset||!engine)return;const target=scanAsset.configuration?.url||scanAsset.configuration?.host||scanAsset.configuration?.ip||scanAsset.configuration?.domain||scanAsset.configuration?.repo_url||scanAsset.name;if(!target)return toast.error(t('Asset has no executable target configuration'));setBusy(true);try{const result=await apiHelpers.post<any>('/scans/',{project_id:scanAsset.project_id,name:`${scanAsset.name} · ${engine} validation`,scan_type:scanTypeFor(scanAsset.type),asset_id:scanAsset.id,engines:[engine],depth:'standard',config:{target,asset_id:scanAsset.id},authorized:true});toast.success(`${t('Scan queued')} · ${result.id}`);setScanOpen(false)}catch(e:any){toast.error(e?.response?.data?.detail||e?.message||t('Unable to start scan'))}finally{setBusy(false)}}
+  return <div className="space-y-5 pb-10">
+    <section className="enterprise-card rounded-3xl p-6 md:p-8"><div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between"><div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-primary"><Server className="h-4 w-4"/>{t('Assets')}</div><h1 className="mt-2 text-3xl font-semibold tracking-tight">{t('Asset registry')}</h1><p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">{t('Authoritative assets from the platform database, including type-specific configuration, criticality, environment, tags and scan history.')}</p></div><button onClick={()=>assetsQuery.refetch()} className="inline-flex items-center gap-2 rounded-xl border bg-card px-4 py-2.5 text-sm font-semibold hover:bg-accent" disabled={assetsQuery.isFetching}><RefreshCw className={cn('h-4 w-4',assetsQuery.isFetching&&'animate-spin')}/>{t('Refresh')}</button></div></section>
+    <section className="enterprise-card rounded-2xl p-4"><div className="flex flex-wrap gap-2">{TYPES.map(([id,label,Icon])=><button key={id} onClick={()=>setType(type===id?'':id)} className={cn('rounded-full border px-3 py-1.5 text-xs inline-flex items-center gap-1.5',type===id?'bg-primary text-primary-foreground border-primary':'bg-card hover:bg-accent')}><Icon className="h-3.5 w-3.5"/>{t(label)}</button>)}</div><div className="mt-3 flex flex-col gap-2 sm:flex-row"><div className="relative flex-1 max-w-xl"><Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('Search name, tags, target…')} className="h-11 w-full rounded-xl border bg-background ps-9 pe-3 text-sm"/></div><select value={env} onChange={e=>setEnv(e.target.value)} className="h-11 rounded-xl border bg-background px-3 text-sm"><option value="">{t('All environments')}</option><option value="development">{t('Development')}</option><option value="staging">{t('Staging')}</option><option value="production">{t('Production')}</option></select><span className="self-center text-xs text-muted-foreground">{assets.length} {t('assets')}</span></div></section>
+    {assetsQuery.isLoading?<div className="space-y-2"><Skeleton className="h-14 w-full"/><Skeleton className="h-14 w-full"/><Skeleton className="h-14 w-full"/></div>:assetsQuery.isError?<div className="enterprise-card rounded-2xl p-12 text-center"><AlertTriangle className="mx-auto h-8 w-8 text-destructive"/><h2 className="mt-3 font-semibold">{t('Unable to load assets')}</h2><button onClick={()=>assetsQuery.refetch()} className="mt-4 rounded-xl border px-4 py-2 text-sm">{t('Retry')}</button></div>:<section className="enterprise-card overflow-hidden rounded-2xl"><div className="overflow-x-auto"><table className="w-full min-w-[1180px] text-sm"><thead><tr className="border-b bg-muted/20 text-xs text-muted-foreground"><th className="px-4 py-3 text-start">{t('Asset')}</th><th className="px-4 py-3 text-start">{t('Target')}</th><th className="px-4 py-3 text-start">{t('Type')}</th><th className="px-4 py-3 text-start">{t('Environment')}</th><th className="px-4 py-3 text-start">{t('Criticality')}</th><th className="px-4 py-3 text-start">{t('Status')}</th><th className="px-4 py-3 text-start">{t('Scans')}</th><th className="px-4 py-3 text-start">{t('Updated')}</th><th className="px-4 py-3 text-start">{t('Actions')}</th></tr></thead><tbody>{assets.length===0?<tr><td colSpan={9} className="px-6 py-16 text-center"><Server className="mx-auto h-7 w-7 text-muted-foreground"/><div className="mt-3 font-medium">{t('No assets available')}</div></td></tr>:assets.map(asset=>{const target=String(asset.configuration?.url||asset.configuration?.host||asset.configuration?.ip||asset.configuration?.domain||asset.configuration?.api_url||asset.configuration?.repo_url||asset.configuration?.path||asset.name||'');return <tr key={asset.id} className="border-b last:border-0 hover:bg-muted/20"><td className="px-4 py-4"><button type="button" onClick={()=>setSelected(asset)} className="text-start font-semibold hover:text-primary">{asset.name}</button><div className="mt-1 font-mono text-[10px] text-muted-foreground">{asset.id}</div></td><td className="px-4 py-4 max-w-[240px] truncate font-mono text-xs">{target}</td><td className="px-4 py-4"><span className="rounded-full border bg-muted/30 px-2 py-1 text-[11px]">{t(asset.type)}</span></td><td className="px-4 py-4 capitalize">{asset.environment||t('Not reported')}</td><td className="px-4 py-4 capitalize">{asset.criticality||t('Not reported')}</td><td className="px-4 py-4"><span className="rounded-full border bg-muted/30 px-2 py-1 text-[11px]">{asset.status|| (asset.is_active?t('active'):t('inactive'))}</span></td><td className="px-4 py-4">{asset.scan_count??'—'}</td><td className="px-4 py-4 text-xs text-muted-foreground">{asset.updated_at?new Date(asset.updated_at).toLocaleString():t('Not reported')}</td><td className="px-4 py-4"><div className="flex gap-1"><button type="button" onClick={()=>{setScanAsset(asset);setEngine(defaultEngineFor(asset.type));setScanOpen(true)}} className="rounded-lg p-2 text-primary hover:bg-primary/10" title={t('Scan')}><Play className="h-4 w-4"/></button><button type="button" onClick={()=>{setSelected(asset);setEditName(asset.name);setEditOpen(true)}} className="rounded-lg p-2 hover:bg-accent" title={t('Edit')}><Pencil className="h-4 w-4"/></button><button type="button" onClick={()=>deleteMutation.mutate(asset.id)} disabled={deleteMutation.isPending} className="rounded-lg p-2 text-destructive hover:bg-destructive/10" title={t('Delete')}><Trash2 className="h-4 w-4"/></button><button type="button" onClick={()=>setSelected(asset)} className="rounded-lg p-2 hover:bg-accent" title={t('Details')}><MoreHorizontal className="h-4 w-4"/></button></div></td></tr>})}</tbody></table></div></section>}
 
-export const Assets = () => {
-  const [q, setQ] = useState('')
-  const [type, setType] = useState('')
-  const [env, setEnv] = useState('')
+    {selected&&!editOpen&&!scanOpen&&<div className="fixed inset-0 z-50 bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={()=>setSelected(null)}><div className="enterprise-card mx-auto mt-[8vh] max-h-[84vh] w-full max-w-2xl overflow-auto rounded-3xl p-6" onClick={e=>e.stopPropagation()}><div className="flex items-start justify-between"><div><div className="text-xs uppercase tracking-[0.16em] text-primary">{t('Asset')}</div><h2 className="mt-2 text-2xl font-semibold">{selected.name}</h2></div><button onClick={()=>setSelected(null)} className="rounded-xl border p-2" aria-label={t('Close')}><X className="h-4 w-4"/></button></div><div className="mt-6 grid gap-3 sm:grid-cols-2">{[['Type',selected.type],['Environment',selected.environment],['Criticality',selected.criticality],['Status',selected.status||(selected.is_active?t('active'):t('inactive'))],['Project',selected.project_id],['Scans',selected.scan_count],['Created',new Date(selected.created_at).toLocaleString()],['Updated',new Date(selected.updated_at).toLocaleString()]].map(([k,v])=><div key={String(k)} className="rounded-xl border bg-background/30 p-3"><div className="text-[10px] uppercase text-muted-foreground">{t(String(k))}</div><div className="mt-1 break-all text-sm">{String(v??t('Not reported'))}</div></div>)}</div><div className="mt-5 rounded-2xl border bg-background/30 p-4"><div className="font-semibold">{t('Configuration')}</div>{Object.keys(selected.configuration||{}).length===0?<p className="mt-2 text-sm text-muted-foreground">{t('Not reported')}</p>:<div className="mt-3 space-y-2">{Object.entries(selected.configuration).map(([k,v])=><div key={k} className="flex gap-3 rounded-lg border p-3 text-xs"><span className="min-w-32 font-semibold">{k}</span><span className="break-all font-mono text-muted-foreground">{typeof v==='string'?v:JSON.stringify(v)}</span>{typeof v==='string'&&/^https?:\/\//.test(v)&&<a href={v} target="_blank" rel="noreferrer" className="ms-auto text-primary"><ExternalLink className="h-3.5 w-3.5"/></a>}</div>)}</div>}</div><div className="mt-5 flex justify-end gap-2"><Link to={`/validations/new?asset_id=${encodeURIComponent(selected.id)}`} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">{t('New validation')}</Link></div></div></div>}
 
-  const assetsQuery = useQuery({
-    queryKey: ['assets', { q, type, env }],
-    queryFn: () => apiHelpers.get<Asset[]>('/assets/', {
-      params: {
-        search: q || undefined,
-        asset_type: type || undefined,
-        environment: env || undefined,
-      },
-    }),
-  })
+    {editOpen&&selected&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 backdrop-blur-sm"><div className="enterprise-card w-full max-w-md rounded-3xl p-6"><div className="flex items-center justify-between"><h2 className="text-xl font-semibold">{t('Edit asset')}</h2><button onClick={()=>setEditOpen(false)} className="rounded-xl border p-2"><X className="h-4 w-4"/></button></div><label className="mt-6 block"><span className="text-sm font-medium">{t('Name')}</span><input value={editName} onChange={e=>setEditName(e.target.value)} className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"/></label><div className="mt-6 flex justify-end gap-2"><button onClick={()=>setEditOpen(false)} className="rounded-xl border px-4 py-2.5 text-sm">{t('Cancel')}</button><button onClick={saveEdit} disabled={busy||!editName.trim()} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">{busy?<Loader2 className="h-4 w-4 animate-spin"/>:t('Save')}</button></div></div></div>}
 
-  const assets = useMemo(() => Array.isArray(assetsQuery.data) ? assetsQuery.data : [], [assetsQuery.data])
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><Server className="h-6 w-6 text-primary" /> Assets</h1>
-          <p className="text-sm text-muted-foreground">Assets loaded from the authenticated platform API and persisted in the database.</p>
-        </div>
-        <button onClick={() => assetsQuery.refetch()} className="px-4 py-2 rounded-lg border bg-card text-sm inline-flex items-center gap-2 hover:bg-accent" disabled={assetsQuery.isFetching}>
-          <RefreshCw className={cn('h-4 w-4', assetsQuery.isFetching && 'animate-spin')} /> Refresh
-        </button>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {TYPES.map(t => (
-          <button key={t.id} onClick={() => setType(type === t.id ? '' : t.id)} className={cn('px-3 py-1.5 rounded-full border text-xs inline-flex items-center gap-1', type === t.id ? 'bg-primary text-primary-foreground border-primary' : 'bg-card hover:bg-accent')}>
-            <t.icon className="h-3.5 w-3.5" />{t.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="rounded-xl border bg-card p-3 flex flex-wrap gap-2">
-        <div className="relative flex-1 max-w-sm"><Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, tags, description..." className="w-full pl-8 pr-3 py-2 rounded-lg border bg-background text-sm" /></div>
-        <select value={env} onChange={e => setEnv(e.target.value)} className="px-3 py-2 rounded-lg border bg-background text-sm">
-          <option value="">All Environments</option><option value="development">Development</option><option value="staging">Staging</option><option value="production">Production</option>
-        </select>
-        <span className="text-xs text-muted-foreground self-center">{assets.length} assets returned</span>
-      </div>
-
-      {assetsQuery.isLoading ? (
-        <div className="space-y-2"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
-      ) : assetsQuery.isError ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-8 text-center">
-          <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-destructive" />
-          <h2 className="font-semibold">Assets unavailable</h2>
-          <p className="mt-1 text-sm text-muted-foreground">The backend did not return asset data. No fallback or synthetic records are displayed.</p>
-          <button onClick={() => assetsQuery.refetch()} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"><RefreshCw className="h-4 w-4" /> Retry</button>
-        </div>
-      ) : (
-        <div className="rounded-xl border bg-card overflow-hidden">
-          <div className="overflow-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="border-b bg-muted/30 text-xs text-muted-foreground">
-                <th className="text-start px-4 py-3">Name</th><th className="text-start px-4 py-3">Type</th><th className="text-start px-4 py-3">Environment</th><th className="text-start px-4 py-3">Criticality</th><th className="text-start px-4 py-3">Tags</th><th className="text-start px-4 py-3">Status</th><th className="text-start px-4 py-3">Scans</th><th className="px-4 py-3">Action</th>
-              </tr></thead>
-              <tbody>
-                {assets.map(asset => (
-                  <tr key={asset.id} className="border-b hover:bg-muted/20">
-                    <td className="px-4 py-3 font-mono text-xs font-medium">{asset.name}</td>
-                    <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full bg-muted text-xs">{asset.type}</span></td>
-                    <td className="px-4 py-3"><span className={cn('px-2 py-0.5 rounded-full text-xs', asset.environment === 'production' ? 'bg-red-500 text-white' : asset.environment === 'staging' ? 'bg-amber-500 text-white' : 'bg-emerald-500 text-white')}>{asset.environment}</span></td>
-                    <td className="px-4 py-3 capitalize">{asset.criticality}</td>
-                    <td className="px-4 py-3"><span className="inline-flex flex-wrap gap-1">{asset.tags.map(tag => <span key={tag} className="px-1.5 py-0.5 rounded bg-muted text-[11px] inline-flex items-center gap-1"><Tag className="h-3 w-3" />{tag}</span>)}</span></td>
-                    <td className="px-4 py-3"><span className={cn('px-2 py-0.5 rounded-full text-xs', asset.is_active ? 'bg-emerald-50 border border-emerald-200 text-emerald-700' : 'bg-muted text-muted-foreground')}>{asset.is_active ? 'active' : 'inactive'}</span></td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{asset.scan_count}</td>
-                    <td className="px-4 py-3"><Link to={`/validations/new?asset=${encodeURIComponent(asset.id)}`} className="p-1.5 rounded hover:bg-accent inline-flex" title="Validate asset"><Play className="h-4 w-4" /></Link></td>
-                  </tr>
-                ))}
-                {!assets.length && <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-muted-foreground">No persisted assets match the current filters.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  )
+    {scanOpen&&scanAsset&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 backdrop-blur-sm"><div className="enterprise-card w-full max-w-md rounded-3xl p-6"><div className="flex items-center justify-between"><h2 className="text-xl font-semibold">{t('Start scan')}</h2><button onClick={()=>setScanOpen(false)} className="rounded-xl border p-2"><X className="h-4 w-4"/></button></div><p className="mt-2 text-sm text-muted-foreground">{scanAsset.name}</p><label className="mt-6 block"><span className="text-sm font-medium">{t('Engine')}</span><select value={engine} onChange={e=>setEngine(e.target.value)} className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm">{(enginesQuery.data||[]).filter(e=>e.enabled!==false).map(e=>{const name=String(e.slug||e.name||e.id||'');return <option key={name} value={name}>{name}</option>})}</select></label><div className="mt-4 rounded-xl border bg-background/30 p-3 text-xs text-muted-foreground">{t('Execution target will be read from the persisted asset configuration and server-side authorization remains authoritative.')}</div><div className="mt-6 flex justify-end gap-2"><button onClick={()=>setScanOpen(false)} className="rounded-xl border px-4 py-2.5 text-sm">{t('Cancel')}</button><button onClick={createScan} disabled={busy||!engine} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">{busy?<Loader2 className="h-4 w-4 animate-spin"/>:t('Start scan')}</button></div></div></div>}
+  </div>
 }
