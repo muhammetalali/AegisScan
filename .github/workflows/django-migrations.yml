@@ -2,10 +2,11 @@ name: Django Migrations
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/finding-validation-loop]
     paths:
       - 'aegis-platform/backend/django_project/**/models.py'
       - 'aegis-platform/backend/django_project/**/apps.py'
+      - 'aegis-platform/backend/enterprise/**'
       - 'aegis-platform/backend/django_project/settings.py'
       - 'aegis-platform/backend/manage.py'
       - 'aegis-platform/backend/requirements.txt'
@@ -25,22 +26,16 @@ jobs:
           POSTGRES_DB: aegisdb
           POSTGRES_USER: aegis
           POSTGRES_PASSWORD: aegis
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U aegis -d aegisdb"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd "pg_isready -U aegis -d aegisdb" --health-interval 10s
+          --health-timeout 5s --health-retries 5
       redis:
         image: redis:7-alpine
-        ports:
-          - 6379:6379
+        ports: ["6379:6379"]
         options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd "redis-cli ping" --health-interval 10s
+          --health-timeout 5s --health-retries 5
     env:
       DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
       REDIS_URL: redis://127.0.0.1:6379/0
@@ -55,48 +50,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+        with: {python-version: '3.12'}
       - name: Install backend dependencies
         run: python -m pip install -r aegis-platform/backend/requirements.txt
       - name: Validate Django configuration
         working-directory: aegis-platform/backend
         run: python manage.py check
-      - name: Generate initial migrations for project apps
+      - name: Generate project and enterprise migrations
         working-directory: aegis-platform/backend
         run: |
           set -e
-          python manage.py makemigrations users projects scans vulnerabilities assets compliance knowledge notifications audit system evidence core --noinput --verbosity 2
-          echo 'Generated migration files:'
-          find django_project -path '*/migrations/*.py' -type f -print | sort
+          python manage.py makemigrations users projects scans vulnerabilities assets compliance knowledge notifications audit system evidence core enterprise --noinput --verbosity 2
+          find django_project enterprise -path '*/migrations/*.py' -type f -print | sort
           test -f django_project/users/migrations/0001_initial.py
-      - name: Commit generated migrations before database validation
+      - name: Commit generated migrations to the current branch
         run: |
           set -e
           files=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep '/migrations/.*\.py$' || true)
-          if [ -z "$files" ]; then
-            echo 'No migration changes.'
-          else
+          if [ -n "$files" ]; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add -- $files
             git commit -m 'chore(django): generate model migrations [skip ci]'
-            git push origin HEAD:main
+            git push origin HEAD:${GITHUB_REF_NAME}
+          else
+            echo 'No migration changes.'
           fi
       - name: Apply migrations to clean PostgreSQL
         working-directory: aegis-platform/backend
         run: python manage.py migrate --noinput
-      - name: Verify users table exists
+      - name: Verify enterprise tables
         working-directory: aegis-platform/backend
-        env:
-          PGPASSWORD: aegis
+        env: {PGPASSWORD: aegis}
         run: |
-          psql "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb" -tAc "SELECT to_regclass('public.users_user');" | grep -Fx 'users_user'
+          set -e
+          for table in enterprise_organization enterprise_organizationmembership enterprise_digitaltwin enterprise_twinscenario enterprise_reportschedule enterprise_threatintelcache enterprise_findingintelligence enterprise_attackpath enterprise_compliancemapping enterprise_executivesnapshot enterprise_continuousassuranceschedule enterprise_notification enterprise_externalintegration enterprise_clouddiscoveryrun enterprise_sbomartifact enterprise_sbomcomponent; do
+            psql "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb" -tAc "SELECT to_regclass('public.$table');" | grep -Fx "public.$table"
+          done
       - name: Verify no pending model migrations
         working-directory: aegis-platform/backend
         run: python manage.py makemigrations --check --dry-run
       - name: Verify migration plan
         working-directory: aegis-platform/backend
         run: python manage.py showmigrations --plan
-
-# This workflow intentionally owns migration generation and validation; other CI gates remain read-only.
