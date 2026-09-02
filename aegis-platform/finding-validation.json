@@ -1,0 +1,1 @@
+{"target_type":"url","rate_limit":5,"extra":{},"target_value":"http://aegis-scan-target","include_subdomains":false,"profile":"quick","finding_id":"4da88795-22c5-466d-804b-cd117de5b629","engines":["nuclei"],"scope":"aegis-scan-target","duration_minutes":5,"authorized":true}

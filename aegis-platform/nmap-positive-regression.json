@@ -1,0 +1,1 @@
+{"target_type":"ip","rate_limit":5,"extra":{},"target_value":"aegis-scan-target","include_subdomains":false,"profile":"quick","finding_id":"623bd558-b12b-4e3d-a389-6689dca9679e","engines":["nmap"],"scope":"aegis-scan-target","duration_minutes":5,"authorized":true}
