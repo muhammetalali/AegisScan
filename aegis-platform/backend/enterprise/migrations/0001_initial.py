@@ -1,7 +1,10 @@
 from django.conf import settings
 from django.db import migrations
 
+
 class Migration(migrations.Migration):
+    """Bootstrap dependency node; model state is generated in the next migration by CI."""
+
     initial = True
     dependencies = [
         ('compliance', '0002_initial'),
