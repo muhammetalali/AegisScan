@@ -18,7 +18,7 @@ from django.db import transaction
 
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
-from ..services.scope_authorization import is_target_authorized
+from fastapi_app.services.scope_authorization import is_target_authorized
 
 
 _DEFAULT_NUCLEI_TEMPLATES = '/opt/nuclei-templates'
