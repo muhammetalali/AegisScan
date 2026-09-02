@@ -17,15 +17,15 @@ from fastapi_app.routers import validations as validations_router
 
 
 # FastAPI TestClient executes async endpoints outside pytest-django's main test
-# thread. The handlers access Django ORM through sync_to_async, therefore the
-# fixture must use a transactional database so rows committed by the test are
-# visible from the request thread. Keep this marker module-wide; per-test
-# django_db markers would override it with the non-transactional default.
+# thread. The handlers access Django ORM through sync_to_async, therefore API
+# tests require a transactional DB so fixture-created rows are visible from
+# the request thread. The fixture below also requests transactional_db
+# explicitly, so this contract cannot be weakened by a future test marker.
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
-def api_fixture(db):
+def api_fixture(transactional_db):
     user = User.objects.create_user(
         email="validation-api-regression@example.invalid",
         password="Strong-Test-Password-123!",
