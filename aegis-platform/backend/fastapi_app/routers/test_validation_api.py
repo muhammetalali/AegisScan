@@ -17,10 +17,10 @@ from fastapi_app.routers import validations as validations_router
 
 
 # FastAPI TestClient executes async endpoints outside pytest-django's main test
-# thread. The API handlers intentionally access Django ORM through
-# sync_to_async, so these regression tests must use a transactional database
-# fixture to make the fixture-created rows visible to the ORM connection used
-# by the request thread.
+# thread. The handlers access Django ORM through sync_to_async, therefore the
+# fixture must use a transactional database so rows committed by the test are
+# visible from the request thread. Keep this marker module-wide; per-test
+# django_db markers would override it with the non-transactional default.
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
@@ -82,11 +82,13 @@ def api_fixture(db):
         "user_id": str(user.id),
         "is_staff": True,
     }
-    client = TestClient(app)
 
-    yield client, user, finding
-
-    app.dependency_overrides.clear()
+    # Deterministically close the TestClient portal/thread after every test.
+    with TestClient(app) as client:
+        try:
+            yield client, user, finding
+        finally:
+            app.dependency_overrides.clear()
 
 
 def _create_body(finding_id: str) -> dict:
@@ -146,7 +148,6 @@ def _completed_validation(user, finding, *, finding_present: bool) -> Validation
     return validation
 
 
-@pytest.mark.django_db
 def test_validation_create_api_persists_finding_link_and_queues_task(api_fixture, monkeypatch):
     client, user, finding = api_fixture
     called = {}
@@ -173,7 +174,6 @@ def test_validation_create_api_persists_finding_link_and_queues_task(api_fixture
     assert validation.celery_task_id == "api-regression-task-id"
 
 
-@pytest.mark.django_db
 def test_validation_create_api_rejects_wrong_target_before_queue(api_fixture, monkeypatch):
     client, _, finding = api_fixture
     called = False
@@ -194,7 +194,6 @@ def test_validation_create_api_rejects_wrong_target_before_queue(api_fixture, mo
     assert called is False
 
 
-@pytest.mark.django_db
 def test_validation_progress_api_returns_not_found_for_unknown_uuid(api_fixture):
     client, _, _ = api_fixture
 
@@ -204,7 +203,6 @@ def test_validation_progress_api_returns_not_found_for_unknown_uuid(api_fixture)
     assert response.json()["detail"] == "Validation not found"
 
 
-@pytest.mark.django_db
 def test_validation_progress_api_rejects_malformed_uuid_without_orm_error(api_fixture):
     client, _, _ = api_fixture
 
@@ -214,7 +212,6 @@ def test_validation_progress_api_rejects_malformed_uuid_without_orm_error(api_fi
     assert response.json()["detail"][0]["type"] == "uuid_parsing"
 
 
-@pytest.mark.django_db
 def test_verify_api_returns_409_when_latest_validation_still_detects_finding(api_fixture):
     client, user, finding = api_fixture
     validation = _completed_validation(user, finding, finding_present=True)
@@ -228,7 +225,6 @@ def test_verify_api_returns_409_when_latest_validation_still_detects_finding(api
     assert ValidationRun.objects.filter(id=validation.id).exists()
 
 
-@pytest.mark.django_db
 def test_verify_api_returns_verified_for_completed_negative_validation(api_fixture):
     client, user, finding = api_fixture
     validation = _completed_validation(user, finding, finding_present=False)
@@ -249,7 +245,6 @@ def test_verify_api_returns_verified_for_completed_negative_validation(api_fixtu
     assert finding.verified_evidence_count == 1
 
 
-@pytest.mark.django_db
 def test_verify_api_requires_finding_linked_completed_authorized_validation(api_fixture):
     client, user, finding = api_fixture
     ValidationRun.objects.create(
