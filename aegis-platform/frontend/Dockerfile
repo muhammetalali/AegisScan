@@ -1,7 +1,11 @@
 FROM node:22-alpine AS build
 WORKDIR /app
+
 COPY package*.json ./
-RUN npm ci --no-audit --no-fund
+# Install from package.json and reconcile the lockfile when the working tree adds
+# a dependency that was missing from an older lockfile.
+RUN npm install --no-audit --no-fund
+
 COPY . .
 RUN npm run build
 
