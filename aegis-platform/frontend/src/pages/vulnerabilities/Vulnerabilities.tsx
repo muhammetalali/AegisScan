@@ -1,116 +1,91 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Bug, Search, Filter, Tag, MoreHorizontal, Eye, Check, Clock, AlertTriangle, Shield } from 'lucide-react'
+import { Bug, Search, Filter, Tag, MoreHorizontal, Eye, Check, Clock, Shield, AlertCircle } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
+import { useLanguageStore } from '@/stores/languageStore'
 
-const sevColor: any = { critical:'bg-red-600 text-white', high:'bg-orange-500 text-white', medium:'bg-amber-500 text-white', low:'bg-emerald-500 text-white', informational:'bg-slate-500 text-white' }
-const statusOptions = ['open','confirmed','in_progress','resolved','accepted_risk','false_positive']
+type Finding = {
+  id: string
+  title: string
+  description?: string
+  severity: string
+  status: string
+  confidence?: number | null
+  cvss_score?: number | null
+  risk_score?: number | null
+  category?: string | null
+  cwe?: string | null
+  asset?: string | null
+  asset_name?: string | null
+  validation_id?: string | null
+  source_engine?: string | null
+}
+
+const severityTone: Record<string, string> = {
+  critical: 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300',
+  high: 'border-orange-500/25 bg-orange-500/10 text-orange-700 dark:text-orange-300',
+  medium: 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+  low: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+  informational: 'border-slate-500/25 bg-slate-500/10 text-slate-700 dark:text-slate-300',
+}
+const statuses = ['', 'open', 'confirmed', 'in_progress', 'resolved', 'accepted_risk', 'false_positive']
+const severityOrder: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, informational: 1 }
 
 export const Vulnerabilities = () => {
+  const t = useLanguageStore(s => s.t)
   const [sev, setSev] = useState('')
   const [status, setStatus] = useState('')
   const [q, setQ] = useState('')
-  const [sort, setSort] = useState<'severity'|'confidence'>('severity')
+  const [sort, setSort] = useState<'severity' | 'confidence'>('severity')
 
-  const { data, isLoading } = useQuery({
-    queryKey:['findings-center', sev, status, q],
-    queryFn: async ()=>{
-      const params = new URLSearchParams()
-      if(sev) params.set('severity', sev)
-      if(status) params.set('status', status)
-      if(q) params.set('q', q)
-      const qs = params.toString() ? `?${params}` : ''
-      try { return await apiHelpers.get<any>(`/findings${qs}`) } catch { return {items:[], total:0} }
-    }
+  const query = useQuery<Finding[]>({
+    queryKey: ['findings-center', sev, status, q],
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: '200', offset: '0' })
+      if (sev) params.set('severity', sev)
+      if (status) params.set('status', status)
+      if (q.trim()) params.set('search', q.trim())
+      return apiHelpers.get<Finding[]>(`/vulnerabilities/?${params.toString()}`)
+    },
   })
 
-  const items = (data?.items || []).slice().sort((a:any,b:any)=>{
-    if(sort==='confidence') return b.confidence - a.confidence
-    const order:any = {critical:5, high:4, medium:3, low:2, informational:1}
-    return (order[b.severity]||0)-(order[a.severity]||0)
+  const items = [...(query.data ?? [])].sort((a, b) => {
+    if (sort === 'confidence') return (b.confidence ?? -1) - (a.confidence ?? -1)
+    return (severityOrder[b.severity?.toLowerCase()] ?? 0) - (severityOrder[a.severity?.toLowerCase()] ?? 0)
   })
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2"><Bug className="h-6 w-6 text-primary" /> Findings Center</h1>
-        <p className="text-sm text-muted-foreground">Critical • High • Medium • Low • Informational — with Search, Sort, Tags, Status, Project, Asset, Engine</p>
-      </div>
+    <div className="space-y-5 pb-10">
+      <section className="enterprise-card rounded-3xl p-5 md:p-7">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-primary"><Bug className="h-4 w-4" /> {t('Findings')}</div><h1 className="mt-2 text-3xl font-semibold tracking-tight">Findings Center</h1><p className="mt-1 text-sm text-muted-foreground">{t('Search, sort, inspect evidence and launch finding-linked validation from real API data.')}</p></div>
+          <Link to="/validations/new" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground"><Check className="h-4 w-4" /> {t('New Validation')}</Link>
+        </div>
+      </section>
 
-      <div className="rounded-xl border bg-card p-3 space-y-3">
-        <div className="flex flex-wrap gap-2 items-center">
-          <div className="flex gap-1">
-            {['','critical','high','medium','low','informational'].map(s=>(
-              <button key={s} onClick={()=>setSev(s)} className={cn('px-2.5 py-1 rounded-full text-xs capitalize border', sev===s ? 'bg-primary text-primary-foreground border-primary' : 'bg-card hover:bg-accent')}>{s||'All'}</button>
-            ))}
-          </div>
+      <section className="enterprise-card rounded-2xl p-4 md:p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-1.5">{['', 'critical', 'high', 'medium', 'low', 'informational'].map(item => <button key={item} type="button" onClick={() => setSev(item)} className={cn('rounded-full border px-3 py-1.5 text-xs capitalize', sev === item ? 'border-primary bg-primary text-primary-foreground' : 'bg-card hover:bg-accent')}>{item || 'All severity'}</button>)}</div>
           <div className="h-6 w-px bg-border mx-1" />
-          <div className="flex gap-1">
-            {['','open','reviewed'].map(s=>(
-              <button key={s} onClick={()=>setStatus(s)} className={cn('px-2 py-1 rounded-full text-xs capitalize border', status===s ? 'bg-primary text-primary-foreground' : 'bg-card')}>{s||'Any status'}</button>
-            ))}
-          </div>
-          <select value={sort} onChange={e=>setSort(e.target.value as any)} className="ml-auto px-2 py-1.5 rounded-lg border bg-background text-xs">
-            <option value="severity">Sort: Severity</option><option value="confidence">Sort: Confidence</option>
-          </select>
+          <div className="flex flex-wrap gap-1.5">{statuses.map(item => <button key={item} type="button" onClick={() => setStatus(item)} className={cn('rounded-full border px-3 py-1.5 text-xs capitalize', status === item ? 'border-primary bg-primary text-primary-foreground' : 'bg-card hover:bg-accent')}>{item || 'Any status'}</button>)}</div>
+          <select value={sort} onChange={e => setSort(e.target.value as 'severity' | 'confidence')} className="ms-auto rounded-xl border bg-background px-3 py-2 text-xs"><option value="severity">Sort: Severity</option><option value="confidence">Sort: Confidence</option></select>
         </div>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative w-full max-w-xl"><Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={q} onChange={e => setQ(e.target.value)} placeholder={t('Search findings, assets…')} className="h-11 w-full rounded-xl border bg-background ps-9 pe-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" /></div>
+          {!query.isLoading && !query.isError && <span className="text-xs text-muted-foreground">{items.length} findings returned by API</span>}
+        </div>
+      </section>
 
-        <div className="flex gap-2">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search title, asset, category, tags, engine..." className="w-full pl-8 pr-3 py-2 rounded-lg border bg-background text-sm" />
-          </div>
-          <span className="text-xs text-muted-foreground self-center">{data?.total ?? 0} findings {data?.simulation && <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[11px]"><AlertTriangle className="h-3 w-3" />Demo</span>}</span>
-        </div>
-      </div>
+      {query.isLoading && <div className="enterprise-card rounded-2xl p-12 text-center text-sm text-muted-foreground">{t('Loading...')}</div>}
+      {query.isError && <div className="enterprise-card rounded-2xl p-12 text-center"><AlertCircle className="mx-auto h-8 w-8 text-destructive" /><h2 className="mt-3 font-semibold">{t('Unable to load findings')}</h2><p className="mt-1 text-sm text-muted-foreground">The vulnerabilities API returned an error. No local or demo fallback is used.</p><button type="button" onClick={() => query.refetch()} className="mt-4 rounded-xl border px-4 py-2 text-sm font-medium">{t('Retry')}</button></div>}
 
-      <div className="rounded-xl border bg-card overflow-hidden">
-        <div className="overflow-auto">
-          <table className="w-full text-sm">
-            <thead><tr className="border-b bg-muted/30 text-xs text-muted-foreground">
-              <th className="text-start px-3 py-2">Severity</th>
-              <th className="text-start px-3 py-2">Finding</th>
-              <th className="text-start px-3 py-2">Asset</th>
-              <th className="text-start px-3 py-2">Validation</th>
-              <th className="text-start px-3 py-2">Confidence</th>
-              <th className="text-start px-3 py-2">Status</th>
-              <th className="text-start px-3 py-2">Actions</th>
-            </tr></thead>
-            <tbody>
-              {isLoading ? <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">Loading...</td></tr> :
-                items.length===0 ? <tr><td colSpan={7} className="px-4 py-12 text-center"><Bug className="h-6 w-6 mx-auto text-muted-foreground" /><div className="text-sm font-medium mt-2">No findings</div><div className="text-xs text-muted-foreground">Run a validation to generate findings</div></td></tr> :
-                items.map((f:any)=>(
-                  <tr key={f.id} className="border-b hover:bg-muted/30">
-                    <td className="px-3 py-2"><span className={cn('px-2 py-0.5 rounded text-[11px] font-medium capitalize', sevColor[f.severity])}>{f.severity}</span></td>
-                    <td className="px-3 py-2">
-                      <Link to={`/vulnerabilities/${f.id}`} className="font-medium hover:underline">{f.title}</Link>
-                      <div className="text-[11px] text-muted-foreground flex gap-1 items-center"><Tag className="h-3 w-3" />{f.category} • {f.cwe} • CVSS {f.cvss}</div>
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">{f.asset}</td>
-                    <td className="px-3 py-2 font-mono text-xs"><Link to={`/validations/${f.validation_id}/results`} className="hover:underline">{f.validation_id}</Link></td>
-                    <td className="px-3 py-2"><span className={cn('px-1.5 py-0.5 rounded text-xs', f.confidence>=90 ? 'bg-emerald-500 text-white' : f.confidence>=80 ? 'bg-primary text-primary-foreground' : 'bg-muted')}>{f.confidence}%</span></td>
-                    <td className="px-3 py-2"><span className={cn('px-1.5 py-0.5 rounded text-[11px] border capitalize', f.status==='reviewed' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700')}>{f.status}</span></td>
-                    <td className="px-3 py-2">
-                      <div className="flex gap-1">
-                        <Link to={`/vulnerabilities/${f.id}`} className="p-1.5 rounded hover:bg-accent" title="View Evidence"><Eye className="h-4 w-4" /></Link>
-                        <button className="p-1.5 rounded hover:bg-accent" title="Assign"><Shield className="h-4 w-4" /></button>
-                        <button className="p-1.5 rounded hover:bg-accent" title="Validate"><Check className="h-4 w-4" /></button>
-                        <button className="p-1.5 rounded hover:bg-accent"><MoreHorizontal className="h-4 w-4" /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              }
-            </tbody>
-          </table>
-        </div>
-        <div className="px-3 py-2 border-t bg-muted/20 flex gap-2 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />Status: Open → Confirmed → In Progress → Resolved → Accepted Risk → False Positive</span>
-          <span className="ml-auto">Actions: Assign • Add Note • Change Status • Validate • Create Ticket • View Evidence</span>
-        </div>
-      </div>
+      {!query.isLoading && !query.isError && <section className="enterprise-card overflow-hidden rounded-2xl"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead><tr className="border-b bg-muted/20 text-start text-xs text-muted-foreground"><th className="px-4 py-3">Severity</th><th className="px-4 py-3">Finding</th><th className="px-4 py-3">Asset</th><th className="px-4 py-3">Engine</th><th className="px-4 py-3">Validation</th><th className="px-4 py-3">Confidence</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Actions</th></tr></thead><tbody>
+        {items.length === 0 ? <tr><td colSpan={8} className="px-6 py-16 text-center"><Bug className="mx-auto h-7 w-7 text-muted-foreground" /><div className="mt-3 font-medium">{t('No findings')}</div><div className="mt-1 text-xs text-muted-foreground">{t('Run a real scan or validation to populate the findings registry.')}</div></td></tr> : items.map(f => {
+          const tone = severityTone[f.severity?.toLowerCase()] ?? severityTone.informational
+          return <tr key={f.id} className="border-b last:border-0 transition hover:bg-muted/20"><td className="px-4 py-3"><span className={cn('inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold capitalize', tone)}>{f.severity}</span></td><td className="px-4 py-3"><Link to={`/vulnerabilities/${f.id}`} className="font-semibold hover:text-primary">{f.title}</Link><div className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"><Tag className="h-3 w-3" />{f.category || 'Security finding'}{f.cwe ? ` • ${f.cwe}` : ''}{f.cvss_score != null ? ` • CVSS ${f.cvss_score}` : ''}</div></td><td className="px-4 py-3 font-mono text-xs">{f.asset || f.asset_name || 'Unavailable'}</td><td className="px-4 py-3 text-xs">{f.source_engine || 'Not reported'}</td><td className="px-4 py-3 font-mono text-xs">{f.validation_id ? <Link to={`/validations/${f.validation_id}/results`} className="text-primary hover:underline">{f.validation_id}</Link> : <span className="text-muted-foreground">Not reported</span>}</td><td className="px-4 py-3">{f.confidence == null ? 'Not reported' : `${f.confidence}%`}</td><td className="px-4 py-3"><span className="rounded-lg border bg-muted/30 px-2 py-1 text-[11px] capitalize">{f.status || 'Not reported'}</span></td><td className="px-4 py-3"><div className="flex gap-1"><Link to={`/vulnerabilities/${f.id}`} className="rounded-lg p-2 hover:bg-accent" title="View Evidence"><Eye className="h-4 w-4" /></Link><Link to={`/vulnerabilities/${f.id}`} className="rounded-lg p-2 hover:bg-accent" title="Assign"><Shield className="h-4 w-4" /></Link><Link to={`/validations/new?finding_id=${encodeURIComponent(f.id)}`} className="rounded-lg p-2 text-primary hover:bg-primary/10" title="Validate"><Check className="h-4 w-4" /></Link><Link to={`/vulnerabilities/${f.id}`} className="rounded-lg p-2 hover:bg-accent" title="More"><MoreHorizontal className="h-4 w-4" /></Link></div></td></tr>
+        })}</tbody></table></div><div className="flex flex-wrap gap-3 border-t bg-muted/10 px-4 py-3 text-xs text-muted-foreground"><span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />Status: Open → Confirmed → In Progress → Resolved → Accepted Risk → False Positive</span><span className="ms-auto inline-flex items-center gap-1"><Filter className="h-3 w-3" />Actions: Assign • Add Note • Change Status • Validate • Create Ticket • View Evidence</span></div></section>}
     </div>
   )
 }
