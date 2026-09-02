@@ -71,16 +71,22 @@ def _create_scan(scan:ScanCreate,user_id:str):
             asset=Asset.objects.create(project=project,owner_id=user_id,name=str(target),slug=slugify(str(target))[:220],type='ip_address',configuration={'host':str(target),'authorized':True})
     if engines[0]=='nuclei' and (not asset or not (asset.configuration or {}).get('url')): raise HTTPException(status_code=400,detail='Nuclei scans require an asset with configuration.url')
     if engines[0]=='semgrep' and (not asset or not ((asset.configuration or {}).get('repo_url') or (asset.configuration or {}).get('path'))): raise HTTPException(status_code=400,detail='Semgrep scans require asset configuration.repo_url or configuration.path')
-    obj=Scan.objects.create(project=project,name=scan.name,scan_type=scan.scan_type,asset=asset,engines=engines,depth=scan.depth,config=scan.config,initiated_by_id=user_id)
+    obj=Scan.objects.create(project=project,name=scan.name,scan_type=scan.scan_type,asset=asset,engines=engines,depth=scan.depth,config=scan.config,initiated_by_id=user_id,status=Scan.Status.QUEUED)
     return obj,engines
+
+@sync_to_async
+def _attach_celery_task(scan_id:str,task_id:str):
+    scan=Scan.objects.get(pk=scan_id)
+    scan.celery_task_id=task_id
+    scan.save(update_fields=['celery_task_id','updated_at'])
+    return scan
 
 @router.post('/',response_model=ScanResponse,status_code=201)
 async def create_scan(scan:ScanCreate,user=Depends(get_current_user)):
     created,engines=await _create_scan(scan,str(user.get('user_id')))
     task_map={'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}
     result=task_map[engines[0]].delay(str(created.id))
-    created.celery_task_id=result.id; created.status=Scan.Status.QUEUED
-    created.save(update_fields=['celery_task_id','status','updated_at'])
+    created=await _attach_celery_task(str(created.id),result.id)
     return await _serialize_scan(created)
 
 @sync_to_async
