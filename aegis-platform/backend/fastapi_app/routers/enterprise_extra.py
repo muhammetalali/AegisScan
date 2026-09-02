@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
-from fastapi import APIRouter, Depends, HTTPException
+from django.db.models import Q
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..core.dependencies import get_current_user
@@ -40,6 +41,41 @@ async def _project(project_id:UUID,user):
     project=await sync_to_async(lambda:Project.objects.filter(id=project_id,owner_id=str(user.get('user_id'))).first() or Project.objects.filter(id=project_id,members__id=str(user.get('user_id'))).first())()
     if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
     return project
+
+@sync_to_async
+def _notifications(user_id:str,project_id:Optional[str],status:Optional[str],limit:int,offset:int):
+    access = Q(user_id=user_id) | Q(user__isnull=True, organization__memberships__user_id=user_id, organization__memberships__is_active=True)
+    qs=Notification.objects.filter(access).distinct().order_by('-created_at')
+    if status: qs=qs.filter(status=status)
+    if project_id:
+        qs=qs.filter(organization__project_links__project_id=project_id)
+    return list(qs[offset:offset+limit])
+
+
+def _notification_json(item:Notification):
+    return {
+        'id':str(item.id),
+        'channel':item.channel,
+        'event_type':item.event_type,
+        'payload':item.payload or {},
+        'status':item.status,
+        'attempts':item.attempts,
+        'last_error':item.last_error or None,
+        'sent_at':item.sent_at.isoformat() if item.sent_at else None,
+        'created_at':item.created_at.isoformat(),
+    }
+
+@router.get('/notifications')
+async def list_notifications(project_id:Optional[str]=None,status:Optional[str]=None,limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),user=Depends(get_current_user)):
+    return [_notification_json(item) for item in await _notifications(str(user.get('user_id')),project_id,status,limit,offset)]
+
+@router.get('/notifications/{notification_id}')
+async def get_notification(notification_id:UUID,user=Depends(get_current_user)):
+    rows=await _notifications(str(user.get('user_id')),None,None,200,0)
+    for item in rows:
+        if item.id == notification_id:
+            return _notification_json(item)
+    raise HTTPException(status_code=404,detail='Notification not found')
 
 @router.post('/notifications',status_code=202)
 async def create_notification(body:NotificationCreate,user=Depends(get_current_user)):
