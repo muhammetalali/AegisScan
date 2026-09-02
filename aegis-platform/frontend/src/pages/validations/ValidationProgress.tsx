@@ -1,36 +1,29 @@
-import { useEffect, useState, useRef, useMemo } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { motion } from 'framer-motion'
-import { ShieldCheck, Clock, Zap, CheckCircle2, Loader2, AlertTriangle, XCircle, Pause, Play, Ban, ArrowRight, Radio, Activity, Search, FileText, Shield, Layers } from 'lucide-react'
+import { Activity, ArrowRight, Ban, CheckCircle2, Clock, Loader2, Pause, Play, Radio, Shield, ShieldCheck, XCircle } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { apiHelpers, createWebSocket } from '@/services/api'
 
-type ProgressResponse = {
+interface ProgressResponse {
   id: string
-  target_type: string
-  target_value: string
-  scope: string
+  finding_id: string | null
   status: string
   progress: number
   current_phase: string
+  celery_task_id: string | null
   created_at: string
   completed_at: string | null
-  groups: { id: string; label: string; desc: string; status: string; engines: { id: string; label: string; status: string; progress: number; findings: number }[] }[]
-  engines: { id: string; phase: string; status: string; progress: number; findings: number }[]
-  phases: string[]
-  live_events: { ts: string; type: string; message: string; meta?: any }[]
+  error_message: string | null
 }
 
-const statusIcon = (s: string) => {
-  if (s === 'completed') return <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-  if (s === 'running') return <Loader2 className="h-4 w-4 text-primary animate-spin" />
-  if (s === 'queued') return <Clock className="h-4 w-4 text-amber-500" />
-  if (s === 'failed' || s === 'cancelled') return <XCircle className="h-4 w-4 text-destructive" />
-  if (s === 'paused') return <Pause className="h-4 w-4 text-amber-500" />
-  if (s === 'skipped') return <span className="h-4 w-4 grid place-items-center text-[10px] text-muted-foreground">—</span>
-  return <span className="h-4 w-4 rounded-full border border-muted-foreground/40 grid place-items-center"><span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" /></span>
+const statusIcon = (status: string) => {
+  if (status === 'completed') return <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+  if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-primary" />
+  if (status === 'queued') return <Clock className="h-4 w-4 text-amber-500" />
+  return <XCircle className="h-4 w-4 text-destructive" />
 }
 
 export const ValidationProgress = () => {
@@ -40,266 +33,112 @@ export const ValidationProgress = () => {
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
 
-  const { data, refetch, isLoading } = useQuery({
+  const query = useQuery({
     queryKey: ['validation-progress', id],
-    queryFn: async () => {
-      // try real API, fallback to localStorage mock
-      try {
-        return await apiHelpers.get<ProgressResponse>(`/validations/${id}/progress`)
-      } catch {
-        const raw = localStorage.getItem(`validation:${id}`)
-        if (raw) {
-          const v = JSON.parse(raw)
-          // synthesize minimal ProgressResponse for mock
-          return {
-            id: v.id,
-            target_type: v.target_type,
-            target_value: v.target_value,
-            scope: v.scope,
-            status: 'queued',
-            progress: 0,
-            current_phase: 'queued',
-            created_at: v.created_at,
-            completed_at: null,
-            groups: [],
-            engines: [],
-            phases: ["queued","initializing","recon","discovery","enumeration","analysis","validation","reporting","completed"],
-            live_events: [{ ts: v.created_at, type: 'validation.queued', message: `Validation ${v.id} queued (mock)` }]
-          } as ProgressResponse
-        }
-        throw new Error('Validation not found')
-      }
-    },
-    refetchInterval: (query) => {
-      const d = query.state.data as ProgressResponse | undefined
-      if (!d) return 2000
-      if (d.status === 'completed' || d.status === 'failed' || d.status === 'cancelled') return false
-      // if WS connected, poll less frequently
+    queryFn: () => apiHelpers.get<ProgressResponse>(`/validations/${id}/progress`),
+    enabled: Boolean(id),
+    retry: false,
+    refetchInterval: (state) => {
+      const current = state.state.data as ProgressResponse | undefined
+      if (!current || ['completed', 'failed', 'cancelled'].includes(current.status)) return false
       return wsConnected ? 5000 : 2000
     },
-    enabled: !!id,
   })
 
-  const display: ProgressResponse | null = live || (data as ProgressResponse) || null
+  const display = live || query.data || null
 
-  // WebSocket: unified contract validation.started | phase.started | engine.started | engine.progress | finding.created | engine.completed | phase.completed | validation.completed | validation.failed
   useEffect(() => {
     if (!id) return
-    let ws: WebSocket | null = null
     let closed = false
-    const connect = () => {
+    const ws = createWebSocket(`/ws/validations/${id}`)
+    wsRef.current = ws
+    ws.onopen = () => setWsConnected(true)
+    ws.onclose = () => {
+      setWsConnected(false)
+      if (!closed) setTimeout(() => query.refetch(), 1000)
+    }
+    ws.onerror = () => setWsConnected(false)
+    ws.onmessage = event => {
       try {
-        ws = createWebSocket(`/ws/validations/${id}`)
-        wsRef.current = ws
-        ws.onopen = () => setWsConnected(true)
-        ws.onclose = () => {
-          setWsConnected(false)
-          if (!closed && display?.status !== 'completed') {
-            setTimeout(() => { if (!closed) connect() }, 3000)
-          }
-        }
-        ws.onerror = () => setWsConnected(false)
-        ws.onmessage = (ev) => {
-          try {
-            const msg = JSON.parse(ev.data)
-            // any event triggers refetch to get full state; for engine.progress we can patch optimistically
-            if (msg.type === 'engine.progress' || msg.type === 'validation.completed' || msg.type === 'engine.completed') {
-              // optimistic update
-              setLive(prev => {
-                const base = (prev || data) as ProgressResponse | null
-                if (!base) return prev
-                // just refetch for correctness, but also update progress quickly
-                return { ...base, progress: msg.overall ?? base.progress }
-              })
-            }
-            // always refetch to sync groups/engines/live_events
-            refetch()
-            // toast for key events
-            if (msg.type === 'finding.created') toast.info(msg.message || 'Finding correlated')
-            if (msg.type === 'validation.completed') toast.success('Validation completed — ready for Results')
-            if (msg.type === 'validation.failed') toast.error(msg.reason || 'Validation failed')
-          } catch {}
-        }
+        const message = JSON.parse(event.data)
+        setLive(prev => ({ ...(prev || query.data || {}), ...(message.progress != null ? { progress: message.progress } : {}), ...(message.status ? { status: message.status } : {}), ...(message.current_phase ? { current_phase: message.current_phase } : {}) } as ProgressResponse))
+        query.refetch()
       } catch {
-        setWsConnected(false)
+        // Ignore malformed external WS frames; the authoritative state remains the API.
       }
     }
-    connect()
-    return () => { closed = true; ws?.close(); wsRef.current = null }
-  }, [id, refetch, data, display?.status])
-
-  const activeEngine = useMemo(() => {
-    if (!display) return null
-    return display.engines.find(e => e.status === 'running') || display.engines.find(e => e.status === 'queued') || null
-  }, [display])
+    return () => { closed = true; ws.close(); wsRef.current = null }
+  }, [id, query.refetch])
 
   const handleCancel = async () => {
+    if (!id) return
     try {
       await apiHelpers.post(`/validations/${id}/cancel`)
-      toast.success('تم إلغاء التحقق')
-      refetch()
-    } catch {
-      // mock fallback
-      toast.success('تم إلغاء التحقق (mock)')
+      toast.success('تم إرسال طلب الإلغاء')
+      query.refetch()
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      toast.error(typeof detail === 'string' ? detail : 'تعذر إلغاء التحقق عبر API')
     }
   }
+
   const handlePauseResume = async () => {
-    if (!display) return
-    const isPaused = display.status === 'paused'
+    if (!id || !display) return
+    const action = display.status === 'paused' ? 'resume' : 'pause'
     try {
-      await apiHelpers.post(`/validations/${id}/${isPaused ? 'resume' : 'pause'}`)
-      refetch()
-    } catch {}
+      await apiHelpers.post(`/validations/${id}/${action}`)
+      query.refetch()
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      toast.error(typeof detail === 'string' ? detail : `تعذر ${action === 'pause' ? 'إيقاف' : 'استئناف'} التحقق عبر API`)
+    }
   }
 
-  if (isLoading && !display) {
-    return <div className="p-6 max-w-5xl mx-auto"><div className="animate-pulse space-y-4"><div className="h-10 bg-muted rounded w-1/3" /><div className="h-64 bg-muted rounded" /></div></div>
-  }
-  if (!display) {
-    return <div className="p-6 max-w-5xl mx-auto"><p className="text-muted-foreground">Validation not found</p><Link to="/validations/new" className="text-primary underline text-sm">إنشاء تحقق جديد</Link></div>
-  }
+  const phase = display?.current_phase || 'queued'
+  const completed = display?.status === 'completed'
+  const failed = display ? ['failed', 'cancelled'].includes(display.status) : false
+  const phaseSteps = useMemo(() => {
+    const known = ['queued', 'preflight', 'recon', 'nmap', 'nuclei', 'validation', 'completed']
+    if (known.includes(phase)) return known
+    return ['queued', phase, 'completed']
+  }, [phase])
 
-  const isDone = display.status === 'completed'
-  const isFailed = display.status === 'failed' || display.status === 'cancelled'
+  if (query.isLoading && !display) return <div className="mx-auto w-full max-w-5xl space-y-4"><div className="h-32 animate-pulse rounded-3xl bg-muted" /><div className="h-72 animate-pulse rounded-3xl bg-muted" /></div>
+
+  if (query.isError || !display) {
+    return <div className="mx-auto flex min-h-[420px] max-w-3xl items-center justify-center"><div className="w-full rounded-3xl border bg-card p-8 text-center shadow-xl"><XCircle className="mx-auto h-10 w-10 text-destructive" /><h1 className="mt-4 text-xl font-semibold">Validation غير متاحة</h1><p className="mt-2 text-sm text-muted-foreground">تعذر تحميل الحالة الحقيقية من API. لم يتم إنشاء أو عرض أي بيانات محلية أو تجريبية.</p><Link to="/validations/new" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">Back to validation creation <ArrowRight className="h-4 w-4" /></Link></div></div>
+  }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-4">
-      {/* Header Command Center */}
-      <div className="rounded-xl border bg-card overflow-hidden">
-        <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20">
-          <div className="flex items-center gap-3">
-            <ShieldCheck className="h-5 w-5 text-primary" />
-            <span className="font-mono text-sm font-semibold">Validation #{display.id}</span>
-            <span className={cn('inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border',
-              isDone ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40' :
-              isFailed ? 'bg-destructive/10 text-destructive border-destructive/20' :
-              'bg-primary/10 text-primary border-primary/20')}>
-              <Radio className={cn('h-3 w-3', !isDone && !isFailed && 'animate-pulse')} />
-              {isDone ? 'COMPLETED' : isFailed ? display.status.toUpperCase() : 'LIVE'}
-            </span>
-            <span className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" />{new Date(display.created_at).toLocaleString()}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold">{display.progress}%</span>
-            {!isDone && !isFailed && (
-              <>
-                <button onClick={handlePauseResume} className="px-3 py-1.5 rounded-lg border bg-card text-xs hover:bg-muted inline-flex items-center gap-1">
-                  {display.status === 'paused' ? <><Play className="h-3 w-3" /> Resume</> : <><Pause className="h-3 w-3" /> Pause</>}
-                </button>
-                <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg border bg-card text-xs hover:bg-muted inline-flex items-center gap-1">
-                  <Ban className="h-3 w-3" /> Cancel
-                </button>
-              </>
-            )}
-            {isDone && (
-              <button onClick={() => navigate(`/validations/${id}/results`)} className="px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium inline-flex items-center gap-1">
-                View Results <ArrowRight className="h-3 w-3" />
-              </button>
-            )}
-          </div>
+    <div className="mx-auto w-full max-w-6xl space-y-5 pb-10">
+      <section className="relative overflow-hidden rounded-[2rem] border bg-card p-6 shadow-[0_30px_90px_rgba(0,0,0,.14)] md:p-8">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,color-mix(in_srgb,var(--primary)_11%,transparent),transparent_32%)]" />
+        <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-primary"><ShieldCheck className="h-4 w-4" /> Real Validation Execution</div><h1 className="mt-3 text-3xl font-semibold tracking-tight">Execution Timeline</h1><p className="mt-2 text-sm text-muted-foreground">الحالة التالية مأخوذة مباشرة من ValidationRun والـWebSocket المرتبط به.</p></div>
+          <div className="flex items-center gap-2 text-xs"><span className={cn('inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-semibold', completed ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : failed ? 'border-red-500/30 bg-red-500/10 text-red-600' : 'border-primary/30 bg-primary/10 text-primary')}>{statusIcon(display.status)} {display.status.toUpperCase()}</span><span className={cn('inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5', wsConnected ? 'border-emerald-500/20 text-emerald-600' : 'border-border text-muted-foreground')}><Radio className="h-3 w-3" />{wsConnected ? 'WebSocket LIVE' : 'API polling'}</span></div>
         </div>
+      </section>
 
-        <div className="px-5 py-4 space-y-3">
-          <div className="flex flex-wrap gap-4 text-xs">
-            <span className="inline-flex items-center gap-1"><Layers className="h-3 w-3 text-muted-foreground" />Target <span className="font-mono font-medium" dir="ltr">{display.target_value}</span></span>
-            <span className="inline-flex items-center gap-1"><Shield className="h-3 w-3 text-muted-foreground" />Scope <span className="font-mono" dir="ltr">{display.scope}</span></span>
-            <span className={cn('inline-flex items-center gap-1', wsConnected ? 'text-emerald-600' : 'text-amber-600')}><Activity className="h-3 w-3" />{wsConnected ? 'WebSocket LIVE' : 'Polling'}</span>
-          </div>
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Fact label="Validation ID" value={display.id} mono />
+        <Fact label="Finding ID" value={display.finding_id || 'Unavailable'} mono />
+        <Fact label="Current phase" value={display.current_phase} />
+        <Fact label="Progress" value={`${display.progress}%`} />
+      </section>
 
-          <div>
-            <div className="flex justify-between text-xs mb-1"><span className="text-muted-foreground">Overall Progress</span><span className="font-medium">{display.progress}% — {display.current_phase}</span></div>
-            <div className="h-2.5 rounded-full bg-muted overflow-hidden">
-              <motion.div initial={{ width: 0 }} animate={{ width: `${display.progress}%` }} transition={{ duration: 0.6 }} className={cn('h-full rounded-full', isDone ? 'bg-emerald-500' : isFailed ? 'bg-destructive' : 'bg-primary')} />
-            </div>
-          </div>
-        </div>
-      </div>
+      <section className="rounded-3xl border bg-card p-5 shadow-sm md:p-7">
+        <div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Execution state</p><h2 className="mt-1 text-xl font-semibold">Server-authoritative progress</h2></div><Activity className="h-5 w-5 text-primary" /></div>
+        <div className="mt-6 h-3 overflow-hidden rounded-full bg-muted"><motion.div initial={{ width: 0 }} animate={{ width: `${Math.max(0, Math.min(100, display.progress))}%` }} className={cn('h-full rounded-full', completed ? 'bg-emerald-500' : failed ? 'bg-destructive' : 'bg-primary')} transition={{ duration: .5 }} /></div>
+        <div className="mt-2 flex justify-between text-xs text-muted-foreground"><span>{display.current_phase}</span><span>{display.progress}%</span></div>
+        <div className="mt-7 grid gap-2 md:grid-cols-7">{phaseSteps.map((step, index) => { const active = step === phase; const done = completed || index < phaseSteps.indexOf(phase); return <div key={`${step}-${index}`} className={cn('rounded-xl border px-3 py-3 text-center text-xs', active ? 'border-primary bg-primary/5 text-primary' : done ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400' : 'border-border text-muted-foreground')}><div className="mx-auto mb-2 grid h-7 w-7 place-items-center rounded-full border">{done ? <CheckCircle2 className="h-4 w-4" /> : active ? <Loader2 className="h-4 w-4 animate-spin" /> : <span>{index + 1}</span>}</div><span className="capitalize">{step}</span></div> })}</div>
+      </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* PHASES */}
-        <div className="rounded-xl border bg-card p-4 lg:col-span-1">
-          <h3 className="text-sm font-semibold flex items-center gap-2 mb-3"><Layers className="h-4 w-4 text-primary" /> PHASES</h3>
-          <div className="space-y-1.5">
-            {(display.groups.length ? display.groups : [{ id: display.current_phase, label: display.current_phase, desc: '', status: display.status, engines: [] }]).map(g => (
-              <div key={g.id} className={cn('rounded-lg border px-3 py-2 flex items-center justify-between', g.status === 'running' ? 'bg-primary/5 border-primary/30' : g.status === 'completed' ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200/50' : 'bg-card')}>
-                <div className="flex items-center gap-2">
-                  {statusIcon(g.status)}
-                  <div>
-                    <div className="text-xs font-medium capitalize">{g.label}</div>
-                    <div className="text-[11px] text-muted-foreground line-clamp-1">{g.desc}</div>
-                  </div>
-                </div>
-                <span className="text-[11px] text-muted-foreground capitalize">{g.status}</span>
-              </div>
-            ))}
-          </div>
-          {/* flat phases fallback */}
-          {display.groups.length === 0 && (
-            <div className="mt-4 flex flex-wrap gap-1">
-              {display.phases.map(p => (
-                <span key={p} className={cn('text-[11px] px-2 py-0.5 rounded-full border capitalize', display.current_phase === p ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted text-muted-foreground')}>{p}</span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* ACTIVE ENGINE */}
-        <div className="rounded-xl border bg-card p-4 lg:col-span-2">
-          <h3 className="text-sm font-semibold flex items-center gap-2 mb-3"><Zap className="h-4 w-4 text-amber-500" /> ACTIVE ENGINE</h3>
-          {activeEngine ? (
-            <div className="rounded-lg border bg-muted/20 p-4">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-sm font-medium">{activeEngine.id}</span>
-                <span className={cn('text-xs px-2 py-0.5 rounded-full border', activeEngine.status === 'running' ? 'bg-primary/10 text-primary border-primary/20' : 'bg-muted')}>{activeEngine.status} {activeEngine.progress}%</span>
-              </div>
-              <div className="h-1.5 rounded-full bg-muted overflow-hidden mt-3">
-                <div className="h-full bg-primary transition-all duration-500" style={{ width: `${activeEngine.progress}%` }} />
-              </div>
-              <div className="grid grid-cols-3 gap-3 mt-3 text-xs">
-                <div><div className="text-muted-foreground">Findings</div><div className="font-semibold">{activeEngine.findings}</div></div>
-                <div><div className="text-muted-foreground">Phase</div><div className="font-mono">{activeEngine.phase}</div></div>
-                <div><div className="text-muted-foreground">Duration</div><div>—</div></div>
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-              {isDone ? 'All engines completed — ready for Results' : isFailed ? 'Validation stopped' : 'Waiting for engine…'}
-            </div>
-          )}
-
-          {/* Engine grid */}
-          <div className="mt-4">
-            <div className="text-xs font-medium mb-2">Engines timeline</div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {display.engines.map(e => (
-                <div key={e.id} className={cn('rounded-lg border px-2.5 py-2 flex items-center justify-between text-xs', e.status === 'running' ? 'bg-primary/5 border-primary/30' : e.status === 'completed' ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : e.status === 'failed' ? 'bg-destructive/5 border-destructive/20' : 'bg-card')}>
-                  <span className="flex items-center gap-1.5 font-mono truncate">{statusIcon(e.status)} {e.id}</span>
-                  <span className="text-[11px] text-muted-foreground">{e.progress}%</span>
-                </div>
-              ))}
-              {display.engines.length === 0 && <span className="text-xs text-muted-foreground col-span-3">No engines — mock run</span>}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* LIVE EVENTS */}
-      <div className="rounded-xl border bg-card p-4">
-        <h3 className="text-sm font-semibold flex items-center gap-2 mb-3"><Activity className="h-4 w-4 text-primary" /> LIVE EVENTS <span className={cn('ml-2 h-2 w-2 rounded-full', wsConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500')} /></h3>
-        <div className="rounded-lg bg-black text-green-400 font-mono text-xs p-3 h-48 overflow-auto border">
-          {display.live_events.length === 0 ? <div className="text-muted-foreground">No events yet…</div> : display.live_events.map((ev, i) => (
-            <div key={i} className="flex gap-2 py-0.5">
-              <span className="text-muted-foreground shrink-0">{new Date(ev.ts).toLocaleTimeString()}</span>
-              <span className={cn(ev.type.includes('failed') ? 'text-red-400' : ev.type.includes('completed') ? 'text-emerald-400' : ev.type.includes('finding') ? 'text-amber-300' : 'text-green-400')}>{ev.type}</span>
-              <span className="text-green-300">{ev.message}</span>
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-2 mt-3">
-          <button onClick={() => refetch()} className="text-xs px-3 py-1.5 rounded border hover:bg-muted">Refresh</button>
-          {isDone && <Link to={`/validations/${id}/results`} className="text-xs px-3 py-1.5 rounded bg-primary text-primary-foreground inline-flex items-center gap-1">Results <ArrowRight className="h-3 w-3" /></Link>}
-        </div>
-      </div>
+      <section className="rounded-3xl border bg-card p-5 shadow-sm md:p-7">
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Execution controls</h2><p className="mt-1 text-xs text-muted-foreground">كل الأوامر أدناه تعتمد على endpoints حقيقية. لا يوجد local fallback.</p></div><div className="flex flex-wrap gap-2">{!completed && !failed && <><button onClick={handlePauseResume} className="inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold hover:bg-muted">{display.status === 'paused' ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}{display.status === 'paused' ? 'Resume' : 'Pause'}</button><button onClick={handleCancel} className="inline-flex items-center gap-2 rounded-xl border border-red-500/20 px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-500/5"><Ban className="h-3.5 w-3.5" />Cancel</button></>}{completed && <button onClick={() => navigate(`/validations/${id}/results`)} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">View Results <ArrowRight className="h-3.5 w-3.5" /></button>}</div></div>
+        {display.error_message && <div className="mt-5 rounded-2xl border border-red-500/20 bg-red-500/5 p-4 text-xs text-red-600 dark:text-red-400">{display.error_message}</div>}
+      </section>
     </div>
   )
 }
+
+const Fact = ({ label, value, mono }: { label: string; value: string; mono?: boolean }) => <div className="rounded-2xl border bg-muted/20 p-4"><div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</div><div dir={mono ? 'ltr' : undefined} className={cn('mt-2 truncate font-semibold', mono ? 'font-mono text-[11px]' : 'text-sm')}>{value}</div></div>
