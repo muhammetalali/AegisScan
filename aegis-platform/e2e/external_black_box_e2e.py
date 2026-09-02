@@ -106,7 +106,11 @@ def main() -> int:
     project_data = require(project, {201}, "Project creation")
     project_id = project_data.get("id")
     if not project_id:
-        raise RuntimeError("Project creation did not return id")
+        keys = sorted(project_data.keys()) if isinstance(project_data, dict) else []
+        raise RuntimeError(
+            "Project creation response contract invalid: expected top-level 'id' "
+            f"(HTTP 201, keys={keys}, body={project_data!r})"
+        )
 
     scan = session.post(
         f"{FASTAPI_URL}/scans/",
