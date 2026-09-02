@@ -15,11 +15,11 @@ from django.db import transaction
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.vulnerabilities.models import Vulnerability
-from ..services.scope_authorization import is_target_authorized
-from ..services.nmap_parser import parse_nmap_xml
-from ..services.tool_abstraction import ToolRequest, get_tool
-from ..services.scanner_adapters import run_nuclei
-from ..services.nmap_finding_ingestion import ingest_nmap_findings
+from fastapi_app.services.scope_authorization import is_target_authorized
+from fastapi_app.services.nmap_parser import parse_nmap_xml
+from fastapi_app.services.tool_abstraction import ToolRequest, get_tool
+from fastapi_app.services.scanner_adapters import run_nuclei
+from fastapi_app.services.nmap_finding_ingestion import ingest_nmap_findings
 
 
 def _ensure_engine(name: str, display_name: str, category: str, timeout: int) -> ScanEngine:
@@ -241,113 +241,4 @@ def run_nmap_scan(self, scan_id: str) -> dict:
         scan.error_message = str(exc)
         scan.completed_at = completed_at
         scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
-        raise
-
-
-@shared_task(bind=True, name='fastapi_app.tasks.security_scan.run_nuclei_scan', max_retries=1, default_retry_delay=30)
-def run_nuclei_scan(self, scan_id: str) -> dict:
-    scan = Scan.objects.select_related('asset', 'initiated_by', 'project').get(pk=scan_id)
-    if not scan.asset:
-        raise ValueError('A scan must reference an asset before execution')
-    configuration = scan.asset.configuration or {}
-    if configuration.get('authorized') is not True:
-        scan.status = Scan.Status.FAILED
-        scan.error_message = 'Execution blocked: asset is not explicitly marked authorized.'
-        scan.completed_at = datetime.now(timezone.utc)
-        scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
-        return {'status': 'blocked', 'scan_id': scan_id}
-    target = configuration.get('url')
-    if not target:
-        raise ValueError('Nuclei requires an authorized http/https URL target')
-    if not is_target_authorized(target):
-        scan.status = Scan.Status.FAILED
-        scan.error_message = 'Execution blocked: target is outside the server-side authorized scan scope.'
-        scan.completed_at = datetime.now(timezone.utc)
-        scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
-        return {'status': 'blocked', 'scan_id': scan_id}
-    scan.status = Scan.Status.RUNNING
-    scan.started_at = datetime.now(timezone.utc)
-    scan.current_phase = 'nuclei'
-    scan.current_engine = 'nuclei'
-    scan.progress = 10
-    scan.save(update_fields=['status', 'started_at', 'current_phase', 'current_engine', 'progress', 'updated_at'])
-    engine = _ensure_engine('nuclei', 'Nuclei', ScanEngine.EngineCategory.ANALYSIS, 600)
-    execution = _start_execution(scan, engine)
-    try:
-        started = scan.started_at
-        result = run_nuclei(target, timeout=600)
-        completed_at = datetime.now(timezone.utc)
-        duration = max(0, (completed_at - started).total_seconds()) if started else 0
-        with transaction.atomic():
-            evidence = Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'format': 'jsonl'}, collected_by=scan.initiated_by)
-            findings = _ingest_nuclei_findings(scan, evidence, result.stdout)
-            execution.status = ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code == 0 else ScanEngineExecution.ExecutionStatus.FAILED
-            execution.progress = 100
-            execution.completed_at = completed_at
-            execution.duration = duration
-            execution.findings_found = len(findings)
-            execution.evidences_collected = 1
-            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'result_count': len(findings), 'evidence_id': str(evidence.id), 'finding_ids': [str(v.id) for v in findings]}
-            execution.logs = result.stderr or ''
-            execution.save(update_fields=['status', 'progress', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'result_data', 'logs', 'updated_at'])
-            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nuclei execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'result_count': len(findings), 'evidence_id': str(evidence.id), 'finding_ids': [str(v.id) for v in findings]})
-            scan.status = Scan.Status.COMPLETED if result.exit_code == 0 else Scan.Status.PARTIAL
-            scan.progress = 100
-            scan.completed_at = completed_at
-            scan.engine_results = {**(scan.engine_results or {}), 'nuclei': {'exit_code': result.exit_code, 'target': result.target, 'result_count': len(findings), 'finding_ids': [str(v.id) for v in findings]}}
-            scan.findings_count = Vulnerability.objects.filter(scan=scan).count()
-            scan.save(update_fields=['status', 'progress', 'completed_at', 'engine_results', 'findings_count', 'updated_at'])
-        return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nuclei', 'target': result.target, 'finding_count': len(findings), 'finding_ids': [str(v.id) for v in findings]}
-    except Exception as exc:
-        completed_at = datetime.now(timezone.utc)
-        execution.status = ScanEngineExecution.ExecutionStatus.FAILED
-        execution.progress = 100
-        execution.completed_at = completed_at
-        execution.error_message = str(exc)
-        execution.save(update_fields=['status', 'progress', 'completed_at', 'error_message', 'updated_at'])
-        ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.ERROR, message='nuclei execution failed', context={'error': str(exc)})
-        scan.status = Scan.Status.FAILED
-        scan.error_message = str(exc)
-        scan.completed_at = completed_at
-        scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
-        raise
-
-
-@shared_task(bind=True, name='fastapi_app.tasks.security_scan.validate_finding_task', max_retries=1, default_retry_delay=30)
-def validate_finding_task(self, validation_id: str) -> dict:
-    validation = ValidationRun.objects.get(pk=validation_id)
-    validation.status = ValidationRun.Status.RUNNING
-    validation.progress = 10
-    validation.current_phase = 'nmap'
-    validation.started_at = datetime.now(timezone.utc)
-    validation.save(update_fields=['status', 'progress', 'current_phase', 'started_at'])
-    if not validation.authorized:
-        validation.status = ValidationRun.Status.FAILED
-        validation.error_message = 'Execution blocked: validation is not explicitly authorized.'
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'error_message', 'completed_at'])
-        return {'status': 'blocked', 'validation_id': validation_id}
-    if not is_target_authorized(validation.scope or validation.target_value):
-        validation.status = ValidationRun.Status.FAILED
-        validation.error_message = 'Execution blocked: target is outside the server-side authorized scan scope.'
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'error_message', 'completed_at'])
-        return {'status': 'blocked', 'validation_id': validation_id}
-    try:
-        result = get_tool('nmap').run(ToolRequest(target=validation.target_value, authorized=True), timeout=300)
-        parsed = parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts': [], 'host_count': 0, 'open_ports': 0}
-        with transaction.atomic():
-            Evidence.objects.create(scan=None, asset=None, source=result.tool, evidence_type='validation_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed}, collected_by=validation.user)
-            validation.status = ValidationRun.Status.COMPLETED if result.exit_code == 0 else ValidationRun.Status.FAILED
-            validation.progress = 100
-            validation.current_phase = 'completed' if result.exit_code == 0 else 'failed'
-            validation.result = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'parsed': parsed}
-            validation.completed_at = datetime.now(timezone.utc)
-            validation.save(update_fields=['status', 'progress', 'current_phase', 'result', 'completed_at'])
-        return {'status': validation.status, 'validation_id': validation_id, 'tool': 'nmap', 'target': result.target, 'parsed': parsed}
-    except Exception as exc:
-        validation.status = ValidationRun.Status.FAILED
-        validation.error_message = str(exc)
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'error_message', 'completed_at'])
         raise
