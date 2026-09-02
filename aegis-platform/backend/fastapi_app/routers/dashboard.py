@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import List, Optional
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 import django
@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from assets.models import Asset
 from compliance.models import ComplianceAssessment
+from evidence.models import Evidence
 from projects.models import Project
 from scans.models import Scan
 from vulnerabilities.models import Vulnerability
@@ -29,12 +30,15 @@ class DashboardSummary(BaseModel):
     total_projects: int
     total_assets: int
     total_validations: int
+    total_vulnerabilities: int
+    total_evidence: int
+    average_risk_score: Optional[float] = None
     critical: int
     high: int
     medium: int
     low: int
-    security_score: int
-    compliance_score: int
+    security_score: Optional[int] = None
+    compliance_score: Optional[int] = None
 
 
 class RiskDistribution(BaseModel):
@@ -49,15 +53,15 @@ class RecentValidation(BaseModel):
     id: str
     project_name: str
     status: str
-    risk_level: str
-    progress: int
+    risk_level: Optional[str] = None
+    progress: Optional[int] = None
     created_at: str
-    security_score: int
+    security_score: Optional[int] = None
 
 
 class TrendPoint(BaseModel):
     date: str
-    score: int
+    score: Optional[int] = None
     validations: int
 
 
@@ -88,23 +92,31 @@ def _summary(project_ids):
     project_filter = Q(project_id__in=project_ids)
     counts = Vulnerability.objects.filter(project_filter).values('severity').annotate(count=Count('id'))
     by_severity = {row['severity']: row['count'] for row in counts}
-    avg_score = Scan.objects.filter(project_id__in=project_ids, status=Scan.Status.COMPLETED).aggregate(value=Avg('security_score'))['value']
+    completed_scores = Scan.objects.filter(project_id__in=project_ids, status=Scan.Status.COMPLETED).aggregate(value=Avg('security_score'))['value']
+    average_risk = Vulnerability.objects.filter(project_filter).aggregate(value=Avg('risk_score'))['value']
     compliance = ComplianceAssessment.objects.filter(project_id__in=project_ids).aggregate(
         compliant=Count('id', filter=Q(status=ComplianceAssessment.Status.COMPLIANT)),
         partial=Count('id', filter=Q(status=ComplianceAssessment.Status.PARTIAL)),
         non_compliant=Count('id', filter=Q(status=ComplianceAssessment.Status.NON_COMPLIANT)),
     )
     assessed = compliance['compliant'] + compliance['partial'] + compliance['non_compliant']
-    compliance_score = round(((compliance['compliant'] + (compliance['partial'] * 0.5)) / assessed) * 100) if assessed else 0
+    compliance_score = round(((compliance['compliant'] + (compliance['partial'] * 0.5)) / assessed) * 100) if assessed else None
     return DashboardSummary(
         total_projects=len(project_ids),
         total_assets=Asset.objects.filter(project_id__in=project_ids, is_active=True).count(),
         total_validations=Scan.objects.filter(project_id__in=project_ids).count(),
+        total_vulnerabilities=Vulnerability.objects.filter(project_filter).count(),
+        total_evidence=Evidence.objects.filter(
+            Q(scan__project_id__in=project_ids) |
+            Q(finding__project_id__in=project_ids) |
+            Q(asset__project_id__in=project_ids)
+        ).distinct().count(),
+        average_risk_score=round(float(average_risk), 2) if average_risk is not None else None,
         critical=by_severity.get(Vulnerability.Severity.CRITICAL, 0),
         high=by_severity.get(Vulnerability.Severity.HIGH, 0),
         medium=by_severity.get(Vulnerability.Severity.MEDIUM, 0),
         low=by_severity.get(Vulnerability.Severity.LOW, 0),
-        security_score=round(avg_score or 0),
+        security_score=round(float(completed_scores)) if completed_scores is not None else None,
         compliance_score=compliance_score,
     )
 
@@ -139,10 +151,10 @@ def _recent(limit: int, project_ids):
         id=str(scan.id),
         project_name=scan.project.name,
         status=scan.status,
-        risk_level=scan.risk_level or 'unknown',
-        progress=round(scan.progress),
+        risk_level=scan.risk_level or None,
+        progress=round(scan.progress) if scan.progress is not None else None,
         created_at=scan.created_at.astimezone(timezone.utc).isoformat(),
-        security_score=round(scan.security_score),
+        security_score=round(scan.security_score) if scan.security_score is not None else None,
     ) for scan in scans]
 
 
@@ -159,17 +171,15 @@ def _trends(days: int, project_ids):
     for row in scans:
         day = row['created_at'].astimezone(timezone.utc).date().isoformat()
         bucket = buckets.setdefault(day, {'scores': [], 'count': 0})
-        bucket['scores'].append(row['security_score'])
+        if row['security_score'] is not None:
+            bucket['scores'].append(row['security_score'])
         bucket['count'] += 1
     result = []
     for i in range(days):
         day = (start + timedelta(days=i)).date().isoformat()
         bucket = buckets.get(day, {'scores': [], 'count': 0})
-        result.append(TrendPoint(
-            date=day,
-            score=round(sum(bucket['scores']) / len(bucket['scores'])) if bucket['scores'] else 0,
-            validations=bucket['count'],
-        ))
+        score = round(sum(bucket['scores']) / len(bucket['scores'])) if bucket['scores'] else None
+        result.append(TrendPoint(date=day, score=score, validations=bucket['count']))
     return result
 
 
