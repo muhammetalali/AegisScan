@@ -11,12 +11,13 @@ django.setup()
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from django_project.evidence.models import ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
+from ..services.audit_writer import add_audit_entry
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 from ..services.remediation_lifecycle import RemediationState, get_state, transition, verify_validation
 from ..tasks.finding_validation import validate_finding_e2e
@@ -128,6 +129,7 @@ def _latest_run(vuln_id: UUID, user_id: str) -> Optional[ValidationRun]:
 async def request_remediation_validation(
     vuln_id: UUID,
     body: RemediationValidationRequest,
+    request: Request,
     user=Depends(get_current_user),
 ):
     if not body.authorized:
@@ -183,6 +185,29 @@ async def request_remediation_validation(
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    try:
+        await sync_to_async(add_audit_entry)(
+            user=user_id,
+            action=AuditLog.Action.VULN_UPDATE,
+            target=str(vuln_id),
+            project=str(finding.project_id),
+            resource_type='vulnerability',
+            resource_repr=f'Remediation validation {validation.id}',
+            metadata={
+                'workflow': 'remediation',
+                'operation': 'validate',
+                'validation_id': str(validation.id),
+                'engine': engine,
+                'target': target,
+                'authorized': True,
+                'profile': body.profile,
+                'reason': body.reason.strip(),
+            },
+            request=request,
+        )
+    except Exception:
+        pass
 
     return {
         'workflow': 'remediation',
@@ -261,7 +286,7 @@ async def remediation_status(vuln_id: UUID, user=Depends(get_current_user)):
 
 
 @router.post('/vulnerabilities/{vuln_id}/remediation/verify')
-async def verify_remediation(vuln_id: UUID, user=Depends(get_current_user)):
+async def verify_remediation(vuln_id: UUID, request: Request, user=Depends(get_current_user)):
     user_id = str(user.get('user_id'))
     finding = await _get_finding(vuln_id, user_id)
     if not finding:
@@ -278,6 +303,26 @@ async def verify_remediation(vuln_id: UUID, user=Depends(get_current_user)):
 
     finding = await _get_finding(vuln_id, user_id)
     result = verified.result if isinstance(verified.result, dict) else {}
+    try:
+        await sync_to_async(add_audit_entry)(
+            user=user_id,
+            action=AuditLog.Action.VULN_FIX_VERIFY,
+            target=str(vuln_id),
+            project=str(finding.project_id) if finding else None,
+            resource_type='vulnerability',
+            resource_repr=f'Remediation verification {verified.id}',
+            metadata={
+                'workflow': 'remediation',
+                'operation': 'verify',
+                'validation_id': str(verified.id),
+                'finding_present': result.get('finding_present'),
+                'evidence_id': result.get('evidence_id'),
+            },
+            request=request,
+        )
+    except Exception:
+        pass
+
     return {
         'workflow': 'remediation',
         'state': get_state(verified),
@@ -293,7 +338,7 @@ async def verify_remediation(vuln_id: UUID, user=Depends(get_current_user)):
 
 
 @router.post('/vulnerabilities/{vuln_id}/remediation/close')
-async def close_remediation(vuln_id: UUID, user=Depends(get_current_user)):
+async def close_remediation(vuln_id: UUID, request: Request, user=Depends(get_current_user)):
     user_id = str(user.get('user_id'))
     finding = await _get_finding(vuln_id, user_id)
     if not finding:
@@ -315,6 +360,26 @@ async def close_remediation(vuln_id: UUID, user=Depends(get_current_user)):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     finding = await _get_finding(vuln_id, user_id)
+    try:
+        await sync_to_async(add_audit_entry)(
+            user=user_id,
+            action=AuditLog.Action.VULN_STATUS_CHANGE,
+            target=str(vuln_id),
+            project=str(finding.project_id) if finding else None,
+            resource_type='vulnerability',
+            resource_repr=f'Remediation closure {validation.id}',
+            changes={'status': 'fixed'},
+            metadata={
+                'workflow': 'remediation',
+                'operation': 'close',
+                'validation_id': str(validation.id),
+                'evidence_id': (validation.result or {}).get('evidence_id') if isinstance(validation.result, dict) else None,
+            },
+            request=request,
+        )
+    except Exception:
+        pass
+
     return {
         'workflow': 'remediation',
         'state': RemediationState.CLOSED,
