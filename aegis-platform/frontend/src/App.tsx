@@ -16,12 +16,13 @@ const Projects = lazyWithRetry(() => import('./pages/projects/Projects').then(m 
 const ProjectDetail = lazyWithRetry(() => import('./pages/projects/ProjectDetail').then(m => ({ default: m.ProjectDetail })))
 const Assets = lazyWithRetry(() => import('./pages/assets/Assets').then(m => ({ default: m.Assets })))
 const ScanPage = lazyWithRetry(() => import('./pages/scans/ScanPage').then(m => ({ default: m.ScanPage })))
-const ScanProgress = lazyWithRetry(() => import('./pages/scans/ScanProgress').then(m => ({ default: m.ScanProgress })))
-const ScanResults = lazyWithRetry(() => import('./pages/validations/ValidationCommandCenter').then(m => ({ default: m.ValidationCommandCenter })))
+const ValidationProgress = lazyWithRetry(() => import('./pages/validations/ValidationProgress').then(m => ({ default: m.ValidationProgress })))
+const ValidationResults = lazyWithRetry(() => import('./pages/validations/ValidationResults').then(m => ({ default: m.ValidationResults })))
 const Vulnerabilities = lazyWithRetry(() => import('./pages/vulnerabilities/Vulnerabilities').then(m => ({ default: m.Vulnerabilities })))
 const VulnerabilityDetail = lazyWithRetry(() => import('./pages/vulnerabilities/VulnerabilityDetail').then(m => ({ default: m.VulnerabilityDetail })))
 const Reports = lazyWithRetry(() => import('./pages/reports/Reports').then(m => ({ default: m.Reports })))
 const ReportDetail = lazyWithRetry(() => import('./pages/reports/ReportDetail').then(m => ({ default: m.ReportDetail })))
+const Evidence = lazyWithRetry(() => import('./pages/evidence/Evidence').then(m => ({ default: m.Evidence })))
 const Compliance = lazyWithRetry(() => import('./pages/compliance/Compliance').then(m => ({ default: m.Compliance })))
 const ComplianceIntelligence = lazyWithRetry(() => import('./pages/compliance/ComplianceIntelligencePage').then(m => ({ default: m.ComplianceIntelligencePage })))
 const SecurityAssurance = lazyWithRetry(() => import('./pages/compliance/SecurityAssuranceCommandCenterPage').then(m => ({ default: m.SecurityAssuranceCommandCenterPage })))
@@ -46,7 +47,7 @@ const Settings = lazyWithRetry(() => import('./pages/settings/Settings').then(m 
 const SystemMonitor = lazyWithRetry(() => import('./pages/system/SystemMonitor').then(m => ({ default: m.SystemMonitor })))
 const AuditLogs = lazyWithRetry(() => import('./pages/audit/AuditLogs').then(m => ({ default: m.AuditLogs })))
 const Notifications = lazyWithRetry(() => import('./pages/notifications/Notifications').then(m => ({ default: m.Notifications })))
-const NewValidation = lazyWithRetry(() => import('./pages/validations/ValidationWizard').then(m => ({ default: m.ValidationWizard })))
+const NewValidation = lazyWithRetry(() => import('./pages/validations/NewValidation').then(m => ({ default: m.NewValidation })))
 
 const Bootstrap = ({ children }: { children: React.ReactNode }) => {
   const started = useRef(false)
@@ -91,13 +92,14 @@ const App = () => (
                   <Route path="/projects/:id" element={page(<ProjectDetail />, 'Project detail')} />
                   <Route path="/assets" element={page(<Assets />, 'Assets')} />
                   <Route path="/validations/new" element={page(<NewValidation />, 'New validation')} />
-                  <Route path="/validations/:id/progress" element={page(<ScanProgress />, 'Validation progress')} />
-                  <Route path="/validations/:id/results" element={page(<ScanResults />, 'Validation results')} />
+                  <Route path="/validations/:id/progress" element={page(<ValidationProgress />, 'Validation progress')} />
+                  <Route path="/validations/:id/results" element={page(<ValidationResults />, 'Validation results')} />
                   <Route path="/scan" element={page(<ScanPage />, 'Scans')} />
-                  <Route path="/scan/:id/progress" element={page(<ScanProgress />, 'Scan progress')} />
-                  <Route path="/scan/:id/results" element={page(<ScanResults />, 'Scan results')} />
+                  <Route path="/scan/:id/progress" element={page(<ValidationProgress />, 'Scan progress')} />
+                  <Route path="/scan/:id/results" element={page(<ValidationResults />, 'Scan results')} />
                   <Route path="/vulnerabilities" element={page(<Vulnerabilities />, 'Vulnerabilities')} />
                   <Route path="/vulnerabilities/:id" element={page(<VulnerabilityDetail />, 'Vulnerability detail')} />
+                  <Route path="/evidence" element={page(<Evidence />, 'Evidence')} />
                   <Route path="/reports" element={page(<Reports />, 'Reports')} />
                   <Route path="/reports/:id" element={page(<ReportDetail />, 'Report detail')} />
                   <Route path="/compliance" element={page(<Compliance />, 'Compliance')} />
