@@ -1,13 +1,14 @@
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion'
 import { Activity, ArrowUpRight, Gauge, ShieldCheck } from 'lucide-react'
 import { type PointerEvent, useRef } from 'react'
+import { useLanguageStore } from '@/stores/languageStore'
 
 type RecentValidation = {
-  id?: string
-  validation_id?: string
-  target_value?: string
-  target?: string
-  status?: string
+  id: string
+  project_name: string
+  status: string
+  target_value?: string | null
+  target?: string | null
 }
 
 type Props = {
@@ -21,8 +22,10 @@ type Props = {
 }
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value))
+const numericOrNull = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null
 
 export const SecurityCommandHero = ({ score, critical, high, assets, validations, recent, onExplore }: Props) => {
+  const t = useLanguageStore(s => s.t)
   const stageRef = useRef<HTMLDivElement>(null)
   const pointerX = useMotionValue(0)
   const pointerY = useMotionValue(0)
@@ -46,11 +49,13 @@ export const SecurityCommandHero = ({ score, critical, high, assets, validations
   const recentItems = recent.slice(0, 3)
 
   const nodes = [
-    { label: 'Critical', value: Number(critical ?? 0), tone: 'danger', x: '7%', y: '21%', delay: 0 },
-    { label: 'High', value: Number(high ?? 0), tone: 'warning', x: '78%', y: '18%', delay: 0.08 },
-    { label: 'Assets', value: Number(assets ?? 0), tone: 'primary', x: '80%', y: '69%', delay: 0.16 },
-    { label: 'Validations', value: Number(validations ?? 0), tone: 'violet', x: '5%', y: '70%', delay: 0.24 },
+    { label: t('Critical'), value: numericOrNull(critical), tone: 'danger', x: '7%', y: '21%', delay: 0 },
+    { label: t('High'), value: numericOrNull(high), tone: 'warning', x: '78%', y: '18%', delay: 0.08 },
+    { label: t('Assets'), value: numericOrNull(assets), tone: 'primary', x: '80%', y: '69%', delay: 0.16 },
+    { label: t('Validations'), value: numericOrNull(validations), tone: 'violet', x: '5%', y: '70%', delay: 0.24 },
   ]
+
+  const statusText = normalizedScore == null ? t('Not reported') : normalizedScore >= 80 ? t('Healthy posture') : normalizedScore >= 60 ? t('Needs review') : t('Priority attention')
 
   return (
     <section className="relative overflow-hidden rounded-[2rem] border border-border/70 bg-[radial-gradient(circle_at_50%_10%,color-mix(in_srgb,var(--primary)_11%,transparent),transparent_34%),linear-gradient(145deg,color-mix(in_srgb,var(--card)_96%,var(--primary)_4%),color-mix(in_srgb,var(--background)_86%,black_14%))] shadow-[0_30px_90px_rgba(0,0,0,.18)]">
@@ -61,37 +66,34 @@ export const SecurityCommandHero = ({ score, critical, high, assets, validations
         <div className="relative z-10 flex min-h-[320px] flex-col justify-center">
           <div className="mb-5 inline-flex w-fit items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-primary">
             <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_14px_var(--primary)]" />
-            Security command center
+            {t('Security command center')}
           </div>
 
           <h1 className="max-w-3xl text-4xl font-semibold tracking-[-0.04em] text-foreground sm:text-5xl lg:text-[4.25rem] lg:leading-[0.98]">
-            See the state of your
-            <span className="block bg-gradient-to-r from-primary via-sky-300 to-violet-400 bg-clip-text text-transparent">security surface.</span>
+            {t('Security posture,')} 
+            <span className="block bg-gradient-to-r from-primary via-sky-300 to-violet-400 bg-clip-text text-transparent">{t('grounded in evidence.')}</span>
           </h1>
-          <p className="mt-5 max-w-xl text-sm leading-7 text-muted-foreground sm:text-base">A live operational view built from your recorded assets, validations and findings — designed to move from signal to decision without losing evidence.</p>
+          <p className="mt-5 max-w-xl text-sm leading-7 text-muted-foreground sm:text-base">{t('A live operational view built from recorded assets, validations and findings.')}</p>
 
           <div className="mt-7 flex flex-wrap items-center gap-3">
             <button type="button" onClick={onExplore} className="group inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-[0_12px_30px_color-mix(in_srgb,var(--primary)_24%,transparent)] transition-transform duration-200 hover:-translate-y-0.5">
-              Explore command center
+              {t('Explore command center')}
               <ArrowUpRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </button>
             <div className="inline-flex items-center gap-2 rounded-xl border border-border/80 bg-background/25 px-3 py-2.5 text-xs text-muted-foreground backdrop-blur">
               <Activity className="h-3.5 w-3.5 text-primary" />
-              Evidence-first telemetry
+              {t('Evidence-first telemetry')}
             </div>
           </div>
 
           {recentItems.length > 0 && (
             <div className="mt-8 flex flex-wrap gap-2">
-              {recentItems.map((item, index) => {
-                const id = item.id || item.validation_id || `validation-${index}`
-                return (
-                  <div key={id} className="max-w-[220px] rounded-xl border border-border/70 bg-background/25 px-3 py-2 backdrop-blur">
-                    <div className="truncate font-mono text-[10px] text-foreground/85">{id}</div>
-                    <div className="mt-0.5 truncate text-[10px] text-muted-foreground">{item.target_value || item.target || 'Validation execution'}</div>
-                  </div>
-                )
-              })}
+              {recentItems.map(item => (
+                <div key={item.id} className="max-w-[220px] rounded-xl border border-border/70 bg-background/25 px-3 py-2 backdrop-blur">
+                  <div className="truncate font-mono text-[10px] text-foreground/85">{item.id}</div>
+                  <div className="mt-0.5 truncate text-[10px] text-muted-foreground">{item.project_name || t('Not reported')}</div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -123,7 +125,7 @@ export const SecurityCommandHero = ({ score, critical, high, assets, validations
                 <span className={`h-2 w-2 rounded-full ${node.tone === 'danger' ? 'bg-red-400' : node.tone === 'warning' ? 'bg-amber-400' : node.tone === 'violet' ? 'bg-violet-400' : 'bg-primary'}`} />
                 <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{node.label}</span>
               </div>
-              <div className="mt-1 text-xl font-semibold tracking-tight">{node.value}</div>
+              <div className="mt-1 text-xl font-semibold tracking-tight">{node.value == null ? '—' : node.value}</div>
             </motion.div>
           ))}
 
@@ -138,9 +140,9 @@ export const SecurityCommandHero = ({ score, critical, high, assets, validations
               <div className="mx-auto mb-3 grid h-11 w-11 place-items-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-[0_0_30px_color-mix(in_srgb,var(--primary)_18%,transparent)]">
                 <ShieldCheck className="h-5 w-5" />
               </div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Security score</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">{t('Security score')}</div>
               <div className="mt-1 text-5xl font-semibold tracking-[-0.06em]">{normalizedScore == null ? '—' : normalizedScore}</div>
-              <div className="mt-1 text-[11px] text-muted-foreground">{normalizedScore == null ? 'Waiting for real posture data' : normalizedScore >= 80 ? 'Healthy posture' : normalizedScore >= 60 ? 'Attention recommended' : 'Priority attention'}</div>
+              <div className="mt-1 text-[11px] text-muted-foreground">{statusText}</div>
             </div>
             <div className="absolute -inset-2 rounded-full border border-primary/15 shadow-[0_0_50px_color-mix(in_srgb,var(--primary)_10%,transparent)]" />
           </motion.div>
@@ -149,7 +151,7 @@ export const SecurityCommandHero = ({ score, critical, high, assets, validations
 
           <div className="absolute bottom-0 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border/70 bg-background/50 px-3 py-1.5 text-[10px] text-muted-foreground backdrop-blur-xl">
             <Gauge className="h-3.5 w-3.5 text-primary" />
-            Live posture layer
+            {t('Posture layer')}
           </div>
         </motion.div>
       </div>
