@@ -1,8 +1,8 @@
-import React, { Suspense } from 'react'
+import React, { Suspense, useEffect, useRef } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { AuthProvider, useAuth } from './stores/authStore'
+import { AuthProvider, initAuth, useAuth } from './stores/authStore'
 import { ThemeProvider } from './stores/themeStore'
-import { LanguageProvider } from './stores/languageStore'
+import { LanguageProvider, initLanguage } from './stores/languageStore'
 import { Layout } from './components/layout/Layout'
 import { LoadingScreen } from './components/ui/LoadingScreen'
 import { AppErrorBoundary, lazyWithRetry } from './components/ui/AppErrorBoundary'
@@ -47,16 +47,30 @@ const AuditLogs = lazyWithRetry(() => import('./pages/audit/AuditLogs').then(m =
 const Notifications = lazyWithRetry(() => import('./pages/notifications/Notifications').then(m => ({ default: m.Notifications })))
 const NewValidation = lazyWithRetry(() => import('./pages/validations/ValidationWizard').then(m => ({ default: m.ValidationWizard })))
 
+const Bootstrap = ({ children }: { children: React.ReactNode }) => {
+  const started = useRef(false)
+  const [ready, setReady] = React.useState(false)
+
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    Promise.allSettled([initLanguage(), initAuth()]).finally(() => setReady(true))
+  }, [])
+
+  if (!ready) return <LoadingScreen />
+  return <>{children}</>
+}
+
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated, loading } = useAuth()
-  if (loading) return <LoadingScreen />
+  const { isAuthenticated, loading, initialized } = useAuth()
+  if (loading || !initialized) return <LoadingScreen />
   if (!isAuthenticated) return <Navigate to="/login" replace />
   return <>{children}</>
 }
 
 const PublicRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated, loading } = useAuth()
-  if (loading) return <LoadingScreen />
+  const { isAuthenticated, loading, initialized } = useAuth()
+  if (loading || !initialized) return <LoadingScreen />
   if (isAuthenticated) return <Navigate to="/dashboard" replace />
   return <>{children}</>
 }
@@ -72,53 +86,55 @@ const App = () => (
     <AuthProvider>
       <ThemeProvider>
         <LanguageProvider>
-          <Routes>
-            <Route path="/login" element={<PublicRoute>{page(<Login />, 'Login')}</PublicRoute>} />
-            <Route path="/register" element={<PublicRoute>{page(<Register />, 'Registration')}</PublicRoute>} />
-            <Route path="/forgot-password" element={<PublicRoute>{page(<ForgotPassword />, 'Password recovery')}</PublicRoute>} />
-            <Route element={<ProtectedRoute><AppErrorBoundary context="Workspace shell"><Layout /></AppErrorBoundary></ProtectedRoute>}>
-              <Route path="/dashboard" element={page(<Dashboard />, 'Dashboard')} />
-              <Route path="/projects" element={page(<Projects />, 'Projects')} />
-              <Route path="/projects/:id" element={page(<ProjectDetail />, 'Project detail')} />
-              <Route path="/assets" element={page(<Assets />, 'Assets')} />
-              <Route path="/validations/new" element={page(<NewValidation />, 'New validation')} />
-              <Route path="/validations/:id/progress" element={page(<ScanProgress />, 'Validation progress')} />
-              <Route path="/validations/:id/results" element={page(<ScanResults />, 'Validation results')} />
-              <Route path="/scan" element={page(<ScanPage />, 'Scans')} />
-              <Route path="/scan/:id/progress" element={page(<ScanProgress />, 'Scan progress')} />
-              <Route path="/scan/:id/results" element={page(<ScanResults />, 'Scan results')} />
-              <Route path="/vulnerabilities" element={page(<Vulnerabilities />, 'Vulnerabilities')} />
-              <Route path="/vulnerabilities/:id" element={page(<VulnerabilityDetail />, 'Vulnerability detail')} />
-              <Route path="/reports" element={page(<Reports />, 'Reports')} />
-              <Route path="/reports/:id" element={page(<ReportDetail />, 'Report detail')} />
-              <Route path="/compliance" element={page(<Compliance />, 'Compliance')} />
-              <Route path="/compliance/intelligence" element={page(<ComplianceIntelligence />, 'Compliance intelligence')} />
-              <Route path="/assurance" element={page(<SecurityAssurance />, 'Security assurance')} />
-              <Route path="/assurance/continuous" element={page(<ContinuousAssurance />, 'Continuous assurance')} />
-              <Route path="/assurance/conflicts" element={page(<CorrelationConflict />, 'Correlation conflicts')} />
-              <Route path="/assurance/evidence" element={page(<CorrelatedEvidenceGraph />, 'Correlated evidence')} />
-              <Route path="/assurance/graph" element={page(<AssuranceGraphPage />, 'Assurance graph')} />
-              <Route path="/assurance/triage" element={page(<AutonomousTriagePage />, 'Autonomous triage')} />
-              <Route path="/assurance/decisions" element={page(<SecurityDecisionPage />, 'Security decisions')} />
-              <Route path="/assurance/actions" element={page(<DecisionActionPage />, 'Decision actions')} />
-              <Route path="/assurance/actions/:actionId" element={page(<DecisionActionDetailPage />, 'Decision action detail')} />
-              <Route path="/assurance/workflow" element={page(<WorkflowControlTowerPage />, 'Workflow control tower')} />
-              <Route path="/assurance/governance" element={page(<GovernancePage />, 'Governance')} />
-              <Route path="/assurance/policies" element={page(<PolicyStudioPage />, 'Policy studio')} />
-              <Route path="/assurance/policies/simulate" element={page(<PolicySimulationPage />, 'Policy simulation')} />
-              <Route path="/knowledge" element={page(<KnowledgeBase />, 'Knowledge base')} />
-              <Route path="/digital-twin" element={page(<DigitalTwin />, 'Digital twin')} />
-              <Route path="/posture" element={page(<SecurityPosture />, 'Security posture')} />
-              <Route path="/executive" element={page(<CISOExecutivePage />, 'CISO executive')} />
-              <Route path="/users" element={page(<Users />, 'Users and RBAC')} />
-              <Route path="/settings" element={page(<Settings />, 'Settings')} />
-              <Route path="/system" element={page(<SystemMonitor />, 'System monitor')} />
-              <Route path="/audit" element={page(<AuditLogs />, 'Audit trail')} />
-              <Route path="/notifications" element={page(<Notifications />, 'Notifications')} />
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
+          <Bootstrap>
+            <Routes>
+              <Route path="/login" element={<PublicRoute>{page(<Login />, 'Login')}</PublicRoute>} />
+              <Route path="/register" element={<PublicRoute>{page(<Register />, 'Registration')}</PublicRoute>} />
+              <Route path="/forgot-password" element={<PublicRoute>{page(<ForgotPassword />, 'Password recovery')}</PublicRoute>} />
+              <Route element={<ProtectedRoute><AppErrorBoundary context="Workspace shell"><Layout /></AppErrorBoundary></ProtectedRoute>}>
+                <Route path="/dashboard" element={page(<Dashboard />, 'Dashboard')} />
+                <Route path="/projects" element={page(<Projects />, 'Projects')} />
+                <Route path="/projects/:id" element={page(<ProjectDetail />, 'Project detail')} />
+                <Route path="/assets" element={page(<Assets />, 'Assets')} />
+                <Route path="/validations/new" element={page(<NewValidation />, 'New validation')} />
+                <Route path="/validations/:id/progress" element={page(<ScanProgress />, 'Validation progress')} />
+                <Route path="/validations/:id/results" element={page(<ScanResults />, 'Validation results')} />
+                <Route path="/scan" element={page(<ScanPage />, 'Scans')} />
+                <Route path="/scan/:id/progress" element={page(<ScanProgress />, 'Scan progress')} />
+                <Route path="/scan/:id/results" element={page(<ScanResults />, 'Scan results')} />
+                <Route path="/vulnerabilities" element={page(<Vulnerabilities />, 'Vulnerabilities')} />
+                <Route path="/vulnerabilities/:id" element={page(<VulnerabilityDetail />, 'Vulnerability detail')} />
+                <Route path="/reports" element={page(<Reports />, 'Reports')} />
+                <Route path="/reports/:id" element={page(<ReportDetail />, 'Report detail')} />
+                <Route path="/compliance" element={page(<Compliance />, 'Compliance')} />
+                <Route path="/compliance/intelligence" element={page(<ComplianceIntelligence />, 'Compliance intelligence')} />
+                <Route path="/assurance" element={page(<SecurityAssurance />, 'Security assurance')} />
+                <Route path="/assurance/continuous" element={page(<ContinuousAssurance />, 'Continuous assurance')} />
+                <Route path="/assurance/conflicts" element={page(<CorrelationConflict />, 'Correlation conflicts')} />
+                <Route path="/assurance/evidence" element={page(<CorrelatedEvidenceGraph />, 'Correlated evidence')} />
+                <Route path="/assurance/graph" element={page(<AssuranceGraphPage />, 'Assurance graph')} />
+                <Route path="/assurance/triage" element={page(<AutonomousTriagePage />, 'Autonomous triage')} />
+                <Route path="/assurance/decisions" element={page(<SecurityDecisionPage />, 'Security decisions')} />
+                <Route path="/assurance/actions" element={page(<DecisionActionPage />, 'Decision actions')} />
+                <Route path="/assurance/actions/:actionId" element={page(<DecisionActionDetailPage />, 'Decision action detail')} />
+                <Route path="/assurance/workflow" element={page(<WorkflowControlTowerPage />, 'Workflow control tower')} />
+                <Route path="/assurance/governance" element={page(<GovernancePage />, 'Governance')} />
+                <Route path="/assurance/policies" element={page(<PolicyStudioPage />, 'Policy studio')} />
+                <Route path="/assurance/policies/simulate" element={page(<PolicySimulationPage />, 'Policy simulation')} />
+                <Route path="/knowledge" element={page(<KnowledgeBase />, 'Knowledge base')} />
+                <Route path="/digital-twin" element={page(<DigitalTwin />, 'Digital twin')} />
+                <Route path="/posture" element={page(<SecurityPosture />, 'Security posture')} />
+                <Route path="/executive" element={page(<CISOExecutivePage />, 'CISO executive')} />
+                <Route path="/users" element={page(<Users />, 'Users and RBAC')} />
+                <Route path="/settings" element={page(<Settings />, 'Settings')} />
+                <Route path="/system" element={page(<SystemMonitor />, 'System monitor')} />
+                <Route path="/audit" element={page(<AuditLogs />, 'Audit trail')} />
+                <Route path="/notifications" element={page(<Notifications />, 'Notifications')} />
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          </Bootstrap>
         </LanguageProvider>
       </ThemeProvider>
     </AuthProvider>
