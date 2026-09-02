@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 from asgiref.sync import sync_to_async
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -55,7 +55,7 @@ async def actions_overview(user: dict[str, Any] = Depends(require_user)):
     return {"items": items, "metrics": workflow_metrics(items)}
 
 @router.post("/actions", status_code=201)
-async def create_action_endpoint(body: ActionCreate, user: dict[str, Any] = Depends(require_user)):
+async def create_action_endpoint(body: ActionCreate, request: Request, user: dict[str, Any] = Depends(require_user)):
     decision = _decision_by_id(body.decision_id)
     if decision is None:
         raise HTTPException(status_code=404, detail="Decision not found")
@@ -69,6 +69,7 @@ async def create_action_endpoint(body: ActionCreate, user: dict[str, Any] = Depe
             project="—",
             result="success",
             resource_type="decision_action",
+            request=request,
         )
     except Exception:
         pass
@@ -82,7 +83,7 @@ async def action_detail(action_id: str, user: dict[str, Any] = Depends(require_u
     return enrich_action(item)
 
 @router.post("/actions/{action_id}/transition")
-async def action_transition(action_id: str, body: ActionTransition, user: dict[str, Any] = Depends(require_user)):
+async def action_transition(action_id: str, body: ActionTransition, request: Request, user: dict[str, Any] = Depends(require_user)):
     actor = str(user.get("id") or user.get("username") or "user")
     try:
         item = transition(action_id, body.state, actor, body.note)
@@ -95,6 +96,7 @@ async def action_transition(action_id: str, body: ActionTransition, user: dict[s
                 result="success",
                 resource_type="decision_action",
                 metadata={"note": body.note or ""},
+                request=request,
             )
         except Exception:
             pass
