@@ -8,6 +8,7 @@ interface AuthState {
   refreshToken: null
   isAuthenticated: boolean
   loading: boolean
+  initialized: boolean
   error: string | null
   login: (email: string, password: string, rememberMe?: boolean) => Promise<void>
   register: (data: RegisterData) => Promise<void>
@@ -54,7 +55,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   accessToken: null,
   refreshToken: null,
   isAuthenticated: false,
-  loading: false,
+  loading: true,
+  initialized: false,
   error: null,
 
   setLoading: (loading) => set({ loading }),
@@ -65,10 +67,10 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await api.get('/auth/csrf/')
       const response = await api.post('/auth/login/', { email, password })
-      set({ user: response.data.user, isAuthenticated: true, loading: false, error: null })
+      set({ user: response.data.user, isAuthenticated: true, loading: false, initialized: true, error: null })
     } catch (error: any) {
       const message = readError(error, 'تعذر تسجيل الدخول')
-      set({ loading: false, error: message })
+      set({ loading: false, error: message, initialized: true })
       throw error
     }
   },
@@ -79,9 +81,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await api.get('/auth/csrf/')
       await api.post('/auth/register/', data)
       await get().login(data.email, data.password)
-      set({ loading: false })
+      set({ loading: false, initialized: true })
     } catch (error: any) {
-      set({ loading: false, error: readError(error, 'تعذر إنشاء الحساب') })
+      set({ loading: false, error: readError(error, 'تعذر إنشاء الحساب'), initialized: true })
       throw error
     }
   },
@@ -90,7 +92,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await api.post('/auth/logout/')
     } finally {
-      set({ user: null, isAuthenticated: false, loading: false, error: null })
+      set({ user: null, isAuthenticated: false, loading: false, initialized: true, error: null })
     }
   },
 
@@ -167,21 +169,33 @@ import React from 'react'
 export const useAuth = () => useAuthStore()
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => children as React.ReactElement
 
+let initializationPromise: Promise<void> | null = null
+
 export const initAuth = async () => {
-  const store = useAuthStore.getState()
-  store.setLoading(true)
-  store.setError(null)
-  try {
-    await api.get('/auth/csrf/')
-    await store.fetchUser()
-  } catch {
+  if (initializationPromise) return initializationPromise
+
+  initializationPromise = (async () => {
+    const store = useAuthStore.getState()
+    store.setLoading(true)
+    store.setError(null)
     try {
-      await store.refreshAccessToken()
+      await api.get('/auth/csrf/')
       await store.fetchUser()
-    } catch {
-      useAuthStore.setState({ user: null, isAuthenticated: false, error: null })
+    } catch (firstError: any) {
+      try {
+        await store.refreshAccessToken()
+        await store.fetchUser()
+      } catch {
+        useAuthStore.setState({ user: null, isAuthenticated: false, error: null })
+      }
+    } finally {
+      useAuthStore.setState({ loading: false, initialized: true })
     }
+  })()
+
+  try {
+    await initializationPromise
   } finally {
-    useAuthStore.setState({ loading: false })
+    initializationPromise = null
   }
 }
