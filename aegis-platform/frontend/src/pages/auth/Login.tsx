@@ -2,10 +2,13 @@ import React, { FormEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/authStore'
+import { useLanguageStore } from '@/stores/languageStore'
 
 export const Login = () => {
   const navigate = useNavigate()
   const { login } = useAuthStore()
+  const t = useLanguageStore(s => s.t)
+  const language = useLanguageStore(s => s.language)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -19,13 +22,13 @@ export const Login = () => {
     try {
       await login(email.trim(), password)
       setPassword('')
-      toast.success('تم تسجيل الدخول بنجاح')
+      toast.success(t('Signed in successfully'))
       navigate('/dashboard', { replace: true })
     } catch (error: any) {
       const detail = error?.response?.data?.detail
       const message = typeof detail === 'string'
         ? detail
-        : detail?.message || error?.response?.data?.error?.message || 'تعذر تسجيل الدخول. تحقق من البيانات وحاول مجددًا.'
+        : detail?.message || error?.response?.data?.error?.message || t('Unable to sign in. Check your credentials and try again.')
       toast.error(message)
     } finally {
       setBusy(false)
@@ -33,7 +36,7 @@ export const Login = () => {
   }
 
   return (
-    <main className="auth-page" dir="rtl">
+    <main className="auth-page" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       <div className="auth-background" aria-hidden="true">
         <span className="auth-orb auth-orb--one" />
         <span className="auth-orb auth-orb--two" />
@@ -43,76 +46,36 @@ export const Login = () => {
 
       <section className="login-surface" aria-labelledby="login-title">
         <div className="login-brand">
-          <div className="login-logo-frame">
-            <img src="/aegis-logo.svg" alt="AegisScan" className="login-logo" />
-          </div>
-          <div>
-            <strong>AegisScan</strong>
-            <span>Security Validation Platform</span>
-          </div>
+          <div className="login-logo-frame"><img src="/aegis-logo.svg" alt="AegisScan" className="login-logo" /></div>
+          <div><strong>AegisScan</strong><span>{t('Security Validation Platform')}</span></div>
         </div>
 
         <div className="login-content">
           <p className="login-kicker">SECURE ACCESS</p>
-          <h1 id="login-title">تسجيل الدخول</h1>
-          <p className="login-subtitle">الوصول الموثق إلى منصة التحقق الأمني.</p>
+          <h1 id="login-title">{t('Sign in')}</h1>
+          <p className="login-subtitle">{t('Authenticated access to the security validation platform.')}</p>
 
           <form onSubmit={submit} className="login-form" noValidate>
             <label className="login-field">
-              <span>البريد الإلكتروني</span>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                inputMode="email"
-                autoComplete="username"
-                placeholder="user@company.com"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                disabled={busy}
-                required
-              />
+              <span>{t('Email address')}</span>
+              <input id="email" name="email" type="email" inputMode="email" autoComplete="username" placeholder="user@company.com" value={email} onChange={(event) => setEmail(event.target.value)} disabled={busy} required />
             </label>
 
             <label className="login-field">
-              <span>كلمة المرور</span>
+              <span>{t('Password')}</span>
               <div className="login-password">
-                <input
-                  id="password"
-                  name="password"
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="current-password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  disabled={busy}
-                  minLength={8}
-                  required
-                />
-                <button
-                  type="button"
-                  className="password-action"
-                  onClick={() => setShowPassword((value) => !value)}
-                  aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
-                >
-                  {showPassword ? 'إخفاء' : 'إظهار'}
+                <input id="password" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="••••••••" value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy} minLength={8} required />
+                <button type="button" className="password-action" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? t('Hide password') : t('Show password')}>
+                  {showPassword ? t('Hide') : t('Show')}
                 </button>
               </div>
             </label>
 
-            <button type="submit" className="login-submit" disabled={busy}>
-              {busy ? 'جارٍ التحقق…' : 'دخول'}
-            </button>
+            <button type="submit" className="login-submit" disabled={busy}>{busy ? t('Signing in…') : t('Sign in')}</button>
           </form>
         </div>
 
-        <div className="login-footer">
-          <span>Protected session</span>
-          <span aria-hidden="true">•</span>
-          <span>RBAC</span>
-          <span aria-hidden="true">•</span>
-          <span>Evidence</span>
-        </div>
+        <div className="login-footer"><span>{t('Protected session')}</span><span aria-hidden="true">•</span><span>RBAC</span><span aria-hidden="true">•</span><span>{t('Evidence')}</span></div>
       </section>
     </main>
   )
