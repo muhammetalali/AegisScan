@@ -1,50 +1,51 @@
-import React, { Suspense, lazy } from 'react'
+import React, { Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './stores/authStore'
 import { ThemeProvider } from './stores/themeStore'
 import { LanguageProvider } from './stores/languageStore'
 import { Layout } from './components/layout/Layout'
 import { LoadingScreen } from './components/ui/LoadingScreen'
+import { AppErrorBoundary, lazyWithRetry } from './components/ui/AppErrorBoundary'
 
-const Login = lazy(() => import('./pages/auth/Login').then(m => ({ default: m.Login })))
-const Register = lazy(() => import('./pages/auth/Register').then(m => ({ default: m.Register })))
-const ForgotPassword = lazy(() => import('./pages/auth/ForgotPassword').then(m => ({ default: m.ForgotPassword })))
-const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
-const Projects = lazy(() => import('./pages/projects/Projects').then(m => ({ default: m.Projects })))
-const ProjectDetail = lazy(() => import('./pages/projects/ProjectDetail').then(m => ({ default: m.ProjectDetail })))
-const Assets = lazy(() => import('./pages/assets/Assets').then(m => ({ default: m.Assets })))
-const ScanPage = lazy(() => import('./pages/scans/ScanPage').then(m => ({ default: m.ScanPage })))
-const ScanProgress = lazy(() => import('./pages/scans/ScanProgress').then(m => ({ default: m.ScanProgress })))
-const ScanResults = lazy(() => import('./pages/validations/ValidationCommandCenter').then(m => ({ default: m.ValidationCommandCenter })))
-const Vulnerabilities = lazy(() => import('./pages/vulnerabilities/Vulnerabilities').then(m => ({ default: m.Vulnerabilities })))
-const VulnerabilityDetail = lazy(() => import('./pages/vulnerabilities/VulnerabilityDetail').then(m => ({ default: m.VulnerabilityDetail })))
-const Reports = lazy(() => import('./pages/reports/Reports').then(m => ({ default: m.Reports })))
-const ReportDetail = lazy(() => import('./pages/reports/ReportDetail').then(m => ({ default: m.ReportDetail })))
-const Compliance = lazy(() => import('./pages/compliance/Compliance').then(m => ({ default: m.Compliance })))
-const ComplianceIntelligence = lazy(() => import('./pages/compliance/ComplianceIntelligencePage').then(m => ({ default: m.ComplianceIntelligencePage })))
-const SecurityAssurance = lazy(() => import('./pages/compliance/SecurityAssuranceCommandCenterPage').then(m => ({ default: m.SecurityAssuranceCommandCenterPage })))
-const ContinuousAssurance = lazy(() => import('./pages/assurance/ContinuousAssurancePage').then(m => ({ default: m.ContinuousAssurancePage })))
-const CorrelationConflict = lazy(() => import('./pages/compliance/CorrelationConflictPage').then(m => ({ default: m.CorrelationConflictPage })))
-const CorrelatedEvidenceGraph = lazy(() => import('./pages/compliance/CorrelatedEvidenceGraphPage').then(m => ({ default: m.CorrelatedEvidenceGraphPage })))
-const AssuranceGraphPage = lazy(() => import('./pages/assurance/AssuranceGraphPage').then(m => ({ default: m.AssuranceGraphPage })))
-const AutonomousTriagePage = lazy(() => import('./pages/assurance/AutonomousTriagePage').then(m => ({ default: m.AutonomousTriagePage })))
-const SecurityDecisionPage = lazy(() => import('./pages/assurance/SecurityDecisionPage').then(m => ({ default: m.SecurityDecisionPage })))
-const DecisionActionPage = lazy(() => import('./pages/assurance/DecisionActionPage').then(m => ({ default: m.DecisionActionPage })))
-const DecisionActionDetailPage = lazy(() => import('./pages/assurance/DecisionActionDetailPage').then(m => ({ default: m.DecisionActionDetailPage })))
-const WorkflowControlTowerPage = lazy(() => import('./pages/assurance/WorkflowControlTowerPage').then(m => ({ default: m.WorkflowControlTowerPage })))
-const GovernancePage = lazy(() => import('./pages/assurance/GovernancePage').then(m => ({ default: m.GovernancePage })))
-const PolicyStudioPage = lazy(() => import('./pages/assurance/PolicyStudioPage').then(m => ({ default: m.PolicyStudioPage })))
-const PolicySimulationPage = lazy(() => import('./pages/assurance/PolicySimulationPage').then(m => ({ default: m.PolicySimulationPage })))
-const KnowledgeBase = lazy(() => import('./pages/knowledge/KnowledgeBase').then(m => ({ default: m.KnowledgeBase })))
-const DigitalTwin = lazy(() => import('./pages/digital-twin/DigitalTwin').then(m => ({ default: m.DigitalTwin })))
-const SecurityPosture = lazy(() => import('./pages/posture/SecurityPosture').then(m => ({ default: m.SecurityPosture })))
-const CISOExecutivePage = lazy(() => import('./pages/executive/CISOExecutivePage').then(m => ({ default: m.CISOExecutivePage })))
-const Users = lazy(() => import('./pages/users/Users').then(m => ({ default: m.Users })))
-const Settings = lazy(() => import('./pages/settings/Settings').then(m => ({ default: m.Settings })))
-const SystemMonitor = lazy(() => import('./pages/system/SystemMonitor').then(m => ({ default: m.SystemMonitor })))
-const AuditLogs = lazy(() => import('./pages/audit/AuditLogs').then(m => ({ default: m.AuditLogs })))
-const Notifications = lazy(() => import('./pages/notifications/Notifications').then(m => ({ default: m.Notifications })))
-const NewValidation = lazy(() => import('./pages/validations/ValidationWizard').then(m => ({ default: m.ValidationWizard })))
+const Login = lazyWithRetry(() => import('./pages/auth/Login').then(m => ({ default: m.Login })))
+const Register = lazyWithRetry(() => import('./pages/auth/Register').then(m => ({ default: m.Register })))
+const ForgotPassword = lazyWithRetry(() => import('./pages/auth/ForgotPassword').then(m => ({ default: m.ForgotPassword })))
+const Dashboard = lazyWithRetry(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
+const Projects = lazyWithRetry(() => import('./pages/projects/Projects').then(m => ({ default: m.Projects })))
+const ProjectDetail = lazyWithRetry(() => import('./pages/projects/ProjectDetail').then(m => ({ default: m.ProjectDetail })))
+const Assets = lazyWithRetry(() => import('./pages/assets/Assets').then(m => ({ default: m.Assets })))
+const ScanPage = lazyWithRetry(() => import('./pages/scans/ScanPage').then(m => ({ default: m.ScanPage })))
+const ScanProgress = lazyWithRetry(() => import('./pages/scans/ScanProgress').then(m => ({ default: m.ScanProgress })))
+const ScanResults = lazyWithRetry(() => import('./pages/validations/ValidationCommandCenter').then(m => ({ default: m.ValidationCommandCenter })))
+const Vulnerabilities = lazyWithRetry(() => import('./pages/vulnerabilities/Vulnerabilities').then(m => ({ default: m.Vulnerabilities })))
+const VulnerabilityDetail = lazyWithRetry(() => import('./pages/vulnerabilities/VulnerabilityDetail').then(m => ({ default: m.VulnerabilityDetail })))
+const Reports = lazyWithRetry(() => import('./pages/reports/Reports').then(m => ({ default: m.Reports })))
+const ReportDetail = lazyWithRetry(() => import('./pages/reports/ReportDetail').then(m => ({ default: m.ReportDetail })))
+const Compliance = lazyWithRetry(() => import('./pages/compliance/Compliance').then(m => ({ default: m.Compliance })))
+const ComplianceIntelligence = lazyWithRetry(() => import('./pages/compliance/ComplianceIntelligencePage').then(m => ({ default: m.ComplianceIntelligencePage })))
+const SecurityAssurance = lazyWithRetry(() => import('./pages/compliance/SecurityAssuranceCommandCenterPage').then(m => ({ default: m.SecurityAssuranceCommandCenterPage })))
+const ContinuousAssurance = lazyWithRetry(() => import('./pages/assurance/ContinuousAssurancePage').then(m => ({ default: m.ContinuousAssurancePage })))
+const CorrelationConflict = lazyWithRetry(() => import('./pages/compliance/CorrelationConflictPage').then(m => ({ default: m.CorrelationConflictPage })))
+const CorrelatedEvidenceGraph = lazyWithRetry(() => import('./pages/compliance/CorrelatedEvidenceGraphPage').then(m => ({ default: m.CorrelatedEvidenceGraphPage })))
+const AssuranceGraphPage = lazyWithRetry(() => import('./pages/assurance/AssuranceGraphPage').then(m => ({ default: m.AssuranceGraphPage })))
+const AutonomousTriagePage = lazyWithRetry(() => import('./pages/assurance/AutonomousTriagePage').then(m => ({ default: m.AutonomousTriagePage })))
+const SecurityDecisionPage = lazyWithRetry(() => import('./pages/assurance/SecurityDecisionPage').then(m => ({ default: m.SecurityDecisionPage })))
+const DecisionActionPage = lazyWithRetry(() => import('./pages/assurance/DecisionActionPage').then(m => ({ default: m.DecisionActionPage })))
+const DecisionActionDetailPage = lazyWithRetry(() => import('./pages/assurance/DecisionActionDetailPage').then(m => ({ default: m.DecisionActionDetailPage })))
+const WorkflowControlTowerPage = lazyWithRetry(() => import('./pages/assurance/WorkflowControlTowerPage').then(m => ({ default: m.WorkflowControlTowerPage })))
+const GovernancePage = lazyWithRetry(() => import('./pages/assurance/GovernancePage').then(m => ({ default: m.GovernancePage })))
+const PolicyStudioPage = lazyWithRetry(() => import('./pages/assurance/PolicyStudioPage').then(m => ({ default: m.PolicyStudioPage })))
+const PolicySimulationPage = lazyWithRetry(() => import('./pages/assurance/PolicySimulationPage').then(m => ({ default: m.PolicySimulationPage })))
+const KnowledgeBase = lazyWithRetry(() => import('./pages/knowledge/KnowledgeBase').then(m => ({ default: m.KnowledgeBase })))
+const DigitalTwin = lazyWithRetry(() => import('./pages/digital-twin/DigitalTwin').then(m => ({ default: m.DigitalTwin })))
+const SecurityPosture = lazyWithRetry(() => import('./pages/posture/SecurityPosture').then(m => ({ default: m.SecurityPosture })))
+const CISOExecutivePage = lazyWithRetry(() => import('./pages/executive/CISOExecutivePage').then(m => ({ default: m.CISOExecutivePage })))
+const Users = lazyWithRetry(() => import('./pages/users/Users').then(m => ({ default: m.Users })))
+const Settings = lazyWithRetry(() => import('./pages/settings/Settings').then(m => ({ default: m.Settings })))
+const SystemMonitor = lazyWithRetry(() => import('./pages/system/SystemMonitor').then(m => ({ default: m.SystemMonitor })))
+const AuditLogs = lazyWithRetry(() => import('./pages/audit/AuditLogs').then(m => ({ default: m.AuditLogs })))
+const Notifications = lazyWithRetry(() => import('./pages/notifications/Notifications').then(m => ({ default: m.Notifications })))
+const NewValidation = lazyWithRetry(() => import('./pages/validations/ValidationWizard').then(m => ({ default: m.ValidationWizard })))
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, loading } = useAuth()
@@ -60,62 +61,68 @@ const PublicRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>
 }
 
-const page = (element: React.ReactNode) => <Suspense fallback={<LoadingScreen />}>{element}</Suspense>
+const page = (element: React.ReactNode, context: string) => (
+  <AppErrorBoundary context={context}>
+    <Suspense fallback={<LoadingScreen />}>{element}</Suspense>
+  </AppErrorBoundary>
+)
 
 const App = () => (
-  <AuthProvider>
-    <ThemeProvider>
-      <LanguageProvider>
-        <Routes>
-          <Route path="/login" element={<PublicRoute>{page(<Login />)}</PublicRoute>} />
-          <Route path="/register" element={<PublicRoute>{page(<Register />)}</PublicRoute>} />
-          <Route path="/forgot-password" element={<PublicRoute>{page(<ForgotPassword />)}</PublicRoute>} />
-          <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-            <Route path="/dashboard" element={page(<Dashboard />)} />
-            <Route path="/projects" element={page(<Projects />)} />
-            <Route path="/projects/:id" element={page(<ProjectDetail />)} />
-            <Route path="/assets" element={page(<Assets />)} />
-            <Route path="/validations/new" element={page(<NewValidation />)} />
-            <Route path="/validations/:id/progress" element={page(<ScanProgress />)} />
-            <Route path="/validations/:id/results" element={page(<ScanResults />)} />
-            <Route path="/scan" element={page(<ScanPage />)} />
-            <Route path="/scan/:id/progress" element={page(<ScanProgress />)} />
-            <Route path="/scan/:id/results" element={page(<ScanResults />)} />
-            <Route path="/vulnerabilities" element={page(<Vulnerabilities />)} />
-            <Route path="/vulnerabilities/:id" element={page(<VulnerabilityDetail />)} />
-            <Route path="/reports" element={page(<Reports />)} />
-            <Route path="/reports/:id" element={page(<ReportDetail />)} />
-            <Route path="/compliance" element={page(<Compliance />)} />
-            <Route path="/compliance/intelligence" element={page(<ComplianceIntelligence />)} />
-            <Route path="/assurance" element={page(<SecurityAssurance />)} />
-            <Route path="/assurance/continuous" element={page(<ContinuousAssurance />)} />
-            <Route path="/assurance/conflicts" element={page(<CorrelationConflict />)} />
-            <Route path="/assurance/evidence" element={page(<CorrelatedEvidenceGraph />)} />
-            <Route path="/assurance/graph" element={page(<AssuranceGraphPage />)} />
-            <Route path="/assurance/triage" element={page(<AutonomousTriagePage />)} />
-            <Route path="/assurance/decisions" element={page(<SecurityDecisionPage />)} />
-            <Route path="/assurance/actions" element={page(<DecisionActionPage />)} />
-            <Route path="/assurance/actions/:actionId" element={page(<DecisionActionDetailPage />)} />
-            <Route path="/assurance/workflow" element={page(<WorkflowControlTowerPage />)} />
-            <Route path="/assurance/governance" element={page(<GovernancePage />)} />
-            <Route path="/assurance/policies" element={page(<PolicyStudioPage />)} />
-            <Route path="/assurance/policies/simulate" element={page(<PolicySimulationPage />)} />
-            <Route path="/knowledge" element={page(<KnowledgeBase />)} />
-            <Route path="/digital-twin" element={page(<DigitalTwin />)} />
-            <Route path="/posture" element={page(<SecurityPosture />)} />
-            <Route path="/executive" element={page(<CISOExecutivePage />)} />
-            <Route path="/users" element={page(<Users />)} />
-            <Route path="/settings" element={page(<Settings />)} />
-            <Route path="/system" element={page(<SystemMonitor />)} />
-            <Route path="/audit" element={page(<AuditLogs />)} />
-            <Route path="/notifications" element={page(<Notifications />)} />
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
-      </LanguageProvider>
-    </ThemeProvider>
-  </AuthProvider>
+  <AppErrorBoundary context="Application shell">
+    <AuthProvider>
+      <ThemeProvider>
+        <LanguageProvider>
+          <Routes>
+            <Route path="/login" element={<PublicRoute>{page(<Login />, 'Login')}</PublicRoute>} />
+            <Route path="/register" element={<PublicRoute>{page(<Register />, 'Registration')}</PublicRoute>} />
+            <Route path="/forgot-password" element={<PublicRoute>{page(<ForgotPassword />, 'Password recovery')}</PublicRoute>} />
+            <Route element={<ProtectedRoute><AppErrorBoundary context="Workspace shell"><Layout /></AppErrorBoundary></ProtectedRoute>}>
+              <Route path="/dashboard" element={page(<Dashboard />, 'Dashboard')} />
+              <Route path="/projects" element={page(<Projects />, 'Projects')} />
+              <Route path="/projects/:id" element={page(<ProjectDetail />, 'Project detail')} />
+              <Route path="/assets" element={page(<Assets />, 'Assets')} />
+              <Route path="/validations/new" element={page(<NewValidation />, 'New validation')} />
+              <Route path="/validations/:id/progress" element={page(<ScanProgress />, 'Validation progress')} />
+              <Route path="/validations/:id/results" element={page(<ScanResults />, 'Validation results')} />
+              <Route path="/scan" element={page(<ScanPage />, 'Scans')} />
+              <Route path="/scan/:id/progress" element={page(<ScanProgress />, 'Scan progress')} />
+              <Route path="/scan/:id/results" element={page(<ScanResults />, 'Scan results')} />
+              <Route path="/vulnerabilities" element={page(<Vulnerabilities />, 'Vulnerabilities')} />
+              <Route path="/vulnerabilities/:id" element={page(<VulnerabilityDetail />, 'Vulnerability detail')} />
+              <Route path="/reports" element={page(<Reports />, 'Reports')} />
+              <Route path="/reports/:id" element={page(<ReportDetail />, 'Report detail')} />
+              <Route path="/compliance" element={page(<Compliance />, 'Compliance')} />
+              <Route path="/compliance/intelligence" element={page(<ComplianceIntelligence />, 'Compliance intelligence')} />
+              <Route path="/assurance" element={page(<SecurityAssurance />, 'Security assurance')} />
+              <Route path="/assurance/continuous" element={page(<ContinuousAssurance />, 'Continuous assurance')} />
+              <Route path="/assurance/conflicts" element={page(<CorrelationConflict />, 'Correlation conflicts')} />
+              <Route path="/assurance/evidence" element={page(<CorrelatedEvidenceGraph />, 'Correlated evidence')} />
+              <Route path="/assurance/graph" element={page(<AssuranceGraphPage />, 'Assurance graph')} />
+              <Route path="/assurance/triage" element={page(<AutonomousTriagePage />, 'Autonomous triage')} />
+              <Route path="/assurance/decisions" element={page(<SecurityDecisionPage />, 'Security decisions')} />
+              <Route path="/assurance/actions" element={page(<DecisionActionPage />, 'Decision actions')} />
+              <Route path="/assurance/actions/:actionId" element={page(<DecisionActionDetailPage />, 'Decision action detail')} />
+              <Route path="/assurance/workflow" element={page(<WorkflowControlTowerPage />, 'Workflow control tower')} />
+              <Route path="/assurance/governance" element={page(<GovernancePage />, 'Governance')} />
+              <Route path="/assurance/policies" element={page(<PolicyStudioPage />, 'Policy studio')} />
+              <Route path="/assurance/policies/simulate" element={page(<PolicySimulationPage />, 'Policy simulation')} />
+              <Route path="/knowledge" element={page(<KnowledgeBase />, 'Knowledge base')} />
+              <Route path="/digital-twin" element={page(<DigitalTwin />, 'Digital twin')} />
+              <Route path="/posture" element={page(<SecurityPosture />, 'Security posture')} />
+              <Route path="/executive" element={page(<CISOExecutivePage />, 'CISO executive')} />
+              <Route path="/users" element={page(<Users />, 'Users and RBAC')} />
+              <Route path="/settings" element={page(<Settings />, 'Settings')} />
+              <Route path="/system" element={page(<SystemMonitor />, 'System monitor')} />
+              <Route path="/audit" element={page(<AuditLogs />, 'Audit trail')} />
+              <Route path="/notifications" element={page(<Notifications />, 'Notifications')} />
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            </Route>
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </LanguageProvider>
+      </ThemeProvider>
+    </AuthProvider>
+  </AppErrorBoundary>
 )
 
 export default App
