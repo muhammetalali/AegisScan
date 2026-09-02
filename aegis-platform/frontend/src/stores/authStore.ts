@@ -2,6 +2,14 @@ import { create } from 'zustand'
 import { api } from '@/services/api'
 import type { User } from '@/types'
 
+const SESSION_HINT_KEY = 'aegis-session-active'
+const hasSessionHint = () => typeof window !== 'undefined' && window.localStorage.getItem(SESSION_HINT_KEY) === '1'
+const setSessionHint = (active: boolean) => {
+  if (typeof window === 'undefined') return
+  if (active) window.localStorage.setItem(SESSION_HINT_KEY, '1')
+  else window.localStorage.removeItem(SESSION_HINT_KEY)
+}
+
 interface AuthState {
   user: User | null
   accessToken: null
@@ -54,7 +62,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   accessToken: null,
   refreshToken: null,
-  isAuthenticated: false,
+  isAuthenticated: hasSessionHint(),
   loading: true,
   initialized: false,
   error: null,
@@ -67,6 +75,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await api.get('/auth/csrf/')
       const response = await api.post('/auth/login/', { email, password })
+      setSessionHint(true)
       set({ user: response.data.user, isAuthenticated: true, loading: false, initialized: true, error: null })
     } catch (error: any) {
       const message = readError(error, 'تعذر تسجيل الدخول')
@@ -92,12 +101,14 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await api.post('/auth/logout/')
     } finally {
+      setSessionHint(false)
       set({ user: null, isAuthenticated: false, loading: false, initialized: true, error: null })
     }
   },
 
   refreshAccessToken: async () => {
     await api.post('/auth/refresh/')
+    setSessionHint(true)
   },
 
   forgotPassword: async (email) => {
@@ -161,6 +172,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
 
   fetchUser: async () => {
     const response = await api.get(ME_ENDPOINT)
+    setSessionHint(true)
     set({ user: response.data, isAuthenticated: true, error: null })
   },
 }))
@@ -182,11 +194,20 @@ export const initAuth = async () => {
       await api.get('/auth/csrf/')
       await store.fetchUser()
     } catch (firstError: any) {
-      try {
-        await store.refreshAccessToken()
-        await store.fetchUser()
-      } catch {
-        useAuthStore.setState({ user: null, isAuthenticated: false, error: null })
+      if (firstError?.response?.status === 401) {
+        try {
+          await store.refreshAccessToken()
+          await store.fetchUser()
+        } catch (refreshError: any) {
+          if (refreshError?.response?.status === 401) {
+            setSessionHint(false)
+            useAuthStore.setState({ user: null, isAuthenticated: false, error: null })
+          }
+        }
+      } else if (hasSessionHint()) {
+        // Preserve the session across a transient network/reverse-proxy failure.
+        // The next authenticated API request remains authoritative and can clear the hint on a real 401.
+        useAuthStore.setState({ isAuthenticated: true })
       }
     } finally {
       useAuthStore.setState({ loading: false, initialized: true })
