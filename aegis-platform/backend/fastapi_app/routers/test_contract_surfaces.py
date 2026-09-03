@@ -23,7 +23,7 @@ EXPECTED_ROUTES = {
 
 
 def test_domain_contract_routes_are_registered():
-    registered = {route.path for route in app.routes if getattr(route, 'path', None)}
+    registered = set(app.openapi().get('paths', {}))
     missing = sorted(EXPECTED_ROUTES - registered)
     assert not missing, f'Missing API contract routes: {missing}'
 
