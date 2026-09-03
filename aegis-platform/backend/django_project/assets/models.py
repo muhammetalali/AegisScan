@@ -117,8 +117,8 @@ class TechnologyFingerprint(models.Model):
     name = models.CharField(_('name'), max_length=100)
     version = models.CharField(_('version'), max_length=50, blank=True)
     category = models.CharField(_('category'), max_length=50)
-    confidence = models.FloatField(default=0.0)
-    source = models.CharField(max_length=50)
+    confidence = models.FloatField(_('confidence'), default=0.0)
+    source = models.CharField(_('source'), max_length=50)
     evidence = models.TextField(blank=True)
     detected_at = models.DateTimeField(auto_now_add=True)
 
