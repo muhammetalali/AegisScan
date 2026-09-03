@@ -20,6 +20,10 @@ from fastapi_app.services.nmap_parser import parse_nmap_xml
 from fastapi_app.services.scope_authorization import is_target_authorized
 
 
+class ValidationBlockedError(RuntimeError):
+    """Expected security/policy denial; persisted and returned without execution."""
+
+
 def _string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ''
 
@@ -111,38 +115,38 @@ def _load_bound_context(validation_id: str) -> tuple[ValidationRun, Vulnerabilit
         )
         finding = validation.finding
         if not finding:
-            raise ValueError('Validation must be bound to a persisted finding')
+            raise ValidationBlockedError('Validation must be bound to a persisted finding')
         if validation.finding_identity_snapshot != finding.id:
-            raise ValueError('Validation finding identity does not match the persisted finding')
+            raise ValidationBlockedError('Validation finding identity does not match the persisted finding')
         if not finding.asset_id:
-            raise ValueError('Finding no longer retains its originating asset')
+            raise ValidationBlockedError('Finding no longer retains its originating asset')
         finding = Vulnerability.objects.select_for_update(of=('self',)).get(pk=finding.id)
         asset = Asset.objects.select_for_update().get(pk=finding.asset_id)
         if not validation.authorization_decision_id:
-            raise ValueError('Validation has no bound authorization decision')
+            raise ValidationBlockedError('Validation has no bound authorization decision')
         decision = AssetAuthorization.objects.select_for_update().get(pk=validation.authorization_decision_id)
         if finding.scan.authorization_decision_id != decision.id:
-            raise ValueError('Validation authorization does not match the originating scan authorization decision')
+            raise ValidationBlockedError('Validation authorization does not match the originating scan authorization decision')
         latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
         if latest is None or latest.id != decision.id:
-            raise ValueError('Validation authorization is no longer the latest asset decision')
+            raise ValidationBlockedError('Validation authorization is no longer the latest asset decision')
         if decision.authorized is not True or not decision.is_currently_valid:
-            raise ValueError('Validation authorization is no longer currently valid')
+            raise ValidationBlockedError('Validation authorization is no longer currently valid')
         if decision.asset_identity_snapshot != asset.id:
-            raise ValueError('Validation authorization asset identity mismatch')
+            raise ValidationBlockedError('Validation authorization asset identity mismatch')
         target = _string(decision.target_snapshot)
         asset_config = asset.configuration or {}
         asset_target = _string(asset_config.get('host') or asset_config.get('ip') or asset_config.get('domain'))
         if not target or target != asset_target:
-            raise ValueError('Validation target no longer matches immutable authorization target')
+            raise ValidationBlockedError('Validation target no longer matches immutable authorization target')
         if not is_target_authorized(target):
-            raise ValueError('Validation target is outside the server-side authorized scan scope')
+            raise ValidationBlockedError('Validation target is outside the server-side authorized scan scope')
         if validation.target_value != target or validation.scope != target:
-            raise ValueError('Validation target/scope does not exactly match the authorized target')
+            raise ValidationBlockedError('Validation target/scope does not exactly match the authorized target')
         if (finding.source_engine or '').strip().lower() != 'nmap':
-            raise ValueError('Only Nmap findings can use the real Nmap validation worker')
+            raise ValidationBlockedError('Only Nmap findings can use the real Nmap validation worker')
         if not validation.engines or [str(v).lower() for v in validation.engines] != ['nmap']:
-            raise ValueError('Validation engine binding must be exactly nmap')
+            raise ValidationBlockedError('Validation engine binding must be exactly nmap')
         return validation, finding, asset, decision
 
 
@@ -150,10 +154,13 @@ def _load_bound_context(validation_id: str) -> tuple[ValidationRun, Vulnerabilit
 def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
     try:
         validation, finding, asset, decision = _load_bound_context(validation_id)
+    except ValidationBlockedError as exc:
+        validation = ValidationRun.objects.get(pk=validation_id)
+        return _fail(validation, str(exc), 'blocked')
     except Exception as exc:
         try:
             validation = ValidationRun.objects.get(pk=validation_id)
-            _fail(validation, str(exc), 'blocked')
+            _fail(validation, str(exc), 'failed')
         except ValidationRun.DoesNotExist:
             pass
         raise
@@ -183,7 +190,7 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             locked_decision = AssetAuthorization.objects.select_for_update().get(pk=decision.id)
             latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
             if latest is None or latest.id != decision.id or locked_decision.authorized is not True or not locked_decision.is_currently_valid:
-                raise ValueError('Validation authorization was revoked or superseded during execution')
+                raise ValidationBlockedError('Validation authorization was revoked or superseded during execution')
             evidence = Evidence.objects.create(
                 scan=finding.scan,
                 asset=asset,
@@ -228,6 +235,8 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             'evidence_id': str(evidence.id),
             'authorization_decision_id': str(decision.id),
         }
+    except ValidationBlockedError as exc:
+        return _fail(validation, str(exc), 'blocked')
     except Exception as exc:
         validation.status = ValidationRun.Status.FAILED
         validation.progress = 100
