@@ -47,6 +47,21 @@ def test_create_build_and_read_real_twin():
     assert fetched.json()['status'] == 'ready'
 
 
+def test_subset_twin_contains_only_selected_assets():
+    _user, project, asset_a, asset_b = _context()
+    client = TestClient(app)
+    twin = client.post(
+        f'/digital-twin/projects/{project.id}/twins',
+        params=[('name', 'subset-model'), ('assets', str(asset_b.id))],
+    )
+    assert twin.status_code == 200, twin.text
+    payload = twin.json()
+    assert [node['id'] for node in payload['environment']['nodes']] == [str(asset_b.id)]
+    assert payload['environment']['assets']['total'] == 1
+    assert payload['environment']['finding_count'] == 1
+    assert payload['environment']['edges'] == []
+
+
 def test_scenario_is_persisted_and_unknown_node_is_rejected():
     _user, project, _asset_a, asset_b = _context()
     client = TestClient(app)
@@ -75,7 +90,10 @@ def test_drift_check_detects_added_project_asset():
 
 
 def test_simulation_fails_closed_without_control_model():
-    app.dependency_overrides.clear()
-    client = TestClient(app)
-    response = client.post('/digital-twin/scenarios/00000000-0000-0000-0000-000000000000/simulate', json={'scenario_id': 'missing'})
+    app.dependency_overrides[get_current_user] = lambda: {'user_id': 'authenticated-test-user'}
+    try:
+        client = TestClient(app)
+        response = client.post('/digital-twin/scenarios/00000000-0000-0000-0000-000000000000/simulate', json={'scenario_id': 'missing'})
+    finally:
+        app.dependency_overrides.clear()
     assert response.status_code == 501
