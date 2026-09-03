@@ -36,7 +36,7 @@ class Scan(models.Model):
     name = models.CharField(_('name'), max_length=200)
     scan_type = models.CharField(_('scan type'), max_length=30, choices=Type.choices)
     status = models.CharField(_('status'), max_length=20, choices=Status.choices, default=Status.PENDING)
-    depth = models.CharField(_('depth'), max_length=20, choices=Depth.choices, default=Scan.Depth.STANDARD)
+    depth = models.CharField(_('depth'), max_length=20, choices=Depth.choices, default=Depth.STANDARD)
     asset = models.ForeignKey('assets.Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
     authorization_decision = models.ForeignKey(
         'assets.AssetAuthorization',
@@ -132,7 +132,7 @@ class ScanEngine(models.Model):
     config_schema = models.JSONField(_('config schema'), default=dict, blank=True)
     default_config = models.JSONField(_('default config'), default=dict, blank=True)
     dependencies = models.JSONField(_('dependencies'), default=list, blank=True)
-    order = models.PositiveIntegerField(_('order'), default=0)
+    order = models.PositiveIntegerField(_('execution order'), default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
