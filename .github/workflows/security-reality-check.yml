@@ -121,6 +121,13 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q django_project/users/test_auth_security.py
 
+      - name: Network scan authorization boundary tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_scans_security_boundary.py
+
       - name: Production Django checks
         working-directory: aegis-platform/backend
         env:
