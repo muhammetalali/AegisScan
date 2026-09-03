@@ -62,39 +62,12 @@ def _project_access(project_id: str, user_id: str) -> bool:
     return bool(project and (str(project.owner_id) == str(user_id) or project.members.filter(pk=user_id).exists()))
 
 
-@sync_to_async
-def _build_environment(project_id: str) -> dict[str, Any]:
-    assets = list(Asset.objects.filter(project_id=project_id, is_active=True).order_by('id'))
-    relationships = list(AssetRelationship.objects.filter(project_id=project_id).select_related('source', 'target').order_by('id'))
-    findings = list(Vulnerability.objects.filter(project_id=project_id).order_by('id'))
-    nodes = [{'id': str(asset.id), 'type': 'asset', 'name': asset.name, 'asset_type': asset.type, 'environment': asset.environment, 'criticality': asset.criticality, 'active': asset.is_active} for asset in assets]
-    edges = [{'source': str(rel.source_id), 'target': str(rel.target_id), 'relationship': rel.relationship_type, 'metadata': rel.metadata or {}} for rel in relationships]
-    closed = {'fixed', 'false_positive', 'accepted_risk', 'wont_fix', 'duplicate'}
-    return {'generated_at': datetime.now(timezone.utc).isoformat(), 'source': 'postgresql', 'nodes': nodes, 'edges': edges, 'finding_count': len(findings), 'open_finding_count': sum(1 for f in findings if str(f.status) not in closed), 'assets': {'total': len(assets)}}
-
-
-@sync_to_async
-def _list_twins(project_id: str) -> list[DigitalTwin]:
-    return list(DigitalTwin.objects.filter(project_id=project_id).order_by('-updated_at'))
-
-
-@sync_to_async
-def _create_twin(project_id: str, name: str, asset_ids: list[str], user_id: str) -> DigitalTwin:
-    twin = DigitalTwin.objects.create(project_id=project_id, name=name, created_by_id=user_id, status=DigitalTwin.Status.BUILDING)
-    available = Asset.objects.filter(project_id=project_id, is_active=True)
-    if asset_ids:
-        selected = {str(v) for v in available.filter(id__in=asset_ids).values_list('id', flat=True)}
-    else:
-        selected = {str(v) for v in available.values_list('id', flat=True)}
-    for asset in available.filter(id__in=selected):
-        DigitalTwinNode.objects.create(twin=twin, asset=asset, node_type='asset', snapshot={'name': asset.name, 'type': asset.type, 'environment': asset.environment, 'criticality': asset.criticality, 'configuration': asset.configuration or {}, 'tags': asset.tags or []})
-    return twin
-
-
-def _build_environment_sync(project_id: str) -> dict[str, Any]:
-    assets = list(Asset.objects.filter(project_id=project_id, is_active=True).order_by('id'))
-    relationships = list(AssetRelationship.objects.filter(project_id=project_id).select_related('source', 'target').order_by('id'))
-    findings = list(Vulnerability.objects.filter(project_id=project_id).order_by('id'))
+def _build_environment_sync(twin: DigitalTwin) -> dict[str, Any]:
+    node_asset_ids = list(twin.nodes.values_list('asset_id', flat=True))
+    assets = list(Asset.objects.filter(id__in=node_asset_ids, project_id=twin.project_id, is_active=True).order_by('id'))
+    asset_ids = {a.id for a in assets}
+    relationships = list(AssetRelationship.objects.filter(project_id=twin.project_id, source_id__in=asset_ids, target_id__in=asset_ids).select_related('source', 'target').order_by('id'))
+    findings = list(Vulnerability.objects.filter(project_id=twin.project_id, asset_id__in=asset_ids).order_by('id'))
     closed = {'fixed', 'false_positive', 'accepted_risk', 'wont_fix', 'duplicate'}
     return {
         'generated_at': datetime.now(timezone.utc).isoformat(),
@@ -108,9 +81,24 @@ def _build_environment_sync(project_id: str) -> dict[str, Any]:
 
 
 @sync_to_async
+def _list_twins(project_id: str) -> list[DigitalTwin]:
+    return list(DigitalTwin.objects.filter(project_id=project_id).order_by('-updated_at'))
+
+
+@sync_to_async
+def _create_twin(project_id: str, name: str, asset_ids: list[str], user_id: str) -> DigitalTwin:
+    twin = DigitalTwin.objects.create(project_id=project_id, name=name, created_by_id=user_id, status=DigitalTwin.Status.BUILDING)
+    available = Asset.objects.filter(project_id=project_id, is_active=True)
+    selected_ids = {str(v) for v in (available.filter(id__in=asset_ids).values_list('id', flat=True) if asset_ids else available.values_list('id', flat=True))}
+    for asset in available.filter(id__in=selected_ids):
+        DigitalTwinNode.objects.create(twin=twin, asset=asset, node_type='asset', snapshot={'name': asset.name, 'type': asset.type, 'environment': asset.environment, 'criticality': asset.criticality, 'configuration': asset.configuration or {}, 'tags': asset.tags or []})
+    return twin
+
+
+@sync_to_async
 def _build_twin(twin_id: str) -> DigitalTwin:
     twin = DigitalTwin.objects.get(pk=twin_id)
-    twin.environment = _build_environment_sync(str(twin.project_id))
+    twin.environment = _build_environment_sync(twin)
     twin.status = DigitalTwin.Status.READY
     twin.built_at = datetime.now(timezone.utc)
     twin.save(update_fields=['environment', 'status', 'built_at', 'updated_at'])
@@ -138,7 +126,7 @@ def _create_scenario(twin_id: str, body: ScenarioCreate, user_id: str) -> TwinSc
     findings = Vulnerability.objects.filter(asset_id__in=[nodes[v].asset_id for v in selected])
     weights = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1, 'info': 0}
     risk = sum(weights.get(str(f.severity).lower(), 0) for f in findings)
-    return TwinScenario.objects.create(twin=twin, name=body.name, change_type=body.change_type, description=body.description, parameters=body.parameters, affected_nodes=selected, security_impact=float(risk), performance_impact=None, risk_reduction=None, recommendation='Scenario is persisted against real twin nodes. Simulation requires a supported deterministic control model.', status=TwinScenario.Status.PENDING, created_by_id=user_id)
+    return TwinScenario.objects.create(twin=twin, name=body.name, change_type=body.change_type, description=body.description, parameters=body.parameters, affected_nodes=selected, security_impact=float(risk), recommendation='Scenario is persisted against real twin nodes. Simulation requires a supported deterministic control model.', status=TwinScenario.Status.PENDING, created_by_id=user_id)
 
 
 @sync_to_async
@@ -177,7 +165,8 @@ async def create_twin(project_id: str, name: str, assets: List[str] = Query(defa
     if not await _project_access(project_id, _user_id(current_user)):
         raise HTTPException(status_code=403, detail='Project access denied')
     try:
-        return _serialize_twin(await _build_twin(str((await _create_twin(project_id, name, assets, _user_id(current_user))).id)))
+        twin = await _create_twin(project_id, name, assets, _user_id(current_user))
+        return _serialize_twin(await _build_twin(str(twin.id)))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
