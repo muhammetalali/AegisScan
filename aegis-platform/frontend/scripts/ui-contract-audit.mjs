@@ -3,7 +3,9 @@ import path from 'node:path'
 
 const root = process.cwd()
 const appPath = path.join(root, 'src', 'App.tsx')
+const contractPath = path.join(root, 'src', 'contracts', 'api.ts')
 const source = fs.readFileSync(appPath, 'utf8')
+const contractSource = fs.readFileSync(contractPath, 'utf8')
 const failures = []
 const checkedImports = []
 
@@ -31,6 +33,10 @@ for (const required of ['/dashboard', '/scan', '/validations/new', '/vulnerabili
   if (!routePaths.includes(required)) failures.push(`Required UI route missing: ${required}`)
 }
 if (!routePaths.includes('/')) failures.push('Protected workspace has no canonical root redirect')
+
+if (/`\/api\/v1\//.test(contractSource) || /'\/api\/v1\//.test(contractSource)) {
+  failures.push('Frontend API contracts must be relative to the centralized /api/v1 baseURL')
+}
 
 const sourceFiles = []
 function walk(dir) {
