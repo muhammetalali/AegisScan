@@ -61,5 +61,5 @@ class ValidationRun(models.Model):
             models.Index(fields=['user', 'status']),
             models.Index(fields=['target_value']),
             models.Index(fields=['finding', 'created_at'], name='evidence_va_finding_8f0f45_idx'),
-            models.Index(fields=['authorization_decision'], name='evidence_va_auth_dec_0a6a5a_idx'),
+            models.Index(fields=['authorization_decision'], name='evidence_va_auth_dec_idx'),
         ]
