@@ -4,6 +4,13 @@ from django.utils.translation import gettext_lazy as _
 import uuid
 
 
+class ScanQuerySet(models.QuerySet):
+    def select_for_update(self, **kwargs):
+        """Lock Scan rows only; related rows are locked explicitly by execution code."""
+        kwargs.setdefault('of', ('self',))
+        return super().select_for_update(**kwargs)
+
+
 class Scan(models.Model):
     class Type(models.TextChoices):
         CODE = 'code', _('Code Scan')
@@ -58,11 +65,11 @@ class Scan(models.Model):
     security_score = models.FloatField(_('security score'), default=0)
     risk_level = models.CharField(_('risk level'), max_length=20, blank=True)
     findings_count = models.PositiveIntegerField(_('findings count'), default=0)
-    critical_count = models.PositiveIntegerField(_('critical count'), default=0)
-    high_count = models.PositiveIntegerField(_('high count'), default=0)
-    medium_count = models.PositiveIntegerField(_('medium count'), default=0)
-    low_count = models.PositiveIntegerField(_('low count'), default=0)
-    info_count = models.PositiveIntegerField(_('info count'), default=0)
+    critical_count = models.PositiveIntegerField(_('critical findings count'), default=0)
+    high_count = models.PositiveIntegerField(_('high findings count'), default=0)
+    medium_count = models.PositiveIntegerField(_('medium findings count'), default=0)
+    low_count = models.PositiveIntegerField(_('low findings count'), default=0)
+    info_count = models.PositiveIntegerField(_('info findings count'), default=0)
     false_positive_count = models.PositiveIntegerField(_('false positive count'), default=0)
     engine_results = models.JSONField(_('engine results'), default=dict, blank=True)
     error_message = models.TextField(_('error message'), blank=True)
@@ -71,6 +78,8 @@ class Scan(models.Model):
     scheduled_scan = models.ForeignKey('projects.ScheduledScan', on_delete=models.SET_NULL, null=True, blank=True, related_name='scan_runs')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = ScanQuerySet.as_manager()
 
     class Meta:
         verbose_name = _('Scan')
@@ -218,4 +227,3 @@ class ScanComparison(models.Model):
         verbose_name = _('Scan Comparison')
         verbose_name_plural = _('Scan Comparisons')
         unique_together = ['scan_a', 'scan_b']
-        ordering = ['-created_at']
