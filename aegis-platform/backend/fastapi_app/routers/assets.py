@@ -113,13 +113,6 @@ def _get_asset(asset_id: str, user_id: str):
     return Asset.objects.select_related("project", "owner").filter(pk=asset_id, project__members__id=user_id).first()
 
 
-@sync_to_async
-def _get_authorizable_asset(asset_id: str, user_id: str):
-    from django_project.assets.models import Asset
-
-    return Asset.objects.select_related("project", "owner").filter(pk=asset_id, project__owner_id=user_id).first()
-
-
 @router.get("/", response_model=List[AssetResponse])
 async def list_assets(
     project_id: Optional[str] = None,
@@ -200,6 +193,9 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
     data = update.model_dump(exclude_unset=True)
     if "configuration" in data and data["configuration"] is not None and "authorized" in data["configuration"]:
         raise HTTPException(status_code=403, detail="Asset authorization can only be changed through the authorization endpoint")
+    if "configuration" in data and data["configuration"] is not None and (asset.configuration or {}).get("authorized") is True:
+        data["configuration"] = dict(data["configuration"])
+        data["configuration"]["authorized"] = False
     if "name" in data:
         data["slug"] = slugify(data["name"]) or asset.slug
     for key, value in data.items():
