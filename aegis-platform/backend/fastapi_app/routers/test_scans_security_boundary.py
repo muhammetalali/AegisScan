@@ -140,12 +140,19 @@ def test_requested_target_must_match_authorization_snapshot(api_fixture):
 
 
 def test_legacy_authorization_flag_alone_is_not_a_current_authorization_decision(api_fixture):
-    client, _, project, asset = api_fixture
-    AssetAuthorization.objects.all().delete()
-    asset.configuration = {"host": "aegis-scan-target", "authorized": True}
-    asset.save(update_fields=["configuration"])
+    client, user, project, _ = api_fixture
+    legacy_only_asset = Asset.objects.create(
+        project=project,
+        name="legacy-only-target",
+        slug="legacy-only-target",
+        type=Asset.Type.IP_ADDRESS,
+        configuration={"host": "legacy-only-target", "authorized": True},
+        owner=user,
+    )
 
-    response = client.post("/scans/", json=_body(project.id, str(asset.id)))
+    body = _body(project.id, str(legacy_only_asset.id))
+    body["config"]["target"] = "legacy-only-target"
+    response = client.post("/scans/", json=body)
 
     assert response.status_code == 403
     assert not Scan.objects.filter(project=project).exists()

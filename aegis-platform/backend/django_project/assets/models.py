@@ -39,7 +39,6 @@ class Asset(models.Model):
     description = models.TextField(_('description'), blank=True)
     environment = models.CharField(_('environment'), max_length=20, choices=Environment.choices, default=Environment.DEVELOPMENT)
     criticality = models.CharField(_('criticality'), max_length=20, choices=Criticality.choices, default=Criticality.MEDIUM)
-
     configuration = models.JSONField(_('configuration'), default=dict, blank=True)
     tags = models.JSONField(_('tags'), default=list, blank=True)
     metadata = models.JSONField(_('metadata'), default=dict, blank=True)
@@ -131,6 +130,23 @@ class TechnologyFingerprint(models.Model):
         ]
 
 
+class AssetAuthorizationQuerySet(models.QuerySet):
+    """Prevent bulk ORM operations from bypassing authorization immutability."""
+
+    def update(self, **kwargs):
+        raise ValidationError('Asset authorization decisions are immutable; bulk updates are forbidden')
+
+    def delete(self):
+        raise ValidationError('Asset authorization decisions are immutable; bulk deletes are forbidden')
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValidationError('Asset authorization decisions are immutable; bulk updates are forbidden')
+
+
+class AssetAuthorizationManager(models.Manager.from_queryset(AssetAuthorizationQuerySet)):
+    pass
+
+
 class AssetAuthorization(models.Model):
     """Immutable authorization decision used as the security source of truth for network execution."""
 
@@ -141,6 +157,7 @@ class AssetAuthorization(models.Model):
     target_snapshot = models.CharField(max_length=500, blank=True)
     reason = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    objects = AssetAuthorizationManager()
 
     class Meta:
         ordering = ['-created_at']

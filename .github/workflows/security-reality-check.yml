@@ -142,6 +142,13 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_asset_authorization_immutability.py
 
+      - name: Asset authorization tamper resistance tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_asset_authorization_tamper_resistance.py
+
       - name: Production Django checks
         working-directory: aegis-platform/backend
         env:
