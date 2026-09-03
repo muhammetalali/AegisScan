@@ -81,7 +81,7 @@ class Scan(models.Model):
             models.Index(fields=['project', 'scan_type']),
             models.Index(fields=['initiated_by']),
             models.Index(fields=['celery_task_id']),
-            models.Index(fields=['authorization_decision']),
+            models.Index(fields=['authorization_decision'], name='scans_scan_authori_0bb523_idx'),
         ]
 
     def __str__(self):
@@ -207,10 +207,10 @@ class ScanComparison(models.Model):
     project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='scan_comparisons')
     scan_a = models.ForeignKey(Scan, on_delete=models.CASCADE, related_name='comparisons_as_a')
     scan_b = models.ForeignKey(Scan, on_delete=models.CASCADE, related_name='comparisons_as_b')
-    similarity_score = models.FloatField(_('similarity score'), default=0)
-    new_findings = models.JSONField(_('new findings'), default=list)
-    fixed_findings = models.JSONField(_('fixed findings'), default=list)
-    changed_findings = models.JSONField(_('changed findings'), default=list)
+    similarity_score = models.FloatField(default=0)
+    new_findings = models.JSONField(default=list)
+    fixed_findings = models.JSONField(default=list)
+    changed_findings = models.JSONField(default=list)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='created_comparisons')
     created_at = models.DateTimeField(auto_now_add=True)
 
