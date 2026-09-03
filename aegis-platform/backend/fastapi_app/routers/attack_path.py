@@ -36,6 +36,15 @@ class AttackPathAnalysisResponse(BaseModel):
     persisted_attack_path_ids: list[str] = Field(default_factory=list)
 
 
+_INACTIVE_STATUSES = {
+    Vulnerability.Status.FIXED,
+    Vulnerability.Status.FALSE_POSITIVE,
+    Vulnerability.Status.ACCEPTED_RISK,
+    Vulnerability.Status.WONT_FIX,
+    Vulnerability.Status.DUPLICATE,
+}
+
+
 def _project_access(project_id: str, user_id: str) -> bool:
     return Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).exists()
 
@@ -60,7 +69,7 @@ def _load_graph(project_id: str, user_id: str) -> AttackPathGraph:
     assets = list(Asset.objects.filter(project_id=project_id).order_by('id'))
     asset_ids = {str(asset.id) for asset in assets}
     finding_weight: dict[str, float] = {}
-    rows = Vulnerability.objects.filter(project_id=project_id).exclude(status=Vulnerability.Status.CLOSED).values('asset_id', 'risk_score', 'severity')
+    rows = Vulnerability.objects.filter(project_id=project_id).exclude(status__in=_INACTIVE_STATUSES).values('asset_id', 'risk_score', 'severity')
     for row in rows:
         asset_id = str(row['asset_id'])
         try:
