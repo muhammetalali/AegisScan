@@ -1,104 +1,220 @@
-from fastapi import APIRouter, Query
-from typing import List, Optional
-from datetime import datetime, timedelta
-import random
+from __future__ import annotations
+
+from typing import Optional
+from uuid import UUID, uuid4
+
+from asgiref.sync import sync_to_async
+from fastapi import APIRouter, Depends, Query
+
+from django_project.audit.models import AuditLog, SecurityEvent
+from django_project.users.models import APIKey, LoginAttempt, Team, User, UserRole
+
+from ..core.dependencies import get_current_user
 
 router = APIRouter()
 
-ROLES = [
-    {"id":"admin","name":"Admin","description":"Full platform access","permissions":["*"]},
-    {"id":"manager","name":"Manager","description":"Manage projects, scans, reports","permissions":["projects:*","scans:*","reports:*"]},
-    {"id":"analyst","name":"Analyst","description":"Analyze findings & evidence","permissions":["findings:read","evidence:read","graph:read"]},
-    {"id":"viewer","name":"Viewer","description":"Read-only dashboard","permissions":["dashboard:read"]},
-    {"id":"auditor","name":"Auditor","description":"Audit logs & compliance","permissions":["audit:read","compliance:read"]},
-    {"id":"engineer","name":"Engineer","description":"Manage engines & posture","permissions":["engines:*","posture:*","twin:*"]},
-    {"id":"guest","name":"Guest","description":"Limited demo access","permissions":["dashboard:read","validations:read"]},
-]
+ROLES = [{'id': role.value, 'name': role.label} for role in UserRole]
 
-USERS_MOCK = [
-    {"id":"u-001","email":"admin@aegisscan.local","name":"Admin User","role":"admin","team":"Platform","status":"active","last_login": (datetime.utcnow()-timedelta(hours=1)).isoformat()},
-    {"id":"u-002","email":"analyst@aegisscan.local","name":"Sara Analyst","role":"analyst","team":"Security","status":"active","last_login": (datetime.utcnow()-timedelta(days=1)).isoformat()},
-    {"id":"u-003","email":"viewer@aegisscan.local","name":"Guest Viewer","role":"viewer","team":"External","status":"active","last_login": (datetime.utcnow()-timedelta(days=3)).isoformat()},
-]
 
-# in-memory audit log, seeded
-_audit_log: List[dict] = []
-
-def _seed_audit():
-    if _audit_log:
-        return
-    actions = ["validation.create","validation.start","validation.completed","finding.reviewed","evidence.export","login.success","login.failed","report.export"]
-    for i in range(24):
-        _audit_log.append({
-            "id": f"audit-{i+1:04d}",
-            "user": random.choice(["admin@aegisscan.local","analyst@aegisscan.local","system"]),
-            "action": random.choice(actions),
-            "project": random.choice(["—","Website A","API B","Project C"]),
-            "target": random.choice(["example.local","api.example.local","192.168.1.10"]),
-            "timestamp": (datetime.utcnow()-timedelta(minutes=i*37)).isoformat(),
-            "result": random.choice(["success","success","success","failed"]),
-            "ip": f"10.0.{random.randint(1,5)}.{random.randint(2,254)}",
-            "request_id": f"req-{random.randint(100000,999999)}",
-        })
-
-_seed_audit()
-
-def add_audit_entry(user: str, action: str, target: str, project: str = "—", result: str = "success", ip: str = "127.0.0.1"):
-    _audit_log.insert(0, {
-        "id": f"audit-{len(_audit_log)+1:05d}",
-        "user": user,
-        "action": action,
-        "project": project,
-        "target": target,
-        "timestamp": datetime.utcnow().isoformat(),
-        "result": result,
-        "ip": ip,
-        "request_id": f"req-{random.randint(100000,999999)}",
-    })
-    if len(_audit_log) > 200:
-        _audit_log.pop()
-
-@router.get("/audit/logs")
-async def list_audit_logs(limit: int = Query(20, le=100), action: Optional[str] = None, user: Optional[str] = None):
-    items = _audit_log
+@sync_to_async
+def _audit_logs(limit: int, action: Optional[str], user: Optional[str]):
+    qs = AuditLog.objects.select_related('user').order_by('-created_at')
     if action:
-        items = [x for x in items if x["action"]==action]
+        qs = qs.filter(action=action)
     if user:
-        items = [x for x in items if x["user"]==user]
-    return {"items": items[:limit], "total": len(items)}
+        qs = qs.filter(user__email=user)
+    total = qs.count()
+    rows = list(qs[:limit])
+    return [
+        {
+            'id': str(row.id),
+            'user': row.user.email if row.user else 'system',
+            'action': row.action,
+            'project': row.metadata.get('project', row.resource_type) if isinstance(row.metadata, dict) else row.resource_type,
+            'target': row.resource_repr or row.resource_id,
+            'timestamp': row.created_at.isoformat(),
+            'result': row.result,
+            'ip': str(row.ip_address),
+            'request_id': str(row.request_id),
+        }
+        for row in rows
+    ], total
 
-@router.get("/audit/roles")
-async def list_roles():
-    return {"items": ROLES, "total": len(ROLES)}
 
-@router.get("/audit/users")
-async def list_users():
-    return {"items": USERS_MOCK, "total": len(USERS_MOCK)}
+@sync_to_async
+def _users():
+    return [
+        {
+            'id': str(user.id),
+            'email': user.email,
+            'name': user.get_full_name(),
+            'role': user.role,
+            'team_ids': [str(team.id) for team in user.teams.filter(is_active=True)],
+            'status': 'active' if user.is_active else 'inactive',
+            'last_login': user.last_login.isoformat() if user.last_login else None,
+            'last_activity': user.last_activity.isoformat() if user.last_activity else None,
+        }
+        for user in User.objects.all().order_by('email')
+    ]
 
-@router.get("/audit/teams")
-async def list_teams():
-    return {"items": [
-        {"id":"team-platform","name":"Platform","members":5},
-        {"id":"team-security","name":"Security","members":8},
-        {"id":"team-external","name":"External","members":3},
-    ]}
 
-@router.get("/audit/api-keys")
-async def list_api_keys():
-    return {"items": [
-        {"id":"key-001","name":"CI/CD Runner","prefix":"aegis_live_...4f2a","created_at": (datetime.utcnow()-timedelta(days=12)).isoformat(), "last_used": (datetime.utcnow()-timedelta(hours=2)).isoformat()},
-        {"id":"key-002","name":"External Integration","prefix":"aegis_live_...9c11","created_at": (datetime.utcnow()-timedelta(days=30)).isoformat(), "last_used": None},
-    ]}
+@sync_to_async
+def _teams():
+    return [
+        {
+            'id': str(team.id),
+            'name': team.name,
+            'description': team.description,
+            'owner_id': str(team.owner_id),
+            'members': team.members.count(),
+            'active': team.is_active,
+        }
+        for team in Team.objects.all().order_by('name')
+    ]
 
-@router.get("/audit/sessions")
-async def list_sessions():
-    return {"items": [
-        {"id":"sess-001","user":"admin@aegisscan.local","ip":"10.0.1.15","user_agent":"Mozilla/5.0","created_at": (datetime.utcnow()-timedelta(hours=1)).isoformat(), "expires_at": (datetime.utcnow()+timedelta(hours=23)).isoformat()},
-    ]}
 
-@router.get("/audit/login-attempts")
-async def list_login_attempts(limit: int = 20):
-    return {"items": [
-        {"id": f"attempt-{i}", "user": "analyst@aegisscan.local", "ip": f"10.0.1.{10+i}", "success": i%4!=0, "timestamp": (datetime.utcnow()-timedelta(minutes=i*15)).isoformat()}
-        for i in range(limit)
-    ]}
+@sync_to_async
+def _api_keys(user_id: str):
+    rows = APIKey.objects.filter(user_id=user_id).select_related('team').order_by('-created_at')
+    return [
+        {
+            'id': str(key.id),
+            'name': key.name,
+            'prefix': key.key_prefix,
+            'permissions': key.permissions or [],
+            'team_id': str(key.team_id) if key.team_id else None,
+            'created_at': key.created_at.isoformat(),
+            'last_used': key.last_used_at.isoformat() if key.last_used_at else None,
+            'expires_at': key.expires_at.isoformat() if key.expires_at else None,
+            'active': key.is_active,
+        }
+        for key in rows
+    ]
+
+
+@sync_to_async
+def _sessions(user_id: str):
+    return [
+        {
+            'id': str(session.id),
+            'user': session.user.email,
+            'ip': str(session.ip_address),
+            'user_agent': session.user_agent,
+            'location': session.location,
+            'current': session.is_current,
+            'created_at': session.created_at.isoformat(),
+            'last_activity': session.last_activity.isoformat(),
+            'expires_at': session.expires_at.isoformat(),
+        }
+        for session in User.objects.get(pk=user_id).sessions.all().order_by('-last_activity')
+    ]
+
+
+@sync_to_async
+def _login_attempts(limit: int):
+    return [
+        {
+            'id': str(row.id),
+            'user': row.email,
+            'ip': str(row.ip_address),
+            'success': row.success,
+            'failure_reason': row.failure_reason,
+            'timestamp': row.created_at.isoformat(),
+        }
+        for row in LoginAttempt.objects.all().order_by('-created_at')[:limit]
+    ]
+
+
+@sync_to_async
+def _security_events(limit: int):
+    return [
+        {
+            'id': str(row.id),
+            'event_type': row.event_type,
+            'severity': row.severity,
+            'status': row.status,
+            'title': row.title,
+            'description': row.description,
+            'source_ip': str(row.source_ip) if row.source_ip else None,
+            'target_user': row.target_user.email if row.target_user else None,
+            'target_resource_type': row.target_resource_type,
+            'target_resource_id': row.target_resource_id,
+            'created_at': row.created_at.isoformat(),
+        }
+        for row in SecurityEvent.objects.select_related('target_user').order_by('-created_at')[:limit]
+    ]
+
+
+def _actor_id(current_user: dict) -> str:
+    return str(current_user.get('user_id') or current_user.get('id'))
+
+
+def add_audit_entry(user: str, action: str, target: str, project: str = '—', result: str = 'success', ip: str = '127.0.0.1'):
+    actor = User.objects.filter(pk=user).first() or User.objects.filter(email=user).first()
+    if actor is None:
+        return None
+    try:
+        action_value = AuditLog.Action(action)
+    except ValueError:
+        return None
+    try:
+        result_value = AuditLog.Result(result)
+    except ValueError:
+        result_value = AuditLog.Result.SUCCESS
+    return AuditLog.objects.create(
+        user=actor,
+        action=action_value,
+        result=result_value,
+        resource_id=str(target)[:100],
+        resource_repr=str(target)[:200],
+        metadata={'project': project},
+        ip_address=ip,
+        request_id=uuid4(),
+    )
+
+
+@router.get('/audit/logs')
+async def list_audit_logs(limit: int = Query(20, ge=1, le=100), action: Optional[str] = None, user: Optional[str] = None, current_user=Depends(get_current_user)):
+    items, total = await _audit_logs(limit, action, user)
+    return {'items': items, 'total': total}
+
+
+@router.get('/audit/roles')
+async def list_roles(current_user=Depends(get_current_user)):
+    return {'items': ROLES, 'total': len(ROLES)}
+
+
+@router.get('/audit/users')
+async def list_users(current_user=Depends(get_current_user)):
+    items = await _users()
+    return {'items': items, 'total': len(items)}
+
+
+@router.get('/audit/teams')
+async def list_teams(current_user=Depends(get_current_user)):
+    items = await _teams()
+    return {'items': items, 'total': len(items)}
+
+
+@router.get('/audit/api-keys')
+async def list_api_keys(current_user=Depends(get_current_user)):
+    items = await _api_keys(_actor_id(current_user))
+    return {'items': items, 'total': len(items)}
+
+
+@router.get('/audit/sessions')
+async def list_sessions(current_user=Depends(get_current_user)):
+    items = await _sessions(_actor_id(current_user))
+    return {'items': items, 'total': len(items)}
+
+
+@router.get('/audit/login-attempts')
+async def list_login_attempts(limit: int = Query(20, ge=1, le=100), current_user=Depends(get_current_user)):
+    items = await _login_attempts(limit)
+    return {'items': items, 'total': len(items)}
+
+
+@router.get('/audit/security-events')
+async def list_security_events(limit: int = Query(20, ge=1, le=100), current_user=Depends(get_current_user)):
+    items = await _security_events(limit)
+    return {'items': items, 'total': len(items)}
