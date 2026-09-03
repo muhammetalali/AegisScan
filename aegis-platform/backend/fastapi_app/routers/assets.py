@@ -50,7 +50,21 @@ def _request_id_from_headers(request: Request) -> UUID:
 
 
 def _request_ip(request: Request) -> str:
-    return request.client.host if request.client and request.client.host else "0.0.0.0"
+    """Return a database-safe source address for audit logging.
+
+    ASGI test clients and some upstream adapters can expose a symbolic host
+    (for example, ``testclient``) instead of an actual IP. AuditLog stores this
+    field in PostgreSQL's ``inet`` type, so invalid values must never reach the
+    database. We fail closed to the unspecified IPv4 address when no valid
+    source IP is available.
+    """
+    import ipaddress
+
+    host = request.client.host if request.client and request.client.host else ""
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return "0.0.0.0"
 
 
 @sync_to_async
@@ -121,6 +135,8 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str, request_id: 
         if "configuration" in data and data["configuration"] is not None:
             latest = AssetAuthorization.objects.filter(asset=asset).order_by("-created_at", "-id").first()
             if latest and latest.authorized and latest.is_currently_valid:
+                request_bound = AssetAuthorization.objects.filter(request_id=request_id).first()
+                if request_bound: raise HTTPException(status_code=409, detail="Request ID is already bound to an authorization decision")
                 data["configuration"] = dict(data["configuration"]); data["configuration"]["authorized"] = False
                 decision = AssetAuthorization.objects.create(asset=asset, actor_id=user_id, authorized=False, target_snapshot=(latest.target_snapshot or _asset_target(asset))[:500], reason="Authorization revoked because asset configuration changed", correlation_id=uuid4(), request_id=request_id, supersedes=latest)
                 AuditLog.objects.create(
@@ -247,26 +263,4 @@ async def add_technology(asset_id: str, name: str, version: str = "", category: 
     from django_project.assets.models import TechnologyFingerprint
     asset = await _get_asset(asset_id, str(user.get("user_id")))
     if not asset: raise HTTPException(status_code=404, detail="Asset not found")
-    technology = await sync_to_async(TechnologyFingerprint.objects.create)(asset=asset, name=name, version=version, category=category, confidence=confidence, source="manual"); return {"id": str(technology.id), "created": True}
-
-
-@router.get("/{asset_id}/relationships")
-async def get_asset_relationships(asset_id: str, user=Depends(get_current_user)):
-    from django_project.assets.models import AssetRelationship
-    asset = await _get_asset(asset_id, str(user.get("user_id")))
-    if not asset: raise HTTPException(status_code=404, detail="Asset not found")
-    relationships = await sync_to_async(list)(AssetRelationship.objects.filter(source=asset).select_related("target")); return [{"id": str(r.id), "target_id": str(r.target_id), "relationship_type": r.relationship_type, "metadata": r.metadata, "created_at": r.created_at.isoformat()} for r in relationships]
-
-
-@router.post("/{asset_id}/relationships")
-async def add_relationship(asset_id: str, target_id: str, relationship_type: str, user=Depends(get_current_user)):
-    from django_project.assets.models import AssetRelationship
-    source = await _get_asset(asset_id, str(user.get("user_id"))); target = await _get_asset(target_id, str(user.get("user_id")))
-    if not source or not target or source.project_id != target.project_id: raise HTTPException(status_code=404, detail="Source or target asset not found")
-    relationship, created = await sync_to_async(AssetRelationship.objects.get_or_create)(project_id=source.project_id, source=source, target=target, relationship_type=relationship_type); return {"id": str(relationship.id), "created": created}
-
-
-@router.post("/bulk-import")
-async def bulk_import_assets(project_id: str, file: UploadFile = File(...), user=Depends(get_current_user)):
-    if not await _has_project_access(project_id, str(user.get("user_id"))): raise HTTPException(status_code=404, detail="Project not found or inaccessible")
-    raise HTTPException(status_code=501, detail="Bulk import is not implemented; no synthetic import result is returned here")
+    return {"id": str((await sync_to_async(TechnologyFingerprint.objects.create)(asset=asset, name=name, version=version, category=category, confidence=confidence)).id), "name": name, "version": version, "category": category, "confidence": confidence}
