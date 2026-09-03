@@ -1,37 +1,15 @@
 import { z } from 'zod'
-
-export const ApiErrorSchema = z.object({
-  code: z.string(),
-  message: z.string(),
-  details: z.record(z.unknown()).default({}),
-})
-
-export const AttackPathNodeSchema = z.object({ id: z.string(), name: z.string(), kind: z.string(), criticality: z.string(), open_finding_weight: z.number().nonnegative(), internet_exposed: z.boolean() })
-export const AttackPathGraphSchema = z.object({
-  contract_version: z.literal('1.0'), project_id: z.string(), source: z.literal('postgresql'), generated_at: z.string(),
-  nodes: z.array(AttackPathNodeSchema),
-  edges: z.array(z.object({ source: z.string(), target: z.string(), relationship: z.string(), metadata: z.record(z.unknown()).default({}) })),
-})
-export const AttackPathAnalysisSchema = z.object({
-  contract_version: z.literal('1.0'), project_id: z.string(), source: z.literal('postgresql'), generated_at: z.string(),
-  source_asset_id: z.string(), target_asset_id: z.string(),
-  paths: z.array(z.object({ nodes: z.array(z.string()), risk_score: z.number().min(0).max(100), hops: z.number().int().nonnegative() })),
-  persisted_attack_path_ids: z.array(z.string()).default([]),
-})
-export const ComplianceValidationItemSchema = z.object({ id: z.string(), framework: z.string(), control: z.string(), status: z.enum(['pass', 'fail', 'partial', 'not_assessed']), finding_count: z.number().int().nonnegative(), evidence_count: z.number().int().nonnegative() })
-export const ComplianceValidationListSchema = z.array(ComplianceValidationItemSchema)
-export const UnifiedValidationSchema = z.object({
-  contract_version: z.literal('1.0'), id: z.string(), finding_id: z.string().nullable().optional(), target_type: z.enum(['url', 'ip', 'api']), target_value: z.string(),
-  profile: z.enum(['quick', 'full', 'custom']), engines: z.array(z.string()), scope: z.string(), status: z.string(), progress: z.number().int().min(0).max(100),
-  current_phase: z.string(), created_at: z.string(), audit_note: z.string(),
-})
-export const TwinScenarioSimulationSchema = z.object({ contract_version: z.literal('1.0'), scenario_id: z.string(), status: z.string(), deterministic: z.boolean(), source: z.literal('postgresql'), pre_change_risk: z.number().nonnegative(), post_change_risk: z.number().nonnegative(), risk_reduction: z.number(), affected_nodes: z.array(z.string()), recommendation: z.string() })
-
-// api.ts already provides /api/v1 as its baseURL; contracts therefore use relative API paths.
-export const apiContractPaths = {
-  attackPathGraph: (projectId: string) => `/attack-path/projects/${projectId}`,
-  attackPathAnalyze: (projectId: string) => `/attack-path/projects/${projectId}/analyze`,
-  validationCompliance: (validationId: string) => `/validations/${validationId}/compliance`,
-  cveIntelligence: (cveId: string) => `/intelligence/cve/${encodeURIComponent(cveId)}`,
-  validationContract: '/validation-contract',
-} as const
+export const ApiErrorSchema=z.object({code:z.string(),message:z.string(),details:z.record(z.unknown()).default({})})
+export const AttackPathNodeSchema=z.object({id:z.string(),name:z.string(),kind:z.string(),criticality:z.string(),open_finding_weight:z.number().nonnegative(),internet_exposed:z.boolean()})
+export const AttackPathGraphSchema=z.object({contract_version:z.literal('1.0'),project_id:z.string(),source:z.literal('postgresql'),generated_at:z.string(),nodes:z.array(AttackPathNodeSchema),edges:z.array(z.object({source:z.string(),target:z.string(),relationship:z.string(),metadata:z.record(z.unknown()).default({})}))})
+export const AttackPathAnalysisSchema=z.object({contract_version:z.literal('1.0'),project_id:z.string(),source:z.literal('postgresql'),generated_at:z.string(),source_asset_id:z.string(),target_asset_id:z.string(),paths:z.array(z.object({nodes:z.array(z.string()),risk_score:z.number().min(0).max(100),hops:z.number().int().nonnegative()})),persisted_attack_path_ids:z.array(z.string()).default([])})
+export const ComplianceValidationItemSchema=z.object({id:z.string(),framework:z.string(),control:z.string(),status:z.enum(['pass','fail','partial','not_assessed']),finding_count:z.number().int().nonnegative(),evidence_count:z.number().int().nonnegative()})
+export const ComplianceValidationListSchema=z.array(ComplianceValidationItemSchema)
+export const UnifiedValidationSchema=z.object({contract_version:z.literal('1.0'),id:z.string(),finding_id:z.string().nullable().optional(),target_type:z.enum(['url','ip','api']),target_value:z.string(),profile:z.enum(['quick','full','custom']),engines:z.array(z.string()),scope:z.string(),status:z.string(),progress:z.number().int().min(0).max(100),current_phase:z.string(),created_at:z.string(),audit_note:z.string()})
+export const TwinScenarioSimulationSchema=z.object({contract_version:z.literal('1.0'),scenario_id:z.string(),status:z.string(),deterministic:z.boolean(),source:z.literal('postgresql'),pre_change_risk:z.number().nonnegative(),post_change_risk:z.number().nonnegative(),risk_reduction:z.number(),affected_nodes:z.array(z.string()),recommendation:z.string()})
+export const InvestigationFindingSchema=z.object({id:z.string(),title:z.string(),severity:z.string(),status:z.string(),risk_score:z.number(),asset_id:z.string().nullable().optional(),asset_name:z.string().nullable().optional(),source_engine:z.string()})
+export const InvestigationEvidenceSchema=z.object({id:z.string(),finding_id:z.string().nullable().optional(),scan_id:z.string().nullable().optional(),source:z.string(),evidence_type:z.string(),sha256:z.string().length(64),collected_at:z.string()})
+export const InvestigationAttackPathSchema=z.object({id:z.string(),source_node:z.record(z.unknown()),target_node:z.record(z.unknown()),steps:z.array(z.unknown()),risk_score:z.number(),status:z.string()})
+export const InvestigationIntelSchema=z.object({id:z.string(),cve_id:z.string(),confidence:z.number(),recommendation:z.string(),explanation:z.string(),snapshot_sha256:z.string().length(64),observed_at:z.string()})
+export const InvestigationWorkspaceSchema=z.object({contract_version:z.literal('1.0'),source:z.literal('postgresql'),project_id:z.string(),findings:z.array(InvestigationFindingSchema),evidence:z.array(InvestigationEvidenceSchema),attack_paths:z.array(InvestigationAttackPathSchema),intelligence:z.array(InvestigationIntelSchema),audit_events:z.number().int().nonnegative()})
+export const apiContractPaths={attackPathGraph:(projectId:string)=>`/api/v1/attack-path/projects/${projectId}`,attackPathAnalyze:(projectId:string)=>`/api/v1/attack-path/projects/${projectId}/analyze`,validationCompliance:(validationId:string)=>`/api/v1/validations/${validationId}/compliance`,cveIntelligence:(cveId:string)=>`/api/v1/intelligence/cve/${encodeURIComponent(cveId)}`,validationContract:'/api/v1/validation-contract',investigation:(projectId:string)=>`/api/v1/investigation/projects/${projectId}`} as const
