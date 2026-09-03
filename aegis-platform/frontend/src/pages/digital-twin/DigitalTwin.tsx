@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { GitBranch, Layers, Play, RefreshCw } from 'lucide-react'
 import { apiHelpers } from '@/services/api'
+import { TwinScenarioSimulationSchema } from '@/contracts/api'
 
 type Project = { id: string; name: string }
 type Twin = { id: string; project_id: string; name: string; status: string; environment: Record<string, unknown>; created_at: string; contract_version: '1.0'; source: 'postgresql' }
@@ -32,8 +33,8 @@ export const DigitalTwin = () => {
   const environment = selectedTwin?.environment ?? {}
 
   const createTwin = async () => { if (!projectId) return; setWorking(true); setError(null); try { const created = await apiHelpers.post<Twin>(`/digital-twin/projects/${projectId}/twins?name=${encodeURIComponent('Primary Digital Twin')}`); setTwinId(created.id); await queryClient.invalidateQueries({ queryKey: ['digital-twins', projectId] }) } catch (e: any) { setError(e?.response?.data?.detail ?? e?.message ?? 'Unable to create digital twin') } finally { setWorking(false) } }
-  const createScenario = async () => { if (!twinId || !scenarioName.trim()) return; setWorking(true); setError(null); try { await apiHelpers.post<Scenario>(`/digital-twin/twins/${twinId}/scenarios`, { name: scenarioName.trim(), change_type: changeType, description: description.trim(), affected_nodes: affectedNodes.split(',').map((v) => v.trim()).filter(Boolean), parameters: {}, performance_impact: Number(performanceImpact) || 0 }); setScenarioName(''); setDescription(''); setAffectedNodes(''); setPerformanceImpact('0'); await scenariosQuery.refetch() } catch (e: any) { setError(e?.response?.data?.detail ?? e?.message ?? 'Unable to create scenario') } finally { setWorking(false) } }
-  const simulate = async (scenarioId: string) => { setWorking(true); setError(null); try { await apiHelpers.post(`/digital-twin/scenarios/${scenarioId}/simulate`); await scenariosQuery.refetch() } catch (e: any) { setError(e?.response?.data?.detail ?? e?.message ?? 'Unable to queue scenario simulation') } finally { setWorking(false) } }
+  const createScenario = async () => { if (!twinId || !scenarioName.trim()) return; setWorking(true); setError(null); try { await apiHelpers.post<Scenario>(`/digital-twin/twins/${twinId}/scenarios`, { name: scenarioName.trim(), change_type: changeType, description: description.trim(), affected_nodes: affectedNodes.split(',').map((v) => v.trim()).filter(Boolean), parameters: { performance_impact: Number(performanceImpact) || 0 } }); setScenarioName(''); setDescription(''); setAffectedNodes(''); setPerformanceImpact('0'); await scenariosQuery.refetch() } catch (e: any) { setError(e?.response?.data?.detail ?? e?.message ?? 'Unable to create scenario') } finally { setWorking(false) } }
+  const simulate = async (scenarioId: string) => { setWorking(true); setError(null); try { const result = await apiHelpers.post<unknown>(`/digital-twin/scenarios/${scenarioId}/simulate`); const parsed = TwinScenarioSimulationSchema.safeParse({ ...result, deterministic: true, source: 'postgresql' }); if (!parsed.success) throw new Error('Simulation contract validation failed'); await scenariosQuery.refetch() } catch (e: any) { setError(e?.response?.data?.detail ?? e?.message ?? 'Unable to queue scenario simulation') } finally { setWorking(false) } }
 
   if (projectsQuery.isLoading) return <div className="grid min-h-[70vh] place-items-center text-sm text-muted-foreground">Loading projects…</div>
   if (projectsQuery.isError) return <div className="grid min-h-[70vh] place-items-center text-sm text-destructive">Projects could not be loaded.</div>
