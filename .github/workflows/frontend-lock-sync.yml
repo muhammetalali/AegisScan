@@ -1,0 +1,41 @@
+name: Frontend Lock Sync
+
+'on':
+  push:
+    branches: [codex/full-contract-ui-audit-2026-09-03]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aegis-platform/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+      - name: Regenerate lock file from manifest
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit lock reconciliation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ../..
+          if git diff --quiet -- aegis-platform/frontend/package-lock.json; then
+            echo 'Frontend lockfile already matches package.json.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add aegis-platform/frontend/package-lock.json
+          git commit -m 'chore(frontend): reconcile npm lockfile [skip ci]'
+          git push origin HEAD:codex/full-contract-ui-audit-2026-09-03
+      - name: Verify clean deterministic install
+        run: npm ci
