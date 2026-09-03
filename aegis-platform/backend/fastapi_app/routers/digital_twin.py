@@ -16,11 +16,11 @@ from enterprise.tasks import build_digital_twin_task, predict_digital_twin_scena
 router=APIRouter()
 
 class TwinResponse(BaseModel):
-    id:str; project_id:str; name:str; status:str; environment:dict; created_at:str; source:str='postgresql'
+    contract_version:str='1.0'; id:str; project_id:str; name:str; status:str; environment:dict; created_at:str; source:str='postgresql'
 class ScenarioCreate(BaseModel):
     name:str; change_type:str; description:str=''; affected_nodes:List[str]=Field(default_factory=list); parameters:dict=Field(default_factory=dict)
 class ScenarioResponse(BaseModel):
-    id:str; twin_id:str; name:str; change_type:str; description:str; affected_nodes:List[str]; security_impact:float; performance_impact:float; risk_reduction:float; recommendation:str; status:str; created_at:str; source:str='postgresql'
+    contract_version:str='1.0'; id:str; twin_id:str; name:str; change_type:str; description:str; affected_nodes:List[str]; security_impact:float; performance_impact:float; risk_reduction:float; recommendation:str; status:str; created_at:str; source:str='postgresql'
 
 @sync_to_async
 def _project(project_id:str,user_id:str):
@@ -51,7 +51,7 @@ async def get_twin(twin_id:UUID,user=Depends(get_current_user)):
 async def build_twin(twin_id:UUID,user=Depends(get_current_user)):
     twin=await sync_to_async(lambda:DigitalTwin.objects.filter(id=twin_id,project__owner_id=str(user.get('user_id'))).first() or DigitalTwin.objects.filter(id=twin_id,project__members__id=str(user.get('user_id'))).first())()
     if not twin: raise HTTPException(status_code=404,detail='Digital Twin not found')
-    task=build_digital_twin_task.delay(str(twin.id)); return {'twin_id':str(twin.id),'task_id':task.id,'status':'queued'}
+    task=build_digital_twin_task.delay(str(twin.id)); return {'contract_version':'1.0','twin_id':str(twin.id),'task_id':task.id,'status':'queued','source':'postgresql'}
 
 @router.get('/twins/{twin_id}/scenarios',response_model=List[ScenarioResponse])
 async def list_scenarios(twin_id:UUID,user=Depends(get_current_user)):
@@ -72,7 +72,7 @@ async def create_scenario(twin_id:UUID,scenario:ScenarioCreate,user=Depends(get_
 async def simulate_scenario(scenario_id:UUID,user=Depends(get_current_user)):
     item=await sync_to_async(lambda:TwinScenario.objects.filter(id=scenario_id,twin__project__owner_id=str(user.get('user_id'))).first() or TwinScenario.objects.filter(id=scenario_id,twin__project__members__id=str(user.get('user_id'))).first())()
     if not item: raise HTTPException(status_code=404,detail='Scenario not found')
-    task=predict_digital_twin_scenario_task.delay(str(item.id)); return {'scenario_id':str(item.id),'task_id':task.id,'status':'queued'}
+    task=predict_digital_twin_scenario_task.delay(str(item.id)); return {'contract_version':'1.0','scenario_id':str(item.id),'task_id':task.id,'status':'queued','source':'postgresql'}
 
 @router.post('/twins/{twin_id}/drift-check')
 async def check_drift(twin_id:UUID,current_assets:List[dict],user=Depends(get_current_user)):
@@ -80,4 +80,4 @@ async def check_drift(twin_id:UUID,current_assets:List[dict],user=Depends(get_cu
     if not twin: raise HTTPException(status_code=404,detail='Digital Twin not found')
     modeled=await sync_to_async(lambda:set(TwinNode.objects.filter(twin=twin,kind=TwinNode.Kind.ASSET).values_list('external_id',flat=True)))()
     observed={str(x.get('id')) for x in current_assets if x.get('id')}; missing=sorted(observed-modeled); extra=sorted(modeled-observed)
-    return {'drift':len(missing)+len(extra),'missing_in_model':missing,'extra_in_model':extra,'status':'drift_detected' if missing or extra else 'in_sync'}
+    return {'contract_version':'1.0','drift':len(missing)+len(extra),'missing_in_model':missing,'extra_in_model':extra,'status':'drift_detected' if missing or extra else 'in_sync','source':'postgresql'}
