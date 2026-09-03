@@ -105,7 +105,7 @@ class AssetAuthorization(models.Model):
     authorized = models.BooleanField(default=False)
     target_snapshot = models.CharField(max_length=500, blank=True)
     reason = models.CharField(max_length=500, blank=True)
-    correlation_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    correlation_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     supersedes = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='superseding_decisions')
     valid_from = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(null=True, blank=True)
@@ -117,7 +117,6 @@ class AssetAuthorization(models.Model):
             models.Index(fields=['asset', '-created_at', '-id']),
             models.Index(fields=['asset', 'authorized', '-created_at']),
             models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
-            models.Index(fields=['correlation_id']),
         ]
     def __str__(self):
         state = 'authorized' if self.authorized else 'revoked'
@@ -126,7 +125,6 @@ class AssetAuthorization(models.Model):
         if self.pk and type(self).objects.filter(pk=self.pk).exists(): raise ValidationError('Asset authorization decisions are immutable; create a new decision instead')
         if self.asset_id: self.asset_identity_snapshot = self.asset_id
         elif not self.asset_identity_snapshot: raise ValidationError('Asset authorization decisions require an asset identity snapshot')
-        if self.expires_at and self.valid_from and self.expires_at <= self.valid_from: raise ValidationError('Authorization expiry must be later than its valid-from timestamp')
         super().save(*args, **kwargs)
     def delete(self, *args, **kwargs): raise ValidationError('Asset authorization decisions are immutable and cannot be deleted')
     @property
