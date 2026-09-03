@@ -33,7 +33,7 @@ class PostureSnapshot(models.Model):
     class Meta:
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['project', '-created_at'], name='posture_snap_project_created_idx'),
+            models.Index(fields=['project', '-created_at'], name='posture_proj_created_idx'),
         ]
 
     def __str__(self):
