@@ -40,7 +40,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 'ordering': ['-created_at'],
-                'indexes': [models.Index(fields=['project', '-created_at'], name='posture_snap_project_created_idx')],
+                'indexes': [models.Index(fields=['project', '-created_at'], name='posture_proj_created_idx')],
             },
         ),
     ]
