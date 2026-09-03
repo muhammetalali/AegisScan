@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^4.3.1",
     "@testing-library/react": "^16.0.0",
     "@types/node": "^26.3.0",
     "@types/react": "^19.0.0",
