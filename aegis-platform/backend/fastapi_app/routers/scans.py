@@ -32,7 +32,6 @@ class ScanCreate(BaseModel):
     depth: str = 'standard'
     config: dict = Field(default_factory=dict)
     # Backwards-compatible request field only. It MUST NOT grant authorization.
-    # Network execution authorization is sourced exclusively from persisted Asset state.
     authorized: bool = False
 
 
@@ -92,26 +91,27 @@ def _create_scan(scan: ScanCreate, user_id: str):
             raise HTTPException(status_code=404, detail='Asset not found')
 
     # Network execution has a strict server-side authorization boundary.
-    # A client-controlled `authorized=true` is never an authorization grant and
-    # must never create a trusted asset. The request must reference an existing
-    # project asset whose persisted configuration explicitly authorizes execution.
+    # The client `authorized` field is intentionally ignored as an authority.
+    # The latest persisted authorization decision is the security source of truth.
     if scan.scan_type in NETWORK_SCAN_TYPES:
         if not asset:
             raise HTTPException(
                 status_code=400,
                 detail='A real network scan requires an existing project asset; authorization must be established on the asset before execution',
             )
-        asset_config = asset.configuration or {}
-        if asset_config.get('authorized') is not True:
-            raise HTTPException(status_code=403, detail='The selected asset is not explicitly authorized for network execution')
+        if not asset.is_active:
+            raise HTTPException(status_code=403, detail='The selected asset is inactive and cannot be used for network execution')
+
+        from django_project.assets.models import AssetAuthorization
+
+        authorization = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at').first()
+        if not authorization or authorization.authorized is not True:
+            raise HTTPException(status_code=403, detail='The selected asset does not have an active persisted network authorization decision')
 
         requested_target = scan.config.get('target') or scan.config.get('host') or scan.config.get('ip') or scan.config.get('url')
+        persisted_target = authorization.target_snapshot or ''
         if requested_target:
             normalized_requested = str(requested_target).strip()
-            persisted_target = (
-                asset_config.get('url') if scan.scan_type == 'url'
-                else asset_config.get('host') or asset_config.get('ip') or asset_config.get('domain')
-            )
             if persisted_target != normalized_requested:
                 raise HTTPException(status_code=409, detail='Requested scan target does not match the authorized asset identity')
 

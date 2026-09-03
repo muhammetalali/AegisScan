@@ -5,7 +5,7 @@ from asgiref.sync import sync_to_async
 from django.db import connections
 from fastapi.testclient import TestClient
 
-from django_project.assets.models import Asset
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.users.models import User
 from fastapi_app.main import app
@@ -85,12 +85,20 @@ def test_generic_asset_update_cannot_grant_network_authorization(api_fixture):
     assert response.status_code == 403
     asset.refresh_from_db()
     assert (asset.configuration or {}).get("authorized") is not True
+    assert not AssetAuthorization.objects.filter(asset=asset).exists()
 
 
 def test_generic_asset_update_revokes_existing_authorization(api_fixture):
-    client, _, _, _, asset, _ = api_fixture
+    client, owner, _, _, asset, _ = api_fixture
     asset.configuration = {"host": "authorized-target", "authorized": True}
     asset.save(update_fields=["configuration"])
+    AssetAuthorization.objects.create(
+        asset=asset,
+        actor=owner,
+        authorized=True,
+        target_snapshot="authorized-target",
+        reason="fixture authorization",
+    )
 
     response = client.patch(
         f"/assets/{asset.id}",
@@ -101,31 +109,46 @@ def test_generic_asset_update_revokes_existing_authorization(api_fixture):
     asset.refresh_from_db()
     assert (asset.configuration or {}).get("host") == "changed-target"
     assert (asset.configuration or {}).get("authorized") is False
+    latest = AssetAuthorization.objects.filter(asset=asset).order_by("-created_at").first()
+    assert latest is not None
+    assert latest.authorized is False
+    assert latest.actor_id == owner.id
+    assert latest.target_snapshot == "authorized-target"
 
 
 def test_only_project_owner_can_authorize_asset(api_fixture):
     client, owner, member, _, asset, fake_user = api_fixture
 
     app.dependency_overrides[assets_router.get_current_user] = lambda: fake_user(member)
-    member_response = client.post(f"/assets/{asset.id}/authorization", json={"authorized": True})
+    member_response = client.post(f"/assets/{asset.id}/authorization", json={"authorized": True, "reason": "member attempt"})
     assert member_response.status_code == 403
     asset.refresh_from_db()
     assert (asset.configuration or {}).get("authorized") is not True
+    assert not AssetAuthorization.objects.filter(asset=asset).exists()
 
     app.dependency_overrides[assets_router.get_current_user] = lambda: fake_user(owner)
-    owner_response = client.post(f"/assets/{asset.id}/authorization", json={"authorized": True})
+    owner_response = client.post(f"/assets/{asset.id}/authorization", json={"authorized": True, "reason": "approved for scheduled assessment"})
     assert owner_response.status_code == 200
     asset.refresh_from_db()
     assert (asset.configuration or {}).get("authorized") is True
+    decision = AssetAuthorization.objects.get(asset=asset)
+    assert decision.authorized is True
+    assert decision.actor_id == owner.id
+    assert decision.target_snapshot == "authorized-target"
+    assert decision.reason == "approved for scheduled assessment"
 
 
 def test_authorization_endpoint_can_revoke_asset_authorization(api_fixture):
-    client, _, _, _, asset, _ = api_fixture
+    client, owner, _, _, asset, _ = api_fixture
     asset.configuration = {"host": "authorized-target", "authorized": True}
     asset.save(update_fields=["configuration"])
 
-    response = client.post(f"/assets/{asset.id}/authorization", json={"authorized": False})
+    response = client.post(f"/assets/{asset.id}/authorization", json={"authorized": False, "reason": "assessment window closed"})
 
     assert response.status_code == 200
     asset.refresh_from_db()
     assert (asset.configuration or {}).get("authorized") is False
+    decision = AssetAuthorization.objects.get(asset=asset)
+    assert decision.authorized is False
+    assert decision.actor_id == owner.id
+    assert decision.reason == "assessment window closed"
