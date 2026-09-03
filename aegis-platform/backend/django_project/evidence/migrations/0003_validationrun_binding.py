@@ -43,6 +43,6 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='validationrun',
-            index=models.Index(fields=['authorization_decision'], name='evidence_va_auth_dec_0a6a5a_idx'),
+            index=models.Index(fields=['authorization_decision'], name='evidence_va_auth_dec_idx'),
         ),
     ]
