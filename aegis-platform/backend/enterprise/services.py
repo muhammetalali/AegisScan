@@ -26,9 +26,7 @@ def ensure_project_tenant(project,user_id:str)->Organization:
     if link:
         if not OrganizationMembership.objects.filter(organization=link.organization,user_id=user_id,is_active=True).exists(): raise PermissionError('User is not a member of the project tenant')
         return link.organization
-    owner=project.owner
-    org,_=Organization.objects.get_or_create(slug=f'user-{owner.id}',defaults={'name':f"{owner.get_full_name() or owner.email} Organization",'owner':owner})
-    OrganizationMembership.objects.get_or_create(organization=org,user=owner,defaults={'role':OrganizationMembership.Role.OWNER})
+    owner=project.owner; org,_=Organization.objects.get_or_create(slug=f'user-{owner.id}',defaults={'name':f"{owner.get_full_name() or owner.email} Organization",'owner':owner}); OrganizationMembership.objects.get_or_create(organization=org,user=owner,defaults={'role':OrganizationMembership.Role.OWNER})
     from .models import TenantProject
     TenantProject.objects.get_or_create(project=project,defaults={'organization':org})
     if org.owner_id!=owner.id: raise PermissionError('Project tenant ownership mismatch')
@@ -39,8 +37,7 @@ def ensure_project_tenant(project,user_id:str)->Organization:
 
 
 def build_twin(twin_id:str)->DigitalTwin:
-    twin=DigitalTwin.objects.select_related('project').get(pk=twin_id); project=twin.project
-    twin.nodes.all().delete(); twin.relationships.all().delete(); asset_nodes={}
+    twin=DigitalTwin.objects.select_related('project').get(pk=twin_id); project=twin.project; twin.nodes.all().delete(); twin.relationships.all().delete(); asset_nodes={}
     for asset in Asset.objects.filter(project=project,is_active=True):
         node=TwinNode.objects.create(twin=twin,kind=TwinNode.Kind.ASSET,external_id=str(asset.id),name=asset.name,properties={'type':asset.type,'criticality':asset.criticality,'configuration':asset.configuration}); asset_nodes[asset.id]=node
         for service in (asset.configuration or {}).get('services',[]):
@@ -73,7 +70,13 @@ def generate_attack_paths(project,organization,max_depth=8):
                 if any(str(v['asset_id'])==target for v in findings): results.append((path,new_path)); continue
                 queue.append((target,new_path))
     created=[]
-    for path,tail in results[:500]: created.append(AttackPath.objects.create(organization=organization,project=project,source_node=path[0],target_node=tail[-1],steps=tail,risk_score=sum(float(item.get('risk_score',0)) for item in findings if str(item['asset_id']) in {x['node'] for x in tail})))
+    for path,tail in results[:500]:
+        source_node, target_node, steps = path[0], tail[-1], tail
+        risk=sum(float(item.get('risk_score',0)) for item in findings if str(item['asset_id']) in {x['node'] for x in tail})
+        row,_=AttackPath.objects.get_or_create(organization=organization,project=project,source_node=source_node,target_node=target_node,steps=steps,defaults={'risk_score':risk,'evidence':{'source':'asset_relationships_and_open_vulnerabilities'},'status':AttackPath.Status.DISCOVERED})
+        if row.risk_score != risk and row.status != AttackPath.Status.CLOSED:
+            row.risk_score=risk; row.save(update_fields=['risk_score','updated_at'])
+        created.append(row)
     return created
 
 
@@ -99,8 +102,7 @@ def schedule_task(schedule:ReportSchedule):
     if schedule.frequency=='cron': raise ValueError('Cron report schedules require an explicit CrontabSchedule configuration')
     minutes={'daily':1440,'weekly':10080,'monthly':43200}.get(schedule.frequency)
     if not minutes: raise ValueError(f'Unsupported report schedule frequency: {schedule.frequency}')
-    interval,_=IntervalSchedule.objects.get_or_create(every=minutes,period=IntervalSchedule.MINUTES)
-    PeriodicTask.objects.update_or_create(name=f'aegis-report:{schedule.id}',defaults={'interval':interval,'task':'enterprise.execute_report_schedule','kwargs':json.dumps({'schedule_id':str(schedule.id)}),'enabled':schedule.enabled,'start_time':schedule.next_run})
+    interval,_=IntervalSchedule.objects.get_or_create(every=minutes,period=IntervalSchedule.MINUTES); PeriodicTask.objects.update_or_create(name=f'aegis-report:{schedule.id}',defaults={'interval':interval,'task':'enterprise.execute_report_schedule','kwargs':json.dumps({'schedule_id':str(schedule.id)}),'enabled':schedule.enabled,'start_time':schedule.next_run})
 
 
 def _http_json(provider,method,url,**kwargs):
@@ -116,9 +118,7 @@ def fetch_intel(provider:str,key:str,cve:str|None=None,package:dict|None=None):
     throttle={'nvd':6,'epss':1,'kev':60,'osv':0}.get(provider,1)
     if throttle and not cache.add(f'aegis:intel:throttle:{provider}',1,timeout=throttle): raise RuntimeError(f'{provider} provider is rate-limited; retry after the configured throttle window')
     headers={}; params={}; body=None; method='GET'; url=PROVIDERS[provider]
-    if provider=='nvd':
-        params={'cveId':cve} if cve else {'resultsPerPage':1}
-        if os.getenv('NVD_API_KEY'): headers['apiKey']=os.environ['NVD_API_KEY']
+    if provider=='nvd': params={'cveId':cve} if cve else {'resultsPerPage':1}; headers.update({'apiKey':os.environ['NVD_API_KEY']} if os.getenv('NVD_API_KEY') else {})
     elif provider=='epss': params={'cve':cve}
     elif provider=='osv':
         if cve: url=f"{PROVIDERS['osv_vuln']}/{cve}"
@@ -130,6 +130,4 @@ def fetch_intel(provider:str,key:str,cve:str|None=None,package:dict|None=None):
 
 
 def fuse_finding(finding:Vulnerability):
-    intel,_=FindingIntelligence.objects.get_or_create(vulnerability=finding); cves=list(finding.cve_ids or []); primary=cves[0] if cves else None
-    intel.nvd=fetch_intel('nvd',primary,cve=primary) if primary else {}; intel.osv=fetch_intel('osv',primary,cve=primary) if primary else {}; intel.epss=fetch_intel('epss',primary,cve=primary) if primary else {}; kev=fetch_intel('kev','global'); rows=kev.get('vulnerabilities',[]) if isinstance(kev,dict) else []; intel.cisa_kev=next((x for x in rows if primary and x.get('cveID')==primary),{})
-    epss_rows=intel.epss.get('data',[]) if isinstance(intel.epss,dict) else []; epss_score=float(epss_rows[0].get('epss',0)) if epss_rows else 0.0; nvd_hit=bool(intel.nvd); osv_hit=bool(intel.osv); kev_hit=bool(intel.cisa_kev); signals=sum([nvd_hit,osv_hit,kev_hit,epss_score>0]); intel.confidence=round(min(100.0,25.0*signals+25.0*(epss_score>0.5)),2); intel.conflict=bool(kev_hit and epss_score<0.01); intel.explanation=f'NVD={nvd_hit}; OSV={osv_hit}; CISA KEV={kev_hit}; EPSS={epss_score:.4f}.'; intel.recommendation='Prioritize immediate remediation.' if kev_hit or epss_score>=0.5 else 'Review and remediate according to project risk policy.'; intel.save(); return intel
+    intel,_=FindingIntelligence.objects.get_or_create(vulnerability=finding); cves=list(finding.cve_ids or []); primary=cves[0] if cves else None; intel.nvd=fetch_intel('nvd',primary,cve=primary) if primary else {}; intel.osv=fetch_intel('osv',primary,cve=primary) if primary else {}; intel.epss=fetch_intel('epss',primary,cve=primary) if primary else {}; kev=fetch_intel('kev','global'); rows=kev.get('vulnerabilities',[]) if isinstance(kev,dict) else []; intel.cisa_kev=next((x for x in rows if primary and x.get('cveID')==primary),{}); epss_rows=intel.epss.get('data',[]) if isinstance(intel.epss,dict) else []; epss_score=float(epss_rows[0].get('epss',0)) if epss_rows else 0.0; nvd_hit=bool(intel.nvd); osv_hit=bool(intel.osv); kev_hit=bool(intel.cisa_kev); signals=sum([nvd_hit,osv_hit,kev_hit,epss_score>0]); intel.confidence=round(min(100.0,25.0*signals+25.0*(epss_score>0.5)),2); intel.conflict=bool(kev_hit and epss_score<0.01); intel.explanation=f'NVD={nvd_hit}; OSV={osv_hit}; CISA KEV={kev_hit}; EPSS={epss_score:.4f}.'; intel.recommendation='Prioritize immediate remediation.' if kev_hit or epss_score>=0.5 else 'Review and remediate according to project risk policy.'; intel.save(); return intel
