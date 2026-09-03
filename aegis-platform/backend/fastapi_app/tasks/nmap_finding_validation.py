@@ -103,7 +103,12 @@ def _fail(validation: ValidationRun, message: str, phase: str = 'blocked') -> di
 
 def _load_bound_context(validation_id: str) -> tuple[ValidationRun, Vulnerability, Asset, AssetAuthorization]:
     with transaction.atomic():
-        validation = ValidationRun.objects.select_for_update().select_related('finding', 'user').get(pk=validation_id)
+        validation = (
+            ValidationRun.objects
+            .select_for_update(of=('self',))
+            .select_related('finding', 'user')
+            .get(pk=validation_id)
+        )
         finding = validation.finding
         if not finding:
             raise ValueError('Validation must be bound to a persisted finding')
@@ -111,6 +116,7 @@ def _load_bound_context(validation_id: str) -> tuple[ValidationRun, Vulnerabilit
             raise ValueError('Validation finding identity does not match the persisted finding')
         if not finding.asset_id:
             raise ValueError('Finding no longer retains its originating asset')
+        finding = Vulnerability.objects.select_for_update(of=('self',)).get(pk=finding.id)
         asset = Asset.objects.select_for_update().get(pk=finding.asset_id)
         if not validation.authorization_decision_id:
             raise ValueError('Validation has no bound authorization decision')
