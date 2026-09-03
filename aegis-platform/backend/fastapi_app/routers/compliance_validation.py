@@ -8,12 +8,13 @@ import django
 django.setup()
 
 from asgiref.sync import sync_to_async
+from django.db.models import Count
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..contracts import ComplianceValidationItem
 from ..core.dependencies import get_current_user
 from compliance.models import ComplianceAssessment
-from evidence.models import ValidationRun
+from evidence.models import Evidence, ValidationRun
 from projects.models import Project
 
 router = APIRouter()
@@ -40,7 +41,13 @@ def _get_items(validation_id: str, user_id: str) -> list[ComplianceValidationIte
     if not Project.objects.filter(id=project.id).filter(owner_id=user_id).exists() and not project.members.filter(pk=user_id).exists():
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
 
-    assessments = ComplianceAssessment.objects.filter(project_id=project.id).select_related("framework", "control").prefetch_related("findings")
+    assessments = (
+        ComplianceAssessment.objects.filter(project_id=project.id)
+        .select_related("framework", "control")
+        .prefetch_related("findings")
+        .annotate(real_evidence_count=Count("findings__evidence_records", distinct=True))
+        .order_by("framework__name", "control__control_id")
+    )
     return [
         ComplianceValidationItem(
             id=str(assessment.id),
@@ -48,9 +55,9 @@ def _get_items(validation_id: str, user_id: str) -> list[ComplianceValidationIte
             control=str(assessment.control.title or assessment.control.control_id),
             status=_status(str(assessment.status)),
             finding_count=assessment.findings.count(),
-            evidence_count=1 if assessment.evidence.strip() else 0,
+            evidence_count=int(assessment.real_evidence_count or (1 if assessment.evidence.strip() else 0)),
         )
-        for assessment in assessments.order_by("framework__name", "control__control_id")
+        for assessment in assessments
     ]
 
 
