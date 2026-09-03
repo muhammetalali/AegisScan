@@ -80,11 +80,20 @@ def _serialize(v: ValidationRun):
 @sync_to_async
 def _create(body: ValidationCreate, user_id: str):
     with transaction.atomic():
-        finding = Vulnerability.objects.select_for_update().select_related('asset', 'scan').filter(pk=body.finding_id).first()
+        finding = (
+            Vulnerability.objects
+            .select_for_update(of=('self',))
+            .select_related('asset', 'scan')
+            .filter(pk=body.finding_id)
+            .first()
+        )
         if not finding:
             raise HTTPException(status_code=404, detail='Finding not found')
         if not finding.asset_id or not finding.scan_id:
             raise HTTPException(status_code=409, detail='Finding must retain both originating asset and scan lineage')
+        asset = finding.asset
+        if asset is None:
+            raise HTTPException(status_code=409, detail='Finding asset lineage is unavailable')
         decision_id = finding.scan.authorization_decision_id
         if not decision_id:
             raise HTTPException(status_code=409, detail='Finding was not produced by an authorization-bound network scan')
