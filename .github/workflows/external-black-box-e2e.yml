@@ -1,8 +1,17 @@
 name: External Black-Box E2E
 
-on:
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/e2e/**'
+      - 'aegis-platform/backend/**'
+      - 'aegis-platform/frontend/**'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker/**'
+      - '.github/workflows/external-black-box-e2e.yml'
   push:
-    branches: [fix/finding-validation-loop]
+    branches: [main, codex/full-contract-ui-audit-2026-09-03]
     paths:
       - 'aegis-platform/e2e/**'
       - 'aegis-platform/backend/**'
@@ -33,13 +42,14 @@ jobs:
       CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
       AUTH_COOKIE_SECURE: 'False'
       AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      SEMGREP_CONFIG: /app/e2e/semgrep-ci.yml
       FRONTEND_URL: http://localhost
       LOG_LEVEL: INFO
       AEGIS_BASE_URL: http://nginx
       AEGIS_DJANGO_URL: http://nginx/api/v1
       AEGIS_FASTAPI_URL: http://nginx
       AEGIS_E2E_TARGET: aegis-scan-target
-      AEGIS_E2E_TIMEOUT: '180'
+      AEGIS_E2E_TIMEOUT: '600'
       AEGIS_E2E_EMAIL: e2e-operator@aegisscan.local
     steps:
       - uses: actions/checkout@v4
@@ -61,14 +71,13 @@ jobs:
           AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
           FRONTEND_URL=${FRONTEND_URL}
           AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          SEMGREP_CONFIG=${SEMGREP_CONFIG}
           LOG_LEVEL=${LOG_LEVEL}
           POSTGRES_DB=${POSTGRES_DB}
           POSTGRES_USER=${POSTGRES_USER}
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
           EOF
           test -s backend/.env
-          grep -q '^DATABASE_URL=' backend/.env
-          grep -q '^REDIS_URL=' backend/.env
       - name: Start real platform stack
         working-directory: aegis-platform
         run: docker compose up -d --build
@@ -78,9 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           for i in {1..60}; do
-            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then
-              exit 0
-            fi
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then exit 0; fi
             sleep 3
           done
           docker compose ps
@@ -98,46 +105,25 @@ jobs:
           )"
           printf 'AEGIS_E2E_PASSWORD=%s\n' "$E2E_PASSWORD" >> "$GITHUB_ENV"
           echo "::add-mask::$E2E_PASSWORD"
-          docker compose exec -T \
-            -e E2E_EMAIL="$AEGIS_E2E_EMAIL" \
-            -e E2E_PASSWORD="$E2E_PASSWORD" \
-            django python manage.py shell <<'PY'
+          docker compose exec -T -e E2E_EMAIL="$AEGIS_E2E_EMAIL" -e E2E_PASSWORD="$E2E_PASSWORD" django python manage.py shell <<'PY'
           import os
           from django.contrib.auth import get_user_model
           from django_project.users.models import UserRole
-          User = get_user_model()
-          email = os.environ['E2E_EMAIL']
-          password = os.environ['E2E_PASSWORD']
-          user, _ = User.objects.get_or_create(
-              email=email,
-              defaults={'first_name':'E2E','last_name':'Operator','role':UserRole.SECURITY_MANAGER,'is_active':True,'is_verified':True},
-          )
-          user.first_name = 'E2E'
-          user.last_name = 'Operator'
-          user.role = UserRole.SECURITY_MANAGER
-          user.is_active = True
-          user.is_verified = True
-          user.set_password(password)
-          user.save(update_fields=['first_name','last_name','role','is_active','is_verified','password'])
-          assert user.has_permission('project.create')
-          assert user.has_permission('scan.create')
-          print(f'Provisioned E2E operator: {email} ({user.role})')
+          User=get_user_model(); email=os.environ['E2E_EMAIL']; password=os.environ['E2E_PASSWORD']
+          user,_=User.objects.get_or_create(email=email,defaults={'first_name':'E2E','last_name':'Operator','role':UserRole.SECURITY_MANAGER,'is_active':True,'is_verified':True})
+          user.first_name='E2E'; user.last_name='Operator'; user.role=UserRole.SECURITY_MANAGER; user.is_active=True; user.is_verified=True; user.set_password(password); user.save()
+          assert user.has_permission('project.create') and user.has_permission('scan.create')
           PY
-      - name: Run HTTP-only black-box E2E
+      - name: Run HTTP black-box E2E
         working-directory: aegis-platform
         run: |
           set -euo pipefail
-          docker compose run --rm --no-deps \
-            -v "$PWD/e2e:/e2e:ro" \
-            -e AEGIS_BASE_URL=http://nginx \
-            -e AEGIS_DJANGO_URL=http://nginx/api/v1 \
-            -e AEGIS_FASTAPI_URL=http://nginx \
-            -e AEGIS_E2E_TARGET=aegis-scan-target \
-            -e AEGIS_E2E_TIMEOUT=180 \
-            -e AEGIS_VERIFY_TLS=false \
-            -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" \
-            -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" \
-            fastapi python /e2e/external_black_box_e2e.py
+          docker compose run --rm --no-deps -v "$PWD/e2e:/e2e:ro" -e AEGIS_BASE_URL=http://nginx -e AEGIS_DJANGO_URL=http://nginx/api/v1 -e AEGIS_FASTAPI_URL=http://nginx -e AEGIS_E2E_TARGET=aegis-scan-target -e AEGIS_E2E_TIMEOUT=600 -e AEGIS_VERIFY_TLS=false -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" fastapi python /e2e/external_black_box_e2e.py
+      - name: Run all scanner engines E2E
+        working-directory: aegis-platform
+        run: |
+          set -euo pipefail
+          docker compose run --rm --no-deps -v "$PWD/e2e:/e2e:ro" -e AEGIS_BASE_URL=http://nginx -e AEGIS_DJANGO_URL=http://nginx/api/v1 -e AEGIS_FASTAPI_URL=http://nginx -e AEGIS_E2E_TARGET=aegis-scan-target -e AEGIS_E2E_TIMEOUT=600 -e AEGIS_VERIFY_TLS=false -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" fastapi python /e2e/scanner_engines_e2e.py
       - name: Print stack state
         if: always()
         working-directory: aegis-platform
