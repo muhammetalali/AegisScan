@@ -16,9 +16,9 @@ from pydantic import BaseModel, Field
 
 from ..contracts import AttackPathEdge, AttackPathGraph, AttackPathNode, AttackPathPath
 from ..core.dependencies import get_current_user
-from ..services.enterprise_tenant import ensure_project_tenant
 from assets.models import Asset, AssetRelationship
 from enterprise.models import AttackPath
+from enterprise.services import ensure_project_tenant
 from projects.models import Project
 from vulnerabilities.models import Vulnerability
 
