@@ -36,6 +36,9 @@ class ValidationRun(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='validation_runs')
+    finding = models.ForeignKey('vulnerabilities.Vulnerability', on_delete=models.SET_NULL, null=True, blank=True, related_name='validation_runs')
+    finding_identity_snapshot = models.UUIDField(null=True, blank=True, editable=False)
+    authorization_decision = models.ForeignKey('assets.AssetAuthorization', on_delete=models.PROTECT, null=True, blank=True, related_name='validation_runs')
     target_type = models.CharField(max_length=20)
     target_value = models.CharField(max_length=500)
     scope = models.CharField(max_length=500)
@@ -54,4 +57,9 @@ class ValidationRun(models.Model):
 
     class Meta:
         ordering = ['-created_at']
-        indexes = [models.Index(fields=['user', 'status']), models.Index(fields=['target_value'])]
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['target_value']),
+            models.Index(fields=['finding', 'created_at']),
+            models.Index(fields=['authorization_decision']),
+        ]
