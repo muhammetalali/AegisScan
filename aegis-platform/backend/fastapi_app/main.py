@@ -15,7 +15,7 @@ from asgiref.sync import sync_to_async
 import asyncio,logging
 from datetime import datetime,timezone
 
-from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,attack_path,compliance_validation,intelligence
+from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,attack_path,compliance_validation,intelligence,validation_contract
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -26,8 +26,7 @@ from .core.security import verify_token
 
 logging.basicConfig(level=logging.INFO)
 logger=logging.getLogger(__name__)
-websocket_manager=WebSocketManager()
-scan_orchestrator=ScanOrchestrator(websocket_manager)
+websocket_manager=WebSocketManager(); scan_orchestrator=ScanOrchestrator(websocket_manager)
 workflow_bridge=WorkflowLiveBridge(lambda event:websocket_manager.broadcast('workflow',event))
 
 @asynccontextmanager
@@ -124,8 +123,7 @@ async def websocket_system_monitor(websocket:WebSocket):
     except WebSocketDisconnect: websocket_manager.disconnect('system_monitor',websocket)
 
 @app.get('/health')
-async def health_check():
-    return {'status':'healthy','timestamp':datetime.now(timezone.utc).isoformat()}
+async def health_check(): return {'status':'healthy','timestamp':datetime.now(timezone.utc).isoformat()}
 
 async def _dependency_readiness()->dict:
     def check_dependencies():
@@ -150,62 +148,43 @@ async def readiness_check():
     except Exception as exc: raise HTTPException(status_code=503,detail={'ready':False,'reason':'dependency_unavailable'}) from exc
     return {'ready':True,'dependencies':dependencies,'timestamp':datetime.now(timezone.utc).isoformat()}
 
-# Canonical API surface. Legacy unversioned aliases are retained for compatibility.
 app.include_router(scans.router,prefix='/scans',tags=['Scans'])
 app.include_router(vulnerabilities.router,prefix='/vulnerabilities',tags=['Vulnerabilities'])
 app.include_router(vulnerabilities.router,prefix='/api/v1/vulnerabilities',tags=['Vulnerabilities'])
-app.include_router(remediation.router,tags=['Remediation Workflow'])
-app.include_router(remediation.router,prefix='/api/v1',tags=['Remediation Workflow'])
-app.include_router(reports.router,prefix='/reports',tags=['Reports'])
-app.include_router(reports.router,prefix='/api/v1/reports',tags=['Reports'])
-app.include_router(assets.router,prefix='/assets',tags=['Assets'])
-app.include_router(assets.router,prefix='/api/v1/assets',tags=['Assets'])
+app.include_router(remediation.router,tags=['Remediation Workflow']); app.include_router(remediation.router,prefix='/api/v1',tags=['Remediation Workflow'])
+app.include_router(reports.router,prefix='/reports',tags=['Reports']); app.include_router(reports.router,prefix='/api/v1/reports',tags=['Reports'])
+app.include_router(assets.router,prefix='/assets',tags=['Assets']); app.include_router(assets.router,prefix='/api/v1/assets',tags=['Assets'])
 app.include_router(evidence.router,prefix='/api/v1/evidence',tags=['Evidence'])
-app.include_router(compliance.router,prefix='/compliance',tags=['Compliance'])
-app.include_router(compliance.router,prefix='/api/v1/compliance',tags=['Compliance'])
+app.include_router(compliance.router,prefix='/compliance',tags=['Compliance']); app.include_router(compliance.router,prefix='/api/v1/compliance',tags=['Compliance'])
 app.include_router(compliance_validation.router,prefix='/api/v1',tags=['Compliance Validation'])
 app.include_router(knowledge.router,prefix='/knowledge',tags=['Knowledge'])
-app.include_router(digital_twin.router,prefix='/digital-twin',tags=['Digital Twin'])
-app.include_router(digital_twin.router,prefix='/api/v1/digital-twin',tags=['Digital Twin'])
+app.include_router(digital_twin.router,prefix='/digital-twin',tags=['Digital Twin']); app.include_router(digital_twin.router,prefix='/api/v1/digital-twin',tags=['Digital Twin'])
 app.include_router(attack_path.router,prefix='/api/v1/attack-path',tags=['Attack Path'])
 app.include_router(intelligence.router,prefix='/api/v1/intelligence',tags=['Threat Intelligence'])
-app.include_router(posture.router,prefix='/posture',tags=['Security Posture'])
-app.include_router(system.router,prefix='/system',tags=['System'])
-app.include_router(assurance.router,prefix='/api/v1/assurance',tags=['Assurance Correlation'])
-app.include_router(assurance_graph.router,prefix='/api/v1/assurance',tags=['Assurance Graph'])
-app.include_router(security_decision.router,prefix='/api/v1/assurance',tags=['Security Decision'])
-app.include_router(decision_actions.router,prefix='/api/v1/assurance',tags=['Decision Actions'])
-app.include_router(governance.router,prefix='/api/v1/assurance',tags=['Governance'])
-app.include_router(policy.router,prefix='/api/v1/assurance',tags=['Policy-as-Code'])
-app.include_router(dashboard.router,prefix='/api',tags=['Dashboard'])
-app.include_router(dashboard.router,prefix='/api/v1',tags=['Dashboard'])
-app.include_router(validations.router,prefix='/api',tags=['Validations'])
-app.include_router(validations.router,prefix='/api/v1',tags=['Validations'])
-app.include_router(audit.router,prefix='/api',tags=['Audit'])
-app.include_router(audit.router,prefix='/api/v1',tags=['Audit'])
-app.include_router(enterprise.router,prefix='/api/v1/enterprise',tags=['Enterprise'])
-app.include_router(enterprise_extra.router,prefix='/api/v1/enterprise',tags=['Enterprise Integrations'])
+app.include_router(posture.router,prefix='/posture',tags=['Security Posture']); app.include_router(system.router,prefix='/system',tags=['System'])
+app.include_router(assurance.router,prefix='/api/v1/assurance',tags=['Assurance Correlation']); app.include_router(assurance_graph.router,prefix='/api/v1/assurance',tags=['Assurance Graph'])
+app.include_router(security_decision.router,prefix='/api/v1/assurance',tags=['Security Decision']); app.include_router(decision_actions.router,prefix='/api/v1/assurance',tags=['Decision Actions'])
+app.include_router(governance.router,prefix='/api/v1/assurance',tags=['Governance']); app.include_router(policy.router,prefix='/api/v1/assurance',tags=['Policy-as-Code'])
+app.include_router(validation_contract.router,prefix='/api/v1',tags=['Validation Contract'])
+app.include_router(dashboard.router,prefix='/api',tags=['Dashboard']); app.include_router(dashboard.router,prefix='/api/v1',tags=['Dashboard'])
+app.include_router(validations.router,prefix='/api',tags=['Validations']); app.include_router(validations.router,prefix='/api/v1',tags=['Validations'])
+app.include_router(audit.router,prefix='/api',tags=['Audit']); app.include_router(audit.router,prefix='/api/v1',tags=['Audit'])
+app.include_router(enterprise.router,prefix='/api/v1/enterprise',tags=['Enterprise']); app.include_router(enterprise_extra.router,prefix='/api/v1/enterprise',tags=['Enterprise Integrations'])
 
 @app.post('/scans/{scan_id}/start')
-async def start_scan(scan_id:str,user=Depends(get_current_user)):return await scan_orchestrator.start_scan(scan_id,user)
+async def start_scan(scan_id:str,user=Depends(get_current_user)): return await scan_orchestrator.start_scan(scan_id,user)
 @app.post('/scans/{scan_id}/pause')
-async def pause_scan(scan_id:str,user=Depends(get_current_user)):return await scan_orchestrator.pause_scan(scan_id,user)
+async def pause_scan(scan_id:str,user=Depends(get_current_user)): return await scan_orchestrator.pause_scan(scan_id,user)
 @app.post('/scans/{scan_id}/resume')
-async def resume_scan(scan_id:str,user=Depends(get_current_user)):return await scan_orchestrator.resume_scan(scan_id,user)
+async def resume_scan(scan_id:str,user=Depends(get_current_user)): return await scan_orchestrator.resume_scan(scan_id,user)
 @app.post('/scans/{scan_id}/cancel')
-async def cancel_scan(scan_id:str,user=Depends(get_current_user)):return await scan_orchestrator.cancel_scan(scan_id,user)
+async def cancel_scan(scan_id:str,user=Depends(get_current_user)): return await scan_orchestrator.cancel_scan(scan_id,user)
 @app.get('/scans/{scan_id}/progress')
-async def get_scan_progress(scan_id:str,user=Depends(get_current_user)):return await scan_orchestrator.get_progress(scan_id,user)
+async def get_scan_progress(scan_id:str,user=Depends(get_current_user)): return await scan_orchestrator.get_progress(scan_id,user)
 
-async def _list_engines(user=Depends(get_current_user)):
-    return await scan_orchestrator.list_engines()
-
-async def _enable_engine(engine_name:str,user=Depends(require_staff)):
-    return await scan_orchestrator.enable_engine(engine_name)
-
-async def _disable_engine(engine_name:str,user=Depends(require_staff)):
-    return await scan_orchestrator.disable_engine(engine_name)
-
+async def _list_engines(user=Depends(get_current_user)): return await scan_orchestrator.list_engines()
+async def _enable_engine(engine_name:str,user=Depends(require_staff)): return await scan_orchestrator.enable_engine(engine_name)
+async def _disable_engine(engine_name:str,user=Depends(require_staff)): return await scan_orchestrator.disable_engine(engine_name)
 @app.get('/engines')
 async def list_engines_legacy(user=Depends(get_current_user)): return await _list_engines(user)
 @app.get('/api/v1/engines')
