@@ -16,7 +16,9 @@ from pydantic import BaseModel, Field
 
 from ..contracts import AttackPathEdge, AttackPathGraph, AttackPathNode, AttackPathPath
 from ..core.dependencies import get_current_user
+from ..services.enterprise_tenant import ensure_project_tenant
 from assets.models import Asset, AssetRelationship
+from enterprise.models import AttackPath
 from projects.models import Project
 from vulnerabilities.models import Vulnerability
 
@@ -37,6 +39,7 @@ class AttackPathAnalysisResponse(BaseModel):
     source_asset_id: str
     target_asset_id: str
     paths: list[AttackPathPath]
+    persisted_attack_path_ids: list[str] = []
 
 
 def _project_access(project_id: str, user_id: str) -> bool:
@@ -74,22 +77,15 @@ def _load_graph(project_id: str, user_id: str) -> AttackPathGraph:
 
     nodes = [
         AttackPathNode(
-            id=str(asset.id),
-            name=asset.name,
-            kind=str(getattr(asset, "type", "asset")),
-            criticality=str(getattr(asset, "criticality", "medium") or "medium"),
+            id=str(asset.id), name=asset.name, kind=str(asset.type), criticality=str(asset.criticality),
             open_finding_weight=round(finding_weight.get(str(asset.id), 0.0), 2),
             internet_exposed=_asset_exposure(asset.configuration or {}),
         )
         for asset in assets
     ]
-    relationships = AssetRelationship.objects.filter(Q(source_asset_id__in=asset_ids) & Q(target_asset_id__in=asset_ids)).order_by("id")
+    relationships = AssetRelationship.objects.filter(project_id=project_id, source_id__in=asset_ids, target_id__in=asset_ids).order_by("id")
     edges = [
-        AttackPathEdge(
-            source=str(r.source_asset_id),
-            target=str(r.target_asset_id),
-            relationship=str(getattr(r, "relationship_type", None) or getattr(r, "type", None) or "related"),
-        )
+        AttackPathEdge(source=str(r.source_id), target=str(r.target_id), relationship=str(r.relationship_type), metadata=r.metadata or {})
         for r in relationships
     ]
     return AttackPathGraph(project_id=project_id, generated_at=datetime.now(timezone.utc), nodes=nodes, edges=edges)
@@ -127,13 +123,24 @@ def _analyze(request: AttackPathAnalysisRequest, project_id: str, user_id: str) 
                 stack.append((neighbor, [*path, neighbor]))
 
     paths.sort(key=lambda item: (-item.risk_score, item.hops, item.nodes))
-    return AttackPathAnalysisResponse(
-        project_id=project_id,
-        generated_at=graph.generated_at,
-        source_asset_id=request.source_asset_id,
-        target_asset_id=request.target_asset_id,
-        paths=paths,
-    )
+    persisted_ids: list[str] = []
+    if paths:
+        project = Project.objects.get(pk=project_id)
+        organization = ensure_project_tenant(project, user_id)
+        for path in paths:
+            row = AttackPath.objects.create(
+                organization=organization,
+                project=project,
+                source_node={"asset_id": request.source_asset_id, "name": node_map[request.source_asset_id].name},
+                target_node={"asset_id": request.target_asset_id, "name": node_map[request.target_asset_id].name},
+                steps=path.nodes,
+                risk_score=path.risk_score,
+                evidence={"source": "asset_relationships_and_open_vulnerabilities", "contract_version": "1.0"},
+                status=AttackPath.Status.DISCOVERED,
+            )
+            persisted_ids.append(str(row.id))
+
+    return AttackPathAnalysisResponse(project_id=project_id, generated_at=graph.generated_at, source_asset_id=request.source_asset_id, target_asset_id=request.target_asset_id, paths=paths, persisted_attack_path_ids=persisted_ids)
 
 
 @router.get("/projects/{project_id}", response_model=AttackPathGraph)
