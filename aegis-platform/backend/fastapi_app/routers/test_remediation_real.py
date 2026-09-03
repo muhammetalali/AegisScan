@@ -1,6 +1,7 @@
 import socket
 
 import pytest
+from django.db import close_old_connections
 from fastapi.testclient import TestClient
 
 from django_project.assets.models import Asset, AssetAuthorization
@@ -82,10 +83,11 @@ def test_validated_closure_executes_real_nmap_and_persists_proof():
 
     assert response.status_code == 200, response.text
     payload = response.json()
+    close_old_connections()
     finding.refresh_from_db()
     validation = ValidationRun.objects.get(pk=payload['validation_id'])
     evidence = Evidence.objects.get(pk=payload['evidence_id'])
-    history = VulnerabilityStatusHistory.objects.get(vulnerability=finding, new_status=Vulnerability.Status.FIXED)
+    history = VulnerabilityStatusHistory.objects.get(vulnerability_id=finding.id, new_status=Vulnerability.Status.FIXED)
 
     assert payload['state'] == 'verified'
     assert payload['risk_before'] == 9.0
@@ -132,8 +134,9 @@ def test_validated_closure_refuses_finding_still_present_without_creating_fix_ev
 
     assert response.status_code == 200, response.text
     payload = response.json()
+    close_old_connections()
     finding.refresh_from_db()
     assert payload['state'] == 'rejected_by_revalidation'
     assert finding.status == Vulnerability.Status.OPEN
     assert finding.risk_score == 7.0
-    assert VulnerabilityStatusHistory.objects.filter(vulnerability=finding, new_status=Vulnerability.Status.FIXED).count() == 0
+    assert VulnerabilityStatusHistory.objects.filter(vulnerability_id=finding.id, new_status=Vulnerability.Status.FIXED).count() == 0
