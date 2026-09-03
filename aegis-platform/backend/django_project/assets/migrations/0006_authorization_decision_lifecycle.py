@@ -24,12 +24,12 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name='assetauthorization', name='valid_from',
-            field=models.DateTimeField(auto_now_add=True, null=True),
+            field=models.DateTimeField(auto_now_add=True),
         ),
         migrations.AlterModelOptions(name='assetauthorization', options={'ordering': ['-created_at', '-id']}),
         migrations.RemoveIndex(model_name='assetauthorization', name='assets_asse_asset_i_76122c_idx'),
         migrations.AddIndex(
             model_name='assetauthorization',
-            index=models.Index(fields=['asset', '-created_at', '-id'], name='assets_asse_asset_i_8c4e0e_idx'),
+            index=models.Index(fields=['asset', '-created_at', '-id'], name='assets_asse_asset_i_58150b_idx'),
         ),
     ]
