@@ -1,0 +1,44 @@
+name: Reality Policy Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compile canonical backend
+        run: python -m compileall -q aegis-platform/backend
+      - name: Reject tracked generated artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in aegis-platform/frontend/dist aegis.egg-info; do
+            if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+              echo "Tracked generated artifact: $path"
+              exit 1
+            fi
+          done
+      - name: Reject known fake completion markers in production source
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=$(grep -RInE --exclude-dir=.git --exclude='*.map' --exclude='*.lock' \
+            'TODO:[[:space:]]*Implement actual|mock execution|fake execution|synthetic endpoint' \
+            aegis-platform/backend aegis-platform/frontend 2>/dev/null || true)
+          if [ -n "$matches" ]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi
+      - name: Verify proof policy
+        run: test -f .github/SECURITY_REALITY_GATE.md
