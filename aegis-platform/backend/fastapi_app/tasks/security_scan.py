@@ -12,6 +12,7 @@ django.setup()
 from celery import shared_task
 from django.db import transaction
 
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.vulnerabilities.models import Vulnerability
@@ -172,35 +173,65 @@ def _ingest_nuclei_findings(scan: Scan, evidence: Evidence, raw_output: str) -> 
     return findings
 
 
+def _execution_authorization(scan_id: str) -> tuple[Scan, str, AssetAuthorization] | tuple[None, str, None]:
+    """Return the bound authorization and target only when it is valid at execution start."""
+    with transaction.atomic():
+        scan = Scan.objects.select_for_update().select_related('project', 'initiated_by').get(pk=scan_id)
+        if not scan.asset_id:
+            return None, 'Execution blocked: scan has no persisted asset.', None
+        if not scan.authorization_decision_id:
+            return None, 'Execution blocked: scan has no bound asset authorization decision.', None
+        asset = Asset.objects.select_for_update().get(pk=scan.asset_id)
+        authorization = AssetAuthorization.objects.select_for_update().get(pk=scan.authorization_decision_id)
+        latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+        if authorization.asset_identity_snapshot != asset.id:
+            return None, 'Execution blocked: authorization decision is not bound to the current asset identity.', None
+        if latest is None or latest.id != authorization.id:
+            return None, 'Execution blocked: bound authorization decision is no longer the latest asset decision.', None
+        if authorization.authorized is not True or not authorization.is_currently_valid:
+            return None, 'Execution blocked: bound authorization decision is not currently valid.', None
+        asset_config = asset.configuration or {}
+        asset_target = _first_string(asset_config.get('host') or asset_config.get('ip') or asset_config.get('domain') or asset_config.get('url'))
+        target = _first_string(authorization.target_snapshot)
+        requested_target = _first_string((scan.config or {}).get('target') or (scan.config or {}).get('host') or (scan.config or {}).get('ip') or (scan.config or {}).get('url'))
+        if not target:
+            return None, 'Execution blocked: authorization decision has no target snapshot.', None
+        if asset_target != target:
+            return None, 'Execution blocked: asset target no longer matches the bound authorization decision.', None
+        if requested_target and requested_target != target:
+            return None, 'Execution blocked: scan target no longer matches the bound authorization decision.', None
+        if not is_target_authorized(target):
+            return None, 'Execution blocked: target is outside the server-side authorized scan scope.', None
+        return scan, target, authorization
+
+
+def _block_scan(scan_id: str, message: str) -> dict:
+    now = datetime.now(timezone.utc)
+    scan = Scan.objects.get(pk=scan_id)
+    scan.status = Scan.Status.FAILED
+    scan.error_message = message
+    scan.completed_at = now
+    scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
+    ScanLog.objects.create(scan=scan, level=ScanLog.Level.WARNING, message=message, context={'authorization_boundary': True})
+    return {'status': 'blocked', 'scan_id': scan_id}
+
+
 @shared_task(bind=True, name='fastapi_app.tasks.security_scan.run_nmap_scan', max_retries=1, default_retry_delay=30)
 def run_nmap_scan(self, scan_id: str) -> dict:
-    scan = Scan.objects.select_related('asset', 'initiated_by').get(pk=scan_id)
-    if not scan.asset:
-        raise ValueError('A scan must reference an asset before execution')
-    configuration = scan.asset.configuration or {}
-    if configuration.get('authorized') is not True:
-        scan.status = Scan.Status.FAILED
-        scan.error_message = 'Execution blocked: asset is not explicitly marked authorized.'
-        scan.completed_at = datetime.now(timezone.utc)
-        scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
-        return {'status': 'blocked', 'scan_id': scan_id}
-    target = configuration.get('host') or configuration.get('ip') or configuration.get('domain') or configuration.get('url')
-    if not target:
-        raise ValueError('Authorized asset has no host/ip/domain/url target')
-    if not is_target_authorized(target):
-        scan.status = Scan.Status.FAILED
-        scan.error_message = 'Execution blocked: target is outside the server-side authorized scan scope.'
-        scan.completed_at = datetime.now(timezone.utc)
-        scan.save(update_fields=['status', 'error_message', 'completed_at', 'updated_at'])
-        return {'status': 'blocked', 'scan_id': scan_id}
+    scan, target, authorization = _execution_authorization(scan_id)
+    if scan is None:
+        return _block_scan(scan_id, target)
     scan.status = Scan.Status.RUNNING
     scan.started_at = datetime.now(timezone.utc)
     scan.current_phase = 'nmap'
     scan.current_engine = 'nmap'
     scan.progress = 10
-    scan.save(update_fields=['status', 'started_at', 'current_phase', 'current_engine', 'progress', 'updated_at'])
+    scan.error_message = ''
+    scan.save(update_fields=['status', 'started_at', 'current_phase', 'current_engine', 'progress', 'error_message', 'updated_at'])
     engine = _ensure_engine('nmap', 'Nmap', ScanEngine.EngineCategory.RECON, 300)
     execution = _start_execution(scan, engine)
+    execution.result_data = {'authorization_decision_id': str(authorization.id), 'authorization_target': authorization.target_snapshot}
+    execution.save(update_fields=['result_data', 'updated_at'])
     try:
         started = scan.started_at
         timeout = 120 if scan.depth == Scan.Depth.QUICK else 300
@@ -209,24 +240,24 @@ def run_nmap_scan(self, scan_id: str) -> dict:
         completed_at = datetime.now(timezone.utc)
         duration = max(0, (completed_at - started).total_seconds()) if started else 0
         with transaction.atomic():
-            evidence = Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed}, collected_by=scan.initiated_by)
+            evidence = Evidence.objects.create(scan=scan, asset=scan.asset, source=result.tool, evidence_type='scanner_output', raw_output=result.stdout, metadata={'stderr': result.stderr, 'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed, 'authorization_decision_id': str(authorization.id), 'authorization_target': authorization.target_snapshot}, collected_by=scan.initiated_by)
             execution.status = ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code == 0 else ScanEngineExecution.ExecutionStatus.FAILED
             execution.progress = 100
             execution.completed_at = completed_at
             execution.duration = duration
             execution.findings_found = 0
             execution.evidences_collected = 1
-            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'parsed': parsed, 'evidence_id': str(evidence.id)}
+            execution.result_data = {'tool': result.tool, 'target': result.target, 'exit_code': result.exit_code, 'parsed': parsed, 'evidence_id': str(evidence.id), 'authorization_decision_id': str(authorization.id), 'authorization_target': authorization.target_snapshot}
             execution.logs = result.stderr or ''
             execution.save(update_fields=['status', 'progress', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'result_data', 'logs', 'updated_at'])
-            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nmap execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'host_count': parsed.get('host_count', 0), 'open_ports': parsed.get('open_ports', 0), 'evidence_id': str(evidence.id)})
+            ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message='nmap execution completed', context={'target': result.target, 'exit_code': result.exit_code, 'host_count': parsed.get('host_count', 0), 'open_ports': parsed.get('open_ports', 0), 'evidence_id': str(evidence.id), 'authorization_decision_id': str(authorization.id)})
             scan.status = Scan.Status.COMPLETED if result.exit_code == 0 else Scan.Status.PARTIAL
             scan.progress = 100
             scan.completed_at = completed_at
             scan.findings_count = 0
-            scan.engine_results = {**(scan.engine_results or {}), 'nmap': {'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed}}
+            scan.engine_results = {**(scan.engine_results or {}), 'nmap': {'exit_code': result.exit_code, 'target': result.target, 'parsed': parsed, 'authorization_decision_id': str(authorization.id)}}
             scan.save(update_fields=['status', 'progress', 'completed_at', 'findings_count', 'engine_results', 'updated_at'])
-        return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nmap', 'target': result.target, 'parsed': parsed}
+        return {'status': scan.status, 'scan_id': scan_id, 'tool': 'nmap', 'target': result.target, 'parsed': parsed, 'authorization_decision_id': str(authorization.id)}
     except Exception as exc:
         completed_at = datetime.now(timezone.utc)
         execution.status = ScanEngineExecution.ExecutionStatus.FAILED
@@ -234,7 +265,7 @@ def run_nmap_scan(self, scan_id: str) -> dict:
         execution.completed_at = completed_at
         execution.error_message = str(exc)
         execution.save(update_fields=['status', 'progress', 'completed_at', 'error_message', 'updated_at'])
-        ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.ERROR, message='nmap execution failed', context={'error': str(exc)})
+        ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.ERROR, message='nmap execution failed', context={'error': str(exc), 'authorization_decision_id': str(authorization.id)})
         scan.status = Scan.Status.FAILED
         scan.error_message = str(exc)
         scan.completed_at = completed_at

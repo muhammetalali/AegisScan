@@ -4,6 +4,13 @@ from django.utils.translation import gettext_lazy as _
 import uuid
 
 
+class ScanQuerySet(models.QuerySet):
+    def select_for_update(self, **kwargs):
+        """Lock Scan rows only; related rows are locked explicitly by execution code."""
+        kwargs.setdefault('of', ('self',))
+        return super().select_for_update(**kwargs)
+
+
 class Scan(models.Model):
     class Type(models.TextChoices):
         CODE = 'code', _('Code Scan')
@@ -38,6 +45,13 @@ class Scan(models.Model):
     status = models.CharField(_('status'), max_length=20, choices=Status.choices, default=Status.PENDING)
     depth = models.CharField(_('depth'), max_length=20, choices=Depth.choices, default=Depth.STANDARD)
     asset = models.ForeignKey('assets.Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
+    authorization_decision = models.ForeignKey(
+        'assets.AssetAuthorization',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='bound_scans',
+    )
     engines = models.JSONField(_('engines'), default=list)
     config = models.JSONField(_('configuration'), default=dict, blank=True)
     template = models.ForeignKey('projects.ScanTemplate', on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
@@ -65,6 +79,8 @@ class Scan(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = ScanQuerySet.as_manager()
+
     class Meta:
         verbose_name = _('Scan')
         verbose_name_plural = _('Scans')
@@ -74,6 +90,7 @@ class Scan(models.Model):
             models.Index(fields=['project', 'scan_type']),
             models.Index(fields=['initiated_by']),
             models.Index(fields=['celery_task_id']),
+            models.Index(fields=['authorization_decision'], name='scans_scan_authori_0bb523_idx'),
         ]
 
     def __str__(self):

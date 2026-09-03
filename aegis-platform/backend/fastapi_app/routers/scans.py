@@ -3,6 +3,7 @@ from typing import List, Optional
 import os
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -42,6 +43,7 @@ class ScanResponse(BaseModel):
     security_score: float
     risk_level: str
     findings_count: int
+    authorization_decision_id: Optional[str] = None
     created_at: str
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
@@ -53,7 +55,9 @@ def _serialize_scan(scan: Scan):
         id=str(scan.id), project_id=str(scan.project_id), name=scan.name, scan_type=scan.scan_type,
         status=scan.status, progress=round(scan.progress), current_phase=scan.current_phase,
         security_score=scan.security_score, risk_level=scan.risk_level or 'unknown',
-        findings_count=scan.findings_count, created_at=scan.created_at.astimezone(timezone.utc).isoformat(),
+        findings_count=scan.findings_count,
+        authorization_decision_id=str(scan.authorization_decision_id) if scan.authorization_decision_id else None,
+        created_at=scan.created_at.astimezone(timezone.utc).isoformat(),
         started_at=scan.started_at.astimezone(timezone.utc).isoformat() if scan.started_at else None,
         completed_at=scan.completed_at.astimezone(timezone.utc).isoformat() if scan.completed_at else None,
     )
@@ -84,17 +88,30 @@ def _create_scan(scan: ScanCreate, user_id: str):
     if scan.scan_type in NETWORK_SCAN_TYPES:
         if not asset:
             raise HTTPException(status_code=400, detail='A real network scan requires an existing project asset; authorization must be established on the asset before execution')
-        if not asset.is_active:
-            raise HTTPException(status_code=403, detail='The selected asset is inactive and cannot be used for network execution')
-        authorization = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
-        if not authorization or authorization.authorized is not True or not authorization.is_currently_valid:
-            raise HTTPException(status_code=403, detail='The selected asset does not have an active persisted network authorization decision')
-        requested_target = scan.config.get('target') or scan.config.get('host') or scan.config.get('ip') or scan.config.get('url')
-        persisted_target = authorization.target_snapshot or ''
-        if requested_target:
-            normalized_requested = str(requested_target).strip()
-            if persisted_target != normalized_requested:
-                raise HTTPException(status_code=409, detail='Requested scan target does not match the authorized asset identity')
+        with transaction.atomic():
+            asset = Asset.objects.select_for_update().filter(id=asset.id, project=project).first()
+            if not asset or not asset.is_active:
+                raise HTTPException(status_code=403, detail='The selected asset is inactive and cannot be used for network execution')
+            authorization = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+            if not authorization or authorization.authorized is not True or not authorization.is_currently_valid:
+                raise HTTPException(status_code=403, detail='The selected asset does not have an active persisted network authorization decision')
+            requested_target = scan.config.get('target') or scan.config.get('host') or scan.config.get('ip') or scan.config.get('url')
+            persisted_target = authorization.target_snapshot or ''
+            if requested_target:
+                normalized_requested = str(requested_target).strip()
+                if persisted_target != normalized_requested:
+                    raise HTTPException(status_code=409, detail='Requested scan target does not match the authorized asset identity')
+            return Scan.objects.create(
+                project=project,
+                name=scan.name,
+                scan_type=scan.scan_type,
+                asset=asset,
+                authorization_decision=authorization,
+                engines=scan.engines or ['nmap'],
+                depth=scan.depth,
+                config=scan.config,
+                initiated_by_id=user_id,
+            )
     return Scan.objects.create(project=project, name=scan.name, scan_type=scan.scan_type, asset=asset, engines=scan.engines or ['nmap'], depth=scan.depth, config=scan.config, initiated_by_id=user_id)
 
 
