@@ -35,6 +35,6 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='assetauthorization',
-            index=models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_asse_asset_i_6b8d51_idx'),
+            index=models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
         ),
     ]
