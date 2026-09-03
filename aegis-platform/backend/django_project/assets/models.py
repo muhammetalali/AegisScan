@@ -39,7 +39,6 @@ class Asset(models.Model):
     description = models.TextField(_('description'), blank=True)
     environment = models.CharField(_('environment'), max_length=20, choices=Environment.choices, default=Environment.DEVELOPMENT)
     criticality = models.CharField(_('criticality'), max_length=20, choices=Criticality.choices, default=Criticality.MEDIUM)
-
     configuration = models.JSONField(_('configuration'), default=dict, blank=True)
     tags = models.JSONField(_('tags'), default=list, blank=True)
     metadata = models.JSONField(_('metadata'), default=dict, blank=True)
@@ -116,10 +115,10 @@ class TechnologyFingerprint(models.Model):
     asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='technologies')
     name = models.CharField(_('name'), max_length=100)
     version = models.CharField(_('version'), max_length=50, blank=True)
-    category = models.CharField(_('category'), max_length=50)
-    confidence = models.FloatField(_('confidence'), default=0.0)
-    source = models.CharField(_('source'), max_length=50)
-    evidence = models.TextField(blank=True)
+    category = models.CharField(max_length=50)
+    confidence = models.FloatField(default=0.0)
+    source = models.CharField(max_length=50)
+    evidence = models.TextField(_('evidence'), blank=True)
     detected_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -158,7 +157,6 @@ class AssetAuthorization(models.Model):
     target_snapshot = models.CharField(max_length=500, blank=True)
     reason = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
     objects = AssetAuthorizationManager()
 
     class Meta:
