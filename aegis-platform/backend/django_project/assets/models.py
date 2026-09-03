@@ -45,7 +45,7 @@ class Asset(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='owned_assets')
     is_active = models.BooleanField(_('active'), default=True)
     last_scanned_at = models.DateTimeField(_('last scanned at'), blank=True, null=True)
-    scan_count = models.PositiveIntegerField(_('scan count'), default=0)
+    scan_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -154,6 +154,7 @@ class AssetAuthorization(models.Model):
     target_snapshot = models.CharField(max_length=500, blank=True)
     reason = models.CharField(max_length=500, blank=True)
     correlation_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    request_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     supersedes = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='superseding_decisions')
     valid_from = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(null=True, blank=True)
@@ -166,6 +167,7 @@ class AssetAuthorization(models.Model):
             models.Index(fields=['asset', '-created_at', '-id'], name='assets_asse_asset_i_58150b_idx'),
             models.Index(fields=['asset', 'authorized', '-created_at'], name='assets_asse_asset_i_ac3a40_idx'),
             models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
+            models.Index(fields=['request_id']),
         ]
 
     def __str__(self):
