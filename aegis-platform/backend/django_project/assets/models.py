@@ -45,7 +45,7 @@ class Asset(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='owned_assets')
     is_active = models.BooleanField(_('active'), default=True)
     last_scanned_at = models.DateTimeField(_('last scanned at'), blank=True, null=True)
-    scan_count = models.PositiveIntegerField(default=0)
+    scan_count = models.PositiveIntegerField(_('scan count'), default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
