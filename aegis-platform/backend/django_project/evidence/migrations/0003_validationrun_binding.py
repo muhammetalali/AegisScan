@@ -39,10 +39,10 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='validationrun',
-            index=models.Index(fields=['finding', 'created_at'], name='evidence_va_finding_8f0f45_idx'),
+            index=models.Index(fields=['finding', 'created_at'], name='evidence_val_finding_created_idx'),
         ),
         migrations.AddIndex(
             model_name='validationrun',
-            index=models.Index(fields=['authorization_decision'], name='evidence_va_auth_dec_0a6a5a_idx'),
+            index=models.Index(fields=['authorization_decision'], name='evidence_val_auth_decision_idx'),
         ),
     ]
