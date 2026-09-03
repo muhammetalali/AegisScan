@@ -22,6 +22,6 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='scan',
-            index=models.Index(fields=['authorization_decision'], name='scans_scan_authoriz_22f5fd_idx'),
+            index=models.Index(fields=['authorization_decision'], name='scans_scan_authori_0bb523_idx'),
         ),
     ]
