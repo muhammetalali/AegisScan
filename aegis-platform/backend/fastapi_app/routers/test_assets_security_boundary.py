@@ -87,6 +87,22 @@ def test_generic_asset_update_cannot_grant_network_authorization(api_fixture):
     assert (asset.configuration or {}).get("authorized") is not True
 
 
+def test_generic_asset_update_revokes_existing_authorization(api_fixture):
+    client, _, _, _, asset, _ = api_fixture
+    asset.configuration = {"host": "authorized-target", "authorized": True}
+    asset.save(update_fields=["configuration"])
+
+    response = client.patch(
+        f"/assets/{asset.id}",
+        json={"configuration": {"host": "changed-target"}},
+    )
+
+    assert response.status_code == 200
+    asset.refresh_from_db()
+    assert (asset.configuration or {}).get("host") == "changed-target"
+    assert (asset.configuration or {}).get("authorized") is False
+
+
 def test_only_project_owner_can_authorize_asset(api_fixture):
     client, owner, member, _, asset, fake_user = api_fixture
 
