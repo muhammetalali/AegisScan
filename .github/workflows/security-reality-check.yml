@@ -32,26 +32,19 @@ jobs:
           POSTGRES_DB: aegisdb
           POSTGRES_USER: aegis
           POSTGRES_PASSWORD: aegis
-        ports:
-          - '5432:5432'
+        ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U aegis -d aegisdb"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
         image: redis:7
-        ports:
-          - '6379:6379'
+        ports: ['6379:6379']
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -60,53 +53,43 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             aegis-platform/backend/requirements.txt
-
       - name: Install Nmap
         run: |
           sudo apt-get update
           sudo apt-get install -y nmap
-
       - name: Install root Aegis package
         run: python -m pip install -e '.[dev]'
-
       - name: Install backend dependencies
         working-directory: aegis-platform/backend
         run: python -m pip install -r requirements.txt
-
       - name: Engine and platform tests
         env:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q tests/test_integration.py tests/test_platform.py
-
       - name: Verify Django project import
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: |
-          python -c "import django_project; import django_project.settings; print('Django project import: OK')"
-
+        run: python -c "import django_project; import django_project.settings; print('Django project import: OK')"
       - name: Django check
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python manage.py check
-
       - name: Migration consistency check
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python manage.py makemigrations --check --dry-run
-
       - name: Apply migrations
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python manage.py migrate --noinput
-
       - name: Verify users table
         working-directory: aegis-platform/backend
         env:
@@ -114,80 +97,72 @@ jobs:
         run: |
           result=$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('public.users_user');")
           test "$result" = 'users_user'
-
       - name: Authentication and CSRF security tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q django_project/users/test_auth_security.py
-
       - name: Network scan authorization boundary tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_scans_security_boundary.py
-
       - name: Real Nmap execution E2E
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-          AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
         run: python -m pytest -q fastapi_app/routers/test_real_nmap_e2e.py
-
       - name: Real Nmap finding validation E2E
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-          AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
         run: python -m pytest -q fastapi_app/routers/test_finding_validation_e2e.py
-
       - name: Real posture API E2E
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-          AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
         run: python -m pytest -q fastapi_app/routers/test_posture_real.py
-
+      - name: Real audit API E2E
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_audit_real.py
       - name: Asset authorization boundary tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_assets_security_boundary.py
-
       - name: Asset authorization immutability tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_asset_authorization_immutability.py
-
       - name: Asset authorization tamper resistance tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_asset_authorization_tamper_resistance.py
-
       - name: Asset authorization lifecycle tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_asset_authorization_lifecycle.py
-
       - name: Asset authorization source-of-truth tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_asset_authorization_source_of_truth.py
-
       - name: Production Django checks
         working-directory: aegis-platform/backend
         env:
@@ -198,45 +173,35 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python manage.py check --deploy
-
       - name: Python compile check
         working-directory: aegis-platform/backend
         run: python -m compileall -q django_project fastapi_app celery_app
-
       - name: Redis connectivity smoke test
-        working-directory: aegis-platform/backend
-        run: |
-          python -c "import redis; r=redis.from_url('redis://127.0.0.1:6379/0'); assert r.ping() is True; print('Redis: OK')"
-
+        run: python -c "import redis; r=redis.from_url('redis://127.0.0.1:6379/0'); assert r.ping() is True; print('Redis: OK')"
       - name: Celery configuration smoke test
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: |
-          python -c "import django; django.setup(); from django.conf import settings; from celery import Celery; app=Celery('aegis'); app.conf.broker_url=settings.CELERY_BROKER_URL; assert app.conf.broker_url == 'redis://127.0.0.1:6379/0'; print('Celery broker: OK')"
+        run: python -c "import django; django.setup(); from django.conf import settings; from celery import Celery; app=Celery('aegis'); app.conf.broker_url=settings.CELERY_BROKER_URL; assert app.conf.broker_url == 'redis://127.0.0.1:6379/0'; print('Celery broker: OK')"
 
   frontend:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: aegis-platform/frontend/package-lock.json
-
       - name: Install dependencies
         working-directory: aegis-platform/frontend
         run: npm ci
-
       - name: Typecheck
         working-directory: aegis-platform/frontend
         run: npx tsc --noEmit
-
       - name: Build
         working-directory: aegis-platform/frontend
         run: npm run build
