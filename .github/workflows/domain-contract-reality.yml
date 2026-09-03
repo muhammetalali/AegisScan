@@ -4,7 +4,7 @@ name: Domain Contract Reality
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, codex/full-contract-ui-audit-2026-09-03]
 
 permissions:
   contents: read
@@ -26,6 +26,10 @@ jobs:
         run: npm ci
       - name: Full UI audit
         run: npm run audit:ui
+      - name: i18n audit
+        run: npm run i18n:audit
+      - name: Lint
+        run: npm run lint
       - name: Typecheck and build
         run: npm run build
 
@@ -72,7 +76,7 @@ jobs:
         run: |
           python -m pip install -e '.[dev]'
           python -m pip install -r aegis-platform/backend/requirements.txt
-      - name: Django checks and migrations
+      - name: Django checks and clean database migration
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
@@ -81,12 +85,13 @@ jobs:
           python manage.py check
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
-      - name: API contract reality
+      - name: API contract and persistence reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py
+        run: |
+          python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py fastapi_app/routers/test_reliability_contracts.py
       - name: Unified validation contract reality
         working-directory: aegis-platform/backend
         env:
