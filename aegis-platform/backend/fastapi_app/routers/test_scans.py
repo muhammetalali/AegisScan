@@ -100,5 +100,32 @@ def test_create_scan_rejects_slug_collision_with_different_identity(api_fixture)
     response = client.post("/scans/", json=_body(project.id))
 
     assert response.status_code == 409
-    assert "different identity" in response.json()["detail"]
+    assert "identity" in response.json()["detail"]
+    assert Scan.objects.filter(project=project).count() == 0
+
+
+def test_create_scan_cannot_create_authorized_asset_from_request_flag(api_fixture):
+    client, _, project, _ = api_fixture
+
+    body = _body(project.id)
+    body["config"]["target"] = "unregistered-target"
+    body["authorized"] = True
+
+    response = client.post("/scans/", json=body)
+
+    assert response.status_code == 400
+    assert "existing project asset" in response.json()["detail"]
+    assert Asset.objects.filter(project=project, name="unregistered-target").count() == 0
+    assert Scan.objects.filter(project=project).count() == 0
+
+
+def test_create_scan_rejects_persisted_unauthorized_asset(api_fixture):
+    client, _, project, asset = api_fixture
+    asset.configuration = {"host": "aegis-scan-target", "authorized": False}
+    asset.save(update_fields=["configuration"])
+
+    response = client.post("/scans/", json=_body(project.id))
+
+    assert response.status_code == 403
+    assert "not explicitly authorized" in response.json()["detail"]
     assert Scan.objects.filter(project=project).count() == 0
