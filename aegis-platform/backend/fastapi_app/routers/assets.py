@@ -109,7 +109,7 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
             latest = AssetAuthorization.objects.filter(asset=asset).order_by("-created_at", "-id").first()
             if latest and latest.authorized and latest.is_currently_valid:
                 data["configuration"] = dict(data["configuration"]); data["configuration"]["authorized"] = False
-                AssetAuthorization.objects.create(asset=asset, actor_id=user_id, authorized=False, target_snapshot=(latest.target_snapshot or _asset_target(asset))[:500], reason="Authorization revoked because asset configuration changed", supersedes=latest)
+                AssetAuthorization.objects.create(asset=asset, actor_id=user_id, authorized=False, target_snapshot=(latest.target_snapshot or _asset_target(asset))[:500], reason="Authorization revoked because asset configuration changed", supersedes=latest, request_id=uuid4())
         if "name" in data: data["slug"] = slugify(data["name"]) or asset.slug
         for key, value in data.items(): setattr(asset, key, value)
         asset.save(); return asset
@@ -139,8 +139,7 @@ def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, reas
             if existing.asset_id != asset.id or existing.authorized != authorized or existing.reason != reason: raise HTTPException(status_code=409, detail="Correlation ID is already bound to a different authorization decision")
             return asset
         request_bound = AssetAuthorization.objects.filter(request_id=request_id).first()
-        if request_bound:
-            raise HTTPException(status_code=409, detail="Request ID is already bound to an authorization decision")
+        if request_bound: raise HTTPException(status_code=409, detail="Request ID is already bound to an authorization decision")
         expiry = None
         if expires_at:
             try: expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
@@ -154,12 +153,12 @@ def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, reas
                 decision = AssetAuthorization.objects.create(asset=asset, actor_id=user_id, authorized=authorized, target_snapshot=target[:500], reason=reason, correlation_id=effective_correlation, request_id=request_id, supersedes=latest, expires_at=expiry)
         except IntegrityError:
             existing = AssetAuthorization.objects.filter(correlation_id=effective_correlation).first()
-            if existing and existing.asset_id == asset.id and existing.authorized == authorized and existing.reason == reason:
-                return asset
+            if existing and existing.asset_id == asset.id and existing.authorized == authorized and existing.reason == reason: return asset
             raise
+        action = "asset_authorization_grant" if authorized else "asset_authorization_revoke"
         AuditLog.objects.create(
             user_id=user_id,
-            action=AuditLog.Action.ASSET_AUTHORIZATION_GRANT if authorized else AuditLog.Action.ASSET_AUTHORIZATION_REVOKE,
+            action=action,
             result=AuditLog.Result.SUCCESS,
             resource_type="AssetAuthorization",
             resource_id=str(decision.id),
@@ -177,12 +176,9 @@ def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, reas
 async def set_asset_authorization(asset_id: str, update: AssetAuthorizationUpdate, request: Request, user=Depends(get_current_user)):
     request_id_raw = request.headers.get("X-Request-ID")
     if request_id_raw:
-        try:
-            request_id = UUID(request_id_raw)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="X-Request-ID must be a valid UUID")
-    else:
-        request_id = uuid4()
+        try: request_id = UUID(request_id_raw)
+        except ValueError: raise HTTPException(status_code=422, detail="X-Request-ID must be a valid UUID")
+    else: request_id = uuid4()
     ip_address = request.client.host if request.client and request.client.host else "0.0.0.0"
     user_agent = request.headers.get("User-Agent", "")
     return _asset_response(await _set_asset_authorization(asset_id, str(user.get("user_id")), update.authorized, update.reason, bool(user.get("is_staff")), update.correlation_id, update.expires_at, request_id, ip_address, user_agent))
