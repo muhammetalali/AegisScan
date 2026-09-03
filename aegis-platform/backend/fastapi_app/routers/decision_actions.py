@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 from asgiref.sync import sync_to_async
 from django_project.vulnerabilities.models import Vulnerability
@@ -18,6 +19,7 @@ from ..services.decision_action_orchestration import create_action, get_action, 
 from ..services.workflow_intelligence import enrich_action, workflow_metrics
 from ..services.remediation_loop import execute_validated_closure, list_runs_for_finding
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
 
@@ -109,8 +111,9 @@ async def validated_closure(finding_id: str, body: ValidatedClosureRequest, user
         return await sync_to_async(execute_validated_closure)(finding_id, actor_id, body.reason)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail='Validated remediation failed') from exc
+    except Exception:
+        logger.exception('Validated remediation failed for finding_id=%s actor_id=%s', finding_id, actor_id)
+        raise HTTPException(status_code=500, detail='Validated remediation failed')
 
 
 @router.get('/remediation/findings/{finding_id}')
