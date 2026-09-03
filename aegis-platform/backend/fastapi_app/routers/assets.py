@@ -51,6 +51,10 @@ class AssetUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class AssetAuthorizationUpdate(BaseModel):
+    authorized: bool
+
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -144,6 +148,8 @@ def _create_asset(data: AssetCreate, user_id: str):
     project = Project.objects.filter(id=data.project_id).filter(owner_id=user_id).first() or Project.objects.filter(id=data.project_id, members__id=user_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
+    if (data.configuration or {}).get("authorized") is not None:
+        raise HTTPException(status_code=403, detail="Asset authorization can only be changed through the authorization endpoint")
     base_slug = slugify(data.name) or "asset"
     slug = base_slug
     suffix = 2
@@ -185,6 +191,11 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     data = update.model_dump(exclude_unset=True)
+    if "configuration" in data and data["configuration"] is not None and "authorized" in data["configuration"]:
+        raise HTTPException(status_code=403, detail="Asset authorization can only be changed through the authorization endpoint")
+    if "configuration" in data and data["configuration"] is not None and (asset.configuration or {}).get("authorized") is True:
+        data["configuration"] = dict(data["configuration"])
+        data["configuration"]["authorized"] = False
     if "name" in data:
         data["slug"] = slugify(data["name"]) or asset.slug
     for key, value in data.items():
@@ -196,6 +207,34 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
 @router.patch("/{asset_id}", response_model=AssetResponse)
 async def update_asset(asset_id: str, update: AssetUpdate, user=Depends(get_current_user)):
     return _asset_response(await _update_asset(asset_id, update, str(user.get("user_id"))))
+
+
+@sync_to_async
+def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, is_staff: bool):
+    from django_project.assets.models import Asset
+
+    asset = Asset.objects.select_related("project", "owner").filter(pk=asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if not is_staff and str(asset.project.owner_id) != str(user_id):
+        raise HTTPException(status_code=403, detail="Only the project owner or staff may change asset network authorization")
+    configuration = dict(asset.configuration or {})
+    configuration["authorized"] = authorized
+    asset.configuration = configuration
+    asset.save(update_fields=["configuration", "updated_at"])
+    return asset
+
+
+@router.post("/{asset_id}/authorization", response_model=AssetResponse)
+async def set_asset_authorization(asset_id: str, update: AssetAuthorizationUpdate, user=Depends(get_current_user)):
+    return _asset_response(
+        await _set_asset_authorization(
+            asset_id,
+            str(user.get("user_id")),
+            update.authorized,
+            bool(user.get("is_staff")),
+        )
+    )
 
 
 @sync_to_async
