@@ -239,7 +239,9 @@ def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, reas
     from django_project.assets.models import Asset, AssetAuthorization
 
     with transaction.atomic():
-        asset = Asset.objects.select_related("project", "owner").select_for_update().filter(pk=asset_id).first()
+        # owner is nullable; do not join it while issuing FOR UPDATE. The asset
+        # row itself is the serialization point for authorization decisions.
+        asset = Asset.objects.select_related("project").select_for_update(of=("self",)).filter(pk=asset_id).first()
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
         if not is_staff and str(asset.project.owner_id) != str(user_id):
