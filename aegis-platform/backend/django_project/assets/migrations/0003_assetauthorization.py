@@ -40,8 +40,8 @@ class Migration(migrations.Migration):
             options={
                 'ordering': ['-created_at'],
                 'indexes': [
-                    models.Index(fields=['asset', '-created_at'], name='assets_asse_asset_id_4a6c1b_idx'),
-                    models.Index(fields=['asset', 'authorized', '-created_at'], name='assets_asse_asset_id_7a4e6c_idx'),
+                    models.Index(fields=['asset', '-created_at'], name='assets_asse_asset_i_76122c_idx'),
+                    models.Index(fields=['asset', 'authorized', '-created_at'], name='assets_asse_asset_i_ac3a40_idx'),
                 ],
             },
         ),
