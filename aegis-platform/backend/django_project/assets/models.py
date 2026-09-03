@@ -151,7 +151,8 @@ class AssetAuthorization(models.Model):
     """Immutable authorization decision used as the security source of truth for network execution."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='authorization_records')
+    asset = models.ForeignKey(Asset, on_delete=models.SET_NULL, null=True, related_name='authorization_records')
+    asset_identity_snapshot = models.UUIDField(default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='asset_authorization_actions')
     authorized = models.BooleanField(default=False)
     target_snapshot = models.CharField(max_length=500, blank=True)
@@ -164,15 +165,23 @@ class AssetAuthorization(models.Model):
         indexes = [
             models.Index(fields=['asset', '-created_at']),
             models.Index(fields=['asset', 'authorized', '-created_at']),
+            models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
         ]
 
     def __str__(self):
         state = 'authorized' if self.authorized else 'revoked'
-        return f"{self.asset_id}: {state} by {self.actor_id}"
+        return f"{self.asset_id or self.asset_identity_snapshot}: {state} by {self.actor_id}"
 
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
             raise ValidationError('Asset authorization decisions are immutable; create a new decision instead')
+        if self.asset_id:
+            # The snapshot is the durable identity of the asset this decision was made for.
+            # Always derive it from the attached asset on first insert so callers cannot
+            # accidentally or maliciously provide a mismatched identity.
+            self.asset_identity_snapshot = self.asset_id
+        elif not self.asset_identity_snapshot:
+            raise ValidationError('Asset authorization decisions require an asset identity snapshot')
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
