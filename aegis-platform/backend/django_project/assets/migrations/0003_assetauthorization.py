@@ -4,6 +4,21 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def migrate_legacy_authorizations(apps, schema_editor):
+    Asset = apps.get_model('assets', 'Asset')
+    AssetAuthorization = apps.get_model('assets', 'AssetAuthorization')
+    for asset in Asset.objects.filter(configuration__authorized=True, owner__isnull=False):
+        configuration = asset.configuration or {}
+        target = configuration.get('url') or configuration.get('host') or configuration.get('ip') or configuration.get('domain') or ''
+        AssetAuthorization.objects.create(
+            asset_id=asset.id,
+            actor_id=asset.owner_id,
+            authorized=True,
+            target_snapshot=str(target)[:500],
+            reason='Migrated from legacy persisted asset authorization flag',
+        )
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ('assets', '0002_initial'),
@@ -30,4 +45,5 @@ class Migration(migrations.Migration):
                 ],
             },
         ),
+        migrations.RunPython(migrate_legacy_authorizations, migrations.RunPython.noop),
     ]
