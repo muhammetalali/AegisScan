@@ -167,7 +167,6 @@ class AssetAuthorization(models.Model):
             models.Index(fields=['asset', '-created_at', '-id'], name='assets_asse_asset_i_58150b_idx'),
             models.Index(fields=['asset', 'authorized', '-created_at'], name='assets_asse_asset_i_ac3a40_idx'),
             models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
-            models.Index(fields=['request_id']),
         ]
 
     def __str__(self):
