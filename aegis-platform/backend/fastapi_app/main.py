@@ -15,7 +15,7 @@ from asgiref.sync import sync_to_async
 import asyncio,logging
 from datetime import datetime,timezone
 
-from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra
+from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,attack_path,compliance_validation,intelligence
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -162,8 +162,13 @@ app.include_router(assets.router,prefix='/assets',tags=['Assets'])
 app.include_router(assets.router,prefix='/api/v1/assets',tags=['Assets'])
 app.include_router(evidence.router,prefix='/api/v1/evidence',tags=['Evidence'])
 app.include_router(compliance.router,prefix='/compliance',tags=['Compliance'])
+app.include_router(compliance.router,prefix='/api/v1/compliance',tags=['Compliance'])
+app.include_router(compliance_validation.router,prefix='/api/v1',tags=['Compliance Validation'])
 app.include_router(knowledge.router,prefix='/knowledge',tags=['Knowledge'])
 app.include_router(digital_twin.router,prefix='/digital-twin',tags=['Digital Twin'])
+app.include_router(digital_twin.router,prefix='/api/v1/digital-twin',tags=['Digital Twin'])
+app.include_router(attack_path.router,prefix='/api/v1/attack-path',tags=['Attack Path'])
+app.include_router(intelligence.router,prefix='/api/v1/intelligence',tags=['Threat Intelligence'])
 app.include_router(posture.router,prefix='/posture',tags=['Security Posture'])
 app.include_router(system.router,prefix='/system',tags=['System'])
 app.include_router(assurance.router,prefix='/api/v1/assurance',tags=['Assurance Correlation'])
