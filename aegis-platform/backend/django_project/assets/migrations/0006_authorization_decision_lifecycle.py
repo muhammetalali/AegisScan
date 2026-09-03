@@ -11,29 +11,23 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
-            model_name='assetauthorization',
-            name='correlation_id',
+            model_name='assetauthorization', name='correlation_id',
             field=models.UUIDField(default=uuid.uuid4, editable=False, unique=True),
         ),
         migrations.AddField(
-            model_name='assetauthorization',
-            name='expires_at',
+            model_name='assetauthorization', name='expires_at',
             field=models.DateTimeField(blank=True, null=True),
         ),
         migrations.AddField(
-            model_name='assetauthorization',
-            name='supersedes',
+            model_name='assetauthorization', name='supersedes',
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='superseding_decisions', to='assets.assetauthorization'),
         ),
         migrations.AddField(
-            model_name='assetauthorization',
-            name='valid_from',
+            model_name='assetauthorization', name='valid_from',
             field=models.DateTimeField(auto_now_add=True, null=True),
         ),
-        migrations.AlterModelOptions(
-            name='assetauthorization',
-            options={'ordering': ['-created_at', '-id']},
-        ),
+        migrations.AlterModelOptions(name='assetauthorization', options={'ordering': ['-created_at', '-id']}),
+        migrations.RemoveIndex(model_name='assetauthorization', name='assets_asse_asset_i_76122c_idx'),
         migrations.AddIndex(
             model_name='assetauthorization',
             index=models.Index(fields=['asset', '-created_at', '-id'], name='assets_asse_asset_i_8c4e0e_idx'),
