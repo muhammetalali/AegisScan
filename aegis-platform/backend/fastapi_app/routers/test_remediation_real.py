@@ -87,7 +87,7 @@ def test_validated_closure_executes_real_nmap_and_persists_proof():
     finding.refresh_from_db()
     validation = ValidationRun.objects.get(pk=payload['validation_id'])
     evidence = Evidence.objects.get(pk=payload['evidence_id'])
-    history = VulnerabilityStatusHistory.objects.get(vulnerability_id=finding.id, new_status=Vulnerability.Status.FIXED)
+    history = VulnerabilityStatusHistory.objects.get(pk=payload['status_history_id'])
 
     assert payload['state'] == 'verified'
     assert payload['risk_before'] == 9.0
@@ -98,6 +98,8 @@ def test_validated_closure_executes_real_nmap_and_persists_proof():
     assert finding.risk_score == 0.0
     assert evidence.metadata['finding_present'] is False
     assert evidence.finding_id == finding.id
+    assert history.vulnerability_id == finding.id
+    assert history.new_status == Vulnerability.Status.FIXED
     assert history.changed_by_id == user.id
     assert AuditLog.objects.filter(action=AuditLog.Action.VULN_FIX_VERIFY, resource_id=str(finding.id), result=AuditLog.Result.SUCCESS).exists()
 
