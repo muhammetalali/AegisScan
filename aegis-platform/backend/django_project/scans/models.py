@@ -38,6 +38,13 @@ class Scan(models.Model):
     status = models.CharField(_('status'), max_length=20, choices=Status.choices, default=Status.PENDING)
     depth = models.CharField(_('depth'), max_length=20, choices=Depth.choices, default=Depth.STANDARD)
     asset = models.ForeignKey('assets.Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
+    authorization_decision = models.ForeignKey(
+        'assets.AssetAuthorization',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='bound_scans',
+    )
     engines = models.JSONField(_('engines'), default=list)
     config = models.JSONField(_('configuration'), default=dict, blank=True)
     template = models.ForeignKey('projects.ScanTemplate', on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
@@ -46,8 +53,8 @@ class Scan(models.Model):
     completed_at = models.DateTimeField(_('completed at'), blank=True, null=True)
     duration = models.FloatField(_('duration (seconds)'), default=0)
     progress = models.FloatField(_('progress %'), default=0)
-    current_phase = models.CharField(_('current phase'), max_length=50, blank=True)
-    current_engine = models.CharField(_('current engine'), max_length=100, blank=True)
+    current_phase = models.CharField(max_length=50, blank=True)
+    current_engine = models.CharField(max_length=100, blank=True)
     security_score = models.FloatField(_('security score'), default=0)
     risk_level = models.CharField(_('risk level'), max_length=20, blank=True)
     findings_count = models.PositiveIntegerField(_('findings count'), default=0)
@@ -74,6 +81,7 @@ class Scan(models.Model):
             models.Index(fields=['project', 'scan_type']),
             models.Index(fields=['initiated_by']),
             models.Index(fields=['celery_task_id']),
+            models.Index(fields=['authorization_decision']),
         ]
 
     def __str__(self):
@@ -124,7 +132,7 @@ class ScanEngine(models.Model):
     config_schema = models.JSONField(_('config schema'), default=dict, blank=True)
     default_config = models.JSONField(_('default config'), default=dict, blank=True)
     dependencies = models.JSONField(_('dependencies'), default=list, blank=True)
-    order = models.PositiveIntegerField(_('execution order'), default=0)
+    order = models.PositiveIntegerField(_('order'), default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -181,7 +189,7 @@ class ScanLog(models.Model):
     engine_execution = models.ForeignKey(ScanEngineExecution, on_delete=models.SET_NULL, null=True, blank=True, related_name='scan_logs')
     level = models.CharField(_('level'), max_length=10, choices=Level.choices, default=Level.INFO)
     message = models.TextField(_('message'))
-    context = models.JSONField(_('context'), default=dict, blank=True)
+    context = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -199,10 +207,10 @@ class ScanComparison(models.Model):
     project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='scan_comparisons')
     scan_a = models.ForeignKey(Scan, on_delete=models.CASCADE, related_name='comparisons_as_a')
     scan_b = models.ForeignKey(Scan, on_delete=models.CASCADE, related_name='comparisons_as_b')
-    similarity_score = models.FloatField(_('similarity score'), default=0)
-    new_findings = models.JSONField(_('new findings'), default=list)
-    fixed_findings = models.JSONField(_('fixed findings'), default=list)
-    changed_findings = models.JSONField(_('changed findings'), default=list)
+    similarity_score = models.FloatField(default=0)
+    new_findings = models.JSONField(default=list)
+    fixed_findings = models.JSONField(default=list)
+    changed_findings = models.JSONField(default=list)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='created_comparisons')
     created_at = models.DateTimeField(auto_now_add=True)
 
