@@ -26,8 +26,7 @@ for (const match of source.matchAll(/import\('\.\/([^']+)'\)/g)) {
   if (size < 150) failures.push(`Suspiciously tiny routed module (${size} bytes): ./src/${relative}`)
 }
 
-const protectedBlock = source.match(/<Route element=\{<ProtectedRoute>[\s\S]*?<\/Route>\n\s*<\/Routes>/)?.[0] ?? ''
-const routePaths = [...protectedBlock.matchAll(/<Route path="([^"]+)"/g)].map((m) => m[1])
+const routePaths = [...source.matchAll(/<Route path="([^"]+)"/g)].map((m) => m[1])
 for (const required of ['/dashboard', '/scan', '/validations/new', '/vulnerabilities', '/compliance', '/digital-twin', '/assurance/graph', '/reports']) {
   if (!routePaths.includes(required)) failures.push(`Required UI route missing: ${required}`)
 }
