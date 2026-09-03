@@ -1,6 +1,6 @@
-from django.db import models
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db import models
 from django.utils.translation import gettext_lazy as _
 import uuid
 
@@ -78,7 +78,7 @@ class AssetRelationship(models.Model):
     source = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='outgoing_relationships')
     target = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='incoming_relationships')
     relationship_type = models.CharField(_('type'), max_length=20, choices=RelationshipType.choices)
-    metadata = models.JSONField(_('metadata'), default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True, verbose_name='metadata')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -125,14 +125,10 @@ class TechnologyFingerprint(models.Model):
         verbose_name = _('Technology Fingerprint')
         verbose_name_plural = _('Technology Fingerprints')
         ordering = ['-confidence', 'name']
-        indexes = [
-            models.Index(fields=['asset', 'category']),
-        ]
+        indexes = [models.Index(fields=['asset', 'category'])]
 
 
 class AssetAuthorizationQuerySet(models.QuerySet):
-    """Prevent bulk ORM operations from bypassing authorization immutability."""
-
     def update(self, **kwargs):
         raise ValidationError('Asset authorization decisions are immutable; bulk updates are forbidden')
 
@@ -148,7 +144,7 @@ class AssetAuthorizationManager(models.Manager.from_queryset(AssetAuthorizationQ
 
 
 class AssetAuthorization(models.Model):
-    """Immutable authorization decision used as the security source of truth for network execution."""
+    """Immutable append-only authorization decision ledger."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     asset = models.ForeignKey(Asset, on_delete=models.SET_NULL, null=True, related_name='authorization_records')
@@ -157,14 +153,18 @@ class AssetAuthorization(models.Model):
     authorized = models.BooleanField(default=False)
     target_snapshot = models.CharField(max_length=500, blank=True)
     reason = models.CharField(max_length=500, blank=True)
+    correlation_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    supersedes = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='superseding_decisions')
+    valid_from = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     objects = AssetAuthorizationManager()
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ['-created_at', '-id']
         indexes = [
-            models.Index(fields=['asset', '-created_at']),
-            models.Index(fields=['asset', 'authorized', '-created_at']),
+            models.Index(fields=['asset', '-created_at', '-id'], name='assets_asse_asset_i_58150b_idx'),
+            models.Index(fields=['asset', 'authorized', '-created_at'], name='assets_asse_asset_i_ac3a40_idx'),
             models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
         ]
 
@@ -176,9 +176,6 @@ class AssetAuthorization(models.Model):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
             raise ValidationError('Asset authorization decisions are immutable; create a new decision instead')
         if self.asset_id:
-            # The snapshot is the durable identity of the asset this decision was made for.
-            # Always derive it from the attached asset on first insert so callers cannot
-            # accidentally or maliciously provide a mismatched identity.
             self.asset_identity_snapshot = self.asset_id
         elif not self.asset_identity_snapshot:
             raise ValidationError('Asset authorization decisions require an asset identity snapshot')
@@ -186,3 +183,9 @@ class AssetAuthorization(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError('Asset authorization decisions are immutable and cannot be deleted')
+
+    @property
+    def is_currently_valid(self):
+        from django.utils import timezone
+        now = timezone.now()
+        return self.valid_from <= now and (self.expires_at is None or now < self.expires_at)
