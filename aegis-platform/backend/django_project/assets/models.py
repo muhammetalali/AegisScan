@@ -15,7 +15,7 @@ class Asset(models.Model):
         FILE = 'file', _('File Upload')
         DOCKER_IMAGE = 'docker_image', _('Docker Image')
         NETWORK_RANGE = 'network_range', _('Network Range')
-        REPOSITORY = 'repository', _('Code Repository')
+        REPOSITORY = 'repository', _('Repository')
         CLOUD_RESOURCE = 'cloud_resource', _('Cloud Resource')
         KUBERNETES = 'kubernetes', _('Kubernetes Cluster')
         MOBILE_APP = 'mobile_app', _('Mobile Application')
@@ -151,7 +151,8 @@ class AssetAuthorization(models.Model):
     """Immutable authorization decision used as the security source of truth for network execution."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='authorization_records')
+    asset = models.ForeignKey(Asset, on_delete=models.SET_NULL, null=True, related_name='authorization_records')
+    asset_identity_snapshot = models.UUIDField(default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='asset_authorization_actions')
     authorized = models.BooleanField(default=False)
     target_snapshot = models.CharField(max_length=500, blank=True)
@@ -164,11 +165,12 @@ class AssetAuthorization(models.Model):
         indexes = [
             models.Index(fields=['asset', '-created_at']),
             models.Index(fields=['asset', 'authorized', '-created_at']),
+            models.Index(fields=['asset_identity_snapshot', '-created_at']),
         ]
 
     def __str__(self):
         state = 'authorized' if self.authorized else 'revoked'
-        return f"{self.asset_id}: {state} by {self.actor_id}"
+        return f"{self.asset_id or self.asset_identity_snapshot}: {state} by {self.actor_id}"
 
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
