@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
+from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from django_project.users.models import User
+from django_project.audit.models import AuditLog
 from ..core.security import verify_token
 from ..services.assurance_correlation import correlate_all
 from ..services.assurance_graph_aggregator import build_assurance_graph
@@ -42,6 +45,23 @@ def _decision_by_id(decision_id: str) -> dict[str, Any] | None:
     pack = build_decision_pack(triage)
     return next((item for item in pack.get("decisions", []) if item.get("decisionId") == decision_id), None)
 
+
+@sync_to_async
+def _record_action_audit(user_id: str, action: AuditLog.Action, target: str, metadata: dict[str, Any]) -> None:
+    actor = User.objects.filter(pk=user_id).first()
+    if actor is None:
+        raise ValueError('Audit actor not found')
+    AuditLog.objects.create(
+        user=actor,
+        action=action,
+        result=AuditLog.Result.SUCCESS,
+        resource_type='decision_action',
+        resource_id=str(target)[:100],
+        resource_repr=str(target)[:200],
+        metadata=metadata,
+        ip_address='127.0.0.1',
+    )
+
 @router.get("/actions")
 async def actions(user: dict[str, Any] = Depends(require_user)):
     items = [enrich_action(item) for item in list_actions()]
@@ -57,13 +77,14 @@ async def create_action_endpoint(body: ActionCreate, user: dict[str, Any] = Depe
     decision = _decision_by_id(body.decision_id)
     if decision is None:
         raise HTTPException(status_code=404, detail="Decision not found")
-    actor = str(user.get("id") or user.get("username") or "user")
-    item = create_action(decision, body.owner, body.sla_hours, actor)
+    actor = str(user.get("user_id") or user.get("id"))
     try:
-        from .audit import add_audit_entry
-        add_audit_entry(user=actor, action="decision_action.create", target=item["actionId"], project="—", result="success")
-    except Exception:
-        pass
+        item = create_action(decision, body.owner, body.sla_hours, actor)
+        await _record_action_audit(actor, AuditLog.Action.DECISION_ACTION_CREATE, item["actionId"], {'decision_id': body.decision_id})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail='Decision action audit persistence failed') from exc
     return enrich_action(item)
 
 @router.get("/actions/{action_id}")
@@ -75,16 +96,14 @@ async def action_detail(action_id: str, user: dict[str, Any] = Depends(require_u
 
 @router.post("/actions/{action_id}/transition")
 async def action_transition(action_id: str, body: ActionTransition, user: dict[str, Any] = Depends(require_user)):
-    actor = str(user.get("id") or user.get("username") or "user")
+    actor = str(user.get("user_id") or user.get("id"))
     try:
         item = transition(action_id, body.state, actor, body.note)
-        try:
-            from .audit import add_audit_entry
-            add_audit_entry(user=actor, action=f"decision_action.{body.state}", target=action_id, project="—", result="success")
-        except Exception:
-            pass
+        await _record_action_audit(actor, AuditLog.Action.DECISION_ACTION_TRANSITION, action_id, {'state': body.state, 'note': body.note})
         return enrich_action(item)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Action not found")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid action state")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Action not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail='Decision action audit persistence failed') from exc
