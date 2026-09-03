@@ -2,6 +2,8 @@ import os
 os.environ.setdefault('DJANGO_SETTINGS_MODULE','django_project.settings')
 import django
 django.setup()
+from .django_compat import install_django_import_aliases
+install_django_import_aliases()
 from fastapi import FastAPI,WebSocket,WebSocketDisconnect,Depends,HTTPException,Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
