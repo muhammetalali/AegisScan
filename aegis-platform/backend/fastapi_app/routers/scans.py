@@ -20,6 +20,7 @@ from ..core.dependencies import get_current_user
 from ..tasks.security_scan import run_nmap_scan
 
 router = APIRouter()
+NETWORK_SCAN_TYPES = {'ip', 'url', 'network'}
 
 
 class ScanCreate(BaseModel):
@@ -30,6 +31,8 @@ class ScanCreate(BaseModel):
     engines: List[str] = Field(default_factory=list)
     depth: str = 'standard'
     config: dict = Field(default_factory=dict)
+    # Backwards-compatible request field only. It MUST NOT grant authorization.
+    # Network execution authorization is sourced exclusively from persisted Asset state.
     authorized: bool = False
 
 
@@ -87,14 +90,31 @@ def _create_scan(scan: ScanCreate, user_id: str):
         asset = Asset.objects.filter(id=scan.asset_id, project=project).first()
         if not asset:
             raise HTTPException(status_code=404, detail='Asset not found')
-    if scan.scan_type in {'ip', 'url', 'network'} and (not asset or (asset.configuration or {}).get('authorized') is not True):
-        if not scan.authorized:
-            raise HTTPException(status_code=400, detail='A real network scan requires explicit authorization')
-        target = scan.config.get('target') or scan.config.get('host') or scan.config.get('ip') or scan.config.get('url')
-        if not target:
-            raise HTTPException(status_code=400, detail='config.target is required for a network scan')
-        from django.utils.text import slugify
-        asset = Asset.objects.create(project=project, owner_id=user_id, name=target, slug=slugify(target)[:220], type='ip_address' if scan.scan_type == 'ip' else 'website', configuration={'host': target, 'authorized': True})
+
+    # Network execution has a strict server-side authorization boundary.
+    # A client-controlled `authorized=true` is never an authorization grant and
+    # must never create a trusted asset. The request must reference an existing
+    # project asset whose persisted configuration explicitly authorizes execution.
+    if scan.scan_type in NETWORK_SCAN_TYPES:
+        if not asset:
+            raise HTTPException(
+                status_code=400,
+                detail='A real network scan requires an existing project asset; authorization must be established on the asset before execution',
+            )
+        asset_config = asset.configuration or {}
+        if asset_config.get('authorized') is not True:
+            raise HTTPException(status_code=403, detail='The selected asset is not explicitly authorized for network execution')
+
+        requested_target = scan.config.get('target') or scan.config.get('host') or scan.config.get('ip') or scan.config.get('url')
+        if requested_target:
+            normalized_requested = str(requested_target).strip()
+            persisted_target = (
+                asset_config.get('url') if scan.scan_type == 'url'
+                else asset_config.get('host') or asset_config.get('ip') or asset_config.get('domain')
+            )
+            if persisted_target != normalized_requested:
+                raise HTTPException(status_code=409, detail='Requested scan target does not match the authorized asset identity')
+
     obj = Scan.objects.create(project=project, name=scan.name, scan_type=scan.scan_type, asset=asset, engines=scan.engines or ['nmap'], depth=scan.depth, config=scan.config, initiated_by_id=user_id)
     return obj
 
