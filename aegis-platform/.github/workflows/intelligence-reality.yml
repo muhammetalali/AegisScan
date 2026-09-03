@@ -1,2 +1,1 @@
-# Deprecated path retained only to avoid duplicate GitHub workflow discovery.
-# The active workflow is located at .github/workflows/intelligence-reality.yml.
+# intentionally empty; active workflow is repository-root .github/workflows/intelligence-reality.yml
