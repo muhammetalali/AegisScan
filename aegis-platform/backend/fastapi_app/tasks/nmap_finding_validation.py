@@ -109,7 +109,11 @@ def _load_bound_context(validation_id: str) -> tuple[ValidationRun, Vulnerabilit
             raise ValueError('Validation must be bound to a persisted finding')
         if validation.finding_identity_snapshot != finding.id:
             raise ValueError('Validation finding identity does not match the persisted finding')
+        if not finding.asset_id:
+            raise ValueError('Finding no longer retains its originating asset')
         asset = Asset.objects.select_for_update().get(pk=finding.asset_id)
+        if not validation.authorization_decision_id:
+            raise ValueError('Validation has no bound authorization decision')
         decision = AssetAuthorization.objects.select_for_update().get(pk=validation.authorization_decision_id)
         if finding.scan.authorization_decision_id != decision.id:
             raise ValueError('Validation authorization does not match the originating scan authorization decision')
@@ -138,7 +142,16 @@ def _load_bound_context(validation_id: str) -> tuple[ValidationRun, Vulnerabilit
 
 @shared_task(bind=True, name='fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e', max_retries=0)
 def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
-    validation, finding, asset, decision = _load_bound_context(validation_id)
+    try:
+        validation, finding, asset, decision = _load_bound_context(validation_id)
+    except Exception as exc:
+        try:
+            validation = ValidationRun.objects.get(pk=validation_id)
+            _fail(validation, str(exc), 'blocked')
+        except ValidationRun.DoesNotExist:
+            pass
+        raise
+
     now = datetime.now(timezone.utc)
     validation.status = ValidationRun.Status.RUNNING
     validation.progress = 10
@@ -161,7 +174,6 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
         completed = datetime.now(timezone.utc)
 
         with transaction.atomic():
-            # Re-check the immutable decision immediately before persisting evidence so revocation cannot be bypassed by a queued worker.
             locked_decision = AssetAuthorization.objects.select_for_update().get(pk=decision.id)
             latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
             if latest is None or latest.id != decision.id or locked_decision.authorized is not True or not locked_decision.is_currently_valid:
@@ -174,25 +186,17 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                 evidence_type='validation_output',
                 raw_output=raw_output,
                 metadata={
-                    'format': 'xml',
-                    'stderr': stderr,
-                    'target': decision.target_snapshot,
-                    'exit_code': exit_code,
-                    'validation_id': validation_id,
-                    'finding_id': str(finding.id),
-                    'finding_present': finding_present,
-                    'port': port,
-                    'expected': expected,
-                    'observed': observed,
-                    'authorization_decision_id': str(decision.id),
+                    'format': 'xml', 'stderr': stderr, 'target': decision.target_snapshot,
+                    'exit_code': exit_code, 'validation_id': validation_id, 'finding_id': str(finding.id),
+                    'finding_present': finding_present, 'port': port, 'expected': expected,
+                    'observed': observed, 'authorization_decision_id': str(decision.id),
                 },
                 collected_by=validation.user,
             )
             validation.result = {
                 'tool': 'nmap', 'target': decision.target_snapshot, 'exit_code': exit_code,
-                'finding_id': str(finding.id), 'port': port, 'expected': expected,
-                'observed': observed, 'finding_present': finding_present,
-                'parsed': parsed, 'evidence_id': str(evidence.id),
+                'finding_id': str(finding.id), 'port': port, 'expected': expected, 'observed': observed,
+                'finding_present': finding_present, 'parsed': parsed, 'evidence_id': str(evidence.id),
                 'authorization_decision_id': str(decision.id),
             }
             validation.status = ValidationRun.Status.COMPLETED if exit_code == 0 else ValidationRun.Status.FAILED
