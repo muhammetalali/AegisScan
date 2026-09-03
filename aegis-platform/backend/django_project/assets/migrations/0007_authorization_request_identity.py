@@ -13,8 +13,4 @@ class Migration(migrations.Migration):
             name='request_id',
             field=models.UUIDField(default=uuid.uuid4, editable=False, unique=True),
         ),
-        migrations.AddIndex(
-            model_name='assetauthorization',
-            index=models.Index(fields=['request_id'], name='assets_asse_request__9b0c4a_idx'),
-        ),
     ]
