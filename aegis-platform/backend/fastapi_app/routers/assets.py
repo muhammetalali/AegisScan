@@ -41,6 +41,18 @@ def _asset_response(asset) -> AssetResponse:
     return AssetResponse(id=str(asset.id), project_id=str(asset.project_id), name=asset.name, slug=asset.slug, type=asset.type, description=asset.description, environment=asset.environment, criticality=asset.criticality, configuration=asset.configuration or {}, tags=asset.tags or [], is_active=asset.is_active, scan_count=asset.scan_count, last_scanned_at=asset.last_scanned_at.isoformat() if asset.last_scanned_at else None, created_at=asset.created_at.isoformat(), updated_at=asset.updated_at.isoformat())
 
 
+def _request_id_from_headers(request: Request) -> UUID:
+    raw = request.headers.get("X-Request-ID")
+    if raw:
+        try: return UUID(raw)
+        except ValueError: raise HTTPException(status_code=422, detail="X-Request-ID must be a valid UUID")
+    return uuid4()
+
+
+def _request_ip(request: Request) -> str:
+    return request.client.host if request.client and request.client.host else "0.0.0.0"
+
+
 @sync_to_async
 def _accessible_assets(user_id: str, project_id: Optional[str] = None):
     from django_project.assets.models import Asset
@@ -98,7 +110,8 @@ async def get_asset(asset_id: str, user=Depends(get_current_user)):
 
 
 @sync_to_async
-def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
+def _update_asset(asset_id: str, update: AssetUpdate, user_id: str, request_id: UUID, ip_address: str, user_agent: str):
+    from django_project.audit.models import AuditLog
     from django_project.assets.models import Asset, AssetAuthorization
     with transaction.atomic():
         asset = Asset.objects.select_for_update().filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.select_for_update().filter(pk=asset_id, project__members__id=user_id).first()
@@ -109,7 +122,20 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
             latest = AssetAuthorization.objects.filter(asset=asset).order_by("-created_at", "-id").first()
             if latest and latest.authorized and latest.is_currently_valid:
                 data["configuration"] = dict(data["configuration"]); data["configuration"]["authorized"] = False
-                AssetAuthorization.objects.create(asset=asset, actor_id=user_id, authorized=False, target_snapshot=(latest.target_snapshot or _asset_target(asset))[:500], reason="Authorization revoked because asset configuration changed", supersedes=latest, request_id=uuid4())
+                decision = AssetAuthorization.objects.create(asset=asset, actor_id=user_id, authorized=False, target_snapshot=(latest.target_snapshot or _asset_target(asset))[:500], reason="Authorization revoked because asset configuration changed", correlation_id=uuid4(), request_id=request_id, supersedes=latest)
+                AuditLog.objects.create(
+                    user_id=user_id,
+                    action="asset_authorization_revoke",
+                    result=AuditLog.Result.SUCCESS,
+                    resource_type="AssetAuthorization",
+                    resource_id=str(decision.id),
+                    resource_repr=f"Asset {asset.id} authorization decision",
+                    changes={"authorized": False, "supersedes": str(latest.id)},
+                    metadata={"asset_id": str(asset.id), "asset_identity_snapshot": str(decision.asset_identity_snapshot), "target_snapshot": decision.target_snapshot, "reason": decision.reason, "correlation_id": str(decision.correlation_id), "request_id": str(decision.request_id), "trigger": "asset_configuration_change"},
+                    ip_address=ip_address,
+                    user_agent=user_agent[:10000],
+                    request_id=decision.request_id,
+                )
         if "name" in data: data["slug"] = slugify(data["name"]) or asset.slug
         for key, value in data.items(): setattr(asset, key, value)
         asset.save(); return asset
@@ -120,8 +146,9 @@ def _asset_target(asset) -> str:
 
 
 @router.patch("/{asset_id}", response_model=AssetResponse)
-async def update_asset(asset_id: str, update: AssetUpdate, user=Depends(get_current_user)):
-    return _asset_response(await _update_asset(asset_id, update, str(user.get("user_id"))))
+async def update_asset(asset_id: str, update: AssetUpdate, request: Request, user=Depends(get_current_user)):
+    request_id = _request_id_from_headers(request)
+    return _asset_response(await _update_asset(asset_id, update, str(user.get("user_id")), request_id, _request_ip(request), request.headers.get("User-Agent", "")))
 
 
 @sync_to_async
@@ -174,14 +201,8 @@ def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, reas
 
 @router.post("/{asset_id}/authorization", response_model=AssetResponse)
 async def set_asset_authorization(asset_id: str, update: AssetAuthorizationUpdate, request: Request, user=Depends(get_current_user)):
-    request_id_raw = request.headers.get("X-Request-ID")
-    if request_id_raw:
-        try: request_id = UUID(request_id_raw)
-        except ValueError: raise HTTPException(status_code=422, detail="X-Request-ID must be a valid UUID")
-    else: request_id = uuid4()
-    ip_address = request.client.host if request.client and request.client.host else "0.0.0.0"
-    user_agent = request.headers.get("User-Agent", "")
-    return _asset_response(await _set_asset_authorization(asset_id, str(user.get("user_id")), update.authorized, update.reason, bool(user.get("is_staff")), update.correlation_id, update.expires_at, request_id, ip_address, user_agent))
+    request_id = _request_id_from_headers(request)
+    return _asset_response(await _set_asset_authorization(asset_id, str(user.get("user_id")), update.authorized, update.reason, bool(user.get("is_staff")), update.correlation_id, update.expires_at, request_id, _request_ip(request), request.headers.get("User-Agent", "")))
 
 
 @sync_to_async
