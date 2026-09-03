@@ -1,9 +1,8 @@
 from datetime import timedelta
 from uuid import uuid4
 
-import pytest
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.utils import timezone
 from fastapi.testclient import TestClient
 
@@ -14,7 +13,9 @@ from fastapi_app.main import app
 from fastapi_app.routers import assets as assets_router
 
 
-class AssetAuthorizationLifecycleTests(TestCase):
+class AssetAuthorizationLifecycleTests(TransactionTestCase):
+    reset_sequences = True
+
     def setUp(self):
         self.user = User.objects.create_user(email=f"authorization-lifecycle-{uuid4()}@example.invalid", password="Strong-Test-Password-123!", first_name="Authorization", last_name="Lifecycle")
         self.project = Project.objects.create(name="Authorization Lifecycle", slug=f"authorization-lifecycle-{uuid4()}", owner=self.user)
