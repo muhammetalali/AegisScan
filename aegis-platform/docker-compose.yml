@@ -43,8 +43,6 @@ services:
     env_file: ./backend/.env
     environment:
       DJANGO_SETTINGS_MODULE: django_project.settings
-      # Compose-internal reverse-proxy hostname is a legitimate Django host.
-      # Keep deployment-specific public hosts configurable through .env.
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,nginx}
     depends_on:
       postgres: {condition: service_healthy}
@@ -84,6 +82,7 @@ services:
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
       DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
       redis: {condition: service_healthy}
