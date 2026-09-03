@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from typing import Any
+
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from django_project.users.models import User
 from django_project.audit.models import AuditLog
+from django_project.users.models import User
+
 from ..core.security import verify_token
 from ..services.assurance_correlation import correlate_all
 from ..services.assurance_graph_aggregator import build_assurance_graph
@@ -62,6 +64,7 @@ def _record_action_audit(user_id: str, action: AuditLog.Action, target: str, met
         ip_address='127.0.0.1',
     )
 
+
 @router.get("/actions")
 async def actions(user: dict[str, Any] = Depends(require_user)):
     items = [enrich_action(item) for item in list_actions()]
@@ -107,3 +110,39 @@ async def action_transition(action_id: str, body: ActionTransition, user: dict[s
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail='Decision action audit persistence failed') from exc
+
+
+@router.post('/remediation/findings/{finding_id}/validated-closure')
+async def validated_closure(finding_id: str, body: ValidatedClosureRequest, user: dict[str, Any] = Depends(require_user)):
+    actor_id = str(user.get('user_id') or user.get('id'))
+    finding = await _finding_access(finding_id, actor_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail='Finding not found')
+    try:
+        return await sync_to_async(execute_validated_closure)(finding_id, actor_id, body.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        logger.exception('Validated remediation failed for finding_id=%s actor_id=%s', finding_id, actor_id)
+        raise HTTPException(status_code=500, detail='Validated remediation failed')
+
+
+@router.get('/remediation/findings/{finding_id}')
+async def remediation_history(finding_id: str, user: dict[str, Any] = Depends(require_user)):
+    actor_id = str(user.get('user_id') or user.get('id'))
+    finding = await _finding_access(finding_id, actor_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail='Finding not found')
+    items = await sync_to_async(list_runs_for_finding)(finding_id)
+    return {'finding_id': finding_id, 'items': items}
+
+
+@sync_to_async
+def _finding_access(finding_id: str, actor_id: str):
+    finding = Vulnerability.objects.select_related('project').filter(pk=finding_id).first()
+    if not finding:
+        return None
+    project = finding.project
+    if str(project.owner_id) == str(actor_id) or project.members.filter(pk=actor_id).exists():
+        return finding
+    return None
