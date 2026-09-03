@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
 
-from django.db import transaction
+from django.db import close_old_connections, transaction
 
 from django_project.audit.models import AuditLog
 from django_project.evidence.models import ValidationRun
@@ -102,16 +101,21 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
             authorized=True,
         )
 
-    result = validate_nmap_finding_e2e.run(str(validation.id))
+    close_old_connections()
+    try:
+        result = validate_nmap_finding_e2e.run(str(validation.id))
+    finally:
+        close_old_connections()
+
     validation.refresh_from_db()
     finding.refresh_from_db()
 
     remediation_id = f'rem-{validation.id}'
     risk_before = float(finding.risk_score or 0)
     completed_at = validation.completed_at or _now()
-    evidence_id = result.get('evidence_id')
+    evidence_id = result.get('evidence_id') if isinstance(result, dict) else None
 
-    if result.get('finding_present') is not False or validation.status != ValidationRun.Status.COMPLETED:
+    if not isinstance(result, dict) or result.get('finding_present') is not False or validation.status != ValidationRun.Status.COMPLETED:
         return _persist_run(
             validation,
             remediation_id=remediation_id,
@@ -170,4 +174,5 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
         }
         validation.save(update_fields=['result'])
 
+    close_old_connections()
     return _serialize(validation)
