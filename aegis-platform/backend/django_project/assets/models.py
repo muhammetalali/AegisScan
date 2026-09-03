@@ -15,7 +15,7 @@ class Asset(models.Model):
         FILE = 'file', _('File Upload')
         DOCKER_IMAGE = 'docker_image', _('Docker Image')
         NETWORK_RANGE = 'network_range', _('Network Range')
-        REPOSITORY = 'repository', _('Repository')
+        REPOSITORY = 'repository', _('Code Repository')
         CLOUD_RESOURCE = 'cloud_resource', _('Cloud Resource')
         KUBERNETES = 'kubernetes', _('Kubernetes Cluster')
         MOBILE_APP = 'mobile_app', _('Mobile Application')
@@ -165,7 +165,7 @@ class AssetAuthorization(models.Model):
         indexes = [
             models.Index(fields=['asset', '-created_at']),
             models.Index(fields=['asset', 'authorized', '-created_at']),
-            models.Index(fields=['asset_identity_snapshot', '-created_at']),
+            models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
         ]
 
     def __str__(self):
