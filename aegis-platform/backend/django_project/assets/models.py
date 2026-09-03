@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 import uuid
 
@@ -151,3 +152,11 @@ class AssetAuthorization(models.Model):
     def __str__(self):
         state = 'authorized' if self.authorized else 'revoked'
         return f"{self.asset_id}: {state} by {self.actor_id}"
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Asset authorization decisions are immutable; create a new decision instead')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Asset authorization decisions are immutable and cannot be deleted')
