@@ -1,0 +1,6 @@
+rules:
+  - id: aegis-ci-noop
+    languages: [python]
+    message: AegisScan controlled Semgrep E2E rule
+    severity: INFO
+    pattern: "__aegisscan_ci_never_matches__()"
