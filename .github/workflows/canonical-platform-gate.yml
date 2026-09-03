@@ -1,0 +1,56 @@
+name: Canonical Platform Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-integrity:
+    name: Canonical platform integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject parallel platform implementations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in packages/backend packages/web; do
+            if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+              echo "Forbidden alternate platform path tracked: $path"
+              exit 1
+            fi
+          done
+
+      - name: Reject generated source artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in aegis-platform/frontend/dist aegis.egg-info; do
+            if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+              echo "Generated artifact tracked as source: $path"
+              exit 1
+            fi
+          done
+
+      - name: Compile canonical backend
+        run: python -m compileall -q aegis-platform/backend
+
+      - name: Verify reality policy exists
+        run: test -f .github/SECURITY_REALITY_GATE.md
+
+      - name: Verify canonical runtime exists
+        run: |
+          test -f aegis-platform/backend/fastapi_app/main.py
+          test -f aegis-platform/backend/fastapi_app/routers/scans.py
+          test -f aegis-platform/backend/fastapi_app/services/scanner_adapters.py
+          test -f aegis-platform/backend/django_project/evidence/models.py
