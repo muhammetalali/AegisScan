@@ -52,6 +52,10 @@ class AuditLog(models.Model):
         VULN_NOTE_ADD = 'vuln_note_add', _('Note Added to Vulnerability')
         VULN_FIX_VERIFY = 'vuln_fix_verify', _('Vulnerability Fix Verified')
 
+        # Decision / Workflow
+        DECISION_ACTION_CREATE = 'decision_action_create', _('Decision Action Created')
+        DECISION_ACTION_TRANSITION = 'decision_action_transition', _('Decision Action Transitioned')
+
         # Report
         REPORT_GENERATE = 'report_generate', _('Report Generated')
         REPORT_DOWNLOAD = 'report_download', _('Report Downloaded')
