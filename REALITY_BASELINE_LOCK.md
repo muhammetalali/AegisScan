@@ -20,8 +20,8 @@ This document is the execution baseline for enterprise completion. A capability 
 
 ## CI evidence required
 
-1. Full UI source audit + TypeScript build.
-2. API contract registration/schema tests.
+1. Full UI audit + TypeScript build.
+2. API contract registration/OpenAPI audit.
 3. Django `check`, `makemigrations --check --dry-run`, and clean `migrate`.
 4. Negative-path, idempotency, retry, and concurrency tests.
 5. Real Nmap/Nuclei/Masscan/Semgrep execution against authorized CI fixtures.
@@ -31,3 +31,7 @@ This document is the execution baseline for enterprise completion. A capability 
 ## Framework policy
 
 ISO 27001, SOC 2, NIST, and PCI DSS support is data-driven. The repository must not embed unlicensed full copyrighted control catalogs. Production deployments must load the authoritative/licensed catalog through the framework import path and preserve version/source metadata.
+
+## Lock provenance
+
+The frontend lockfile is reconciled by `Frontend Lock Sync`; deterministic `npm ci` is the required install path for the domain gate.
