@@ -59,7 +59,7 @@ class AssetRelationship(models.Model):
     source = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='outgoing_relationships')
     target = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='incoming_relationships')
     relationship_type = models.CharField(_('type'), max_length=20, choices=RelationshipType.choices)
-    metadata = models.JSONField(_('metadata'), default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True, verbose_name='metadata')
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         verbose_name = _('Asset Relationship'); verbose_name_plural = _('Asset Relationships'); unique_together = ['source', 'target', 'relationship_type']
