@@ -59,7 +59,7 @@ class AssetRelationship(models.Model):
     source = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='outgoing_relationships')
     target = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='incoming_relationships')
     relationship_type = models.CharField(_('type'), max_length=20, choices=RelationshipType.choices)
-    metadata = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(_('metadata'), default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         verbose_name = _('Asset Relationship'); verbose_name_plural = _('Asset Relationships'); unique_together = ['source', 'target', 'relationship_type']
@@ -114,7 +114,7 @@ class AssetAuthorization(models.Model):
     class Meta:
         ordering = ['-created_at', '-id']
         indexes = [
-            models.Index(fields=['asset', '-created_at', '-id']),
+            models.Index(fields=['asset', '-created_at', '-id'], name='assets_asse_asset_i_58150b_idx'),
             models.Index(fields=['asset', 'authorized', '-created_at']),
             models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
         ]
