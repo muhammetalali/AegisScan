@@ -78,7 +78,7 @@ class AssetRelationship(models.Model):
     source = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='outgoing_relationships')
     target = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='incoming_relationships')
     relationship_type = models.CharField(_('type'), max_length=20, choices=RelationshipType.choices)
-    metadata = models.JSONField(_('metadata'), default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -175,6 +175,13 @@ class AssetAuthorization(models.Model):
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
             raise ValidationError('Asset authorization decisions are immutable; create a new decision instead')
+        if self.asset_id:
+            # The snapshot is the durable identity of the asset this decision was made for.
+            # Always derive it from the attached asset on first insert so callers cannot
+            # accidentally or maliciously provide a mismatched identity.
+            self.asset_identity_snapshot = self.asset_id
+        elif not self.asset_identity_snapshot:
+            raise ValidationError('Asset authorization decisions require an asset identity snapshot')
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
