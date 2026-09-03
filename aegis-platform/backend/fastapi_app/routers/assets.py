@@ -53,6 +53,7 @@ class AssetUpdate(BaseModel):
 
 class AssetAuthorizationUpdate(BaseModel):
     authorized: bool
+    reason: str = Field(default="", max_length=500)
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
@@ -185,7 +186,7 @@ async def get_asset(asset_id: str, user=Depends(get_current_user)):
 
 @sync_to_async
 def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
-    from django_project.assets.models import Asset
+    from django_project.assets.models import Asset, AssetAuthorization
 
     asset = Asset.objects.filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first()
     if not asset:
@@ -196,6 +197,13 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
     if "configuration" in data and data["configuration"] is not None and (asset.configuration or {}).get("authorized") is True:
         data["configuration"] = dict(data["configuration"])
         data["configuration"]["authorized"] = False
+        AssetAuthorization.objects.create(
+            asset=asset,
+            actor_id=user_id,
+            authorized=False,
+            target_snapshot=_asset_target(asset)[:500],
+            reason="Authorization revoked because asset configuration changed",
+        )
     if "name" in data:
         data["slug"] = slugify(data["name"]) or asset.slug
     for key, value in data.items():
@@ -204,24 +212,37 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
     return asset
 
 
+def _asset_target(asset) -> str:
+    configuration = asset.configuration or {}
+    return str(configuration.get("url") or configuration.get("host") or configuration.get("ip") or configuration.get("domain") or configuration.get("cidr") or "")
+
+
 @router.patch("/{asset_id}", response_model=AssetResponse)
 async def update_asset(asset_id: str, update: AssetUpdate, user=Depends(get_current_user)):
     return _asset_response(await _update_asset(asset_id, update, str(user.get("user_id"))))
 
 
 @sync_to_async
-def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, is_staff: bool):
-    from django_project.assets.models import Asset
+def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, reason: str, is_staff: bool):
+    from django_project.assets.models import Asset, AssetAuthorization
 
     asset = Asset.objects.select_related("project", "owner").filter(pk=asset_id).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     if not is_staff and str(asset.project.owner_id) != str(user_id):
         raise HTTPException(status_code=403, detail="Only the project owner or staff may change asset network authorization")
+    target = _asset_target(asset)
     configuration = dict(asset.configuration or {})
     configuration["authorized"] = authorized
     asset.configuration = configuration
     asset.save(update_fields=["configuration", "updated_at"])
+    AssetAuthorization.objects.create(
+        asset=asset,
+        actor_id=user_id,
+        authorized=authorized,
+        target_snapshot=target[:500],
+        reason=reason,
+    )
     return asset
 
 
@@ -232,6 +253,7 @@ async def set_asset_authorization(asset_id: str, update: AssetAuthorizationUpdat
             asset_id,
             str(user.get("user_id")),
             update.authorized,
+            update.reason,
             bool(user.get("is_staff")),
         )
     )
