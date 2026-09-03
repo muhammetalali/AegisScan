@@ -1,0 +1,9 @@
+services:
+  celery_worker:
+    volumes:
+      - ./backend:/app
+      - ./e2e:/app/e2e:ro
+  fastapi:
+    volumes:
+      - ./backend:/app
+      - ./e2e:/app/e2e:ro
