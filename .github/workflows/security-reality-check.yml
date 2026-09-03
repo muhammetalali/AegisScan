@@ -137,6 +137,14 @@ jobs:
           AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
         run: python -m pytest -q fastapi_app/routers/test_real_nmap_e2e.py
 
+      - name: Real Nmap finding validation E2E
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+          AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
+        run: python -m pytest -q fastapi_app/routers/test_finding_validation_e2e.py
+
       - name: Asset authorization boundary tests
         working-directory: aegis-platform/backend
         env:
