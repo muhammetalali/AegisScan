@@ -78,7 +78,7 @@ class AssetRelationship(models.Model):
     source = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='outgoing_relationships')
     target = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='incoming_relationships')
     relationship_type = models.CharField(_('type'), max_length=20, choices=RelationshipType.choices)
-    metadata = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(_('metadata'), default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -115,9 +115,9 @@ class TechnologyFingerprint(models.Model):
     asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='technologies')
     name = models.CharField(_('name'), max_length=100)
     version = models.CharField(_('version'), max_length=50, blank=True)
-    category = models.CharField(_('category'), max_length=50)
+    category = models.CharField(max_length=50)
     confidence = models.FloatField(_('confidence'), default=0.0)
-    source = models.CharField(_('source'), max_length=50)
+    source = models.CharField(max_length=50)
     evidence = models.TextField(_('evidence'), blank=True)
     detected_at = models.DateTimeField(auto_now_add=True)
 
