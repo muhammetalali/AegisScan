@@ -128,7 +128,7 @@ def _persist_verified_closure(validation: ValidationRun, finding_id: str, actor_
             'completed_at': completed_at.isoformat(),
         }
         validation.save(update_fields=['result'])
-    return history.id
+    return str(history.id)
 
 
 def _ensure_history_committed(*, finding_id: str, old_status: str, actor_id: str, reason: str) -> str:
@@ -140,17 +140,7 @@ def _ensure_history_committed(*, finding_id: str, old_status: str, actor_id: str
             new_status=Vulnerability.Status.FIXED,
             changed_by_id=actor_id,
         ).order_by('-created_at', '-id').first()
-        if history is not None:
-            return str(history.id)
-        with transaction.atomic():
-            history = VulnerabilityStatusHistory.objects.create(
-                vulnerability_id=finding_id,
-                old_status=old_status,
-                new_status=Vulnerability.Status.FIXED,
-                changed_by_id=actor_id,
-                reason=reason,
-            )
-        if not VulnerabilityStatusHistory.objects.filter(pk=history.pk).exists():
+        if history is None:
             raise RuntimeError('Verified closure status history was not committed')
         return str(history.id)
     finally:
@@ -218,10 +208,10 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
         )
 
     old_status = finding.status
-    history_id = _persist_verified_closure(
+    _persist_verified_closure(
         validation, str(finding.id), actor_id, reason, risk_before, remediation_id, evidence_id, completed_at,
     )
-    committed_history_id = _ensure_history_committed(
+    status_history_id = _ensure_history_committed(
         finding_id=str(finding.id), old_status=old_status, actor_id=actor_id, reason=reason,
     )
 
@@ -230,11 +220,10 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
         validation.refresh_from_db()
     finally:
         close_old_connections()
-    if committed_history_id != str(history_id):
-        validation.result = {**(validation.result or {}), 'status_history_id': committed_history_id}
-        validation.save(update_fields=['result'])
-        validation.refresh_from_db()
-
     finding.refresh_from_db()
-    close_old_connections()
-    return _serialize(validation)
+
+    payload = _serialize(validation)
+    payload['status_history_id'] = status_history_id
+    if payload.get('state') != 'verified' or payload.get('risk_after') != 0.0:
+        raise RuntimeError('Validated closure response proof is inconsistent with persisted state')
+    return payload
