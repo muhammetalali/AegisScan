@@ -8,7 +8,7 @@ import pytest
 from django.db import connections
 from fastapi.testclient import TestClient
 
-from django_project.assets.models import Asset
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import User
@@ -43,6 +43,13 @@ def api_fixture(transactional_db, monkeypatch):
         type=Asset.Type.IP_ADDRESS,
         configuration={"host": "aegis-scan-target", "authorized": True},
         owner=user,
+    )
+    AssetAuthorization.objects.create(
+        asset=asset,
+        actor=user,
+        authorized=True,
+        target_snapshot="aegis-scan-target",
+        reason="regression fixture",
     )
 
     app.dependency_overrides[core_dependencies.get_current_user] = lambda: {
@@ -105,17 +112,22 @@ def test_client_authorized_flag_cannot_create_trusted_asset(api_fixture):
 
 def test_persisted_unauthorized_asset_is_denied(api_fixture):
     client, _, project, asset = api_fixture
-    asset.configuration = {"host": "aegis-scan-target", "authorized": False}
-    asset.save(update_fields=["configuration"])
+    AssetAuthorization.objects.create(
+        asset=asset,
+        actor=api_fixture[1],
+        authorized=False,
+        target_snapshot="aegis-scan-target",
+        reason="explicit revocation",
+    )
 
     response = client.post("/scans/", json=_body(project.id, str(asset.id)))
 
     assert response.status_code == 403
-    assert "not explicitly authorized" in response.json()["detail"]
+    assert "active persisted network authorization" in response.json()["detail"]
     assert not Scan.objects.filter(project=project).exists()
 
 
-def test_requested_target_must_match_persisted_asset_identity(api_fixture):
+def test_requested_target_must_match_authorization_snapshot(api_fixture):
     client, _, project, asset = api_fixture
     body = _body(project.id, str(asset.id))
     body["config"]["target"] = "different-target"
@@ -124,4 +136,16 @@ def test_requested_target_must_match_persisted_asset_identity(api_fixture):
 
     assert response.status_code == 409
     assert "does not match" in response.json()["detail"]
+    assert not Scan.objects.filter(project=project).exists()
+
+
+def test_legacy_authorization_flag_alone_is_not_a_current_authorization_decision(api_fixture):
+    client, _, project, asset = api_fixture
+    AssetAuthorization.objects.all().delete()
+    asset.configuration = {"host": "aegis-scan-target", "authorized": True}
+    asset.save(update_fields=["configuration"])
+
+    response = client.post("/scans/", json=_body(project.id, str(asset.id)))
+
+    assert response.status_code == 403
     assert not Scan.objects.filter(project=project).exists()
