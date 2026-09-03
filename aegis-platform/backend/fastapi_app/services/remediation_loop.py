@@ -224,10 +224,16 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
     committed_history_id = _ensure_history_committed(
         finding_id=str(finding.id), old_status=old_status, actor_id=actor_id, reason=reason,
     )
-    if committed_history_id != history_id:
+
+    close_old_connections()
+    try:
         validation.refresh_from_db()
+    finally:
+        close_old_connections()
+    if committed_history_id != str(history_id):
         validation.result = {**(validation.result or {}), 'status_history_id': committed_history_id}
         validation.save(update_fields=['result'])
+        validation.refresh_from_db()
 
     finding.refresh_from_db()
     close_old_connections()
