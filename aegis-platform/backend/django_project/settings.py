@@ -71,6 +71,7 @@ INSTALLED_APPS = [
     'django_project.audit',
     'django_project.system',
     'django_project.evidence',
+    'django_project.posture',
 ]
 
 MIDDLEWARE = [
