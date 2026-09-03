@@ -1,0 +1,1 @@
+This file intentionally documents implementation separately from the canonical security lifecycle documentation.
