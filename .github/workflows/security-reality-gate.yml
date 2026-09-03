@@ -1,0 +1,63 @@
+name: Security Reality Gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-reality:
+    name: Repository Reality Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Reject obvious fake-completion markers in executable code
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE --exclude-dir=.git --exclude='*.map' --exclude='*.lock' \
+            '(TODO: Implement actual|mock execution|fake execution|synthetic endpoint|return[[:space:]]+\{?[^\n]*(status|completed)["'"']?[[:space:]]*:[[:space:]]*["'"']completed["'"'])' \
+            aegis-platform/backend aegis-platform/frontend 2>/dev/null; then
+            echo 'Potential fake/incomplete execution marker found. Review and remove or make the implementation real before merging.'
+            exit 1
+          fi
+
+      - name: Reject generated frontend distribution from being recreated in CI source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch aegis-platform/frontend/dist >/dev/null 2>&1; then
+            echo 'frontend/dist is tracked; generated build output must not be source-of-truth.'
+            git ls-files aegis-platform/frontend/dist
+            exit 1
+          fi
+
+      - name: Validate Python syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q aegis-platform/backend
+
+      - name: Validate canonical runtime files exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f aegis-platform/backend/fastapi_app/main.py
+          test -f aegis-platform/backend/fastapi_app/routers/scans.py
+          test -f aegis-platform/backend/fastapi_app/tasks/security_scan.py
+          test -f aegis-platform/backend/fastapi_app/tasks/advanced_scans.py
+          test -f aegis-platform/backend/fastapi_app/services/scanner_adapters.py
+          test -f aegis-platform/backend/fastapi_app/services/intelligence/providers.py
+          test -f aegis-platform/backend/django_project/evidence/models.py
+
+      - name: Publish gate policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .github/SECURITY_REALITY_GATE.md
