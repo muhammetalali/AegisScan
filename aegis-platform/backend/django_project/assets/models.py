@@ -154,6 +154,7 @@ class AssetAuthorization(models.Model):
     target_snapshot = models.CharField(max_length=500, blank=True)
     reason = models.CharField(max_length=500, blank=True)
     correlation_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    request_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     supersedes = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='superseding_decisions')
     valid_from = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(null=True, blank=True)

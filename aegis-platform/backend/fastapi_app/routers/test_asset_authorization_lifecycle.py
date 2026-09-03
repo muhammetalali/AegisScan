@@ -7,6 +7,7 @@ from django.utils import timezone
 from fastapi.testclient import TestClient
 
 from django_project.assets.models import Asset, AssetAuthorization
+from django_project.audit.models import AuditLog
 from django_project.projects.models import Project
 from django_project.users.models import User
 from fastapi_app.main import app
@@ -60,13 +61,14 @@ class AssetAuthorizationLifecycleTests(TransactionTestCase):
         correlation_id = uuid4()
         app.dependency_overrides[assets_router.get_current_user] = lambda: {"user_id": str(self.user.id), "is_staff": False}
         try:
-            with TestClient(app) as client:
+            with TestClient(app, client=("127.0.0.1", 50001)) as client:
                 payload = {"authorized": True, "reason": "approved window", "correlation_id": str(correlation_id)}
                 first = client.post(f"/assets/{self.asset.id}/authorization", json=payload)
                 second = client.post(f"/assets/{self.asset.id}/authorization", json=payload)
             self.assertEqual(first.status_code, 200)
             self.assertEqual(second.status_code, 200)
             self.assertEqual(AssetAuthorization.objects.filter(correlation_id=correlation_id).count(), 1)
+            self.assertEqual(AuditLog.objects.filter(resource_type="AssetAuthorization", action="asset_authorization_grant", resource_id__isnull=False).count(), 1)
         finally:
             app.dependency_overrides.clear()
 
@@ -75,8 +77,63 @@ class AssetAuthorizationLifecycleTests(TransactionTestCase):
         AssetAuthorization.objects.create(asset=self.asset, actor=self.user, authorized=True, target_snapshot="10.0.0.10", correlation_id=correlation_id)
         app.dependency_overrides[assets_router.get_current_user] = lambda: {"user_id": str(self.user.id), "is_staff": False}
         try:
-            with TestClient(app) as client:
+            with TestClient(app, client=("127.0.0.1", 50002)) as client:
                 response = client.post(f"/assets/{self.asset.id}/authorization", json={"authorized": False, "reason": "conflicting reuse", "correlation_id": str(correlation_id)})
             self.assertEqual(response.status_code, 409)
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_request_identity_and_audit_linkage_are_persisted_atomically(self):
+        correlation_id = uuid4(); request_id = uuid4()
+        app.dependency_overrides[assets_router.get_current_user] = lambda: {"user_id": str(self.user.id), "is_staff": False}
+        try:
+            with TestClient(app, client=("127.0.0.1", 50003)) as client:
+                response = client.post(f"/assets/{self.asset.id}/authorization", json={"authorized": True, "reason": "governance approval", "correlation_id": str(correlation_id)}, headers={"X-Request-ID": str(request_id), "User-Agent": "AegisScan-Test/1.0"})
+            self.assertEqual(response.status_code, 200)
+            decision = AssetAuthorization.objects.get(correlation_id=correlation_id)
+            audit = AuditLog.objects.get(resource_type="AssetAuthorization", resource_id=str(decision.id))
+            self.assertEqual(decision.request_id, request_id); self.assertEqual(audit.request_id, request_id); self.assertEqual(audit.user_id, self.user.id)
+            self.assertEqual(audit.metadata["correlation_id"], str(correlation_id)); self.assertEqual(audit.metadata["request_id"], str(request_id)); self.assertEqual(audit.metadata["asset_id"], str(self.asset.id)); self.assertEqual(audit.resource_id, str(decision.id)); self.assertEqual(audit.ip_address, "127.0.0.1")
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_invalid_request_identity_is_rejected_before_persistence(self):
+        correlation_id = uuid4()
+        app.dependency_overrides[assets_router.get_current_user] = lambda: {"user_id": str(self.user.id), "is_staff": False}
+        try:
+            with TestClient(app, client=("127.0.0.1", 50004)) as client:
+                response = client.post(f"/assets/{self.asset.id}/authorization", json={"authorized": True, "reason": "invalid request id", "correlation_id": str(correlation_id)}, headers={"X-Request-ID": "not-a-uuid"})
+            self.assertEqual(response.status_code, 422)
+            self.assertFalse(AssetAuthorization.objects.filter(correlation_id=correlation_id).exists())
+            self.assertFalse(AuditLog.objects.filter(resource_type="AssetAuthorization").exists())
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_idempotent_retry_with_new_http_request_id_does_not_duplicate_audit(self):
+        correlation_id = uuid4(); first_request_id = uuid4(); retry_request_id = uuid4()
+        app.dependency_overrides[assets_router.get_current_user] = lambda: {"user_id": str(self.user.id), "is_staff": False}
+        try:
+            with TestClient(app, client=("127.0.0.1", 50005)) as client:
+                payload = {"authorized": True, "reason": "retry-safe approval", "correlation_id": str(correlation_id)}
+                first = client.post(f"/assets/{self.asset.id}/authorization", json=payload, headers={"X-Request-ID": str(first_request_id)})
+                retry = client.post(f"/assets/{self.asset.id}/authorization", json=payload, headers={"X-Request-ID": str(retry_request_id)})
+            self.assertEqual(first.status_code, 200); self.assertEqual(retry.status_code, 200)
+            decision = AssetAuthorization.objects.get(correlation_id=correlation_id)
+            self.assertEqual(decision.request_id, first_request_id); self.assertEqual(AuditLog.objects.filter(resource_type="AssetAuthorization", resource_id=str(decision.id)).count(), 1); self.assertFalse(AssetAuthorization.objects.filter(request_id=retry_request_id).exists())
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_configuration_change_revocation_is_audited_with_same_request_identity(self):
+        initial = AssetAuthorization.objects.create(asset=self.asset, actor=self.user, authorized=True, target_snapshot="10.0.0.10", reason="initial authorization")
+        request_id = uuid4()
+        app.dependency_overrides[assets_router.get_current_user] = lambda: {"user_id": str(self.user.id), "is_staff": False}
+        try:
+            with TestClient(app, client=("127.0.0.1", 50006)) as client:
+                response = client.patch(f"/assets/{self.asset.id}", json={"configuration": {"host": "10.0.0.11"}}, headers={"X-Request-ID": str(request_id), "User-Agent": "AegisScan-Test/1.0"})
+            self.assertEqual(response.status_code, 200)
+            decision = AssetAuthorization.objects.filter(asset=self.asset).order_by("-created_at", "-id").first()
+            self.assertFalse(decision.authorized); self.assertEqual(decision.supersedes_id, initial.id); self.assertEqual(decision.request_id, request_id)
+            audit = AuditLog.objects.get(resource_type="AssetAuthorization", resource_id=str(decision.id))
+            self.assertEqual(audit.request_id, request_id); self.assertEqual(audit.metadata["trigger"], "asset_configuration_change"); self.assertEqual(audit.metadata["request_id"], str(request_id)); self.assertEqual(audit.ip_address, "127.0.0.1")
         finally:
             app.dependency_overrides.clear()
