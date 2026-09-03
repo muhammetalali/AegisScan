@@ -1,6 +1,5 @@
-import uuid
-
 import django.db.models.deletion
+import uuid
 from django.db import migrations, models
 
 
@@ -40,9 +39,20 @@ class Migration(migrations.Migration):
             name='assetauthorization',
             options={'ordering': ['-created_at', '-id']},
         ),
-        migrations.RenameIndex(
+        migrations.RemoveIndex(
             model_name='assetauthorization',
-            old_name='assets_asse_asset_i_76122c_idx',
-            new_name='assets_asse_asset_i_58150b_idx',
+            name='assets_asse_asset_i_76122c_idx',
+        ),
+        migrations.AddIndex(
+            model_name='assetauthorization',
+            index=models.Index(
+                fields=['asset', '-created_at', '-id'],
+                name='assets_asse_asset_i_58150b_idx',
+            ),
+        ),
+        migrations.AlterField(
+            model_name='assetrelationship',
+            name='metadata',
+            field=models.JSONField(blank=True, default=dict, verbose_name='metadata'),
         ),
     ]
