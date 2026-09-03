@@ -39,18 +39,7 @@ class Asset(models.Model):
     environment = models.CharField(_('environment'), max_length=20, choices=Environment.choices, default=Environment.DEVELOPMENT)
     criticality = models.CharField(_('criticality'), max_length=20, choices=Criticality.choices, default=Criticality.MEDIUM)
 
-    # Type-specific fields (JSON for flexibility)
     configuration = models.JSONField(_('configuration'), default=dict, blank=True)
-    # For source_code: {repo_url, branch, path, language}
-    # For website: {url, auth_type, credentials_ref}
-    # For ip_address: {ip, ports, os_fingerprint}
-    # For domain: {domain, subdomains, dns_records}
-    # For api_endpoint: {base_url, spec_url, auth}
-    # For file: {file_path, file_hash, mime_type}
-    # For docker_image: {image_name, tag, registry, dockerfile_path}
-    # For network_range: {cidr, exclude_ips, scan_ports}
-    # For repository: {provider, repo_url, branch, access_token_ref}
-
     tags = models.JSONField(_('tags'), default=list, blank=True)
     metadata = models.JSONField(_('metadata'), default=dict, blank=True)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='owned_assets')
@@ -126,9 +115,9 @@ class TechnologyFingerprint(models.Model):
     asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='technologies')
     name = models.CharField(_('name'), max_length=100)
     version = models.CharField(_('version'), max_length=50, blank=True)
-    category = models.CharField(_('category'), max_length=50)  # framework, language, server, database, etc.
+    category = models.CharField(_('category'), max_length=50)
     confidence = models.FloatField(_('confidence'), default=0.0)
-    source = models.CharField(_('source'), max_length=50)  # header, body, header, cert, etc.
+    source = models.CharField(_('source'), max_length=50)
     evidence = models.TextField(_('evidence'), blank=True)
     detected_at = models.DateTimeField(auto_now_add=True)
 
@@ -139,3 +128,26 @@ class TechnologyFingerprint(models.Model):
         indexes = [
             models.Index(fields=['asset', 'category']),
         ]
+
+
+class AssetAuthorization(models.Model):
+    """Immutable authorization decision used as the security source of truth for network execution."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='authorization_records')
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='asset_authorization_actions')
+    authorized = models.BooleanField(default=False)
+    target_snapshot = models.CharField(max_length=500, blank=True)
+    reason = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['asset', '-created_at']),
+            models.Index(fields=['asset', 'authorized', '-created_at']),
+        ]
+
+    def __str__(self):
+        state = 'authorized' if self.authorized else 'revoked'
+        return f"{self.asset_id}: {state} by {self.actor_id}"
