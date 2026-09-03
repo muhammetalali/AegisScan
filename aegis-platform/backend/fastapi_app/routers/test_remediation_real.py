@@ -1,7 +1,7 @@
 import socket
 
 import pytest
-from django.db import close_old_connections
+from django.db import connections
 from fastapi.testclient import TestClient
 
 from django_project.assets.models import Asset, AssetAuthorization
@@ -15,6 +15,10 @@ from fastapi_app.main import app
 from fastapi_app.routers.decision_actions import require_user
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+def _refresh_test_connection():
+    connections['default'].close()
 
 
 def _context():
@@ -83,7 +87,7 @@ def test_validated_closure_executes_real_nmap_and_persists_proof():
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    close_old_connections()
+    _refresh_test_connection()
     finding.refresh_from_db()
     validation = ValidationRun.objects.get(pk=payload['validation_id'])
     evidence = Evidence.objects.get(pk=payload['evidence_id'])
@@ -136,7 +140,7 @@ def test_validated_closure_refuses_finding_still_present_without_creating_fix_ev
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    close_old_connections()
+    _refresh_test_connection()
     finding.refresh_from_db()
     assert payload['state'] == 'rejected_by_revalidation'
     assert finding.status == Vulnerability.Status.OPEN
