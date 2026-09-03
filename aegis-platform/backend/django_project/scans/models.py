@@ -227,3 +227,4 @@ class ScanComparison(models.Model):
         verbose_name = _('Scan Comparison')
         verbose_name_plural = _('Scan Comparisons')
         unique_together = ['scan_a', 'scan_b']
+        ordering = ['-created_at']
