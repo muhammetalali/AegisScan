@@ -94,6 +94,9 @@ def main() -> int:
     )
     require(login, {200}, "Login")
 
+    # Django REST Framework remains CSRF-protected because the external test
+    # intentionally exercises the same cookie-backed browser contract as the
+    # real frontend. Preserve the freshly issued token on every unsafe request.
     project = session.post(
         f"{DJANGO_URL}/projects/",
         json={
@@ -101,6 +104,7 @@ def main() -> int:
             "description": "Real HTTP black-box validation project",
             "environment": "development",
         },
+        headers=headers,
         timeout=20,
     )
     project_data = require(project, {201}, "Project creation")
