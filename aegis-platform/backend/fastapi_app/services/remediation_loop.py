@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
 
-from asgiref.sync import sync_to_async
 from django.db import close_old_connections, transaction
 
 from django_project.audit.models import AuditLog
@@ -70,6 +68,95 @@ def _persist_run(validation: ValidationRun, *, remediation_id: str, state: str, 
     return _serialize(validation)
 
 
+def _persist_verified_closure(validation: ValidationRun, finding_id: str, actor_id: str,
+                              reason: str, risk_before: float, remediation_id: str,
+                              evidence_id: str | None, completed_at):
+    with transaction.atomic():
+        locked = Vulnerability.objects.select_for_update(of=('self',)).get(pk=finding_id)
+        old_status = locked.status
+        locked.status = Vulnerability.Status.FIXED
+        locked.fixed_at = completed_at
+        locked.fixed_by_id = actor_id
+        locked.validation_status = 'verified'
+        locked.risk_score = 0
+        locked.save(update_fields=['status', 'fixed_at', 'fixed_by', 'validation_status', 'risk_score', 'updated_at'])
+        history = VulnerabilityStatusHistory.objects.filter(
+            vulnerability_id=locked.id,
+            old_status=old_status,
+            new_status=Vulnerability.Status.FIXED,
+            changed_by_id=actor_id,
+        ).first()
+        if history is None:
+            history = VulnerabilityStatusHistory.objects.create(
+                vulnerability_id=locked.id,
+                old_status=old_status,
+                new_status=Vulnerability.Status.FIXED,
+                changed_by_id=actor_id,
+                reason=reason,
+            )
+        elif history.reason != reason:
+            history.reason = reason
+            history.save(update_fields=['reason'])
+        AuditLog.objects.create(
+            user_id=actor_id,
+            action=AuditLog.Action.VULN_FIX_VERIFY,
+            result=AuditLog.Result.SUCCESS,
+            resource_type='vulnerability',
+            resource_id=str(locked.id),
+            resource_repr=locked.title[:200],
+            changes={'status': [old_status, Vulnerability.Status.FIXED], 'risk_score': [risk_before, 0]},
+            metadata={
+                'validation_id': str(validation.id),
+                'evidence_id': evidence_id,
+                'remediation_id': remediation_id,
+                'status_history_id': str(history.id),
+            },
+            ip_address='127.0.0.1',
+            request_id=validation.id,
+        )
+        validation.result = {
+            **(validation.result or {}),
+            'remediation_id': remediation_id,
+            'state': 'verified',
+            'risk_before': risk_before,
+            'risk_after': 0.0,
+            'risk_delta': -risk_before,
+            'evidence_id': evidence_id,
+            'reason': reason,
+            'status_history_id': str(history.id),
+            'created_at': validation.created_at.isoformat(),
+            'completed_at': completed_at.isoformat(),
+        }
+        validation.save(update_fields=['result'])
+    return history.id
+
+
+def _ensure_history_committed(*, finding_id: str, old_status: str, actor_id: str, reason: str) -> str:
+    close_old_connections()
+    try:
+        history = VulnerabilityStatusHistory.objects.filter(
+            vulnerability_id=finding_id,
+            old_status=old_status,
+            new_status=Vulnerability.Status.FIXED,
+            changed_by_id=actor_id,
+        ).order_by('-created_at', '-id').first()
+        if history is not None:
+            return str(history.id)
+        with transaction.atomic():
+            history = VulnerabilityStatusHistory.objects.create(
+                vulnerability_id=finding_id,
+                old_status=old_status,
+                new_status=Vulnerability.Status.FIXED,
+                changed_by_id=actor_id,
+                reason=reason,
+            )
+        if not VulnerabilityStatusHistory.objects.filter(pk=history.pk).exists():
+            raise RuntimeError('Verified closure status history was not committed')
+        return str(history.id)
+    finally:
+        close_old_connections()
+
+
 def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> dict:
     with transaction.atomic():
         finding = (
@@ -130,61 +217,18 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
             completed_at=completed_at,
         )
 
-    with transaction.atomic():
-        locked = Vulnerability.objects.select_for_update(of=('self',)).get(pk=finding.id)
-        old_status = locked.status
-        locked.status = Vulnerability.Status.FIXED
-        locked.fixed_at = completed_at
-        locked.fixed_by_id = actor_id
-        locked.validation_status = 'verified'
-        locked.risk_score = 0
-        locked.save(update_fields=['status', 'fixed_at', 'fixed_by', 'validation_status', 'risk_score', 'updated_at'])
-
-        history, _ = VulnerabilityStatusHistory.objects.get_or_create(
-            vulnerability_id=locked.id,
-            old_status=old_status,
-            new_status=Vulnerability.Status.FIXED,
-            changed_by_id=actor_id,
-            defaults={'reason': reason},
-        )
-        if history.reason != reason:
-            history.reason = reason
-            history.save(update_fields=['reason'])
-        persisted_history = VulnerabilityStatusHistory.objects.filter(pk=history.pk).exists()
-        if not persisted_history:
-            raise RuntimeError('Failed to persist vulnerability status history')
-
-        AuditLog.objects.create(
-            user_id=actor_id,
-            action=AuditLog.Action.VULN_FIX_VERIFY,
-            result=AuditLog.Result.SUCCESS,
-            resource_type='vulnerability',
-            resource_id=str(locked.id),
-            resource_repr=locked.title[:200],
-            changes={'status': [old_status, Vulnerability.Status.FIXED], 'risk_score': [risk_before, 0]},
-            metadata={
-                'validation_id': str(validation.id),
-                'evidence_id': evidence_id,
-                'remediation_id': remediation_id,
-                'status_history_id': str(history.id),
-            },
-            ip_address='127.0.0.1',
-            request_id=validation.id,
-        )
-        validation.result = {
-            **(validation.result or {}),
-            'remediation_id': remediation_id,
-            'state': 'verified',
-            'risk_before': risk_before,
-            'risk_after': 0.0,
-            'risk_delta': -risk_before,
-            'evidence_id': evidence_id,
-            'reason': reason,
-            'status_history_id': str(history.id),
-            'created_at': validation.created_at.isoformat(),
-            'completed_at': completed_at.isoformat(),
-        }
+    old_status = finding.status
+    history_id = _persist_verified_closure(
+        validation, str(finding.id), actor_id, reason, risk_before, remediation_id, evidence_id, completed_at,
+    )
+    committed_history_id = _ensure_history_committed(
+        finding_id=str(finding.id), old_status=old_status, actor_id=actor_id, reason=reason,
+    )
+    if committed_history_id != history_id:
+        validation.refresh_from_db()
+        validation.result = {**(validation.result or {}), 'status_history_id': committed_history_id}
         validation.save(update_fields=['result'])
 
+    finding.refresh_from_db()
     close_old_connections()
     return _serialize(validation)
