@@ -156,6 +156,13 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_asset_authorization_lifecycle.py
 
+      - name: Asset authorization source-of-truth tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_asset_authorization_source_of_truth.py
+
       - name: Production Django checks
         working-directory: aegis-platform/backend
         env:

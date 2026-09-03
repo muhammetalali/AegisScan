@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from django.utils.text import slugify
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -188,28 +189,39 @@ async def get_asset(asset_id: str, user=Depends(get_current_user)):
 def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
     from django_project.assets.models import Asset, AssetAuthorization
 
-    asset = Asset.objects.filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first()
-    if not asset:
-        raise HTTPException(status_code=404, detail="Asset not found")
-    data = update.model_dump(exclude_unset=True)
-    if "configuration" in data and data["configuration"] is not None and "authorized" in data["configuration"]:
-        raise HTTPException(status_code=403, detail="Asset authorization can only be changed through the authorization endpoint")
-    if "configuration" in data and data["configuration"] is not None and (asset.configuration or {}).get("authorized") is True:
-        data["configuration"] = dict(data["configuration"])
-        data["configuration"]["authorized"] = False
-        AssetAuthorization.objects.create(
-            asset=asset,
-            actor_id=user_id,
-            authorized=False,
-            target_snapshot=_asset_target(asset)[:500],
-            reason="Authorization revoked because asset configuration changed",
-        )
-    if "name" in data:
-        data["slug"] = slugify(data["name"]) or asset.slug
-    for key, value in data.items():
-        setattr(asset, key, value)
-    asset.save()
-    return asset
+    with transaction.atomic():
+        asset = Asset.objects.select_for_update().filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.select_for_update().filter(pk=asset_id, project__members__id=user_id).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        data = update.model_dump(exclude_unset=True)
+        if "configuration" in data and data["configuration"] is not None and "authorized" in data["configuration"]:
+            raise HTTPException(status_code=403, detail="Asset authorization can only be changed through the authorization endpoint")
+
+        # The immutable authorization ledger is authoritative. The legacy
+        # configuration flag is compatibility state only and can never establish
+        # or preserve authorization on its own.
+        if "configuration" in data and data["configuration"] is not None:
+            latest_authorization = AssetAuthorization.objects.filter(asset=asset).order_by("-created_at", "-id").first()
+            if latest_authorization and latest_authorization.authorized:
+                previous_target = latest_authorization.target_snapshot or _asset_target(asset)
+                data["configuration"] = dict(data["configuration"])
+                data["configuration"]["authorized"] = False
+                AssetAuthorization.objects.create(
+                    asset=asset,
+                    actor_id=user_id,
+                    authorized=False,
+                    target_snapshot=previous_target[:500],
+                    reason="Authorization revoked because asset configuration changed",
+                )
+            elif data["configuration"].get("authorized") is True:
+                raise HTTPException(status_code=403, detail="Asset authorization can only be changed through the authorization endpoint")
+
+        if "name" in data:
+            data["slug"] = slugify(data["name"]) or asset.slug
+        for key, value in data.items():
+            setattr(asset, key, value)
+        asset.save()
+        return asset
 
 
 def _asset_target(asset) -> str:
@@ -226,24 +238,27 @@ async def update_asset(asset_id: str, update: AssetUpdate, user=Depends(get_curr
 def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, reason: str, is_staff: bool):
     from django_project.assets.models import Asset, AssetAuthorization
 
-    asset = Asset.objects.select_related("project", "owner").filter(pk=asset_id).first()
-    if not asset:
-        raise HTTPException(status_code=404, detail="Asset not found")
-    if not is_staff and str(asset.project.owner_id) != str(user_id):
-        raise HTTPException(status_code=403, detail="Only the project owner or staff may change asset network authorization")
-    target = _asset_target(asset)
-    configuration = dict(asset.configuration or {})
-    configuration["authorized"] = authorized
-    asset.configuration = configuration
-    asset.save(update_fields=["configuration", "updated_at"])
-    AssetAuthorization.objects.create(
-        asset=asset,
-        actor_id=user_id,
-        authorized=authorized,
-        target_snapshot=target[:500],
-        reason=reason,
-    )
-    return asset
+    with transaction.atomic():
+        # owner is nullable; do not join it while issuing FOR UPDATE. The asset
+        # row itself is the serialization point for authorization decisions.
+        asset = Asset.objects.select_related("project").select_for_update(of=("self",)).filter(pk=asset_id).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        if not is_staff and str(asset.project.owner_id) != str(user_id):
+            raise HTTPException(status_code=403, detail="Only the project owner or staff may change asset network authorization")
+        target = _asset_target(asset)
+        configuration = dict(asset.configuration or {})
+        configuration["authorized"] = authorized
+        asset.configuration = configuration
+        asset.save(update_fields=["configuration", "updated_at"])
+        AssetAuthorization.objects.create(
+            asset=asset,
+            actor_id=user_id,
+            authorized=authorized,
+            target_snapshot=target[:500],
+            reason=reason,
+        )
+        return asset
 
 
 @router.post("/{asset_id}/authorization", response_model=AssetResponse)
@@ -344,4 +359,4 @@ async def add_relationship(asset_id: str, target_id: str, relationship_type: str
 async def bulk_import_assets(project_id: str, file: UploadFile = File(...), user=Depends(get_current_user)):
     if not await _has_project_access(project_id, str(user.get("user_id"))):
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
-    raise HTTPException(status_code=501, detail="Bulk import is not implemented; no synthetic import result is returned")
+    raise HTTPException(status_code=501, detail="Bulk import is not implemented; no synthetic import result is returned here")
