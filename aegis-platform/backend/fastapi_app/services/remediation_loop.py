@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
+from asgiref.sync import sync_to_async
 from django.db import close_old_connections, transaction
 
 from django_project.audit.models import AuditLog
@@ -137,13 +139,21 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
         locked.validation_status = 'verified'
         locked.risk_score = 0
         locked.save(update_fields=['status', 'fixed_at', 'fixed_by', 'validation_status', 'risk_score', 'updated_at'])
-        VulnerabilityStatusHistory.objects.create(
-            vulnerability=locked,
+
+        history, _ = VulnerabilityStatusHistory.objects.get_or_create(
+            vulnerability_id=locked.id,
             old_status=old_status,
             new_status=Vulnerability.Status.FIXED,
             changed_by_id=actor_id,
-            reason=reason,
+            defaults={'reason': reason},
         )
+        if history.reason != reason:
+            history.reason = reason
+            history.save(update_fields=['reason'])
+        persisted_history = VulnerabilityStatusHistory.objects.filter(pk=history.pk).exists()
+        if not persisted_history:
+            raise RuntimeError('Failed to persist vulnerability status history')
+
         AuditLog.objects.create(
             user_id=actor_id,
             action=AuditLog.Action.VULN_FIX_VERIFY,
@@ -156,6 +166,7 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
                 'validation_id': str(validation.id),
                 'evidence_id': evidence_id,
                 'remediation_id': remediation_id,
+                'status_history_id': str(history.id),
             },
             ip_address='127.0.0.1',
             request_id=validation.id,
@@ -169,6 +180,7 @@ def execute_validated_closure(finding_id: str, actor_id: str, reason: str) -> di
             'risk_delta': -risk_before,
             'evidence_id': evidence_id,
             'reason': reason,
+            'status_history_id': str(history.id),
             'created_at': validation.created_at.isoformat(),
             'completed_at': completed_at.isoformat(),
         }
