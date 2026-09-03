@@ -117,9 +117,9 @@ class TechnologyFingerprint(models.Model):
     name = models.CharField(_('name'), max_length=100)
     version = models.CharField(_('version'), max_length=50, blank=True)
     category = models.CharField(_('category'), max_length=50)
-    confidence = models.FloatField(_('confidence'), default=0.0)
-    source = models.CharField(_('source'), max_length=50)
-    evidence = models.TextField(_('evidence'), blank=True)
+    confidence = models.FloatField(default=0.0)
+    source = models.CharField(max_length=50)
+    evidence = models.TextField(blank=True)
     detected_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -129,6 +129,23 @@ class TechnologyFingerprint(models.Model):
         indexes = [
             models.Index(fields=['asset', 'category']),
         ]
+
+
+class AssetAuthorizationQuerySet(models.QuerySet):
+    """Prevent bulk ORM operations from bypassing authorization immutability."""
+
+    def update(self, **kwargs):
+        raise ValidationError('Asset authorization decisions are immutable; bulk updates are forbidden')
+
+    def delete(self):
+        raise ValidationError('Asset authorization decisions are immutable; bulk deletes are forbidden')
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValidationError('Asset authorization decisions are immutable; bulk updates are forbidden')
+
+
+class AssetAuthorizationManager(models.Manager.from_queryset(AssetAuthorizationQuerySet)):
+    pass
 
 
 class AssetAuthorization(models.Model):
@@ -141,6 +158,8 @@ class AssetAuthorization(models.Model):
     target_snapshot = models.CharField(max_length=500, blank=True)
     reason = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = AssetAuthorizationManager()
 
     class Meta:
         ordering = ['-created_at']
