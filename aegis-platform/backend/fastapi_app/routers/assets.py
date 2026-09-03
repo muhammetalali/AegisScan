@@ -5,6 +5,7 @@ import json
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
+from django.db.models import Q
 from django.utils.text import slugify
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Query
 from pydantic import BaseModel, Field
@@ -49,13 +50,13 @@ def _accessible_assets(user_id: str, project_id: Optional[str] = None):
 @sync_to_async
 def _has_project_access(project_id: str, user_id: str) -> bool:
     from django_project.projects.models import Project
-    return Project.objects.filter(id=project_id).filter(__import__('django').db.models.Q(owner_id=user_id)|__import__('django').db.models.Q(members__id=user_id)).exists()
+    return Project.objects.filter(id=project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).exists()
 
 
 @sync_to_async
 def _get_asset(asset_id: str, user_id: str):
     from django_project.assets.models import Asset
-    return Asset.objects.select_related('project','owner').filter(pk=asset_id).filter(__import__('django').db.models.Q(project__owner_id=user_id)|__import__('django').db.models.Q(project__members__id=user_id)).first()
+    return Asset.objects.select_related('project','owner').filter(pk=asset_id).filter(Q(project__owner_id=user_id)|Q(project__members__id=user_id)).first()
 
 
 @router.get('/', response_model=List[AssetResponse])
@@ -74,7 +75,7 @@ async def list_assets(project_id: Optional[str]=None, asset_type: Optional[str]=
 def _create_asset(data: AssetCreate, user_id: str):
     from django_project.assets.models import Asset
     from django_project.projects.models import Project
-    project=Project.objects.filter(id=data.project_id).filter(__import__('django').db.models.Q(owner_id=user_id)|__import__('django').db.models.Q(members__id=user_id)).first()
+    project=Project.objects.filter(id=data.project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).first()
     if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
     base_slug=slugify(data.name) or 'asset'; slug=base_slug; suffix=2
     while Asset.objects.filter(project=project,slug=slug).exists(): slug=f'{base_slug}-{suffix}'; suffix+=1
@@ -105,7 +106,7 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
 
 def _get_asset_sync(asset_id: str,user_id: str):
     from django_project.assets.models import Asset
-    return Asset.objects.filter(pk=asset_id).filter(__import__('django').db.models.Q(project__owner_id=user_id)|__import__('django').db.models.Q(project__members__id=user_id)).first()
+    return Asset.objects.filter(pk=asset_id).filter(Q(project__owner_id=user_id)|Q(project__members__id=user_id)).first()
 
 
 @router.patch('/{asset_id}', response_model=AssetResponse)
@@ -201,7 +202,7 @@ async def bulk_import_assets(project_id: str,file: UploadFile=File(...),user=Dep
     try:
         text=raw.decode('utf-8-sig')
         content_type=(file.content_type or '').lower()
-        if file.filename and file.filename.lower().endswith('.csv') or 'csv' in content_type:
+        if (file.filename and file.filename.lower().endswith('.csv')) or 'csv' in content_type:
             rows=list(csv.DictReader(io.StringIO(text)))
         else:
             parsed=json.loads(text); rows=parsed if isinstance(parsed,list) else parsed.get('assets',[]) if isinstance(parsed,dict) else []
@@ -209,15 +210,27 @@ async def bulk_import_assets(project_id: str,file: UploadFile=File(...),user=Dep
         if len(rows)>1000: raise ValueError('Import payload may contain at most 1000 assets')
         normalized=[_normalize_import_row(row,project_id) for row in rows if isinstance(row,dict)]
     except (UnicodeDecodeError,json.JSONDecodeError,ValueError,TypeError) as exc: raise HTTPException(status_code=400,detail=f'Invalid asset import payload: {exc}') from exc
-    created=[]
     try:
-        for item in normalized:
-            asset=await _create_asset(item,user_id); created.append(_asset_response(asset))
-    except Exception:
-        if created:
-            from django_project.assets.models import Asset
-            for item in normalized[:len(created)]: Asset.objects.filter(project_id=project_id,slug=slugify(item.name)).delete()
+        created = await _bulk_create_assets(normalized, user_id)
+    except HTTPException:
         raise
+    return [_asset_response(asset) for asset in created]
+
+
+@sync_to_async
+@transaction.atomic
+def _bulk_create_assets(items: List[AssetCreate], user_id: str):
+    from django_project.assets.models import Asset
+    from django_project.projects.models import Project
+    projects={str(project.id): project for project in Project.objects.filter(id__in={item.project_id for item in items}).filter(Q(owner_id=user_id)|Q(members__id=user_id)).distinct()}
+    created=[]
+    for item in items:
+        project=projects.get(item.project_id)
+        if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
+        base_slug=slugify(item.name) or 'asset'; slug=base_slug; suffix=2
+        while Asset.objects.filter(project=project,slug=slug).exists(): slug=f'{base_slug}-{suffix}'; suffix+=1
+        created.append(Asset(project=project,owner_id=user_id,name=item.name,slug=slug,type=item.type,description=item.description,environment=item.environment,criticality=item.criticality,configuration=item.configuration,tags=item.tags))
+    Asset.objects.bulk_create(created)
     return created
 
 # verify_token remains imported for compatibility with deployments that import this module symbolically.
