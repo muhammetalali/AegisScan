@@ -17,7 +17,9 @@ def csrf(s):
  return token
 def main()->int:
  s=requests.Session(); token=csrf(s); headers={'X-CSRFToken':token,'Referer':f'{BASE}/'}; req(s,'POST',f'{DJANGO}/auth/login/',{200},json={'email':EMAIL,'password':PASSWORD},headers=headers)
- project=req(s,'POST',f'{DJANGO}/projects/',{201},json={'name':f'Scanner Engine E2E {uuid.uuid4().hex[:10]}','description':'Authorized scanner engine black-box E2E','environment':'development'}); pid=str(project['id'])
+ # Django REST Framework project creation is cookie-backed and CSRF-protected; keep the refreshed token on the unsafe request.
+ token=csrf(s); headers['X-CSRFToken']=token
+ project=req(s,'POST',f'{DJANGO}/projects/',{201},json={'name':f'Scanner Engine E2E {uuid.uuid4().hex[:10]}','description':'Authorized scanner engine black-box E2E','environment':'development'},headers=headers); pid=str(project['id'])
  source_asset=req(s,'POST',f'{API}/api/v1/assets/',{201},json={'project_id':pid,'name':'Backend Source','type':'source_code','environment':'development','criticality':'medium','configuration':{'path':'/app/e2e','authorized':True},'tags':['e2e','semgrep']})
  specs=[('nmap','network',{'target':TARGET}),('masscan','network',{'target':TARGET,'ports':'80','rate':1000}),('nuclei','url',{'target':f'http://{TARGET}'}),('semgrep','code',{'path':'/app/e2e'})]
  scans=[]
