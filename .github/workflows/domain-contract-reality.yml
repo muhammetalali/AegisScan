@@ -85,13 +85,19 @@ jobs:
           python manage.py check
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
+      - name: Full API OpenAPI contract audit
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python scripts/api_contract_audit.py --json
       - name: API contract and persistence reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
-          python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py fastapi_app/routers/test_reliability_contracts.py
+          python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py fastapi_app/routers/test_reliability_contracts.py fastapi_app/routers/test_realtime_and_assurance.py django_project/compliance/test_framework_catalog.py
       - name: Unified validation contract reality
         working-directory: aegis-platform/backend
         env:
