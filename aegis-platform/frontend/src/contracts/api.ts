@@ -27,10 +27,11 @@ export const UnifiedValidationSchema = z.object({
 })
 export const TwinScenarioSimulationSchema = z.object({ contract_version: z.literal('1.0'), scenario_id: z.string(), status: z.string(), deterministic: z.boolean(), source: z.literal('postgresql'), pre_change_risk: z.number().nonnegative(), post_change_risk: z.number().nonnegative(), risk_reduction: z.number(), affected_nodes: z.array(z.string()), recommendation: z.string() })
 
+// api.ts already provides /api/v1 as its baseURL; contracts therefore use relative API paths.
 export const apiContractPaths = {
-  attackPathGraph: (projectId: string) => `/api/v1/attack-path/projects/${projectId}`,
-  attackPathAnalyze: (projectId: string) => `/api/v1/attack-path/projects/${projectId}/analyze`,
-  validationCompliance: (validationId: string) => `/api/v1/validations/${validationId}/compliance`,
-  cveIntelligence: (cveId: string) => `/api/v1/intelligence/cve/${encodeURIComponent(cveId)}`,
-  validationContract: '/api/v1/validation-contract',
+  attackPathGraph: (projectId: string) => `/attack-path/projects/${projectId}`,
+  attackPathAnalyze: (projectId: string) => `/attack-path/projects/${projectId}/analyze`,
+  validationCompliance: (validationId: string) => `/validations/${validationId}/compliance`,
+  cveIntelligence: (cveId: string) => `/intelligence/cve/${encodeURIComponent(cveId)}`,
+  validationContract: '/validation-contract',
 } as const
