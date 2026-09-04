@@ -213,7 +213,10 @@ def test_completed_validation_redelivery_is_idempotent(finding_fixture, monkeypa
 @pytest.mark.django_db
 def test_nmap_validation_uses_immutable_grant_not_mutable_asset_flag(finding_fixture, monkeypatch):
     user, finding = finding_fixture
+    finding.asset.configuration["authorized"] = False
+    finding.asset.save(update_fields=["configuration"])
     validation = _validation(user, finding)
+
     monkeypatch.setattr(nmap_finding_validation, "_run_nmap_exact", lambda *args, **kwargs: (0, CLOSED_NMAP_XML, ''))
     result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
     validation.refresh_from_db()
@@ -239,6 +242,7 @@ def test_verify_requires_completed_authorized_finding_validation(finding_fixture
     )
 
     verified_finding, validation, error = async_to_sync(_verify_fix)(str(finding.id), str(user.id))
+
     assert verified_finding.id == finding.id
     assert validation is None
     assert error == "Fix verification requires a completed authorized finding-linked validation run."
