@@ -9,12 +9,12 @@ services:
           - aegis-scan-target
   fastapi:
     environment:
-      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
   celery_worker:
     environment:
-      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
   celery_beat:
     environment:
-      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
