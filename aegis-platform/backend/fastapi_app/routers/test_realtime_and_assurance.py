@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
+from django.db import close_old_connections
 from django.utils import timezone
+from fastapi.testclient import TestClient
 
 from django_project.projects.models import Project
 from django_project.assets.models import Asset
@@ -17,10 +18,13 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_websocket_rejects_missing_authentication():
-    client = TestClient(app)
-    with pytest.raises(Exception):
-        with client.websocket_connect('/ws/workflow'):
-            pass
+    try:
+        with TestClient(app) as client:
+            with pytest.raises(Exception):
+                with client.websocket_connect('/ws/workflow'):
+                    pass
+    finally:
+        close_old_connections()
 
 
 def test_continuous_assurance_creates_and_queues_real_scan(monkeypatch):
@@ -57,3 +61,4 @@ def test_continuous_assurance_creates_and_queues_real_scan(monkeypatch):
     assert project.scans.filter(id=result['scan_id']).exists()
     schedule.refresh_from_db()
     assert schedule.last_run is not None
+    close_old_connections()
