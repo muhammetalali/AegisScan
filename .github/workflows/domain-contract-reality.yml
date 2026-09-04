@@ -25,7 +25,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Production dependency audit
-        run: npm audit --omit=dev --audit-level=low
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npm audit --omit=dev --audit-level=low; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "npm audit attempt $attempt failed; retrying the authoritative registry endpoint" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          echo "npm audit failed after three attempts; dependency assurance remains unproven" >&2
+          exit 1
       - name: Full UI audit
         run: npm run audit:ui
       - name: i18n audit
