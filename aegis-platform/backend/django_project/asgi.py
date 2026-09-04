@@ -1,5 +1,9 @@
 """
 ASGI config for AegisScan Platform.
+
+All websocket imports intentionally resolve through the canonical
+``django_project.core`` namespace so the production ASGI path never depends
+on a legacy top-level ``core`` package.
 """
 import os
 
