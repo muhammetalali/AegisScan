@@ -67,7 +67,7 @@ def run_nmap(target: str, timeout: int = 300) -> ScanResult:
     if not executable:
         raise RuntimeError('Nmap is not installed on the worker')
     completed = subprocess.run(
-        [executable, '-sV', '-oX', '-', '--', host],
+        [executable, '-Pn', '-sV', '-oX', '-', '--', host],
         capture_output=True,
         text=True,
         timeout=timeout,
