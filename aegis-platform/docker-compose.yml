@@ -78,6 +78,9 @@ services:
     container_name: aegis-celery-worker
     restart: unless-stopped
     command: celery -A fastapi_app.celery_app worker -l info -c 4
+    # Only the scanner worker receives packet-capture capabilities. The API,
+    # scheduler, and persistence services retain Docker's default boundary.
+    cap_add: [NET_RAW, NET_ADMIN]
     volumes: [./backend:/app]
     env_file: ./backend/.env
     environment:
@@ -92,7 +95,7 @@ services:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-beat
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app beat -l info
+    command: celery -A fastapi_app.celery_app beat -l info --schedule /tmp/celerybeat-schedule
     volumes: [./backend:/app]
     env_file: ./backend/.env
     environment:
