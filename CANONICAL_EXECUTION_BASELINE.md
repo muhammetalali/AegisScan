@@ -22,11 +22,4 @@ Mandatory current gates:
 6. Scanner failure/reliability/redelivery.
 7. Production/runtime integrity.
 
-Superseded/duplicate branch candidates, once unique value is disproven:
-`codex/asset-authorization-first-class-2026-09-03`, `codex/asset-authorization-tamper-resistance-2026-09-03`, `codex/authorization-execution-binding-2026-09-03`, `codex/canonical-security-convergence-2026-09-03`, `codex/asset-authorization-control-2026-09-03`, `codex/asset-authorization-control-2026-09-03-pr`, `codex/reality-gate-2026-09-03`, `codex/asset-authorization-lifecycle-2026-09-03`, `codex/intel-realize-2026-09-03`, `codex/intel-pr-2026-09-03`.
-
-Source/reconciliation branches are never merged wholesale; hotspot areas include audit, decision actions, validations, assets authorization, scanner lifecycle, Digital Twin, intelligence persistence/correlation, and remediation validation.
-
 Current release decision: NOT READY until the exact current HEAD has all mandatory gates green.
-
-CI quality: affected TestClient-based Django tests must close clients and call `close_old_connections()` so teardown warnings are treated as defects rather than ignored.
