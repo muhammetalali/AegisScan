@@ -93,6 +93,21 @@ jobs:
           echo "AEGIS_MASSCAN_TARGET=$TARGET_IP" >> "$GITHUB_ENV"
           echo "AUTHORIZED_SCAN_TARGETS=aegis-scan-target,$TARGET_IP" >> "$GITHUB_ENV"
           AUTHORIZED_SCAN_TARGETS="aegis-scan-target,$TARGET_IP" docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --force-recreate fastapi celery_worker celery_beat
+      - name: Wait after scanner environment refresh
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..60}; do
+            if curl -fsS http://localhost/ready >/dev/null; then
+              echo 'FastAPI is ready after scanner environment refresh.'
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps fastapi celery_worker celery_beat nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=200 fastapi celery_worker celery_beat nginx
+          exit 1
       - name: Verify scanner target authorization
         working-directory: aegis-platform
         shell: bash
