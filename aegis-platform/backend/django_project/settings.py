@@ -73,6 +73,7 @@ INSTALLED_APPS = [
     'django_project.evidence',
     'django_project.posture',
     'django_project.digital_twin',
+    'django_project.intelligence',
 ]
 
 MIDDLEWARE = [
