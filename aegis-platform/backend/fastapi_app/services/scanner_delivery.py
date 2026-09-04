@@ -5,13 +5,18 @@ from typing import Any
 from django_project.scans.models import Scan, ScanEngineExecution
 
 
+TERMINAL_EXECUTION_STATUSES = {
+    ScanEngineExecution.ExecutionStatus.COMPLETED,
+    ScanEngineExecution.ExecutionStatus.FAILED,
+    ScanEngineExecution.ExecutionStatus.SKIPPED,
+}
+
+
 def terminal_scan_delivery(scan_id: str, engine_name: str) -> dict[str, Any] | None:
     """Return an immutable replay for a scan that is already terminal.
 
-    This check intentionally runs before authorization revalidation and before
-    invoking any scanner binary. A late Celery redelivery must never reopen a
-    finished scan, rerun an engine, duplicate evidence, or rewrite historical
-    results merely because authorization state changed after completion.
+    A redelivered Celery task may replay only a durable engine outcome. The
+    worker must never synthesize a terminal result solely from Scan.status.
     """
     scan = Scan.objects.filter(pk=scan_id).first()
     if scan is None or not scan.is_finished:
@@ -22,7 +27,10 @@ def terminal_scan_delivery(scan_id: str, engine_name: str) -> dict[str, Any] | N
         .select_related('engine')
         .first()
     )
-    result = execution.result_data if execution and isinstance(execution.result_data, dict) else {}
+    if execution is None or execution.status not in TERMINAL_EXECUTION_STATUSES:
+        return None
+
+    result = execution.result_data if isinstance(execution.result_data, dict) else {}
     target = result.get('target') or result.get('source')
 
     return {
