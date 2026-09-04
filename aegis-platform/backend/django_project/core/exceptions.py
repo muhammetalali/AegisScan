@@ -1,6 +1,7 @@
 from rest_framework.views import exception_handler
 from rest_framework.response import Response
 from rest_framework import status
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 import logging
@@ -49,6 +50,6 @@ def custom_exception_handler(exc, context):
         'error': {
             'code': status.HTTP_500_INTERNAL_SERVER_ERROR,
             'message': 'Internal server error',
-            'details': 'An unexpected error occurred' if not settings.DEBUG else str(exc),
+            'details': str(exc) if settings.DEBUG else 'An unexpected error occurred',
         }
     }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
