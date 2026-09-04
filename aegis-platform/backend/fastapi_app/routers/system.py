@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import urlparse
 
+import psutil
 import redis
 from celery import current_app as celery_app
 from fastapi import APIRouter, HTTPException, Query
@@ -72,31 +73,12 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _proc_memory_percent() -> float:
-    try:
-        values: dict[str, int] = {}
-        with open('/proc/meminfo', 'r', encoding='utf-8') as handle:
-            for line in handle:
-                key, raw = line.split(':', 1)
-                values[key] = int(raw.strip().split()[0])
-        total = values.get('MemTotal')
-        available = values.get('MemAvailable')
-        if total and available is not None:
-            return round((total - available) * 100 / total, 2)
-    except (OSError, ValueError):
-        pass
-    return 0.0
-
-
 def _system_cpu_percent() -> float:
-    try:
-        first = os.times()
-        time.sleep(0.05)
-        second = os.times()
-        total = max(sum(second[:4]) - sum(first[:4]), 1e-9)
-        return round(min(max((total / 0.05) * 100, 0.0), 100.0), 2)
-    except OSError:
-        return 0.0
+    return round(float(psutil.cpu_percent(interval=0.1)), 2)
+
+
+def _system_memory_percent() -> float:
+    return round(float(psutil.virtual_memory().percent), 2)
 
 
 def _disk_percent() -> float:
@@ -200,16 +182,19 @@ def _unsupported(operation: str) -> None:
 
 @router.get('/settings', response_model=List[SettingResponse])
 async def list_settings(category: Optional[str] = None):
+    del category
     _unsupported('Settings management')
 
 
 @router.get('/settings/{key}', response_model=SettingResponse)
 async def get_setting(key: str):
+    del key
     _unsupported('Settings management')
 
 
 @router.patch('/settings/{key}', response_model=SettingResponse)
 async def update_setting(key: str, update: SettingUpdate):
+    del key, update
     _unsupported('Settings management')
 
 
@@ -222,7 +207,7 @@ async def get_metrics(
     del since
     collectors = {
         'cpu_usage': _system_cpu_percent,
-        'memory_usage': _proc_memory_percent,
+        'memory_usage': _system_memory_percent,
         'disk_usage': _disk_percent,
     }
     selected = [metric_type] if metric_type in collectors else list(collectors)
