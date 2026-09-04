@@ -128,7 +128,7 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/services/test_authorization_guard.py
+        run: python -m pytest -q fastapi_app/services/test_authorization_guard.py fastapi_app/routers/test_semgrep_authorization_binding.py
       - name: API contract and persistence reality
         working-directory: aegis-platform/backend
         env:
