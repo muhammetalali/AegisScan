@@ -11,11 +11,11 @@ def req(s:requests.Session,method:str,url:str,expected:set[int],**kwargs)->dict[
  if r.status_code not in expected: raise RuntimeError(f'{method} {url} failed HTTP {r.status_code}: {r.text[:1000]}')
  if not r.text:return {}
  try:return r.json()
- except ValueError as exc:raise RuntimeError(f'Non-JSON response from {url}') from exc
+ except ValueError as exc:raise RuntimeError(f'Non-JSON response from {url}: {r.text[:1000]}') from exc
 def collection(data:dict[str,Any]|list[Any],label:str)->list[dict[str,Any]]:
  if isinstance(data,list): return data
  if isinstance(data,dict) and isinstance(data.get('results'),list): return data['results']
- raise RuntimeError(f'{label} response contract invalid: expected list or paginated results, got {type(data).__name__}')
+ raise RuntimeError(f'{label} response contract invalid: expected list or paginated results, got {type(data).__name__}: {data!r}')
 def csrf(s):
  data=req(s,'GET',f'{DJANGO}/auth/csrf/',{200}); token=data.get('csrfToken') if isinstance(data,dict) else None; token=token or s.cookies.get('csrftoken')
  if not token:raise RuntimeError('CSRF token missing')
@@ -44,11 +44,14 @@ def main()->int:
    print(f'ENGINE_STATE engine={engine} status={state.get("status")} progress={state.get("progress")}',flush=True)
    if state.get('status') in {'completed','failed','cancelled','partial'}:break
    time.sleep(2)
-  if state.get('status')!='completed':raise RuntimeError(f'{engine} scan {sid} ended in {state.get("status")}: {state}')
-  executions=collection(req(s,'GET',f'{API}/scans/{sid}/engine-executions',{200}),f'{engine} execution'); matching=[item for item in executions if item.get('engine')==engine]
-  if not matching or any(item.get('status')!='completed' for item in matching):raise RuntimeError(f'{engine} execution contract invalid: {executions}')
+  executions=collection(req(s,'GET',f'{API}/scans/{sid}/engine-executions',{200}),f'{engine} execution')
+  matching=[item for item in executions if item.get('engine')==engine]
+  diagnostic={'scan':state,'executions':executions}
+  print(f'ENGINE_DIAGNOSTIC engine={engine} diagnostic={diagnostic}',flush=True)
+  if state.get('status')!='completed':raise RuntimeError(f'{engine} scan {sid} ended in {state.get("status")}: {diagnostic}')
+  if not matching or any(item.get('status')!='completed' for item in matching):raise RuntimeError(f'{engine} execution contract invalid: {diagnostic}')
   evidence=collection(req(s,'GET',f'{API}/evidence/',{200},params={'scan_id':sid,'limit':500}),f'{engine} evidence'); scanner=[x for x in evidence if x.get('source')==engine]
-  if not scanner:raise RuntimeError(f'{engine} produced no persisted evidence: {evidence}')
+  if not scanner:raise RuntimeError(f'{engine} produced no persisted evidence: {diagnostic}; evidence={evidence}')
   for item in scanner:
    if len(item.get('sha256',''))!=64 or item.get('scan_id')!=sid:raise RuntimeError(f'{engine} evidence provenance invalid: {item}')
   results[engine]={'scan_id':sid,'findings_count':state.get('findings_count',0),'evidence_count':len(scanner)}
