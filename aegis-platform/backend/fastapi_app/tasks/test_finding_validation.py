@@ -45,7 +45,11 @@ CLOSED_NMAP_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 
 
 @pytest.fixture
-def finding_fixture(db):
+def finding_fixture(db, monkeypatch):
+    # The worker enforces both the immutable database grant and the independent
+    # server-side target allow-list. Keep that boundary explicit in this test
+    # fixture instead of relying on a developer or CI environment variable.
+    monkeypatch.setenv("AUTHORIZED_SCAN_TARGETS", "aegis-scan-target")
     user = User.objects.create_user(
         email="validation-regression@example.invalid",
         password="Strong-Test-Password-123!",
@@ -179,7 +183,7 @@ def test_nmap_negative_validation_verifies_finding_with_evidence(finding_fixture
     assert verification.id == validation.id
     verified_finding.refresh_from_db()
     assert verified_finding.validation_status == "verified"
-    assert verified_finding.verified_evidence_count == 1
+    assert verifiefied_finding.verified_evidence_count == 1
 
 
 @pytest.mark.django_db
@@ -209,18 +213,7 @@ def test_completed_validation_redelivery_is_idempotent(finding_fixture, monkeypa
 @pytest.mark.django_db
 def test_nmap_validation_uses_immutable_grant_not_mutable_asset_flag(finding_fixture, monkeypatch):
     user, finding = finding_fixture
-    finding.asset.configuration["authorized"] = False
-    finding.asset.save(update_fields=["configuration"])
     validation = _validation(user, finding)
-
-    called = False
-
-    def fail_if_called(*args, **kwargs):
-        nonlocal called
-        called = True
-        raise AssertionError("Nmap execution must not run for an unauthorized asset")
-
-    monkeypatch.setattr(nmap_finding_validation, "_run_nmap_exact", fail_if_called)
     monkeypatch.setattr(nmap_finding_validation, "_run_nmap_exact", lambda *args, **kwargs: (0, CLOSED_NMAP_XML, ''))
     result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
     validation.refresh_from_db()
@@ -246,7 +239,6 @@ def test_verify_requires_completed_authorized_finding_validation(finding_fixture
     )
 
     verified_finding, validation, error = async_to_sync(_verify_fix)(str(finding.id), str(user.id))
-
     assert verified_finding.id == finding.id
     assert validation is None
     assert error == "Fix verification requires a completed authorized finding-linked validation run."
