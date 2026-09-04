@@ -42,9 +42,8 @@ class ActionTransition(BaseModel):
 async def _decision_by_id(decision_id: str, user_id: str) -> dict[str, Any] | None:
     validations = await _load_validations(user_id)
     correlations = correlate_all(validations)
-    graph = build_assurance_graph(validations, correlations)
-    intelligence = analyze_graph(graph)
-    triage = build_triage(intelligence)
+    graph = analyze_graph(build_assurance_graph(validations, correlations))
+    triage = build_triage(graph)
     pack = build_decision_pack(triage)
     return next((item for item in pack.get("decisions", []) if item.get("decisionId") == decision_id), None)
 
