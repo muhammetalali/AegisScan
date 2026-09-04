@@ -183,7 +183,7 @@ def test_nmap_negative_validation_verifies_finding_with_evidence(finding_fixture
     assert verification.id == validation.id
     verified_finding.refresh_from_db()
     assert verified_finding.validation_status == "verified"
-    assert verifiefied_finding.verified_evidence_count == 1
+    assert verified_finding.verified_evidence_count == 1
 
 
 @pytest.mark.django_db
