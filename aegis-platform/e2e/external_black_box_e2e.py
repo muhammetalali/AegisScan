@@ -35,7 +35,10 @@ def main()->int:
  project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20)
  if not isinstance(project,dict) or not project.get('id'): raise RuntimeError(f'Project creation response contract invalid: {project!r}')
  project_id=project['id']
- scan=http(session,'POST',f'{API_V1}/scans/','Real Nmap scan creation',{201},json={'project_id':project_id,'name':f'External real Nmap {unique}','scan_type':'network','engines':['nmap'],'depth':'quick','config':{'target':TARGET},'authorized':True},timeout=20)
+ asset=http(session,'POST',f'{API_V1}/assets/','Authorized Nmap asset creation',{201},json={'project_id':project_id,'name':f'External Nmap target {unique}','type':'ip_address','description':'Real authorized Nmap E2E target','environment':'development','criticality':'medium','configuration':{'host':TARGET,'authorized':True},'tags':['e2e','nmap']},timeout=20)
+ asset_id=asset.get('id') if isinstance(asset,dict) else None
+ if not asset_id:raise RuntimeError(f'Asset creation did not return id: {asset!r}')
+ scan=http(session,'POST',f'{API_V1}/scans/','Real Nmap scan creation',{201},json={'project_id':project_id,'name':f'External real Nmap {unique}','scan_type':'ip','asset_id':asset_id,'engines':['nmap'],'depth':'quick','config':{'host':TARGET},'authorized':True},timeout=20)
  scan_id=scan.get('id') if isinstance(scan,dict) else None
  if not scan_id:raise RuntimeError('Scan creation did not return id')
  deadline=time.monotonic()+TIMEOUT; last={}
@@ -58,7 +61,7 @@ def main()->int:
   if item.get('finding_id')!=finding_id:raise RuntimeError(f'Evidence/finding provenance mismatch: {item}')
   if len(item.get('sha256',''))!=64:raise RuntimeError(f'Evidence SHA-256 is invalid: {item}')
   if item.get('evidence_type')!='scanner_output':raise RuntimeError(f'Unexpected evidence type: {item}')
- print('EXTERNAL_REAL_E2E=PASS'); print(f'project_id={project_id}'); print(f'scan_id={scan_id}'); print(f'finding_id={finding_id}'); print(f'evidence_count={len(scanner_evidence)}'); print(f'target={TARGET}'); return 0
+ print('EXTERNAL_REAL_E2E=PASS'); print(f'project_id={project_id}'); print(f'asset_id={asset_id}'); print(f'scan_id={scan_id}'); print(f'finding_id={finding_id}'); print(f'evidence_count={len(scanner_evidence)}'); print(f'target={TARGET}'); return 0
 if __name__=='__main__':
  try:raise SystemExit(main())
  except Exception as exc:print(f'EXTERNAL_REAL_E2E=FAIL: {exc}',file=sys.stderr,flush=True);raise
