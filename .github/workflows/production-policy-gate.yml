@@ -32,6 +32,10 @@ jobs:
       AUTHORIZED_SCAN_TARGETS: production-policy.example
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - name: Install policy test dependency
+        run: python -m pip install pytest==9.1.1
       - name: Prepare non-secret policy environment
         working-directory: aegis-platform
         run: |
