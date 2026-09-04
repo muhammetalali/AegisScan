@@ -50,19 +50,27 @@ async def _decision_by_id(decision_id: str, user_id: str) -> dict[str, Any] | No
 
 @router.get("/actions")
 async def actions(user: dict[str, Any] = Depends(require_user)):
-    items = [enrich_action(item) for item in list_actions()]
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    items = [enrich_action(item) for item in list_actions(actor)]
     return {"items": items, "metrics": workflow_metrics(items)}
 
 
 @router.get("/actions/overview")
 async def actions_overview(user: dict[str, Any] = Depends(require_user)):
-    items = [enrich_action(item) for item in list_actions()]
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    items = [enrich_action(item) for item in list_actions(actor)]
     return {"items": items, "metrics": workflow_metrics(items)}
 
 
 @router.post("/actions", status_code=201)
 async def create_action_endpoint(body: ActionCreate, request: Request, user: dict[str, Any] = Depends(require_user)):
-    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "user")
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
     decision = await _decision_by_id(body.decision_id, actor)
     if decision is None:
         raise HTTPException(status_code=404, detail="Decision not found")
@@ -81,7 +89,10 @@ async def create_action_endpoint(body: ActionCreate, request: Request, user: dic
 
 @router.get("/actions/{action_id}")
 async def action_detail(action_id: str, user: dict[str, Any] = Depends(require_user)):
-    item = get_action(action_id)
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    item = get_action(action_id, actor)
     if item is None:
         raise HTTPException(status_code=404, detail="Action not found")
     return enrich_action(item)
@@ -89,7 +100,9 @@ async def action_detail(action_id: str, user: dict[str, Any] = Depends(require_u
 
 @router.post("/actions/{action_id}/transition")
 async def action_transition(action_id: str, body: ActionTransition, request: Request, user: dict[str, Any] = Depends(require_user)):
-    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "user")
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
     try:
         item = transition(action_id, body.state, actor, body.note)
         await sync_to_async(add_audit_entry)(
