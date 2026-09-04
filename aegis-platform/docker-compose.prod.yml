@@ -11,7 +11,7 @@ services:
 
   django:
     ports: !reset []
-    volumes:
+    volumes: !override
       - media_data:/app/media
       - static_data:/app/staticfiles
     read_only: true
