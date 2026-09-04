@@ -29,13 +29,8 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if npm audit --omit=dev --audit-level=low; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "npm audit attempt $attempt failed; retrying the authoritative registry endpoint" >&2
-              sleep $((attempt * 10))
-            fi
+            if npm audit --omit=dev --audit-level=low; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then echo "npm audit attempt $attempt failed; retrying" >&2; sleep $((attempt * 10)); fi
           done
           echo "npm audit failed after three attempts; dependency assurance remains unproven" >&2
           exit 1
@@ -128,13 +123,18 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_scanner_tenant_isolation.py
+      - name: Authorization boundary and scanner provenance reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/services/test_authorization_guard.py
       - name: API contract and persistence reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: |
-          python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py fastapi_app/routers/test_reliability_contracts.py fastapi_app/routers/test_realtime_and_assurance.py fastapi_app/services/test_scope_authorization.py django_project/compliance/test_framework_catalog.py django_project/audit/test_middleware.py
+        run: python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py fastapi_app/routers/test_reliability_contracts.py fastapi_app/routers/test_realtime_and_assurance.py fastapi_app/services/test_scope_authorization.py django_project/compliance/test_framework_catalog.py django_project/audit/test_middleware.py
       - name: System telemetry and unsupported operations reality
         working-directory: aegis-platform/backend
         env:
