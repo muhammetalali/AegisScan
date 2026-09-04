@@ -32,6 +32,19 @@ jobs:
       AUTHORIZED_SCAN_TARGETS: production-policy.example
     steps:
       - uses: actions/checkout@v5
+      - name: Prepare non-secret policy environment
+        working-directory: aegis-platform
+        run: |
+          printf '%s\n' \
+            'DEBUG=False' \
+            'SECRET_KEY=ci-policy-django-key-012345678901234567890123456789' \
+            'JWT_SECRET_KEY=ci-policy-jwt-key-012345678901234567890123456789' \
+            'DATABASE_URL=postgresql://aegis:ci-policy-secret-not-for-production@postgres:5432/aegisdb' \
+            'REDIS_URL=redis://redis:6379/0' \
+            'CELERY_BROKER_URL=redis://redis:6379/0' \
+            'CELERY_RESULT_BACKEND=redis://redis:6379/0' \
+            'ALLOWED_HOSTS=localhost,nginx' \
+            'AUTHORIZED_SCAN_TARGETS=production-policy.example' > backend/.env
       - name: Resolve production Compose model
         working-directory: aegis-platform
         run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config --format json > /tmp/aegis-production-compose.json

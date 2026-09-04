@@ -16,7 +16,8 @@ def validate(model: dict) -> list[str]:
     services = model.get('services') if isinstance(model, dict) else None
     if not isinstance(services, dict):
         return ['Resolved Compose document has no services mapping']
-    if 'scan_target' in services:
+    scan_target = services.get('scan_target')
+    if scan_target is not None and 'ci-only' not in (scan_target.get('profiles') or []):
         failures.append('CI-only scan_target is active in the default production model')
     for name in INTERNAL_SERVICES:
         service = services.get(name, {})

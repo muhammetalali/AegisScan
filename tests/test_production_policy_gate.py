@@ -43,6 +43,9 @@ def test_rejects_internal_ports_bind_mounts_fixture_scope_and_ci_target():
     assert any('bind mount' in item for item in failures)
     assert any('CI fixture' in item for item in failures)
 
+    model['services']['scan_target'] = {'profiles': ['ci-only']}
+    assert not any('scan_target' in item for item in MODULE.validate(model))
+
 
 def test_backend_images_drop_root_before_runtime():
     root = Path(__file__).parents[1] / 'aegis-platform/backend'
