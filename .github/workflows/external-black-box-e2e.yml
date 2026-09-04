@@ -2,10 +2,10 @@ name: External Black-Box E2E
 'on':
   pull_request:
     branches: [main]
-    paths: ['aegis-platform/e2e/**','aegis-platform/backend/**','aegis-platform/frontend/**','aegis-platform/docker-compose.yml','aegis-platform/docker/**','aegis-platform/docker-compose.ci.yml','.github/workflows/external-black-box-e2e.yml','.github/workflows/domain-contract-reality.yml','.github/workflows/frontend-lock-sync.yml']
+    paths: ['aegis-platform/e2e/**','aegis-platform/backend/**','aegis-platform/frontend/**','aegis-platform/docker-compose.yml','aegis-platform/docker/**','aegis-platform/docker-compose.ci.yml','.github/workflows/external-black-box-e2e.yml','.github/workflows/domain-contract-reality.yml','.github/workflows/frontend-lock-sync.yml','CANONICAL_EXECUTION_BASELINE.md']
   push:
     branches: [main, codex/full-contract-ui-audit-2026-09-03]
-    paths: ['aegis-platform/e2e/**','aegis-platform/backend/**','aegis-platform/frontend/**','aegis-platform/docker-compose.yml','aegis-platform/docker/**','aegis-platform/docker-compose.ci.yml','.github/workflows/external-black-box-e2e.yml','.github/workflows/domain-contract-reality.yml','.github/workflows/frontend-lock-sync.yml']
+    paths: ['aegis-platform/e2e/**','aegis-platform/backend/**','aegis-platform/frontend/**','aegis-platform/docker-compose.yml','aegis-platform/docker/**','aegis-platform/docker-compose.ci.yml','.github/workflows/external-black-box-e2e.yml','.github/workflows/domain-contract-reality.yml','.github/workflows/frontend-lock-sync.yml','CANONICAL_EXECUTION_BASELINE.md']
   workflow_dispatch:
 permissions: {contents: read}
 jobs:
