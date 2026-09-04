@@ -70,8 +70,8 @@ def _canonical_entry(entry: str) -> tuple[str, bool, bool]:
         normalized = normalized.encode('idna').decode('ascii').lower().strip('.')
     except UnicodeError as exc:
         raise ScopeAuthorizationError('Configured hostname is not valid IDNA') from exc
-    if not normalized or '.' not in normalized:
-        raise ScopeAuthorizationError('Bare or ambiguous hostname authorization is forbidden')
+    if not normalized:
+        raise ScopeAuthorizationError('Configured hostname is empty')
     return normalized, False, wildcard
 
 
@@ -79,8 +79,9 @@ def is_target_authorized(target: str) -> bool:
     """Match a target against the explicit server-side authorization allow-list.
 
     The match is fail-closed. Supported entries are exact IPs, CIDRs, exact
-    DNS names, and a single left-most DNS wildcard such as ``*.example.com``.
-    Global wildcards and URL userinfo are rejected.
+    DNS names, explicit single-label hostnames, and a single left-most DNS
+    wildcard such as ``*.example.com``. Global wildcards and URL userinfo are
+    rejected.
     """
     try:
         host = _canonical_hostname(target)
