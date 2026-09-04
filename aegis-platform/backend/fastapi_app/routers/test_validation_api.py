@@ -7,7 +7,7 @@ from asgiref.sync import sync_to_async
 from django.db import connections
 from fastapi.testclient import TestClient
 
-from django_project.assets.models import Asset
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import User
@@ -55,6 +55,10 @@ def api_fixture(transactional_db, monkeypatch):
         criticality=Asset.Criticality.HIGH,
         configuration={"host": "aegis-scan-target", "authorized": True},
         owner=user,
+    )
+    AssetAuthorization.objects.create(
+        asset=asset, actor=user, authorized=True,
+        target_snapshot='aegis-scan-target', reason='Validation API test grant',
     )
     scan = Scan.objects.create(
         project=project,
@@ -186,6 +190,8 @@ def test_validation_create_api_persists_finding_link_and_queues_task(api_fixture
     assert validation.user_id == user.id
     assert validation.finding_id == finding.id
     assert validation.authorized is True
+    assert validation.authorization_decision_id == finding.asset.authorization_records.first().id
+    assert payload["authorization_decision_id"] == str(validation.authorization_decision_id)
     assert validation.celery_task_id == "api-regression-task-id"
 
 

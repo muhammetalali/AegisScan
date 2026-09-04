@@ -68,16 +68,21 @@ def dispatch_integration(integration_id: str,event: dict): return send_integrati
 
 @shared_task(name='enterprise.run_continuous_assurance')
 def run_continuous_assurance(schedule_id: str):
-    schedule=ContinuousAssuranceSchedule.objects.select_related('project').get(pk=schedule_id)
+    schedule=ContinuousAssuranceSchedule.objects.select_related('project','asset','authorization_decision').get(pk=schedule_id)
     if not schedule.enabled:return {'status':'disabled','schedule_id':schedule_id}
     from django_project.scans.models import Scan
     from fastapi_app.tasks.security_scan import run_nmap_scan,run_nuclei_scan
     from fastapi_app.tasks.advanced_scans import run_masscan_scan,run_semgrep_scan
     task={'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}.get(schedule.engine)
     if not task: raise ValueError(f'Unsupported assurance engine: {schedule.engine}')
-    asset=schedule.project.assets.filter(is_active=True).first()
-    if not asset: raise ValueError('Continuous assurance requires an active project asset')
-    scan=Scan.objects.create(project=schedule.project,name=f'Continuous assurance {schedule.engine}',scan_type=schedule.scan_type,asset=asset,engines=[schedule.engine],depth=Scan.Depth.QUICK,config=asset.configuration or {},initiated_by_id=schedule.created_by_id)
+    asset=schedule.asset
+    if not asset or not asset.is_active or asset.project_id != schedule.project_id:
+        raise ValueError('Continuous assurance requires its persisted active project asset binding')
+    from fastapi_app.services.authorization_guard import current_asset_authorization
+    authorization, reason=current_asset_authorization(asset)
+    if authorization is None or authorization.id != schedule.authorization_decision_id:
+        raise ValueError(reason or 'Continuous assurance authorization was superseded; renew the schedule binding')
+    scan=Scan.objects.create(project=schedule.project,name=f'Continuous assurance {schedule.engine}',scan_type=schedule.scan_type,asset=asset,authorization_decision=authorization,engines=[schedule.engine],depth=Scan.Depth.QUICK,config={'target':authorization.target_snapshot},initiated_by_id=schedule.created_by_id)
     result=task.delay(str(scan.id)); schedule.last_run=timezone.now(); schedule.next_run=timezone.now()+timedelta(minutes=schedule.interval_minutes); schedule.save(update_fields=['last_run','next_run']); return {'status':'queued','scan_id':str(scan.id),'task_id':result.id}
 
 @shared_task(name='enterprise.dispatch_due_schedules')

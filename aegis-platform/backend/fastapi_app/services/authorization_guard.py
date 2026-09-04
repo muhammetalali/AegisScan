@@ -100,6 +100,41 @@ def authorization_snapshot(decision: AssetAuthorization) -> dict[str, Any]:
     }
 
 
+def current_asset_authorization(asset: Asset, expected_target: str = '') -> tuple[AssetAuthorization | None, str]:
+    """Return the current immutable grant only when identity and target still match."""
+    decision = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+    if decision is None:
+        return None, 'Execution blocked: asset has no authoritative authorization decision.'
+    if decision.asset_identity_snapshot != asset.id:
+        return None, 'Execution blocked: authorization decision is not bound to the current asset identity.'
+    if decision.authorized is not True or not decision.is_currently_valid:
+        return None, 'Execution blocked: latest authorization decision is not currently valid.'
+    target = asset_target(asset)
+    if not target or target != _first_string(decision.target_snapshot):
+        return None, 'Execution blocked: asset target does not match the authorization snapshot.'
+    if expected_target and _first_string(expected_target) != target:
+        return None, 'Execution blocked: requested target does not match the authorization snapshot.'
+    return decision, ''
+
+
+def require_bound_validation_authorization(validation) -> tuple[Asset | None, str, AssetAuthorization | None]:
+    """Resolve a ValidationRun against its immutable, still-current authorization grant."""
+    finding = validation.finding
+    asset = finding.asset if finding else None
+    if asset is None:
+        return None, 'Execution blocked: validation finding has no persisted asset.', None
+    if not validation.authorization_decision_id:
+        return None, 'Execution blocked: validation has no bound asset authorization decision.', None
+    decision, reason = current_asset_authorization(asset, validation.target_value)
+    if decision is None:
+        return None, reason, None
+    if decision.id != validation.authorization_decision_id:
+        return None, 'Execution blocked: bound authorization decision is no longer the latest asset decision.', None
+    if not is_target_authorized(decision.target_snapshot):
+        return None, 'Execution blocked: target is outside the server-side authorized scan scope.', None
+    return asset, decision.target_snapshot, decision
+
+
 def revalidate_bound_authorization(scan: Scan, decision: AssetAuthorization) -> tuple[bool, str]:
     """Re-check the latest persisted decision immediately before evidence commit."""
     with transaction.atomic():

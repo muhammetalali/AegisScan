@@ -15,7 +15,7 @@ from django.db import transaction
 
 from django_project.evidence.models import Evidence, ValidationRun
 from fastapi_app.services.nmap_parser import parse_nmap_xml
-from fastapi_app.services.scope_authorization import is_target_authorized
+from fastapi_app.services.authorization_guard import authorization_snapshot, require_bound_validation_authorization
 from fastapi_app.services.evidence_identity import evidence_id
 
 
@@ -131,25 +131,14 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
     validation.save(update_fields=['status', 'progress', 'current_phase', 'started_at', 'error_message'])
 
     try:
-        if not validation.authorized:
-            return _fail_validation(validation, 'Execution blocked: validation is not explicitly authorized.', 'blocked')
-
-        asset = finding.asset
-        asset_config = (asset.configuration or {}) if asset else {}
-        if asset_config.get('authorized') is not True:
-            return _fail_validation(validation, 'Execution blocked: finding asset is not explicitly marked authorized.', 'blocked')
+        asset, target, authorization = require_bound_validation_authorization(validation)
+        if authorization is None:
+            return _fail_validation(validation, target, 'blocked')
+        asset_config = asset.configuration or {}
 
         engine = (validation.engines or [finding.source_engine])[0].strip().lower()
         if engine != 'nmap' or (finding.source_engine or '').strip().lower() != 'nmap':
             raise ValueError('Nmap finding validation requires source engine nmap and validation engine nmap')
-
-        target = _string(asset_config.get('host') or asset_config.get('ip') or asset_config.get('domain'))
-        if not target:
-            raise ValueError('Finding asset does not contain an authorized host/ip/domain for Nmap validation')
-        if validation.target_value.strip() != target:
-            raise ValueError('Nmap finding validation target must exactly match the finding asset host')
-        if not is_target_authorized(validation.scope or validation.target_value):
-            raise ValueError('Execution blocked: target is outside the server-side authorized scan scope.')
 
         port, signature = _expected_signature(finding.raw_data or {})
         validation.current_phase = 'nmap'
@@ -171,6 +160,9 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
         }
 
         now = datetime.now(timezone.utc)
+        _, authorization_reason, current_authorization = require_bound_validation_authorization(validation)
+        if current_authorization is None:
+            raise ValueError(authorization_reason)
         with transaction.atomic():
             evidence, _ = Evidence.objects.update_or_create(
                 id=evidence_id('validation', validation_id, 'nmap', 'validation_output', str(finding.id)),
@@ -191,6 +183,7 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                         'port': port,
                         'expected': signature,
                         'observed': observed,
+                        **authorization_snapshot(authorization),
                     },
                     'collected_by': validation.user,
                 },

@@ -114,7 +114,7 @@ class ExecutiveSnapshot(models.Model):
 
 
 class ContinuousAssuranceSchedule(models.Model):
-    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='assurance_schedules'); project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='assurance_schedules'); scan_type=models.CharField(max_length=30); engine=models.CharField(max_length=30); interval_minutes=models.PositiveIntegerField(default=60); enabled=models.BooleanField(default=True); next_run=models.DateTimeField(); last_run=models.DateTimeField(null=True,blank=True); created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT); created_at=models.DateTimeField(auto_now_add=True)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='assurance_schedules'); project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='assurance_schedules'); asset=models.ForeignKey('assets.Asset',on_delete=models.PROTECT,null=True,blank=True,related_name='assurance_schedules'); authorization_decision=models.ForeignKey('assets.AssetAuthorization',on_delete=models.PROTECT,null=True,blank=True,related_name='assurance_schedules'); scan_type=models.CharField(max_length=30); engine=models.CharField(max_length=30); interval_minutes=models.PositiveIntegerField(default=60); enabled=models.BooleanField(default=True); next_run=models.DateTimeField(); last_run=models.DateTimeField(null=True,blank=True); created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT); created_at=models.DateTimeField(auto_now_add=True)
 
 
 class Notification(models.Model):

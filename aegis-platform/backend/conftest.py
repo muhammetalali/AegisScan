@@ -37,6 +37,8 @@ def terminate_orphaned_test_database_sessions(django_db_setup):
     from django.db import connection
 
     settings = connection.settings_dict
+    if settings.get("ENGINE") != "django.db.backends.postgresql":
+        return
     test_db_name = settings.get("NAME")
     if not test_db_name:
         return

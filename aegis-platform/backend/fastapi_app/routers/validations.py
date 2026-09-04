@@ -16,6 +16,7 @@ from evidence.models import ValidationRun
 from vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
+from ..services.authorization_guard import current_asset_authorization
 from ..tasks.finding_validation import validate_finding_e2e
 from ..tasks.nmap_finding_validation import validate_nmap_finding_e2e
 
@@ -52,6 +53,7 @@ class ValidationOut(BaseModel):
     current_phase: str
     created_at: str
     audit_note: str
+    authorization_decision_id: Optional[str] = None
 
 
 @sync_to_async
@@ -64,6 +66,7 @@ def _serialize(v: ValidationRun):
         progress=v.progress, current_phase=v.current_phase,
         created_at=v.created_at.isoformat(),
         audit_note=f'Scope={v.scope} authorized={v.authorized} finding_id={v.finding_id or ""}',
+        authorization_decision_id=str(v.authorization_decision_id) if v.authorization_decision_id else None,
     )
 
 
@@ -80,6 +83,11 @@ def _get_finding(finding_id: UUID, user_id: str):
 def _create(body: ValidationCreate, user_id: str, finding: Optional[Vulnerability]):
     if not finding:
         raise ValueError('finding_id is required for real validation execution')
+    if not finding.asset_id:
+        raise ValueError('Finding must reference a persisted asset')
+    decision, reason = current_asset_authorization(finding.asset, body.target_value)
+    if decision is None:
+        raise PermissionError(reason)
     v = ValidationRun.objects.create(
         user_id=user_id,
         finding=finding,
@@ -89,6 +97,7 @@ def _create(body: ValidationCreate, user_id: str, finding: Optional[Vulnerabilit
         profile=body.profile,
         engines=body.engines,
         authorized=True,
+        authorization_decision=decision,
     )
     source_engine = (finding.source_engine or '').strip().lower()
     task = validate_nmap_finding_e2e if source_engine == 'nmap' else validate_finding_e2e
@@ -140,6 +149,8 @@ async def create_validation(body: ValidationCreate, user=Depends(get_current_use
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     try:
         validation = await _create(body, user_id, finding)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await _serialize(validation)

@@ -13,6 +13,7 @@ from enterprise.models import (
     AttackPath, CloudDiscoveryRun, ComplianceMapping, DigitalTwin, ExecutiveSnapshot,
     ExternalIntegration, FindingIntelligence, Notification, Organization, OrganizationMembership,
     ReportSchedule, SBOMArtifact, SBOMComponent, TwinScenario, TenantProject,
+    ContinuousAssuranceSchedule,
 )
 from enterprise.services import ensure_project_tenant, build_twin, predict_scenario, generate_attack_paths, map_compliance, executive_snapshot, schedule_task
 from enterprise.tasks import build_digital_twin_task, predict_digital_twin_scenario_task, generate_attack_paths_task, map_compliance_task, run_continuous_assurance
@@ -39,6 +40,13 @@ class ScheduleCreate(BaseModel):
     format: str = 'pdf'
     frequency: str
     recipients: list[str] = Field(default_factory=list)
+    next_run: Optional[str] = None
+class ContinuousAssuranceCreate(BaseModel):
+    project_id: UUID
+    asset_id: UUID
+    scan_type: str
+    engine: str
+    interval_minutes: int = Field(default=60, ge=5, le=43200)
     next_run: Optional[str] = None
 
 @sync_to_async
@@ -132,6 +140,24 @@ async def run_assurance(schedule_id: UUID, user=Depends(__import__('fastapi_app.
     schedule=await sync_to_async(lambda:ContinuousAssuranceSchedule.objects.filter(pk=schedule_id,created_by_id=str(user.get('user_id'))).first())()
     if not schedule: raise HTTPException(status_code=404,detail='Continuous assurance schedule not found')
     task=run_continuous_assurance.delay(str(schedule.id)); return {'task_id':task.id,'status':'queued'}
+
+@router.post('/continuous-assurance', status_code=201)
+async def create_continuous_assurance(body: ContinuousAssuranceCreate, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
+    from django_project.assets.models import Asset
+    from fastapi_app.services.authorization_guard import current_asset_authorization
+    if body.engine not in {'nmap','nuclei','masscan','semgrep'}:
+        raise HTTPException(status_code=400, detail='Unsupported continuous assurance engine')
+    project=await _project_for_user(str(body.project_id),str(user.get('user_id')))
+    org=await sync_to_async(ensure_project_tenant)(project,str(user.get('user_id')))
+    asset=await sync_to_async(lambda:Asset.objects.filter(pk=body.asset_id,project=project,is_active=True).first())()
+    if not asset:
+        raise HTTPException(status_code=404,detail='Active project asset not found')
+    authorization,reason=await sync_to_async(current_asset_authorization)(asset)
+    if authorization is None:
+        raise HTTPException(status_code=403,detail=reason)
+    next_run=timezone.now() if not body.next_run else timezone.datetime.fromisoformat(body.next_run.replace('Z','+00:00'))
+    schedule=await sync_to_async(ContinuousAssuranceSchedule.objects.create)(organization=org,project=project,asset=asset,authorization_decision=authorization,scan_type=body.scan_type,engine=body.engine,interval_minutes=body.interval_minutes,next_run=next_run,created_by_id=str(user.get('user_id')))
+    return {'id':str(schedule.id),'project_id':str(project.id),'asset_id':str(asset.id),'authorization_decision_id':str(authorization.id),'next_run':schedule.next_run.isoformat(),'enabled':schedule.enabled}
 
 @router.post('/projects/{project_id}/cloud-discovery', status_code=202)
 async def cloud_discovery(project_id: UUID, provider: str, config: dict[str,Any], user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
