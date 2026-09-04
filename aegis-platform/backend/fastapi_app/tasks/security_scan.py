@@ -32,9 +32,17 @@ def _ensure_engine(name: str, display_name: str, category: str, timeout: int) ->
 def _start_execution(scan: Scan, engine: ScanEngine) -> ScanEngineExecution:
     now = datetime.now(timezone.utc)
     execution, _ = ScanEngineExecution.objects.get_or_create(scan=scan, engine=engine, defaults={'status': ScanEngineExecution.ExecutionStatus.PENDING})
-    execution.status = ScanEngineExecution.ExecutionStatus.RUNNING; execution.progress = 10; execution.started_at = now; execution.completed_at = None; execution.duration = 0; execution.findings_found = 0; execution.evidences_collected = 0; execution.error_message = ''; execution.logs = ''
-    execution.save(update_fields=['status', 'progress', 'started_at', 'completed_at', 'duration', 'findings_found', 'evidences_collected', 'error_message', 'logs', 'updated_at'])
-    ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message=f'{engine.name} execution started', context={'engine': engine.name})
+    execution.status = ScanEngineExecution.ExecutionStatus.RUNNING
+    execution.progress = 10
+    execution.started_at = now
+    execution.completed_at = None
+    execution.duration = 0
+    execution.findings_found = 0
+    execution.evidences_collected = 0
+    execution.error_message = ''
+    execution.logs = ''
+    execution.save(update_fields=['status','progress','started_at','completed_at','duration','findings_found','evidences_collected','error_message','logs','updated_at'])
+    ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message=f'{engine.name} execution started', context={'engine':engine.name})
     return execution
 
 
@@ -43,14 +51,14 @@ def _completed_delivery(scan: Scan, engine: ScanEngine) -> dict[str, Any] | None
     if not execution or execution.status != ScanEngineExecution.ExecutionStatus.COMPLETED or scan.status != Scan.Status.COMPLETED:
         return None
     result = execution.result_data if isinstance(execution.result_data, dict) else {}
-    return {'status': scan.status, 'scan_id': str(scan.id), 'tool': engine.name, 'target': result.get('target'), 'finding_ids': result.get('finding_ids', []), 'redelivered': True}
+    return {'status':scan.status,'scan_id':str(scan.id),'tool':engine.name,'target':result.get('target'),'finding_ids':result.get('finding_ids',[]),'redelivered':True}
 
 
 def _first_string(value: Any) -> str:
-    if isinstance(value, str): return value.strip()
-    if isinstance(value, list):
+    if isinstance(value,str): return value.strip()
+    if isinstance(value,list):
         for item in value:
-            if isinstance(item, str) and item.strip(): return item.strip()
+            if isinstance(item,str) and item.strip(): return item.strip()
     return ''
 
 
@@ -60,7 +68,7 @@ def _severity(value: Any) -> str:
 
 
 def _risk_score(severity: str) -> float:
-    return {Vulnerability.Severity.CRITICAL: 95.0, Vulnerability.Severity.HIGH: 80.0, Vulnerability.Severity.MEDIUM: 60.0, Vulnerability.Severity.LOW: 35.0, Vulnerability.Severity.INFO: 10.0}[severity]
+    return {Vulnerability.Severity.CRITICAL:95.0,Vulnerability.Severity.HIGH:80.0,Vulnerability.Severity.MEDIUM:60.0,Vulnerability.Severity.LOW:35.0,Vulnerability.Severity.INFO:10.0}[severity]
 
 
 def _parse_nuclei_findings(raw_output: str) -> list[dict[str, Any]]:
@@ -86,7 +94,7 @@ def _ingest_nuclei_findings(scan: Scan, evidence: Evidence, raw_output: str) -> 
             vulnerability=Vulnerability.objects.create(scan=scan,project=scan.project,asset=scan.asset,title=item['title'],description=item['description'],severity=item['severity'],status=Vulnerability.Status.OPEN,confidence=Vulnerability.Confidence.HIGH,category='web',cwe_id=item['cwe_id'],cve_ids=item['cve_ids'],tags=[x for x in [item['template_id'],item['matcher_name']] if x],url=item['url'][:500],method=item['method'][:10],risk_score=_risk_score(item['severity']),evidence_count=0,verified_evidence_count=0,validation_status='unverified',remediation=item['remediation'],references=item['references'],source_engine='nuclei',raw_data=item['record'])
         else:
             vulnerability.last_seen=datetime.now(timezone.utc); vulnerability.raw_data=item['record']; vulnerability.save(update_fields=['last_seen','raw_data','updated_at'])
-        if evidence.finding_id not in {None, vulnerability.id}:
+        if evidence.finding_id not in {None,vulnerability.id}:
             Evidence.objects.update_or_create(id=evidence_id('scan',str(scan.id),'nuclei','scanner_output',str(vulnerability.id)),defaults={'scan':scan,'asset':scan.asset,'finding':vulnerability,'source':'nuclei','evidence_type':'scanner_output','raw_output':evidence.raw_output,'metadata':{**(evidence.metadata or {}),'finding_id':str(vulnerability.id)},'collected_by':scan.initiated_by})
         else:
             evidence.finding=vulnerability; evidence.save(update_fields=['finding'])
@@ -98,16 +106,22 @@ def _block_scan(scan_id: str, message: str) -> dict[str, Any]:
     now=datetime.now(timezone.utc); scan=Scan.objects.get(pk=scan_id); scan.status=Scan.Status.FAILED; scan.error_message=message; scan.progress=100; scan.completed_at=now; scan.save(update_fields=['status','error_message','progress','completed_at','updated_at']); ScanLog.objects.create(scan=scan,level=ScanLog.Level.WARNING,message=message,context={'authorization_boundary':True}); return {'status':'blocked','scan_id':scan_id,'error':message}
 
 
+def _fail_scan(scan: Scan, execution: ScanEngineExecution, message: str)->dict[str,Any]:
+    now=datetime.now(timezone.utc); execution.status=ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.error_message=message; execution.save(update_fields=['status','progress','completed_at','error_message','updated_at']); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.ERROR,message='scanner execution failed',context={'error':message}); scan.status=Scan.Status.FAILED; scan.error_message=message; scan.completed_at=now; scan.progress=100; scan.save(update_fields=['status','error_message','completed_at','progress','updated_at']); return {'status':'failed','scan_id':str(scan.id),'error':message}
+
+
 @shared_task(bind=True,name='fastapi_app.tasks.security_scan.run_nmap_scan',max_retries=1,default_retry_delay=30)
 def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
     scan,target,authorization=require_bound_scan_authorization(scan_id)
     if scan is None: return _block_scan(scan_id,target)
     if scan.scan_type not in {Scan.Type.IP,Scan.Type.NETWORK}: return _block_scan(scan_id,'Execution blocked: Nmap requires an IP or network scan type.')
+    engine=_ensure_engine('nmap','Nmap',ScanEngine.EngineCategory.RECON,300)
+    completed=_completed_delivery(scan,engine)
+    if completed: return completed
     scan.status=Scan.Status.RUNNING; scan.started_at=datetime.now(timezone.utc); scan.current_phase='nmap'; scan.current_engine='nmap'; scan.progress=10; scan.error_message=''; scan.save(update_fields=['status','started_at','current_phase','current_engine','progress','error_message','updated_at'])
-    engine=_ensure_engine('nmap','Nmap',ScanEngine.EngineCategory.RECON,300); execution=_start_execution(scan,engine); execution.result_data=authorization_snapshot(authorization); execution.save(update_fields=['result_data','updated_at'])
+    execution=_start_execution(scan,engine); execution.result_data=authorization_snapshot(authorization); execution.save(update_fields=['result_data','updated_at'])
     try:
-        started=scan.started_at; timeout=120 if scan.depth==Scan.Depth.QUICK else 300; result=get_tool('nmap').run(ToolRequest(target=target,authorized=True),timeout=timeout); parsed=parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts':[],'host_count':0,'open_ports':0}
-        ok,reason=revalidate_bound_authorization(scan,authorization)
+        started=scan.started_at; timeout=120 if scan.depth==Scan.Depth.QUICK else 300; result=get_tool('nmap').run(ToolRequest(target=target,authorized=True),timeout=timeout); parsed=parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts':[],'host_count':0,'open_ports':0}; ok,reason=revalidate_bound_authorization(scan,authorization)
         if not ok: return _block_scan(scan_id,reason)
         completed_at=datetime.now(timezone.utc); duration=max(0,(completed_at-started).total_seconds()) if started else 0
         with transaction.atomic():
@@ -118,17 +132,16 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
         return _fail_scan(scan,execution,str(exc))
 
 
-def _fail_scan(scan: Scan, execution: ScanEngineExecution, message: str)->dict[str,Any]:
-    now=datetime.now(timezone.utc); execution.status=ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.error_message=message; execution.save(update_fields=['status','progress','completed_at','error_message','updated_at']); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.ERROR,message='scanner execution failed',context={'error':message}); scan.status=Scan.Status.FAILED; scan.error_message=message; scan.completed_at=now; scan.progress=100; scan.save(update_fields=['status','error_message','completed_at','progress','updated_at']); return {'status':'failed','scan_id':str(scan.id),'error':message}
-
-
 @shared_task(bind=True,name='fastapi_app.tasks.security_scan.run_nuclei_scan',max_retries=1,default_retry_delay=30)
 def run_nuclei_scan(self,scan_id:str)->dict[str,Any]:
     scan,target,authorization=require_bound_scan_authorization(scan_id)
     if scan is None: return _block_scan(scan_id,target)
     if scan.scan_type != Scan.Type.URL: return _block_scan(scan_id,'Execution blocked: Nuclei requires a URL scan type.')
+    engine=_ensure_engine('nuclei','Nuclei',ScanEngine.EngineCategory.ANALYSIS,600)
+    completed=_completed_delivery(scan,engine)
+    if completed: return completed
     scan.status=Scan.Status.RUNNING; scan.started_at=datetime.now(timezone.utc); scan.current_phase='nuclei'; scan.current_engine='nuclei'; scan.progress=10; scan.error_message=''; scan.save(update_fields=['status','started_at','current_phase','current_engine','progress','error_message','updated_at'])
-    engine=_ensure_engine('nuclei','Nuclei',ScanEngine.EngineCategory.ANALYSIS,600); execution=_start_execution(scan,engine); execution.result_data=authorization_snapshot(authorization); execution.save(update_fields=['result_data','updated_at'])
+    execution=_start_execution(scan,engine); execution.result_data=authorization_snapshot(authorization); execution.save(update_fields=['result_data','updated_at'])
     try:
         started=scan.started_at; result=run_nuclei(target,timeout=600); ok,reason=revalidate_bound_authorization(scan,authorization)
         if not ok: return _block_scan(scan_id,reason)
