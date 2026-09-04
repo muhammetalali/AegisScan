@@ -147,3 +147,9 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_intelligence_real.py
+      - name: Scanner failure lifecycle reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/tasks/test_nmap_failure_contract.py fastapi_app/tasks/test_scanner_redelivery.py
