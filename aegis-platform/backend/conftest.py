@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import psycopg2
 import pytest
 from django.db import connections
 
@@ -34,25 +35,21 @@ def terminate_orphaned_test_database_sessions(django_db_setup):
     yield
 
     from django.db import connection
-    import psycopg2
 
     settings = connection.settings_dict
-    test_db_name = connection.vendor and settings.get("NAME")
+    test_db_name = settings.get("NAME")
     if not test_db_name:
         return
 
-    params = {
-        "dbname": "postgres",
-        "user": settings.get("USER") or None,
-        "password": settings.get("PASSWORD") or None,
-        "host": settings.get("HOST") or "127.0.0.1",
-        "port": settings.get("PORT") or 5432,
-        "connect_timeout": 5,
-    }
-
-    maintenance = None
+    maintenance = psycopg2.connect(
+        dbname="postgres",
+        user=settings.get("USER") or None,
+        password=settings.get("PASSWORD") or None,
+        host=settings.get("HOST") or "127.0.0.1",
+        port=settings.get("PORT") or 5432,
+        connect_timeout=5,
+    )
     try:
-        maintenance = psycopg2.connect(**params)
         maintenance.autocommit = True
         with maintenance.cursor() as cursor:
             cursor.execute(
@@ -64,10 +61,5 @@ def terminate_orphaned_test_database_sessions(django_db_setup):
                 """,
                 [test_db_name],
             )
-    except (psycopg2.Error, OSError):
-        # Database teardown is still owned by pytest-django. Do not mask the
-        # actual test result if the maintenance connection is unavailable.
-        pass
     finally:
-        if maintenance is not None:
-            maintenance.close()
+        maintenance.close()
