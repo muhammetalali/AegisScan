@@ -157,6 +157,14 @@ jobs:
       - name: Run HTTP black-box E2E
         working-directory: aegis-platform
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm --no-deps -v "$PWD/e2e:/e2e:ro" -e AEGIS_BASE_URL=http://nginx -e AEGIS_DJANGO_URL=http://nginx/api/v1 -e AEGIS_FASTAPI_URL=http://nginx -e AEGIS_API_URL=http://nginx/api/v1 -e AEGIS_E2E_TARGET=aegis-scan-target -e AEGIS_E2E_TIMEOUT=600 -e AEGIS_VERIFY_TLS=false -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" fastapi python /e2e/external_black_box_e2e.py
+      - name: Run installed CLI against canonical platform
+        env:
+          AEGIS_PLATFORM_URL: http://localhost
+          AEGIS_EMAIL: ${{ env.AEGIS_E2E_EMAIL }}
+          AEGIS_PASSWORD: ${{ env.AEGIS_E2E_PASSWORD }}
+        run: |
+          python -m pip install -e .
+          aegis platform-status --json
       - name: Run all scanner engines E2E
         working-directory: aegis-platform
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm --no-deps -v "$PWD/e2e:/e2e:ro" -e AEGIS_BASE_URL=http://nginx -e AEGIS_DJANGO_URL=http://nginx/api/v1 -e AEGIS_FASTAPI_URL=http://nginx -e AEGIS_API_URL=http://nginx/api/v1 -e AEGIS_E2E_TARGET=aegis-scan-target -e AEGIS_MASSCAN_TARGET="$AEGIS_MASSCAN_TARGET" -e AEGIS_E2E_TIMEOUT=600 -e AEGIS_VERIFY_TLS=false -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" fastapi python /e2e/scanner_engines_e2e.py

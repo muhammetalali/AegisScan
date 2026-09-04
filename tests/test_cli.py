@@ -50,10 +50,34 @@ def test_findings_empty_database_is_explicit(tmp_path, monkeypatch):
 
 
 def test_scan_and_validate_reject_missing_targets():
-    scan_result = runner.invoke(app, ['scan', '--no-external', '--no-analysis'])
-    validation_result = runner.invoke(app, ['validate', '--no-external', '--no-analysis', '--no-validation'])
+    scan_result = runner.invoke(app, ['local-scan', '--no-external', '--no-analysis'])
+    validation_result = runner.invoke(app, ['local-validate', '--no-external', '--no-analysis', '--no-validation'])
 
     assert scan_result.exit_code == 1
     assert validation_result.exit_code == 1
     assert 'حدّد --code أو --url على الأقل' in scan_result.output
     assert 'حدّد --code أو --url على الأقل' in validation_result.output
+
+
+def test_platform_status_requires_canonical_connection_credentials(monkeypatch):
+    for key in ('AEGIS_PLATFORM_URL', 'AEGIS_EMAIL', 'AEGIS_PASSWORD'):
+        monkeypatch.delenv(key, raising=False)
+    result = runner.invoke(app, ['platform-status'])
+    assert result.exit_code == 2
+    assert 'AEGIS_PLATFORM_URL' in result.output
+
+
+def test_platform_status_reports_only_authenticated_platform_state(monkeypatch):
+    class Client:
+        def __init__(self, base_url):
+            assert base_url == 'https://platform.example'
+
+        def authenticated_status(self, email, password):
+            assert (email, password) == ('operator@example.test', 'secret')
+            return {'ready': {'ready': True}, 'health': {'status': 'healthy'}, 'authenticated': True, 'project_count': 3, 'source': 'platform-api'}
+
+    monkeypatch.setattr('aegis.cli.main.PlatformClient', Client)
+    result = runner.invoke(app, ['platform-status', '--base-url', 'https://platform.example', '--email', 'operator@example.test', '--password', 'secret', '--json'])
+    assert result.exit_code == 0
+    assert 'platform-api' in result.output
+    assert 'project_count' in result.output
