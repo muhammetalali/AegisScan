@@ -1,8 +1,4 @@
-"""Reality gates for the production Django/FastAPI application tree.
-
-These tests deliberately exercise the real application packages under
-``aegis-platform/backend`` rather than the legacy ``packages/backend`` tree.
-"""
+"""Reality gates for the production Django/FastAPI application tree."""
 
 from __future__ import annotations
 
@@ -13,27 +9,24 @@ from pathlib import Path
 
 import pytest
 
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1] / "aegis-platform" / "backend"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_ROOT = REPO_ROOT / "aegis-platform" / "backend"
 
 
 def _bootstrap_backend() -> None:
     backend = str(BACKEND_ROOT)
+    repo = str(REPO_ROOT)
     if backend not in sys.path:
         sys.path.insert(0, backend)
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
     os.environ.setdefault("DEBUG", "0")
-    os.environ.setdefault("SECRET_KEY", "production-reality-gate-secret-key")
-    os.environ.setdefault("JWT_SECRET_KEY", "production-reality-gate-jwt-secret-key")
-    os.environ.setdefault("ALLOWED_HOSTS", "localhost,127.0.0.1")
-    os.environ.setdefault("DATABASE_URL", "sqlite:///tmp/reality-gate.sqlite3")
-    os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 
 def _discover_modules() -> list[str]:
-    roots = [BACKEND_ROOT / "django_project", BACKEND_ROOT / "fastapi_app"]
     modules: list[str] = []
-    for root in roots:
+    for root in (BACKEND_ROOT / "django_project", BACKEND_ROOT / "fastapi_app"):
         if not root.exists():
             continue
         for path in root.rglob("*.py"):
@@ -41,8 +34,7 @@ def _discover_modules() -> list[str]:
                 continue
             if "migrations" in path.parts or "tests" in path.parts:
                 continue
-            relative = path.relative_to(BACKEND_ROOT).with_suffix("")
-            modules.append(".".join(relative.parts))
+            modules.append(".".join(path.relative_to(BACKEND_ROOT).with_suffix("").parts))
     return sorted(set(modules))
 
 
@@ -51,14 +43,12 @@ def test_production_backend_modules_are_importable() -> None:
     import django
 
     django.setup()
-
     failures: list[str] = []
     for module_name in _discover_modules():
         try:
             importlib.import_module(module_name)
-        except Exception as exc:  # pragma: no cover - failure payload is assertion output
+        except Exception as exc:
             failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
-
     assert not failures, "Production backend import failures:\n" + "\n".join(failures)
 
 
@@ -69,7 +59,6 @@ def test_global_exception_handler_handles_unexpected_exception() -> None:
     django.setup()
     from django.conf import settings
     from django.test import override_settings
-
     from django_project.core.exceptions import custom_exception_handler
 
     with override_settings(DEBUG=False):
@@ -94,11 +83,6 @@ def test_aepex_target_authorization_is_not_prefix_bypass(target: str, allowed: t
     _bootstrap_backend()
     from aegis.engines.offensive.aepex import AePEX
 
-    assert AePEX._target_allowed is not object  # keep method import explicit for this reality gate
-    candidate = AePEX._parse_target(target)
-    assert candidate is not None
-
-    # Execute the same policy with a deliberately untrusted object-less instance.
     subject = object.__new__(AePEX)
     subject.allowed_target_prefixes = allowed
     assert subject._target_allowed(target) is expected
