@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+from django.db import transaction
+
+from django_project.assets.models import Asset, AssetAuthorization
+from django_project.scans.models import Scan
+
+from .scope_authorization import is_target_authorized
+
+
+def _first_string(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    return ''
+
+
+def asset_target(asset: Asset) -> str:
+    configuration = asset.configuration or {}
+    return _first_string(
+        configuration.get('url')
+        or configuration.get('host')
+        or configuration.get('ip')
+        or configuration.get('domain')
+        or configuration.get('cidr')
+        or configuration.get('target')
+    )
+
+
+def require_bound_scan_authorization(scan_id: str) -> tuple[Scan | None, str, AssetAuthorization | None]:
+    """Resolve the immutable authorization bound to a network scan.
+
+    The scan admission record is authoritative. Mutable Asset.configuration
+    fields, including the legacy ``authorized`` compatibility flag, never grant
+    execution authority.
+    """
+    with transaction.atomic():
+        scan = (
+            Scan.objects.select_for_update()
+            .select_related('project', 'initiated_by')
+            .get(pk=scan_id)
+        )
+        if not scan.asset_id:
+            return None, 'Execution blocked: scan has no persisted asset.', None
+        if not scan.authorization_decision_id:
+            return None, 'Execution blocked: scan has no bound asset authorization decision.', None
+
+        asset = Asset.objects.select_for_update().get(pk=scan.asset_id)
+        decision = AssetAuthorization.objects.select_for_update().get(pk=scan.authorization_decision_id)
+        latest = (
+            AssetAuthorization.objects.filter(asset=asset)
+            .order_by('-created_at', '-id')
+            .first()
+        )
+        if decision.asset_identity_snapshot != asset.id:
+            return None, 'Execution blocked: authorization decision is not bound to the current asset identity.', None
+        if latest is None or latest.id != decision.id:
+            return None, 'Execution blocked: bound authorization decision is no longer the latest asset decision.', None
+        if decision.authorized is not True or not decision.is_currently_valid:
+            return None, 'Execution blocked: bound authorization decision is not currently valid.', None
+
+        current_target = asset_target(asset)
+        authorized_target = _first_string(decision.target_snapshot)
+        requested_target = _first_string(
+            (scan.config or {}).get('target')
+            or (scan.config or {}).get('host')
+            or (scan.config or {}).get('ip')
+            or (scan.config or {}).get('url')
+            or (scan.config or {}).get('domain')
+        )
+        if not authorized_target:
+            return None, 'Execution blocked: authorization decision has no target snapshot.', None
+        if current_target != authorized_target:
+            return None, 'Execution blocked: asset target no longer matches the bound authorization decision.', None
+        if requested_target and requested_target != authorized_target:
+            return None, 'Execution blocked: scan target no longer matches the bound authorization decision.', None
+        if not is_target_authorized(authorized_target):
+            return None, 'Execution blocked: target is outside the server-side authorized scan scope.', None
+        return scan, authorized_target, decision
+
+
+def authorization_snapshot(decision: AssetAuthorization) -> dict[str, Any]:
+    return {
+        'authorization_decision_id': str(decision.id),
+        'authorization_target': decision.target_snapshot,
+        'authorization_correlation_id': str(decision.correlation_id),
+        'authorization_request_id': str(decision.request_id),
+        'authorization_expires_at': decision.expires_at.isoformat() if decision.expires_at else None,
+        'authorization_valid_from': decision.valid_from.isoformat() if decision.valid_from else None,
+    }
+
+
+def revalidate_bound_authorization(scan: Scan, decision: AssetAuthorization) -> tuple[bool, str]:
+    """Re-check the latest persisted decision immediately before evidence commit."""
+    with transaction.atomic():
+        asset = Asset.objects.select_for_update().get(pk=scan.asset_id)
+        latest = (
+            AssetAuthorization.objects.select_for_update()
+            .filter(asset=asset)
+            .order_by('-created_at', '-id')
+            .first()
+        )
+        if latest is None or latest.id != decision.id:
+            return False, 'Execution blocked: authorization was superseded before evidence persistence.'
+        if latest.authorized is not True or not latest.is_currently_valid:
+            return False, 'Execution blocked: authorization is no longer valid before evidence persistence.'
+        if asset_target(asset) != decision.target_snapshot:
+            return False, 'Execution blocked: asset target changed before evidence persistence.'
+        return True, ''
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
