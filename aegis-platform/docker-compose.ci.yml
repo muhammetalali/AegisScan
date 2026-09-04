@@ -7,27 +7,14 @@ services:
         aliases:
           - scan_target
           - aegis-scan-target
-      e2e_net:
-        ipv4_address: 10.251.0.10
   fastapi:
     environment:
-      AUTHORIZED_SCAN_TARGETS: aegis-scan-target,10.251.0.10
-    networks:
-      e2e_net: {}
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
   celery_worker:
     environment:
-      AUTHORIZED_SCAN_TARGETS: aegis-scan-target,10.251.0.10
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
-    networks:
-      e2e_net: {}
   celery_beat:
     environment:
-      AUTHORIZED_SCAN_TARGETS: aegis-scan-target,10.251.0.10
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
-    networks:
-      e2e_net: {}
-networks:
-  e2e_net:
-    ipam:
-      config:
-        - subnet: 10.251.0.0/24
