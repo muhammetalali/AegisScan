@@ -23,6 +23,10 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_track_started=True,
+    worker_prefetch_multiplier=1,
     imports=(
         "fastapi_app.tasks.advanced_scans",
         "fastapi_app.tasks.finding_validation",
