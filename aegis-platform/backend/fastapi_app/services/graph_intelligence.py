@@ -43,11 +43,21 @@ def analyze_graph(graph: dict[str, Any]) -> dict[str, Any]:
         risk = float(node.get("risk", 0) or 0)
         confidence = float(node.get("confidence", 0) or 0)
         conflicts = float(node.get("conflicts", 0) or 0)
-        sources = float(node.get("sources", 0) or 0)
+        sources = max(0.0, float(node.get("sources", 0) or 0))
         evidence_bonus = 12 if node.get("evidenceBacked") else 0
+        # Corroboration is meaningful only when there is actual source evidence.
+        # Additional independent sources raise priority, capped to keep this factor bounded.
+        source_bonus = min(18.0, sources * 6.0)
         conflict_penalty = min(30, conflicts * 6)
         centrality_bonus = min(18, degree * 3)
-        priority = _clamp(risk * 0.48 + (100 - confidence) * 0.18 + conflict_penalty * 0.55 + centrality_bonus + evidence_bonus * 0.25)
+        priority = _clamp(
+            risk * 0.44
+            + (100 - confidence) * 0.18
+            + source_bonus
+            + conflict_penalty * 0.45
+            + centrality_bonus
+            + evidence_bonus * 0.25
+        )
         item = {**node, "degree": degree, "priority": priority}
         enriched.append(item)
 
@@ -61,14 +71,29 @@ def analyze_graph(graph: dict[str, Any]) -> dict[str, Any]:
         start = str(item["id"])
         distances = _distance_map(start, adjacency)
         impact_nodes = [
-            {"id": target, "distance": distance, "risk": node_map[target].get("risk", 0), "kind": node_map[target].get("kind")}
+            {
+                "id": target,
+                "distance": distance,
+                "risk": node_map[target].get("risk", 0),
+                "kind": node_map[target].get("kind"),
+                "priority": priority_map.get(target, 0),
+            }
             for target, distance in distances.items()
             if target != start and node_map.get(target, {}).get("risk", 0) > 0
         ]
-        impact_nodes.sort(key=lambda value: (value["risk"], -value["distance"]), reverse=True)
+        impact_nodes.sort(
+            key=lambda value: (value["priority"], value["risk"], -value["distance"]),
+            reverse=True,
+        )
         blast = len(impact_nodes)
         max_impact = max((float(value["risk"]) for value in impact_nodes), default=0)
-        score = _clamp(item.get("priority", 0) * 0.65 + max_impact * 0.25 + min(10, blast))
+        max_priority = max((float(value["priority"]) for value in impact_nodes), default=0)
+        score = _clamp(
+            item.get("priority", 0) * 0.60
+            + max_impact * 0.20
+            + max_priority * 0.10
+            + min(10, blast)
+        )
         paths.append({
             "root": start,
             "label": item.get("label", start),
