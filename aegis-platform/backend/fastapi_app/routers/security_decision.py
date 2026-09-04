@@ -8,9 +8,11 @@ from ..services.assurance_graph_aggregator import build_assurance_graph
 from ..services.assurance_correlation import correlate_all
 from ..services.graph_intelligence import analyze_graph
 from ..services.security_decision import build_decision_pack
+from .assurance_graph import _load_validations
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
+
 
 async def require_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict[str, Any]:
     user = await verify_token(credentials.credentials)
@@ -18,10 +20,14 @@ async def require_user(credentials: HTTPAuthorizationCredentials = Depends(secur
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
 
+
 @router.get("/decision-pack")
 async def decision_pack(user: dict[str, Any] = Depends(require_user)):
-    from .validations import _store
-    correlations = correlate_all(_store)
-    graph = analyze_graph(build_assurance_graph(_store, correlations))
+    user_id = str(user.get("user_id") or user.get("id") or "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    validations = await _load_validations(user_id)
+    correlations = correlate_all(validations)
+    graph = analyze_graph(build_assurance_graph(validations, correlations))
     triage = triage_graph(graph)
     return build_decision_pack({"items": triage.get("priorities", []), "generatedAt": None})
