@@ -14,7 +14,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl nmap masscan ca-certificates \
+    && apt-get install -y --no-install-recommends curl nmap masscan ca-certificates libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
@@ -29,6 +29,12 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY . .
 
+RUN groupadd --gid 10001 aegis \
+    && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
+    && mkdir -p /app/staticfiles /app/media \
+    && chown -R aegis:aegis /app \
+    && setcap cap_net_raw,cap_net_admin+eip /usr/bin/nmap /usr/bin/masscan
+
 # Verify required scanner/analysis binaries are installed without relying on
 # non-zero CLI exit semantics (masscan prints its version but returns 1).
 RUN command -v nmap >/dev/null \
@@ -36,5 +42,7 @@ RUN command -v nmap >/dev/null \
     && command -v semgrep >/dev/null
 
 EXPOSE 8000
+
+USER 10001:10001
 
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]

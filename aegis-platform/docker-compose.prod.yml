@@ -10,9 +10,69 @@ services:
       - media_data:/usr/share/nginx/html/media:ro
 
   django:
+    ports: !reset []
+    volumes:
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     environment:
       DEBUG: "False"
       AUTH_COOKIE_SECURE: "True"
+
+  fastapi:
+    ports: !reset []
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+    depends_on: !override
+      django: {condition: service_started}
+      redis: {condition: service_healthy}
+
+  celery_worker:
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, NET_ADMIN]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on: !override
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+
+  celery_beat:
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on: !override
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+
+  postgres:
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in production}
+
+  redis:
+    ports: !reset []
+
+  scan_target:
+    profiles: [ci-only]
 
 volumes:
   static_data:

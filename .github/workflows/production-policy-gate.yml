@@ -1,0 +1,44 @@
+name: Production Policy Gate
+
+on:
+  push:
+    branches: [main, codex/full-contract-ui-audit-2026-09-03]
+    paths:
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/backend/Dockerfile.*'
+      - 'aegis-platform/scripts/production_policy_gate.py'
+      - 'tests/test_production_policy_gate.py'
+      - '.github/workflows/production-policy-gate.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/backend/Dockerfile.*'
+      - 'aegis-platform/scripts/production_policy_gate.py'
+      - 'tests/test_production_policy_gate.py'
+      - '.github/workflows/production-policy-gate.yml'
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  production-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      POSTGRES_PASSWORD: ci-policy-secret-not-for-production
+      AUTHORIZED_SCAN_TARGETS: production-policy.example
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve production Compose model
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config --format json > /tmp/aegis-production-compose.json
+      - name: Enforce production policy
+        run: python aegis-platform/scripts/production_policy_gate.py /tmp/aegis-production-compose.json
+      - name: Unit-test fail-closed policy decisions
+        run: python -m pytest -q tests/test_production_policy_gate.py
+      - name: Build production application images
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml build django fastapi

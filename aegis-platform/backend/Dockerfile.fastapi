@@ -16,6 +16,12 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY . .
 
+RUN groupadd --gid 10001 aegis \
+    && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
+    && chown -R aegis:aegis /app
+
 EXPOSE 8001
+
+USER 10001:10001
 
 CMD ["uvicorn", "fastapi_app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
