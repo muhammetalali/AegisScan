@@ -19,6 +19,7 @@ from fastapi_app.services import scope_authorization as scope
         ('*.example.com', 'example.com', False),
         ('*.example.com', 'api.internal.example.com', True),
         ('*', 'anything.example.com', False),
+        ('aegis-scan-target', 'aegis-scan-target', True),
         ('example.com', 'https://example.com', True),
         ('example.com', 'https://user:pass@example.com', False),
         ('example.com', 'https://example.com/?redirect=https://evil.example', False),
