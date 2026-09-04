@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import ipaddress
 import os
 import re
@@ -30,8 +29,8 @@ def _canonical_hostname(value: str, *, require_http_scheme: bool = False) -> str
         raise ScopeAuthorizationError('URL scan targets require http or https')
     if parsed.username is not None or parsed.password is not None:
         raise ScopeAuthorizationError('Target userinfo is not allowed')
-    if parsed.fragment:
-        raise ScopeAuthorizationError('Target fragments are not allowed')
+    if parsed.fragment or parsed.query:
+        raise ScopeAuthorizationError('Target fragments and query strings are not allowed')
     if parsed.path not in {'', '/'} and parsed.scheme == '':
         raise ScopeAuthorizationError('Host targets cannot contain a path')
     host = parsed.hostname
@@ -47,22 +46,23 @@ def _canonical_hostname(value: str, *, require_http_scheme: bool = False) -> str
             raise ScopeAuthorizationError('Target hostname is not valid IDNA') from exc
 
 
-def _canonical_entry(entry: str) -> tuple[str, bool]:
+def _canonical_entry(entry: str) -> tuple[str, bool, bool]:
     value = entry.strip()
     if not value or _CONTROL_RE.search(value):
         raise ScopeAuthorizationError('Configured authorization contains invalid characters')
     if value in {'*', '**', '*.*'} or value.startswith('?.'):
         raise ScopeAuthorizationError('Global wildcard authorization is forbidden')
     try:
-        return str(ipaddress.ip_network(value, strict=False)), True
+        return str(ipaddress.ip_network(value, strict=False)), True, False
     except ValueError:
         pass
     try:
-        return str(ipaddress.ip_address(value)), True
+        return str(ipaddress.ip_address(value)), True, False
     except ValueError:
         pass
+    wildcard = '*' in value or '?' in value
     normalized = value.lower().strip('.')
-    if '*' in normalized or '?' in normalized:
+    if wildcard:
         if not normalized.startswith('*.') or normalized.count('*') != 1 or '?' in normalized:
             raise ScopeAuthorizationError('Only a single left-most wildcard label is supported')
         normalized = normalized[2:]
@@ -72,7 +72,7 @@ def _canonical_entry(entry: str) -> tuple[str, bool]:
         raise ScopeAuthorizationError('Configured hostname is not valid IDNA') from exc
     if not normalized or '.' not in normalized:
         raise ScopeAuthorizationError('Bare or ambiguous hostname authorization is forbidden')
-    return normalized, False
+    return normalized, False, wildcard
 
 
 def is_target_authorized(target: str) -> bool:
@@ -93,23 +93,18 @@ def is_target_authorized(target: str) -> bool:
 
     for raw_entry in _configured_targets():
         try:
-            normalized, is_network = _canonical_entry(raw_entry)
+            normalized, is_network, wildcard = _canonical_entry(raw_entry)
         except ScopeAuthorizationError:
             continue
         if is_network:
-            try:
-                if target_ip is not None and target_ip in ipaddress.ip_network(normalized, strict=False):
-                    return True
-            except ValueError:
-                continue
-            if target_ip is not None and normalized == str(target_ip):
+            if target_ip is not None and target_ip in ipaddress.ip_network(normalized, strict=False):
                 return True
             continue
-        if normalized.startswith('*.'):
-            suffix = normalized[2:]
-            if target_ip is None and fnmatch.fnmatchcase(host, f'*.{suffix}') and host != suffix:
-                return True
-        elif target_ip is None and host == normalized:
+        if target_ip is not None:
+            continue
+        if wildcard and (host == normalized or host.endswith('.' + normalized)):
+            return host != normalized
+        if not wildcard and host == normalized:
             return True
     return False
 
