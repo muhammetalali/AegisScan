@@ -3,126 +3,132 @@
 **Authoritative date:** 2026-09-04  
 **Repository:** `muhammetalali/AegisScan`  
 **Canonical implementation branch:** `codex/full-contract-ui-audit-2026-09-03`  
-**Current canonical HEAD at publication:** `778aa4ff1d87e03d9503d13d3c82e31e8b5626a3`  
-**PR:** #23 → `main`  
-**PR state:** OPEN, NOT MERGED  
+**Canonical release rule:** only the latest HEAD of the canonical branch can establish release readiness.
 
 ## 1. Single source of truth
 
-This document is the repository's canonical execution baseline for the current remediation stream.
+This document is the repository-wide execution baseline for the current remediation stream.
 
 Rules:
 
-1. No parallel `codex/*` branch may be treated as an independent implementation stream for the same capability.
-2. No branch is considered a candidate for merge merely because its name matches a backlog item.
-3. Existing implementations must be compared against the canonical branch before any porting.
-4. When two branches touch the same security/domain contract, their logic must be reconciled into one canonical implementation; commits must not be cherry-picked blindly.
-5. Completion means: `Designed → Implemented → Integrated → Real Data → Tested → E2E Validated → Evidence Captured → Independently Verified → Production Ready`.
-6. Mock/demo/random/static business data is never acceptable as proof of completion.
-7. A successful API response is not proof unless the result is persisted and independently observable.
+1. One implementation branch owns the active remediation stream.
+2. Parallel `codex/*` branches are research/history/cleanup artifacts unless explicitly promoted after comparison.
+3. No whole-branch merge or blind cherry-pick is allowed when multiple branches touch the same domain contract.
+4. Reconciliation must be performed by file, function, data contract and runtime behavior.
+5. Completion is: `Designed → Implemented → Integrated → Real Data → Tested → E2E Validated → Evidence Captured → Independently Verified → Production Ready`.
+6. Mock/demo/random/static business data is never acceptable as evidence of completion.
+7. A successful response without durable persistence and independent observation is not proof.
+8. A historical CI pass on a superseded SHA is not evidence for the current SHA.
 
-## 2. Current verified state
+## 2. Canonical branch discipline
 
-The canonical branch currently contains the following verified remediation work:
+Canonical implementation branch:
 
-- Frontend `package-lock.json` corruption/truncation was corrected and lock synchronization was restored.
-- Nginx duplicate `/vulnerabilities/` routing was removed; the legacy route is explicitly proxied to `/api/v1/vulnerabilities/` instead of falling into the SPA.
-- Nginx routing regression tests were added.
-- npm audit CI was hardened with bounded retry/backoff while remaining fail-closed.
-- FastAPI system telemetry slicing was corrected so direct invocation does not treat FastAPI's `Query` sentinel as an integer.
-- Decision/assurance routes were moved away from disconnected legacy validation stores to persisted validation data.
-- Generated and disconnected legacy artifacts/trees already identified as obsolete were removed; `packages/backend` and `packages/web` must not be reintroduced.
-- Nmap execution now binds to a persisted authorized Asset and converts target/authorization failures into terminal `FAILED` state with persisted engine execution and error log evidence.
-- External Black-Box E2E was changed to create and use a real authorized Asset instead of relying on an incompatible synthetic `network_range` target shape.
-- Scanner redelivery/idempotency regression coverage was added; repeated delivery of a completed scanner task must not duplicate durable findings/evidence.
-- Celery reliability settings were strengthened with late acknowledgements, worker-loss rejection, started-state tracking and single-task prefetch behavior.
-- Scanner tenant isolation regression coverage was added for Asset → Scan → Vulnerability → Evidence access.
-- CI now executes the scanner failure lifecycle, redelivery and tenant isolation tests as explicit release-gate steps.
-- CI scanner target networking was isolated to a dedicated private CI network and a fixed authorized Masscan target IP; production authorization scope is not widened by this fixture.
+`codex/full-contract-ui-audit-2026-09-03`
 
-## 3. Real scanner contract
+All new fixes discovered by CI or runtime validation are committed to this branch. Do not create another branch for the same capability. A temporary isolated branch is allowed only when its purpose is documented and it cannot compete with the canonical implementation stream.
 
-Each supported scanner execution must satisfy:
+## 3. Verified remediation already present on the canonical branch
 
-`authorized persisted Asset → asset-bound Scan → Celery task → ScanEngineExecution → real binary/provider → raw output → parser → persisted Vulnerability/Evidence → terminal Scan state → API/UI observation`.
+The current canonical stream already contains these verified classes of remediation:
 
-Supported real engine paths in the current implementation are:
+- frontend lockfile integrity and deterministic install enforcement;
+- canonical Nginx vulnerability routing and regression tests;
+- fail-closed npm dependency audit retries;
+- FastAPI telemetry parameter normalization;
+- persisted validation data for decision/assurance orchestration;
+- removal of identified obsolete/generated legacy artifacts;
+- persisted Asset-bound Nmap execution and terminal failure lifecycle;
+- real authorized Assets in external scanner E2E;
+- scanner redelivery/idempotency coverage;
+- Celery late-acknowledgement and worker-loss reliability configuration;
+- scanner tenant-isolation coverage for Asset → Scan → Vulnerability → Evidence;
+- explicit CI execution of scanner lifecycle, reliability and tenant gates;
+- isolated CI scanner network and fixed Masscan test target;
+- canonical security scope authorization rather than ambiguous prefix matching.
+
+These statements describe the implementation state; they do not, by themselves, constitute final production readiness.
+
+## 4. Real scanner contract
+
+Every supported scanner execution must satisfy the complete chain:
+
+`authorized persisted Asset → asset-bound Scan → Celery task → ScanEngineExecution → real binary/provider → raw output → parser/normalizer → persisted Vulnerability/Evidence → terminal Scan state → API/UI observation`.
+
+A pre-execution failure must also produce durable terminal `FAILED` state. No Scan may remain indefinitely queued because a precondition exception escaped before lifecycle bookkeeping.
+
+Supported real engine paths in the current implementation:
 
 - Nmap
 - Masscan
 - Nuclei
 - Semgrep
 
-A scanner failure before tool execution must still produce a terminal durable failure state; a Scan must never remain indefinitely `queued` because a precondition exception escaped before lifecycle bookkeeping.
+## 5. Authorization contract
 
-## 4. Authorization contract
+Every scanner execution requires:
 
-Security execution requires:
-
-- a persisted Asset belonging to the same project as the Scan;
+- a persisted Asset in the same project as the Scan;
 - explicit `configuration.authorized == true`;
-- a target present in the Asset configuration in the engine-appropriate form;
-- server-side authorization through `AUTHORIZED_SCAN_TARGETS` / scope authorization;
-- no ambiguous prefix-only authorization semantics.
+- an engine-appropriate target in the Asset configuration;
+- server-side authorization against `AUTHORIZED_SCAN_TARGETS` / scope authorization;
+- canonical host/IP/URL handling;
+- rejection of ambiguous prefix-only authorization.
 
-Legacy `startswith()` target authorization must never be restored.
+The legacy `startswith()` authorization pattern must never return to production execution paths.
 
-For URL execution, canonical URL parsing must reject unsupported schemes, userinfo, query/fragment abuse and malformed hosts. Host/IP/domain authorization is performed on canonical values rather than arbitrary string prefixes.
+## 6. Tenant-isolation contract
 
-## 5. Tenant isolation contract
+Every protected object access must be scoped through project ownership or membership and never through object identifier alone.
 
-For every protected scanner resource, access must be scoped through project ownership or project membership and never by object ID alone.
-
-The mandatory security chain is:
+Mandatory chain:
 
 `Project → Asset → Scan → Vulnerability → Evidence`.
 
-A principal from tenant B must receive no object from tenant A through list, detail, update, note, evidence, execution, relationship or scan-triggering routes.
+A principal from tenant B must not be able to list, retrieve, update, annotate, relate, trigger or inspect tenant A resources.
 
 Cross-project Asset relationships must be rejected.
 
-## 6. Worker reliability contract
+## 7. Worker reliability contract
 
-Scanner tasks must be safe under normal Celery redelivery and worker loss.
+Scanner tasks must survive normal Celery redelivery and worker-loss conditions without duplicate durable effects.
 
 Required properties:
 
 - late acknowledgements;
 - worker-loss rejection/requeue semantics;
-- task started-state tracking;
+- started-state tracking;
 - bounded prefetch;
-- durable execution status;
-- idempotent findings/evidence identifiers;
-- terminal failure state after bounded retry exhaustion;
-- no duplicate `ScanEngineExecution` for the same `(scan, engine)`.
+- durable execution state;
+- idempotent findings/evidence;
+- bounded retry exhaustion to terminal failure;
+- no duplicate `ScanEngineExecution` for one `(scan, engine)` lifecycle.
 
-The existing redelivery regression test is mandatory evidence but does not by itself constitute production disaster-recovery proof.
+Regression tests are mandatory evidence, but disaster-recovery claims require independent runtime proof.
 
-## 7. CI/reality-gate policy
+## 8. CI release gates
 
-Only runs associated with the current canonical HEAD may be used for final release decisions.
+Final release decisions must use only runs associated with the current canonical HEAD.
 
-Historical runs on superseded commits are evidence of history, not evidence of current correctness.
-
-Required release gates for this stream:
+Mandatory gates for this stream:
 
 1. Frontend Lock Sync.
 2. Domain Contract Reality.
 3. External Black-Box E2E.
-4. Real scanner engines E2E.
+4. All scanner engines E2E.
 5. Tenant isolation matrix.
-6. Scanner failure lifecycle and redelivery.
-7. Final production/runtime audit.
+6. Scanner failure/reliability/redelivery tests.
+7. Production/runtime integrity gate.
 
-No stage is complete while any required gate is queued, running, skipped or failed.
+A gate is not complete when queued, running, skipped or failed.
 
-## 8. Branch de-duplication policy
+## 9. Branch reconciliation policy
 
-The remote currently contains multiple `codex/*` branches created from parallel work streams. They are classified into three categories:
+The remote contains multiple historical `codex/*` branches created by parallel agents. They are divided into:
 
-### A. Superseded/duplicate candidates
+### Superseded/duplicate candidates
 
-These must not receive new implementation work and should be deleted once repository-side branch deletion is available:
+These receive no new implementation work and may be deleted once repository-side branch deletion is available and unique required commits have been disproven:
 
 - `codex/asset-authorization-first-class-2026-09-03`
 - `codex/asset-authorization-tamper-resistance-2026-09-03`
@@ -135,9 +141,9 @@ These must not receive new implementation work and should be deleted once reposi
 - `codex/intel-realize-2026-09-03`
 - `codex/intel-pr-2026-09-03`
 
-Important: branch-name similarity is not enough for destructive action. Before deletion of any listed branch, compare it to the canonical branch and verify there are no unique required commits/files.
+### Reconciliation/source branches
 
-### B. Research/source branches requiring reconciliation, not blind merge
+Useful only as source material. Never merge wholesale:
 
 - `codex/audit-reality-2026-09-03`
 - `codex/authorization-audit-linkage-2026-09-03`
@@ -154,18 +160,16 @@ Important: branch-name similarity is not enough for destructive action. Before d
 - `codex/reporting-realization-2026-09-03`
 - `codex/fix-assets-migration-drift-2026-09-03`
 
-These branches can contain useful implementation ideas, but their changes must be reconciled into the canonical branch by file/function/contract, not merged as whole branches.
-
-### C. Historical foundation branches
+### Historical foundation
 
 - `codex/enterprise-completion-2026-09-03`
 - `codex/reality-gate-merge-2026-09-03`
 
-These are historical reference streams. They must not be treated as additional parallel implementation sources unless a specific missing change is independently proven necessary.
+These remain historical references, not parallel implementation streams.
 
-## 9. Known reconciliation hotspots
+## 10. Reconciliation hotspots
 
-The following files/capabilities previously had multiple independent implementations and must have exactly one canonical version:
+The following capabilities must have exactly one canonical implementation:
 
 - `fastapi_app/routers/decision_actions.py`
 - `fastapi_app/routers/audit.py`
@@ -173,39 +177,37 @@ The following files/capabilities previously had multiple independent implementat
 - `django_project/assets/models.py`
 - `fastapi_app/routers/assets.py`
 - scanner authorization/execution lifecycle
-- Digital Twin source-of-truth model
-- intelligence correlation/persistence
+- Digital Twin source of truth
+- intelligence correlation and persistence
 - remediation/validation lifecycle
 
-No branch is to be merged wholesale at these hotspots.
+Any competing branch touching one of these areas must be compared against the canonical implementation before reuse.
 
-## 10. Explicit non-goals until verified
+## 11. Known non-completion conditions
 
-The following must remain marked incomplete until independent evidence exists:
+The platform is not production-ready until independently proven:
 
-- production-ready claim;
-- full four-engine E2E success;
-- complete worker disaster recovery;
-- complete RBAC matrix across every protected endpoint;
-- complete SSRF/scanner authorization matrix;
-- complete multi-tenant isolation matrix across every platform domain;
-- live NVD/OSV/CISA KEV/EPSS/GreyNoise/Shodan/Censys provider lifecycle;
-- complete Digital Twin/Attack Path/Blast Radius production evidence;
-- complete remediation → revalidation → proof-of-fix chain;
-- production secrets/TLS/backups/restore/rollback/monitoring validation.
+- four-engine E2E success;
+- complete tenant/RBAC isolation matrix;
+- SSRF and scanner authorization matrix;
+- worker disaster recovery;
+- real external provider lifecycle for NVD/OSV/CISA KEV/EPSS and any additional providers advertised by the UI;
+- persisted Digital Twin / Attack Path / Blast Radius evidence;
+- remediation → revalidation → proof-of-fix lifecycle;
+- production secrets, TLS, backups, restore, monitoring and rollback.
 
-## 11. Current release decision
+## 12. Current release decision
 
-**STATUS: NOT READY FOR MAIN MERGE.**
+**NOT READY FOR MAIN MERGE.**
 
-Reason: the canonical branch has real fixes and explicit tests, but the newest GitHub reality gates are still executing and no final all-green External Black-Box + four-engine scanner proof has yet been established for the final HEAD.
+Reason: the latest canonical HEAD has active CI verification in progress. No final all-green External Black-Box + all-engine scanner evidence has yet been established for that exact HEAD.
 
-The correct next action is not another feature branch. It is to finish verification on this canonical branch, fix any newly demonstrated failures in place, rerun the complete gates, and only then consider PR #23 for merge.
+The next action is always:
 
-## 12. Branch discipline from this point forward
+`verify current HEAD → inspect failing gate → fix in canonical branch → push → verify new runs → repeat until all gates are green`.
 
-- One implementation branch only: `codex/full-contract-ui-audit-2026-09-03` until PR #23 is merged or explicitly superseded.
-- No new `codex/*` branch for a subtask unless isolation is technically required and its purpose is documented before creation.
-- All bug fixes discovered by CI are committed directly to the canonical branch.
-- All tests added for release gates must be invoked by CI; an unexecuted test file is not evidence.
-- Superseded branches are cleanup artifacts, not implementation sources.
+## 13. CI/test quality rule
+
+Test harnesses must release HTTP clients and Django database connections explicitly. A warning about a leaked test connection is treated as a defect in the harness, even if pytest exits successfully.
+
+Environment/dependency deprecation warnings are tracked separately from functional failures and must not be converted into false “PASS” evidence.
