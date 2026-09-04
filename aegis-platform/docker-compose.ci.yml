@@ -2,6 +2,11 @@ services:
   scan_target:
     labels:
       aegisscan.ci.authorized-target: "true"
+    networks:
+      default:
+        aliases:
+          - scan_target
+          - aegis-scan-target
   celery_worker:
     environment:
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
