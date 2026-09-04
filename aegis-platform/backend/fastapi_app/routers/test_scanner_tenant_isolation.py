@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from asgiref.sync import async_to_sync
 import pytest
 
 from django_project.assets.models import Asset
@@ -62,11 +63,11 @@ def test_scanner_objects_are_inaccessible_across_tenants():
 
     assert assets._get_asset_sync(str(asset.id), str(owner.id)) is not None
     assert assets._get_asset_sync(str(asset.id), str(other.id)) is None
-    assert scans._get_scan(str(scan.id), str(owner.id)).id == scan.id
-    assert scans._get_scan(str(scan.id), str(other.id)) is None
-    assert vulnerabilities._get_vulnerability(vulnerability.id, str(owner.id)) is not None
-    assert vulnerabilities._get_vulnerability(vulnerability.id, str(other.id)) is None
-    foreign_access = vulnerabilities._get_evidences(vulnerability.id, str(other.id))
+    assert async_to_sync(scans._get_scan)(str(scan.id), str(owner.id)).id == scan.id
+    assert async_to_sync(scans._get_scan)(str(scan.id), str(other.id)) is None
+    assert async_to_sync(vulnerabilities._get_vulnerability)(vulnerability.id, str(owner.id)) is not None
+    assert async_to_sync(vulnerabilities._get_vulnerability)(vulnerability.id, str(other.id)) is None
+    foreign_access = async_to_sync(vulnerabilities._get_evidences)(vulnerability.id, str(other.id))
     assert foreign_access[0] is None
     assert foreign_access[1] == []
     assert evidence.finding_id == vulnerability.id
