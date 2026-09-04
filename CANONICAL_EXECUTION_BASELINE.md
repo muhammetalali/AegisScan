@@ -45,7 +45,8 @@ The current canonical stream already contains these verified classes of remediat
 - scanner tenant-isolation coverage for Asset → Scan → Vulnerability → Evidence;
 - explicit CI execution of scanner lifecycle, reliability and tenant gates;
 - isolated CI scanner network and fixed Masscan test target;
-- canonical security scope authorization rather than ambiguous prefix matching.
+- canonical security scope authorization rather than ambiguous prefix matching;
+- HTTP TestClient and Django connection cleanup in affected backend tests.
 
 These statements describe implementation state; they do not, by themselves, constitute final production readiness.
 
@@ -121,6 +122,8 @@ Mandatory gates for this stream:
 7. Production/runtime integrity gate.
 
 A gate is not complete when queued, running, skipped or failed.
+
+Every canonical source change under test-covered domains must trigger the relevant workflow; path filters must include the canonical baseline/control documents when those changes affect release governance.
 
 ## 9. Branch reconciliation policy
 
