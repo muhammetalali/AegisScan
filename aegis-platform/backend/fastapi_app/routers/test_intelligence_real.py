@@ -1,4 +1,5 @@
 import pytest
+from django.db import close_old_connections
 from fastapi.testclient import TestClient
 
 from django_project.intelligence.models import IntelligenceEnrichment
@@ -13,9 +14,11 @@ def test_live_cve_enrichment_persists_provenance():
     user = User.objects.create_user(email='intelligence-e2e@example.invalid', password='Strong-Test-Password-123!')
     app.dependency_overrides[get_current_user] = lambda: {'user_id': str(user.id)}
     try:
-        response = TestClient(app).get('/api/v1/intelligence/cve/CVE-2021-44228')
+        with TestClient(app) as client:
+            response = client.get('/api/v1/intelligence/cve/CVE-2021-44228')
     finally:
         app.dependency_overrides.clear()
+        close_old_connections()
 
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -36,5 +39,9 @@ def test_live_cve_enrichment_persists_provenance():
 
 
 def test_unauthenticated_live_intelligence_is_rejected():
-    response = TestClient(app).get('/api/v1/intelligence/cve/CVE-2021-44228')
+    try:
+        with TestClient(app) as client:
+            response = client.get('/api/v1/intelligence/cve/CVE-2021-44228')
+    finally:
+        close_old_connections()
     assert response.status_code in {401, 403}
