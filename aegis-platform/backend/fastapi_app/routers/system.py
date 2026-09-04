@@ -3,7 +3,7 @@ import os
 import shutil
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from urllib.parse import urlparse
 
 import psutil
@@ -202,7 +202,7 @@ async def update_setting(key: str, update: SettingUpdate):
 async def get_metrics(
     metric_type: Optional[str] = Query(default=None),
     since: Optional[str] = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=1000),
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ):
     del since
     collectors = {
@@ -211,10 +211,9 @@ async def get_metrics(
         'disk_usage': _disk_percent,
     }
     selected = [metric_type] if metric_type in collectors else list(collectors)
-    limit_value = int(limit)
     return [
         {'metric_type': key, 'value': float(await asyncio.to_thread(collectors[key])), 'unit': '%', 'timestamp': _now()}
-        for key in selected[:limit_value]
+        for key in selected[:limit]
     ]
 
 
