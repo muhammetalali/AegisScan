@@ -152,4 +152,4 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/tasks/test_nmap_failure_contract.py fastapi_app/tasks/test_scanner_redelivery.py
+        run: python -m pytest -q fastapi_app/tasks/test_nmap_failure_contract.py fastapi_app/tasks/test_scanner_redelivery.py fastapi_app/tasks/test_celery_reliability_contract.py
