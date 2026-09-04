@@ -122,6 +122,12 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/services/test_decision_action_orchestration.py
+      - name: Scanner tenant isolation reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_scanner_tenant_isolation.py
       - name: API contract and persistence reality
         working-directory: aegis-platform/backend
         env:
@@ -147,7 +153,7 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_intelligence_real.py
-      - name: Scanner failure lifecycle reality
+      - name: Scanner failure and worker reliability reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
