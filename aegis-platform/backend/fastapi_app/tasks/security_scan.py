@@ -107,17 +107,17 @@ def _fail_scan(scan: Scan, execution: ScanEngineExecution, message: str) -> dict
 @shared_task(bind=True,name='fastapi_app.tasks.security_scan.run_nmap_scan',max_retries=1,default_retry_delay=30)
 def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
     scan=Scan.objects.select_related('asset','initiated_by','project').get(pk=scan_id)
-    if not scan.asset: raise ValueError('A scan must reference an asset before execution')
-    configuration=scan.asset.configuration or {}
     engine=_ensure_engine('nmap','Nmap',ScanEngine.EngineCategory.RECON,300)
     completed = _completed_delivery(scan, engine)
     if completed: return completed
-    if configuration.get('authorized') is not True: return _fail_scan(scan,_start_execution(scan,engine),'Execution blocked: asset is not explicitly marked authorized.')
+    execution = _start_execution(scan, engine)
+    if not scan.asset: return _fail_scan(scan,execution,'Execution blocked: scan must reference an authorized asset before Nmap execution.')
+    configuration=scan.asset.configuration or {}
+    if configuration.get('authorized') is not True: return _fail_scan(scan,execution,'Execution blocked: asset is not explicitly marked authorized.')
     target=configuration.get('host') or configuration.get('ip') or configuration.get('domain') or configuration.get('url')
-    if not target: raise ValueError('Authorized asset has no host/ip/domain/url target')
-    if not is_target_authorized(target): return _fail_scan(scan,_start_execution(scan,engine),'Execution blocked: target is outside the server-side authorized scan scope.')
+    if not target: return _fail_scan(scan,execution,'Execution blocked: authorized asset has no host/ip/domain/url target.')
+    if not is_target_authorized(target): return _fail_scan(scan,execution,'Execution blocked: target is outside the server-side authorized scan scope.')
     scan.status=Scan.Status.RUNNING; scan.started_at=datetime.now(timezone.utc); scan.current_phase='nmap'; scan.current_engine='nmap'; scan.progress=10; scan.save(update_fields=['status','started_at','current_phase','current_engine','progress','updated_at'])
-    execution=_start_execution(scan,engine)
     try:
         result=get_tool('nmap').run(ToolRequest(target=target,authorized=True),timeout=120 if scan.depth==Scan.Depth.QUICK else 300); parsed=parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts':[],'host_count':0,'open_ports':0}; completed_at=datetime.now(timezone.utc)
         with transaction.atomic():
