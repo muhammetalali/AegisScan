@@ -32,7 +32,7 @@ def map_compliance_task(project_id: str): return {'project_id':project_id,'mappi
 
 @shared_task(name='enterprise.fuse_finding_intelligence')
 def fuse_finding_intelligence_task(finding_id: str):
-    item=fuse_finding(Vulnerability.objects.get(pk=finding_id)); return {'finding_id':finding_id,'confidence':item.confidence,'conflict':item.conflict}
+    item=fuse_finding(Vulnerability.objects.get(pk=finding_id)); return {'finding_id':finding_id,'confidence':item.confidence,'conflict':item.conflict,'source_snapshot_id':str(item.source_snapshot_id),'primary_cve':item.primary_cve,'analysis_version':item.analysis_version}
 
 @shared_task(name='enterprise.fetch_threat_intel')
 def fetch_threat_intel_task(provider: str,key: str,cve: str|None=None,package: dict|None=None): return fetch_intel(provider,key,cve=cve,package=package)

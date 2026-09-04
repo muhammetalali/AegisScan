@@ -183,6 +183,31 @@ def test_nmap_negative_validation_verifies_finding_with_evidence(finding_fixture
 
 
 @pytest.mark.django_db
+def test_completed_validation_redelivery_is_idempotent(finding_fixture, monkeypatch):
+    user, finding = finding_fixture
+    validation = _validation(user, finding)
+    calls = 0
+
+    def run_once(target, port, timeout):
+        nonlocal calls
+        calls += 1
+        return 0, CLOSED_NMAP_XML, ''
+
+    monkeypatch.setattr(nmap_finding_validation, '_run_nmap_exact', run_once)
+    monkeypatch.setattr(nmap_finding_validation, 'is_target_authorized', lambda target: True)
+
+    first = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
+    second = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
+
+    assert first['status'] == ValidationRun.Status.COMPLETED
+    assert second['status'] == ValidationRun.Status.COMPLETED
+    assert second['redelivered'] is True
+    assert second['evidence_id'] == first['evidence_id']
+    assert calls == 1
+    assert Evidence.objects.filter(finding=finding, evidence_type='validation_output').count() == 1
+
+
+@pytest.mark.django_db
 def test_nmap_validation_blocks_unauthorized_asset_without_execution(finding_fixture, monkeypatch):
     user, finding = finding_fixture
     finding.asset.configuration["authorized"] = False

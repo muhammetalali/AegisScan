@@ -41,6 +41,16 @@ def main() -> int:
             if '500' in responses:
                 failures.append(f'{method.upper()} {path}: implicit 500 response leaked into contract')
     required = {
+        '/api/v1/scans/',
+        '/api/v1/scans/{scan_id}',
+        '/api/v1/scans/{scan_id}/engine-executions',
+        '/api/v1/scans/{scan_id}/progress',
+        '/api/v1/scans/{scan_id}/cancel',
+        '/api/v1/vulnerabilities/',
+        '/api/v1/vulnerabilities/{vuln_id}/evidences',
+        '/api/v1/evidence/',
+        '/api/v1/system/metrics',
+        '/api/v1/system/services',
         '/api/v1/attack-path/projects/{project_id}',
         '/api/v1/attack-path/projects/{project_id}/analyze',
         '/api/v1/intelligence/cve/{cve_id}',

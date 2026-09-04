@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
 from ..core.dependencies import get_current_user
+from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 
 router = APIRouter()
 
@@ -140,6 +141,11 @@ async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='s
     if final_scan_type!=resolved_type: raise HTTPException(status_code=400,detail=f'Asset type {asset.type} requires scan_type={resolved_type}')
     config_target=config.get('url') or config.get('host') or config.get('ip') or config.get('domain') or config.get('cidr') or config.get('path') or config.get('repo_url')
     if engine in {'nmap','nuclei','masscan'} and not config_target: raise HTTPException(status_code=400,detail='Asset has no executable target in configuration')
+    if engine in {'nmap','nuclei','masscan'}:
+        try:
+            require_authorized_target(str(config_target))
+        except ScopeAuthorizationError as exc:
+            raise HTTPException(status_code=403,detail=str(exc)) from exc
     created,engines=await _create_scan(ScanCreate(project_id=str(asset.project_id),name=f'Asset scan: {asset.name}',scan_type=final_scan_type,asset_id=str(asset.id),engines=[engine],depth=depth,config={**config,'target':config_target},authorized=True),str(user.get('user_id')))
     task_map={'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}; result=task_map[engine].delay(str(created.id)); created=await _attach_celery_task(str(created.id),result.id)
     return {'scan_id':str(created.id),'task_id':result.id,'engine':engine,'status':created.status,'source':'postgresql'}

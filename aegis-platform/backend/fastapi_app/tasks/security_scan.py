@@ -16,6 +16,7 @@ from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.services.scope_authorization import is_target_authorized
+from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.nmap_parser import parse_nmap_xml
 from fastapi_app.services.scanner_adapters import run_nuclei
 from fastapi_app.services.tool_abstraction import ToolRequest, get_tool
@@ -34,6 +35,23 @@ def _start_execution(scan: Scan, engine: ScanEngine) -> ScanEngineExecution:
     execution.save(update_fields=['status','progress','started_at','completed_at','duration','findings_found','evidences_collected','error_message','logs','updated_at'])
     ScanLog.objects.create(scan=scan, engine_execution=execution, level=ScanLog.Level.INFO, message=f'{engine.name} execution started', context={'engine': engine.name})
     return execution
+
+
+def _completed_delivery(scan: Scan, engine: ScanEngine) -> dict[str, Any] | None:
+    execution = ScanEngineExecution.objects.filter(scan=scan, engine=engine).first()
+    if not execution or execution.status != ScanEngineExecution.ExecutionStatus.COMPLETED:
+        return None
+    if scan.status != Scan.Status.COMPLETED:
+        return None
+    result = execution.result_data if isinstance(execution.result_data, dict) else {}
+    return {
+        'status': scan.status,
+        'scan_id': str(scan.id),
+        'tool': engine.name,
+        'target': result.get('target'),
+        'finding_ids': result.get('finding_ids', []),
+        'redelivered': True,
+    }
 
 
 def _first_string(value: Any) -> str:
@@ -77,7 +95,7 @@ def _ingest_nuclei_findings(scan: Scan, evidence: Evidence, raw_output: str) -> 
         else:
             vulnerability.last_seen=datetime.now(timezone.utc); vulnerability.raw_data=item['record']; vulnerability.save(update_fields=['last_seen','raw_data','updated_at'])
         if evidence.finding_id in {None, vulnerability.id}: evidence.finding=vulnerability; evidence.save(update_fields=['finding'])
-        else: Evidence.objects.get_or_create(scan=scan,asset=scan.asset,finding=vulnerability,source='nuclei',evidence_type='scanner_output',defaults={'raw_output':evidence.raw_output,'metadata':{**(evidence.metadata or {}),'finding_id':str(vulnerability.id)}})
+        else: Evidence.objects.update_or_create(id=evidence_id('scan',str(scan.id),'nuclei','scanner_output',str(vulnerability.id)),defaults={'scan':scan,'asset':scan.asset,'finding':vulnerability,'source':'nuclei','evidence_type':'scanner_output','raw_output':evidence.raw_output,'metadata':{**(evidence.metadata or {}),'finding_id':str(vulnerability.id)}})
         vulnerability.evidence_count=vulnerability.evidence_records.count(); vulnerability.save(update_fields=['evidence_count','updated_at']); findings.append(vulnerability)
     return findings
 
@@ -92,6 +110,8 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
     if not scan.asset: raise ValueError('A scan must reference an asset before execution')
     configuration=scan.asset.configuration or {}
     engine=_ensure_engine('nmap','Nmap',ScanEngine.EngineCategory.RECON,300)
+    completed = _completed_delivery(scan, engine)
+    if completed: return completed
     if configuration.get('authorized') is not True: return _fail_scan(scan,_start_execution(scan,engine),'Execution blocked: asset is not explicitly marked authorized.')
     target=configuration.get('host') or configuration.get('ip') or configuration.get('domain') or configuration.get('url')
     if not target: raise ValueError('Authorized asset has no host/ip/domain/url target')
@@ -101,7 +121,7 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
     try:
         result=get_tool('nmap').run(ToolRequest(target=target,authorized=True),timeout=120 if scan.depth==Scan.Depth.QUICK else 300); parsed=parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts':[],'host_count':0,'open_ports':0}; completed_at=datetime.now(timezone.utc)
         with transaction.atomic():
-            evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source=result.tool,evidence_type='scanner_output',raw_output=result.stdout,metadata={'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'parsed':parsed},collected_by=scan.initiated_by); findings=ingest_nmap_findings(scan,evidence,parsed); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'parsed':parsed,'evidence_id':str(evidence.id),'finding_ids':[str(v.id) for v in findings]}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','logs','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'nmap':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
+            evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'nmap','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':result.tool,'evidence_type':'scanner_output','raw_output':result.stdout,'metadata':{'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'parsed':parsed},'collected_by':scan.initiated_by}); findings=ingest_nmap_findings(scan,evidence,parsed); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'parsed':parsed,'evidence_id':str(evidence.id),'finding_ids':[str(v.id) for v in findings]}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','logs','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'nmap':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
         return {'status':scan.status,'scan_id':scan_id,'tool':'nmap','target':result.target,'finding_ids':[str(v.id) for v in findings]}
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
@@ -112,7 +132,9 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
 def run_nuclei_scan(self,scan_id:str)->dict[str,Any]:
     scan=Scan.objects.select_related('asset','initiated_by','project').get(pk=scan_id)
     if not scan.asset: raise ValueError('A scan must reference an asset before execution')
-    configuration=scan.asset.configuration or {}; target=configuration.get('url'); engine=_ensure_engine('nuclei','Nuclei',ScanEngine.EngineCategory.ANALYSIS,600); execution=_start_execution(scan,engine)
+    configuration=scan.asset.configuration or {}; target=configuration.get('url'); engine=_ensure_engine('nuclei','Nuclei',ScanEngine.EngineCategory.ANALYSIS,600); completed=_completed_delivery(scan,engine)
+    if completed: return completed
+    execution=_start_execution(scan,engine)
     if configuration.get('authorized') is not True: return _fail_scan(scan,execution,'Execution blocked: asset is not explicitly marked authorized.')
     if not target: return _fail_scan(scan,execution,'Nuclei requires an authorized http/https URL target')
     if not is_target_authorized(target): return _fail_scan(scan,execution,'Execution blocked: target is outside the server-side authorized scan scope.')
@@ -120,7 +142,7 @@ def run_nuclei_scan(self,scan_id:str)->dict[str,Any]:
     try:
         result=run_nuclei(target,timeout=600); completed_at=datetime.now(timezone.utc)
         with transaction.atomic():
-            evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source=result.tool,evidence_type='scanner_output',raw_output=result.stdout,metadata={'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'jsonl'},collected_by=scan.initiated_by); findings=_ingest_nuclei_findings(scan,evidence,result.stdout); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'result_count':len(findings),'evidence_id':str(evidence.id),'finding_ids':[str(v.id) for v in findings]}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','logs','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.engine_results={**(scan.engine_results or {}),'nuclei':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','engine_results','updated_at'])
+            evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'nuclei','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':result.tool,'evidence_type':'scanner_output','raw_output':result.stdout,'metadata':{'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'jsonl'},'collected_by':scan.initiated_by}); findings=_ingest_nuclei_findings(scan,evidence,result.stdout); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'result_count':len(findings),'evidence_id':str(evidence.id),'finding_ids':[str(v.id) for v in findings]}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','logs','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.engine_results={**(scan.engine_results or {}),'nuclei':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','engine_results','updated_at'])
         return {'status':scan.status,'scan_id':scan_id,'tool':'nuclei','target':result.target,'finding_ids':[str(v.id) for v in findings]}
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)

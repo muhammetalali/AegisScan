@@ -18,6 +18,7 @@ from django.db import transaction
 
 from django_project.evidence.models import Evidence, ValidationRun
 from fastapi_app.services.scope_authorization import is_target_authorized
+from fastapi_app.services.evidence_identity import evidence_id
 
 
 _DEFAULT_NUCLEI_TEMPLATES = '/opt/nuclei-templates'
@@ -81,6 +82,19 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
     finding = validation.finding
     if not finding:
         raise ValueError('Finding-specific validation requires validation.finding')
+    existing_result = validation.result if isinstance(validation.result, dict) else {}
+    existing_evidence_id = existing_result.get('evidence_id')
+    if validation.status == ValidationRun.Status.COMPLETED and existing_evidence_id and Evidence.objects.filter(pk=existing_evidence_id, finding=finding).exists():
+        return {
+            'status': validation.status,
+            'validation_id': validation_id,
+            'finding_id': str(finding.id),
+            'tool': existing_result.get('tool') or finding.source_engine,
+            'target': existing_result.get('target'),
+            'finding_present': existing_result.get('finding_present'),
+            'evidence_id': str(existing_evidence_id),
+            'redelivered': True,
+        }
 
     validation.status = ValidationRun.Status.RUNNING
     validation.progress = 10
@@ -151,24 +165,27 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
 
         now = datetime.now(timezone.utc)
         with transaction.atomic():
-            evidence = Evidence.objects.create(
-                scan=finding.scan,
-                asset=finding.asset,
-                finding=finding,
-                source=engine,
-                evidence_type='validation_output',
-                raw_output=evidence_raw,
-                metadata={
-                    'format': 'jsonl',
-                    'stderr': stderr,
-                    'target': result['target'],
-                    'exit_code': result['exit_code'],
-                    'validation_id': validation_id,
-                    'finding_present': result['finding_present'],
-                    'template_id': result.get('template_id', ''),
-                    'matcher_name': result.get('matcher_name', ''),
+            evidence, _ = Evidence.objects.update_or_create(
+                id=evidence_id('validation', validation_id, engine, 'validation_output', str(finding.id)),
+                defaults={
+                    'scan': finding.scan,
+                    'asset': finding.asset,
+                    'finding': finding,
+                    'source': engine,
+                    'evidence_type': 'validation_output',
+                    'raw_output': evidence_raw,
+                    'metadata': {
+                        'format': 'jsonl',
+                        'stderr': stderr,
+                        'target': result['target'],
+                        'exit_code': result['exit_code'],
+                        'validation_id': validation_id,
+                        'finding_present': result['finding_present'],
+                        'template_id': result.get('template_id', ''),
+                        'matcher_name': result.get('matcher_name', ''),
+                    },
+                    'collected_by': validation.user,
                 },
-                collected_by=validation.user,
             )
             result['evidence_id'] = str(evidence.id)
             existing_result = dict(validation.result) if isinstance(validation.result, dict) else {}

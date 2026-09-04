@@ -6,6 +6,7 @@ from typing import Any
 from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan
 from django_project.vulnerabilities.models import Vulnerability
+from fastapi_app.services.evidence_identity import evidence_id
 
 
 def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any]) -> list[Vulnerability]:
@@ -79,10 +80,14 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
                 evidence.save(update_fields=['finding'])
                 primary_evidence_used = True
             else:
-                Evidence.objects.get_or_create(
-                    scan=scan, asset=scan.asset, finding=vulnerability,
-                    source='nmap', evidence_type='scanner_output', sha256=evidence.sha256,
+                Evidence.objects.update_or_create(
+                    id=evidence_id('scan', str(scan.id), 'nmap', 'scanner_output', str(vulnerability.id)),
                     defaults={
+                        'scan': scan,
+                        'asset': scan.asset,
+                        'finding': vulnerability,
+                        'source': 'nmap',
+                        'evidence_type': 'scanner_output',
                         'raw_output': evidence.raw_output,
                         'metadata': {**(evidence.metadata or {}), 'observation_port': port_number, 'observation_protocol': protocol, 'observation_ip': ip, 'finding_id': str(vulnerability.id)},
                         'collected_by': evidence.collected_by,

@@ -39,6 +39,7 @@ django-allauth>=0.63
 drf-spectacular>=0.27
 django-health-check>=3.17
 prometheus-client>=0.19
+psutil>=6.0
 sentry-sdk>=1.38
 reportlab>=4.2
 boto3>=1.35

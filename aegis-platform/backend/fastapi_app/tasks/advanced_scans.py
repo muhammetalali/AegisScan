@@ -15,6 +15,7 @@ from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.services.scope_authorization import is_target_authorized
+from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.scanner_adapters import run_masscan, run_semgrep, validate_code_target
 
 
@@ -28,6 +29,23 @@ def _execution(scan: Scan, engine: ScanEngine) -> ScanEngineExecution:
     item.status=ScanEngineExecution.ExecutionStatus.RUNNING; item.progress=10; item.started_at=datetime.now(timezone.utc); item.completed_at=None; item.error_message=''; item.logs=''
     item.save(update_fields=['status','progress','started_at','completed_at','error_message','logs','updated_at'])
     return item
+
+
+def _completed_delivery(scan: Scan, engine: ScanEngine) -> dict[str, Any] | None:
+    execution = ScanEngineExecution.objects.filter(scan=scan, engine=engine).first()
+    if not execution or execution.status != ScanEngineExecution.ExecutionStatus.COMPLETED:
+        return None
+    if scan.status != Scan.Status.COMPLETED:
+        return None
+    result = execution.result_data if isinstance(execution.result_data, dict) else {}
+    return {
+        'status': scan.status,
+        'scan_id': str(scan.id),
+        'tool': engine.name,
+        'target': result.get('target') or result.get('source'),
+        'finding_ids': result.get('finding_ids', []),
+        'redelivered': True,
+    }
 
 
 def _finish_failed(scan: Scan, execution: ScanEngineExecution, message: str):
@@ -77,18 +95,20 @@ def _git_checkout(asset_config:dict[str,Any]):
 def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
     scan=Scan.objects.select_related('asset','initiated_by','project').get(pk=scan_id)
     if not scan.asset: raise ValueError('A scan must reference an asset before execution')
-    config=scan.asset.configuration or {}; engine=_ensure_engine('masscan','Masscan',ScanEngine.EngineCategory.RECON,300); execution=_execution(scan,engine); target=config.get('host') or config.get('ip') or config.get('domain')
+    config=scan.asset.configuration or {}; engine=_ensure_engine('masscan','Masscan',ScanEngine.EngineCategory.RECON,300); completed=_completed_delivery(scan,engine)
+    if completed: return completed
+    execution=_execution(scan,engine); target=config.get('cidr') or config.get('host') or config.get('ip') or config.get('domain')
     if config.get('authorized') is not True: return _finish_failed(scan,execution,'Execution blocked: asset is not explicitly marked authorized.')
     if not target: return _finish_failed(scan,execution,'Masscan requires an authorized host/ip/domain target')
     if not is_target_authorized(str(target)): return _finish_failed(scan,execution,'Execution blocked: target is outside the server-side authorized scan scope.')
     try:
         result=run_masscan(str(target),ports=str(config.get('ports') or scan.config.get('ports') or '1-65535'),rate=int(config.get('rate') or scan.config.get('rate') or 1000),timeout=300); observations=_masscan_findings(result.stdout); now=datetime.now(timezone.utc)
         with transaction.atomic():
-            scanner_evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source='masscan',evidence_type='scanner_output',raw_output=result.stdout,metadata={'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'json'},collected_by=scan.initiated_by); findings=[]
+            scanner_evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'masscan','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':'masscan','evidence_type':'scanner_output','raw_output':result.stdout,'metadata':{'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'json'},'collected_by':scan.initiated_by}); findings=[]
             for obs in observations:
                 finding=Vulnerability.objects.filter(scan=scan,asset=scan.asset,source_engine='masscan',raw_data__port=obs['port'],raw_data__protocol=obs['protocol'],raw_data__ip=obs['ip']).first()
                 if finding is None: finding=Vulnerability.objects.create(scan=scan,project=scan.project,asset=scan.asset,title=f"Open {obs['protocol'].upper()} port {obs['port']}",description=f"Masscan detected an open {obs['protocol'].upper()} port {obs['port']} on {obs['ip'] or target}.",severity=Vulnerability.Severity.INFO,status=Vulnerability.Status.OPEN,confidence=Vulnerability.Confidence.HIGH,category='network',tags=['masscan',obs['protocol']],risk_score=10.0,validation_status='unverified',source_engine='masscan',raw_data={**obs['record'],'observation_ip':obs['ip'],'observation_port':obs['port'],'observation_protocol':obs['protocol']})
-                Evidence.objects.get_or_create(scan=scan,asset=scan.asset,finding=finding,source='masscan',evidence_type='scanner_output',defaults={'raw_output':scanner_evidence.raw_output,'metadata':{'scanner_evidence_id':str(scanner_evidence.id),'observation_ip':obs['ip'],'observation_port':obs['port'],'observation_protocol':obs['protocol']},'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
+                Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'masscan','scanner_output',str(finding.id)),defaults={'scan':scan,'asset':scan.asset,'finding':finding,'source':'masscan','evidence_type':'scanner_output','raw_output':scanner_evidence.raw_output,'metadata':{'scanner_evidence_id':str(scanner_evidence.id),'observation_ip':obs['ip'],'observation_port':obs['port'],'observation_protocol':obs['protocol']},'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
             execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':'masscan','target':result.target,'exit_code':result.exit_code,'finding_ids':[str(v.id) for v in findings],'scanner_evidence_id':str(scanner_evidence.id)}; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=now; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'masscan':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
         return {'status':scan.status,'scan_id':scan_id,'tool':'masscan','target':result.target,'finding_ids':[str(v.id) for v in findings]}
     except Exception as exc:
@@ -100,7 +120,9 @@ def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
 def run_semgrep_scan(self,scan_id:str)->dict[str,Any]:
     scan=Scan.objects.select_related('asset','initiated_by','project').get(pk=scan_id)
     if not scan.asset: raise ValueError('A scan must reference an asset before execution')
-    config=scan.asset.configuration or {}; engine=_ensure_engine('semgrep','Semgrep',ScanEngine.EngineCategory.ANALYSIS,900); execution=_execution(scan,engine)
+    config=scan.asset.configuration or {}; engine=_ensure_engine('semgrep','Semgrep',ScanEngine.EngineCategory.ANALYSIS,900); completed=_completed_delivery(scan,engine)
+    if completed: return completed
+    execution=_execution(scan,engine)
     if config.get('authorized') is not True: return _finish_failed(scan,execution,'Execution blocked: asset is not explicitly marked authorized.')
     holder=None
     try:
@@ -108,11 +130,11 @@ def run_semgrep_scan(self,scan_id:str)->dict[str,Any]:
         else: source=validate_code_target(str(config.get('path') or scan.config.get('path') or ''))
         result=run_semgrep(source,timeout=900); observations=_semgrep_findings(result.stdout); now=datetime.now(timezone.utc)
         with transaction.atomic():
-            scanner_evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source='semgrep',evidence_type='scanner_output',raw_output=result.stdout,metadata={'stderr':result.stderr,'exit_code':result.exit_code,'source':source,'format':'json'},collected_by=scan.initiated_by); findings=[]
+            scanner_evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':'semgrep','evidence_type':'scanner_output','raw_output':result.stdout,'metadata':{'stderr':result.stderr,'exit_code':result.exit_code,'source':source,'format':'json'},'collected_by':scan.initiated_by}); findings=[]
             for obs in observations:
                 finding=Vulnerability.objects.filter(scan=scan,asset=scan.asset,source_engine='semgrep',file_path=obs['path'],line_start=obs['line'],title=obs['message'][:300]).first()
                 if finding is None: finding=Vulnerability.objects.create(scan=scan,project=scan.project,asset=scan.asset,title=obs['message'][:300],description=obs['message'],severity=obs['severity'],status=Vulnerability.Status.OPEN,confidence=Vulnerability.Confidence.HIGH,category='code',file_path=obs['path'][:500],line_start=max(0,obs['line']) or None,risk_score={Vulnerability.Severity.HIGH:80.0,Vulnerability.Severity.MEDIUM:60.0,Vulnerability.Severity.INFO:10.0}[obs['severity']],validation_status='unverified',source_engine='semgrep',raw_data=obs['record'])
-                Evidence.objects.get_or_create(scan=scan,asset=scan.asset,finding=finding,source='semgrep',evidence_type='scanner_output',defaults={'raw_output':scanner_evidence.raw_output,'metadata':{'scanner_evidence_id':str(scanner_evidence.id),'check_id':obs['check_id'],'path':obs['path'],'line':obs['line']},'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
+                Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output',str(finding.id)),defaults={'scan':scan,'asset':scan.asset,'finding':finding,'source':'semgrep','evidence_type':'scanner_output','raw_output':scanner_evidence.raw_output,'metadata':{'scanner_evidence_id':str(scanner_evidence.id),'check_id':obs['check_id'],'path':obs['path'],'line':obs['line']},'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
             execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':'semgrep','source':source,'exit_code':result.exit_code,'finding_ids':[str(v.id) for v in findings],'scanner_evidence_id':str(scanner_evidence.id)}; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=now; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'semgrep':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
         return {'status':scan.status,'scan_id':scan_id,'tool':'semgrep','finding_ids':[str(v.id) for v in findings]}
     except Exception as exc:

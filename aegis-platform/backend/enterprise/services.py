@@ -9,6 +9,7 @@ from datetime import timedelta
 
 import requests
 from django.core.cache import cache
+from django.db import transaction
 from django.utils import timezone
 from django_celery_beat.models import IntervalSchedule, PeriodicTask
 
@@ -129,5 +130,41 @@ def fetch_intel(provider:str,key:str,cve:str|None=None,package:dict|None=None):
     cache_obj,_=ThreatIntelCache.objects.update_or_create(provider=provider,key=key,defaults={'payload':payload,'fetched_at':now,'expires_at':now+timedelta(minutes=15 if provider in {'kev','epss'} else 360),'http_status':status,'sha256':digest}); return cache_obj.payload
 
 
-def fuse_finding(finding:Vulnerability):
-    intel,_=FindingIntelligence.objects.get_or_create(vulnerability=finding); cves=list(finding.cve_ids or []); primary=cves[0] if cves else None; intel.nvd=fetch_intel('nvd',primary,cve=primary) if primary else {}; intel.osv=fetch_intel('osv',primary,cve=primary) if primary else {}; intel.epss=fetch_intel('epss',primary,cve=primary) if primary else {}; kev=fetch_intel('kev','global'); rows=kev.get('vulnerabilities',[]) if isinstance(kev,dict) else []; intel.cisa_kev=next((x for x in rows if primary and x.get('cveID')==primary),{}); epss_rows=intel.epss.get('data',[]) if isinstance(intel.epss,dict) else []; epss_score=float(epss_rows[0].get('epss',0)) if epss_rows else 0.0; nvd_hit=bool(intel.nvd); osv_hit=bool(intel.osv); kev_hit=bool(intel.cisa_kev); signals=sum([nvd_hit,osv_hit,kev_hit,epss_score>0]); intel.confidence=round(min(100.0,25.0*signals+25.0*(epss_score>0.5)),2); intel.conflict=bool(kev_hit and epss_score<0.01); intel.explanation=f'NVD={nvd_hit}; OSV={osv_hit}; CISA KEV={kev_hit}; EPSS={epss_score:.4f}.'; intel.recommendation='Prioritize immediate remediation.' if kev_hit or epss_score>=0.5 else 'Review and remediate according to project risk policy.'; intel.save(); return intel
+@transaction.atomic
+def fuse_finding(finding: Vulnerability, *, fusion=None, actor_id: str | None = None):
+    """Derive finding-scoped analysis from one immutable provider snapshot.
+
+    `IntelligenceEnrichment` is provider truth and provenance. This model is the
+    Aegis interpretation for one finding and must always retain its lineage.
+    """
+    from fastapi_app.services.intelligence.fusion import IntelligenceFusion
+
+    cves = [str(cve).strip().upper() for cve in (finding.cve_ids or []) if str(cve).strip()]
+    primary = next((cve for cve in cves if cve.startswith('CVE-')), None)
+    if not primary:
+        raise ValueError('Finding intelligence requires at least one CVE identifier')
+
+    provider_fusion = fusion or IntelligenceFusion()
+    result = provider_fusion.enrich_cve(primary, nvd_api_key=os.getenv('NVD_API_KEY'))
+    if actor_id is None and finding.scan_id:
+        actor_id = finding.scan.initiated_by_id
+    snapshot = IntelligenceFusion.persist(result, actor_id=str(actor_id) if actor_id else None)
+    sources = snapshot.sources if isinstance(snapshot.sources, dict) else {}
+
+    intel, _ = FindingIntelligence.objects.update_or_create(
+        vulnerability=finding,
+        defaults={
+            'source_snapshot': snapshot,
+            'primary_cve': primary,
+            'analysis_version': '1.0',
+            'nvd': sources.get('nvd', {}),
+            'osv': sources.get('osv', {}),
+            'cisa_kev': sources.get('cisa_kev', {}),
+            'epss': sources.get('epss', {}),
+            'confidence': snapshot.confidence,
+            'conflict': bool(snapshot.conflicts),
+            'explanation': snapshot.explanation,
+            'recommendation': snapshot.recommendation,
+        },
+    )
+    return intel

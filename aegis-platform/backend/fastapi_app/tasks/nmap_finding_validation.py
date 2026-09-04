@@ -16,6 +16,7 @@ from django.db import transaction
 from django_project.evidence.models import Evidence, ValidationRun
 from fastapi_app.services.nmap_parser import parse_nmap_xml
 from fastapi_app.services.scope_authorization import is_target_authorized
+from fastapi_app.services.evidence_identity import evidence_id
 
 
 def _string(value: Any) -> str:
@@ -108,6 +109,19 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
     finding = validation.finding
     if not finding:
         raise ValueError('Nmap finding validation requires validation.finding')
+    existing_result = validation.result if isinstance(validation.result, dict) else {}
+    existing_evidence_id = existing_result.get('evidence_id')
+    if validation.status == ValidationRun.Status.COMPLETED and existing_evidence_id and Evidence.objects.filter(pk=existing_evidence_id, finding=finding).exists():
+        return {
+            'status': validation.status,
+            'validation_id': validation_id,
+            'finding_id': str(finding.id),
+            'tool': 'nmap',
+            'target': existing_result.get('target'),
+            'finding_present': existing_result.get('finding_present'),
+            'evidence_id': str(existing_evidence_id),
+            'redelivered': True,
+        }
 
     validation.status = ValidationRun.Status.RUNNING
     validation.progress = 10
@@ -158,25 +172,28 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
 
         now = datetime.now(timezone.utc)
         with transaction.atomic():
-            evidence = Evidence.objects.create(
-                scan=finding.scan,
-                asset=finding.asset,
-                finding=finding,
-                source='nmap',
-                evidence_type='validation_output',
-                raw_output=evidence_raw,
-                metadata={
-                    'format': 'xml',
-                    'stderr': stderr,
-                    'target': target,
-                    'exit_code': exit_code,
-                    'validation_id': validation_id,
-                    'finding_present': finding_present,
-                    'port': port,
-                    'expected': signature,
-                    'observed': observed,
+            evidence, _ = Evidence.objects.update_or_create(
+                id=evidence_id('validation', validation_id, 'nmap', 'validation_output', str(finding.id)),
+                defaults={
+                    'scan': finding.scan,
+                    'asset': finding.asset,
+                    'finding': finding,
+                    'source': 'nmap',
+                    'evidence_type': 'validation_output',
+                    'raw_output': evidence_raw,
+                    'metadata': {
+                        'format': 'xml',
+                        'stderr': stderr,
+                        'target': target,
+                        'exit_code': exit_code,
+                        'validation_id': validation_id,
+                        'finding_present': finding_present,
+                        'port': port,
+                        'expected': signature,
+                        'observed': observed,
+                    },
+                    'collected_by': validation.user,
                 },
-                collected_by=validation.user,
             )
             result['evidence_id'] = str(evidence.id)
             existing_result = dict(validation.result) if isinstance(validation.result, dict) else {}

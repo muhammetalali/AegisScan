@@ -24,6 +24,8 @@ jobs:
           cache-dependency-path: aegis-platform/frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=low
       - name: Full UI audit
         run: npm run audit:ui
       - name: i18n audit
@@ -37,12 +39,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEBUG: 'True'
-      SECRET_KEY: ci-only-secret
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
       DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
       REDIS_URL: 'redis://127.0.0.1:6379/0'
       CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
       CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
-      JWT_SECRET_KEY: ci-only-jwt-secret
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
       ALLOWED_HOSTS: 'localhost,127.0.0.1'
       CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
       AUTHORIZED_SCAN_TARGETS: '127.0.0.1'

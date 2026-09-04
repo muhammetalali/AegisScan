@@ -55,6 +55,7 @@ class ScenarioResponse(BaseModel):
     source: str = 'postgresql'
 
 
+@sync_to_async
 def _project(project_id: str, user_id: str):
     project = Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).first()
     if not project:

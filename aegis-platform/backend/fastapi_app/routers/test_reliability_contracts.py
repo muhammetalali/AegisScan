@@ -6,7 +6,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.db import close_old_connections
 
-from assets.models import Asset, AssetRelationship
+from django_project.assets.models import Asset, AssetRelationship
 from django_project.projects.models import Project
 from django_project.users.models import User
 from fastapi_app.core.dependencies import get_current_user as core_get_current_user
@@ -36,6 +36,72 @@ def test_negative_scan_scope_is_enforced():
     with pytest.raises(Exception) as exc:
         async_to_sync(_create_scan)(ScanCreate(project_id=str(project.id), name='blocked', scan_type='network', engines=['nmap'], config={'target': 'not-authorized.invalid'}), str(user.id))
     assert 'authorization' in str(exc.value).lower() or 'authorized' in str(exc.value).lower()
+
+
+def test_scan_target_is_bound_to_authorized_asset_identity(monkeypatch):
+    from fastapi import HTTPException
+    from fastapi_app.routers.scans import _create_scan, ScanCreate
+
+    user = User.objects.create_user(email='bound-scan@example.invalid', password='Strong-Test-Password-123!')
+    project = Project.objects.create(name='Bound Scan', slug='bound-scan', owner=user)
+    asset = Asset.objects.create(
+        project=project,
+        owner=user,
+        name='Bound target',
+        slug='bound-target',
+        type=Asset.Type.IP_ADDRESS,
+        configuration={'host': '10.30.0.10', 'authorized': True},
+    )
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', '10.30.0.0/24')
+
+    with pytest.raises(HTTPException) as exc:
+        async_to_sync(_create_scan)(
+            ScanCreate(
+                project_id=str(project.id),
+                name='target substitution',
+                scan_type='ip',
+                asset_id=str(asset.id),
+                engines=['nmap'],
+                config={'target': '169.254.169.254'},
+                authorized=True,
+            ),
+            str(user.id),
+        )
+
+    assert exc.value.status_code == 409
+    assert not project.scans.exists()
+
+
+def test_server_scope_is_required_even_for_authorized_asset(monkeypatch):
+    from fastapi import HTTPException
+    from fastapi_app.routers.scans import _create_scan, ScanCreate
+
+    user = User.objects.create_user(email='server-scope@example.invalid', password='Strong-Test-Password-123!')
+    project = Project.objects.create(name='Server Scope', slug='server-scope', owner=user)
+    asset = Asset.objects.create(
+        project=project,
+        owner=user,
+        name='Asset authorization alone is insufficient',
+        slug='insufficient-authorization',
+        type=Asset.Type.IP_ADDRESS,
+        configuration={'host': '10.40.0.10', 'authorized': True},
+    )
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', '10.50.0.0/24')
+
+    with pytest.raises(HTTPException) as exc:
+        async_to_sync(_create_scan)(
+            ScanCreate(
+                project_id=str(project.id),
+                name='outside server scope',
+                scan_type='ip',
+                asset_id=str(asset.id),
+                engines=['nmap'],
+            ),
+            str(user.id),
+        )
+
+    assert exc.value.status_code == 403
+    assert not project.scans.exists()
 
 
 def test_attack_path_persistence_is_idempotent():

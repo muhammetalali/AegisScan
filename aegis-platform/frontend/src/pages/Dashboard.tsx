@@ -1,12 +1,12 @@
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Bug, FileText, FolderKanban, Plus, RefreshCw, Server, Settings, ShieldCheck, TrendingUp, Activity, Database } from 'lucide-react'
-import ReactECharts from 'echarts-for-react'
 import { motion } from 'framer-motion'
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
 import { Skeleton, CardSkeleton } from '@/components/ui/skeleton'
 import { SecurityCommandHero } from '@/components/dashboard/SecurityCommandHero'
+import { DashboardBarChart, DashboardDonutChart, DashboardTrendChart } from '@/components/dashboard/DashboardChart'
 import { useLanguageStore } from '@/stores/languageStore'
 
 const StatCard = ({ icon: Icon, label, value, hint, tone = 'default' }: { icon: any; label: string; value: number | string | undefined; hint: string; tone?: 'default' | 'danger' | 'warning' }) => (
@@ -57,21 +57,8 @@ export const Dashboard = () => {
   const riskChartReady = riskValues.length > 0 && riskValues.every((value: number | null) => value !== null)
   const trendPoints = trends.filter((item: any) => typeof item?.score === 'number' && Number.isFinite(item.score))
 
-  const trendOption = trendPoints.length ? {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 12, right: 12, top: 20, bottom: 20, containLabel: true },
-    xAxis: { type: 'category', data: trendPoints.map((item: any) => String(item.date).slice(5)), boundaryGap: false, axisLine: { show: false }, axisTick: { show: false } },
-    yAxis: { type: 'value', min: 0, max: 100, splitLine: { lineStyle: { type: 'dashed' } } },
-    series: [{ type: 'line', data: trendPoints.map((item: any) => item.score), smooth: true, symbol: 'circle', symbolSize: 5, areaStyle: { opacity: 0.08 }, lineStyle: { width: 2 } }],
-  } : null
-
-  const severityOption = risk && riskChartReady ? {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 12, right: 12, top: 12, bottom: 20, containLabel: true },
-    xAxis: { type: 'category', data: [t('Critical'), t('High'), t('Medium'), t('Low'), t('Informational')], axisLine: { show: false }, axisTick: { show: false } },
-    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { type: 'dashed' } } },
-    series: [{ type: 'bar', data: riskValues, barMaxWidth: 34, itemStyle: { borderRadius: [8, 8, 0, 0] } }],
-  } : null
+  const trendChartPoints = trendPoints.map((item: any) => ({ label: String(item.date).slice(5), value: item.score }))
+  const severityChartPoints = riskChartReady ? [t('Critical'), t('High'), t('Medium'), t('Low'), t('Informational')].map((label, index) => ({ label, value: riskValues[index] as number })) : []
 
   return (
     <div className="space-y-6">
@@ -112,16 +99,16 @@ export const Dashboard = () => {
         <section className="grid gap-4 xl:grid-cols-3">
           <div className="enterprise-card rounded-2xl p-5 xl:col-span-2">
             <div className="mb-3 flex items-center justify-between"><div><h2 className="enterprise-section-title flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" />{t('Security score trend')}</h2><p className="enterprise-muted mt-1">{t('Last 30 days')}</p></div></div>
-            {trendsQuery.isLoading ? <Skeleton className="h-56 w-full" /> : trendsQuery.isError ? <ChartEmpty label={t('Unable to load trend data')} /> : trendOption ? <ReactECharts option={trendOption} style={{ height: 224 }} /> : <ChartEmpty label={t('No trend data available')} />}
+            {trendsQuery.isLoading ? <Skeleton className="h-56 w-full" /> : trendsQuery.isError ? <ChartEmpty label={t('Unable to load trend data')} /> : trendChartPoints.length ? <DashboardTrendChart points={trendChartPoints} /> : <ChartEmpty label={t('No trend data available')} />}
           </div>
           <div className="enterprise-card rounded-2xl p-5">
             <div className="mb-3"><h2 className="enterprise-section-title">{t('Risk distribution')}</h2><p className="enterprise-muted mt-1">{t('Findings by severity')}</p></div>
-            {riskQuery.isLoading ? <Skeleton className="h-56 w-full" /> : riskQuery.isError ? <ChartEmpty label={t('Unable to load risk data')} /> : riskChartReady ? <ReactECharts option={{ tooltip: { trigger: 'item' }, legend: { bottom: 0, icon: 'circle', itemWidth: 7, itemHeight: 7 }, series: [{ type: 'pie', radius: ['46%', '70%'], center: ['50%', '45%'], data: [{ value: risk.critical, name: t('Critical') }, { value: risk.high, name: t('High') }, { value: risk.medium, name: t('Medium') }, { value: risk.low, name: t('Low') }, { value: risk.informational, name: t('Informational') }], label: { show: false } }] }} style={{ height: 224 }} /> : <ChartEmpty label={t('No risk data available')} />}
+            {riskQuery.isLoading ? <Skeleton className="h-56 w-full" /> : riskQuery.isError ? <ChartEmpty label={t('Unable to load risk data')} /> : severityChartPoints.length ? <DashboardDonutChart points={severityChartPoints} /> : <ChartEmpty label={t('No risk data available')} />}
           </div>
         </section>
 
         <section className="grid gap-4 lg:grid-cols-2">
-          <div className="enterprise-card rounded-2xl p-5"><div className="mb-3"><h2 className="enterprise-section-title">{t('Findings by severity')}</h2><p className="enterprise-muted mt-1">{t('Current risk distribution')}</p></div>{severityOption ? <ReactECharts option={severityOption} style={{ height: 208 }} /> : <ChartEmpty label={t('No findings data available')} />}</div>
+          <div className="enterprise-card rounded-2xl p-5"><div className="mb-3"><h2 className="enterprise-section-title">{t('Findings by severity')}</h2><p className="enterprise-muted mt-1">{t('Current risk distribution')}</p></div>{severityChartPoints.length ? <DashboardBarChart points={severityChartPoints} /> : <ChartEmpty label={t('No findings data available')} />}</div>
           <div className="enterprise-card rounded-2xl p-5"><div className="mb-3 flex items-center justify-between"><div><h2 className="enterprise-section-title">{t('Recent validations')}</h2><p className="enterprise-muted mt-1">{t('Latest execution activity')}</p></div><Link to="/scan" className="text-xs font-medium text-primary hover:underline">{t('View all')}</Link></div><div className="space-y-2">{recent.length ? recent.slice(0, 5).map((item: any) => <Link key={item.id} to={`/validations/${item.id}/results`} className="flex items-center justify-between rounded-xl border border-border/70 bg-background/20 px-3 py-2.5 transition-all hover:-translate-y-0.5 hover:bg-accent"><div className="min-w-0"><div className="truncate font-mono text-xs font-semibold">{item.id}</div><div className="mt-0.5 truncate text-xs text-muted-foreground">{item.project_name || t('Not reported')}</div></div><span className="ml-3 shrink-0 rounded-full border border-border/60 bg-muted/50 px-2 py-1 text-[10px] font-semibold uppercase">{item.status || t('Not reported')}</span></Link>) : <div className="rounded-xl border border-dashed border-border/70 py-10 text-center text-sm text-muted-foreground">{t('No validation activity available')}</div>}</div></div>
         </section>
 

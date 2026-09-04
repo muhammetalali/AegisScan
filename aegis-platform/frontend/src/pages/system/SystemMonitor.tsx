@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Monitor, Activity, Database, HardDrive, Cpu } from 'lucide-react'
+import { Activity, AlertTriangle, Cpu, Database, HardDrive, Monitor, RefreshCw } from 'lucide-react'
 import { apiHelpers } from '@/services/api'
 
 type Metric = { metric_type: string; value: number; unit: string; timestamp: string }

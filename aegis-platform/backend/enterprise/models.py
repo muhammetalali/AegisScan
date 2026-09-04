@@ -91,7 +91,11 @@ class ThreatIntelAudit(models.Model):
 
 
 class FindingIntelligence(models.Model):
-    vulnerability=models.OneToOneField('vulnerabilities.Vulnerability',on_delete=models.CASCADE,related_name='intelligence'); nvd=models.JSONField(default=dict,blank=True); osv=models.JSONField(default=dict,blank=True); cisa_kev=models.JSONField(default=dict,blank=True); epss=models.JSONField(default=dict,blank=True); confidence=models.FloatField(default=0.0); conflict=models.BooleanField(default=False); explanation=models.TextField(blank=True); recommendation=models.TextField(blank=True); calculated_at=models.DateTimeField(auto_now=True)
+    vulnerability=models.OneToOneField('vulnerabilities.Vulnerability',on_delete=models.CASCADE,related_name='intelligence')
+    source_snapshot=models.ForeignKey('intelligence.IntelligenceEnrichment',on_delete=models.PROTECT,related_name='finding_analyses',null=True,blank=True)
+    primary_cve=models.CharField(max_length=32,blank=True,db_index=True)
+    analysis_version=models.CharField(max_length=20,default='1.0')
+    nvd=models.JSONField(default=dict,blank=True); osv=models.JSONField(default=dict,blank=True); cisa_kev=models.JSONField(default=dict,blank=True); epss=models.JSONField(default=dict,blank=True); confidence=models.FloatField(default=0.0); conflict=models.BooleanField(default=False); explanation=models.TextField(blank=True); recommendation=models.TextField(blank=True); calculated_at=models.DateTimeField(auto_now=True)
 
 
 class AttackPath(models.Model):
