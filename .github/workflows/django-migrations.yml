@@ -94,13 +94,45 @@ jobs:
         working-directory: aegis-platform/backend
         env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py migrate --noinput
-      - name: Verify critical tables
-        env: {PGPASSWORD: aegis}
+      - name: Verify critical tables from Django model metadata
+        working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: |
-          set -e
-          for table in users_user enterprise_digitaltwin enterprise_twinscenario enterprise_attackpath intelligence_intelligenceenrichment; do
-            psql "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb" -tAc "SELECT to_regclass('public.$table');" | grep -Fx "public.$table"
-          done
+          python - <<'PY'
+          import os
+          os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+          import django
+          django.setup()
+
+          from django.contrib.auth import get_user_model
+          from django.db import connection
+          from django_project.assets.models import AssetAuthorization
+          from django_project.evidence.models import Evidence
+          from django_project.intelligence.models import IntelligenceEnrichment
+          from django_project.scans.models import Scan
+          from django_project.vulnerabilities.models import Vulnerability
+          from enterprise.models import AttackPath, DigitalTwin, FindingIntelligence, TwinScenario
+
+          critical_models = [
+              get_user_model(),
+              AssetAuthorization,
+              Scan,
+              Evidence,
+              Vulnerability,
+              IntelligenceEnrichment,
+              FindingIntelligence,
+              DigitalTwin,
+              TwinScenario,
+              AttackPath,
+          ]
+          expected = [model._meta.db_table for model in critical_models]
+          existing = set(connection.introspection.table_names())
+          missing = [table for table in expected if table not in existing]
+          print('critical_tables_expected=', expected)
+          print('critical_tables_missing=', missing)
+          if missing:
+              raise SystemExit(f'Missing critical migrated tables: {missing}')
+          PY
       - name: Verify no pending model migrations
         working-directory: aegis-platform/backend
         env: {DJANGO_SETTINGS_MODULE: django_project.settings}

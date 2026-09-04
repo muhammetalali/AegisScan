@@ -20,6 +20,7 @@ from fastapi_app.services.scope_authorization import is_target_authorized
 from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.nmap_parser import parse_nmap_xml
 from fastapi_app.services.scanner_adapters import run_nuclei
+from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 from fastapi_app.services.tool_abstraction import ToolRequest, get_tool
 from fastapi_app.services.nmap_finding_ingestion import ingest_nmap_findings
 
@@ -112,6 +113,8 @@ def _fail_scan(scan: Scan, execution: ScanEngineExecution, message: str)->dict[s
 
 @shared_task(bind=True,name='fastapi_app.tasks.security_scan.run_nmap_scan',max_retries=1,default_retry_delay=30)
 def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
+    terminal=terminal_scan_delivery(scan_id,'nmap')
+    if terminal: return terminal
     scan,target,authorization=require_bound_scan_authorization(scan_id)
     if scan is None: return _block_scan(scan_id,target)
     if scan.scan_type not in {Scan.Type.IP,Scan.Type.NETWORK}: return _block_scan(scan_id,'Execution blocked: Nmap requires an IP or network scan type.')
@@ -134,6 +137,8 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
 
 @shared_task(bind=True,name='fastapi_app.tasks.security_scan.run_nuclei_scan',max_retries=1,default_retry_delay=30)
 def run_nuclei_scan(self,scan_id:str)->dict[str,Any]:
+    terminal=terminal_scan_delivery(scan_id,'nuclei')
+    if terminal: return terminal
     scan,target,authorization=require_bound_scan_authorization(scan_id)
     if scan is None: return _block_scan(scan_id,target)
     if scan.scan_type != Scan.Type.URL: return _block_scan(scan_id,'Execution blocked: Nuclei requires a URL scan type.')

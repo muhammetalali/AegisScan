@@ -17,6 +17,7 @@ from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.services.authorization_guard import authorization_snapshot, require_bound_scan_authorization, revalidate_bound_authorization
 from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.scanner_adapters import run_masscan, run_semgrep, validate_code_target
+from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 
 
 def _ensure_engine(name: str, display_name: str, category: str, timeout: int) -> ScanEngine:
@@ -83,6 +84,8 @@ def _git_checkout(asset_config:dict[str,Any]):
 
 @shared_task(bind=True,name='fastapi_app.tasks.advanced_scans.run_masscan_scan',max_retries=1,default_retry_delay=30)
 def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
+    terminal=terminal_scan_delivery(scan_id,'masscan')
+    if terminal: return terminal
     scan,target,authorization=require_bound_scan_authorization(scan_id)
     if scan is None: return _finish_failed(Scan.objects.get(pk=scan_id), _execution(Scan.objects.get(pk=scan_id), _ensure_engine('masscan','Masscan',ScanEngine.EngineCategory.RECON,300)), target)
     if scan.scan_type != Scan.Type.NETWORK: return _finish_failed(scan, _execution(scan,_ensure_engine('masscan','Masscan',ScanEngine.EngineCategory.RECON,300)), 'Execution blocked: Masscan requires a network scan type.')
@@ -108,6 +111,8 @@ def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
 
 @shared_task(bind=True,name='fastapi_app.tasks.advanced_scans.run_semgrep_scan',max_retries=1,default_retry_delay=30)
 def run_semgrep_scan(self,scan_id:str)->dict[str,Any]:
+    terminal=terminal_scan_delivery(scan_id,'semgrep')
+    if terminal: return terminal
     scan,target,authorization=require_bound_scan_authorization(scan_id)
     engine=_ensure_engine('semgrep','Semgrep',ScanEngine.EngineCategory.ANALYSIS,900)
     if scan is None:
