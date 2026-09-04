@@ -24,3 +24,4 @@ dist/
 # Runtime certificates/private TLS material
 aegis-platform/docker/ssl/*.pem
 aegis-platform/docker/ssl/*.key
+aegis-platform/backend/celerybeat-schedule

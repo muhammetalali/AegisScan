@@ -1,6 +1,6 @@
+from django.db import models
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models
 from django.utils.translation import gettext_lazy as _
 import uuid
 
@@ -78,7 +78,7 @@ class AssetRelationship(models.Model):
     source = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='outgoing_relationships')
     target = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='incoming_relationships')
     relationship_type = models.CharField(_('type'), max_length=20, choices=RelationshipType.choices)
-    metadata = models.JSONField(default=dict, blank=True, verbose_name='metadata')
+    metadata = models.JSONField(_('metadata'), default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -159,6 +159,7 @@ class AssetAuthorization(models.Model):
     valid_from = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
     objects = AssetAuthorizationManager()
 
     class Meta:

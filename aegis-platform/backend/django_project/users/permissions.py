@@ -77,7 +77,7 @@ class IsProjectMember(permissions.BasePermission):
         if not project_id:
             return False
 
-        from projects.models import ProjectMembership
+        from django_project.projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
             project_id=project_id,
             user=request.user,
@@ -96,7 +96,7 @@ class IsProjectAdmin(permissions.BasePermission):
         if not project_id:
             return False
 
-        from projects.models import ProjectMembership
+        from django_project.projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
             project_id=project_id,
             user=request.user,
@@ -133,7 +133,7 @@ class IsScanOwnerOrProjectMember(permissions.BasePermission):
             return True
         if obj.initiated_by == request.user:
             return True
-        from projects.models import ProjectMembership
+        from django_project.projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
             project=obj.project,
             user=request.user,
@@ -147,7 +147,7 @@ class IsVulnerabilityAssigneeOrProjectMember(permissions.BasePermission):
             return True
         if obj.assigned_to == request.user:
             return True
-        from projects.models import ProjectMembership
+        from django_project.projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
             project=obj.project,
             user=request.user,

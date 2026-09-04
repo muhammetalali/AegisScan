@@ -1,0 +1,199 @@
+name: External Black-Box E2E
+'on':
+  pull_request:
+    branches: [main]
+    paths: ['aegis-platform/e2e/**','aegis-platform/backend/**','aegis-platform/frontend/**','aegis-platform/docker-compose.yml','aegis-platform/docker/**','aegis-platform/docker-compose.ci.yml','.github/workflows/external-black-box-e2e.yml','.github/workflows/domain-contract-reality.yml','.github/workflows/frontend-lock-sync.yml','.github/workflows/production-runtime-reality-gate.yml','CANONICAL_EXECUTION_BASELINE.md']
+  push:
+    branches: [main, codex/full-contract-ui-audit-2026-09-03]
+    paths: ['aegis-platform/e2e/**','aegis-platform/backend/**','aegis-platform/frontend/**','aegis-platform/docker-compose.yml','aegis-platform/docker/**','aegis-platform/docker-compose.ci.yml','.github/workflows/external-black-box-e2e.yml','.github/workflows/domain-contract-reality.yml','.github/workflows/frontend-lock-sync.yml','.github/workflows/production-runtime-reality-gate.yml','CANONICAL_EXECUTION_BASELINE.md']
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  external-black-box:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      POSTGRES_DB: aegisdb
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis
+      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
+      DEBUG: 'False'
+      SECURE_SSL_REDIRECT: 'False'
+      ALLOWED_HOSTS: localhost,127.0.0.1,nginx
+      CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
+      CSRF_TRUSTED_ORIGINS: http://localhost,http://127.0.0.1,http://nginx
+      AUTH_COOKIE_SECURE: 'False'
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      SEMGREP_CONFIG: /app/e2e/semgrep-ci.yml
+      FRONTEND_URL: http://localhost
+      LOG_LEVEL: INFO
+      AEGIS_BASE_URL: http://nginx
+      AEGIS_DJANGO_URL: http://nginx/api/v1
+      AEGIS_FASTAPI_URL: http://nginx
+      AEGIS_API_URL: http://nginx/api/v1
+      AEGIS_E2E_TARGET: aegis-scan-target
+      AEGIS_E2E_TIMEOUT: '600'
+      AEGIS_E2E_EMAIL: e2e-operator@aegisscan.local
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare CI environment
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backend/.env <<EOF
+          DEBUG=${DEBUG}
+          SECRET_KEY=${SECRET_KEY}
+          JWT_SECRET_KEY=${JWT_SECRET_KEY}
+          SECURE_SSL_REDIRECT=${SECURE_SSL_REDIRECT}
+          ALLOWED_HOSTS=${ALLOWED_HOSTS}
+          CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+          CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+          DATABASE_URL=${DATABASE_URL}
+          REDIS_URL=${REDIS_URL}
+          CELERY_BROKER_URL=${CELERY_BROKER_URL}
+          CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+          AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
+          FRONTEND_URL=${FRONTEND_URL}
+          AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          SEMGREP_CONFIG=${SEMGREP_CONFIG}
+          LOG_LEVEL=${LOG_LEVEL}
+          POSTGRES_DB=${POSTGRES_DB}
+          POSTGRES_USER=${POSTGRES_USER}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          EOF
+      - name: Validate compose configuration
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+      - name: Build real platform images
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --pull; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              echo 'Docker Compose build failed after the bounded retry; refusing to mask the failure.' >&2
+              exit 1
+            fi
+            echo 'Docker Compose build failed once; retrying after a short transient backoff.' >&2
+            sleep 15
+          done
+      - name: Start real platform stack
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build
+      - name: Wait for platform readiness
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..60}; do
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then exit 0; fi
+            sleep 3
+          done
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi celery_worker scan_target nginx
+          exit 1
+      - name: Resolve authorized scanner target
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_IP="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-scan-target)"
+          test -n "$TARGET_IP"
+          echo "Resolved CI scanner target IP: $TARGET_IP"
+          echo "AEGIS_MASSCAN_TARGET=$TARGET_IP" >> "$GITHUB_ENV"
+          echo "AUTHORIZED_SCAN_TARGETS=aegis-scan-target,$TARGET_IP" >> "$GITHUB_ENV"
+          AUTHORIZED_SCAN_TARGETS="aegis-scan-target,$TARGET_IP" docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --force-recreate fastapi celery_worker celery_beat nginx
+      - name: Wait after scanner environment refresh
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..60}; do
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then
+              echo 'FastAPI and Nginx are ready after scanner environment refresh.'
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps fastapi celery_worker celery_beat nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=200 fastapi celery_worker celery_beat nginx
+          exit 1
+      - name: Verify scanner target authorization
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T celery_worker sh -c 'echo "AUTHORIZED_SCAN_TARGETS=$AUTHORIZED_SCAN_TARGETS"'
+      - name: Provision CI E2E operator
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          E2E_PASSWORD="$(python - <<'PY'
+          import secrets
+          print('Aegis-E2E-' + secrets.token_urlsafe(24))
+          PY
+          )"
+          printf 'AEGIS_E2E_PASSWORD=%s\n' "$E2E_PASSWORD" >> "$GITHUB_ENV"
+          echo "::add-mask::$E2E_PASSWORD"
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T -e E2E_EMAIL="$AEGIS_E2E_EMAIL" -e E2E_PASSWORD="$E2E_PASSWORD" django python manage.py shell <<'PY'
+          import os
+          from django.contrib.auth import get_user_model
+          from django_project.users.models import UserRole
+          User=get_user_model(); email=os.environ['E2E_EMAIL']; password=os.environ['E2E_PASSWORD']
+          user,_=User.objects.get_or_create(email=email,defaults={'first_name':'E2E','last_name':'Operator','role':UserRole.SECURITY_MANAGER,'is_active':True,'is_verified':True})
+          user.role=UserRole.SECURITY_MANAGER; user.is_active=True; user.is_verified=True; user.set_password(password); user.save()
+          assert user.has_permission('project.create') and user.has_permission('scan.create')
+          PY
+      - name: Run HTTP black-box E2E
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm --no-deps -v "$PWD/e2e:/e2e:ro" -e AEGIS_BASE_URL=http://nginx -e AEGIS_DJANGO_URL=http://nginx/api/v1 -e AEGIS_FASTAPI_URL=http://nginx -e AEGIS_API_URL=http://nginx/api/v1 -e AEGIS_E2E_TARGET=aegis-scan-target -e AEGIS_E2E_TIMEOUT=600 -e AEGIS_VERIFY_TLS=false -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" fastapi python /e2e/external_black_box_e2e.py
+      - name: Run installed CLI against canonical platform
+        env:
+          AEGIS_PLATFORM_URL: http://localhost
+          AEGIS_EMAIL: ${{ env.AEGIS_E2E_EMAIL }}
+          AEGIS_PASSWORD: ${{ env.AEGIS_E2E_PASSWORD }}
+        run: |
+          python -m pip install -e .
+          aegis platform-status --json
+      - name: Run all scanner engines E2E
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm --no-deps -v "$PWD/e2e:/e2e:ro" -e AEGIS_BASE_URL=http://nginx -e AEGIS_DJANGO_URL=http://nginx/api/v1 -e AEGIS_FASTAPI_URL=http://nginx -e AEGIS_API_URL=http://nginx/api/v1 -e AEGIS_E2E_TARGET=aegis-scan-target -e AEGIS_MASSCAN_TARGET="$AEGIS_MASSCAN_TARGET" -e AEGIS_E2E_TIMEOUT=600 -e AEGIS_VERIFY_TLS=false -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" fastapi python /e2e/scanner_engines_e2e.py
+      - name: Print stack state
+        if: always()
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
+      - name: Capture failure diagnostics
+        if: failure()
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set +e
+          mkdir -p ci-artifacts
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps -a > ci-artifacts/compose-ps.txt 2>&1
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color --timestamps django fastapi celery_worker celery_beat scan_target nginx > ci-artifacts/compose.log 2>&1
+          docker images --digests > ci-artifacts/docker-images.txt 2>&1
+          docker system df > ci-artifacts/docker-system-df.txt 2>&1
+          tail -n 300 ci-artifacts/compose.log || true
+          exit 0
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-black-box-${{ github.run_id }}-${{ github.run_attempt }}
+          path: aegis-platform/ci-artifacts
+          if-no-files-found: error
+          retention-days: 14
+      - name: Stop real platform stack
+        if: always()
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v

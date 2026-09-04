@@ -12,7 +12,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,8 @@ logger = logging.getLogger("aegis.offensive.base_module")
 
 class TestResult(BaseModel):
     """نتيجة تنفيذ وحدة اختبار واحدة."""
+
+    __test__: ClassVar[bool] = False
 
     success: bool
     proof: str

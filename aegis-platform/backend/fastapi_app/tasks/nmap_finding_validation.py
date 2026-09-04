@@ -13,53 +13,57 @@ django.setup()
 from celery import shared_task
 from django.db import transaction
 
-from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, ValidationRun
-from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.services.nmap_parser import parse_nmap_xml
-from fastapi_app.services.scope_authorization import is_target_authorized
-
-
-class ValidationBlockedError(RuntimeError):
-    """Expected security/policy denial; persisted and returned without execution."""
+from fastapi_app.services.authorization_guard import authorization_snapshot, require_bound_validation_authorization
+from fastapi_app.services.evidence_identity import evidence_id
 
 
 def _string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ''
 
 
-def _finding_port_signature(raw_data: dict[str, Any]) -> tuple[int, dict[str, str]]:
+def _first_expected_port(raw_data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     if isinstance(raw_data.get('port'), (int, str)):
         candidates.append(raw_data)
     parsed = raw_data.get('parsed')
     if isinstance(parsed, dict):
         for host in parsed.get('hosts', []):
-            if isinstance(host, dict):
-                candidates.extend(p for p in host.get('ports', []) if isinstance(p, dict))
+            if not isinstance(host, dict):
+                continue
+            for port in host.get('ports', []):
+                if isinstance(port, dict) and port.get('port') is not None:
+                    candidates.append(port)
     for candidate in candidates:
+        value = candidate.get('port', candidate.get('portid'))
         try:
-            port = int(candidate.get('port', candidate.get('portid')))
+            port = int(value)
         except (TypeError, ValueError):
             continue
-        if not 1 <= port <= 65535:
-            continue
-        signature = {
-            'protocol': _string(candidate.get('protocol') or raw_data.get('protocol')).lower() or 'tcp',
-            'state': _string(candidate.get('state') or raw_data.get('state')).lower(),
-            'service': _string(candidate.get('service') or raw_data.get('service')).lower(),
-            'product': _string(candidate.get('product') or raw_data.get('product')).lower(),
-            'version': _string(candidate.get('version') or raw_data.get('version')).lower(),
-        }
-        if signature['state']:
-            return port, signature
-    raise ValueError('Nmap finding has no valid port/state signature for exact re-validation')
+        if 1 <= port <= 65535:
+            return port, candidate
+    raise ValueError('Nmap finding has no valid port for exact re-validation')
 
 
-def _run_nmap_exact(target: str, port: int, timeout: int = 300) -> tuple[int, str, str]:
+def _expected_signature(raw_data: dict[str, Any]) -> tuple[int, dict[str, str]]:
+    port, source = _first_expected_port(raw_data)
+    signature = {
+        'protocol': _string(source.get('protocol') or raw_data.get('protocol')).lower() or 'tcp',
+        'state': _string(source.get('state') or raw_data.get('state')).lower(),
+        'service': _string(source.get('service') or raw_data.get('service')).lower(),
+        'product': _string(source.get('product') or raw_data.get('product')).lower(),
+        'version': _string(source.get('version') or raw_data.get('version')).lower(),
+    }
+    if not signature['state']:
+        raise ValueError('Nmap finding has no state for exact re-validation')
+    return port, signature
+
+
+def _run_nmap_exact(target: str, port: int, timeout: int) -> tuple[int, str, str]:
     executable = shutil.which('nmap')
     if not executable:
-        raise RuntimeError('Nmap is not installed on the validation worker')
+        raise RuntimeError('Nmap is not installed on the worker')
     completed = subprocess.run(
         [executable, '-sV', '-p', str(port), '-oX', '-', '--', target],
         capture_output=True,
@@ -70,17 +74,12 @@ def _run_nmap_exact(target: str, port: int, timeout: int = 300) -> tuple[int, st
     return completed.returncode, completed.stdout, completed.stderr
 
 
-def _matches(parsed: dict[str, Any], expected_port: int, signature: dict[str, str]) -> tuple[bool, dict[str, Any] | None]:
+def _matches_signature(parsed: dict[str, Any], expected_port: int, signature: dict[str, str]) -> tuple[bool, dict[str, Any] | None]:
     for host in parsed.get('hosts', []):
         if not isinstance(host, dict):
             continue
         for observed in host.get('ports', []):
-            if not isinstance(observed, dict):
-                continue
-            try:
-                if int(observed.get('port') or 0) != expected_port:
-                    continue
-            except (TypeError, ValueError):
+            if not isinstance(observed, dict) or int(observed.get('port') or 0) != expected_port:
                 continue
             if _string(observed.get('protocol')).lower() != signature['protocol']:
                 continue
@@ -88,155 +87,146 @@ def _matches(parsed: dict[str, Any], expected_port: int, signature: dict[str, st
                 continue
             for field in ('service', 'product', 'version'):
                 expected = signature[field]
-                if expected and _string(observed.get(field)).lower() != expected:
+                if expected and expected != _string(observed.get(field)).lower():
                     return False, observed
             return True, observed
     return False, None
 
 
-def _fail(validation: ValidationRun, message: str, phase: str = 'blocked') -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+def _fail_validation(validation: ValidationRun, message: str, status: str = 'failed') -> dict[str, Any]:
     validation.status = ValidationRun.Status.FAILED
     validation.progress = 100
-    validation.current_phase = phase
+    validation.current_phase = status
     validation.error_message = message
-    validation.completed_at = now
+    validation.completed_at = datetime.now(timezone.utc)
     validation.save(update_fields=['status', 'progress', 'current_phase', 'error_message', 'completed_at'])
-    return {'status': phase, 'validation_id': str(validation.id), 'error': message}
+    return {'status': status, 'validation_id': str(validation.id)}
 
 
-def _load_bound_context(validation_id: str) -> tuple[ValidationRun, Vulnerability, Asset, AssetAuthorization]:
-    with transaction.atomic():
-        validation = (
-            ValidationRun.objects
-            .select_for_update(of=('self',))
-            .select_related('finding', 'user')
-            .get(pk=validation_id)
-        )
-        finding = validation.finding
-        if not finding:
-            raise ValidationBlockedError('Validation must be bound to a persisted finding')
-        if validation.finding_identity_snapshot != finding.id:
-            raise ValidationBlockedError('Validation finding identity does not match the persisted finding')
-        if not finding.asset_id:
-            raise ValidationBlockedError('Finding no longer retains its originating asset')
-        finding = Vulnerability.objects.select_for_update(of=('self',)).get(pk=finding.id)
-        asset = Asset.objects.select_for_update().get(pk=finding.asset_id)
-        if not validation.authorization_decision_id:
-            raise ValidationBlockedError('Validation has no bound authorization decision')
-        decision = AssetAuthorization.objects.select_for_update().get(pk=validation.authorization_decision_id)
-        if finding.scan.authorization_decision_id != decision.id:
-            raise ValidationBlockedError('Validation authorization does not match the originating scan authorization decision')
-        latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
-        if latest is None or latest.id != decision.id:
-            raise ValidationBlockedError('Validation authorization is no longer the latest asset decision')
-        if decision.authorized is not True or not decision.is_currently_valid:
-            raise ValidationBlockedError('Validation authorization is no longer currently valid')
-        if decision.asset_identity_snapshot != asset.id:
-            raise ValidationBlockedError('Validation authorization asset identity mismatch')
-        target = _string(decision.target_snapshot)
-        asset_config = asset.configuration or {}
-        asset_target = _string(asset_config.get('host') or asset_config.get('ip') or asset_config.get('domain'))
-        if not target or target != asset_target:
-            raise ValidationBlockedError('Validation target no longer matches immutable authorization target')
-        if not is_target_authorized(target):
-            raise ValidationBlockedError('Validation target is outside the server-side authorized scan scope')
-        if validation.target_value != target or validation.scope != target:
-            raise ValidationBlockedError('Validation target/scope does not exactly match the authorized target')
-        if (finding.source_engine or '').strip().lower() != 'nmap':
-            raise ValidationBlockedError('Only Nmap findings can use the real Nmap validation worker')
-        if not validation.engines or [str(v).lower() for v in validation.engines] != ['nmap']:
-            raise ValidationBlockedError('Validation engine binding must be exactly nmap')
-        return validation, finding, asset, decision
-
-
-@shared_task(bind=True, name='fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e', max_retries=0)
+@shared_task(bind=True, name='fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e', max_retries=1, default_retry_delay=30)
 def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
-    try:
-        validation, finding, asset, decision = _load_bound_context(validation_id)
-    except ValidationBlockedError as exc:
-        validation = ValidationRun.objects.get(pk=validation_id)
-        return _fail(validation, str(exc), 'blocked')
-    except Exception as exc:
-        try:
-            validation = ValidationRun.objects.get(pk=validation_id)
-            _fail(validation, str(exc), 'failed')
-        except ValidationRun.DoesNotExist:
-            pass
-        raise
+    validation = ValidationRun.objects.select_related('finding', 'finding__asset', 'finding__scan', 'user').get(pk=validation_id)
+    finding = validation.finding
+    if not finding:
+        raise ValueError('Nmap finding validation requires validation.finding')
+    existing_result = validation.result if isinstance(validation.result, dict) else {}
+    existing_evidence_id = existing_result.get('evidence_id')
+    if validation.status == ValidationRun.Status.COMPLETED and existing_evidence_id and Evidence.objects.filter(pk=existing_evidence_id, finding=finding).exists():
+        return {
+            'status': validation.status,
+            'validation_id': validation_id,
+            'finding_id': str(finding.id),
+            'tool': 'nmap',
+            'target': existing_result.get('target'),
+            'finding_present': existing_result.get('finding_present'),
+            'evidence_id': str(existing_evidence_id),
+            'redelivered': True,
+        }
 
-    now = datetime.now(timezone.utc)
     validation.status = ValidationRun.Status.RUNNING
     validation.progress = 10
     validation.current_phase = 'preflight'
-    validation.started_at = now
+    validation.started_at = datetime.now(timezone.utc)
     validation.error_message = ''
     validation.save(update_fields=['status', 'progress', 'current_phase', 'started_at', 'error_message'])
 
     try:
-        if validation.authorized is not True:
-            return _fail(validation, 'Execution blocked: validation is not explicitly authorized')
-        port, expected = _finding_port_signature(finding.raw_data or {})
+        asset, target, authorization = require_bound_validation_authorization(validation)
+        if authorization is None:
+            return _fail_validation(validation, target, 'blocked')
+        asset_config = asset.configuration or {}
+
+        engine = (validation.engines or [finding.source_engine])[0].strip().lower()
+        if engine != 'nmap' or (finding.source_engine or '').strip().lower() != 'nmap':
+            raise ValueError('Nmap finding validation requires source engine nmap and validation engine nmap')
+
+        port, signature = _expected_signature(finding.raw_data or {})
         validation.current_phase = 'nmap'
         validation.progress = 20
         validation.save(update_fields=['current_phase', 'progress'])
 
-        exit_code, raw_output, stderr = _run_nmap_exact(decision.target_snapshot, port)
-        parsed = parse_nmap_xml(raw_output) if raw_output.strip() else {'hosts': [], 'host_count': 0, 'open_ports': 0}
-        finding_present, observed = _matches(parsed, port, expected)
-        completed = datetime.now(timezone.utc)
+        exit_code, evidence_raw, stderr = _run_nmap_exact(target, port, timeout=300)
+        parsed = parse_nmap_xml(evidence_raw) if evidence_raw.strip() else {'hosts': [], 'host_count': 0, 'open_ports': 0}
+        finding_present, observed = _matches_signature(parsed, port, signature)
+        result = {
+            'tool': 'nmap',
+            'target': target,
+            'exit_code': exit_code,
+            'port': port,
+            'expected': signature,
+            'observed': observed,
+            'parsed': parsed,
+            'finding_present': finding_present,
+        }
 
+        now = datetime.now(timezone.utc)
+        _, authorization_reason, current_authorization = require_bound_validation_authorization(validation)
+        if current_authorization is None:
+            raise ValueError(authorization_reason)
         with transaction.atomic():
-            locked_decision = AssetAuthorization.objects.select_for_update().get(pk=decision.id)
-            latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
-            if latest is None or latest.id != decision.id or locked_decision.authorized is not True or not locked_decision.is_currently_valid:
-                raise ValidationBlockedError('Validation authorization was revoked or superseded during execution')
-            evidence = Evidence.objects.create(
-                scan=finding.scan,
-                asset=asset,
-                finding=finding,
-                source='nmap',
-                evidence_type='validation_output',
-                raw_output=raw_output,
-                metadata={
-                    'format': 'xml', 'stderr': stderr, 'target': decision.target_snapshot,
-                    'exit_code': exit_code, 'validation_id': validation_id, 'finding_id': str(finding.id),
-                    'finding_present': finding_present, 'port': port, 'expected': expected,
-                    'observed': observed, 'authorization_decision_id': str(decision.id),
+            evidence, _ = Evidence.objects.update_or_create(
+                id=evidence_id('validation', validation_id, 'nmap', 'validation_output', str(finding.id)),
+                defaults={
+                    'scan': finding.scan,
+                    'asset': finding.asset,
+                    'finding': finding,
+                    'source': 'nmap',
+                    'evidence_type': 'validation_output',
+                    'raw_output': evidence_raw,
+                    'metadata': {
+                        'format': 'xml',
+                        'stderr': stderr,
+                        'target': target,
+                        'exit_code': exit_code,
+                        'validation_id': validation_id,
+                        'finding_present': finding_present,
+                        'port': port,
+                        'expected': signature,
+                        'observed': observed,
+                        **authorization_snapshot(authorization),
+                    },
+                    'collected_by': validation.user,
                 },
-                collected_by=validation.user,
             )
-            validation.result = {
-                'tool': 'nmap', 'target': decision.target_snapshot, 'exit_code': exit_code,
-                'finding_id': str(finding.id), 'port': port, 'expected': expected, 'observed': observed,
-                'finding_present': finding_present, 'parsed': parsed, 'evidence_id': str(evidence.id),
-                'authorization_decision_id': str(decision.id),
-            }
+            result['evidence_id'] = str(evidence.id)
+            existing_result = dict(validation.result) if isinstance(validation.result, dict) else {}
+            validation.result = {**existing_result, **result}
             validation.status = ValidationRun.Status.COMPLETED if exit_code == 0 else ValidationRun.Status.FAILED
             validation.progress = 100
             validation.current_phase = 'completed' if exit_code == 0 else 'failed'
-            validation.completed_at = completed
-            validation.save(update_fields=['result', 'status', 'progress', 'current_phase', 'completed_at'])
+            validation.completed_at = now
+            validation.save(update_fields=['status', 'progress', 'current_phase', 'result', 'completed_at'])
 
-            evidence_qs = finding.evidence_records.filter(evidence_type='validation_output', metadata__finding_present=False)
             finding.evidence_count = finding.evidence_records.count()
-            finding.verified_evidence_count = evidence_qs.count()
-            finding.validation_status = 'verified' if exit_code == 0 and not finding_present else 'unverified'
-            finding.validated_at = completed
-            finding.validated_by = validation.user
-            finding.save(update_fields=['evidence_count', 'verified_evidence_count', 'validation_status', 'validated_at', 'validated_by', 'updated_at'])
+            if exit_code == 0 and finding_present is False:
+                finding.validation_status = 'verified'
+                finding.validated_at = now
+                finding.validated_by = validation.user
+                finding.verified_evidence_count = finding.evidence_records.filter(
+                    evidence_type='validation_output',
+                    metadata__finding_present=False,
+                ).count()
+                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'evidence_count', 'updated_at'])
+            else:
+                finding.validation_status = 'unverified'
+                finding.validated_at = now
+                finding.validated_by = validation.user
+                finding.verified_evidence_count = finding.evidence_records.filter(
+                    evidence_type='validation_output',
+                    metadata__finding_present=False,
+                ).count()
+                finding.save(update_fields=['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'evidence_count', 'updated_at'])
 
         return {
             'status': validation.status,
             'validation_id': validation_id,
             'finding_id': str(finding.id),
-            'target': decision.target_snapshot,
+            'tool': 'nmap',
+            'target': target,
+            'port': port,
             'finding_present': finding_present,
-            'evidence_id': str(evidence.id),
-            'authorization_decision_id': str(decision.id),
+            'evidence_id': result['evidence_id'],
         }
-    except ValidationBlockedError as exc:
-        return _fail(validation, str(exc), 'blocked')
     except Exception as exc:
         validation.status = ValidationRun.Status.FAILED
         validation.progress = 100

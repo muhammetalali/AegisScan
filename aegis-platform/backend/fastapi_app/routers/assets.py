@@ -1,18 +1,31 @@
 from typing import List, Optional
-from uuid import UUID, uuid4
-from asgiref.sync import sync_to_async
-from django.db import IntegrityError, transaction
-from django.utils.text import slugify
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
-from fastapi_app.core.security import verify_token
+import csv
+import io
+import json
 
-router = APIRouter(); _bearer = HTTPBearer(auto_error=False)
+from asgiref.sync import sync_to_async
+from django.db import transaction
+from django.db.models import Q
+from django.utils.text import slugify
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Query
+from pydantic import BaseModel, Field
+
+from ..core.security import verify_token
+from ..core.dependencies import get_current_user
+from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
+
+router = APIRouter()
 
 
 class AssetCreate(BaseModel):
-    project_id: str; name: str; type: str; description: str = ""; environment: str = "development"; criticality: str = "medium"; configuration: dict = Field(default_factory=dict); tags: List[str] = Field(default_factory=list)
+    project_id: str
+    name: str
+    type: str
+    description: str = ''
+    environment: str = 'development'
+    criticality: str = 'medium'
+    configuration: dict = Field(default_factory=dict)
+    tags: List[str] = Field(default_factory=list)
 
 
 class AssetResponse(BaseModel):
@@ -23,244 +36,209 @@ class AssetUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; environment: Optional[str] = None; criticality: Optional[str] = None; configuration: Optional[dict] = None; tags: Optional[List[str]] = None; is_active: Optional[bool] = None
 
 
-class AssetAuthorizationUpdate(BaseModel):
-    authorized: bool
-    reason: str = Field(default="", max_length=500)
-    correlation_id: Optional[UUID] = None
-    expires_at: Optional[str] = None
-
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
-    if not credentials: raise HTTPException(status_code=401, detail="Not authenticated")
-    user = await verify_token(credentials.credentials)
-    if not user: raise HTTPException(status_code=401, detail="Invalid token")
-    return user
-
-
 def _asset_response(asset) -> AssetResponse:
     return AssetResponse(id=str(asset.id), project_id=str(asset.project_id), name=asset.name, slug=asset.slug, type=asset.type, description=asset.description, environment=asset.environment, criticality=asset.criticality, configuration=asset.configuration or {}, tags=asset.tags or [], is_active=asset.is_active, scan_count=asset.scan_count, last_scanned_at=asset.last_scanned_at.isoformat() if asset.last_scanned_at else None, created_at=asset.created_at.isoformat(), updated_at=asset.updated_at.isoformat())
-
-
-def _request_id_from_headers(request: Request) -> UUID:
-    raw = request.headers.get("X-Request-ID")
-    if raw:
-        try: return UUID(raw)
-        except ValueError: raise HTTPException(status_code=422, detail="X-Request-ID must be a valid UUID")
-    return uuid4()
-
-
-def _request_ip(request: Request) -> str:
-    """Return a database-safe source address for audit logging.
-
-    ASGI test clients and some upstream adapters can expose a symbolic host
-    (for example, ``testclient``) instead of an actual IP. AuditLog stores this
-    field in PostgreSQL's ``inet`` type, so invalid values must never reach the
-    database. We fail closed to the unspecified IPv4 address when no valid
-    source IP is available.
-    """
-    import ipaddress
-
-    host = request.client.host if request.client and request.client.host else ""
-    try:
-        return str(ipaddress.ip_address(host))
-    except ValueError:
-        return "0.0.0.0"
 
 
 @sync_to_async
 def _accessible_assets(user_id: str, project_id: Optional[str] = None):
     from django_project.assets.models import Asset
-    qs = (Asset.objects.select_related("project", "owner").filter(project__owner_id=user_id) | Asset.objects.select_related("project", "owner").filter(project__members__id=user_id)).distinct()
-    if project_id: qs = qs.filter(project_id=project_id)
-    return list(qs.order_by("-created_at"))
+    owner_qs=Asset.objects.select_related('project','owner').filter(project__owner_id=user_id); member_qs=Asset.objects.select_related('project','owner').filter(project__members__id=user_id); qs=(owner_qs|member_qs).distinct()
+    if project_id: qs=qs.filter(project_id=project_id)
+    return list(qs.order_by('-created_at'))
 
 
 @sync_to_async
 def _has_project_access(project_id: str, user_id: str) -> bool:
     from django_project.projects.models import Project
-    return Project.objects.filter(id=project_id).filter(owner_id=user_id).exists() or Project.objects.filter(id=project_id, members__id=user_id).exists()
+    return Project.objects.filter(id=project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).exists()
 
 
 @sync_to_async
 def _get_asset(asset_id: str, user_id: str):
     from django_project.assets.models import Asset
-    return Asset.objects.select_related("project", "owner").filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.select_related("project", "owner").filter(pk=asset_id, project__members__id=user_id).first()
+    return Asset.objects.select_related('project','owner').filter(pk=asset_id).filter(Q(project__owner_id=user_id)|Q(project__members__id=user_id)).first()
 
 
-@router.get("/", response_model=List[AssetResponse])
-async def list_assets(project_id: Optional[str] = None, asset_type: Optional[str] = None, environment: Optional[str] = None, criticality: Optional[str] = None, is_active: Optional[bool] = None, search: Optional[str] = None, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), user=Depends(get_current_user)):
-    assets = await _accessible_assets(str(user.get("user_id")), project_id)
-    if asset_type: assets = [a for a in assets if a.type == asset_type]
-    if environment: assets = [a for a in assets if a.environment == environment]
-    if criticality: assets = [a for a in assets if a.criticality == criticality]
-    if is_active is not None: assets = [a for a in assets if a.is_active == is_active]
+@router.get('/', response_model=List[AssetResponse])
+async def list_assets(project_id: Optional[str]=None, asset_type: Optional[str]=None, environment: Optional[str]=None, criticality: Optional[str]=None, is_active: Optional[bool]=None, search: Optional[str]=None, limit: int=Query(50,ge=1,le=200), offset: int=Query(0,ge=0), user=Depends(get_current_user)):
+    assets=await _accessible_assets(str(user.get('user_id')),project_id)
+    if asset_type: assets=[a for a in assets if a.type==asset_type]
+    if environment: assets=[a for a in assets if a.environment==environment]
+    if criticality: assets=[a for a in assets if a.criticality==criticality]
+    if is_active is not None: assets=[a for a in assets if a.is_active==is_active]
     if search:
-        needle = search.casefold(); assets = [a for a in assets if needle in a.name.casefold() or needle in a.description.casefold() or any(needle in str(t).casefold() for t in (a.tags or []))]
-    return [_asset_response(a) for a in assets[offset:offset + limit]]
+        needle=search.casefold(); assets=[a for a in assets if needle in a.name.casefold() or needle in a.description.casefold() or any(needle in str(t).casefold() for t in (a.tags or []))]
+    return [_asset_response(a) for a in assets[offset:offset+limit]]
 
 
 @sync_to_async
 def _create_asset(data: AssetCreate, user_id: str):
     from django_project.assets.models import Asset
     from django_project.projects.models import Project
-    project = Project.objects.filter(id=data.project_id).filter(owner_id=user_id).first() or Project.objects.filter(id=data.project_id, members__id=user_id).first()
-    if not project: raise HTTPException(status_code=404, detail="Project not found or inaccessible")
-    if (data.configuration or {}).get("authorized") is not None: raise HTTPException(status_code=403, detail="Asset authorization can only be changed through the authorization endpoint")
-    base_slug = slugify(data.name) or "asset"; slug = base_slug; suffix = 2
-    while Asset.objects.filter(project=project, slug=slug).exists(): slug = f"{base_slug}-{suffix}"; suffix += 1
-    return Asset.objects.create(project=project, owner_id=user_id, name=data.name, slug=slug, type=data.type, description=data.description, environment=data.environment, criticality=data.criticality, configuration=data.configuration, tags=data.tags)
+    project=Project.objects.filter(id=data.project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).first()
+    if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
+    base_slug=slugify(data.name) or 'asset'; slug=base_slug; suffix=2
+    while Asset.objects.filter(project=project,slug=slug).exists(): slug=f'{base_slug}-{suffix}'; suffix+=1
+    return Asset.objects.create(project=project,owner_id=user_id,name=data.name,slug=slug,type=data.type,description=data.description,environment=data.environment,criticality=data.criticality,configuration=data.configuration,tags=data.tags)
 
 
-@router.post("/", response_model=AssetResponse, status_code=201)
+@router.post('/', response_model=AssetResponse, status_code=201)
 async def create_asset(asset: AssetCreate, user=Depends(get_current_user)):
-    return _asset_response(await _create_asset(asset, str(user.get("user_id"))))
+    return _asset_response(await _create_asset(asset,str(user.get('user_id'))))
 
 
-@router.get("/{asset_id}", response_model=AssetResponse)
+@router.get('/{asset_id}', response_model=AssetResponse)
 async def get_asset(asset_id: str, user=Depends(get_current_user)):
-    asset = await _get_asset(asset_id, str(user.get("user_id")))
-    if not asset: raise HTTPException(status_code=404, detail="Asset not found")
+    asset=await _get_asset(asset_id,str(user.get('user_id')))
+    if not asset: raise HTTPException(status_code=404,detail='Asset not found')
     return _asset_response(asset)
 
 
 @sync_to_async
-def _update_asset(asset_id: str, update: AssetUpdate, user_id: str, request_id: UUID, ip_address: str, user_agent: str):
-    from django_project.audit.models import AuditLog
-    from django_project.assets.models import Asset, AssetAuthorization
-    with transaction.atomic():
-        asset = Asset.objects.select_for_update().filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.select_for_update().filter(pk=asset_id, project__members__id=user_id).first()
-        if not asset: raise HTTPException(status_code=404, detail="Asset not found")
-        data = update.model_dump(exclude_unset=True)
-        if "configuration" in data and data["configuration"] is not None and "authorized" in data["configuration"]: raise HTTPException(status_code=403, detail="Asset authorization can only be changed through the authorization endpoint")
-        if "configuration" in data and data["configuration"] is not None:
-            latest = AssetAuthorization.objects.filter(asset=asset).order_by("-created_at", "-id").first()
-            if latest and latest.authorized and latest.is_currently_valid:
-                request_bound = AssetAuthorization.objects.filter(request_id=request_id).first()
-                if request_bound: raise HTTPException(status_code=409, detail="Request ID is already bound to an authorization decision")
-                data["configuration"] = dict(data["configuration"]); data["configuration"]["authorized"] = False
-                decision = AssetAuthorization.objects.create(asset=asset, actor_id=user_id, authorized=False, target_snapshot=(latest.target_snapshot or _asset_target(asset))[:500], reason="Authorization revoked because asset configuration changed", correlation_id=uuid4(), request_id=request_id, supersedes=latest)
-                AuditLog.objects.create(
-                    user_id=user_id,
-                    action="asset_authorization_revoke",
-                    result=AuditLog.Result.SUCCESS,
-                    resource_type="AssetAuthorization",
-                    resource_id=str(decision.id),
-                    resource_repr=f"Asset {asset.id} authorization decision",
-                    changes={"authorized": False, "supersedes": str(latest.id)},
-                    metadata={"asset_id": str(asset.id), "asset_identity_snapshot": str(decision.asset_identity_snapshot), "target_snapshot": decision.target_snapshot, "reason": decision.reason, "correlation_id": str(decision.correlation_id), "request_id": str(decision.request_id), "trigger": "asset_configuration_change"},
-                    ip_address=ip_address,
-                    user_agent=user_agent[:10000],
-                    request_id=decision.request_id,
-                )
-        if "name" in data: data["slug"] = slugify(data["name"]) or asset.slug
-        for key, value in data.items(): setattr(asset, key, value)
-        asset.save(); return asset
+def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
+    asset=_get_asset_sync(asset_id,user_id)
+    if not asset: raise HTTPException(status_code=404,detail='Asset not found')
+    data=update.model_dump(exclude_unset=True)
+    if 'name' in data: data['slug']=slugify(data['name']) or asset.slug
+    for key,value in data.items(): setattr(asset,key,value)
+    asset.save(); return asset
 
 
-def _asset_target(asset) -> str:
-    c = asset.configuration or {}; return str(c.get("url") or c.get("host") or c.get("ip") or c.get("domain") or c.get("cidr") or "")
-
-
-@router.patch("/{asset_id}", response_model=AssetResponse)
-async def update_asset(asset_id: str, update: AssetUpdate, request: Request, user=Depends(get_current_user)):
-    request_id = _request_id_from_headers(request)
-    return _asset_response(await _update_asset(asset_id, update, str(user.get("user_id")), request_id, _request_ip(request), request.headers.get("User-Agent", "")))
-
-
-@sync_to_async
-def _set_asset_authorization(asset_id: str, user_id: str, authorized: bool, reason: str, is_staff: bool, correlation_id: Optional[UUID], expires_at, request_id: UUID, ip_address: str, user_agent: str):
-    from datetime import datetime, timezone as dt_timezone
-    from django_project.audit.models import AuditLog
-    from django_project.assets.models import Asset, AssetAuthorization
-    with transaction.atomic():
-        asset = Asset.objects.select_related("project").select_for_update(of=("self",)).filter(pk=asset_id).first()
-        if not asset: raise HTTPException(status_code=404, detail="Asset not found")
-        if not is_staff and str(asset.project.owner_id) != str(user_id): raise HTTPException(status_code=403, detail="Only the project owner or staff may change asset network authorization")
-        effective_correlation = correlation_id or uuid4()
-        existing = AssetAuthorization.objects.filter(correlation_id=effective_correlation).first()
-        if existing:
-            if existing.asset_id != asset.id or existing.authorized != authorized or existing.reason != reason: raise HTTPException(status_code=409, detail="Correlation ID is already bound to a different authorization decision")
-            return asset
-        request_bound = AssetAuthorization.objects.filter(request_id=request_id).first()
-        if request_bound: raise HTTPException(status_code=409, detail="Request ID is already bound to an authorization decision")
-        expiry = None
-        if expires_at:
-            try: expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            except ValueError: raise HTTPException(status_code=422, detail="expires_at must be a valid ISO-8601 timestamp")
-            if expiry <= datetime.now(dt_timezone.utc): raise HTTPException(status_code=422, detail="expires_at must be in the future")
-        latest = AssetAuthorization.objects.filter(asset=asset).order_by("-created_at", "-id").first()
-        target = _asset_target(asset); configuration = dict(asset.configuration or {}); configuration["authorized"] = authorized; asset.configuration = configuration
-        asset.save(update_fields=["configuration", "updated_at"])
-        try:
-            with transaction.atomic():
-                decision = AssetAuthorization.objects.create(asset=asset, actor_id=user_id, authorized=authorized, target_snapshot=target[:500], reason=reason, correlation_id=effective_correlation, request_id=request_id, supersedes=latest, expires_at=expiry)
-        except IntegrityError:
-            existing = AssetAuthorization.objects.filter(correlation_id=effective_correlation).first()
-            if existing and existing.asset_id == asset.id and existing.authorized == authorized and existing.reason == reason: return asset
-            raise
-        action = "asset_authorization_grant" if authorized else "asset_authorization_revoke"
-        AuditLog.objects.create(
-            user_id=user_id,
-            action=action,
-            result=AuditLog.Result.SUCCESS,
-            resource_type="AssetAuthorization",
-            resource_id=str(decision.id),
-            resource_repr=f"Asset {asset.id} authorization decision",
-            changes={"authorized": authorized, "supersedes": str(latest.id) if latest else None},
-            metadata={"asset_id": str(asset.id), "asset_identity_snapshot": str(decision.asset_identity_snapshot), "target_snapshot": decision.target_snapshot, "reason": reason, "correlation_id": str(decision.correlation_id), "request_id": str(decision.request_id), "expires_at": decision.expires_at.isoformat() if decision.expires_at else None},
-            ip_address=ip_address,
-            user_agent=user_agent[:10000],
-            request_id=decision.request_id,
-        )
-        return asset
-
-
-@router.post("/{asset_id}/authorization", response_model=AssetResponse)
-async def set_asset_authorization(asset_id: str, update: AssetAuthorizationUpdate, request: Request, user=Depends(get_current_user)):
-    request_id = _request_id_from_headers(request)
-    return _asset_response(await _set_asset_authorization(asset_id, str(user.get("user_id")), update.authorized, update.reason, bool(user.get("is_staff")), update.correlation_id, update.expires_at, request_id, _request_ip(request), request.headers.get("User-Agent", "")))
-
-
-@sync_to_async
-def _delete_asset(asset_id: str, user_id: str):
+def _get_asset_sync(asset_id: str,user_id: str):
     from django_project.assets.models import Asset
-    asset = Asset.objects.filter(pk=asset_id, project__owner_id=user_id).first() or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first()
-    if not asset: raise HTTPException(status_code=404, detail="Asset not found")
+    return Asset.objects.filter(pk=asset_id).filter(Q(project__owner_id=user_id)|Q(project__members__id=user_id)).first()
+
+
+@router.patch('/{asset_id}', response_model=AssetResponse)
+async def update_asset(asset_id: str, update: AssetUpdate, user=Depends(get_current_user)): return _asset_response(await _update_asset(asset_id,update,str(user.get('user_id'))))
+
+
+@sync_to_async
+def _delete_asset(asset_id: str,user_id: str):
+    asset=_get_asset_sync(asset_id,user_id)
+    if not asset: raise HTTPException(status_code=404,detail='Asset not found')
     asset.delete()
 
 
-@router.delete("/{asset_id}")
-async def delete_asset(asset_id: str, user=Depends(get_current_user)):
-    await _delete_asset(asset_id, str(user.get("user_id"))); return {"deleted": True, "asset_id": asset_id}
+@router.delete('/{asset_id}')
+async def delete_asset(asset_id: str,user=Depends(get_current_user)):
+    await _delete_asset(asset_id,str(user.get('user_id'))); return {'deleted':True,'asset_id':asset_id}
 
 
-@router.post("/{asset_id}/scan")
-async def scan_asset(asset_id: str, scan_type: str = "full_validation", depth: str = "standard", user=Depends(get_current_user)):
-    asset = await _get_asset(asset_id, str(user.get("user_id")))
-    if not asset: raise HTTPException(status_code=404, detail="Asset not found")
-    raise HTTPException(status_code=501, detail="Asset scanning is provided by the scan orchestration service; no synthetic scan is returned here")
+@router.post('/{asset_id}/scan')
+async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='standard', user=Depends(get_current_user)):
+    asset=await _get_asset(asset_id,str(user.get('user_id')))
+    if not asset: raise HTTPException(status_code=404,detail='Asset not found')
+    config=asset.configuration or {}
+    from .scans import ScanCreate,_create_scan,_attach_celery_task,run_masscan_scan,run_nmap_scan,run_nuclei_scan,run_semgrep_scan
+    type_to_scan={'website':('url','nuclei'),'ip_address':('ip','nmap'),'domain':('ip','nmap'),'network_range':('network','masscan'),'source_code':('code','semgrep'),'repository':('code','semgrep'),'api_endpoint':('url','nuclei')}
+    inferred=type_to_scan.get(asset.type)
+    if not inferred: raise HTTPException(status_code=400,detail=f'No scanner mapping exists for asset type: {asset.type}')
+    resolved_type,engine=inferred
+    final_scan_type=scan_type or resolved_type
+    if final_scan_type!=resolved_type: raise HTTPException(status_code=400,detail=f'Asset type {asset.type} requires scan_type={resolved_type}')
+    config_target=config.get('url') or config.get('host') or config.get('ip') or config.get('domain') or config.get('cidr') or config.get('path') or config.get('repo_url')
+    if engine in {'nmap','nuclei','masscan'} and not config_target: raise HTTPException(status_code=400,detail='Asset has no executable target in configuration')
+    if engine in {'nmap','nuclei','masscan'}:
+        try:
+            require_authorized_target(str(config_target))
+        except ScopeAuthorizationError as exc:
+            raise HTTPException(status_code=403,detail=str(exc)) from exc
+    scan_config={key:value for key,value in config.items() if key!='authorized'}
+    scan_config['target']=config_target
+    created,engines=await _create_scan(ScanCreate(project_id=str(asset.project_id),name=f'Asset scan: {asset.name}',scan_type=final_scan_type,asset_id=str(asset.id),engines=[engine],depth=depth,config=scan_config),str(user.get('user_id')))
+    task_map={'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}; result=task_map[engine].delay(str(created.id)); created=await _attach_celery_task(str(created.id),result.id)
+    return {'scan_id':str(created.id),'task_id':result.id,'engine':engine,'status':created.status,'asset_id':str(created.asset_id) if created.asset_id else None,'authorization_decision_id':str(created.authorization_decision_id) if created.authorization_decision_id else None,'source':'postgresql'}
 
 
 @sync_to_async
-def _technologies(asset_id: str, user_id: str):
-    asset = _get_asset_sync(asset_id, user_id); return list(asset.technologies.all()) if asset else None
+def _technologies(asset_id: str,user_id: str):
+    asset=_get_asset_sync(asset_id,user_id); return list(asset.technologies.all()) if asset else None
 
 
-def _get_asset_sync(asset_id: str, user_id: str):
-    from django_project.assets.models import Asset
-    return Asset.objects.filter(pk=asset_id).filter(project__owner_id=user_id).first() or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first()
+@router.get('/{asset_id}/technologies')
+async def get_asset_technologies(asset_id: str,user=Depends(get_current_user)):
+    technologies=await _technologies(asset_id,str(user.get('user_id')))
+    if technologies is None: raise HTTPException(status_code=404,detail='Asset not found')
+    return [{'id':str(t.id),'name':t.name,'version':t.version,'category':t.category,'confidence':t.confidence,'source':t.source,'evidence':t.evidence,'detected_at':t.detected_at.isoformat()} for t in technologies]
 
 
-@router.get("/{asset_id}/technologies")
-async def get_asset_technologies(asset_id: str, user=Depends(get_current_user)):
-    technologies = await _technologies(asset_id, str(user.get("user_id")))
-    if technologies is None: raise HTTPException(status_code=404, detail="Asset not found")
-    return [{"id": str(t.id), "name": t.name, "version": t.version, "category": t.category, "confidence": t.confidence, "source": t.source, "evidence": t.evidence, "detected_at": t.detected_at.isoformat()} for t in technologies]
-
-
-@router.post("/{asset_id}/technologies")
-async def add_technology(asset_id: str, name: str, version: str = "", category: str = "unknown", confidence: float = 0.0, user=Depends(get_current_user)):
+@router.post('/{asset_id}/technologies')
+async def add_technology(asset_id: str,name: str,version: str='',category: str='unknown',confidence: float=0.0,user=Depends(get_current_user)):
     from django_project.assets.models import TechnologyFingerprint
-    asset = await _get_asset(asset_id, str(user.get("user_id")))
-    if not asset: raise HTTPException(status_code=404, detail="Asset not found")
-    return {"id": str((await sync_to_async(TechnologyFingerprint.objects.create)(asset=asset, name=name, version=version, category=category, confidence=confidence)).id), "name": name, "version": version, "category": category, "confidence": confidence}
+    asset=await _get_asset(asset_id,str(user.get('user_id')))
+    if not asset: raise HTTPException(status_code=404,detail='Asset not found')
+    technology=await sync_to_async(TechnologyFingerprint.objects.create)(asset=asset,name=name,version=version,category=category,confidence=confidence,source='manual'); return {'id':str(technology.id),'created':True}
+
+
+@router.get('/{asset_id}/relationships')
+async def get_asset_relationships(asset_id: str,user=Depends(get_current_user)):
+    from django_project.assets.models import AssetRelationship
+    asset=await _get_asset(asset_id,str(user.get('user_id')))
+    if not asset: raise HTTPException(status_code=404,detail='Asset not found')
+    relationships=await sync_to_async(list)(AssetRelationship.objects.filter(source=asset).select_related('target')); return [{'id':str(r.id),'target_id':str(r.target_id),'relationship_type':r.relationship_type,'metadata':r.metadata,'created_at':r.created_at.isoformat()} for r in relationships]
+
+
+@router.post('/{asset_id}/relationships')
+async def add_relationship(asset_id: str,target_id: str,relationship_type: str,user=Depends(get_current_user)):
+    from django_project.assets.models import AssetRelationship
+    source=await _get_asset(asset_id,str(user.get('user_id'))); target=await _get_asset(target_id,str(user.get('user_id')))
+    if not source or not target or source.project_id!=target.project_id: raise HTTPException(status_code=404,detail='Source or target asset not found')
+    relationship,created=await sync_to_async(AssetRelationship.objects.get_or_create)(project_id=source.project_id,source=source,target=target,relationship_type=relationship_type); return {'id':str(relationship.id),'created':created}
+
+
+def _normalize_import_row(row: dict[str,object],project_id: str) -> AssetCreate:
+    config=dict(row.get('configuration') or {}) if isinstance(row.get('configuration'),dict) else {}
+    for key in ('url','host','ip','domain','cidr','repo_url','path','services','authorized'):
+        if key in row and key not in config: config[key]=row[key]
+    if config.get('authorized') is not True: config['authorized']=False
+    tags=row.get('tags') if isinstance(row.get('tags'),list) else [x.strip() for x in str(row.get('tags') or '').split(',') if x.strip()]
+    name=str(row.get('name') or row.get('target') or row.get('url') or row.get('host') or row.get('domain') or '').strip()
+    asset_type=str(row.get('type') or '').strip();
+    if not name or not asset_type: raise ValueError('Each import row requires name and type')
+    return AssetCreate(project_id=project_id,name=name,type=asset_type,description=str(row.get('description') or ''),environment=str(row.get('environment') or 'development'),criticality=str(row.get('criticality') or 'medium'),configuration=config,tags=tags)
+
+
+@router.post('/bulk-import', response_model=List[AssetResponse], status_code=201)
+async def bulk_import_assets(project_id: str,file: UploadFile=File(...),user=Depends(get_current_user)):
+    user_id=str(user.get('user_id'))
+    if not await _has_project_access(project_id,user_id): raise HTTPException(status_code=404,detail='Project not found or inaccessible')
+    raw=await file.read()
+    if len(raw)>5*1024*1024: raise HTTPException(status_code=413,detail='Import file exceeds 5 MiB limit')
+    try:
+        text=raw.decode('utf-8-sig')
+        content_type=(file.content_type or '').lower()
+        if (file.filename and file.filename.lower().endswith('.csv')) or 'csv' in content_type:
+            rows=list(csv.DictReader(io.StringIO(text)))
+        else:
+            parsed=json.loads(text); rows=parsed if isinstance(parsed,list) else parsed.get('assets',[]) if isinstance(parsed,dict) else []
+        if not isinstance(rows,list) or not rows: raise ValueError('Import payload must contain a non-empty array of assets')
+        if len(rows)>1000: raise ValueError('Import payload may contain at most 1000 assets')
+        normalized=[_normalize_import_row(row,project_id) for row in rows if isinstance(row,dict)]
+    except (UnicodeDecodeError,json.JSONDecodeError,ValueError,TypeError) as exc: raise HTTPException(status_code=400,detail=f'Invalid asset import payload: {exc}') from exc
+    try:
+        created = await _bulk_create_assets(normalized, user_id)
+    except HTTPException:
+        raise
+    return [_asset_response(asset) for asset in created]
+
+
+@sync_to_async
+@transaction.atomic
+def _bulk_create_assets(items: List[AssetCreate], user_id: str):
+    from django_project.assets.models import Asset
+    from django_project.projects.models import Project
+    projects={str(project.id): project for project in Project.objects.filter(id__in={item.project_id for item in items}).filter(Q(owner_id=user_id)|Q(members__id=user_id)).distinct()}
+    created=[]
+    for item in items:
+        project=projects.get(item.project_id)
+        if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
+        base_slug=slugify(item.name) or 'asset'; slug=base_slug; suffix=2
+        while Asset.objects.filter(project=project,slug=slug).exists(): slug=f'{base_slug}-{suffix}'; suffix+=1
+        created.append(Asset(project=project,owner_id=user_id,name=item.name,slug=slug,type=item.type,description=item.description,environment=item.environment,criticality=item.criticality,configuration=item.configuration,tags=item.tags))
+    Asset.objects.bulk_create(created)
+    return created
+
+# verify_token remains imported for compatibility with deployments that import this module symbolically.
+_ = verify_token

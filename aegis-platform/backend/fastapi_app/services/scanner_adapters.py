@@ -49,19 +49,48 @@ def validate_authorized_web_target(target: str) -> str:
     return value
 
 
+def validate_code_target(target: str) -> str:
+    value = target.strip()
+    if not value or '\x00' in value:
+        raise ValueError('Invalid code scan target')
+    path = Path(value).expanduser().resolve()
+    if not path.exists():
+        raise ValueError(f'Code scan target does not exist: {path}')
+    if not path.is_dir():
+        raise ValueError('Code scan target must be a directory')
+    return str(path)
+
+
 def run_nmap(target: str, timeout: int = 300) -> ScanResult:
     host = validate_authorized_target(target)
     executable = shutil.which('nmap')
     if not executable:
         raise RuntimeError('Nmap is not installed on the worker')
     completed = subprocess.run(
-        [executable, '-sV', '-oX', '-', '--', host],
+        [executable, '-Pn', '-sV', '-oX', '-', '--', host],
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
     return ScanResult('nmap', host, completed.returncode, completed.stdout, completed.stderr)
+
+
+def run_masscan(target: str, ports: str = '1-65535', rate: int = 1000, timeout: int = 300) -> ScanResult:
+    host = validate_authorized_target(target)
+    if rate <= 0:
+        raise ValueError('Masscan rate must be positive')
+    executable = shutil.which('masscan')
+    if not executable:
+        raise RuntimeError('Masscan is not installed on the worker')
+    completed = subprocess.run(
+        [executable, host, '-p', ports, '--rate', str(rate), '--output-format', 'json', '--output-filename', '-'],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    return ScanResult('masscan', host, completed.returncode, completed.stdout, completed.stderr)
 
 
 def run_nuclei(target: str, timeout: int = 600) -> ScanResult:
@@ -83,3 +112,18 @@ def run_nuclei(target: str, timeout: int = 600) -> ScanResult:
         check=False,
     )
     return ScanResult('nuclei', url, completed.returncode, completed.stdout, completed.stderr)
+
+
+def run_semgrep(target: str, timeout: int = 600) -> ScanResult:
+    path = validate_code_target(target)
+    executable = shutil.which('semgrep')
+    if not executable:
+        raise RuntimeError('Semgrep is not installed on the worker')
+    completed = subprocess.run(
+        [executable, '--config', os.getenv('SEMGREP_CONFIG', 'auto'), '--json', '--error', '--no-git-ignore', path],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    return ScanResult('semgrep', path, completed.returncode, completed.stdout, completed.stderr)

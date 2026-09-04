@@ -1,0 +1,1 @@
+{"depth":"quick","asset_id":"61ecd78e-becb-49e3-ab94-d262da57c0dc","config":{"target":"aegis-scan-target"},"name":"E2E Nmap Validation","scan_type":"network","project_id":"0cd7e242-e2cf-46d4-aae7-d68e02022103","engines":["nmap"],"authorized":true}

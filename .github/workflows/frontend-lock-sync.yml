@@ -1,0 +1,33 @@
+name: Frontend Lock Sync
+
+'on':
+  push:
+    branches: [codex/full-contract-ui-audit-2026-09-03]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aegis-platform/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+      - name: Verify manifest and lockfile agreement
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Fail on lockfile drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ../..
+          git diff --exit-code -- aegis-platform/frontend/package-lock.json
+      - name: Verify clean deterministic install
+        run: npm ci

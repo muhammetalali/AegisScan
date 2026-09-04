@@ -1,4 +1,5 @@
-from .security_scan import run_nmap_scan
-from .workflow_tasks import evaluate_action_slas
+"""Celery task package.
 
-__all__ = ['run_nmap_scan', 'evaluate_action_slas']
+Task modules are discovered by Celery; this package intentionally avoids eager
+imports so one task module cannot break imports of another task or test module.
+"""

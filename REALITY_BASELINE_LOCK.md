@@ -1,27 +1,27 @@
 # AegisScan Reality Baseline Lock
 
-This document is the execution baseline for the enterprise-completion branch. A capability is considered complete only when the following chain is evidenced:
+This document is the execution baseline for enterprise completion. A capability is complete only when evidenced through:
 
 `Designed -> Implemented -> Integrated -> Real Data -> Tested -> E2E -> Evidence -> Independently Verified`
 
 ## Non-negotiable gates
 
 - No UI page may display synthetic security KPIs, fake findings, fake risk scores, or placeholder success states.
-- Browser/API transport must cross the centralized frontend API service boundary.
-- `/api/v1` domain surfaces must expose versioned, machine-validatable contracts.
-- Django migrations must be consistent before tests run and a clean database must migrate without generated drift.
-- Scanner execution must be server-side authorized and must persist scanner evidence and finding provenance.
-- Retried work must be bounded and idempotent; repeated requests must not create duplicate durable state.
-- Tenant-scoped data access must be enforced at the project/organization boundary.
+- Browser/API transport crosses the centralized frontend API service boundary.
+- `/api/v1` domain surfaces expose versioned, machine-validatable contracts.
+- Django migrations are consistent before tests and a clean database can migrate from zero.
+- Scanner execution is explicitly authorized server-side and persists scanner evidence/finding provenance.
+- Retried work is bounded and idempotent; repeated requests do not create duplicate durable state.
+- Tenant-scoped data access is enforced at project/organization boundaries.
 - WebSocket connections are authenticated and resource-scoped.
-- Continuous assurance must enqueue real scanner tasks rather than synthesize results.
-- Compliance results must derive from persisted assessments/findings/evidence.
-- Threat intelligence must retain provider provenance and immutable snapshot integrity.
+- Continuous assurance enqueues real scanner tasks rather than synthetic results.
+- Compliance results derive from persisted assessments/findings/evidence.
+- Threat intelligence retains provider provenance and immutable snapshot integrity.
 
-## Required CI evidence
+## CI evidence required
 
-1. Full UI source audit + TypeScript build.
-2. API contract registration/schema tests.
+1. Full UI audit + TypeScript build.
+2. API contract registration/OpenAPI audit.
 3. Django `check`, `makemigrations --check --dry-run`, and clean `migrate`.
 4. Negative-path, idempotency, retry, and concurrency tests.
 5. Real Nmap/Nuclei/Masscan/Semgrep execution against authorized CI fixtures.
@@ -30,4 +30,8 @@ This document is the execution baseline for the enterprise-completion branch. A 
 
 ## Framework policy
 
-ISO 27001, SOC 2, NIST, and PCI DSS support is implemented as data-driven framework ingestion and assessment. The repository must not embed unlicensed full copyrighted control catalogs. Production deployments must load the authoritative/licensed catalog through the framework import path and must preserve version/source metadata.
+ISO 27001, SOC 2, NIST, and PCI DSS support is data-driven. The repository must not embed unlicensed full copyrighted control catalogs. Production deployments must load the authoritative/licensed catalog through the framework import path and preserve version/source metadata.
+
+## Lock provenance
+
+The frontend lockfile is reconciled by `Frontend Lock Sync`; deterministic `npm ci` is the required install path for the domain gate.

@@ -22,6 +22,7 @@ from aegis.core.event_bus import EventBus
 from aegis.core.crypto import load_or_create_key
 from aegis.core.orchestrator import AegisOrchestrator
 from aegis.core.platform_orchestrator import PlatformOrchestrator
+from aegis.platform_client import PlatformClient, PlatformClientError
 
 app = typer.Typer(
     name="aegis",
@@ -58,7 +59,7 @@ def _components(config: ConfigManager):
 #  scan — الفحص الشامل (الدورة الكاملة)
 # ═══════════════════════════════════════════════════════════════
 
-@app.command()
+@app.command('local-scan')
 def scan(
     code: Optional[str] = typer.Option(None, "--code", "-c", help="مسار الكود المصدري"),
     url: Optional[str] = typer.Option(None, "--url", "-u", help="عنوان URL الهدف"),
@@ -69,7 +70,7 @@ def scan(
     remediate: bool = typer.Option(False, "--remediate", "-r", help="توليد إصلاحات تلقائية"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """فحص أمني شامل: جمع أدلة + تحليل + استدلال + إصلاح + تقرير."""
+    """تشغيل محرك Aegis المحلي المستقل؛ لا يكتب في منصة PostgreSQL."""
     _setup(verbose)
     if not code and not url:
         console.print("[red]حدّد --code أو --url على الأقل[/red]")
@@ -125,7 +126,7 @@ def scan(
 #  validate — منصة التحقق الأمني الكاملة (10 مراحل)
 # ═══════════════════════════════════════════════════════════════
 
-@app.command()
+@app.command('local-validate')
 def validate(
     code: Optional[str] = typer.Option(None, "--code", "-c", help="مسار الكود المصدري"),
     url: Optional[str] = typer.Option(None, "--url", "-u", help="عنوان URL الهدف"),
@@ -137,7 +138,7 @@ def validate(
     remediate: bool = typer.Option(False, "--remediate", "-r", help="إصلاح تلقائي"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """منصة التحقق الأمني — 10 مراحل: استطلاع، تحليل، استخبارات، تحقق، معرفة، قرار."""
+    """تشغيل مسار التحقق المحلي المستقل؛ ليس ValidationRun في المنصة."""
     _setup(verbose)
     if not code and not url:
         console.print("[red]حدّد --code أو --url على الأقل[/red]")
@@ -203,7 +204,29 @@ def init() -> None:
         Path(d).mkdir(parents=True, exist_ok=True)
         console.print(f"[green]📁 {d}/[/green]")
     console.print("[green]✅ config.yaml جاهز[/green]")
-    console.print("\n[bold]التالي:[/] aegis scan --code <مسار> أو --url <عنوان>")
+    console.print("\n[bold]التالي:[/] aegis local-scan --code <مسار> أو aegis platform-status")
+
+
+@app.command('platform-status')
+def platform_status(
+    base_url: Optional[str] = typer.Option(None, '--base-url', envvar='AEGIS_PLATFORM_URL'),
+    email: Optional[str] = typer.Option(None, '--email', envvar='AEGIS_EMAIL'),
+    password: Optional[str] = typer.Option(None, '--password', envvar='AEGIS_PASSWORD', hide_input=True),
+    json_output: bool = typer.Option(False, '--json'),
+) -> None:
+    """تحقق حقيقي من readiness والمصادقة وقراءة مشاريع المنصة المركزية."""
+    if not base_url or not email or not password:
+        console.print('[red]AEGIS_PLATFORM_URL وAEGIS_EMAIL وAEGIS_PASSWORD مطلوبة[/red]')
+        raise typer.Exit(2)
+    try:
+        result = PlatformClient(base_url).authenticated_status(email, password)
+    except PlatformClientError as exc:
+        console.print(f'[red]Platform check failed: {exc}[/red]')
+        raise typer.Exit(1) from exc
+    if json_output:
+        console.print_json(data=result)
+    else:
+        console.print(f"[green]Platform API authenticated[/green] | projects={result['project_count']}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -278,19 +301,9 @@ def version() -> None:
     """إصدار Aegis."""
     console.print(Panel.fit(
         f"[bold]Aegis v{__version__}[/]\n"
-        "الطبقة 0: الأساس [OK] | الطبقة 1: الاستخبارات [OK]\n"
-        "الطبقة 2: العمليات [OK] | الطبقة 3: الاستخبارات الخارجية [OK]\n"
-        "الطبقة 4: التحليل [OK] | الطبقة 5: الاستدلال [OK]\n"
-        "الطبقة 6: التحقق [OK] | الطبقة 7: الاصلاح + التقرير [OK]\n"
-        "---------------------------------------------\n"
-        "[bold cyan]منصة التحقق الامني v1.0:[/]\n"
-        "1. استطلاع [OK] | 2. تحليل [OK] | 3. استخبارات [OK]\n"
-        "4. ربط + مسارات هجوم [OK] | 5. تحقق آمن [OK]\n"
-        "6. ادارة معرفة [OK] | 7. مساعد AI [OK]\n"
-        "8. قياس وضع امني [OK] | 9. Digital Twin [OK]\n"
-        "10. منصة قرار + تقارير [OK]\n"
-        "---------------------------------------------\n"
-        "المنصة مكتملة — 15 محركاً مستقلاً [READY]"
+        "حزمة CLI مثبتة وقابلة للتشغيل.\n"
+        "حالة المحركات والتكاملات تُقاس بالتنفيذ الفعلي ونتائج CI،\n"
+        "ولا يعلن أمر الإصدار الجاهزية الإنتاجية أو اكتمال المنصة."
     ))
 
 

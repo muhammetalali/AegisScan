@@ -1,0 +1,173 @@
+name: Domain Contract Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, codex/full-contract-ui-audit-2026-09-03]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-ui-contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aegis-platform/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Production dependency audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npm audit --omit=dev --audit-level=low; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then echo "npm audit attempt $attempt failed; retrying" >&2; sleep $((attempt * 10)); fi
+          done
+          echo "npm audit failed after three attempts; dependency assurance remains unproven" >&2
+          exit 1
+      - name: Full UI audit
+        run: npm run audit:ui
+      - name: i18n audit
+        run: npm run i18n:audit
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck and build
+        run: npm run build
+
+  backend-domain-contract:
+    runs-on: ubuntu-latest
+    env:
+      DEBUG: 'True'
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
+      DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
+      REDIS_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
+      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
+      AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            aegis-platform/backend/requirements.txt
+      - name: Install package and backend dependencies
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Installed CLI contract reality
+        run: |
+          set -euo pipefail
+          aegis --help >/dev/null
+          aegis version
+          python -m pytest -q tests/test_cli.py
+      - name: Django checks and clean database migration
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+      - name: Full API OpenAPI contract audit
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python scripts/api_contract_audit.py --json
+      - name: Production import and security runtime reality
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: python -m pytest -q tests/test_production_runtime_imports.py
+      - name: Assurance decision runtime regression
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: python -m pytest -q tests/test_assurance_decision_runtime.py
+      - name: Decision action tenant isolation reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/services/test_decision_action_orchestration.py
+      - name: Scanner tenant isolation reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_scanner_tenant_isolation.py
+      - name: Authorization boundary and scanner provenance reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/services/test_authorization_guard.py fastapi_app/routers/test_semgrep_authorization_binding.py
+      - name: API contract and persistence reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py fastapi_app/routers/test_reliability_contracts.py fastapi_app/routers/test_realtime_and_assurance.py fastapi_app/services/test_scope_authorization.py django_project/compliance/test_framework_catalog.py django_project/audit/test_middleware.py
+      - name: Bulk import atomicity and intelligence lineage reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_bulk_import_atomicity.py enterprise/test_intelligence_lineage.py
+      - name: System telemetry and unsupported operations reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_system.py
+      - name: Unified validation contract reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_contract_surfaces.py
+      - name: Live threat intelligence reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_intelligence_real.py
+      - name: Scanner failure, retry, redelivery and worker reliability reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/tasks/test_nmap_failure_contract.py fastapi_app/tasks/test_scanner_retry_recovery.py fastapi_app/tasks/test_scanner_redelivery.py fastapi_app/tasks/test_celery_reliability_contract.py

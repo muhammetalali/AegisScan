@@ -6,6 +6,18 @@ on:
     paths:
       - 'aegis-platform/backend/django_project/**/models.py'
       - 'aegis-platform/backend/django_project/**/apps.py'
+      - 'aegis-platform/backend/enterprise/**'
+      - 'aegis-platform/backend/django_project/settings.py'
+      - 'aegis-platform/backend/manage.py'
+      - 'aegis-platform/backend/requirements.txt'
+      - '.github/workflows/django-migrations.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/django_project/**/models.py'
+      - 'aegis-platform/backend/django_project/**/apps.py'
+      - 'aegis-platform/backend/django_project/intelligence/**'
+      - 'aegis-platform/backend/enterprise/**'
       - 'aegis-platform/backend/django_project/settings.py'
       - 'aegis-platform/backend/manage.py'
       - 'aegis-platform/backend/requirements.txt'
@@ -25,22 +37,16 @@ jobs:
           POSTGRES_DB: aegisdb
           POSTGRES_USER: aegis
           POSTGRES_PASSWORD: aegis
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U aegis -d aegisdb"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd "pg_isready -U aegis -d aegisdb" --health-interval 10s
+          --health-timeout 5s --health-retries 5
       redis:
         image: redis:7-alpine
-        ports:
-          - 6379:6379
+        ports: ["6379:6379"]
         options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd "redis-cli ping" --health-interval 10s
+          --health-timeout 5s --health-retries 5
     env:
       DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
       REDIS_URL: redis://127.0.0.1:6379/0
@@ -48,55 +54,90 @@ jobs:
       CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
       SECRET_KEY: ci-only-secret-key-not-for-production
       JWT_SECRET_KEY: ci-only-jwt-secret-key-not-for-production
-      DEBUG: 'False'
+      DEBUG: 'True'
       ALLOWED_HOSTS: localhost,127.0.0.1
       CORS_ALLOWED_ORIGINS: http://localhost:5173
       AUTH_COOKIE_SECURE: 'False'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+        with: {python-version: '3.12'}
       - name: Install backend dependencies
         run: python -m pip install -r aegis-platform/backend/requirements.txt
       - name: Validate Django configuration
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py check
-      - name: Generate initial migrations for project apps
+      - name: Generate project, enterprise, and intelligence migrations
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: |
           set -e
-          python manage.py makemigrations users projects scans vulnerabilities assets compliance knowledge notifications audit system evidence core --noinput --verbosity 2
-          echo 'Generated migration files:'
-          find django_project -path '*/migrations/*.py' -type f -print | sort
+          python manage.py makemigrations users projects scans vulnerabilities assets compliance knowledge notifications audit system evidence core enterprise intelligence --noinput --verbosity 2
+          find django_project enterprise -path '*/migrations/*.py' -type f -print | sort
           test -f django_project/users/migrations/0001_initial.py
-      - name: Commit generated migrations before database validation
+      - name: Commit generated migrations on main pushes only
+        if: github.event_name == 'push'
         run: |
           set -e
           files=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep '/migrations/.*\.py$' || true)
-          if [ -z "$files" ]; then
-            echo 'No migration changes.'
-          else
+          if [ -n "$files" ]; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add -- $files
             git commit -m 'chore(django): generate model migrations [skip ci]'
             git push origin HEAD:main
+          else
+            echo 'No migration changes.'
           fi
       - name: Apply migrations to clean PostgreSQL
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py migrate --noinput
-      - name: Verify users table exists
+      - name: Verify critical tables from Django model metadata
         working-directory: aegis-platform/backend
-        env:
-          PGPASSWORD: aegis
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: |
-          psql "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb" -tAc "SELECT to_regclass('public.users_user');" | grep -Fx 'users_user'
+          python - <<'PY'
+          import os
+          os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+          import django
+          django.setup()
+
+          from django.contrib.auth import get_user_model
+          from django.db import connection
+          from django_project.assets.models import AssetAuthorization
+          from django_project.evidence.models import Evidence
+          from django_project.intelligence.models import IntelligenceEnrichment
+          from django_project.scans.models import Scan
+          from django_project.vulnerabilities.models import Vulnerability
+          from enterprise.models import AttackPath, DigitalTwin, FindingIntelligence, TwinScenario
+
+          critical_models = [
+              get_user_model(),
+              AssetAuthorization,
+              Scan,
+              Evidence,
+              Vulnerability,
+              IntelligenceEnrichment,
+              FindingIntelligence,
+              DigitalTwin,
+              TwinScenario,
+              AttackPath,
+          ]
+          expected = [model._meta.db_table for model in critical_models]
+          existing = set(connection.introspection.table_names())
+          missing = [table for table in expected if table not in existing]
+          print('critical_tables_expected=', expected)
+          print('critical_tables_missing=', missing)
+          if missing:
+              raise SystemExit(f'Missing critical migrated tables: {missing}')
+          PY
       - name: Verify no pending model migrations
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py makemigrations --check --dry-run
       - name: Verify migration plan
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py showmigrations --plan
-
-# This workflow intentionally owns migration generation and validation; other CI gates remain read-only.

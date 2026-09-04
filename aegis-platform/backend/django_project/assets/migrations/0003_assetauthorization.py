@@ -10,21 +10,11 @@ def migrate_legacy_authorizations(apps, schema_editor):
     for asset in Asset.objects.filter(configuration__authorized=True, owner__isnull=False):
         configuration = asset.configuration or {}
         target = configuration.get('url') or configuration.get('host') or configuration.get('ip') or configuration.get('domain') or ''
-        AssetAuthorization.objects.create(
-            asset_id=asset.id,
-            actor_id=asset.owner_id,
-            authorized=True,
-            target_snapshot=str(target)[:500],
-            reason='Migrated from legacy persisted asset authorization flag',
-        )
+        AssetAuthorization.objects.create(asset_id=asset.id, actor_id=asset.owner_id, authorized=True, target_snapshot=str(target)[:500], reason='Migrated from legacy persisted asset authorization flag')
 
 
 class Migration(migrations.Migration):
-    dependencies = [
-        ('assets', '0002_initial'),
-        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-    ]
-
+    dependencies = [('assets', '0002_initial'), migrations.swappable_dependency(settings.AUTH_USER_MODEL)]
     operations = [
         migrations.CreateModel(
             name='AssetAuthorization',
@@ -37,13 +27,7 @@ class Migration(migrations.Migration):
                 ('actor', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='asset_authorization_actions', to=settings.AUTH_USER_MODEL)),
                 ('asset', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='authorization_records', to='assets.asset')),
             ],
-            options={
-                'ordering': ['-created_at'],
-                'indexes': [
-                    models.Index(fields=['asset', '-created_at'], name='assets_asse_asset_i_76122c_idx'),
-                    models.Index(fields=['asset', 'authorized', '-created_at'], name='assets_asse_asset_i_ac3a40_idx'),
-                ],
-            },
+            options={'ordering': ['-created_at'], 'indexes': [models.Index(fields=['asset', '-created_at'], name='assets_asse_asset_i_76122c_idx'), models.Index(fields=['asset', 'authorized', '-created_at'], name='assets_asse_asset_i_ac3a40_idx')]},
         ),
         migrations.RunPython(migrate_legacy_authorizations, migrations.RunPython.noop),
     ]

@@ -7,14 +7,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl nmap \
+    && apt-get install -y --no-install-recommends curl nmap masscan ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m pip install --no-cache-dir semgrep
 
 COPY . .
 
+RUN groupadd --gid 10001 aegis \
+    && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
+    && chown -R aegis:aegis /app
+
 EXPOSE 8001
+
+USER 10001:10001
 
 CMD ["uvicorn", "fastapi_app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]

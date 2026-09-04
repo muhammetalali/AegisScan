@@ -63,6 +63,31 @@ def test_login_accepts_csrf_token_and_sets_httponly_jwt_cookies(settings):
 
 
 @pytest.mark.django_db
+def test_login_accepts_configured_reverse_proxy_origin(settings):
+    settings.CSRF_TRUSTED_ORIGINS = ['http://nginx']
+    User.objects.create_user(
+        email='csrf-proxy@example.invalid',
+        password='Strong-Test-Password-123!',
+        first_name='CSRF',
+        last_name='Proxy',
+    )
+    client = Client(enforce_csrf_checks=True)
+    csrf_response = client.get('/api/v1/auth/csrf/', HTTP_HOST='nginx')
+    csrf_token = csrf_response.json()['csrfToken']
+
+    response = client.post(
+        '/api/v1/auth/login/',
+        {'email': 'csrf-proxy@example.invalid', 'password': 'Strong-Test-Password-123!'},
+        HTTP_HOST='nginx',
+        HTTP_ORIGIN='http://nginx',
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 200
+    assert response.json()['authenticated'] is True
+
+
+@pytest.mark.django_db
 def test_refresh_rejects_missing_csrf_token():
     client = Client(enforce_csrf_checks=True)
     csrf_response = client.get('/api/v1/auth/csrf/')

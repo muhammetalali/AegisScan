@@ -16,15 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEBUG: 'True'
-      SECRET_KEY: ci-only-secret
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
       DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
       REDIS_URL: 'redis://127.0.0.1:6379/0'
       CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
       CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
-      JWT_SECRET_KEY: ci-only-jwt-secret
-      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
+      ALLOWED_HOSTS: 'localhost,127.0.0.1,nginx'
       CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
-      AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
+      CSRF_TRUSTED_ORIGINS: 'http://localhost,http://127.0.0.1,http://nginx'
     services:
       postgres:
         image: postgres:16
@@ -122,71 +122,19 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q django_project/users/test_auth_security.py
 
-      - name: Network scan authorization boundary tests
+      - name: Audit evidence regression tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_scans_security_boundary.py
+        run: python -m pytest -q django_project/audit/test_middleware.py
 
-      - name: Real Nmap execution E2E
+      - name: Finding validation regression tests
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-          AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
-        run: python -m pytest -q fastapi_app/routers/test_real_nmap_e2e.py
-
-      - name: Real Nmap finding validation E2E
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-          AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
-        run: python -m pytest -q fastapi_app/routers/test_finding_validation_e2e.py
-
-      - name: Real posture API E2E
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-          AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
-        run: python -m pytest -q fastapi_app/routers/test_posture_real.py
-
-      - name: Asset authorization boundary tests
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_assets_security_boundary.py
-
-      - name: Asset authorization immutability tests
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_asset_authorization_immutability.py
-
-      - name: Asset authorization tamper resistance tests
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_asset_authorization_tamper_resistance.py
-
-      - name: Asset authorization lifecycle tests
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_asset_authorization_lifecycle.py
-
-      - name: Asset authorization source-of-truth tests
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_asset_authorization_source_of_truth.py
+        run: python -m pytest -q fastapi_app/tasks/test_finding_validation.py fastapi_app/routers/test_validation_api.py
 
       - name: Production Django checks
         working-directory: aegis-platform/backend

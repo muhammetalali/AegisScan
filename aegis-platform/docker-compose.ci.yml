@@ -1,9 +1,20 @@
 services:
-  celery_worker:
-    volumes:
-      - ./backend:/app
-      - ./e2e:/app/e2e:ro
+  scan_target:
+    labels:
+      aegisscan.ci.authorized-target: "true"
+    networks:
+      default:
+        aliases:
+          - scan_target
+          - aegis-scan-target
   fastapi:
-    volumes:
-      - ./backend:/app
-      - ./e2e:/app/e2e:ro
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+  celery_worker:
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
+  celery_beat:
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}

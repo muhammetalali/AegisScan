@@ -94,26 +94,26 @@ def transition(action_id: str, state: str, actor: str, note: str | None = None) 
     pool = _pool_instance(); conn = pool.getconn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT state, version FROM security_decision_actions WHERE action_id=%s FOR UPDATE", (action_id,)); row=cur.fetchone()
+            cur.execute("SELECT state, version FROM security_decision_actions WHERE action_id=%s AND requested_by=%s FOR UPDATE", (action_id, actor)); row=cur.fetchone()
             if row is None: raise KeyError(action_id)
             current, version=row
             if state not in TRANSITIONS.get(current,set()): raise ValueError(f"Invalid transition: {current} -> {state}")
-            now=_now(); cur.execute("UPDATE security_decision_actions SET state=%s,updated_at=%s,version=version+1 WHERE action_id=%s AND version=%s",(state,now,action_id,version))
+            now=_now(); cur.execute("UPDATE security_decision_actions SET state=%s,updated_at=%s,version=version+1 WHERE action_id=%s AND requested_by=%s AND version=%s",(state,now,action_id,actor,version))
             if cur.rowcount!=1: raise RuntimeError("Concurrent action update detected")
             cur.execute("INSERT INTO security_decision_action_events(action_id,event_type,actor,note,created_at) VALUES(%s,%s,%s,%s,%s)",(action_id,f"action.{state}",actor,note,now))
-            cur.execute("SELECT * FROM security_decision_actions WHERE action_id=%s",(action_id,)); item=_hydrate(cur,cur.fetchone()); conn.commit(); return item
+            cur.execute("SELECT * FROM security_decision_actions WHERE action_id=%s AND requested_by=%s",(action_id,actor)); item=_hydrate(cur,cur.fetchone()); conn.commit(); return item
     finally: pool.putconn(conn)
 
 
-def list_actions() -> list[dict[str, Any]]:
+def list_actions(requested_by: str) -> list[dict[str, Any]]:
     _ensure_schema(); pool=_pool_instance(); conn=pool.getconn()
     try:
-        with conn.cursor() as cur: cur.execute("SELECT * FROM security_decision_actions ORDER BY updated_at DESC"); return [_hydrate(cur,row) for row in cur.fetchall()]
+        with conn.cursor() as cur: cur.execute("SELECT * FROM security_decision_actions WHERE requested_by=%s ORDER BY updated_at DESC",(requested_by,)); return [_hydrate(cur,row) for row in cur.fetchall()]
     finally: pool.putconn(conn)
 
 
-def get_action(action_id: str) -> dict[str, Any] | None:
+def get_action(action_id: str, requested_by: str) -> dict[str, Any] | None:
     _ensure_schema(); pool=_pool_instance(); conn=pool.getconn()
     try:
-        with conn.cursor() as cur: cur.execute("SELECT * FROM security_decision_actions WHERE action_id=%s",(action_id,)); row=cur.fetchone(); return _hydrate(cur,row) if row else None
+        with conn.cursor() as cur: cur.execute("SELECT * FROM security_decision_actions WHERE action_id=%s AND requested_by=%s",(action_id,requested_by)); row=cur.fetchone(); return _hydrate(cur,row) if row else None
     finally: pool.putconn(conn)

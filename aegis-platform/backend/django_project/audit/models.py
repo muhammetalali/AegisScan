@@ -14,6 +14,7 @@ class AuditLog(models.Model):
         PASSWORD_RESET = 'password_reset', _('Password Reset')
         TWO_FACTOR_ENABLE = '2fa_enable', _('2FA Enabled')
         TWO_FACTOR_DISABLE = '2fa_disable', _('2FA Disabled')
+        API_REQUEST = 'api_request', _('API Request')
 
         # User Management
         USER_CREATE = 'user_create', _('User Created')
@@ -185,7 +186,7 @@ class DataExport(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='data_exports')
     name = models.CharField(_('name'), max_length=200)
     format = models.CharField(_('format'), max_length=10, choices=Format.choices)
-    status = models.CharField(_('status'), max_length=15, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(_('status'), max_length=15, choices=Status.choices, default='pending')
     resource_type = models.CharField(_('resource type'), max_length=50)
     filters = models.JSONField(_('filters'), default=dict, blank=True)
     fields = models.JSONField(_('fields'), default=list, blank=True)
