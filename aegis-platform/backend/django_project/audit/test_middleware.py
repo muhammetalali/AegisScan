@@ -37,6 +37,30 @@ def test_authenticated_state_changing_api_request_is_persisted():
 
 
 @pytest.mark.django_db
+def test_request_without_materialized_session_key_preserves_audit_evidence():
+    request = RequestFactory().post(
+        '/api/v1/auth/login/',
+        data={'email': 'audit-session@example.invalid'},
+        content_type='application/json',
+    )
+    request.user = type('AnonymousUser', (), {'is_authenticated': False})()
+    request.session = type('Session', (), {'session_key': None})()
+
+    middleware = EnterpriseAuditMiddleware(lambda _request: JsonResponse({'ok': True}, status=200))
+    middleware.process_request(request)
+    response = middleware.process_response(request, JsonResponse({'ok': True}, status=200))
+
+    assert response.status_code == 200
+    audit = AuditLog.objects.get(request_id=request._audit_request_id)
+    assert audit.user is None
+    assert audit.action == AuditLog.Action.API_REQUEST
+    assert audit.result == AuditLog.Result.SUCCESS
+    assert audit.resource_type == 'auth'
+    assert audit.resource_id == 'login'
+    assert audit.session_id == ''
+
+
+@pytest.mark.django_db
 def test_ignored_health_requests_do_not_create_audit_records():
     request = RequestFactory().post('/health', data={})
     request.user = type('User', (), {'is_authenticated': False})()

@@ -50,6 +50,12 @@ class EnterpriseAuditMiddleware(MiddlewareMixin):
         user = getattr(request, 'user', None)
         if not getattr(user, 'is_authenticated', False):
             user = None
+        # A request can have SessionMiddleware attached before a session has
+        # ever been materialized. In that state session_key is None, but the
+        # durable audit schema intentionally uses an empty string for "no
+        # established session" rather than a nullable identifier.
+        session = getattr(request, 'session', None)
+        session_id = getattr(session, 'session_key', None) or ''
 
         try:
             AuditLog.objects.create(
@@ -67,7 +73,7 @@ class EnterpriseAuditMiddleware(MiddlewareMixin):
                 },
                 ip_address=self._client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', '')[:10000],
-                session_id=request.session.session_key if hasattr(request, 'session') else '',
+                session_id=session_id,
                 request_id=getattr(request, '_audit_request_id', uuid.uuid4()),
                 error_message=str(exception)[:4000] if exception else '',
                 duration_ms=max(0, round((time.monotonic() - started_at) * 1000)),

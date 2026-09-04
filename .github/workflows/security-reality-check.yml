@@ -22,8 +22,9 @@ jobs:
       CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
       CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
       JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
-      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      ALLOWED_HOSTS: 'localhost,127.0.0.1,nginx'
       CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
+      CSRF_TRUSTED_ORIGINS: 'http://localhost,http://127.0.0.1,http://nginx'
     services:
       postgres:
         image: postgres:16
@@ -120,6 +121,13 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q django_project/users/test_auth_security.py
+
+      - name: Audit evidence regression tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q django_project/audit/test_middleware.py
 
       - name: Finding validation regression tests
         working-directory: aegis-platform/backend
