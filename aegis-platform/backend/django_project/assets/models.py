@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 import uuid
 
@@ -38,19 +39,7 @@ class Asset(models.Model):
     description = models.TextField(_('description'), blank=True)
     environment = models.CharField(_('environment'), max_length=20, choices=Environment.choices, default=Environment.DEVELOPMENT)
     criticality = models.CharField(_('criticality'), max_length=20, choices=Criticality.choices, default=Criticality.MEDIUM)
-
-    # Type-specific fields (JSON for flexibility)
     configuration = models.JSONField(_('configuration'), default=dict, blank=True)
-    # For source_code: {repo_url, branch, path, language}
-    # For website: {url, auth_type, credentials_ref}
-    # For ip_address: {ip, ports, os_fingerprint}
-    # For domain: {domain, subdomains, dns_records}
-    # For api_endpoint: {base_url, spec_url, auth}
-    # For file: {file_path, file_hash, mime_type}
-    # For docker_image: {image_name, tag, registry, dockerfile_path}
-    # For network_range: {cidr, exclude_ips, scan_ports}
-    # For repository: {provider, repo_url, branch, access_token_ref}
-
     tags = models.JSONField(_('tags'), default=list, blank=True)
     metadata = models.JSONField(_('metadata'), default=dict, blank=True)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='owned_assets')
@@ -126,9 +115,9 @@ class TechnologyFingerprint(models.Model):
     asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='technologies')
     name = models.CharField(_('name'), max_length=100)
     version = models.CharField(_('version'), max_length=50, blank=True)
-    category = models.CharField(_('category'), max_length=50)  # framework, language, server, database, etc.
+    category = models.CharField(_('category'), max_length=50)
     confidence = models.FloatField(_('confidence'), default=0.0)
-    source = models.CharField(_('source'), max_length=50)  # header, body, header, cert, etc.
+    source = models.CharField(_('source'), max_length=50)
     evidence = models.TextField(_('evidence'), blank=True)
     detected_at = models.DateTimeField(auto_now_add=True)
 
@@ -136,6 +125,69 @@ class TechnologyFingerprint(models.Model):
         verbose_name = _('Technology Fingerprint')
         verbose_name_plural = _('Technology Fingerprints')
         ordering = ['-confidence', 'name']
+        indexes = [models.Index(fields=['asset', 'category'])]
+
+
+class AssetAuthorizationQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Asset authorization decisions are immutable; bulk updates are forbidden')
+
+    def delete(self):
+        raise ValidationError('Asset authorization decisions are immutable; bulk deletes are forbidden')
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValidationError('Asset authorization decisions are immutable; bulk updates are forbidden')
+
+
+class AssetAuthorizationManager(models.Manager.from_queryset(AssetAuthorizationQuerySet)):
+    pass
+
+
+class AssetAuthorization(models.Model):
+    """Immutable append-only authorization decision ledger."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset = models.ForeignKey(Asset, on_delete=models.SET_NULL, null=True, related_name='authorization_records')
+    asset_identity_snapshot = models.UUIDField(default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='asset_authorization_actions')
+    authorized = models.BooleanField(default=False)
+    target_snapshot = models.CharField(max_length=500, blank=True)
+    reason = models.CharField(max_length=500, blank=True)
+    correlation_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    request_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    supersedes = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='superseding_decisions')
+    valid_from = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = AssetAuthorizationManager()
+
+    class Meta:
+        ordering = ['-created_at', '-id']
         indexes = [
-            models.Index(fields=['asset', 'category']),
+            models.Index(fields=['asset', '-created_at', '-id'], name='assets_asse_asset_i_58150b_idx'),
+            models.Index(fields=['asset', 'authorized', '-created_at'], name='assets_asse_asset_i_ac3a40_idx'),
+            models.Index(fields=['asset_identity_snapshot', '-created_at'], name='assets_aa_identity_created_idx'),
         ]
+
+    def __str__(self):
+        state = 'authorized' if self.authorized else 'revoked'
+        return f"{self.asset_id or self.asset_identity_snapshot}: {state} by {self.actor_id}"
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Asset authorization decisions are immutable; create a new decision instead')
+        if self.asset_id:
+            self.asset_identity_snapshot = self.asset_id
+        elif not self.asset_identity_snapshot:
+            raise ValidationError('Asset authorization decisions require an asset identity snapshot')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Asset authorization decisions are immutable and cannot be deleted')
+
+    @property
+    def is_currently_valid(self):
+        from django.utils import timezone
+        now = timezone.now()
+        return self.valid_from <= now and (self.expires_at is None or now < self.expires_at)
