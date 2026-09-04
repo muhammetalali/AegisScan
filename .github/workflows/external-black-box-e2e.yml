@@ -11,6 +11,7 @@ permissions: {contents: read}
 jobs:
   external-black-box:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
       POSTGRES_DB: aegisdb
       POSTGRES_USER: aegis
