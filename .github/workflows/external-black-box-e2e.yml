@@ -67,9 +67,28 @@ jobs:
           POSTGRES_USER=${POSTGRES_USER}
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
           EOF
+      - name: Validate compose configuration
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+      - name: Build real platform images
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --pull; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              echo 'Docker Compose build failed after the bounded retry; refusing to mask the failure.' >&2
+              exit 1
+            fi
+            echo 'Docker Compose build failed once; retrying after a short transient backoff.' >&2
+            sleep 15
+          done
       - name: Start real platform stack
         working-directory: aegis-platform
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build
       - name: Wait for platform readiness
         working-directory: aegis-platform
         shell: bash
@@ -145,10 +164,27 @@ jobs:
         if: always()
         working-directory: aegis-platform
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
-      - name: Collect failure logs
+      - name: Capture failure diagnostics
         if: failure()
         working-directory: aegis-platform
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=300 django fastapi celery_worker celery_beat scan_target nginx
+        shell: bash
+        run: |
+          set +e
+          mkdir -p ci-artifacts
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps -a > ci-artifacts/compose-ps.txt 2>&1
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color --timestamps django fastapi celery_worker celery_beat scan_target nginx > ci-artifacts/compose.log 2>&1
+          docker images --digests > ci-artifacts/docker-images.txt 2>&1
+          docker system df > ci-artifacts/docker-system-df.txt 2>&1
+          tail -n 300 ci-artifacts/compose.log || true
+          exit 0
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-black-box-${{ github.run_id }}-${{ github.run_attempt }}
+          path: aegis-platform/ci-artifacts
+          if-no-files-found: error
+          retention-days: 14
       - name: Stop real platform stack
         if: always()
         working-directory: aegis-platform

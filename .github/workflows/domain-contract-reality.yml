@@ -86,6 +86,12 @@ jobs:
         run: |
           python -m pip install -e '.[dev]'
           python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Installed CLI contract reality
+        run: |
+          set -euo pipefail
+          aegis --help >/dev/null
+          aegis version
+          python -m pytest -q tests/test_cli.py
       - name: Django checks and clean database migration
         working-directory: aegis-platform/backend
         env:
@@ -135,6 +141,12 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py fastapi_app/routers/test_reliability_contracts.py fastapi_app/routers/test_realtime_and_assurance.py fastapi_app/services/test_scope_authorization.py django_project/compliance/test_framework_catalog.py django_project/audit/test_middleware.py
+      - name: Bulk import atomicity and intelligence lineage reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q fastapi_app/routers/test_bulk_import_atomicity.py enterprise/test_intelligence_lineage.py
       - name: System telemetry and unsupported operations reality
         working-directory: aegis-platform/backend
         env:
@@ -153,9 +165,9 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_intelligence_real.py
-      - name: Scanner failure and worker reliability reality
+      - name: Scanner failure, retry, redelivery and worker reliability reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/tasks/test_nmap_failure_contract.py fastapi_app/tasks/test_scanner_redelivery.py fastapi_app/tasks/test_celery_reliability_contract.py
+        run: python -m pytest -q fastapi_app/tasks/test_nmap_failure_contract.py fastapi_app/tasks/test_scanner_retry_recovery.py fastapi_app/tasks/test_scanner_redelivery.py fastapi_app/tasks/test_celery_reliability_contract.py
