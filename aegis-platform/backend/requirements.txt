@@ -9,6 +9,7 @@ django-redis>=5.4
 django-ratelimit>=4.1
 psycopg2-binary>=2.9
 redis>=5.0
+psutil>=6.0
 celery>=5.3
 django-celery-beat>=2.6
 django-celery-results>=2.5
