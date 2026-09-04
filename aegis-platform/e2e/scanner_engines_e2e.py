@@ -7,6 +7,7 @@ import requests
 BASE=os.getenv('AEGIS_BASE_URL','http://localhost'); API_ROOT=os.getenv('AEGIS_FASTAPI_URL',BASE); API=f'{API_ROOT}/api/v1'; DJANGO=os.getenv('AEGIS_DJANGO_URL',f'{BASE}/api/v1'); TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','600')); VERIFY=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; EMAIL=os.environ['AEGIS_E2E_EMAIL']; PASSWORD=os.environ['AEGIS_E2E_PASSWORD']
 def req(s:requests.Session,method:str,url:str,expected:set[int],**kwargs)->dict[str,Any]|list[Any]:
  r=s.request(method,url,timeout=30,verify=VERIFY,**kwargs)
+ print(f'E2E_HTTP stage="{method} {url}" status={r.status_code}',flush=True)
  if r.status_code not in expected: raise RuntimeError(f'{method} {url} failed HTTP {r.status_code}: {r.text[:1000]}')
  if not r.text:return {}
  try:return r.json()
@@ -19,26 +20,32 @@ def csrf(s):
  data=req(s,'GET',f'{DJANGO}/auth/csrf/',{200}); token=data.get('csrfToken') if isinstance(data,dict) else None; token=token or s.cookies.get('csrftoken')
  if not token:raise RuntimeError('CSRF token missing')
  return token
+def asset(s,project_id,name,asset_type,configuration,tags):
+ data=req(s,'POST',f'{API}/assets/',{201},json={'project_id':project_id,'name':name,'type':asset_type,'environment':'development','criticality':'medium','configuration':configuration,'tags':tags}); aid=data.get('id') if isinstance(data,dict) else None
+ if not aid: raise RuntimeError(f'Asset creation did not return id: {data!r}')
+ return str(aid)
 def main()->int:
  s=requests.Session(); token=csrf(s); headers={'X-CSRFToken':token,'Referer':f'{BASE}/'}; req(s,'POST',f'{DJANGO}/auth/login/',{200},json={'email':EMAIL,'password':PASSWORD},headers=headers)
  token=csrf(s); headers['X-CSRFToken']=token
  project=req(s,'POST',f'{DJANGO}/projects/',{201},json={'name':f'Scanner Engine E2E {uuid.uuid4().hex[:10]}','description':'Authorized scanner engine black-box E2E','environment':'development'},headers=headers); pid=str(project['id'])
- source_asset=req(s,'POST',f'{API}/assets/',{201},json={'project_id':pid,'name':'Backend Source','type':'source_code','environment':'development','criticality':'medium','configuration':{'path':'/app/e2e','authorized':True},'tags':['e2e','semgrep']})
- specs=[('nmap','network',{'target':TARGET}),('masscan','network',{'target':TARGET,'ports':'80','rate':1000}),('nuclei','url',{'target':f'http://{TARGET}'}),('semgrep','code',{'path':'/app/e2e'})]; scans=[]
- for engine,scan_type,config in specs:
-  body={'project_id':pid,'name':f'E2E {engine}','scan_type':scan_type,'engines':[engine],'depth':'quick' if engine in {'nmap','masscan'} else 'standard','config':config,'authorized':True}
-  if engine=='semgrep': body['asset_id']=str(source_asset['id'])
+ nmap_asset=asset(s,pid,'Nmap target','ip_address',{'host':TARGET,'authorized':True},['e2e','nmap'])
+ masscan_asset=asset(s,pid,'Masscan target','ip_address',{'host':TARGET,'authorized':True},['e2e','masscan'])
+ nuclei_asset=asset(s,pid,'Nuclei target','url',{'url':f'http://{TARGET}','authorized':True},['e2e','nuclei'])
+ semgrep_asset=asset(s,pid,'Backend Source','source_code',{'path':'/app/e2e','authorized':True},['e2e','semgrep'])
+ specs=[('nmap','ip',{'host':TARGET},nmap_asset,'quick'),('masscan','ip',{'host':TARGET,'ports':'80','rate':1000},masscan_asset,'quick'),('nuclei','url',{'url':f'http://{TARGET}'},nuclei_asset,'standard'),('semgrep','code',{'path':'/app/e2e'},semgrep_asset,'standard')]; scans=[]
+ for engine,scan_type,config,asset_id,depth in specs:
+  body={'project_id':pid,'name':f'E2E {engine}','scan_type':scan_type,'asset_id':asset_id,'engines':[engine],'depth':depth,'config':config,'authorized':True}
   created=req(s,'POST',f'{API}/scans/',{201},json=body); scans.append((engine,created['id']))
  results={}
  for engine,sid in scans:
-  deadline=time.monotonic()+TIMEOUT; state={}
+  print(f'ENGINE_START engine={engine} scan_id={sid}',flush=True); deadline=time.monotonic()+TIMEOUT; state={}
   while time.monotonic()<deadline:
    state=req(s,'GET',f'{API}/scans/{sid}',{200})
+   print(f'ENGINE_STATE engine={engine} status={state.get("status")} progress={state.get("progress")}',flush=True)
    if state.get('status') in {'completed','failed','cancelled','partial'}:break
    time.sleep(2)
   if state.get('status')!='completed':raise RuntimeError(f'{engine} scan {sid} ended in {state.get("status")}: {state}')
-  executions=collection(req(s,'GET',f'{API}/scans/{sid}/engine-executions',{200}),f'{engine} execution');
-  matching=[item for item in executions if item.get('engine')==engine]
+  executions=collection(req(s,'GET',f'{API}/scans/{sid}/engine-executions',{200}),f'{engine} execution'); matching=[item for item in executions if item.get('engine')==engine]
   if not matching or any(item.get('status')!='completed' for item in matching):raise RuntimeError(f'{engine} execution contract invalid: {executions}')
   evidence=collection(req(s,'GET',f'{API}/evidence/',{200},params={'scan_id':sid,'limit':500}),f'{engine} evidence'); scanner=[x for x in evidence if x.get('source')==engine]
   if not scanner:raise RuntimeError(f'{engine} produced no persisted evidence: {evidence}')
