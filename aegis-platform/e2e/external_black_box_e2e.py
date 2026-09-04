@@ -4,7 +4,7 @@ from __future__ import annotations
 import os,sys,time,uuid
 from typing import Any
 import requests
-BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); FASTAPI_URL=os.getenv('AEGIS_FASTAPI_URL',f'{BASE_URL}'); TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD')
+BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD')
 def require(response:requests.Response,expected:set[int],label:str)->dict[str,Any]|list[Any]:
  if response.status_code not in expected: raise RuntimeError(f'{label} failed: HTTP {response.status_code}: {response.text[:1000]}')
  if not response.text:return {}
@@ -22,7 +22,7 @@ def collection(data:dict[str,Any]|list[Any],label:str)->list[dict[str,Any]]:
  raise RuntimeError(f'{label} response contract invalid: expected list or paginated results, got {type(data).__name__}')
 def main()->int:
  session=requests.Session(); session.verify=VERIFY_TLS
- require(session.get(f'{FASTAPI_URL}/ready',timeout=15),{200},'FastAPI readiness'); require(session.get(f'{FASTAPI_URL}/health',timeout=15),{200},'FastAPI health')
+ require(session.get(f'{API_URL}/ready',timeout=15),{200},'FastAPI readiness'); require(session.get(f'{API_URL}/health',timeout=15),{200},'FastAPI health')
  csrf_token=csrf(session); unique=uuid.uuid4().hex[:12]; email=E2E_EMAIL or f'e2e-{unique}@aegisscan.local'; password=E2E_PASSWORD or f'Aegis-E2E-{unique}-StrongPass!9'; headers={'X-CSRFToken':csrf_token,'Referer':f'{BASE_URL}/'}
  if not (E2E_EMAIL and E2E_PASSWORD):
   registration=session.post(f'{DJANGO_URL}/auth/register/',json={'email':email,'first_name':'E2E','last_name':'Harness','password':password,'password_confirm':password},headers=headers,timeout=20); require(registration,{201},'User registration')
@@ -31,22 +31,22 @@ def main()->int:
  project=require(session.post(f'{DJANGO_URL}/projects/',json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20),{201},'Project creation')
  if not isinstance(project,dict) or not project.get('id'): raise RuntimeError(f'Project creation response contract invalid: {project!r}')
  project_id=project['id']
- scan=require(session.post(f'{FASTAPI_URL}/scans/',json={'project_id':project_id,'name':f'External real Nmap {unique}','scan_type':'network','engines':['nmap'],'depth':'quick','config':{'target':TARGET},'authorized':True},timeout=20),{201},'Real Nmap scan creation')
+ scan=require(session.post(f'{API_V1}/scans/',json={'project_id':project_id,'name':f'External real Nmap {unique}','scan_type':'network','engines':['nmap'],'depth':'quick','config':{'target':TARGET},'authorized':True},timeout=20),{201},'Real Nmap scan creation')
  scan_id=scan.get('id') if isinstance(scan,dict) else None
  if not scan_id:raise RuntimeError('Scan creation did not return id')
  deadline=time.monotonic()+TIMEOUT; last={}
  while time.monotonic()<deadline:
-  last=require(session.get(f'{FASTAPI_URL}/scans/{scan_id}',timeout=20),{200},'Scan polling')
+  last=require(session.get(f'{API_V1}/scans/{scan_id}',timeout=20),{200},'Scan polling')
   if isinstance(last,dict) and last.get('status') in {'completed','failed','cancelled'}:break
   time.sleep(2)
  else:raise RuntimeError(f'Nmap scan timed out after {TIMEOUT}s; last state={last}')
  if not isinstance(last,dict) or last.get('status')!='completed':raise RuntimeError(f'Nmap scan did not complete successfully: {last}')
  if int(last.get('findings_count',0))<1:raise RuntimeError(f'Expected at least one real Nmap finding, got {last}')
- findings_data=require(session.get(f'{FASTAPI_URL}/vulnerabilities/',params={'project_id':project_id,'scan_id':scan_id,'limit':200},timeout=20),{200},'Finding retrieval'); findings=collection(findings_data,'Finding retrieval')
+ findings_data=require(session.get(f'{API_V1}/vulnerabilities/',params={'project_id':project_id,'scan_id':scan_id,'limit':200},timeout=20),{200},'Finding retrieval'); findings=collection(findings_data,'Finding retrieval')
  if not findings:raise RuntimeError('Scan completed but no finding was returned for the scan')
  finding=findings[0]; finding_id=finding.get('id')
  if finding.get('scan_id')!=scan_id:raise RuntimeError(f'Finding provenance mismatch: finding.scan_id={finding.get("scan_id")} scan={scan_id}')
- evidence_data=require(session.get(f'{FASTAPI_URL}/vulnerabilities/{finding_id}/evidences',timeout=20),{200},'Evidence retrieval'); evidence=collection(evidence_data,'Evidence retrieval')
+ evidence_data=require(session.get(f'{API_V1}/vulnerabilities/{finding_id}/evidences',timeout=20),{200},'Evidence retrieval'); evidence=collection(evidence_data,'Evidence retrieval')
  if not evidence:raise RuntimeError('Finding exists but no evidence was returned')
  scanner_evidence=[item for item in evidence if item.get('source')=='nmap']
  if not scanner_evidence:raise RuntimeError(f'No Nmap evidence found: {evidence_data}')
