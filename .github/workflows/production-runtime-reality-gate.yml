@@ -19,6 +19,8 @@ on:
 permissions:
   contents: read
 
+timeout-minutes: 20
+
 jobs:
   production-runtime-reality:
     name: Real application import and runtime integrity
@@ -62,6 +64,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+      - name: Verify canonical checkout SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          echo "Canonical HEAD verified: $actual_sha"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
