@@ -32,7 +32,7 @@ def main()->int:
  nmap_asset=asset(s,pid,'Nmap target','ip_address',{'host':TARGET},['e2e','nmap']); authorize(s,nmap_asset)
  masscan_asset=asset(s,pid,'Masscan target','network_range',{'cidr':MASSCAN_TARGET},['e2e','masscan']); authorize(s,masscan_asset)
  nuclei_asset=asset(s,pid,'Nuclei target','website',{'url':f'http://{TARGET}'},['e2e','nuclei']); authorize(s,nuclei_asset)
- semgrep_asset=asset(s,pid,'Backend Source','source_code',{'path':'/app/e2e'},['e2e','semgrep'])
+ semgrep_asset=asset(s,pid,'Backend Source','source_code',{'path':'/app/e2e'},['e2e','semgrep']); authorize(s,semgrep_asset)
  specs=[('nmap','ip',{'host':TARGET},nmap_asset,'quick'),('masscan','network',{'host':MASSCAN_TARGET,'ports':'80','rate':1000},masscan_asset,'quick'),('nuclei','url',{'url':f'http://{TARGET}'},nuclei_asset,'standard'),('semgrep','code',{'path':'/app/e2e'},semgrep_asset,'standard')]; scans=[]
  for engine,scan_type,config,asset_id,depth in specs:
   created=req(s,'POST',f'{API}/scans/',{201},json={'project_id':pid,'name':f'E2E {engine}','scan_type':scan_type,'asset_id':asset_id,'engines':[engine],'depth':depth,'config':config}); scans.append((engine,created['id']))
@@ -51,7 +51,7 @@ def main()->int:
   for item in scanner:
    if len(item.get('sha256',''))!=64 or item.get('scan_id')!=sid:raise RuntimeError(f'{engine} evidence provenance invalid: {item}')
   result_data=matching[0].get('result_data') or {}
-  if engine in {'nmap','masscan','nuclei'} and not result_data.get('authorization_decision_id'): raise RuntimeError(f'{engine} execution lost authorization provenance: {matching[0]}')
+  if not result_data.get('authorization_decision_id'): raise RuntimeError(f'{engine} execution lost authorization provenance: {matching[0]}')
   results[engine]={'scan_id':sid,'findings_count':state.get('findings_count',0),'evidence_count':len(scanner),'authorization_decision_id':result_data.get('authorization_decision_id')}
  print('SCANNER_ENGINES_REAL_E2E=PASS');print(f'project_id={pid}');print(results);return 0
 if __name__=='__main__':
