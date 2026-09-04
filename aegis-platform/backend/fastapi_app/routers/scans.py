@@ -22,7 +22,8 @@ from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 
 router = APIRouter()
 SUPPORTED_ENGINES = {'nmap', 'nuclei', 'masscan', 'semgrep'}
-NETWORK_SCAN_TYPES = {'ip', 'url', 'network'}
+NETWORK_SCAN_TYPES = {Scan.Type.IP, Scan.Type.URL, Scan.Type.NETWORK}
+PERSISTED_AUTH_SCAN_TYPES = NETWORK_SCAN_TYPES | {Scan.Type.CODE}
 
 
 class ScanCreate(BaseModel):
@@ -49,6 +50,8 @@ class ScanResponse(BaseModel):
     risk_level: str
     findings_count: int
     created_at: str
+    asset_id: Optional[str] = None
+    authorization_decision_id: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
 
@@ -61,6 +64,8 @@ def _serialize_scan(scan: Scan):
         current_phase=scan.current_phase, security_score=scan.security_score,
         risk_level=scan.risk_level or 'unknown', findings_count=scan.findings_count,
         created_at=scan.created_at.astimezone(timezone.utc).isoformat(),
+        asset_id=str(scan.asset_id) if scan.asset_id else None,
+        authorization_decision_id=str(scan.authorization_decision_id) if scan.authorization_decision_id else None,
         started_at=scan.started_at.astimezone(timezone.utc).isoformat() if scan.started_at else None,
         completed_at=scan.completed_at.astimezone(timezone.utc).isoformat() if scan.completed_at else None,
     )
@@ -78,14 +83,18 @@ def _list_scans(user_id: str, project_id: Optional[str], status: Optional[str], 
 
 
 def _request_target(scan: ScanCreate) -> Optional[str]:
-    for key in ('target', 'host', 'ip', 'url', 'domain', 'cidr'):
+    for key in ('target', 'host', 'ip', 'url', 'domain', 'cidr', 'repo_url', 'path'):
         value = scan.config.get(key)
         if value is not None and str(value).strip():
             return str(value).strip()
     return None
 
 
-def _bind_network_authorization(scan: ScanCreate, asset: Asset, requested_target: Optional[str]) -> tuple[Asset, str, AssetAuthorization]:
+def _bind_persisted_authorization(
+    scan: ScanCreate,
+    asset: Asset,
+    requested_target: Optional[str],
+) -> tuple[Asset, str, AssetAuthorization]:
     current_target = asset_target(asset)
     if not current_target:
         raise HTTPException(status_code=400, detail='Authorized asset has no executable target')
@@ -99,10 +108,11 @@ def _bind_network_authorization(scan: ScanCreate, asset: Asset, requested_target
         raise HTTPException(status_code=403, detail='The authorization decision is not bound to the current asset identity')
     if latest.target_snapshot != current_target:
         raise HTTPException(status_code=409, detail='The authorized asset target no longer matches the authoritative authorization snapshot')
-    try:
-        require_authorized_target(current_target, url=scan.scan_type == 'url')
-    except ScopeAuthorizationError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if scan.scan_type in NETWORK_SCAN_TYPES:
+        try:
+            require_authorized_target(current_target, url=scan.scan_type == Scan.Type.URL)
+        except ScopeAuthorizationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     return asset, current_target, latest
 
 
@@ -136,10 +146,11 @@ def _create_scan(scan: ScanCreate, user_id: str):
 
         requested_target = _request_target(scan)
         authorization = None
-        if scan.scan_type in NETWORK_SCAN_TYPES:
+        requires_persisted_authorization = scan.scan_type in PERSISTED_AUTH_SCAN_TYPES or engines[0] == 'semgrep'
+        if requires_persisted_authorization:
             if asset is None:
-                raise HTTPException(status_code=400, detail='Network scans require an existing asset with an authoritative authorization decision')
-            asset, target, authorization = _bind_network_authorization(scan, asset, requested_target)
+                raise HTTPException(status_code=400, detail='Scanner execution requires an existing asset with an authoritative authorization decision')
+            asset, target, authorization = _bind_persisted_authorization(scan, asset, requested_target)
         else:
             target = requested_target
 

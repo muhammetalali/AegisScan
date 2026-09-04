@@ -24,20 +24,27 @@ def asset(s,project_id,name,asset_type,configuration,tags):
  if not aid: raise RuntimeError(f'Asset creation did not return id: {data!r}')
  return str(aid)
 def authorize(s,asset_id):
- data=req(s,'POST',f'{API}/assets/{asset_id}/authorization',{200},json={'authorized':True,'reason':'CI controlled real scanner target'}); 
+ data=req(s,'POST',f'{API}/assets/{asset_id}/authorization',{200},json={'authorized':True,'reason':'CI controlled real scanner target'});
  if not isinstance(data,dict) or (data.get('configuration') or {}).get('authorized') is not True: raise RuntimeError(f'Authorization did not persist for {asset_id}: {data!r}')
+ history=collection(req(s,'GET',f'{API}/assets/{asset_id}/authorization',{200}),f'{asset_id} authorization history')
+ if not history or history[0].get('authorized') is not True or history[0].get('currently_valid') is not True: raise RuntimeError(f'Authoritative authorization decision missing or invalid for {asset_id}: {history!r}')
+ decision_id=str(history[0].get('id') or '')
+ if not decision_id: raise RuntimeError(f'Authorization decision id missing for {asset_id}: {history[0]!r}')
+ return decision_id
 def main()->int:
  s=requests.Session(); token=csrf(s); headers={'X-CSRFToken':token,'Referer':f'{BASE}/'}; req(s,'POST',f'{DJANGO}/auth/login/',{200},json={'email':EMAIL,'password':PASSWORD},headers=headers); token=csrf(s); headers['X-CSRFToken']=token
  project=req(s,'POST',f'{DJANGO}/projects/',{201},json={'name':f'Scanner Engine E2E {uuid.uuid4().hex[:10]}','description':'Authorized scanner engine black-box E2E','environment':'development'},headers=headers); pid=str(project['id'])
- nmap_asset=asset(s,pid,'Nmap target','ip_address',{'host':TARGET},['e2e','nmap']); authorize(s,nmap_asset)
- masscan_asset=asset(s,pid,'Masscan target','network_range',{'cidr':MASSCAN_TARGET},['e2e','masscan']); authorize(s,masscan_asset)
- nuclei_asset=asset(s,pid,'Nuclei target','website',{'url':f'http://{TARGET}'},['e2e','nuclei']); authorize(s,nuclei_asset)
- semgrep_asset=asset(s,pid,'Backend Source','source_code',{'path':'/app/e2e'},['e2e','semgrep']); authorize(s,semgrep_asset)
- specs=[('nmap','ip',{'host':TARGET},nmap_asset,'quick'),('masscan','network',{'host':MASSCAN_TARGET,'ports':'80','rate':1000},masscan_asset,'quick'),('nuclei','url',{'url':f'http://{TARGET}'},nuclei_asset,'standard'),('semgrep','code',{'path':'/app/e2e'},semgrep_asset,'standard')]; scans=[]
- for engine,scan_type,config,asset_id,depth in specs:
-  created=req(s,'POST',f'{API}/scans/',{201},json={'project_id':pid,'name':f'E2E {engine}','scan_type':scan_type,'asset_id':asset_id,'engines':[engine],'depth':depth,'config':config}); scans.append((engine,created['id']))
+ nmap_asset=asset(s,pid,'Nmap target','ip_address',{'host':TARGET},['e2e','nmap']); nmap_auth=authorize(s,nmap_asset)
+ masscan_asset=asset(s,pid,'Masscan target','network_range',{'cidr':MASSCAN_TARGET},['e2e','masscan']); masscan_auth=authorize(s,masscan_asset)
+ nuclei_asset=asset(s,pid,'Nuclei target','website',{'url':f'http://{TARGET}'},['e2e','nuclei']); nuclei_auth=authorize(s,nuclei_asset)
+ semgrep_asset=asset(s,pid,'Backend Source','source_code',{'path':'/app/e2e'},['e2e','semgrep']); semgrep_auth=authorize(s,semgrep_asset)
+ specs=[('nmap','ip',{'host':TARGET},nmap_asset,'quick',nmap_auth),('masscan','network',{'host':MASSCAN_TARGET,'ports':'80','rate':1000},masscan_asset,'quick',masscan_auth),('nuclei','url',{'url':f'http://{TARGET}'},nuclei_asset,'standard',nuclei_auth),('semgrep','code',{'path':'/app/e2e'},semgrep_asset,'standard',semgrep_auth)]; scans=[]
+ for engine,scan_type,config,asset_id,depth,authorization_id in specs:
+  created=req(s,'POST',f'{API}/scans/',{201},json={'project_id':pid,'name':f'E2E {engine}','scan_type':scan_type,'asset_id':asset_id,'engines':[engine],'depth':depth,'config':config})
+  if str(created.get('authorization_decision_id') or '') != authorization_id: raise RuntimeError(f'{engine} scan creation lost authorization binding: expected={authorization_id} response={created!r}')
+  scans.append((engine,created['id'],authorization_id))
  results={}
- for engine,sid in scans:
+ for engine,sid,authorization_id in scans:
   print(f'ENGINE_START engine={engine} scan_id={sid}',flush=True); deadline=time.monotonic()+TIMEOUT; state={}
   while time.monotonic()<deadline:
    state=req(s,'GET',f'{API}/scans/{sid}',{200}); print(f'ENGINE_STATE engine={engine} status={state.get("status")} progress={state.get("progress")}',flush=True)
@@ -51,7 +58,7 @@ def main()->int:
   for item in scanner:
    if len(item.get('sha256',''))!=64 or item.get('scan_id')!=sid:raise RuntimeError(f'{engine} evidence provenance invalid: {item}')
   result_data=matching[0].get('result_data') or {}
-  if not result_data.get('authorization_decision_id'): raise RuntimeError(f'{engine} execution lost authorization provenance: {matching[0]}')
+  if str(result_data.get('authorization_decision_id') or '') != authorization_id: raise RuntimeError(f'{engine} execution authorization provenance mismatch: expected={authorization_id} execution={matching[0]}')
   results[engine]={'scan_id':sid,'findings_count':state.get('findings_count',0),'evidence_count':len(scanner),'authorization_decision_id':result_data.get('authorization_decision_id')}
  print('SCANNER_ENGINES_REAL_E2E=PASS');print(f'project_id={pid}');print(results);return 0
 if __name__=='__main__':

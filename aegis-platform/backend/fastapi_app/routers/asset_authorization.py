@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from django_project.audit.models import AuditLog
 from django_project.assets.models import Asset, AssetAuthorization
 from ..core.dependencies import get_current_user
+from ..services.authorization_guard import asset_target
 
 router = APIRouter()
 
@@ -40,11 +41,6 @@ def _request_ip(request: Request) -> str:
         return str(ipaddress.ip_address(host))
     except ValueError:
         return '0.0.0.0'
-
-
-def _target(asset: Asset) -> str:
-    configuration = asset.configuration or {}
-    return str(configuration.get('url') or configuration.get('host') or configuration.get('ip') or configuration.get('domain') or configuration.get('cidr') or configuration.get('target') or '').strip()
 
 
 def _response(asset: Asset) -> dict:
@@ -101,7 +97,7 @@ def _set_authorization(asset_id: str, user_id: str, is_staff: bool, update: Auth
                 asset=asset,
                 actor_id=user_id,
                 authorized=update.authorized,
-                target_snapshot=_target(asset)[:500],
+                target_snapshot=asset_target(asset)[:500],
                 reason=update.reason,
                 correlation_id=correlation_id,
                 request_id=request_id,
