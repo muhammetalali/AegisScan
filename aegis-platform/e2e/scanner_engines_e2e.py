@@ -4,7 +4,7 @@ from __future__ import annotations
 import os,sys,time,uuid
 from typing import Any
 import requests
-BASE=os.getenv('AEGIS_BASE_URL','http://localhost'); API_ROOT=os.getenv('AEGIS_FASTAPI_URL',BASE); API=f'{API_ROOT}/api/v1'; DJANGO=os.getenv('AEGIS_DJANGO_URL',f'{BASE}/api/v1'); TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','600')); VERIFY=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; EMAIL=os.environ['AEGIS_E2E_EMAIL']; PASSWORD=os.environ['AEGIS_E2E_PASSWORD']
+BASE=os.getenv('AEGIS_BASE_URL','http://localhost'); API_ROOT=os.getenv('AEGIS_FASTAPI_URL',BASE); API=f'{API_ROOT}/api/v1'; DJANGO=os.getenv('AEGIS_DJANGO_URL',f'{BASE}/api/v1'); TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); MASSCAN_TARGET=os.getenv('AEGIS_MASSCAN_TARGET','172.28.0.10'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','600')); VERIFY=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; EMAIL=os.environ['AEGIS_E2E_EMAIL']; PASSWORD=os.environ['AEGIS_E2E_PASSWORD']
 def req(s:requests.Session,method:str,url:str,expected:set[int],**kwargs)->dict[str,Any]|list[Any]:
  r=s.request(method,url,timeout=30,verify=VERIFY,**kwargs)
  print(f'E2E_HTTP stage="{method} {url}" status={r.status_code}',flush=True)
@@ -29,10 +29,10 @@ def main()->int:
  token=csrf(s); headers['X-CSRFToken']=token
  project=req(s,'POST',f'{DJANGO}/projects/',{201},json={'name':f'Scanner Engine E2E {uuid.uuid4().hex[:10]}','description':'Authorized scanner engine black-box E2E','environment':'development'},headers=headers); pid=str(project['id'])
  nmap_asset=asset(s,pid,'Nmap target','ip_address',{'host':TARGET,'authorized':True},['e2e','nmap'])
- masscan_asset=asset(s,pid,'Masscan target','ip_address',{'host':TARGET,'authorized':True},['e2e','masscan'])
+ masscan_asset=asset(s,pid,'Masscan target','ip_address',{'host':MASSCAN_TARGET,'authorized':True},['e2e','masscan'])
  nuclei_asset=asset(s,pid,'Nuclei target','url',{'url':f'http://{TARGET}','authorized':True},['e2e','nuclei'])
  semgrep_asset=asset(s,pid,'Backend Source','source_code',{'path':'/app/e2e','authorized':True},['e2e','semgrep'])
- specs=[('nmap','ip',{'host':TARGET},nmap_asset,'quick'),('masscan','ip',{'host':TARGET,'ports':'80','rate':1000},masscan_asset,'quick'),('nuclei','url',{'url':f'http://{TARGET}'},nuclei_asset,'standard'),('semgrep','code',{'path':'/app/e2e'},semgrep_asset,'standard')]; scans=[]
+ specs=[('nmap','ip',{'host':TARGET},nmap_asset,'quick'),('masscan','ip',{'host':MASSCAN_TARGET,'ports':'80','rate':1000},masscan_asset,'quick'),('nuclei','url',{'url':f'http://{TARGET}'},nuclei_asset,'standard'),('semgrep','code',{'path':'/app/e2e'},semgrep_asset,'standard')]; scans=[]
  for engine,scan_type,config,asset_id,depth in specs:
   body={'project_id':pid,'name':f'E2E {engine}','scan_type':scan_type,'asset_id':asset_id,'engines':[engine],'depth':depth,'config':config,'authorized':True}
   created=req(s,'POST',f'{API}/scans/',{201},json=body); scans.append((engine,created['id']))
