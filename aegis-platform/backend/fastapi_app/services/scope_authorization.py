@@ -22,18 +22,30 @@ def _canonical_hostname(value: str, *, require_http_scheme: bool = False) -> str
     candidate = str(value).strip()
     if not candidate or _CONTROL_RE.search(candidate):
         raise ScopeAuthorizationError('Target contains whitespace or control characters')
-    parsed = urlsplit(candidate if '://' in candidate else f'//{candidate}')
-    if parsed.scheme and parsed.scheme.lower() not in {'http', 'https'}:
-        raise ScopeAuthorizationError('Unsupported target scheme')
-    if require_http_scheme and parsed.scheme.lower() not in {'http', 'https'}:
-        raise ScopeAuthorizationError('URL scan targets require http or https')
-    if parsed.username is not None or parsed.password is not None:
-        raise ScopeAuthorizationError('Target userinfo is not allowed')
-    if parsed.fragment or parsed.query:
-        raise ScopeAuthorizationError('Target fragments and query strings are not allowed')
-    if parsed.path not in {'', '/'} and parsed.scheme == '':
-        raise ScopeAuthorizationError('Host targets cannot contain a path')
-    host = parsed.hostname
+
+    # Literal IPs are canonicalized before URL parsing so bare IPv6 is treated
+    # as an IP address rather than a malformed host:port expression.
+    if '://' not in candidate and not candidate.startswith('['):
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            pass
+
+    try:
+        parsed = urlsplit(candidate if '://' in candidate else f'//{candidate}')
+        if parsed.scheme and parsed.scheme.lower() not in {'http', 'https'}:
+            raise ScopeAuthorizationError('Unsupported target scheme')
+        if require_http_scheme and parsed.scheme.lower() not in {'http', 'https'}:
+            raise ScopeAuthorizationError('URL scan targets require http or https')
+        if parsed.username is not None or parsed.password is not None:
+            raise ScopeAuthorizationError('Target userinfo is not allowed')
+        if parsed.fragment or parsed.query:
+            raise ScopeAuthorizationError('Target fragments and query strings are not allowed')
+        if parsed.path not in {'', '/'} and parsed.scheme == '':
+            raise ScopeAuthorizationError('Host targets cannot contain a path')
+        host = parsed.hostname
+    except ValueError as exc:
+        raise ScopeAuthorizationError('Target host syntax is invalid') from exc
     if not host:
         raise ScopeAuthorizationError('Target hostname is missing')
     host = host.rstrip('.').lower()
@@ -76,13 +88,7 @@ def _canonical_entry(entry: str) -> tuple[str, bool, bool]:
 
 
 def is_target_authorized(target: str) -> bool:
-    """Match a target against the explicit server-side authorization allow-list.
-
-    The match is fail-closed. Supported entries are exact IPs, CIDRs, exact
-    DNS names, explicit single-label hostnames, and a single left-most DNS
-    wildcard such as ``*.example.com``. Global wildcards and URL userinfo are
-    rejected.
-    """
+    """Match a target against the explicit server-side authorization allow-list."""
     try:
         host = _canonical_hostname(target)
     except ScopeAuthorizationError:
@@ -103,8 +109,8 @@ def is_target_authorized(target: str) -> bool:
             continue
         if target_ip is not None:
             continue
-        if wildcard and (host == normalized or host.endswith('.' + normalized)):
-            return host != normalized
+        if wildcard and host.endswith('.' + normalized):
+            return True
         if not wildcard and host == normalized:
             return True
     return False
