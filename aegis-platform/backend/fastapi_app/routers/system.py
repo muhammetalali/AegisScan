@@ -205,6 +205,7 @@ async def get_metrics(
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
 ):
     del since
+    limit_value = int(limit)
     collectors = {
         'cpu_usage': _system_cpu_percent,
         'memory_usage': _system_memory_percent,
@@ -212,8 +213,13 @@ async def get_metrics(
     }
     selected = [metric_type] if metric_type in collectors else list(collectors)
     return [
-        {'metric_type': key, 'value': float(await asyncio.to_thread(collectors[key])), 'unit': '%', 'timestamp': _now()}
-        for key in selected[:limit]
+        MetricResponse(
+            metric_type=key,
+            value=float(await asyncio.to_thread(collectors[key])),
+            unit='%',
+            timestamp=_now(),
+        )
+        for key in selected[:limit_value]
     ]
 
 
