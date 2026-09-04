@@ -15,6 +15,7 @@ from django_project.assets.models import Asset
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from ..core.dependencies import get_current_user
+from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 
@@ -45,6 +46,42 @@ def _list_scans(user_id:str,project_id:Optional[str],status:Optional[str],limit:
     if status: qs=qs.filter(status=status)
     return list(qs[offset:offset+limit])
 
+
+def _request_target(scan: ScanCreate) -> Optional[str]:
+    for key in ('target', 'host', 'ip', 'url', 'domain'):
+        value=scan.config.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _asset_target(asset: Asset) -> Optional[str]:
+    config=asset.configuration or {}
+    for key in ('url','host','ip','domain','target'):
+        value=config.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _enforce_scan_scope(scan: ScanCreate, asset: Optional[Asset]) -> tuple[Optional[Asset], Optional[str]]:
+    if scan.scan_type not in {'ip','url','network'}:
+        return asset, None
+    requested=_request_target(scan)
+    attached=_asset_target(asset) if asset else None
+    target=attached or requested
+    if requested and attached and requested != attached:
+        raise HTTPException(status_code=409, detail='Scan target must exactly match the authorized asset target')
+    if not target:
+        raise HTTPException(status_code=400, detail='An explicit scan target is required')
+    if asset and (asset.configuration or {}).get('authorized') is not True:
+        raise HTTPException(status_code=403, detail='The asset is not explicitly authorized for security execution')
+    try:
+        require_authorized_target(target, url=scan.scan_type == 'url')
+    except ScopeAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return asset, target
+
 @router.get('/',response_model=List[ScanResponse])
 async def list_scans(project_id:Optional[str]=None,status:Optional[str]=None,limit:int=Query(20,le=100),offset:int=0,user=Depends(get_current_user)):
     return [await _serialize_scan(scan) for scan in await _list_scans(str(user.get('user_id')),project_id,status,limit,offset)]
@@ -62,32 +99,27 @@ def _create_scan(scan:ScanCreate,user_id:str):
         if scan.asset_id:
             asset=Asset.objects.filter(id=scan.asset_id,project=project).first()
             if not asset: raise HTTPException(status_code=404,detail='Asset not found')
-        if scan.scan_type in {'ip','url','network'} and (not asset or (asset.configuration or {}).get('authorized') is not True):
-            if not scan.authorized: raise HTTPException(status_code=400,detail='A real network scan requires explicit authorization')
-            target=scan.config.get('target') or scan.config.get('host') or scan.config.get('ip') or scan.config.get('url')
-            if not target: raise HTTPException(status_code=400,detail='config.target is required for a network scan')
+        asset,target=_enforce_scan_scope(scan,asset)
+        if scan.scan_type in {'ip','url','network'} and asset is None:
             from django.utils.text import slugify
             normalized_target=str(target).strip()
             target_slug=slugify(normalized_target)[:220]
-            expected_type='website' if scan.scan_type=='url' else 'ip_address'
+            expected_type='website' if scan.scan_type=='url' else ('network_range' if scan.scan_type=='network' else 'ip_address')
             existing=Asset.objects.filter(project=project,slug=target_slug).first()
             if existing:
                 existing_config=existing.configuration or {}
-                existing_target=(
-                    existing_config.get('url')
-                    if expected_type=='website'
-                    else existing_config.get('host') or existing_config.get('ip') or existing_config.get('domain')
-                )
+                existing_target=_asset_target(existing)
                 if existing_target != normalized_target or existing.type != expected_type:
                     raise HTTPException(status_code=409,detail='An asset with the normalized target slug already exists for this project with a different identity')
                 if existing_config.get('authorized') is not True:
                     raise HTTPException(status_code=403,detail='The existing asset for this target is not explicitly authorized')
                 asset=existing
             else:
-                if scan.scan_type=='url':
-                    asset=Asset.objects.create(project=project,owner_id=user_id,name=normalized_target,slug=target_slug,type='website',configuration={'url':normalized_target,'authorized':True})
-                else:
-                    asset=Asset.objects.create(project=project,owner_id=user_id,name=normalized_target,slug=target_slug,type='ip_address',configuration={'host':normalized_target,'authorized':True})
+                configuration={'authorized':True}
+                if expected_type=='website': configuration['url']=normalized_target
+                elif expected_type=='network_range': configuration['target']=normalized_target
+                else: configuration['host']=normalized_target
+                asset=Asset.objects.create(project=project,owner_id=user_id,name=normalized_target,slug=target_slug,type=expected_type,configuration=configuration)
         if engines[0]=='nuclei' and (not asset or not (asset.configuration or {}).get('url')): raise HTTPException(status_code=400,detail='Nuclei scans require an asset with configuration.url')
         if engines[0]=='semgrep' and (not asset or not ((asset.configuration or {}).get('repo_url') or (asset.configuration or {}).get('path'))): raise HTTPException(status_code=400,detail='Semgrep scans require asset configuration.repo_url or configuration.path')
         obj=Scan.objects.create(project=project,name=scan.name,scan_type=scan.scan_type,asset=asset,engines=engines,depth=scan.depth,config=scan.config,initiated_by_id=user_id,status=Scan.Status.QUEUED)
