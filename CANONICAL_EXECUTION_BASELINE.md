@@ -47,11 +47,11 @@ The current canonical stream already contains these verified classes of remediat
 - isolated CI scanner network and fixed Masscan test target;
 - canonical security scope authorization rather than ambiguous prefix matching.
 
-These statements describe the implementation state; they do not, by themselves, constitute final production readiness.
+These statements describe implementation state; they do not, by themselves, constitute final production readiness.
 
 ## 4. Real scanner contract
 
-Every supported scanner execution must satisfy the complete chain:
+Every supported scanner execution must satisfy:
 
 `authorized persisted Asset → asset-bound Scan → Celery task → ScanEngineExecution → real binary/provider → raw output → parser/normalizer → persisted Vulnerability/Evidence → terminal Scan state → API/UI observation`.
 
