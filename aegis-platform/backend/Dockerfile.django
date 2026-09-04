@@ -33,7 +33,14 @@ RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
     && mkdir -p /app/staticfiles /app/media \
     && chown -R aegis:aegis /app \
-    && setcap cap_net_raw,cap_net_admin+eip /usr/bin/nmap /usr/bin/masscan
+    && nmap_binary="$(readlink -f "$(command -v nmap)")" \
+    && masscan_binary="$(readlink -f "$(command -v masscan)")" \
+    && test -f "$nmap_binary" \
+    && test -f "$masscan_binary" \
+    && setcap cap_net_raw,cap_net_admin+eip "$nmap_binary" \
+    && setcap cap_net_raw,cap_net_admin+eip "$masscan_binary" \
+    && getcap "$nmap_binary" | grep -q 'cap_net_admin,cap_net_raw=eip' \
+    && getcap "$masscan_binary" | grep -q 'cap_net_admin,cap_net_raw=eip'
 
 # Verify required scanner/analysis binaries are installed without relying on
 # non-zero CLI exit semantics (masscan prints its version but returns 1).
