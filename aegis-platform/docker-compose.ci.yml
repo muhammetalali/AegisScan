@@ -7,9 +7,23 @@ services:
         aliases:
           - scan_target
           - aegis-scan-target
+      e2e_net:
+        ipv4_address: 172.28.0.10
+  fastapi:
+    networks:
+      e2e_net: {}
   celery_worker:
     environment:
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
+    networks:
+      e2e_net: {}
   celery_beat:
     environment:
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
+    networks:
+      e2e_net: {}
+networks:
+  e2e_net:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
