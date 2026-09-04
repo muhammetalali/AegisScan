@@ -3,7 +3,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing import Any
 
 from ..core.security import verify_token
-from ..services.autonomous_triage import triage_graph
+from ..services.autonomous_triage import build_triage
 from ..services.assurance_graph_aggregator import build_assurance_graph
 from ..services.assurance_correlation import correlate_all
 from ..services.graph_intelligence import analyze_graph
@@ -29,5 +29,5 @@ async def decision_pack(user: dict[str, Any] = Depends(require_user)):
     validations = await _load_validations(user_id)
     correlations = correlate_all(validations)
     graph = analyze_graph(build_assurance_graph(validations, correlations))
-    triage = triage_graph(graph)
-    return build_decision_pack({"items": triage.get("priorities", []), "generatedAt": None})
+    triage = build_triage(graph)
+    return build_decision_pack(triage)
