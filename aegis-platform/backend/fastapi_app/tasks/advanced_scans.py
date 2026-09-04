@@ -74,7 +74,7 @@ def _git_checkout(asset_config:dict[str,Any]):
     if token_env and env.get(token_env):
         token=env[token_env]
         if repo_url.startswith('https://') and '@' not in repo_url.split('://',1)[1].split('/',1)[0]: repo_url='https://oauth2:%s@%s' % (token,repo_url.split('://',1)[1])
-    command=['git','clone','--depth','1'];
+    command=['git','clone','--depth','1']
     if branch: command+=['--branch',branch]
     command += [repo_url,str(destination)]; result=subprocess.run(command,capture_output=True,text=True,timeout=300,check=False,env=env)
     if result.returncode!=0: holder.cleanup(); raise RuntimeError(result.stderr.strip() or 'git clone failed')
@@ -108,27 +108,36 @@ def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
 
 @shared_task(bind=True,name='fastapi_app.tasks.advanced_scans.run_semgrep_scan',max_retries=1,default_retry_delay=30)
 def run_semgrep_scan(self,scan_id:str)->dict[str,Any]:
-    scan=Scan.objects.select_related('asset','initiated_by','project').get(pk=scan_id)
-    if not scan.asset: raise ValueError('A scan must reference an asset before execution')
-    config=scan.asset.configuration or {}; engine=_ensure_engine('semgrep','Semgrep',ScanEngine.EngineCategory.ANALYSIS,900); completed=_completed_delivery(scan,engine)
+    scan,target,authorization=require_bound_scan_authorization(scan_id)
+    engine=_ensure_engine('semgrep','Semgrep',ScanEngine.EngineCategory.ANALYSIS,900)
+    if scan is None:
+        persisted_scan=Scan.objects.select_related('asset','initiated_by','project').get(pk=scan_id)
+        execution=_execution(persisted_scan,engine)
+        return _finish_failed(persisted_scan,execution,target)
+    if scan.scan_type != Scan.Type.CODE: return _finish_failed(scan, _execution(scan,engine), 'Execution blocked: Semgrep requires a code scan type.')
+    completed=_completed_delivery(scan,engine)
     if completed: return completed
     execution=_execution(scan,engine)
-    if config.get('authorized') is not True: return _finish_failed(scan,execution,'Execution blocked: asset is not explicitly marked authorized.')
+    execution.result_data=authorization_snapshot(authorization)
+    execution.save(update_fields=['result_data','updated_at'])
     holder=None
     try:
+        config=scan.asset.configuration or {}
         if config.get('repo_url'): source,holder=_git_checkout(config)
-        else: source=validate_code_target(str(config.get('path') or scan.config.get('path') or ''))
-        result=run_semgrep(source,timeout=900); observations=_semgrep_findings(result.stdout); now=datetime.now(timezone.utc)
+        else: source=validate_code_target(str(config.get('path') or (scan.config or {}).get('path') or target))
+        result=run_semgrep(source,timeout=900); observations=_semgrep_findings(result.stdout); ok,reason=revalidate_bound_authorization(scan,authorization)
+        if not ok: return _finish_failed(scan,execution,reason,authorization_snapshot(authorization))
+        now=datetime.now(timezone.utc)
         with transaction.atomic():
-            scanner_evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':'semgrep','evidence_type':'scanner_output','raw_output':result.stdout,'metadata':{'stderr':result.stderr,'exit_code':result.exit_code,'source':source,'format':'json'},'collected_by':scan.initiated_by}); findings=[]
+            scanner_evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':'semgrep','evidence_type':'scanner_output','raw_output':result.stdout,'metadata':{'stderr':result.stderr,'exit_code':result.exit_code,'source':source,'format':'json',**authorization_snapshot(authorization)},'collected_by':scan.initiated_by}); findings=[]
             for obs in observations:
                 finding=Vulnerability.objects.filter(scan=scan,asset=scan.asset,source_engine='semgrep',file_path=obs['path'],line_start=obs['line'],title=obs['message'][:300]).first()
                 if finding is None: finding=Vulnerability.objects.create(scan=scan,project=scan.project,asset=scan.asset,title=obs['message'][:300],description=obs['message'],severity=obs['severity'],status=Vulnerability.Status.OPEN,confidence=Vulnerability.Confidence.HIGH,category='code',file_path=obs['path'][:500],line_start=max(0,obs['line']) or None,risk_score={Vulnerability.Severity.HIGH:80.0,Vulnerability.Severity.MEDIUM:60.0,Vulnerability.Severity.INFO:10.0}[obs['severity']],validation_status='unverified',source_engine='semgrep',raw_data=obs['record'])
-                Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output',str(finding.id)),defaults={'scan':scan,'asset':scan.asset,'finding':finding,'source':'semgrep','evidence_type':'scanner_output','raw_output':scanner_evidence.raw_output,'metadata':{'scanner_evidence_id':str(scanner_evidence.id),'check_id':obs['check_id'],'path':obs['path'],'line':obs['line']},'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
-            execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':'semgrep','source':source,'exit_code':result.exit_code,'finding_ids':[str(v.id) for v in findings],'scanner_evidence_id':str(scanner_evidence.id)}; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=now; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'semgrep':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
-        return {'status':scan.status,'scan_id':scan_id,'tool':'semgrep','finding_ids':[str(v.id) for v in findings]}
+                Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output',str(finding.id)),defaults={'scan':scan,'asset':scan.asset,'finding':finding,'source':'semgrep','evidence_type':'scanner_output','raw_output':scanner_evidence.raw_output,'metadata':{'scanner_evidence_id':str(scanner_evidence.id),'check_id':obs['check_id'],'path':obs['path'],'line':obs['line'],**authorization_snapshot(authorization)},'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
+            execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':'semgrep','source':source,'exit_code':result.exit_code,'finding_ids':[str(v.id) for v in findings],'scanner_evidence_id':str(scanner_evidence.id),**authorization_snapshot(authorization)}; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=now; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'semgrep':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
+        return {'status':scan.status,'scan_id':scan_id,'tool':'semgrep','target':source,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
-        return _finish_failed(scan,execution,str(exc))
+        return _finish_failed(scan,execution,str(exc),authorization_snapshot(authorization))
     finally:
         if holder: holder.cleanup()
