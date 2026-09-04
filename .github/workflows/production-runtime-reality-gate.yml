@@ -2,7 +2,7 @@ name: AegisScan Production Runtime Reality Gate
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/full-contract-ui-audit-2026-09-03]
     paths:
       - 'aegis-platform/backend/**'
       - 'aegis/**'
