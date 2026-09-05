@@ -87,10 +87,11 @@ def run_continuous_assurance(schedule_id: str):
 
 @shared_task(name='enterprise.dispatch_due_schedules')
 def dispatch_due_schedules():
-    now=timezone.now(); reports=list(ReportSchedule.objects.filter(enabled=True,next_run__lte=now)); assurances=list(ContinuousAssuranceSchedule.objects.filter(enabled=True,next_run__lte=now)); queued=0
-    for schedule in reports: execute_report_schedule.delay(str(schedule.id)); queued+=1
+    now=timezone.now(); assurances=list(ContinuousAssuranceSchedule.objects.filter(enabled=True,next_run__lte=now)); queued=0
+    # Report schedules have one durable django-celery-beat PeriodicTask each.
+    # Dispatching them here as well would enqueue the same report twice.
     for schedule in assurances: run_continuous_assurance.delay(str(schedule.id)); queued+=1
-    return {'queued':queued,'reports':len(reports),'assurance':len(assurances)}
+    return {'queued':queued,'reports':0,'assurance':len(assurances)}
 
 @shared_task(name='enterprise.cloud_discovery')
 def cloud_discovery_task(run_id: str):
