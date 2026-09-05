@@ -7,20 +7,25 @@ from datetime import timedelta, timezone
 from typing import List, Optional
 
 from asgiref.sync import sync_to_async
+from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.signing import BadSignature, SignatureExpired, dumps, loads
+from django.core.validators import validate_email
+from django.db import transaction
 from django.http import FileResponse
 from django.utils import timezone as django_timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..core.dependencies import get_current_user, require_permission
-from audit.models import DataExport
-from projects.models import Project
-from scans.models import Scan
-from vulnerabilities.models import Vulnerability
-from evidence.models import Evidence
+from django_project.audit.models import DataExport
+from django_project.evidence.models import Evidence
+from django_project.projects.models import Project
+from django_project.scans.models import Scan
 from django_project.users.models import Permission
+from django_project.vulnerabilities.models import Vulnerability
+from enterprise.models import ReportSchedule
+from enterprise.services import ensure_project_tenant, schedule_task
 
 router = APIRouter()
 SUPPORTED_FORMATS = {'json', 'csv', 'pdf'}
@@ -55,6 +60,18 @@ class ReportScheduleCreate(BaseModel):
     recipients: List[str]
     formats: List[str]
 
+class ReportScheduleResponse(BaseModel):
+    id: str
+    project_id: str
+    template_id: str
+    title: str
+    frequency: str
+    recipients: List[str]
+    format: str
+    enabled: bool
+    next_run: str
+    last_run: Optional[str] = None
+
 @sync_to_async
 def _project_access(project_id: str, user_id: str):
     from django.db.models import Q
@@ -65,6 +82,67 @@ def _project_access(project_id: str, user_id: str):
 
 def _report_queryset(user_id: str):
     return DataExport.objects.filter(resource_type='project_report', user_id=user_id).order_by('-created_at')
+
+def _serialize_schedule(schedule: ReportSchedule) -> ReportScheduleResponse:
+    return ReportScheduleResponse(
+        id=str(schedule.id), project_id=str(schedule.project_id),
+        template_id=schedule.report_type, title=schedule.title,
+        frequency=schedule.frequency, recipients=list(schedule.recipients or []),
+        format=schedule.format, enabled=schedule.enabled,
+        next_run=schedule.next_run.astimezone(timezone.utc).isoformat(),
+        last_run=schedule.last_run.astimezone(timezone.utc).isoformat() if schedule.last_run else None,
+    )
+
+@sync_to_async
+def _create_report_schedules(body: ReportScheduleCreate, user_id: str) -> list[ReportSchedule]:
+    if body.template_id not in SUPPORTED_REPORT_TYPES:
+        raise HTTPException(status_code=400, detail='Unsupported report template')
+    if body.frequency not in {ReportSchedule.Frequency.DAILY, ReportSchedule.Frequency.WEEKLY, ReportSchedule.Frequency.MONTHLY}:
+        raise HTTPException(status_code=400, detail='frequency must be daily, weekly, or monthly')
+    formats = list(dict.fromkeys(body.formats))
+    if not formats or any(item not in SUPPORTED_FORMATS for item in formats):
+        raise HTTPException(status_code=400, detail='At least one supported report format is required')
+    recipients = list(dict.fromkeys(address.strip().lower() for address in body.recipients if address.strip()))
+    if not recipients or len(recipients) > 100:
+        raise HTTPException(status_code=400, detail='Between 1 and 100 report recipients are required')
+    try:
+        for address in recipients:
+            validate_email(address)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail='Every report recipient must be a valid email address') from exc
+
+    with transaction.atomic():
+        project = Project.objects.filter(id=body.project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail='Project not found')
+        try:
+            organization = ensure_project_tenant(project, user_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        interval = {
+            ReportSchedule.Frequency.DAILY: timedelta(days=1),
+            ReportSchedule.Frequency.WEEKLY: timedelta(weeks=1),
+            ReportSchedule.Frequency.MONTHLY: timedelta(days=30),
+        }[body.frequency]
+        rows = []
+        for report_format in formats:
+            schedule = ReportSchedule.objects.create(
+                organization=organization, project=project,
+                title=f'{body.template_id.title()} security report',
+                report_type=body.template_id, format=report_format,
+                frequency=body.frequency, recipients=recipients,
+                next_run=django_timezone.now() + interval, created_by_id=user_id,
+            )
+            schedule_task(schedule)
+            rows.append(schedule)
+        return rows
+
+@sync_to_async
+def _list_report_schedules(user_id: str, project_id: Optional[str]) -> list[ReportSchedule]:
+    qs = ReportSchedule.objects.filter(created_by_id=user_id).select_related('project').order_by('-created_at')
+    if project_id:
+        qs = qs.filter(project_id=project_id)
+    return list(qs)
 
 @sync_to_async
 def _serialize(report: DataExport):
@@ -155,6 +233,44 @@ async def create_report(report: ReportCreate, current_user=Depends(require_permi
     await _project_access(report.project_id, str(current_user.get('user_id'))); payload = await _build_payload(report.project_id, report.scan_id, report.report_type)
     return await _serialize(await _create_report(report, str(current_user.get('user_id')), payload))
 
+@router.post('/compare')
+async def compare_reports(report_id_a: str, report_id_b: str, current_user=Depends(require_permission(Permission.REPORT_COMPARE))):
+    first, second = await _get_report(report_id_a, str(current_user.get('user_id'))), await _get_report(report_id_b, str(current_user.get('user_id')))
+    a = {'id': str(first.id), 'project_id': first.filters.get('project_id'), 'scan_id': first.filters.get('scan_id'), 'record_count': first.record_count, 'file_size': first.file_size, 'created_at': first.created_at.astimezone(timezone.utc).isoformat()}
+    b = {'id': str(second.id), 'project_id': second.filters.get('project_id'), 'scan_id': second.filters.get('scan_id'), 'record_count': second.record_count, 'file_size': second.file_size, 'created_at': second.created_at.astimezone(timezone.utc).isoformat()}
+    return {'report_a': a, 'report_b': b, 'record_count_delta': b['record_count'] - a['record_count'], 'file_size_delta': b['file_size'] - a['file_size']}
+
+@router.post('/schedules', response_model=List[ReportScheduleResponse], status_code=201)
+async def create_schedule(schedule: ReportScheduleCreate, current_user=Depends(require_permission(Permission.REPORT_CREATE))):
+    user_id = str(current_user.get('user_id'))
+    await _project_access(schedule.project_id, user_id)
+    return [_serialize_schedule(item) for item in await _create_report_schedules(schedule, user_id)]
+
+@router.get('/schedules', response_model=List[ReportScheduleResponse])
+async def list_schedules(project_id: Optional[str] = None, current_user=Depends(require_permission(Permission.REPORT_READ))):
+    user_id = str(current_user.get('user_id'))
+    if project_id:
+        await _project_access(project_id, user_id)
+    return [_serialize_schedule(item) for item in await _list_report_schedules(user_id, project_id)]
+
+@router.get('/templates', response_model=List[dict])
+async def list_templates(report_type: Optional[str] = None, current_user=Depends(require_permission(Permission.REPORT_READ))):
+    templates = [
+        {'id': 'full', 'name': 'Full security report', 'report_type': 'full', 'formats': sorted(SUPPORTED_FORMATS)},
+        {'id': 'findings', 'name': 'Findings report', 'report_type': 'findings', 'formats': sorted(SUPPORTED_FORMATS)},
+        {'id': 'evidence', 'name': 'Evidence report', 'report_type': 'evidence', 'formats': sorted(SUPPORTED_FORMATS)},
+        {'id': 'scan', 'name': 'Scan summary report', 'report_type': 'scan', 'formats': sorted(SUPPORTED_FORMATS)},
+    ]
+    return [item for item in templates if not report_type or item['report_type'] == report_type]
+
+@router.get('/shared/{share_token}/download')
+async def download_shared_report(share_token: str):
+    try: payload = loads(share_token, salt='aegisscan-report-share', max_age=30 * 24 * 3600)
+    except (BadSignature, SignatureExpired): raise HTTPException(status_code=401, detail='Invalid or expired report share token')
+    report = await sync_to_async(lambda: DataExport.objects.filter(id=payload.get('report_id'), resource_type='project_report', status=DataExport.Status.COMPLETED).first())()
+    if not report or not report.file or payload.get('permission') not in {'view', 'download'}: raise HTTPException(status_code=404, detail='Shared report not found')
+    return FileResponse(report.file.path, media_type='application/octet-stream', filename=report.file.name.rsplit('/', 1)[-1])
+
 @router.get('/{report_id}', response_model=ReportResponse)
 async def get_report(report_id: str, current_user=Depends(require_permission(Permission.REPORT_READ))):
     return await _serialize(await _get_report(report_id, str(current_user.get('user_id'))))
@@ -164,14 +280,6 @@ async def download_report(report_id: str, current_user=Depends(require_permissio
     report = await _get_report(report_id, str(current_user.get('user_id')))
     if report.status != DataExport.Status.COMPLETED or not report.file: raise HTTPException(status_code=409, detail='Report is not ready for download')
     report.downloaded_at = django_timezone.now(); await sync_to_async(report.save)(update_fields=['downloaded_at'])
-    return FileResponse(report.file.path, media_type='application/octet-stream', filename=report.file.name.rsplit('/', 1)[-1])
-
-@router.get('/shared/{share_token}/download')
-async def download_shared_report(share_token: str):
-    try: payload = loads(share_token, salt='aegisscan-report-share', max_age=30 * 24 * 3600)
-    except (BadSignature, SignatureExpired): raise HTTPException(status_code=401, detail='Invalid or expired report share token')
-    report = await sync_to_async(lambda: DataExport.objects.filter(id=payload.get('report_id'), resource_type='project_report', status=DataExport.Status.COMPLETED).first())()
-    if not report or not report.file or payload.get('permission') not in {'view', 'download'}: raise HTTPException(status_code=404, detail='Shared report not found')
     return FileResponse(report.file.path, media_type='application/octet-stream', filename=report.file.name.rsplit('/', 1)[-1])
 
 @router.delete('/{report_id}')
@@ -184,28 +292,3 @@ async def share_report(report_id: str, email: str, permission: str = 'view', exp
     report = await _get_report(report_id, str(current_user.get('user_id')))
     token = dumps({'report_id': str(report.id), 'permission': permission, 'recipient': email}, salt='aegisscan-report-share')
     return {'report_id': str(report.id), 'recipient': email, 'permission': permission, 'expires_in_days': expires_in_days, 'share_token': token, 'download_path': f'/reports/shared/{token}/download'}
-
-@router.post('/compare')
-async def compare_reports(report_id_a: str, report_id_b: str, current_user=Depends(require_permission(Permission.REPORT_COMPARE))):
-    first, second = await _get_report(report_id_a, str(current_user.get('user_id'))), await _get_report(report_id_b, str(current_user.get('user_id')))
-    a = {'id': str(first.id), 'project_id': first.filters.get('project_id'), 'scan_id': first.filters.get('scan_id'), 'record_count': first.record_count, 'file_size': first.file_size, 'created_at': first.created_at.astimezone(timezone.utc).isoformat()}
-    b = {'id': str(second.id), 'project_id': second.filters.get('project_id'), 'scan_id': second.filters.get('scan_id'), 'record_count': second.record_count, 'file_size': second.file_size, 'created_at': second.created_at.astimezone(timezone.utc).isoformat()}
-    return {'report_a': a, 'report_b': b, 'record_count_delta': b['record_count'] - a['record_count'], 'file_size_delta': b['file_size'] - a['file_size']}
-
-@router.post('/schedules', response_model=dict)
-async def create_schedule(schedule: ReportScheduleCreate, current_user=Depends(require_permission(Permission.REPORT_CREATE))):
-    await _project_access(schedule.project_id, str(current_user.get('user_id'))); raise HTTPException(status_code=501, detail='Report scheduling requires a persisted report schedule model and Celery Beat registration; no placeholder schedule is created')
-
-@router.get('/schedules/', response_model=List[dict])
-async def list_schedules(project_id: Optional[str] = None, current_user=Depends(require_permission(Permission.REPORT_READ))):
-    raise HTTPException(status_code=501, detail='Report scheduling is not enabled until persisted schedules are configured')
-
-@router.get('/templates/', response_model=List[dict])
-async def list_templates(report_type: Optional[str] = None, current_user=Depends(require_permission(Permission.REPORT_READ))):
-    templates = [
-        {'id': 'full', 'name': 'Full security report', 'report_type': 'full', 'formats': sorted(SUPPORTED_FORMATS)},
-        {'id': 'findings', 'name': 'Findings report', 'report_type': 'findings', 'formats': sorted(SUPPORTED_FORMATS)},
-        {'id': 'evidence', 'name': 'Evidence report', 'report_type': 'evidence', 'formats': sorted(SUPPORTED_FORMATS)},
-        {'id': 'scan', 'name': 'Scan summary report', 'report_type': 'scan', 'formats': sorted(SUPPORTED_FORMATS)},
-    ]
-    return [item for item in templates if not report_type or item['report_type'] == report_type]
