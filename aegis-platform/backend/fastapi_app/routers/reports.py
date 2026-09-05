@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.signing import BadSignature, SignatureExpired, dumps, loads
 from django.core.validators import validate_email
+from django.conf import settings as django_settings
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
 from django.http import FileResponse
@@ -53,6 +54,7 @@ class ReportResponse(BaseModel):
     generated_by: str
     created_at: str
     completed_at: Optional[str] = None
+    expires_at: str
 
 class ReportScheduleCreate(BaseModel):
     project_id: str
@@ -257,7 +259,8 @@ def _serialize(report: DataExport):
     return ReportResponse(id=str(report.id), project_id=str(filters.get('project_id', '')), scan_id=str(filters['scan_id']) if filters.get('scan_id') else None,
                           title=report.name, report_type=filters.get('report_type', 'full'), format=report.format, status=report.status,
                           file_size=report.file_size, generated_by=str(report.user_id), created_at=report.created_at.astimezone(timezone.utc).isoformat(),
-                          completed_at=report.completed_at.astimezone(timezone.utc).isoformat() if report.completed_at else None)
+                          completed_at=report.completed_at.astimezone(timezone.utc).isoformat() if report.completed_at else None,
+                          expires_at=report.expires_at.astimezone(timezone.utc).isoformat())
 
 @sync_to_async
 def _build_payload(project_id: str, scan_id: Optional[str], report_type: str):
@@ -315,7 +318,7 @@ def _create_report(body: ReportCreate, user_id: str, payload: dict):
     if body.report_type not in SUPPORTED_REPORT_TYPES: raise HTTPException(status_code=400, detail=f'Unsupported report type: {body.report_type}')
     report = DataExport.objects.create(user_id=user_id, name=body.title, format=body.format, status=DataExport.Status.PROCESSING,
                                        resource_type='project_report', filters={'project_id': body.project_id, 'scan_id': body.scan_id, 'report_type': body.report_type, 'description': body.description, 'template_id': body.template_id},
-                                       fields=['project', 'scan', 'findings', 'evidence'], expires_at=django_timezone.now() + timedelta(days=7))
+                                       fields=['project', 'scan', 'findings', 'evidence'], expires_at=django_timezone.now() + timedelta(days=django_settings.REPORT_RETENTION_DAYS))
     if body.format == 'json': content, ext = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), 'json'
     elif body.format == 'csv': content, ext = _make_csv(payload), 'csv'
     else: content, ext = _make_pdf(payload, body.title), 'pdf'
@@ -396,7 +399,9 @@ async def list_templates(report_type: Optional[str] = None, current_user=Depends
 async def download_shared_report(share_token: str):
     try: payload = loads(share_token, salt='aegisscan-report-share', max_age=30 * 24 * 3600)
     except (BadSignature, SignatureExpired): raise HTTPException(status_code=401, detail='Invalid or expired report share token')
-    report = await sync_to_async(lambda: DataExport.objects.filter(id=payload.get('report_id'), resource_type='project_report', status=DataExport.Status.COMPLETED).first())()
+    if not isinstance(payload.get('expires_at'), (int, float)) or payload['expires_at'] <= django_timezone.now().timestamp():
+        raise HTTPException(status_code=401, detail='Invalid or expired report share token')
+    report = await sync_to_async(lambda: DataExport.objects.filter(id=payload.get('report_id'), resource_type='project_report', status=DataExport.Status.COMPLETED, expires_at__gt=django_timezone.now()).first())()
     if not report or not report.file or payload.get('permission') not in {'view', 'download'}: raise HTTPException(status_code=404, detail='Shared report not found')
     return FileResponse(report.file.path, media_type='application/octet-stream', filename=report.file.name.rsplit('/', 1)[-1])
 
@@ -407,6 +412,7 @@ async def get_report(report_id: str, current_user=Depends(require_permission(Per
 @router.get('/{report_id}/download')
 async def download_report(report_id: str, current_user=Depends(require_permission(Permission.REPORT_DOWNLOAD))):
     report = await _get_report(report_id, str(current_user.get('user_id')))
+    if report.expires_at <= django_timezone.now(): raise HTTPException(status_code=410, detail='Report artifact has expired')
     if report.status != DataExport.Status.COMPLETED or not report.file: raise HTTPException(status_code=409, detail='Report is not ready for download')
     report.downloaded_at = django_timezone.now(); await sync_to_async(report.save)(update_fields=['downloaded_at'])
     return FileResponse(report.file.path, media_type='application/octet-stream', filename=report.file.name.rsplit('/', 1)[-1])
@@ -424,6 +430,11 @@ async def delete_report(report_id: str, current_user=Depends(require_permission(
 @router.post('/{report_id}/share')
 async def share_report(report_id: str, email: str, permission: str = 'view', expires_in_days: int = Query(7, ge=1, le=30), current_user=Depends(require_permission(Permission.REPORT_SHARE))):
     if permission not in {'view', 'download'}: raise HTTPException(status_code=400, detail='permission must be view or download')
+    try: validate_email(email)
+    except ValidationError as exc: raise HTTPException(status_code=400, detail='A valid report recipient email is required') from exc
     report = await _get_report(report_id, str(current_user.get('user_id')))
-    token = dumps({'report_id': str(report.id), 'permission': permission, 'recipient': email}, salt='aegisscan-report-share')
-    return {'report_id': str(report.id), 'recipient': email, 'permission': permission, 'expires_in_days': expires_in_days, 'share_token': token, 'download_path': f'/reports/shared/{token}/download'}
+    if report.status != DataExport.Status.COMPLETED or not report.file or report.expires_at <= django_timezone.now():
+        raise HTTPException(status_code=409, detail='Only an active completed report can be shared')
+    share_expires_at=min(report.expires_at, django_timezone.now()+timedelta(days=expires_in_days))
+    token = dumps({'report_id': str(report.id), 'permission': permission, 'recipient': email, 'expires_at': share_expires_at.timestamp()}, salt='aegisscan-report-share')
+    return {'report_id': str(report.id), 'recipient': email, 'permission': permission, 'expires_in_days': expires_in_days, 'expires_at': share_expires_at.astimezone(timezone.utc).isoformat(), 'share_token': token, 'download_path': f'/reports/shared/{token}/download'}
