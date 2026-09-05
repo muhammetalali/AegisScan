@@ -6,9 +6,10 @@ from django_celery_beat.models import PeriodicTask
 from django_project.projects.models import Project
 from django_project.users.models import User
 from django_project.audit.models import DataExport
-from enterprise.models import ReportSchedule
+from enterprise.models import ReportSchedule, ReportScheduleExecution
 from enterprise.tasks import dispatch_due_schedules, execute_report_schedule
 from fastapi import HTTPException
+from fastapi_app.routers import reports as reports_router
 from fastapi_app.routers.reports import (
     ReportScheduleCreate,
     _create_report_schedules,
@@ -109,7 +110,7 @@ def test_report_schedule_executes_real_report_and_advances_schedule(report_proje
     ), str(owner.id))[0]
     previous_next_run = schedule.next_run
 
-    result = execute_report_schedule.run(str(schedule.id))
+    result = execute_report_schedule.run(str(schedule.id), delivery_id="report-delivery-1")
 
     schedule.refresh_from_db()
     report = DataExport.objects.get(id=result["report_id"])
@@ -120,6 +121,20 @@ def test_report_schedule_executes_real_report_and_advances_schedule(report_proje
     assert report.file.name.endswith(".json")
     assert schedule.last_run is not None
     assert schedule.next_run > previous_next_run
+    execution = ReportScheduleExecution.objects.get(delivery_id="report-delivery-1")
+    assert execution.status == ReportScheduleExecution.Status.COMPLETED
+    assert execution.report_id == report.id
+    assert execution.attempts == 1
+
+    replay = execute_report_schedule.run(str(schedule.id), delivery_id="report-delivery-1")
+
+    assert replay == {
+        "status": "completed", "schedule_id": str(schedule.id),
+        "report_id": str(report.id), "replayed": True,
+    }
+    assert DataExport.objects.filter(resource_type="project_report").count() == 1
+    execution.refresh_from_db()
+    assert execution.attempts == 1
 
 
 @pytest.mark.django_db
@@ -137,3 +152,36 @@ def test_due_dispatcher_does_not_duplicate_beat_managed_reports(report_projects,
     result = dispatch_due_schedules.run()
 
     assert result == {"queued": 0, "reports": 0, "assurance": 0}
+
+
+@pytest.mark.django_db
+def test_failed_report_delivery_reuses_durable_execution_on_retry(report_projects, settings, tmp_path, monkeypatch):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+    real_build_payload = reports_router._build_payload
+
+    async def fail_build(*_args, **_kwargs):
+        raise RuntimeError("deterministic report build failure")
+
+    monkeypatch.setattr(reports_router, "_build_payload", fail_build)
+    with pytest.raises(RuntimeError, match="deterministic report build failure"):
+        execute_report_schedule.run(str(schedule.id), delivery_id="report-delivery-retry")
+
+    execution = ReportScheduleExecution.objects.get(delivery_id="report-delivery-retry")
+    assert execution.status == ReportScheduleExecution.Status.FAILED
+    assert execution.attempts == 1
+    assert execution.report_id is None
+
+    monkeypatch.setattr(reports_router, "_build_payload", real_build_payload)
+    result = execute_report_schedule.run(str(schedule.id), delivery_id="report-delivery-retry")
+
+    execution.refresh_from_db()
+    assert result["status"] == "completed"
+    assert result["replayed"] is False
+    assert execution.status == ReportScheduleExecution.Status.COMPLETED
+    assert execution.attempts == 2
+    assert DataExport.objects.filter(resource_type="project_report").count() == 1
