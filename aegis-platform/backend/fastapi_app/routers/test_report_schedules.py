@@ -139,7 +139,9 @@ def test_report_schedule_executes_real_report_and_advances_schedule(report_proje
     assert result["status"] == "completed"
     assert report.status == DataExport.Status.COMPLETED
     assert report.resource_type == "project_report"
+    assert len(report.artifact_sha256) == 64
     assert report.file_size > 0
+    assert len(report.artifact_sha256) == 64
     assert report.file.name.endswith(".json")
     assert schedule.last_run is not None
     assert schedule.next_run > previous_next_run
@@ -469,6 +471,32 @@ def test_expired_report_and_expired_share_token_are_denied(report_projects, sett
     assert direct_error.value.status_code == 410
     assert shared_error.value.status_code == 401
     assert share_error.value.status_code == 409
+
+
+@pytest.mark.django_db
+def test_tampered_report_is_rejected_by_download_and_delivery(report_projects, settings, tmp_path):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+    result = execute_report_schedule.run(str(schedule.id), delivery_id="report-integrity-proof")
+    report = DataExport.objects.get(pk=result["report_id"])
+    delivery = ReportRecipientDelivery.objects.get(execution_id=result["execution_id"])
+    Path(report.file.path).write_bytes(b'{"tampered":true}')
+
+    with pytest.raises(HTTPException) as download_error:
+        async_to_sync(download_report)(str(report.id), {"user_id":str(owner.id)})
+    with pytest.raises(Exception, match="artifact integrity verification failed"):
+        deliver_scheduled_report.run(str(delivery.id))
+
+    delivery.refresh_from_db()
+    assert download_error.value.status_code == 409
+    assert delivery.status == ReportRecipientDelivery.Status.FAILED
+    assert "integrity verification failed" in delivery.last_error
+    assert len(mail.outbox) == 0
 
 
 @pytest.mark.django_db(transaction=True)
