@@ -12,6 +12,7 @@ from django.core.files.base import ContentFile
 from django.core.signing import BadSignature, SignatureExpired, dumps, loads
 from django.core.validators import validate_email
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.http import FileResponse
 from django.utils import timezone as django_timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -284,7 +285,13 @@ async def download_report(report_id: str, current_user=Depends(require_permissio
 
 @router.delete('/{report_id}')
 async def delete_report(report_id: str, current_user=Depends(require_permission(Permission.REPORT_CREATE))):
-    report = await _get_report(report_id, str(current_user.get('user_id'))); report.file.delete(save=False); report.delete(); return {'deleted': True, 'report_id': report_id}
+    report = await _get_report(report_id, str(current_user.get('user_id')))
+    try:
+        await sync_to_async(report.delete)()
+    except ProtectedError as exc:
+        raise HTTPException(status_code=409, detail='Scheduled report evidence cannot be deleted') from exc
+    report.file.delete(save=False)
+    return {'deleted': True, 'report_id': report_id}
 
 @router.post('/{report_id}/share')
 async def share_report(report_id: str, email: str, permission: str = 'view', expires_in_days: int = Query(7, ge=1, le=30), current_user=Depends(require_permission(Permission.REPORT_SHARE))):
