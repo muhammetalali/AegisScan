@@ -15,7 +15,7 @@ env = environ.Env(
     CELERY_BROKER_URL=(str, 'redis://localhost:6379/0'), CELERY_RESULT_BACKEND=(str, 'redis://localhost:6379/0'),
     JWT_SECRET_KEY=(str, ''), JWT_ACCESS_TOKEN_LIFETIME=(int, 60), JWT_REFRESH_TOKEN_LIFETIME=(int, 1440),
     AUTH_COOKIE_SECURE=(bool, False), SECURE_SSL_REDIRECT=(bool, True), EMAIL_HOST=(str, 'smtp.gmail.com'), EMAIL_PORT=(int, 587), EMAIL_HOST_USER=(str, ''),
-    EMAIL_HOST_PASSWORD=(str, ''), EMAIL_USE_TLS=(bool, True), DEFAULT_FROM_EMAIL=(str, 'AegisScan <noreply@aegisscan.local>'),
+    EMAIL_HOST_PASSWORD=(str, ''), EMAIL_USE_TLS=(bool, True), EMAIL_TIMEOUT=(int, 30), DEFAULT_FROM_EMAIL=(str, 'AegisScan <noreply@aegisscan.local>'),
     FRONTEND_URL=(str, 'http://localhost:5173'), SENTRY_DSN=(str, ''), LOG_LEVEL=(str, 'INFO'),
 )
 environ.Env.read_env(BASE_DIR / '.env')
@@ -46,7 +46,7 @@ SPECTACULAR_SETTINGS={'TITLE':'AegisScan Platform API','DESCRIPTION':'Security V
 AUTH_USER_MODEL='users.User'; SIMPLE_JWT={'ACCESS_TOKEN_LIFETIME':timedelta(minutes=env('JWT_ACCESS_TOKEN_LIFETIME')),'REFRESH_TOKEN_LIFETIME':timedelta(minutes=env('JWT_REFRESH_TOKEN_LIFETIME')),'ROTATE_REFRESH_TOKENS':True,'BLACKLIST_AFTER_ROTATION':True,'UPDATE_LAST_LOGIN':True,'ALGORITHM':'HS256','SIGNING_KEY':JWT_SECRET_KEY,'AUTH_HEADER_TYPES':('Bearer',),'AUTH_HEADER_NAME':'HTTP_AUTHORIZATION','USER_ID_FIELD':'id','USER_ID_CLAIM':'user_id','ISSUER':'aegisscan'}
 CELERY_BROKER_URL=env('CELERY_BROKER_URL'); CELERY_RESULT_BACKEND=env('CELERY_RESULT_BACKEND'); CELERY_ACCEPT_CONTENT=['json']; CELERY_TASK_SERIALIZER='json'; CELERY_RESULT_SERIALIZER='json'; CELERY_TIMEZONE='UTC'; CELERY_TASK_TRACK_STARTED=True; CELERY_TASK_TIME_LIMIT=3600; CELERY_WORKER_PREFETCH_MULTIPLIER=1; CELERY_BEAT_SCHEDULER='django_celery_beat.schedulers:DatabaseScheduler'; CHANNEL_LAYERS={'default':{'BACKEND':'channels_redis.RedisChannelLayer','CONFIG':{'hosts':[REDIS_URL]}}}
 AUTH_PASSWORD_VALIDATORS=[{'NAME':'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},{'NAME':'django.contrib.auth.password_validation.MinimumLengthValidator'},{'NAME':'django.contrib.auth.password_validation.CommonPasswordValidator'},{'NAME':'django.contrib.auth.password_validation.NumericPasswordValidator'}]
-LANGUAGE_CODE='ar'; TIME_ZONE='UTC'; USE_I18N=True; USE_TZ=True; STATIC_URL='static/'; STATIC_ROOT=BASE_DIR/'staticfiles'; MEDIA_URL='media/'; MEDIA_ROOT=BASE_DIR/'media'; DEFAULT_AUTO_FIELD='django.db.models.BigAutoField'; EMAIL_BACKEND='django.core.mail.backends.smtp.EmailBackend'; EMAIL_HOST=env('EMAIL_HOST'); EMAIL_PORT=env('EMAIL_PORT'); EMAIL_USE_TLS=env('EMAIL_USE_TLS'); EMAIL_HOST_USER=env('EMAIL_HOST_USER'); EMAIL_HOST_PASSWORD=env('EMAIL_HOST_PASSWORD'); DEFAULT_FROM_EMAIL=env('DEFAULT_FROM_EMAIL'); FRONTEND_URL=env('FRONTEND_URL')
+LANGUAGE_CODE='ar'; TIME_ZONE='UTC'; USE_I18N=True; USE_TZ=True; STATIC_URL='static/'; STATIC_ROOT=BASE_DIR/'staticfiles'; MEDIA_URL='media/'; MEDIA_ROOT=BASE_DIR/'media'; DEFAULT_AUTO_FIELD='django.db.models.BigAutoField'; EMAIL_BACKEND='django.core.mail.backends.smtp.EmailBackend'; EMAIL_HOST=env('EMAIL_HOST'); EMAIL_PORT=env('EMAIL_PORT'); EMAIL_USE_TLS=env('EMAIL_USE_TLS'); EMAIL_TIMEOUT=env('EMAIL_TIMEOUT'); EMAIL_HOST_USER=env('EMAIL_HOST_USER'); EMAIL_HOST_PASSWORD=env('EMAIL_HOST_PASSWORD'); DEFAULT_FROM_EMAIL=env('DEFAULT_FROM_EMAIL'); FRONTEND_URL=env('FRONTEND_URL')
 LOGGING={'version':1,'disable_existing_loggers':False,'handlers':{'console':{'class':'logging.StreamHandler'}},'root':{'handlers':['console'],'level':env('LOG_LEVEL')}}
 if env('SENTRY_DSN'):
     import sentry_sdk
