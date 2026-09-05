@@ -33,39 +33,8 @@ def _pool_instance() -> ThreadedConnectionPool:
 
 def initialize_policy_store() -> None:
     global _schema_ready
-    if _schema_ready:
-        return
-    pool = _pool_instance(); conn = pool.getconn()
-    try:
-        with conn.cursor() as cur:
-            # Serialize raw bootstrap DDL across all API worker processes.
-            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ('aegisscan:bootstrap-schema:v1',))
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS assurance_policies (
-                    policy_id TEXT NOT NULL,
-                    version INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                    priority INTEGER NOT NULL DEFAULT 0,
-                    conditions JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    actions JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    created_by TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    PRIMARY KEY (policy_id, version)
-                )
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_assurance_policies_enabled_priority ON assurance_policies(enabled, priority DESC, version DESC)")
-            cur.execute("SELECT COUNT(*) FROM assurance_policies")
-            if cur.fetchone()[0] == 0:
-                now = _now()
-                for policy in DEFAULT_POLICIES:
-                    cur.execute("INSERT INTO assurance_policies(policy_id,version,name,enabled,priority,conditions,actions,created_by,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (policy["id"], policy["version"], policy["name"], policy["enabled"], policy["priority"], json.dumps(policy.get("when", {})), json.dumps(policy.get("actions", {})), "system", now))
-            conn.commit(); _schema_ready = True
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        pool.putconn(conn)
+    # Schema and seed ownership belongs to Django migration 0007.
+    _schema_ready = True
 
 
 def list_policies() -> list[dict[str, Any]]:
