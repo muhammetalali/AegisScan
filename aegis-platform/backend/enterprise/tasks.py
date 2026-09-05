@@ -6,11 +6,12 @@ from datetime import timedelta
 from asgiref.sync import async_to_sync
 from celery import shared_task
 from django.core.mail import send_mail
+from django.db import transaction
 from django.utils import timezone
 
 from django_project.projects.models import Project
 from django_project.vulnerabilities.models import Vulnerability
-from .models import ContinuousAssuranceSchedule, Notification, ReportSchedule, CloudDiscoveryRun, ExternalIntegration
+from .models import ContinuousAssuranceSchedule, Notification, ReportSchedule, ReportScheduleExecution, CloudDiscoveryRun, ExternalIntegration
 from .services import build_twin, predict_scenario, generate_attack_paths, map_compliance, fetch_intel, fuse_finding
 from .integrations import send_integration, ingest_sbom
 
@@ -37,15 +38,43 @@ def fuse_finding_intelligence_task(finding_id: str):
 @shared_task(name='enterprise.fetch_threat_intel')
 def fetch_threat_intel_task(provider: str,key: str,cve: str|None=None,package: dict|None=None): return fetch_intel(provider,key,cve=cve,package=package)
 
-@shared_task(name='enterprise.execute_report_schedule')
-def execute_report_schedule(schedule_id: str):
+@shared_task(bind=True,name='enterprise.execute_report_schedule')
+def execute_report_schedule(self, schedule_id: str, delivery_id: str | None = None):
     from fastapi_app.routers.reports import ReportCreate, _build_payload, _create_report
-    schedule=ReportSchedule.objects.select_related('project').get(pk=schedule_id)
-    if not schedule.enabled:return {'status':'disabled','schedule_id':schedule_id}
-    payload=async_to_sync(_build_payload)(str(schedule.project_id),None,schedule.report_type)
-    report=async_to_sync(_create_report)(ReportCreate(project_id=str(schedule.project_id),title=schedule.title,report_type=schedule.report_type,format=schedule.format),str(schedule.created_by_id),payload)
-    now=timezone.now(); schedule.last_run=now; schedule.next_run=now+timedelta(minutes={'daily':1440,'weekly':10080,'monthly':43200}.get(schedule.frequency,60)); schedule.save(update_fields=['last_run','next_run','updated_at'])
-    return {'status':'completed','schedule_id':schedule_id,'report_id':str(report.id)}
+    task_delivery_id=delivery_id or getattr(self.request,'id',None)
+    if not task_delivery_id: raise ValueError('Scheduled report execution requires a durable Celery delivery identifier')
+    redelivered=bool((getattr(self.request,'delivery_info',None) or {}).get('redelivered'))
+    try:
+        with transaction.atomic():
+            schedule=ReportSchedule.objects.select_for_update().select_related('project').get(pk=schedule_id)
+            if not schedule.enabled:return {'status':'disabled','schedule_id':schedule_id}
+            execution,created=ReportScheduleExecution.objects.select_for_update().get_or_create(
+                delivery_id=task_delivery_id,defaults={'schedule':schedule},
+            )
+            if execution.schedule_id != schedule.id: raise ValueError('Report delivery identifier is already bound to another schedule')
+            if execution.status==ReportScheduleExecution.Status.COMPLETED and execution.report_id:
+                return {'status':'completed','schedule_id':schedule_id,'report_id':str(execution.report_id),'replayed':True}
+            if not created and execution.status==ReportScheduleExecution.Status.RUNNING and not redelivered:
+                return {'status':'in_progress','schedule_id':schedule_id,'execution_id':str(execution.id)}
+            execution.status=ReportScheduleExecution.Status.RUNNING; execution.attempts+=1; execution.started_at=timezone.now(); execution.error_message=''
+            execution.save(update_fields=['status','attempts','started_at','error_message','updated_at'])
+            payload=async_to_sync(_build_payload)(str(schedule.project_id),None,schedule.report_type)
+            report=async_to_sync(_create_report)(ReportCreate(project_id=str(schedule.project_id),title=schedule.title,report_type=schedule.report_type,format=schedule.format),str(schedule.created_by_id),payload)
+            now=timezone.now(); execution.report=report; execution.status=ReportScheduleExecution.Status.COMPLETED; execution.completed_at=now
+            execution.save(update_fields=['report','status','completed_at','updated_at'])
+            schedule.last_run=now; schedule.next_run=now+timedelta(minutes={'daily':1440,'weekly':10080,'monthly':43200}.get(schedule.frequency,60)); schedule.save(update_fields=['last_run','next_run','updated_at'])
+        return {'status':'completed','schedule_id':schedule_id,'report_id':str(report.id),'execution_id':str(execution.id),'replayed':False}
+    except Exception as exc:
+        with transaction.atomic():
+            schedule=ReportSchedule.objects.get(pk=schedule_id)
+            execution,_=ReportScheduleExecution.objects.select_for_update().get_or_create(
+                delivery_id=task_delivery_id,defaults={'schedule':schedule},
+            )
+            if execution.schedule_id != schedule.id: raise ValueError('Report delivery identifier is already bound to another schedule') from exc
+            if execution.status != ReportScheduleExecution.Status.COMPLETED:
+                execution.status=ReportScheduleExecution.Status.FAILED; execution.attempts=max(1,execution.attempts); execution.error_message=str(exc)
+                execution.save(update_fields=['status','attempts','error_message','updated_at'])
+        raise
 
 @shared_task(name='enterprise.send_notification',autoretry_for=(Exception,),retry_backoff=True,max_retries=3)
 def send_notification(notification_id: str):
