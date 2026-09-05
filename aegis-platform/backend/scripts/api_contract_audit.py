@@ -58,6 +58,8 @@ def main() -> int:
         '/api/v1/validations/{validation_id}/contract',
         '/api/v1/validation-contract',
         '/api/v1/investigation/projects/{project_id}',
+        '/api/v1/reports/schedules',
+        '/api/v1/reports/templates',
     }
     missing = sorted(required - set(schema.get('paths', {})))
     failures.extend(f'Missing contractual domain path: {path}' for path in missing)
