@@ -64,7 +64,7 @@ services:
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
     depends_on:
-      django: {condition: service_started}
+      django: {condition: service_healthy}
       redis: {condition: service_healthy}
       scan_target: {condition: service_healthy}
     healthcheck:
@@ -88,6 +88,7 @@ services:
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
       DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
+      django: {condition: service_healthy}
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
       scan_target: {condition: service_healthy}
@@ -102,6 +103,7 @@ services:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
+      django: {condition: service_healthy}
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
       scan_target: {condition: service_healthy}
