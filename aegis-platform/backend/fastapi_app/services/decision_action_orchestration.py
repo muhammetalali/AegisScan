@@ -41,6 +41,9 @@ def _ensure_schema() -> None:
     pool = _pool_instance(); conn = pool.getconn()
     try:
         with conn.cursor() as cur:
+            # Uvicorn workers initialize concurrently. PostgreSQL's IF NOT EXISTS
+            # does not serialize catalog/type creation, so guard bootstrap DDL.
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ('aegisscan:bootstrap-schema:v1',))
             cur.execute("""CREATE TABLE IF NOT EXISTS security_decision_actions (
                 action_id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, node_id TEXT NOT NULL, title TEXT NOT NULL,
                 owner TEXT NOT NULL, requested_by TEXT NOT NULL, sla_hours INTEGER NOT NULL CHECK (sla_hours > 0),
@@ -59,6 +62,9 @@ def _ensure_schema() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_actions_state_updated ON security_decision_actions(state, updated_at)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_actions_owner_sla ON security_decision_actions(owner, sla_status, created_at)")
             conn.commit(); _schema_ready = True
+    except Exception:
+        conn.rollback()
+        raise
     finally: pool.putconn(conn)
 
 
