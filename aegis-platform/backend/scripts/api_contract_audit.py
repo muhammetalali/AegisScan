@@ -61,6 +61,7 @@ def main() -> int:
         '/api/v1/reports/schedules',
         '/api/v1/reports/schedules/{schedule_id}',
         '/api/v1/reports/schedules/{schedule_id}/executions',
+        '/api/v1/reports/schedules/{schedule_id}/executions/{execution_id}/deliveries',
         '/api/v1/reports/templates',
     }
     missing = sorted(required - set(schema.get('paths', {})))

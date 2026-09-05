@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage, send_mail
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from django_project.projects.models import Project
 from django_project.vulnerabilities.models import Vulnerability
-from .models import ContinuousAssuranceSchedule, Notification, ReportSchedule, ReportScheduleExecution, CloudDiscoveryRun, ExternalIntegration
+from .models import ContinuousAssuranceSchedule, Notification, ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution, CloudDiscoveryRun, ExternalIntegration
 from .services import build_twin, predict_scenario, generate_attack_paths, map_compliance, fetch_intel, fuse_finding
 from .integrations import send_integration, ingest_sbom
 
@@ -62,8 +64,20 @@ def execute_report_schedule(self, schedule_id: str, delivery_id: str | None = No
             report=async_to_sync(_create_report)(ReportCreate(project_id=str(schedule.project_id),title=schedule.title,report_type=schedule.report_type,format=schedule.format),str(schedule.created_by_id),payload)
             now=timezone.now(); execution.report=report; execution.status=ReportScheduleExecution.Status.COMPLETED; execution.completed_at=now
             execution.save(update_fields=['report','status','completed_at','updated_at'])
+            delivery_ids=[]
+            for recipient in schedule.recipients:
+                recipient_hash=hashlib.sha256(recipient.encode('utf-8')).hexdigest()[:16]
+                delivery,_=ReportRecipientDelivery.objects.get_or_create(
+                    execution=execution,recipient=recipient,
+                    defaults={'message_id':f'<aegis-report-{execution.id}-{recipient_hash}@aegisscan.local>'},
+                )
+                delivery_ids.append(str(delivery.id))
+            def queue_recipient_deliveries():
+                for recipient_delivery_id in delivery_ids:
+                    deliver_scheduled_report.delay(recipient_delivery_id)
+            transaction.on_commit(queue_recipient_deliveries,robust=True)
             schedule.last_run=now; schedule.next_run=now+timedelta(minutes={'daily':1440,'weekly':10080,'monthly':43200}.get(schedule.frequency,60)); schedule.save(update_fields=['last_run','next_run','updated_at'])
-        return {'status':'completed','schedule_id':schedule_id,'report_id':str(report.id),'execution_id':str(execution.id),'replayed':False}
+        return {'status':'completed','schedule_id':schedule_id,'report_id':str(report.id),'execution_id':str(execution.id),'recipient_deliveries':len(delivery_ids),'replayed':False}
     except Exception as exc:
         with transaction.atomic():
             schedule=ReportSchedule.objects.get(pk=schedule_id)
@@ -75,6 +89,50 @@ def execute_report_schedule(self, schedule_id: str, delivery_id: str | None = No
                 execution.status=ReportScheduleExecution.Status.FAILED; execution.attempts=max(1,execution.attempts); execution.error_message=str(exc)
                 execution.save(update_fields=['status','attempts','error_message','updated_at'])
         raise
+
+@shared_task(bind=True,name='enterprise.deliver_scheduled_report',autoretry_for=(Exception,),retry_backoff=True,max_retries=3)
+def deliver_scheduled_report(self, recipient_delivery_id: str):
+    redelivered=bool((getattr(self.request,'delivery_info',None) or {}).get('redelivered'))
+    stale_before=timezone.now()-timedelta(minutes=10)
+    with transaction.atomic():
+        delivery=ReportRecipientDelivery.objects.select_for_update().select_related('execution__schedule','execution__report').get(pk=recipient_delivery_id)
+        if delivery.status==ReportRecipientDelivery.Status.SENT:
+            return {'status':'sent','delivery_id':recipient_delivery_id,'message_id':delivery.message_id,'artifact_sha256':delivery.artifact_sha256,'replayed':True}
+        if delivery.status==ReportRecipientDelivery.Status.SENDING and delivery.updated_at>=stale_before and not redelivered:
+            return {'status':'in_progress','delivery_id':recipient_delivery_id}
+        delivery.status=ReportRecipientDelivery.Status.SENDING; delivery.attempts+=1; delivery.last_error=''
+        delivery.save(update_fields=['status','attempts','last_error','updated_at'])
+    try:
+        report=delivery.execution.report
+        if not report or report.status!='completed' or not report.file:
+            raise ValueError('Recipient delivery requires a completed persisted report artifact')
+        report.file.open('rb')
+        try: content=report.file.read()
+        finally: report.file.close()
+        artifact_sha256=hashlib.sha256(content).hexdigest()
+        content_type={'pdf':'application/pdf','json':'application/json','csv':'text/csv'}.get(report.format,'application/octet-stream')
+        message=EmailMessage(
+            subject=delivery.execution.schedule.title,
+            body=f'AegisScan scheduled report {report.id} is attached. Delivery evidence: {delivery.id}.',
+            to=[delivery.recipient],headers={'Message-ID':delivery.message_id},
+        )
+        message.attach(report.file.name.rsplit('/',1)[-1],content,content_type)
+        if message.send(fail_silently=False)!=1: raise RuntimeError('Email backend did not accept the scheduled report message')
+        now=timezone.now(); ReportRecipientDelivery.objects.filter(pk=delivery.pk).update(status=ReportRecipientDelivery.Status.SENT,sent_at=now,artifact_sha256=artifact_sha256,last_error='')
+        return {'status':'sent','delivery_id':recipient_delivery_id,'message_id':delivery.message_id,'artifact_sha256':artifact_sha256,'replayed':False}
+    except Exception as exc:
+        ReportRecipientDelivery.objects.filter(pk=delivery.pk).update(status=ReportRecipientDelivery.Status.FAILED,last_error=str(exc))
+        raise
+
+@shared_task(name='enterprise.dispatch_report_deliveries')
+def dispatch_report_deliveries(limit: int = 100):
+    ids=list(ReportRecipientDelivery.objects.filter(
+        Q(status__in=[ReportRecipientDelivery.Status.QUEUED,ReportRecipientDelivery.Status.FAILED]) |
+        Q(status=ReportRecipientDelivery.Status.SENDING,updated_at__lt=timezone.now()-timedelta(minutes=10)),
+        attempts__lt=4,
+    ).order_by('created_at').values_list('id',flat=True)[:max(1,min(limit,500))])
+    for delivery_id in ids: deliver_scheduled_report.delay(str(delivery_id))
+    return {'queued':len(ids),'delivery_ids':[str(item) for item in ids]}
 
 @shared_task(name='enterprise.send_notification',autoretry_for=(Exception,),retry_backoff=True,max_retries=3)
 def send_notification(notification_id: str):
