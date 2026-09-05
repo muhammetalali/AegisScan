@@ -81,6 +81,24 @@ class ReportSchedule(models.Model):
     recipients=models.JSONField(default=list); enabled=models.BooleanField(default=True); next_run=models.DateTimeField(); last_run=models.DateTimeField(null=True,blank=True); created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
 
 
+class ReportScheduleExecution(models.Model):
+    class Status(models.TextChoices):
+        PENDING='pending','Pending'; RUNNING='running','Running'; COMPLETED='completed','Completed'; FAILED='failed','Failed'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    schedule=models.ForeignKey(ReportSchedule,on_delete=models.CASCADE,related_name='executions')
+    delivery_id=models.CharField(max_length=255,unique=True)
+    status=models.CharField(max_length=20,choices=Status.choices,default=Status.PENDING)
+    report=models.OneToOneField('audit.DataExport',on_delete=models.PROTECT,related_name='schedule_execution',null=True,blank=True)
+    attempts=models.PositiveIntegerField(default=0)
+    error_message=models.TextField(blank=True)
+    started_at=models.DateTimeField(null=True,blank=True)
+    completed_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        indexes=[models.Index(fields=['schedule','status']),models.Index(fields=['created_at'])]
+
+
 class ThreatIntelCache(models.Model):
     provider=models.CharField(max_length=30); key=models.CharField(max_length=300); payload=models.JSONField(default=dict); fetched_at=models.DateTimeField(); expires_at=models.DateTimeField(); http_status=models.PositiveIntegerField(null=True,blank=True); etag=models.CharField(max_length=200,blank=True); sha256=models.CharField(max_length=64,blank=True)
     class Meta: unique_together=['provider','key']; indexes=[models.Index(fields=['provider','expires_at'])]
