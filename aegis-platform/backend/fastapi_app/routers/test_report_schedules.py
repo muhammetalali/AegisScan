@@ -1,19 +1,29 @@
 from asgiref.sync import async_to_sync
 import pytest
+from asgiref.sync import sync_to_async
+from django.db import connections
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from django_celery_beat.models import PeriodicTask
 
 from django_project.projects.models import Project
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from django_project.audit.models import DataExport
 from enterprise.models import ReportSchedule, ReportScheduleExecution
 from enterprise.tasks import dispatch_due_schedules, execute_report_schedule
 from fastapi import HTTPException
 from fastapi_app.routers import reports as reports_router
+from fastapi_app.core import dependencies as core_dependencies
 from fastapi_app.routers.reports import (
     ReportScheduleCreate,
+    ReportScheduleUpdate,
     _create_report_schedules,
+    _delete_report_schedule,
+    _get_report_schedule,
     _list_report_schedules,
+    _list_report_schedule_executions,
+    _update_report_schedule,
     router,
 )
 from starlette.routing import Match
@@ -185,3 +195,104 @@ def test_failed_report_delivery_reuses_durable_execution_on_retry(report_project
     assert execution.status == ReportScheduleExecution.Status.COMPLETED
     assert execution.attempts == 2
     assert DataExport.objects.filter(resource_type="project_report").count() == 1
+
+
+@pytest.mark.django_db
+def test_report_schedule_update_synchronizes_celery_beat(report_projects):
+    owner, _, project, _ = report_projects
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="findings", frequency="daily",
+        recipients=[owner.email], formats=["pdf"],
+    ), str(owner.id))[0]
+
+    updated = async_to_sync(_update_report_schedule)(str(schedule.id), str(owner.id), ReportScheduleUpdate(
+        title="Weekly risk review", frequency="weekly",
+        recipients=["SOC@example.com"], enabled=False,
+    ))
+
+    task = PeriodicTask.objects.select_related("interval").get(name=f"aegis-report:{schedule.id}")
+    assert updated.title == "Weekly risk review"
+    assert updated.frequency == ReportSchedule.Frequency.WEEKLY
+    assert updated.recipients == ["soc@example.com"]
+    assert updated.enabled is False
+    assert task.enabled is False
+    assert task.interval.every == 10080
+    assert task.interval.period == "minutes"
+
+
+@pytest.mark.django_db
+def test_report_schedule_delete_removes_beat_registration(report_projects):
+    owner, _, project, _ = report_projects
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="evidence", frequency="monthly",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+
+    async_to_sync(_delete_report_schedule)(str(schedule.id), str(owner.id))
+
+    assert not ReportSchedule.objects.filter(pk=schedule.id).exists()
+    assert not PeriodicTask.objects.filter(name=f"aegis-report:{schedule.id}").exists()
+
+
+@pytest.mark.django_db
+def test_report_schedule_lifecycle_is_owner_scoped(report_projects):
+    owner, outsider, project, _ = report_projects
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+
+    with pytest.raises(HTTPException) as get_error:
+        async_to_sync(_get_report_schedule)(str(schedule.id), str(outsider.id))
+    with pytest.raises(HTTPException) as update_error:
+        async_to_sync(_update_report_schedule)(str(schedule.id), str(outsider.id), ReportScheduleUpdate(enabled=False))
+    with pytest.raises(HTTPException) as execution_error:
+        async_to_sync(_list_report_schedule_executions)(str(schedule.id), str(outsider.id))
+
+    assert get_error.value.status_code == 404
+    assert update_error.value.status_code == 404
+    assert execution_error.value.status_code == 404
+    assert ReportSchedule.objects.get(pk=schedule.id).enabled is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_report_schedule_http_lifecycle_uses_persisted_state(transactional_db, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    user = User.objects.create_user(
+        email="report-api@example.invalid", password="Strong-Test-Password-123!",
+        role=UserRole.SECURITY_MANAGER,
+    )
+    project = Project.objects.create(name="Report API", slug="report-api", owner=user)
+    test_app = FastAPI()
+    test_app.include_router(reports_router.router, prefix="/api/v1/reports")
+    test_app.dependency_overrides[core_dependencies.get_current_user] = lambda: {
+        "user_id": str(user.id), "is_staff": False,
+    }
+    client = TestClient(test_app)
+    try:
+        with client:
+            created = client.post("/api/v1/reports/schedules", json={
+                "project_id": str(project.id), "template_id": "full", "frequency": "daily",
+                "recipients": [user.email], "formats": ["json"],
+            })
+            assert created.status_code == 201
+            schedule_id = created.json()[0]["id"]
+
+            updated = client.patch(f"/api/v1/reports/schedules/{schedule_id}", json={
+                "frequency": "weekly", "enabled": False,
+            })
+            assert updated.status_code == 200
+            assert updated.json()["frequency"] == "weekly"
+            assert updated.json()["enabled"] is False
+
+            executions = client.get(f"/api/v1/reports/schedules/{schedule_id}/executions")
+            assert executions.status_code == 200
+            assert executions.json() == []
+
+            deleted = client.delete(f"/api/v1/reports/schedules/{schedule_id}")
+            assert deleted.status_code == 204
+            assert client.get(f"/api/v1/reports/schedules/{schedule_id}").status_code == 404
+    finally:
+        if client.portal is not None:
+            client.portal.call(sync_to_async(connections.close_all, thread_sensitive=True))
+        test_app.dependency_overrides.clear()

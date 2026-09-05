@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from asgiref.sync import sync_to_async
@@ -16,7 +16,7 @@ from django.db.models.deletion import ProtectedError
 from django.http import FileResponse
 from django.utils import timezone as django_timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core.dependencies import get_current_user, require_permission
 from django_project.audit.models import DataExport
@@ -25,7 +25,7 @@ from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import Permission
 from django_project.vulnerabilities.models import Vulnerability
-from enterprise.models import ReportSchedule
+from enterprise.models import ReportSchedule, ReportScheduleExecution
 from enterprise.services import ensure_project_tenant, schedule_task
 
 router = APIRouter()
@@ -60,6 +60,15 @@ class ReportScheduleCreate(BaseModel):
     frequency: str
     recipients: List[str]
     formats: List[str]
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    next_run: Optional[datetime] = None
+
+class ReportScheduleUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    frequency: Optional[str] = None
+    recipients: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+    next_run: Optional[datetime] = None
 
 class ReportScheduleResponse(BaseModel):
     id: str
@@ -72,6 +81,16 @@ class ReportScheduleResponse(BaseModel):
     enabled: bool
     next_run: str
     last_run: Optional[str] = None
+
+class ReportScheduleExecutionResponse(BaseModel):
+    id: str
+    delivery_id: str
+    status: str
+    attempts: int
+    report_id: Optional[str] = None
+    error_message: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
 
 @sync_to_async
 def _project_access(project_id: str, user_id: str):
@@ -94,23 +113,36 @@ def _serialize_schedule(schedule: ReportSchedule) -> ReportScheduleResponse:
         last_run=schedule.last_run.astimezone(timezone.utc).isoformat() if schedule.last_run else None,
     )
 
+def _validated_recipients(recipients: List[str]) -> list[str]:
+    normalized = list(dict.fromkeys(address.strip().lower() for address in recipients if address.strip()))
+    if not normalized or len(normalized) > 100:
+        raise HTTPException(status_code=400, detail='Between 1 and 100 report recipients are required')
+    try:
+        for address in normalized:
+            validate_email(address)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail='Every report recipient must be a valid email address') from exc
+    return normalized
+
+def _schedule_interval(frequency: str) -> timedelta:
+    intervals = {
+        ReportSchedule.Frequency.DAILY: timedelta(days=1),
+        ReportSchedule.Frequency.WEEKLY: timedelta(weeks=1),
+        ReportSchedule.Frequency.MONTHLY: timedelta(days=30),
+    }
+    if frequency not in intervals:
+        raise HTTPException(status_code=400, detail='frequency must be daily, weekly, or monthly')
+    return intervals[frequency]
+
 @sync_to_async
 def _create_report_schedules(body: ReportScheduleCreate, user_id: str) -> list[ReportSchedule]:
     if body.template_id not in SUPPORTED_REPORT_TYPES:
         raise HTTPException(status_code=400, detail='Unsupported report template')
-    if body.frequency not in {ReportSchedule.Frequency.DAILY, ReportSchedule.Frequency.WEEKLY, ReportSchedule.Frequency.MONTHLY}:
-        raise HTTPException(status_code=400, detail='frequency must be daily, weekly, or monthly')
+    interval = _schedule_interval(body.frequency)
     formats = list(dict.fromkeys(body.formats))
     if not formats or any(item not in SUPPORTED_FORMATS for item in formats):
         raise HTTPException(status_code=400, detail='At least one supported report format is required')
-    recipients = list(dict.fromkeys(address.strip().lower() for address in body.recipients if address.strip()))
-    if not recipients or len(recipients) > 100:
-        raise HTTPException(status_code=400, detail='Between 1 and 100 report recipients are required')
-    try:
-        for address in recipients:
-            validate_email(address)
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail='Every report recipient must be a valid email address') from exc
+    recipients = _validated_recipients(body.recipients)
 
     with transaction.atomic():
         project = Project.objects.filter(id=body.project_id).first()
@@ -120,19 +152,17 @@ def _create_report_schedules(body: ReportScheduleCreate, user_id: str) -> list[R
             organization = ensure_project_tenant(project, user_id)
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        interval = {
-            ReportSchedule.Frequency.DAILY: timedelta(days=1),
-            ReportSchedule.Frequency.WEEKLY: timedelta(weeks=1),
-            ReportSchedule.Frequency.MONTHLY: timedelta(days=30),
-        }[body.frequency]
+        next_run = body.next_run or django_timezone.now() + interval
+        if django_timezone.is_naive(next_run):
+            next_run = django_timezone.make_aware(next_run, timezone.utc)
         rows = []
         for report_format in formats:
             schedule = ReportSchedule.objects.create(
                 organization=organization, project=project,
-                title=f'{body.template_id.title()} security report',
+                title=body.title or f'{body.template_id.title()} security report',
                 report_type=body.template_id, format=report_format,
                 frequency=body.frequency, recipients=recipients,
-                next_run=django_timezone.now() + interval, created_by_id=user_id,
+                next_run=next_run, created_by_id=user_id,
             )
             schedule_task(schedule)
             rows.append(schedule)
@@ -144,6 +174,57 @@ def _list_report_schedules(user_id: str, project_id: Optional[str]) -> list[Repo
     if project_id:
         qs = qs.filter(project_id=project_id)
     return list(qs)
+
+@sync_to_async
+def _get_report_schedule(schedule_id: str, user_id: str) -> ReportSchedule:
+    schedule = ReportSchedule.objects.filter(pk=schedule_id, created_by_id=user_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail='Report schedule not found')
+    return schedule
+
+@sync_to_async
+def _update_report_schedule(schedule_id: str, user_id: str, body: ReportScheduleUpdate) -> ReportSchedule:
+    with transaction.atomic():
+        schedule = ReportSchedule.objects.select_for_update().filter(pk=schedule_id, created_by_id=user_id).first()
+        if not schedule:
+            raise HTTPException(status_code=404, detail='Report schedule not found')
+        changes = body.model_dump(exclude_unset=True)
+        if 'frequency' in changes:
+            _schedule_interval(changes['frequency'])
+        if 'recipients' in changes:
+            changes['recipients'] = _validated_recipients(changes['recipients'])
+        if 'next_run' in changes and django_timezone.is_naive(changes['next_run']):
+            changes['next_run'] = django_timezone.make_aware(changes['next_run'], timezone.utc)
+        for field, value in changes.items():
+            setattr(schedule, field, value)
+        schedule.save(update_fields=[*changes.keys(), 'updated_at'])
+        schedule_task(schedule)
+        return schedule
+
+@sync_to_async
+def _delete_report_schedule(schedule_id: str, user_id: str) -> None:
+    from django_celery_beat.models import PeriodicTask
+    with transaction.atomic():
+        schedule = ReportSchedule.objects.select_for_update().filter(pk=schedule_id, created_by_id=user_id).first()
+        if not schedule:
+            raise HTTPException(status_code=404, detail='Report schedule not found')
+        PeriodicTask.objects.filter(name=f'aegis-report:{schedule.id}').delete()
+        schedule.delete()
+
+@sync_to_async
+def _list_report_schedule_executions(schedule_id: str, user_id: str) -> list[ReportScheduleExecution]:
+    if not ReportSchedule.objects.filter(pk=schedule_id, created_by_id=user_id).exists():
+        raise HTTPException(status_code=404, detail='Report schedule not found')
+    return list(ReportScheduleExecution.objects.filter(schedule_id=schedule_id).order_by('-created_at'))
+
+def _serialize_schedule_execution(execution: ReportScheduleExecution) -> ReportScheduleExecutionResponse:
+    return ReportScheduleExecutionResponse(
+        id=str(execution.id), delivery_id=execution.delivery_id, status=execution.status,
+        attempts=execution.attempts, report_id=str(execution.report_id) if execution.report_id else None,
+        error_message=execution.error_message,
+        started_at=execution.started_at.astimezone(timezone.utc).isoformat() if execution.started_at else None,
+        completed_at=execution.completed_at.astimezone(timezone.utc).isoformat() if execution.completed_at else None,
+    )
 
 @sync_to_async
 def _serialize(report: DataExport):
@@ -253,6 +334,23 @@ async def list_schedules(project_id: Optional[str] = None, current_user=Depends(
     if project_id:
         await _project_access(project_id, user_id)
     return [_serialize_schedule(item) for item in await _list_report_schedules(user_id, project_id)]
+
+@router.get('/schedules/{schedule_id}', response_model=ReportScheduleResponse)
+async def get_schedule(schedule_id: str, current_user=Depends(require_permission(Permission.REPORT_READ))):
+    return _serialize_schedule(await _get_report_schedule(schedule_id, str(current_user.get('user_id'))))
+
+@router.patch('/schedules/{schedule_id}', response_model=ReportScheduleResponse)
+async def update_schedule(schedule_id: str, body: ReportScheduleUpdate, current_user=Depends(require_permission(Permission.REPORT_CREATE))):
+    return _serialize_schedule(await _update_report_schedule(schedule_id, str(current_user.get('user_id')), body))
+
+@router.delete('/schedules/{schedule_id}', status_code=204)
+async def delete_schedule(schedule_id: str, current_user=Depends(require_permission(Permission.REPORT_CREATE))):
+    await _delete_report_schedule(schedule_id, str(current_user.get('user_id')))
+
+@router.get('/schedules/{schedule_id}/executions', response_model=List[ReportScheduleExecutionResponse])
+async def list_schedule_executions(schedule_id: str, current_user=Depends(require_permission(Permission.REPORT_READ))):
+    rows = await _list_report_schedule_executions(schedule_id, str(current_user.get('user_id')))
+    return [_serialize_schedule_execution(item) for item in rows]
 
 @router.get('/templates', response_model=List[dict])
 async def list_templates(report_type: Optional[str] = None, current_user=Depends(require_permission(Permission.REPORT_READ))):
