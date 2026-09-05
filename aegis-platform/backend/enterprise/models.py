@@ -99,6 +99,25 @@ class ReportScheduleExecution(models.Model):
         indexes=[models.Index(fields=['schedule','status']),models.Index(fields=['created_at'])]
 
 
+class ReportRecipientDelivery(models.Model):
+    class Status(models.TextChoices):
+        QUEUED='queued','Queued'; SENDING='sending','Sending'; SENT='sent','Sent'; FAILED='failed','Failed'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    execution=models.ForeignKey(ReportScheduleExecution,on_delete=models.CASCADE,related_name='recipient_deliveries')
+    recipient=models.EmailField(max_length=254)
+    message_id=models.CharField(max_length=255,unique=True)
+    status=models.CharField(max_length=20,choices=Status.choices,default=Status.QUEUED)
+    attempts=models.PositiveIntegerField(default=0)
+    artifact_sha256=models.CharField(max_length=64,blank=True)
+    last_error=models.TextField(blank=True)
+    sent_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['execution','recipient'],name='unique_report_execution_recipient')]
+        indexes=[models.Index(fields=['status','created_at']),models.Index(fields=['recipient','created_at'])]
+
+
 class ThreatIntelCache(models.Model):
     provider=models.CharField(max_length=30); key=models.CharField(max_length=300); payload=models.JSONField(default=dict); fetched_at=models.DateTimeField(); expires_at=models.DateTimeField(); http_status=models.PositiveIntegerField(null=True,blank=True); etag=models.CharField(max_length=200,blank=True); sha256=models.CharField(max_length=64,blank=True)
     class Meta: unique_together=['provider','key']; indexes=[models.Index(fields=['provider','expires_at'])]
