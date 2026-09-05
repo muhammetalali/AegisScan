@@ -1,7 +1,12 @@
+import hashlib
+from datetime import timedelta
+
 from asgiref.sync import async_to_sync
 import pytest
 from asgiref.sync import sync_to_async
 from django.db import connections
+from django.core import mail
+from django.utils import timezone as django_timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -10,8 +15,8 @@ from django_celery_beat.models import PeriodicTask
 from django_project.projects.models import Project
 from django_project.users.models import User, UserRole
 from django_project.audit.models import DataExport
-from enterprise.models import ReportSchedule, ReportScheduleExecution
-from enterprise.tasks import dispatch_due_schedules, execute_report_schedule
+from enterprise.models import ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution
+from enterprise.tasks import deliver_scheduled_report, dispatch_due_schedules, dispatch_report_deliveries, execute_report_schedule
 from fastapi import HTTPException
 from fastapi_app.routers import reports as reports_router
 from fastapi_app.core import dependencies as core_dependencies
@@ -23,6 +28,7 @@ from fastapi_app.routers.reports import (
     _get_report_schedule,
     _list_report_schedules,
     _list_report_schedule_executions,
+    _list_report_recipient_deliveries,
     _update_report_schedule,
     router,
 )
@@ -135,6 +141,7 @@ def test_report_schedule_executes_real_report_and_advances_schedule(report_proje
     assert execution.status == ReportScheduleExecution.Status.COMPLETED
     assert execution.report_id == report.id
     assert execution.attempts == 1
+    assert ReportRecipientDelivery.objects.filter(execution=execution).count() == 1
 
     replay = execute_report_schedule.run(str(schedule.id), delivery_id="report-delivery-1")
 
@@ -145,6 +152,107 @@ def test_report_schedule_executes_real_report_and_advances_schedule(report_proje
     assert DataExport.objects.filter(resource_type="project_report").count() == 1
     execution.refresh_from_db()
     assert execution.attempts == 1
+
+
+@pytest.mark.django_db
+def test_recipient_outbox_sends_real_attachment_and_replays_without_duplicate(report_projects, settings, tmp_path):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+    result = execute_report_schedule.run(str(schedule.id), delivery_id="report-email-delivery")
+    delivery = ReportRecipientDelivery.objects.get(execution_id=result["execution_id"])
+
+    sent = deliver_scheduled_report.run(str(delivery.id))
+
+    delivery.refresh_from_db()
+    assert sent["status"] == "sent"
+    assert sent["replayed"] is False
+    assert delivery.status == ReportRecipientDelivery.Status.SENT
+    assert delivery.attempts == 1
+    assert delivery.sent_at is not None
+    assert len(delivery.artifact_sha256) == 64
+    assert len(mail.outbox) == 1
+    assert mail.outbox[0].to == [owner.email]
+    assert mail.outbox[0].extra_headers["Message-ID"] == delivery.message_id
+    assert len(mail.outbox[0].attachments) == 1
+    assert mail.outbox[0].attachments[0][0].endswith(".json")
+    assert hashlib.sha256(mail.outbox[0].attachments[0][1]).hexdigest() == delivery.artifact_sha256
+    assert sent["artifact_sha256"] == delivery.artifact_sha256
+
+    replay = deliver_scheduled_report.run(str(delivery.id))
+
+    assert replay["replayed"] is True
+    assert len(mail.outbox) == 1
+    delivery.refresh_from_db()
+    assert delivery.attempts == 1
+
+
+@pytest.mark.django_db
+def test_report_delivery_dispatcher_queues_only_retryable_outbox_rows(report_projects, settings, tmp_path, monkeypatch):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email, "soc@example.com"], formats=["json"],
+    ), str(owner.id))[0]
+    execute_report_schedule.run(str(schedule.id), delivery_id="report-outbox-dispatch")
+    queued=[]
+    monkeypatch.setattr(deliver_scheduled_report, "delay", lambda delivery_id: queued.append(delivery_id))
+
+    result = dispatch_report_deliveries.run()
+
+    assert result["queued"] == 2
+    assert sorted(queued) == sorted(result["delivery_ids"])
+
+
+@pytest.mark.django_db
+def test_stale_sending_delivery_is_recovered_and_sent(report_projects, settings, tmp_path):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+    result = execute_report_schedule.run(str(schedule.id), delivery_id="report-stale-delivery")
+    delivery = ReportRecipientDelivery.objects.get(execution_id=result["execution_id"])
+    ReportRecipientDelivery.objects.filter(pk=delivery.id).update(
+        status=ReportRecipientDelivery.Status.SENDING, attempts=1,
+        updated_at=django_timezone.now()-timedelta(minutes=11),
+    )
+
+    sent = deliver_scheduled_report.run(str(delivery.id))
+
+    delivery.refresh_from_db()
+    assert sent["status"] == "sent"
+    assert delivery.status == ReportRecipientDelivery.Status.SENT
+    assert delivery.attempts == 2
+    assert len(mail.outbox) == 1
+
+
+@pytest.mark.django_db
+def test_recipient_delivery_history_is_schedule_owner_scoped(report_projects, settings, tmp_path):
+    owner, outsider, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+    result = execute_report_schedule.run(str(schedule.id), delivery_id="report-history-delivery")
+
+    rows = async_to_sync(_list_report_recipient_deliveries)(
+        str(schedule.id), result["execution_id"], str(owner.id),
+    )
+    assert len(rows) == 1
+    with pytest.raises(HTTPException) as exc:
+        async_to_sync(_list_report_recipient_deliveries)(
+            str(schedule.id), result["execution_id"], str(outsider.id),
+        )
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.django_db
