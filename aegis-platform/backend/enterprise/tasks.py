@@ -12,6 +12,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from django_project.projects.models import Project
+from django_project.audit.models import DataExport
 from django_project.vulnerabilities.models import Vulnerability
 from .models import ContinuousAssuranceSchedule, Notification, ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution, CloudDiscoveryRun, ExternalIntegration
 from .services import build_twin, predict_scenario, generate_attack_paths, map_compliance, fetch_intel, fuse_finding
@@ -133,6 +134,29 @@ def dispatch_report_deliveries(limit: int = 100):
     ).order_by('created_at').values_list('id',flat=True)[:max(1,min(limit,500))])
     for delivery_id in ids: deliver_scheduled_report.delay(str(delivery_id))
     return {'queued':len(ids),'delivery_ids':[str(item) for item in ids]}
+
+@shared_task(name='enterprise.expire_report_exports')
+def expire_report_exports(limit: int = 500):
+    """Remove expired report artifacts while preserving their durable database provenance."""
+    bounded_limit=max(1,min(limit,2000)); now=timezone.now()
+    ids=list(DataExport.objects.filter(
+        resource_type='project_report',expires_at__lte=now,
+    ).exclude(status=DataExport.Status.EXPIRED).order_by('expires_at').values_list('id',flat=True)[:bounded_limit])
+    expired=[]; failed=[]
+    for report_id in ids:
+        try:
+            with transaction.atomic():
+                report=DataExport.objects.select_for_update().get(pk=report_id)
+                if report.status==DataExport.Status.EXPIRED or report.expires_at>timezone.now(): continue
+                if report.file:
+                    report.file.delete(save=False)
+                report.file=None; report.status=DataExport.Status.EXPIRED; report.error_message=''
+                report.save(update_fields=['file','status','error_message'])
+                expired.append(str(report.id))
+        except Exception as exc:
+            DataExport.objects.filter(pk=report_id).exclude(status=DataExport.Status.EXPIRED).update(error_message=f'Artifact expiration failed: {exc}')
+            failed.append({'report_id':str(report_id),'error':str(exc)})
+    return {'expired':len(expired),'expired_ids':expired,'failed':failed}
 
 @shared_task(name='enterprise.send_notification',autoretry_for=(Exception,),retry_backoff=True,max_retries=3)
 def send_notification(notification_id: str):

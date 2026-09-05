@@ -1,11 +1,14 @@
 import hashlib
 from datetime import timedelta
+from pathlib import Path
 
 from asgiref.sync import async_to_sync
 import pytest
 from asgiref.sync import sync_to_async
 from django.db import connections
 from django.core import mail
+from django.core.files.base import ContentFile
+from django.core.signing import dumps
 from django.utils import timezone as django_timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -16,7 +19,7 @@ from django_project.projects.models import Project
 from django_project.users.models import User, UserRole
 from django_project.audit.models import DataExport
 from enterprise.models import ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution
-from enterprise.tasks import deliver_scheduled_report, dispatch_due_schedules, dispatch_report_deliveries, execute_report_schedule
+from enterprise.tasks import deliver_scheduled_report, dispatch_due_schedules, dispatch_report_deliveries, execute_report_schedule, expire_report_exports
 from fastapi import HTTPException
 from fastapi_app.routers import reports as reports_router
 from fastapi_app.core import dependencies as core_dependencies
@@ -30,7 +33,10 @@ from fastapi_app.routers.reports import (
     _list_report_schedule_executions,
     _list_report_recipient_deliveries,
     _update_report_schedule,
+    download_report,
+    download_shared_report,
     router,
+    share_report,
 )
 from starlette.routing import Match
 
@@ -361,6 +367,108 @@ def test_report_schedule_lifecycle_is_owner_scoped(report_projects):
     assert update_error.value.status_code == 404
     assert execution_error.value.status_code == 404
     assert ReportSchedule.objects.get(pk=schedule.id).enabled is True
+
+
+@pytest.mark.django_db
+def test_expired_report_artifact_is_removed_but_schedule_provenance_is_preserved(report_projects, settings, tmp_path):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+    result = execute_report_schedule.run(str(schedule.id), delivery_id="report-retention-proof")
+    report = DataExport.objects.get(pk=result["report_id"])
+    artifact_path = report.file.path
+    DataExport.objects.filter(pk=report.id).update(expires_at=django_timezone.now()-timedelta(seconds=1))
+
+    expired = expire_report_exports.run()
+
+    report.refresh_from_db()
+    execution = ReportScheduleExecution.objects.get(delivery_id="report-retention-proof")
+    assert expired["expired"] == 1
+    assert expired["failed"] == []
+    assert report.status == DataExport.Status.EXPIRED
+    assert not report.file
+    assert report.file_size > 0
+    assert execution.report_id == report.id
+    assert not Path(artifact_path).exists()
+    assert expire_report_exports.run()["expired"] == 0
+
+
+@pytest.mark.django_db
+def test_report_expiration_storage_failure_is_durable_and_retryable(report_projects, settings, tmp_path, monkeypatch):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    report = DataExport.objects.create(
+        user=owner, name="Retention failure", format="json", status=DataExport.Status.COMPLETED,
+        resource_type="project_report", filters={"project_id":str(project.id)}, fields=[],
+        expires_at=django_timezone.now()-timedelta(seconds=1), completed_at=django_timezone.now(),
+    )
+    report.file.save(f"{report.id}.json", ContentFile(b"{}"))
+    storage = report.file.storage
+    real_delete = storage.delete
+    monkeypatch.setattr(storage, "delete", lambda _name: (_ for _ in ()).throw(OSError("storage unavailable")))
+
+    failed = expire_report_exports.run()
+
+    report.refresh_from_db()
+    assert failed["expired"] == 0
+    assert failed["failed"][0]["report_id"] == str(report.id)
+    assert report.status == DataExport.Status.COMPLETED
+    assert report.file
+    assert "storage unavailable" in report.error_message
+
+    monkeypatch.setattr(storage, "delete", real_delete)
+    retried = expire_report_exports.run()
+    report.refresh_from_db()
+    assert retried["expired"] == 1
+    assert report.status == DataExport.Status.EXPIRED
+    assert report.error_message == ""
+
+
+@pytest.mark.django_db
+def test_report_retention_setting_controls_new_artifact_expiry(report_projects, settings, tmp_path):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    settings.REPORT_RETENTION_DAYS = 31
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["json"],
+    ), str(owner.id))[0]
+    before = django_timezone.now()
+
+    result = execute_report_schedule.run(str(schedule.id), delivery_id="report-retention-setting")
+
+    report = DataExport.objects.get(pk=result["report_id"])
+    assert before+timedelta(days=31) <= report.expires_at <= django_timezone.now()+timedelta(days=31)
+
+
+@pytest.mark.django_db
+def test_expired_report_and_expired_share_token_are_denied(report_projects, settings, tmp_path):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    report = DataExport.objects.create(
+        user=owner, name="Expired access", format="json", status=DataExport.Status.COMPLETED,
+        resource_type="project_report", filters={"project_id":str(project.id)}, fields=[],
+        expires_at=django_timezone.now()-timedelta(seconds=1), completed_at=django_timezone.now(),
+    )
+    report.file.save(f"{report.id}.json", ContentFile(b"{}"))
+    expired_token = dumps({
+        "report_id":str(report.id), "permission":"download", "recipient":owner.email,
+        "expires_at":(django_timezone.now()-timedelta(seconds=1)).timestamp(),
+    }, salt="aegisscan-report-share")
+
+    with pytest.raises(HTTPException) as direct_error:
+        async_to_sync(download_report)(str(report.id), {"user_id":str(owner.id)})
+    with pytest.raises(HTTPException) as shared_error:
+        async_to_sync(download_shared_report)(expired_token)
+    with pytest.raises(HTTPException) as share_error:
+        async_to_sync(share_report)(str(report.id), owner.email, "download", 7, {"user_id":str(owner.id)})
+
+    assert direct_error.value.status_code == 410
+    assert shared_error.value.status_code == 401
+    assert share_error.value.status_code == 409
 
 
 @pytest.mark.django_db(transaction=True)
