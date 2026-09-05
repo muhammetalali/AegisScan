@@ -37,35 +37,9 @@ def initialize_action_store() -> None: _ensure_schema()
 
 def _ensure_schema() -> None:
     global _schema_ready
-    if _schema_ready: return
-    pool = _pool_instance(); conn = pool.getconn()
-    try:
-        with conn.cursor() as cur:
-            # Uvicorn workers initialize concurrently. PostgreSQL's IF NOT EXISTS
-            # does not serialize catalog/type creation, so guard bootstrap DDL.
-            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ('aegisscan:bootstrap-schema:v1',))
-            cur.execute("""CREATE TABLE IF NOT EXISTS security_decision_actions (
-                action_id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, node_id TEXT NOT NULL, title TEXT NOT NULL,
-                owner TEXT NOT NULL, requested_by TEXT NOT NULL, sla_hours INTEGER NOT NULL CHECK (sla_hours > 0),
-                state TEXT NOT NULL, risk_before INTEGER NOT NULL DEFAULT 0, confidence_before INTEGER NOT NULL DEFAULT 0,
-                priority INTEGER NOT NULL DEFAULT 0, recommended_action TEXT NOT NULL, remediation_plan JSONB NOT NULL DEFAULT '[]'::jsonb,
-                created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, version INTEGER NOT NULL DEFAULT 1,
-                sla_status TEXT NOT NULL DEFAULT 'on_track', escalation_level INTEGER NOT NULL DEFAULT 0
-            )""")
-            cur.execute("ALTER TABLE security_decision_actions ADD COLUMN IF NOT EXISTS sla_status TEXT NOT NULL DEFAULT 'on_track'")
-            cur.execute("ALTER TABLE security_decision_actions ADD COLUMN IF NOT EXISTS escalation_level INTEGER NOT NULL DEFAULT 0")
-            cur.execute("""CREATE TABLE IF NOT EXISTS security_decision_action_events (
-                event_id BIGSERIAL PRIMARY KEY, action_id TEXT NOT NULL REFERENCES security_decision_actions(action_id) ON DELETE CASCADE,
-                event_type TEXT NOT NULL, actor TEXT NOT NULL, note TEXT, created_at TIMESTAMPTZ NOT NULL
-            )""")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_action_events_action_id_created ON security_decision_action_events(action_id, created_at)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_actions_state_updated ON security_decision_actions(state, updated_at)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_actions_owner_sla ON security_decision_actions(owner, sla_status, created_at)")
-            conn.commit(); _schema_ready = True
-    except Exception:
-        conn.rollback()
-        raise
-    finally: pool.putconn(conn)
+    # Schema ownership belongs to Django migration 0007. Runtime workers must
+    # never perform DDL; compose waits for the migrated Django service.
+    _schema_ready = True
 
 
 def _event_row(row: tuple[Any, ...]) -> dict[str, Any]: return {"type": row[0], "at": row[1].isoformat(), "actor": row[2], "note": row[3]}
