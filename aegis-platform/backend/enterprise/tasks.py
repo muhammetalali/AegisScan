@@ -111,6 +111,8 @@ def deliver_scheduled_report(self, recipient_delivery_id: str):
         try: content=report.file.read()
         finally: report.file.close()
         artifact_sha256=hashlib.sha256(content).hexdigest()
+        if report.artifact_sha256 and artifact_sha256 != report.artifact_sha256:
+            raise ValueError('Scheduled report artifact integrity verification failed')
         content_type={'pdf':'application/pdf','json':'application/json','csv':'text/csv'}.get(report.format,'application/octet-stream')
         message=EmailMessage(
             subject=delivery.execution.schedule.title,

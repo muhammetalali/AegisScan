@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
@@ -51,6 +52,7 @@ class ReportResponse(BaseModel):
     format: str
     status: str
     file_size: int = 0
+    artifact_sha256: str = ''
     generated_by: str
     created_at: str
     completed_at: Optional[str] = None
@@ -258,7 +260,7 @@ def _serialize(report: DataExport):
     filters = report.filters if isinstance(report.filters, dict) else {}
     return ReportResponse(id=str(report.id), project_id=str(filters.get('project_id', '')), scan_id=str(filters['scan_id']) if filters.get('scan_id') else None,
                           title=report.name, report_type=filters.get('report_type', 'full'), format=report.format, status=report.status,
-                          file_size=report.file_size, generated_by=str(report.user_id), created_at=report.created_at.astimezone(timezone.utc).isoformat(),
+                          file_size=report.file_size, artifact_sha256=report.artifact_sha256, generated_by=str(report.user_id), created_at=report.created_at.astimezone(timezone.utc).isoformat(),
                           completed_at=report.completed_at.astimezone(timezone.utc).isoformat() if report.completed_at else None,
                           expires_at=report.expires_at.astimezone(timezone.utc).isoformat())
 
@@ -322,7 +324,19 @@ def _create_report(body: ReportCreate, user_id: str, payload: dict):
     if body.format == 'json': content, ext = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), 'json'
     elif body.format == 'csv': content, ext = _make_csv(payload), 'csv'
     else: content, ext = _make_pdf(payload, body.title), 'pdf'
-    report.file.save(f'{report.id}.{ext}', ContentFile(content), save=False); report.file_size = len(content); report.record_count = len(payload.get('findings', [])) + len(payload.get('evidence', [])); report.status = DataExport.Status.COMPLETED; report.completed_at = django_timezone.now(); report.save(update_fields=['file', 'file_size', 'record_count', 'status', 'completed_at']); return report
+    report.file.save(f'{report.id}.{ext}', ContentFile(content), save=False); report.file_size = len(content); report.artifact_sha256 = hashlib.sha256(content).hexdigest(); report.record_count = len(payload.get('findings', [])) + len(payload.get('evidence', [])); report.status = DataExport.Status.COMPLETED; report.completed_at = django_timezone.now(); report.save(update_fields=['file', 'file_size', 'artifact_sha256', 'record_count', 'status', 'completed_at']); return report
+
+def _verify_report_artifact(report: DataExport) -> None:
+    if not report.artifact_sha256:
+        return
+    report.file.open('rb')
+    try:
+        digest=hashlib.sha256()
+        for chunk in iter(lambda: report.file.read(1024*1024), b''): digest.update(chunk)
+    finally:
+        report.file.close()
+    if digest.hexdigest() != report.artifact_sha256:
+        raise HTTPException(status_code=409, detail='Report artifact integrity verification failed')
 
 @sync_to_async
 def _get_report(report_id: str, user_id: str):
@@ -403,6 +417,7 @@ async def download_shared_report(share_token: str):
         raise HTTPException(status_code=401, detail='Invalid or expired report share token')
     report = await sync_to_async(lambda: DataExport.objects.filter(id=payload.get('report_id'), resource_type='project_report', status=DataExport.Status.COMPLETED, expires_at__gt=django_timezone.now()).first())()
     if not report or not report.file or payload.get('permission') not in {'view', 'download'}: raise HTTPException(status_code=404, detail='Shared report not found')
+    await sync_to_async(_verify_report_artifact)(report)
     return FileResponse(report.file.path, media_type='application/octet-stream', filename=report.file.name.rsplit('/', 1)[-1])
 
 @router.get('/{report_id}', response_model=ReportResponse)
@@ -414,6 +429,7 @@ async def download_report(report_id: str, current_user=Depends(require_permissio
     report = await _get_report(report_id, str(current_user.get('user_id')))
     if report.expires_at <= django_timezone.now(): raise HTTPException(status_code=410, detail='Report artifact has expired')
     if report.status != DataExport.Status.COMPLETED or not report.file: raise HTTPException(status_code=409, detail='Report is not ready for download')
+    await sync_to_async(_verify_report_artifact)(report)
     report.downloaded_at = django_timezone.now(); await sync_to_async(report.save)(update_fields=['downloaded_at'])
     return FileResponse(report.file.path, media_type='application/octet-stream', filename=report.file.name.rsplit('/', 1)[-1])
 
