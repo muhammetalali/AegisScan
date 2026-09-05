@@ -25,7 +25,7 @@ from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import Permission
 from django_project.vulnerabilities.models import Vulnerability
-from enterprise.models import ReportSchedule, ReportScheduleExecution
+from enterprise.models import ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution
 from enterprise.services import ensure_project_tenant, schedule_task
 
 router = APIRouter()
@@ -91,6 +91,16 @@ class ReportScheduleExecutionResponse(BaseModel):
     error_message: str
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+
+class ReportRecipientDeliveryResponse(BaseModel):
+    id: str
+    recipient: str
+    message_id: str
+    status: str
+    attempts: int
+    artifact_sha256: str
+    last_error: str
+    sent_at: Optional[str] = None
 
 @sync_to_async
 def _project_access(project_id: str, user_id: str):
@@ -227,6 +237,21 @@ def _serialize_schedule_execution(execution: ReportScheduleExecution) -> ReportS
     )
 
 @sync_to_async
+def _list_report_recipient_deliveries(schedule_id: str, execution_id: str, user_id: str) -> list[ReportRecipientDelivery]:
+    if not ReportScheduleExecution.objects.filter(
+        pk=execution_id,schedule_id=schedule_id,schedule__created_by_id=user_id,
+    ).exists():
+        raise HTTPException(status_code=404, detail='Report schedule execution not found')
+    return list(ReportRecipientDelivery.objects.filter(execution_id=execution_id).order_by('recipient'))
+
+def _serialize_recipient_delivery(delivery: ReportRecipientDelivery) -> ReportRecipientDeliveryResponse:
+    return ReportRecipientDeliveryResponse(
+        id=str(delivery.id),recipient=delivery.recipient,message_id=delivery.message_id,
+        status=delivery.status,attempts=delivery.attempts,artifact_sha256=delivery.artifact_sha256,last_error=delivery.last_error,
+        sent_at=delivery.sent_at.astimezone(timezone.utc).isoformat() if delivery.sent_at else None,
+    )
+
+@sync_to_async
 def _serialize(report: DataExport):
     filters = report.filters if isinstance(report.filters, dict) else {}
     return ReportResponse(id=str(report.id), project_id=str(filters.get('project_id', '')), scan_id=str(filters['scan_id']) if filters.get('scan_id') else None,
@@ -351,6 +376,11 @@ async def delete_schedule(schedule_id: str, current_user=Depends(require_permiss
 async def list_schedule_executions(schedule_id: str, current_user=Depends(require_permission(Permission.REPORT_READ))):
     rows = await _list_report_schedule_executions(schedule_id, str(current_user.get('user_id')))
     return [_serialize_schedule_execution(item) for item in rows]
+
+@router.get('/schedules/{schedule_id}/executions/{execution_id}/deliveries', response_model=List[ReportRecipientDeliveryResponse])
+async def list_recipient_deliveries(schedule_id: str, execution_id: str, current_user=Depends(require_permission(Permission.REPORT_READ))):
+    rows = await _list_report_recipient_deliveries(schedule_id, execution_id, str(current_user.get('user_id')))
+    return [_serialize_recipient_delivery(item) for item in rows]
 
 @router.get('/templates', response_model=List[dict])
 async def list_templates(report_type: Optional[str] = None, current_user=Depends(require_permission(Permission.REPORT_READ))):
