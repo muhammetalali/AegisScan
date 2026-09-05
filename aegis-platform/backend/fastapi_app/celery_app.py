@@ -48,5 +48,9 @@ celery_app.conf.update(
             "task": "enterprise.dispatch_report_deliveries",
             "schedule": 60.0,
         },
+        "expire-report-artifacts-hourly": {
+            "task": "enterprise.expire_report_exports",
+            "schedule": 3600.0,
+        },
     },
 )
