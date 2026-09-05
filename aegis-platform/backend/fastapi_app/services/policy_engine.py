@@ -38,6 +38,8 @@ def initialize_policy_store() -> None:
     pool = _pool_instance(); conn = pool.getconn()
     try:
         with conn.cursor() as cur:
+            # Serialize raw bootstrap DDL across all API worker processes.
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ('aegisscan:bootstrap-schema:v1',))
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS assurance_policies (
                     policy_id TEXT NOT NULL,
@@ -59,6 +61,9 @@ def initialize_policy_store() -> None:
                 for policy in DEFAULT_POLICIES:
                     cur.execute("INSERT INTO assurance_policies(policy_id,version,name,enabled,priority,conditions,actions,created_by,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (policy["id"], policy["version"], policy["name"], policy["enabled"], policy["priority"], json.dumps(policy.get("when", {})), json.dumps(policy.get("actions", {})), "system", now))
             conn.commit(); _schema_ready = True
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         pool.putconn(conn)
 

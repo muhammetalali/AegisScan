@@ -5,6 +5,66 @@ import uuid
 import pytest
 
 from fastapi_app.services import decision_action_orchestration as store
+from fastapi_app.services import policy_engine
+
+
+class _BootstrapCursor:
+    def __init__(self, fail_after_lock=False):
+        self.statements = []
+        self.fail_after_lock = fail_after_lock
+
+    def __enter__(self): return self
+    def __exit__(self, *_args): return False
+    def execute(self, sql, _params=None):
+        self.statements.append(sql)
+        if self.fail_after_lock and len(self.statements) == 2:
+            raise RuntimeError("deterministic DDL failure")
+    def fetchone(self): return (1,)
+
+
+class _BootstrapConnection:
+    def __init__(self, cursor):
+        self.bootstrap_cursor = cursor
+        self.committed = False
+        self.rolled_back = False
+
+    def cursor(self): return self.bootstrap_cursor
+    def commit(self): self.committed = True
+    def rollback(self): self.rolled_back = True
+
+
+class _BootstrapPool:
+    def __init__(self, connection): self.connection = connection
+    def getconn(self): return self.connection
+    def putconn(self, connection): assert connection is self.connection
+
+
+@pytest.mark.parametrize("module,initializer", [
+    (store, store.initialize_action_store),
+    (policy_engine, policy_engine.initialize_policy_store),
+])
+def test_bootstrap_schema_takes_cross_process_advisory_lock(monkeypatch, module, initializer):
+    cursor = _BootstrapCursor()
+    connection = _BootstrapConnection(cursor)
+    monkeypatch.setattr(module, "_schema_ready", False)
+    monkeypatch.setattr(module, "_pool_instance", lambda: _BootstrapPool(connection))
+
+    initializer()
+
+    assert "pg_advisory_xact_lock" in cursor.statements[0]
+    assert connection.committed is True
+
+
+def test_bootstrap_schema_rolls_back_failed_connection(monkeypatch):
+    cursor = _BootstrapCursor(fail_after_lock=True)
+    connection = _BootstrapConnection(cursor)
+    monkeypatch.setattr(store, "_schema_ready", False)
+    monkeypatch.setattr(store, "_pool_instance", lambda: _BootstrapPool(connection))
+
+    with pytest.raises(RuntimeError, match="deterministic DDL failure"):
+        store.initialize_action_store()
+
+    assert connection.rolled_back is True
 
 
 @pytest.mark.django_db(transaction=True)
