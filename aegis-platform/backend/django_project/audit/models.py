@@ -192,6 +192,7 @@ class DataExport(models.Model):
     fields = models.JSONField(_('fields'), default=list, blank=True)
     file = models.FileField(_('file'), upload_to='exports/', blank=True, null=True)
     file_size = models.PositiveIntegerField(_('file size'), default=0)
+    artifact_sha256 = models.CharField(_('artifact SHA-256'), max_length=64, blank=True)
     record_count = models.PositiveIntegerField(_('record count'), default=0)
     expires_at = models.DateTimeField(_('expires at'))
     downloaded_at = models.DateTimeField(_('downloaded at'), blank=True, null=True)
