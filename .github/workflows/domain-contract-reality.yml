@@ -122,7 +122,7 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/services/test_decision_action_orchestration.py
+        run: python -m pytest -q fastapi_app/services/test_decision_action_orchestration.py fastapi_app/services/test_policy_engine.py
       - name: Scanner tenant isolation reality
         working-directory: aegis-platform/backend
         env:

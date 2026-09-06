@@ -1,3 +1,5 @@
+from asgiref.sync import sync_to_async
+from django.contrib.auth import get_user_model
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -10,6 +12,11 @@ from ..services.decision_action_orchestration import get_action
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
+
+
+def _is_policy_administrator(user_id: str) -> bool:
+    User = get_user_model()
+    return User.objects.filter(pk=user_id, is_active=True, is_staff=True).exists()
 
 async def require_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict[str, Any]:
     user = await verify_token(credentials.credentials)
@@ -31,34 +38,51 @@ class PolicySimulationPayload(BaseModel):
 
 @router.get("/policies")
 async def policies(user: dict[str, Any] = Depends(require_user)):
-    return {"items": list_policies()}
+    return {"items": await sync_to_async(list_policies)()}
 
 @router.post("/policies", status_code=201)
 async def create_policy(body: PolicyPayload, user: dict[str, Any] = Depends(require_user)):
-    actor = str(user.get("id") or user.get("username") or "user")
-    if any(p["id"] == body.id for p in list_policies()):
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    if not await sync_to_async(_is_policy_administrator)(actor):
+        raise HTTPException(status_code=403, detail="Policy administration permission required")
+    try:
+        return await sync_to_async(save_policy)(body.model_dump(), actor, False)
+    except FileExistsError:
         raise HTTPException(status_code=409, detail="Policy already exists; use PUT to create a new version")
-    return save_policy(body.model_dump(), actor)
 
 @router.put("/policies/{policy_id}")
 async def update_policy(policy_id: str, body: PolicyPayload, user: dict[str, Any] = Depends(require_user)):
-    actor = str(user.get("id") or user.get("username") or "user")
-    if not any(p["id"] == policy_id for p in list_policies()):
-        raise HTTPException(status_code=404, detail="Policy not found")
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    if not await sync_to_async(_is_policy_administrator)(actor):
+        raise HTTPException(status_code=403, detail="Policy administration permission required")
     payload = body.model_dump(); payload["id"] = policy_id
-    return save_policy(payload, actor)
+    try:
+        return await sync_to_async(save_policy)(payload, actor, True)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Policy not found")
 
 @router.post("/policies/evaluate/{action_id}")
 async def evaluate_action_policy(action_id: str, user: dict[str, Any] = Depends(require_user)):
-    action = get_action(action_id)
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    action = await sync_to_async(get_action)(action_id, actor)
     if not action:
         raise HTTPException(status_code=404, detail="Action not found")
-    return {"actionId": action_id, "policy": evaluate_policy(action)}
+    policies = await sync_to_async(list_policies)()
+    return {"actionId": action_id, "policy": evaluate_policy(action, policies)}
 
 @router.post("/policies/simulate")
 async def simulate(body: PolicySimulationPayload, user: dict[str, Any] = Depends(require_user)):
-    action = get_action(body.action_id)
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    action = await sync_to_async(get_action)(body.action_id, actor)
     if not action:
         raise HTTPException(status_code=404, detail="Action not found")
-    result = simulate_policy(action, body.policy.model_dump())
+    result = await sync_to_async(simulate_policy)(action, body.policy.model_dump())
     return result

@@ -9,7 +9,7 @@ from ..core.security import verify_token
 from ..services.decision_action_orchestration import list_actions, get_action
 from ..services.workflow_intelligence import enrich_action
 from ..services.governance_engine import enrich_governance, governance_metrics
-from ..services.policy_engine import evaluate_policy
+from ..services.policy_engine import evaluate_policy, list_policies
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)
@@ -21,8 +21,8 @@ async def require_user(credentials: HTTPAuthorizationCredentials = Depends(secur
     return user
 
 
-def enrich_policy_governance(action: dict[str, Any]) -> dict[str, Any]:
-    return {**action, "policy": evaluate_policy(action)}
+def enrich_policy_governance(action: dict[str, Any], policies: list[dict[str, Any]]) -> dict[str, Any]:
+    return {**action, "policy": evaluate_policy(action, policies)}
 
 @router.get("/governance")
 async def governance(user: dict[str, Any] = Depends(require_user)):
@@ -31,7 +31,8 @@ async def governance(user: dict[str, Any] = Depends(require_user)):
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
     stored_actions = await sync_to_async(list_actions)(actor)
     actions = [enrich_action(item) for item in stored_actions]
-    items = [enrich_policy_governance(item) for item in enrich_governance(actions)]
+    policies = await sync_to_async(list_policies)()
+    items = [enrich_policy_governance(item, policies) for item in enrich_governance(actions)]
     metrics = governance_metrics(actions)
     metrics["policyControlled"] = len(items)
     return {"items": items, "metrics": metrics}
@@ -45,4 +46,5 @@ async def governance_action(action_id: str, user: dict[str, Any] = Depends(requi
     if item is None:
         raise HTTPException(status_code=404, detail="Action not found")
     action = enrich_action(item)
-    return {"actionId": action_id, "governance": {**action.get("governance", {}), "policy": evaluate_policy(action)}}
+    policies = await sync_to_async(list_policies)()
+    return {"actionId": action_id, "governance": {**action.get("governance", {}), "policy": evaluate_policy(action, policies)}}

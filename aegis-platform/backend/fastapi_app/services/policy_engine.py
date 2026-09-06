@@ -4,9 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from psycopg2.pool import ThreadedConnectionPool
-
-from ..core.config import settings
+from django.db import connection, transaction
 
 DEFAULT_POLICIES: list[dict[str, Any]] = [
     {"id":"critical-production","version":1,"name":"Critical production risk","enabled":True,"priority":100,"when":{"risk_gte":90,"environment":"production"},"actions":{"approval_role":"ciso","approval_count":2,"sla_hours":2,"escalate_after_minutes":60,"escalation_targets":["security_manager","ciso"]}},
@@ -16,19 +14,11 @@ DEFAULT_POLICIES: list[dict[str, Any]] = [
     {"id":"low","version":1,"name":"Low risk","enabled":True,"priority":10,"when":{},"actions":{"approval_role":"none","approval_count":0,"sla_hours":168,"escalate_after_minutes":2880,"escalation_targets":["analyst"]}},
 ]
 
-_pool: ThreadedConnectionPool | None = None
 _schema_ready = False
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _pool_instance() -> ThreadedConnectionPool:
-    global _pool
-    if _pool is None:
-        _pool = ThreadedConnectionPool(1, 8, settings.DATABASE_URL)
-    return _pool
 
 
 def initialize_policy_store() -> None:
@@ -38,31 +28,33 @@ def initialize_policy_store() -> None:
 
 
 def list_policies() -> list[dict[str, Any]]:
-    initialize_policy_store(); pool = _pool_instance(); conn = pool.getconn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT policy_id,version,name,enabled,priority,conditions,actions,created_by,created_at FROM assurance_policies ORDER BY priority DESC, policy_id, version DESC")
-            result=[]
-            for row in cur.fetchall():
-                policy_id,version,name,enabled,priority,conditions,actions,created_by,created_at=row
-                result.append({"id":policy_id,"version":version,"name":name,"enabled":enabled,"priority":priority,"when":conditions if isinstance(conditions,dict) else json.loads(conditions),"actions":actions if isinstance(actions,dict) else json.loads(actions),"createdBy":created_by,"createdAt":created_at.isoformat()})
-            return result
-    finally:
-        pool.putconn(conn)
+    initialize_policy_store()
+    with connection.cursor() as cur:
+        cur.execute("SELECT policy_id,version,name,enabled,priority,conditions,actions,created_by,created_at FROM assurance_policies ORDER BY priority DESC, policy_id, version DESC")
+        result=[]
+        for row in cur.fetchall():
+            policy_id,version,name,enabled,priority,conditions,actions,created_by,created_at=row
+            result.append({"id":policy_id,"version":version,"name":name,"enabled":enabled,"priority":priority,"when":conditions if isinstance(conditions,dict) else json.loads(conditions),"actions":actions if isinstance(actions,dict) else json.loads(actions),"createdBy":created_by,"createdAt":created_at.isoformat()})
+        return result
 
 
-def save_policy(policy: dict[str, Any], actor: str) -> dict[str, Any]:
-    initialize_policy_store(); pool=_pool_instance(); conn=pool.getconn()
-    try:
-        with conn.cursor() as cur:
+def save_policy(policy: dict[str, Any], actor: str, require_existing: bool | None = None) -> dict[str, Any]:
+    initialize_policy_store()
+    with transaction.atomic():
+        with connection.cursor() as cur:
+            if connection.vendor == "postgresql":
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (policy["id"],))
             cur.execute("SELECT COALESCE(MAX(version),0) FROM assurance_policies WHERE policy_id=%s", (policy["id"],))
-            version=int(cur.fetchone()[0])+1
+            current_version = int(cur.fetchone()[0])
+            if require_existing is False and current_version:
+                raise FileExistsError(policy["id"])
+            if require_existing is True and not current_version:
+                raise KeyError(policy["id"])
+            version=current_version+1
             now=_now()
             item={**policy,"version":version,"createdBy":actor,"createdAt":now.isoformat()}
             cur.execute("INSERT INTO assurance_policies(policy_id,version,name,enabled,priority,conditions,actions,created_by,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (item["id"],version,item["name"],item.get("enabled",True),item.get("priority",50),json.dumps(item.get("when",{})),json.dumps(item.get("actions",{})),actor,now))
-            conn.commit(); return item
-    finally:
-        pool.putconn(conn)
+            return item
 
 
 def _matches(policy: dict[str, Any], action: dict[str, Any]) -> bool:
