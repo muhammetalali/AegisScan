@@ -11,7 +11,7 @@ from ..services.assurance_correlation import correlate_all, correlate_validation
 from ..services.assurance_graph_aggregator import build_assurance_graph
 from ..services.graph_intelligence import analyze_graph
 from ..services.autonomous_triage import triage_graph
-from evidence.models import ValidationRun
+from django_project.evidence.models import ValidationRun
 
 router = APIRouter()
 
