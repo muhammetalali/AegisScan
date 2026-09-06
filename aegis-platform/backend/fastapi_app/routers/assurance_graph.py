@@ -20,11 +20,14 @@ router = APIRouter()
 def _load_validations(user_id: str) -> dict[str, dict[str, Any]]:
     rows = list(
         ValidationRun.objects.filter(user_id=user_id)
-        .select_related('finding__scan')
+        .select_related('finding__scan', 'finding__project', 'authorization_decision__asset__project')
         .order_by('-created_at')
     )
     result: dict[str, dict[str, Any]] = {}
     for item in rows:
+        project = item.finding.project if item.finding_id else None
+        if project is None and item.authorization_decision_id:
+            project = item.authorization_decision.asset.project
         engines = [str(engine).lower() for engine in (item.engines or [])]
         engine_state: dict[str, dict[str, int]] = {}
         if item.finding_id and item.finding and item.finding.scan_id:
@@ -42,6 +45,8 @@ def _load_validations(user_id: str) -> dict[str, dict[str, Any]]:
             'target_value': item.target_value,
             'scope': item.scope,
             'finding_id': str(item.finding_id) if item.finding_id else None,
+            'validation_id': str(item.id),
+            'project_id': str(project.id) if project else None,
         }
     return result
 

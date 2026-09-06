@@ -5,9 +5,12 @@ from typing import Any
 from uuid import uuid4
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from enterprise.models import DecisionAction, DecisionActionEvent
+from enterprise.models import DecisionAction, DecisionActionEvent, Organization, OrganizationMembership, TenantProject
+from evidence.models import ValidationRun
+from projects.models import Project
 
 STATES = ["pending", "approved", "assigned", "in_progress", "awaiting_revalidation", "verified", "rejected", "deferred"]
 TRANSITIONS: dict[str, set[str]] = {
@@ -38,13 +41,43 @@ def _hydrate(action: DecisionAction) -> dict[str, Any]:
         "createdAt":action.created_at.isoformat(),"updatedAt":action.updated_at.isoformat(),
         "dueAt":(action.created_at+timedelta(hours=action.sla_hours)).isoformat(),"version":action.version,
         "slaStatus":action.sla_status,"escalationLevel":action.escalation_level,"events":events,
+        "organizationId":str(action.organization_id),"projectId":str(action.project_id),
+        "validationId":str(action.validation_id),
     }
 
 
-def create_action(decision: dict[str, Any], owner: str, sla_hours: int, requested_by: str) -> dict[str, Any]:
+def _validation_project_id(validation: ValidationRun) -> str | None:
+    if validation.finding_id:
+        return str(validation.finding.project_id)
+    if validation.authorization_decision_id:
+        return str(validation.authorization_decision.asset.project_id)
+    return None
+
+
+def _scoped_actions(requested_by: str):
+    projects = Project.objects.filter(Q(owner_id=requested_by) | Q(members__id=requested_by)).values('id')
+    organizations = OrganizationMembership.objects.filter(user_id=requested_by,is_active=True).values('organization_id')
+    return DecisionAction.objects.filter(
+        requested_by=requested_by,
+        project_id__in=projects,
+        organization_id__in=organizations,
+    )
+
+
+def create_action(
+    decision: dict[str, Any], owner: str, sla_hours: int, requested_by: str, *,
+    organization: Organization, project: Project, validation: ValidationRun,
+) -> dict[str, Any]:
+    if str(validation.user_id) != str(requested_by):
+        raise PermissionError('Validation does not belong to the requesting user')
+    if _validation_project_id(validation) != str(project.id):
+        raise ValueError('Validation project lineage does not match the action project')
+    if not TenantProject.objects.filter(project=project,organization=organization).exists():
+        raise ValueError('Project tenant lineage does not match the action organization')
     now=timezone.now()
     with transaction.atomic():
         action=DecisionAction.objects.create(
+            organization=organization,project=project,validation=validation,
             action_id=f"act-{uuid4().hex[:12]}",decision_id=str(decision.get("decisionId") or ""),
             node_id=str(decision.get("nodeId") or "unknown"),title=f"Remediate: {decision.get('label','Security finding')}",
             owner=owner,requested_by=requested_by,sla_hours=max(1,sla_hours),state="pending",
@@ -59,20 +92,20 @@ def create_action(decision: dict[str, Any], owner: str, sla_hours: int, requeste
 def transition(action_id: str, state: str, actor: str, note: str | None = None) -> dict[str, Any]:
     if state not in STATES: raise ValueError(f"Invalid state: {state}")
     with transaction.atomic():
-        action=DecisionAction.objects.select_for_update().filter(pk=action_id,requested_by=actor).first()
+        action=_scoped_actions(actor).select_for_update().filter(pk=action_id).first()
         if action is None: raise KeyError(action_id)
         if state not in TRANSITIONS.get(action.state,set()): raise ValueError(f"Invalid transition: {action.state} -> {state}")
         now=timezone.now(); action.state=state; action.updated_at=now; action.version+=1
         action.save(update_fields=['state','updated_at','version'])
         DecisionActionEvent.objects.create(action=action,event_type=f"action.{state}",actor=actor,note=note,created_at=now)
-    return _hydrate(DecisionAction.objects.prefetch_related('events').get(pk=action.pk,requested_by=actor))
+    return _hydrate(_scoped_actions(actor).prefetch_related('events').get(pk=action.pk))
 
 
 def list_actions(requested_by: str) -> list[dict[str, Any]]:
-    rows=DecisionAction.objects.filter(requested_by=requested_by).prefetch_related('events').order_by('-updated_at')
+    rows=_scoped_actions(requested_by).prefetch_related('events').order_by('-updated_at')
     return [_hydrate(row) for row in rows]
 
 
 def get_action(action_id: str, requested_by: str) -> dict[str, Any] | None:
-    action=DecisionAction.objects.filter(pk=action_id,requested_by=requested_by).prefetch_related('events').first()
+    action=_scoped_actions(requested_by).filter(pk=action_id).prefetch_related('events').first()
     return _hydrate(action) if action else None
