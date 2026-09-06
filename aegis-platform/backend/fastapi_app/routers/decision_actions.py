@@ -53,7 +53,8 @@ async def actions(user: dict[str, Any] = Depends(require_user)):
     actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
     if not actor:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
-    items = [enrich_action(item) for item in list_actions(actor)]
+    stored_actions = await sync_to_async(list_actions)(actor)
+    items = [enrich_action(item) for item in stored_actions]
     return {"items": items, "metrics": workflow_metrics(items)}
 
 
@@ -62,7 +63,8 @@ async def actions_overview(user: dict[str, Any] = Depends(require_user)):
     actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
     if not actor:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
-    items = [enrich_action(item) for item in list_actions(actor)]
+    stored_actions = await sync_to_async(list_actions)(actor)
+    items = [enrich_action(item) for item in stored_actions]
     return {"items": items, "metrics": workflow_metrics(items)}
 
 
@@ -74,7 +76,7 @@ async def create_action_endpoint(body: ActionCreate, request: Request, user: dic
     decision = await _decision_by_id(body.decision_id, actor)
     if decision is None:
         raise HTTPException(status_code=404, detail="Decision not found")
-    item = create_action(decision, body.owner, body.sla_hours, actor)
+    item = await sync_to_async(create_action)(decision, body.owner, body.sla_hours, actor)
     await sync_to_async(add_audit_entry)(
         user=actor,
         action="decision_action.create",
@@ -92,7 +94,7 @@ async def action_detail(action_id: str, user: dict[str, Any] = Depends(require_u
     actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
     if not actor:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
-    item = get_action(action_id, actor)
+    item = await sync_to_async(get_action)(action_id, actor)
     if item is None:
         raise HTTPException(status_code=404, detail="Action not found")
     return enrich_action(item)
@@ -104,7 +106,7 @@ async def action_transition(action_id: str, body: ActionTransition, request: Req
     if not actor:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
     try:
-        item = transition(action_id, body.state, actor, body.note)
+        item = await sync_to_async(transition)(action_id, body.state, actor, body.note)
         await sync_to_async(add_audit_entry)(
             user=actor,
             action=f"decision_action.{body.state}",

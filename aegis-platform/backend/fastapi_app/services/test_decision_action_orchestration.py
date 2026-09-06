@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import pytest
 
 from fastapi_app.services import decision_action_orchestration as store
 from fastapi_app.services import policy_engine
+from fastapi_app.services.workflow_sla import evaluate_sla_actions
+from enterprise.models import DecisionAction, DecisionActionEvent
+from django.utils import timezone
 
 
 @pytest.mark.parametrize("module,initializer", [
@@ -14,7 +18,6 @@ from fastapi_app.services import policy_engine
 ])
 def test_runtime_initializers_never_execute_schema_ddl(monkeypatch, module, initializer):
     monkeypatch.setattr(module, "_schema_ready", False)
-    monkeypatch.setattr(module, "_pool_instance", lambda: pytest.fail("runtime initializer must not access PostgreSQL"))
 
     initializer()
 
@@ -64,15 +67,40 @@ def test_decision_actions_are_tenant_isolated() -> None:
 
         transitioned = store.transition(action_b["actionId"], "approved", user_b)
         assert transitioned["state"] == "approved"
+        assert transitioned["version"] == 2
+        assert [event["type"] for event in transitioned["events"]] == ["action.created", "action.approved"]
     finally:
-        pool = store._pool_instance()
-        conn = pool.getconn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM security_decision_actions WHERE action_id IN (%s, %s)",
-                    (action_a["actionId"], action_b["actionId"]),
-                )
-                conn.commit()
-        finally:
-            pool.putconn(conn)
+        DecisionAction.objects.filter(action_id__in=[action_a["actionId"],action_b["actionId"]]).delete()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_action_and_creation_event_are_atomic(monkeypatch) -> None:
+    requested_by = f"atomic-{uuid.uuid4().hex}"
+
+    def fail_event(*args, **kwargs):
+        raise RuntimeError("event persistence failed")
+
+    monkeypatch.setattr(DecisionActionEvent.objects, "create", fail_event)
+    with pytest.raises(RuntimeError, match="event persistence failed"):
+        store.create_action({"decisionId": "atomic", "nodeId": "node"}, "owner", 4, requested_by)
+
+    assert not DecisionAction.objects.filter(requested_by=requested_by).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sla_breach_is_durable_versioned_and_idempotent() -> None:
+    requested_by = f"sla-{uuid.uuid4().hex}"
+    action = store.create_action({"decisionId": "sla", "nodeId": "node"}, "owner", 1, requested_by)
+    evaluation_time = timezone.now() + timedelta(hours=2)
+
+    first = evaluate_sla_actions(evaluation_time)
+    second = evaluate_sla_actions(evaluation_time)
+    persisted = store.get_action(action["actionId"], requested_by)
+
+    assert [item["actionId"] for item in first] == [action["actionId"]]
+    assert second == []
+    assert persisted is not None
+    assert persisted["slaStatus"] == "breached"
+    assert persisted["escalationLevel"] == 2
+    assert persisted["version"] == 2
+    assert [event["type"] for event in persisted["events"]] == ["action.created", "action.sla_breached"]
