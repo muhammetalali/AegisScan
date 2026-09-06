@@ -94,6 +94,7 @@ def test_continuous_assurance_rejects_superseded_authorization(monkeypatch):
     AssetAuthorization.objects.create(asset=asset, actor=user, authorized=False, target_snapshot='127.0.0.1', reason='revoked', supersedes=grant)
     org = Organization.objects.create(name='Revoked Org', slug='revoked-org', owner=user)
     OrganizationMembership.objects.create(organization=org, user=user, role=OrganizationMembership.Role.OWNER)
+    TenantProject.objects.create(organization=org, project=project)
     schedule = ContinuousAssuranceSchedule.objects.create(organization=org, project=project, asset=asset, authorization_decision=grant, scan_type='ip', engine='nmap', next_run=timezone.now(), created_by=user)
     monkeypatch.setattr(run_nmap_scan, 'delay', lambda scan_id: pytest.fail('revoked schedule must not enqueue'))
 
