@@ -26,7 +26,8 @@ def build_assurance_graph(validations: dict[str, dict[str, Any]], correlations: 
 
     for validation_id, validation in validations.items():
         v_id = f"validation:{validation_id}"
-        _node(nodes, v_id, "validation", validation_id, status=validation.get("status"), risk=min(100, int(validation.get("progress", 0))))
+        lineage = {"validationId": validation.get("validation_id") or validation_id, "projectId": validation.get("project_id")}
+        _node(nodes, v_id, "validation", validation_id, status=validation.get("status"), risk=min(100, int(validation.get("progress", 0))), **lineage)
         selected_engines = validation.get("engines", []) or []
         for engine in selected_engines:
             e_id = f"engine:{engine}"
@@ -37,10 +38,10 @@ def build_assurance_graph(validations: dict[str, dict[str, Any]], correlations: 
             if findings:
                 f_id = f"finding:{validation_id}:{engine}"
                 confidence = 60 + min(35, findings * 8)
-                _node(nodes, f_id, "finding", f"{engine} finding", risk=min(100, 35 + findings * 12), confidence=confidence, findings=findings)
+                _node(nodes, f_id, "finding", f"{engine} finding", risk=min(100, 35 + findings * 12), confidence=confidence, findings=findings, **lineage)
                 _edge(edges, seen_edges, e_id, f_id, "detected")
                 ev_id = f"evidence:{validation_id}:{engine}"
-                _node(nodes, ev_id, "evidence", f"{engine} evidence", confidence=confidence, evidenceBacked=True)
+                _node(nodes, ev_id, "evidence", f"{engine} evidence", confidence=confidence, evidenceBacked=True, **lineage)
                 _edge(edges, seen_edges, f_id, ev_id, "supported-by")
                 _edge(edges, seen_edges, ev_id, v_id, "validated-by")
 

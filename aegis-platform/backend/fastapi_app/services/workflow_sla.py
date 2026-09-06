@@ -13,7 +13,9 @@ ACTIVE_STATES = ("pending", "approved", "assigned", "in_progress", "awaiting_rev
 
 def evaluate_sla_actions(now: datetime | None = None) -> list[dict[str, Any]]:
     now=now or timezone.now(); changed=[]
-    action_ids=list(DecisionAction.objects.filter(state__in=ACTIVE_STATES).values_list('action_id',flat=True))
+    action_ids=list(DecisionAction.objects.filter(
+        state__in=ACTIVE_STATES,organization__isnull=False,project__isnull=False,validation__isnull=False,
+    ).values_list('action_id',flat=True))
     for action_id in action_ids:
         with transaction.atomic():
             action=DecisionAction.objects.select_for_update().filter(pk=action_id,state__in=ACTIVE_STATES).first()

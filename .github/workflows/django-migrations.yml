@@ -111,7 +111,7 @@ jobs:
           from django_project.intelligence.models import IntelligenceEnrichment
           from django_project.scans.models import Scan
           from django_project.vulnerabilities.models import Vulnerability
-          from enterprise.models import AttackPath, DigitalTwin, FindingIntelligence, TwinScenario
+          from enterprise.models import AttackPath, DecisionAction, DigitalTwin, FindingIntelligence, TwinScenario
 
           critical_models = [
               get_user_model(),
@@ -124,6 +124,7 @@ jobs:
               DigitalTwin,
               TwinScenario,
               AttackPath,
+              DecisionAction,
           ]
           expected = [model._meta.db_table for model in critical_models]
           existing = set(connection.introspection.table_names())
@@ -132,6 +133,28 @@ jobs:
           print('critical_tables_missing=', missing)
           if missing:
               raise SystemExit(f'Missing critical migrated tables: {missing}')
+
+          action_table = DecisionAction._meta.db_table
+          with connection.cursor() as cursor:
+              columns = {column.name for column in connection.introspection.get_table_description(cursor, action_table)}
+              constraints = connection.introspection.get_constraints(cursor, action_table)
+          required_lineage = {'organization_id', 'project_id', 'validation_id'}
+          missing_lineage = sorted(required_lineage - columns)
+          foreign_key_columns = {
+              column
+              for constraint in constraints.values()
+              if constraint.get('foreign_key')
+              for column in constraint.get('columns', [])
+          }
+          missing_foreign_keys = sorted(required_lineage - foreign_key_columns)
+          print('decision_action_lineage_columns=', sorted(required_lineage & columns))
+          print('decision_action_missing_lineage=', missing_lineage)
+          print('decision_action_missing_foreign_keys=', missing_foreign_keys)
+          if missing_lineage or missing_foreign_keys:
+              raise SystemExit(
+                  f'Decision action lineage migration is incomplete: '
+                  f'columns={missing_lineage}, foreign_keys={missing_foreign_keys}'
+              )
           PY
       - name: Verify no pending model migrations
         working-directory: aegis-platform/backend

@@ -120,6 +120,9 @@ class ReportRecipientDelivery(models.Model):
 
 class DecisionAction(models.Model):
     action_id=models.CharField(max_length=255,primary_key=True)
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='decision_actions',null=True,blank=True)
+    project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='decision_actions',null=True,blank=True)
+    validation=models.ForeignKey('evidence.ValidationRun',on_delete=models.PROTECT,related_name='decision_actions',null=True,blank=True)
     decision_id=models.TextField(); node_id=models.TextField(); title=models.TextField(); owner=models.TextField(); requested_by=models.TextField()
     sla_hours=models.PositiveIntegerField(); state=models.TextField(); risk_before=models.IntegerField(default=0); confidence_before=models.IntegerField(default=0)
     priority=models.IntegerField(default=0); recommended_action=models.TextField(); remediation_plan=models.JSONField(default=list)
@@ -127,7 +130,7 @@ class DecisionAction(models.Model):
     sla_status=models.TextField(default='on_track'); escalation_level=models.PositiveIntegerField(default=0)
     class Meta:
         db_table='security_decision_actions'
-        indexes=[models.Index(fields=['state','updated_at'],name='idx_actions_state_updated'),models.Index(fields=['owner','sla_status','created_at'],name='idx_actions_owner_sla'),models.Index(fields=['requested_by'],name='idx_actions_requested_by')]
+        indexes=[models.Index(fields=['state','updated_at'],name='idx_actions_state_updated'),models.Index(fields=['owner','sla_status','created_at'],name='idx_actions_owner_sla'),models.Index(fields=['requested_by'],name='idx_actions_requested_by'),models.Index(fields=['organization','state'],name='idx_actions_org_state'),models.Index(fields=['project','state'],name='idx_actions_project_state')]
 
 
 class DecisionActionEvent(models.Model):

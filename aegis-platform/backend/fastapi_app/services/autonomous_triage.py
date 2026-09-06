@@ -59,6 +59,8 @@ def triage_graph(graph: dict[str, Any]) -> dict[str, Any]:
             "recommendedAction": action,
             "investigationBrief": f"{node.get('label', node_id)} has priority {priority}/100 with risk {risk}/100 and confidence {confidence}/100.",
             "executiveImpact": "Board-level attention recommended" if priority >= 85 else "Management attention recommended" if priority >= 70 else "Operational follow-up",
+            "validationId": node.get("validationId"),
+            "projectId": node.get("projectId"),
         })
 
     priorities.sort(key=lambda item: item["priority"], reverse=True)
@@ -81,13 +83,14 @@ def triage_graph(graph: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_triage(intelligence: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility adapter for existing decision-pack consumers.
+    """Build the decision-layer shape from a graph or a triage result.
 
-    Graph Intelligence exposes `priorities`; the legacy Decision layer expects
-    `items`. Keep one scoring source and translate the shape without duplicating
-    triage logic.
+    Decision consumers pass the enriched assurance graph. Older callers may
+    already pass a triage result. Normalize both without silently returning an
+    empty decision pack when real graph nodes exist.
     """
-    priorities = intelligence.get("priorities") or []
+    triaged = triage_graph(intelligence) if "nodes" in intelligence else intelligence
+    priorities = triaged.get("priorities") or []
     items: list[dict[str, Any]] = []
     for priority in priorities:
         items.append({
@@ -103,9 +106,11 @@ def build_triage(intelligence: dict[str, Any]) -> dict[str, Any]:
             "recommendedAction": priority.get("recommendedAction"),
             "investigationBrief": priority.get("investigationBrief"),
             "executiveImpact": priority.get("executiveImpact"),
+            "validationId": priority.get("validationId"),
+            "projectId": priority.get("projectId"),
         })
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "items": items,
-        "metrics": intelligence.get("metrics", {}),
+        "metrics": triaged.get("metrics", {}),
     }

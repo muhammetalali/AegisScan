@@ -33,6 +33,10 @@ def build_decision_pack(triage: dict[str, Any]) -> dict[str, Any]:
             "investigationBrief": item.get("investigationBrief") or "Validate the highest-impact evidence and resolve conflicting signals.",
             "remediationBrief": "Apply the recommended control, verify the affected asset, then re-run validation.",
             "revalidationPlan": ["Confirm scope and evidence", "Apply remediation", "Run targeted re-validation", "Compare before/after risk"],
+            "validationId": item.get("validationId"),
+            "projectId": item.get("projectId"),
+            "actionable": bool(item.get("validationId") and item.get("projectId")),
+            "actionabilityReason": None if item.get("validationId") and item.get("projectId") else "Context-only graph node; no verified validation/project lineage.",
         })
     decisions.sort(key=lambda x: (x["priority"], x["executiveImpact"]), reverse=True)
     return {
@@ -44,5 +48,6 @@ def build_decision_pack(triage: dict[str, Any]) -> dict[str, Any]:
             "high": sum(d["urgency"] == "high" for d in decisions),
             "requiresInvestigation": sum(d["conflicts"] > 0 or d["confidence"] < 70 for d in decisions),
             "executivePriority": _clamp(sum(d["executiveImpact"] for d in decisions[:5]) / max(1, min(5, len(decisions)))),
+            "actionable": sum(bool(d["actionable"]) for d in decisions),
         },
     }
