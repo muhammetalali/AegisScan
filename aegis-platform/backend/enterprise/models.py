@@ -175,7 +175,36 @@ class ExecutiveSnapshot(models.Model):
 
 
 class ContinuousAssuranceSchedule(models.Model):
-    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='assurance_schedules'); project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='assurance_schedules'); asset=models.ForeignKey('assets.Asset',on_delete=models.PROTECT,null=True,blank=True,related_name='assurance_schedules'); authorization_decision=models.ForeignKey('assets.AssetAuthorization',on_delete=models.PROTECT,null=True,blank=True,related_name='assurance_schedules'); scan_type=models.CharField(max_length=30); engine=models.CharField(max_length=30); interval_minutes=models.PositiveIntegerField(default=60); enabled=models.BooleanField(default=True); next_run=models.DateTimeField(); last_run=models.DateTimeField(null=True,blank=True); created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT); created_at=models.DateTimeField(auto_now_add=True)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='assurance_schedules'); project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='assurance_schedules'); asset=models.ForeignKey('assets.Asset',on_delete=models.PROTECT,null=True,blank=True,related_name='assurance_schedules'); authorization_decision=models.ForeignKey('assets.AssetAuthorization',on_delete=models.PROTECT,null=True,blank=True,related_name='assurance_schedules'); scan_type=models.CharField(max_length=30); engine=models.CharField(max_length=30); interval_minutes=models.PositiveIntegerField(default=60); enabled=models.BooleanField(default=True); next_run=models.DateTimeField(); last_run=models.DateTimeField(null=True,blank=True); disabled_at=models.DateTimeField(null=True,blank=True); disabled_reason=models.TextField(blank=True); created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT); created_at=models.DateTimeField(auto_now_add=True)
+
+
+class ContinuousAssuranceExecution(models.Model):
+    """Durable, tenant-bound delivery record for one intended schedule occurrence."""
+
+    class Status(models.TextChoices):
+        PENDING='pending','Pending'; RUNNING='running','Running'; QUEUED='queued','Queued'; COMPLETED='completed','Completed'; BLOCKED='blocked','Blocked'; FAILED='failed','Failed'
+
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    schedule=models.ForeignKey(ContinuousAssuranceSchedule,on_delete=models.CASCADE,related_name='executions')
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='assurance_executions')
+    project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='assurance_executions')
+    asset=models.ForeignKey('assets.Asset',on_delete=models.PROTECT,related_name='assurance_executions')
+    authorization_decision=models.ForeignKey('assets.AssetAuthorization',on_delete=models.PROTECT,related_name='assurance_executions')
+    scheduled_for=models.DateTimeField()
+    status=models.CharField(max_length=20,choices=Status.choices,default=Status.PENDING)
+    scan=models.OneToOneField('scans.Scan',on_delete=models.PROTECT,null=True,blank=True,related_name='assurance_execution')
+    celery_task_id=models.CharField(max_length=255,blank=True)
+    scanner_task_id=models.CharField(max_length=255,blank=True)
+    attempts=models.PositiveIntegerField(default=0)
+    reason=models.TextField(blank=True)
+    started_at=models.DateTimeField(null=True,blank=True)
+    completed_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['schedule','scheduled_for'],name='uniq_assurance_schedule_occurrence')]
+        indexes=[models.Index(fields=['schedule','status'],name='idx_assurance_schedule_state'),models.Index(fields=['organization','status'],name='idx_assurance_org_state')]
 
 
 class Notification(models.Model):
