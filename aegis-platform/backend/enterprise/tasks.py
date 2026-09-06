@@ -187,10 +187,8 @@ def run_continuous_assurance(execution_id: str):
     task_map={'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}
     now=timezone.now()
     with transaction.atomic():
-        execution=(ContinuousAssuranceExecution.objects.select_for_update().select_related(
-            'schedule__project','schedule__organization','schedule__asset','schedule__authorization_decision','scan',
-        ).get(pk=execution_id))
-        schedule=execution.schedule
+        execution=ContinuousAssuranceExecution.objects.select_for_update().get(pk=execution_id)
+        schedule=ContinuousAssuranceSchedule.objects.select_for_update().get(pk=execution.schedule_id)
         if execution.status==ContinuousAssuranceExecution.Status.COMPLETED and execution.scan_id:
             return {'status':'completed','execution_id':str(execution.id),'scan_id':str(execution.scan_id),'task_id':execution.scanner_task_id,'replayed':True}
         if execution.status==ContinuousAssuranceExecution.Status.FAILED and execution.scan_id and execution.scan.is_finished:
