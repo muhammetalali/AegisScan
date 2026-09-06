@@ -18,8 +18,8 @@ from ..services.workflow_intelligence import enrich_action, workflow_metrics
 from ..services.audit_writer import add_audit_entry
 from .assurance_graph import _load_validations
 from enterprise.services import ensure_project_tenant
-from evidence.models import ValidationRun
-from projects.models import Project
+from django_project.evidence.models import ValidationRun
+from django_project.projects.models import Project
 
 router = APIRouter()
 security = HTTPBearer(auto_error=True)

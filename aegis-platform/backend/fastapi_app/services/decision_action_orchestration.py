@@ -9,8 +9,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from enterprise.models import DecisionAction, DecisionActionEvent, Organization, OrganizationMembership, TenantProject
-from evidence.models import ValidationRun
-from projects.models import Project
+from django_project.evidence.models import ValidationRun
+from django_project.projects.models import Project
 
 STATES = ["pending", "approved", "assigned", "in_progress", "awaiting_revalidation", "verified", "rejected", "deferred"]
 TRANSITIONS: dict[str, set[str]] = {

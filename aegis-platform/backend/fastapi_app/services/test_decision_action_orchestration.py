@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from enterprise.models import DecisionAction, DecisionActionEvent, OrganizationMembership
 from enterprise.services import ensure_project_tenant
-from evidence.models import ValidationRun
+from django_project.evidence.models import ValidationRun
 from fastapi_app.services import decision_action_orchestration as store
 from fastapi_app.services import policy_engine
 from fastapi_app.services.assurance_graph_aggregator import build_assurance_graph
@@ -19,9 +19,9 @@ from fastapi_app.services.security_decision import build_decision_pack
 from fastapi_app.services.workflow_sla import evaluate_sla_actions
 from fastapi_app.routers.assurance_graph import _load_validations
 from fastapi_app.routers.decision_actions import _resolve_action_scope
-from projects.models import Project, ProjectMembership
-from scans.models import Scan
-from vulnerabilities.models import Vulnerability
+from django_project.projects.models import Project, ProjectMembership
+from django_project.scans.models import Scan
+from django_project.vulnerabilities.models import Vulnerability
 
 
 @pytest.mark.parametrize("module,initializer", [
