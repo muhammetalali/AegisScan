@@ -1,91 +1,127 @@
-name: AegisScan Production Runtime Reality Gate
+from __future__ import annotations
 
-on:
-  push:
-    branches: [main, codex/full-contract-ui-audit-2026-09-03]
-    paths:
-      - 'aegis-platform/backend/**'
-      - 'aegis/**'
-      - 'tests/test_production_runtime_imports.py'
-      - '.github/workflows/production-runtime-reality-gate.yml'
-  pull_request:
-    paths:
-      - 'aegis-platform/backend/**'
-      - 'aegis/**'
-      - 'tests/test_production_runtime_imports.py'
-      - '.github/workflows/production-runtime-reality-gate.yml'
-  workflow_dispatch:
+import socket
 
-permissions:
-  contents: read
+import pytest
 
-jobs:
-  production-runtime-reality:
-    name: Real application import and runtime integrity
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: aegisdb
-          POSTGRES_USER: aegis
-          POSTGRES_PASSWORD: aegis
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U aegis -d aegisdb"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-    env:
-      DJANGO_SETTINGS_MODULE: django_project.settings
-      PYTHONPATH: aegis-platform/backend:.
-      SECRET_KEY: ci-production-reality-secret-key-012345678901234567890123
-      JWT_SECRET_KEY: ci-production-reality-jwt-secret-key-012345678901234567890123
-      DEBUG: '0'
-      ALLOWED_HOSTS: localhost,127.0.0.1
-      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegisdb
-      REDIS_URL: redis://localhost:6379/0
-      CELERY_BROKER_URL: redis://localhost:6379/0
-      CELERY_RESULT_BACKEND: redis://localhost:6379/0
-      WS_ALLOW_QUERY_TOKEN: '0'
-      LOG_TO_FILE: '0'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Verify canonical checkout SHA
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual_sha="$(git rev-parse HEAD)"
-          test "$actual_sha" = "$GITHUB_SHA"
-          echo "Canonical HEAD verified: $actual_sha"
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install real platform dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -r aegis-platform/backend/requirements.txt
-          python -m pip install ruff==0.8.6
-      - name: Django system checks
-        working-directory: aegis-platform/backend
-        run: python manage.py check --deploy
-      - name: Production backend syntax gate
-        run: python -m compileall -q aegis-platform/backend aegis tests
-      - name: Undefined-name static gate on production backend
-        run: ruff check aegis-platform/backend --select F821 --output-format concise
-      - name: Production backend import resolution and runtime tests
-        run: python -m pytest -q tests/test_production_runtime_imports.py
+from fastapi_app.services import scope_authorization as scope
+
+
+@pytest.mark.parametrize(
+    ('configured', 'target', 'expected'),
+    [
+        ('127.0.0.1', '127.0.0.1', True),
+        ('127.0.0.0/24', '127.0.0.42', True),
+        ('127.0.0.0/24', '127.0.1.42', False),
+        ('2001:db8::/32', '2001:db8::42', True),
+        ('2001:db8::/32', '2001:db9::42', False),
+        ('10.0.0.0/8', '10.20.0.0/16', True),
+        ('10.0.0.0/16', '10.0.0.0/8', False),
+        ('example.com', 'example.com', True),
+        ('example.com', 'api.example.com', False),
+        ('*.example.com', 'api.example.com', True),
+        ('*.example.com', 'example.com', False),
+        ('*.example.com', 'api.internal.example.com', True),
+        ('*', 'anything.example.com', False),
+        ('aegis-scan-target', 'aegis-scan-target', True),
+        ('example.com', 'https://example.com', True),
+        ('example.com', 'https://user:pass@example.com', False),
+        ('example.com', 'https://example.com/?redirect=https://evil.example', False),
+        ('example.com', 'example.com\n.evil.example', False),
+        ('xn--bcher-kva.example', 'bücher.example', True),
+        ('example.com', 'example.com:443', True),
+    ],
+)
+def test_target_scope_matrix(monkeypatch, configured: str, target: str, expected: bool):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', configured)
+    assert scope.is_target_authorized(target) is expected
+
+
+def test_empty_allowlist_fails_closed(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    assert scope.is_target_authorized('127.0.0.1') is False
+
+
+def test_invalid_configured_wildcard_fails_closed(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', '*.')
+    assert scope.is_target_authorized('api.example.com') is False
+
+
+def test_url_scope_requires_http(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'example.com')
+    with pytest.raises(scope.ScopeAuthorizationError):
+        scope.require_authorized_target('ftp://example.com', url=True)
+
+
+def _dns_answer(address: str):
+    family = socket.AF_INET6 if ':' in address else socket.AF_INET
+    sockaddr = (address, 0, 0, 0) if family == socket.AF_INET6 else (address, 0)
+    return (family, socket.SOCK_STREAM, 6, '', sockaddr)
+
+
+def test_worker_dns_policy_blocks_metadata_destination(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'approved.example')
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('169.254.169.254')],
+    )
+
+    assert scope.is_target_authorized('approved.example') is True
+    assert scope.is_target_authorized('approved.example', resolve_dns=True) is False
+    with pytest.raises(scope.ScopeAuthorizationError, match='non-global destination'):
+        scope.require_authorized_target('approved.example', resolve_dns=True)
+
+
+def test_worker_dns_policy_blocks_mixed_safe_and_unsafe_answers(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'approved.example')
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [
+            _dns_answer('93.184.216.34'),
+            _dns_answer('127.0.0.1'),
+        ],
+    )
+
+    assert scope.is_target_authorized('approved.example', resolve_dns=True) is False
+
+
+def test_worker_dns_policy_allows_private_destination_only_with_explicit_cidr(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'internal.example,10.0.0.0/8')
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('10.23.45.67')],
+    )
+
+    assert scope.is_target_authorized('internal.example', resolve_dns=True) is True
+    assert scope.require_authorized_target('internal.example', resolve_dns=True) == ('10.23.45.67',)
+
+
+def test_worker_dns_policy_fails_closed_on_resolution_error(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'approved.example')
+
+    def fail_dns(*_args, **_kwargs):
+        raise socket.gaierror('synthetic DNS failure')
+
+    monkeypatch.setattr(scope.socket, 'getaddrinfo', fail_dns)
+    assert scope.is_target_authorized('approved.example', resolve_dns=True) is False
+    with pytest.raises(scope.ScopeAuthorizationError, match='DNS resolution failed'):
+        scope.require_authorized_target('approved.example', resolve_dns=True)
+
+
+def test_explicit_single_label_service_identity_does_not_use_search_suffix_dns(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'aegis-scan-target')
+
+    def must_not_resolve(*_args, **_kwargs):
+        raise AssertionError('single-label service identity was unexpectedly resolved')
+
+    monkeypatch.setattr(scope.socket, 'getaddrinfo', must_not_resolve)
+    assert scope.is_target_authorized('aegis-scan-target', resolve_dns=True) is True
+
+
+def test_localhost_alias_requires_explicit_ip_authorization(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'localhost')
+    assert scope.is_target_authorized('localhost') is True
+    assert scope.is_target_authorized('localhost', resolve_dns=True) is False

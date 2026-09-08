@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .scope_authorization import require_authorized_target
+
 
 @dataclass
 class ScanResult:
@@ -28,6 +30,11 @@ def validate_authorized_target(target: str) -> str:
     value = target.strip()
     if not value or len(value) > 253 or any(c in value for c in '\r\n\x00'):
         raise ValueError('Invalid scan target')
+    if '://' not in value and '/' in value:
+        try:
+            return str(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            raise ValueError('Invalid network scan target') from None
     parsed = urlparse(value if '://' in value else f'//{value}')
     if parsed.scheme and parsed.scheme not in _URL_SCHEMES:
         raise ValueError('Unsupported target URL scheme')
@@ -63,6 +70,7 @@ def validate_code_target(target: str) -> str:
 
 def run_nmap(target: str, timeout: int = 300) -> ScanResult:
     host = validate_authorized_target(target)
+    require_authorized_target(host, resolve_dns=True)
     executable = shutil.which('nmap')
     if not executable:
         raise RuntimeError('Nmap is not installed on the worker')
@@ -78,6 +86,7 @@ def run_nmap(target: str, timeout: int = 300) -> ScanResult:
 
 def run_masscan(target: str, ports: str = '1-65535', rate: int = 1000, timeout: int = 300) -> ScanResult:
     host = validate_authorized_target(target)
+    require_authorized_target(host, resolve_dns=True)
     if rate <= 0:
         raise ValueError('Masscan rate must be positive')
     executable = shutil.which('masscan')
@@ -95,6 +104,7 @@ def run_masscan(target: str, ports: str = '1-65535', rate: int = 1000, timeout: 
 
 def run_nuclei(target: str, timeout: int = 600) -> ScanResult:
     url = validate_authorized_web_target(target)
+    require_authorized_target(url, url=True, resolve_dns=True)
     executable = shutil.which('nuclei')
     if not executable:
         raise RuntimeError('Nuclei is not installed on the worker')
@@ -104,8 +114,10 @@ def run_nuclei(target: str, timeout: int = 600) -> ScanResult:
     if not templates_path.is_dir():
         raise RuntimeError(f'Nuclei templates directory is missing: {templates_dir}')
 
+    # Nuclei supports -dr/--disable-redirects. Redirects are disabled so an
+    # authorized URL cannot pivot the scanner to a different egress target.
     completed = subprocess.run(
-        [executable, '-u', url, '-t', str(templates_path), '-jsonl', '-silent', '-no-color'],
+        [executable, '-u', url, '-t', str(templates_path), '-jsonl', '-silent', '-no-color', '-dr'],
         capture_output=True,
         text=True,
         timeout=timeout,

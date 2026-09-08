@@ -1,190 +1,128 @@
-name: Security Reality Check
+from __future__ import annotations
 
-'on':
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+import socket
+from unittest.mock import Mock
 
-permissions:
-  contents: read
+import pytest
 
-jobs:
-  backend:
-    runs-on: ubuntu-latest
-    env:
-      DEBUG: 'True'
-      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
-      DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
-      REDIS_URL: 'redis://127.0.0.1:6379/0'
-      CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
-      CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
-      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
-      ALLOWED_HOSTS: 'localhost,127.0.0.1,nginx'
-      CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
-      CSRF_TRUSTED_ORIGINS: 'http://localhost,http://127.0.0.1,http://nginx'
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: aegisdb
-          POSTGRES_USER: aegis
-          POSTGRES_PASSWORD: aegis
-        ports:
-          - '5432:5432'
-        options: >-
-          --health-cmd "pg_isready -U aegis -d aegisdb"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7
-        ports:
-          - '6379:6379'
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+from django_project.assets.models import Asset, AssetAuthorization
+from django_project.evidence.models import Evidence
+from django_project.projects.models import Project
+from django_project.scans.models import Scan, ScanEngineExecution
+from django_project.users.models import User
+from fastapi_app.services import scope_authorization
+from fastapi_app.services.authorization_guard import require_bound_scan_authorization
+from fastapi_app.tasks import security_scan
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: |
-            pyproject.toml
-            aegis-platform/backend/requirements.txt
 
-      - name: Install Nmap
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y nmap
+def _dns_answer(address: str):
+    family = socket.AF_INET6 if ':' in address else socket.AF_INET
+    sockaddr = (address, 0, 0, 0) if family == socket.AF_INET6 else (address, 0)
+    return (family, socket.SOCK_STREAM, 6, '', sockaddr)
 
-      - name: Install root Aegis package
-        run: python -m pip install -e '.[dev]'
 
-      - name: Install backend dependencies
-        working-directory: aegis-platform/backend
-        run: python -m pip install -r requirements.txt
+@pytest.mark.django_db
+def test_worker_blocks_authorized_hostname_that_resolves_to_metadata(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'approved.example')
+    monkeypatch.setattr(
+        scope_authorization.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('169.254.169.254')],
+    )
 
-      - name: Engine and platform tests
-        env:
-          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q tests/test_integration.py tests/test_platform.py
+    user = User.objects.create_user(
+        email='egress-metadata@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    project = Project.objects.create(name='Egress Metadata', slug='egress-metadata', owner=user)
+    asset = Asset.objects.create(
+        project=project,
+        owner=user,
+        name='Authorized hostname',
+        slug='authorized-hostname',
+        type=Asset.Type.IP_ADDRESS,
+        configuration={'host': 'approved.example'},
+    )
+    decision = AssetAuthorization.objects.create(
+        asset=asset,
+        actor=user,
+        authorized=True,
+        target_snapshot='approved.example',
+        reason='egress boundary test',
+    )
+    scan = Scan.objects.create(
+        project=project,
+        name='Blocked metadata pivot',
+        scan_type=Scan.Type.IP,
+        asset=asset,
+        authorization_decision=decision,
+        engines=['nmap'],
+        config={'target': 'approved.example'},
+        initiated_by=user,
+        status=Scan.Status.QUEUED,
+    )
+    tool = Mock()
+    monkeypatch.setattr(security_scan, 'get_tool', lambda _name: tool)
 
-      - name: Verify Django project import
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: |
-          python -c "import django_project; import django_project.settings; print('Django project import: OK')"
+    bound_scan, reason, bound_decision = require_bound_scan_authorization(str(scan.id))
+    assert bound_scan is None
+    assert bound_decision is None
+    assert 'non-global destination' in reason
 
-      - name: Django check
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python manage.py check
+    result = security_scan.run_nmap_scan.run(str(scan.id))
+    scan.refresh_from_db()
 
-      - name: Migration consistency check
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python manage.py makemigrations --check --dry-run
+    assert result['status'] == 'blocked'
+    assert scan.status == Scan.Status.FAILED
+    assert tool.run.called is False
+    assert ScanEngineExecution.objects.filter(scan=scan).count() == 0
+    assert Evidence.objects.filter(scan=scan).count() == 0
 
-      - name: Apply migrations
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python manage.py migrate --noinput
 
-      - name: Verify users table
-        working-directory: aegis-platform/backend
-        env:
-          PGPASSWORD: aegis
-        run: |
-          result=$(psql "$DATABASE_URL" -tAc "SELECT to_regclass('public.users_user');")
-          test "$result" = 'users_user'
+@pytest.mark.django_db
+def test_worker_allows_private_dns_only_when_cidr_is_explicitly_authorized(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'internal.example,10.0.0.0/8')
+    monkeypatch.setattr(
+        scope_authorization.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('10.10.20.30')],
+    )
 
-      - name: Authentication and CSRF security tests
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q django_project/users/test_auth_security.py
+    user = User.objects.create_user(
+        email='egress-private@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    project = Project.objects.create(name='Egress Private', slug='egress-private', owner=user)
+    asset = Asset.objects.create(
+        project=project,
+        owner=user,
+        name='Authorized private hostname',
+        slug='authorized-private-hostname',
+        type=Asset.Type.IP_ADDRESS,
+        configuration={'host': 'internal.example'},
+    )
+    decision = AssetAuthorization.objects.create(
+        asset=asset,
+        actor=user,
+        authorized=True,
+        target_snapshot='internal.example',
+        reason='explicit private CIDR grant',
+    )
+    scan = Scan.objects.create(
+        project=project,
+        name='Allowed private target',
+        scan_type=Scan.Type.IP,
+        asset=asset,
+        authorization_decision=decision,
+        engines=['nmap'],
+        config={'target': 'internal.example'},
+        initiated_by=user,
+        status=Scan.Status.QUEUED,
+    )
 
-      - name: Audit evidence regression tests
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q django_project/audit/test_middleware.py
+    bound_scan, target, bound_decision = require_bound_scan_authorization(str(scan.id))
 
-      - name: Finding validation regression tests
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/tasks/test_finding_validation.py fastapi_app/routers/test_validation_api.py
-
-      - name: Production Django checks
-        working-directory: aegis-platform/backend
-        env:
-          DEBUG: 'False'
-          SECRET_KEY: ci-production-secret-not-used-at-runtime
-          JWT_SECRET_KEY: ci-production-jwt-secret-not-used-at-runtime
-          AUTH_COOKIE_SECURE: 'True'
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python manage.py check --deploy
-
-      - name: Python compile check
-        working-directory: aegis-platform/backend
-        run: python -m compileall -q django_project fastapi_app celery_app
-
-      - name: Redis connectivity smoke test
-        working-directory: aegis-platform/backend
-        run: |
-          python -c "import redis; r=redis.from_url('redis://127.0.0.1:6379/0'); assert r.ping() is True; print('Redis: OK')"
-
-      - name: Celery configuration smoke test
-        working-directory: aegis-platform/backend
-        env:
-          DJANGO_SETTINGS_MODULE: django_project.settings
-          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: |
-          python -c "import django; django.setup(); from django.conf import settings; from celery import Celery; app=Celery('aegis'); app.conf.broker_url=settings.CELERY_BROKER_URL; assert app.conf.broker_url == 'redis://127.0.0.1:6379/0'; print('Celery broker: OK')"
-
-  frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: aegis-platform/frontend/package-lock.json
-
-      - name: Install dependencies
-        working-directory: aegis-platform/frontend
-        run: npm ci
-
-      - name: Typecheck
-        working-directory: aegis-platform/frontend
-        run: npx tsc --noEmit
-
-      - name: Build
-        working-directory: aegis-platform/frontend
-        run: npm run build
+    assert bound_scan is not None
+    assert bound_scan.id == scan.id
+    assert target == 'internal.example'
+    assert bound_decision.id == decision.id

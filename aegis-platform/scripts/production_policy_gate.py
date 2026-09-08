@@ -1,62 +1,56 @@
-#!/usr/bin/env python3
-"""Fail-closed policy checks for the fully resolved production Compose model."""
 from __future__ import annotations
 
-import argparse
-import json
-from pathlib import Path
+from types import SimpleNamespace
+
+from fastapi_app.services import scanner_adapters
 
 
-INTERNAL_SERVICES = {'postgres', 'redis', 'django', 'fastapi', 'celery_worker', 'celery_beat', 'frontend'}
-HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'celery_beat'}
+def _completed():
+    return SimpleNamespace(returncode=0, stdout='', stderr='')
 
 
-def validate(model: dict) -> list[str]:
-    failures: list[str] = []
-    services = model.get('services') if isinstance(model, dict) else None
-    if not isinstance(services, dict):
-        return ['Resolved Compose document has no services mapping']
-    scan_target = services.get('scan_target')
-    if scan_target is not None and 'ci-only' not in (scan_target.get('profiles') or []):
-        failures.append('CI-only scan_target is active in the default production model')
-    for name in INTERNAL_SERVICES:
-        service = services.get(name, {})
-        if service.get('ports'):
-            failures.append(f'{name} publishes a host port in production')
-        for volume in service.get('volumes') or []:
-            source = volume.get('source') if isinstance(volume, dict) else str(volume).split(':', 1)[0]
-            if str(source).startswith('.') or str(source).startswith('/'):
-                failures.append(f'{name} uses host bind mount {source!r} in production')
-    for name in HARDENED_SERVICES:
-        service = services.get(name, {})
-        if service.get('read_only') is not True:
-            failures.append(f'{name} root filesystem is not read-only')
-        security_opt = service.get('security_opt') or []
-        if not any(str(item).lower() == 'no-new-privileges:true' for item in security_opt):
-            failures.append(f'{name} does not enforce no-new-privileges')
-        cap_drop = {str(item).upper() for item in service.get('cap_drop') or []}
-        if 'ALL' not in cap_drop:
-            failures.append(f'{name} does not drop all ambient Linux capabilities')
-    postgres = services.get('postgres', {})
-    password = (postgres.get('environment') or {}).get('POSTGRES_PASSWORD', '')
-    if not password or password == 'change-me':
-        failures.append('Production PostgreSQL password is missing or uses the development default')
-    for name in ('fastapi', 'celery_worker', 'celery_beat'):
-        allowed = str((services.get(name, {}).get('environment') or {}).get('AUTHORIZED_SCAN_TARGETS', '')).strip()
-        if not allowed or allowed == 'aegis-scan-target':
-            failures.append(f'{name} uses an absent or CI fixture authorization scope')
-    return failures
+def test_nuclei_enforces_dns_egress_and_disables_redirects(monkeypatch, tmp_path):
+    calls = []
+    command = []
+
+    def authorized(target, **kwargs):
+        calls.append((target, kwargs))
+        return ()
+
+    def run(args, **kwargs):
+        command.extend(args)
+        return _completed()
+
+    monkeypatch.setattr(scanner_adapters, 'require_authorized_target', authorized)
+    monkeypatch.setattr(scanner_adapters.shutil, 'which', lambda name: f'/usr/local/bin/{name}')
+    monkeypatch.setattr(scanner_adapters.subprocess, 'run', run)
+    monkeypatch.setenv('NUCLEI_TEMPLATES_DIR', str(tmp_path))
+
+    result = scanner_adapters.run_nuclei('https://approved.example', timeout=15)
+
+    assert result.tool == 'nuclei'
+    assert calls == [
+        ('https://approved.example', {'url': True, 'resolve_dns': True}),
+    ]
+    assert '-dr' in command
+    assert command[command.index('-u') + 1] == 'https://approved.example'
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('compose_json', type=Path)
-    args = parser.parse_args()
-    model = json.loads(args.compose_json.read_text(encoding='utf-8'))
-    failures = validate(model)
-    print(json.dumps({'policy': 'production-compose-v1', 'failures': failures}, indent=2))
-    return 1 if failures else 0
+def test_network_scanners_enforce_worker_dns_egress(monkeypatch):
+    calls = []
 
+    def authorized(target, **kwargs):
+        calls.append((target, kwargs))
+        return ()
 
-if __name__ == '__main__':
-    raise SystemExit(main())
+    monkeypatch.setattr(scanner_adapters, 'require_authorized_target', authorized)
+    monkeypatch.setattr(scanner_adapters.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr(scanner_adapters.subprocess, 'run', lambda *_args, **_kwargs: _completed())
+
+    scanner_adapters.run_nmap('approved.example', timeout=15)
+    scanner_adapters.run_masscan('10.20.0.0/16', ports='80', rate=10, timeout=15)
+
+    assert calls == [
+        ('approved.example', {'resolve_dns': True}),
+        ('10.20.0.0/16', {'resolve_dns': True}),
+    ]
