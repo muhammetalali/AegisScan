@@ -2,7 +2,9 @@ name: Frontend Lock Sync
 
 'on':
   push:
-    branches: [codex/full-contract-ui-audit-2026-09-03]
+    branches: [main, codex/full-contract-ui-audit-2026-09-03]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

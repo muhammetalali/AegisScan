@@ -1,6 +1,6 @@
 # AegisScan — Canonical Execution Baseline
 
-This file is authoritative for the active remediation stream. One implementation branch only: `codex/full-contract-ui-audit-2026-09-03`.
+This file is authoritative for the active remediation stream. Scoped implementation branches integrate through reviewed pull requests; `main` is the canonical release branch.
 
 Completion requires: Designed → Implemented → Integrated → Real Data → Tested → E2E Validated → Evidence Captured → Independently Verified → Production Ready.
 
