@@ -8,7 +8,7 @@ from django.db import transaction
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.scans.models import Scan
 
-from .scope_authorization import is_target_authorized
+from .scope_authorization import ScopeAuthorizationError, require_authorized_target
 
 
 _NETWORK_SCAN_TYPES = {Scan.Type.IP, Scan.Type.URL, Scan.Type.NETWORK}
@@ -52,13 +52,20 @@ def _requested_scan_target(scan: Scan) -> str:
     )
 
 
+def _require_worker_egress(target: str, *, url: bool = False) -> tuple[bool, str]:
+    try:
+        require_authorized_target(target, url=url, resolve_dns=True)
+    except ScopeAuthorizationError as exc:
+        return False, f'Execution blocked: {exc}'
+    return True, ''
+
+
 def require_bound_scan_authorization(scan_id: str) -> tuple[Scan | None, str, AssetAuthorization | None]:
     """Resolve the immutable authorization bound to a scan.
 
-    The persisted AssetAuthorization decision is authoritative for both network
-    and source-code scans. Mutable Asset.configuration flags never grant
-    execution authority. Network scans additionally require the server-side
-    target scope allowlist.
+    Database identity and authorization checks are performed under row locks.
+    DNS/egress resolution is deliberately performed after those locks are
+    released so resolver latency cannot hold PostgreSQL rows hostage.
     """
     with transaction.atomic():
         scan = Scan.objects.select_for_update().select_related('project', 'initiated_by').get(pk=scan_id)
@@ -84,9 +91,14 @@ def require_bound_scan_authorization(scan_id: str) -> tuple[Scan | None, str, As
             return None, 'Execution blocked: asset target no longer matches the bound authorization decision.', None
         if requested_target and requested_target != authorized_target:
             return None, 'Execution blocked: scan target no longer matches the bound authorization decision.', None
-        if scan.scan_type in _NETWORK_SCAN_TYPES and not is_target_authorized(authorized_target):
-            return None, 'Execution blocked: target is outside the server-side authorized scan scope.', None
-        return scan, authorized_target, decision
+        needs_egress_check = scan.scan_type in _NETWORK_SCAN_TYPES
+        is_url_scan = scan.scan_type == Scan.Type.URL
+
+    if needs_egress_check:
+        ok, reason = _require_worker_egress(authorized_target, url=is_url_scan)
+        if not ok:
+            return None, reason, None
+    return scan, authorized_target, decision
 
 
 def authorization_snapshot(decision: AssetAuthorization) -> dict[str, Any]:
@@ -130,13 +142,17 @@ def require_bound_validation_authorization(validation) -> tuple[Asset | None, st
         return None, reason, None
     if decision.id != validation.authorization_decision_id:
         return None, 'Execution blocked: bound authorization decision is no longer the latest asset decision.', None
-    if not is_target_authorized(decision.target_snapshot):
-        return None, 'Execution blocked: target is outside the server-side authorized scan scope.', None
+    ok, reason = _require_worker_egress(
+        decision.target_snapshot,
+        url=(validation.target_type or '').strip().lower() == 'url',
+    )
+    if not ok:
+        return None, reason, None
     return asset, decision.target_snapshot, decision
 
 
 def revalidate_bound_authorization(scan: Scan, decision: AssetAuthorization) -> tuple[bool, str]:
-    """Re-check the latest persisted decision immediately before evidence commit."""
+    """Re-check durable authorization, then egress policy, before evidence commit."""
     with transaction.atomic():
         asset = Asset.objects.select_for_update().get(pk=scan.asset_id)
         latest = AssetAuthorization.objects.select_for_update().filter(asset=asset).order_by('-created_at', '-id').first()
@@ -146,9 +162,15 @@ def revalidate_bound_authorization(scan: Scan, decision: AssetAuthorization) -> 
             return False, 'Execution blocked: authorization is no longer valid before evidence persistence.'
         if asset_target(asset) != decision.target_snapshot:
             return False, 'Execution blocked: asset target changed before evidence persistence.'
-        if scan.scan_type in _NETWORK_SCAN_TYPES and not is_target_authorized(decision.target_snapshot):
-            return False, 'Execution blocked: target left the server-side authorized scan scope before evidence persistence.'
-        return True, ''
+        needs_egress_check = scan.scan_type in _NETWORK_SCAN_TYPES
+        is_url_scan = scan.scan_type == Scan.Type.URL
+        target = decision.target_snapshot
+
+    if needs_egress_check:
+        ok, reason = _require_worker_egress(target, url=is_url_scan)
+        if not ok:
+            return False, reason.replace('Execution blocked: ', 'Execution blocked before evidence persistence: ', 1)
+    return True, ''
 
 
 def utcnow() -> datetime:

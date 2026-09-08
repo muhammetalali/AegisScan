@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import socket
 from urllib.parse import urlsplit
 
 
@@ -18,13 +19,15 @@ def _configured_targets() -> list[str]:
     return [item.strip() for item in raw.split(',') if item.strip()]
 
 
+def _allow_single_label_targets() -> bool:
+    return os.getenv('ALLOW_SINGLE_LABEL_SCAN_TARGETS', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 def _canonical_hostname(value: str, *, require_http_scheme: bool = False) -> str:
     candidate = str(value).strip()
     if not candidate or _CONTROL_RE.search(candidate):
         raise ScopeAuthorizationError('Target contains whitespace or control characters')
 
-    # Literal IPs are canonicalized before URL parsing so bare IPv6 is treated
-    # as an IP address rather than a malformed host:port expression.
     if '://' not in candidate and not candidate.startswith('['):
         try:
             return str(ipaddress.ip_address(candidate))
@@ -87,8 +90,116 @@ def _canonical_entry(entry: str) -> tuple[str, bool, bool]:
     return normalized, False, wildcard
 
 
-def is_target_authorized(target: str) -> bool:
-    """Match a target against the explicit server-side authorization allow-list."""
+def _target_network(value: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
+    candidate = str(value).strip()
+    if '://' in candidate or '/' not in candidate:
+        return None
+    try:
+        return ipaddress.ip_network(candidate, strict=False)
+    except ValueError:
+        return None
+
+
+def _configured_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for raw_entry in _configured_targets():
+        try:
+            normalized, is_network, _ = _canonical_entry(raw_entry)
+        except ScopeAuthorizationError:
+            continue
+        if not is_network:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(normalized, strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+def _ip_explicitly_authorized(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(
+        address.version == network.version and address in network
+        for network in _configured_networks()
+    )
+
+
+def _resolve_host_addresses(host: str) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
+    try:
+        answers = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ScopeAuthorizationError(f'Target DNS resolution failed: {host}') from exc
+
+    addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+    for answer in answers:
+        sockaddr = answer[4]
+        if not sockaddr:
+            continue
+        raw_address = str(sockaddr[0]).split('%', 1)[0]
+        try:
+            addresses.add(ipaddress.ip_address(raw_address))
+        except ValueError:
+            continue
+    if not addresses:
+        raise ScopeAuthorizationError(f'Target DNS resolution returned no IP addresses: {host}')
+    return tuple(sorted(addresses, key=lambda item: (item.version, int(item))))
+
+
+def _enforce_resolved_egress(host: str) -> tuple[str, ...]:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+
+    if address is not None:
+        return (str(address),)
+
+    if '.' not in host:
+        if host in {'localhost', 'localhost.localdomain'}:
+            raise ScopeAuthorizationError('Localhost aliases require explicit IP/CIDR authorization')
+        if not _allow_single_label_targets():
+            raise ScopeAuthorizationError(
+                'Single-label target hostnames are disabled outside explicitly '
+                'isolated service-discovery environments'
+            )
+        return ()
+
+    resolved = _resolve_host_addresses(host)
+    for destination in resolved:
+        if destination.is_global:
+            continue
+        if _ip_explicitly_authorized(destination):
+            continue
+        raise ScopeAuthorizationError(
+            'Target hostname resolves to a non-global destination that is not '
+            f'explicitly authorized by IP/CIDR: {destination}'
+        )
+    return tuple(str(item) for item in resolved)
+
+
+def is_target_authorized(target: str, *, resolve_dns: bool = False) -> bool:
+    """Match a target against the explicit server-side authorization allow-list.
+
+    With ``resolve_dns=True`` every non-global address reached through a FQDN
+    must also be explicitly authorized by IP/CIDR. Single-label service names
+    require an explicit isolated-service-discovery opt-in.
+    """
+    network_target = _target_network(target)
+    if network_target is not None:
+        for raw_entry in _configured_targets():
+            try:
+                normalized, is_network, _ = _canonical_entry(raw_entry)
+            except ScopeAuthorizationError:
+                continue
+            if not is_network:
+                continue
+            configured_network = ipaddress.ip_network(normalized, strict=False)
+            if (
+                configured_network.version == network_target.version
+                and network_target.subnet_of(configured_network)
+            ):
+                return True
+        return False
+
     try:
         host = _canonical_hostname(target)
     except ScopeAuthorizationError:
@@ -98,6 +209,7 @@ def is_target_authorized(target: str) -> bool:
     except ValueError:
         target_ip = None
 
+    matched = False
     for raw_entry in _configured_targets():
         try:
             normalized, is_network, wildcard = _canonical_entry(raw_entry)
@@ -105,22 +217,52 @@ def is_target_authorized(target: str) -> bool:
             continue
         if is_network:
             if target_ip is not None and target_ip in ipaddress.ip_network(normalized, strict=False):
-                return True
+                matched = True
+                break
             continue
         if target_ip is not None:
             continue
         if wildcard and host.endswith('.' + normalized):
-            return True
+            matched = True
+            break
         if not wildcard and host == normalized:
-            return True
-    return False
+            matched = True
+            break
+
+    if not matched:
+        return False
+    if not resolve_dns:
+        return True
+    try:
+        _enforce_resolved_egress(host)
+    except ScopeAuthorizationError:
+        return False
+    return True
 
 
-def require_authorized_target(target: str, *, url: bool = False) -> None:
-    if url:
-        _canonical_hostname(target, require_http_scheme=True)
+def require_authorized_target(
+    target: str,
+    *,
+    url: bool = False,
+    resolve_dns: bool = False,
+) -> tuple[str, ...]:
+    network_target = _target_network(target)
+    if network_target is not None:
+        if url:
+            raise ScopeAuthorizationError('URL scan targets cannot be CIDR networks')
+        if not is_target_authorized(target):
+            raise ScopeAuthorizationError(
+                'Target is outside the server-side authorized scan scope. '
+                'Configure AUTHORIZED_SCAN_TARGETS before starting a real security run.'
+            )
+        return (str(network_target),) if resolve_dns else ()
+
+    host = _canonical_hostname(target, require_http_scheme=url)
     if not is_target_authorized(target):
         raise ScopeAuthorizationError(
             'Target is outside the server-side authorized scan scope. '
             'Configure AUTHORIZED_SCAN_TARGETS before starting a real security run.'
         )
+    if not resolve_dns:
+        return ()
+    return _enforce_resolved_egress(host)

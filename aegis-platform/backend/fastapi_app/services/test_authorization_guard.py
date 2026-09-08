@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from datetime import timedelta
 from unittest.mock import Mock
 
@@ -11,8 +12,15 @@ from django_project.evidence.models import Evidence
 from django_project.projects.models import Project
 from django_project.scans.models import Scan, ScanEngineExecution
 from django_project.users.models import User
+from fastapi_app.services import scope_authorization
 from fastapi_app.services.authorization_guard import require_bound_scan_authorization
 from fastapi_app.tasks import advanced_scans, security_scan
+
+
+def _dns_answer(address: str):
+    family = socket.AF_INET6 if ':' in address else socket.AF_INET
+    sockaddr = (address, 0, 0, 0) if family == socket.AF_INET6 else (address, 0)
+    return (family, socket.SOCK_STREAM, 6, '', sockaddr)
 
 
 @pytest.mark.django_db
@@ -84,3 +92,54 @@ def test_masscan_requires_authoritative_decision(monkeypatch):
     assert result['status'] == 'failed'
     assert 'authorization' in result['error'].lower()
     assert tool.called is False
+
+
+@pytest.mark.django_db
+def test_worker_blocks_authorized_hostname_resolving_to_metadata(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'approved.example')
+    monkeypatch.setattr(
+        scope_authorization.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('169.254.169.254')],
+    )
+
+    user = User.objects.create_user(email='guard-egress@example.invalid', password='Strong-Test-Password-123!')
+    project = Project.objects.create(name='Guard Egress', slug='guard-egress', owner=user)
+    asset = Asset.objects.create(project=project, owner=user, name='Approved hostname', slug='approved-hostname', type=Asset.Type.IP_ADDRESS, configuration={'host': 'approved.example'})
+    decision = AssetAuthorization.objects.create(asset=asset, actor=user, authorized=True, target_snapshot='approved.example', reason='egress test grant')
+    scan = Scan.objects.create(project=project, name='Metadata pivot', scan_type=Scan.Type.IP, asset=asset, authorization_decision=decision, engines=['nmap'], config={'target': 'approved.example'}, initiated_by=user, status=Scan.Status.QUEUED)
+    tool = Mock(); monkeypatch.setattr(security_scan, 'get_tool', lambda name: tool)
+
+    bound_scan, reason, bound_decision = require_bound_scan_authorization(str(scan.id))
+    assert bound_scan is None
+    assert bound_decision is None
+    assert 'non-global destination' in reason
+
+    result = security_scan.run_nmap_scan.run(str(scan.id)); scan.refresh_from_db()
+    assert result['status'] == 'blocked'
+    assert scan.status == Scan.Status.FAILED
+    assert tool.run.called is False
+    assert ScanEngineExecution.objects.filter(scan=scan).count() == 0
+    assert Evidence.objects.filter(scan=scan).count() == 0
+
+
+@pytest.mark.django_db
+def test_worker_allows_private_dns_only_with_explicit_cidr(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'internal.example,10.0.0.0/8')
+    monkeypatch.setattr(
+        scope_authorization.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('10.10.20.30')],
+    )
+
+    user = User.objects.create_user(email='guard-private@example.invalid', password='Strong-Test-Password-123!')
+    project = Project.objects.create(name='Guard Private', slug='guard-private', owner=user)
+    asset = Asset.objects.create(project=project, owner=user, name='Private hostname', slug='private-hostname', type=Asset.Type.IP_ADDRESS, configuration={'host': 'internal.example'})
+    decision = AssetAuthorization.objects.create(asset=asset, actor=user, authorized=True, target_snapshot='internal.example', reason='private CIDR grant')
+    scan = Scan.objects.create(project=project, name='Private target', scan_type=Scan.Type.IP, asset=asset, authorization_decision=decision, engines=['nmap'], config={'target': 'internal.example'}, initiated_by=user, status=Scan.Status.QUEUED)
+
+    bound_scan, target, bound_decision = require_bound_scan_authorization(str(scan.id))
+    assert bound_scan is not None
+    assert bound_scan.id == scan.id
+    assert target == 'internal.example'
+    assert bound_decision.id == decision.id
