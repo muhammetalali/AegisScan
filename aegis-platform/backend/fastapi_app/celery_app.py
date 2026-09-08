@@ -17,6 +17,17 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
 )
 
+SCANNER_QUEUE = "scanners"
+SCANNER_TASK_ROUTES = {
+    "fastapi_app.tasks.security_scan.run_nmap_scan": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.security_scan.run_nuclei_scan": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.security_scan.validate_finding_task": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.advanced_scans.run_masscan_scan": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.advanced_scans.run_semgrep_scan": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.finding_validation.validate_finding_e2e": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e": {"queue": SCANNER_QUEUE},
+}
+
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -27,6 +38,8 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     task_track_started=True,
     worker_prefetch_multiplier=1,
+    task_default_queue="default",
+    task_routes=SCANNER_TASK_ROUTES,
     imports=(
         "fastapi_app.tasks.advanced_scans",
         "fastapi_app.tasks.finding_validation",
