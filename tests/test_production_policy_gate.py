@@ -15,6 +15,10 @@ def hardened_service(**extra):
     return {'read_only': True, 'security_opt': ['no-new-privileges:true'], 'cap_drop': ['ALL'], **extra}
 
 
+def scanner_handoff_service(**extra):
+    return {'read_only': True, 'cap_drop': ['ALL'], **extra}
+
+
 def valid_model():
     return {'services': {
         'nginx': {'ports': [{'published': '443', 'target': 443}]},
@@ -26,7 +30,7 @@ def valid_model():
             environment={'AUTHORIZED_SCAN_TARGETS':'security.example'},
             command='celery -A fastapi_app.celery_app worker -Q default',
         ),
-        'scanner_worker': hardened_service(
+        'scanner_worker': scanner_handoff_service(
             environment={'AUTHORIZED_SCAN_TARGETS':'security.example'},
             command='sh /app/scanner-worker-entrypoint.sh',
             user='0:0',
@@ -67,12 +71,14 @@ def test_rejects_scanner_privilege_or_namespace_regressions():
     model['services']['scanner_worker']['cap_add'] = ['NET_RAW', 'NET_ADMIN', 'SETUID', 'SETGID', 'SETPCAP']
     model['services']['scanner_worker']['network_mode'] = 'default'
     model['services']['scanner_worker']['user'] = '10001:10001'
+    model['services']['scanner_worker']['security_opt'] = ['no-new-privileges:true']
     model['services']['scanner_egress']['cap_add'] = ['NET_RAW']
     model['services']['scanner_egress']['environment']['SCANNER_EGRESS_PRIVATE_TARGETS'] = 'aegis-scan-target'
     failures = MODULE.validate(model)
     assert any('general celery_worker retains' in item for item in failures)
     assert any('bootstrap capabilities must be exactly' in item for item in failures)
     assert any('scanner_worker must not receive NET_ADMIN' in item for item in failures)
+    assert any('cannot enforce no-new-privileges' in item for item in failures)
     assert any('bounded capability handoff as uid 0' in item for item in failures)
     assert any('does not share the scanner_egress' in item for item in failures)
     assert any('scanner_egress lacks NET_ADMIN' in item for item in failures)
@@ -114,13 +120,28 @@ def test_scanner_handoff_ends_nonroot_with_only_net_raw_and_scanners_queue():
         Path(__file__).parents[1] / 'aegis-platform/backend/scanner-worker-entrypoint.sh'
     ).read_text(encoding='utf-8')
     assert '--keep=1' in entrypoint
+    assert '--caps=cap_setpcap,cap_setuid,cap_setgid,cap_net_raw+eip' in entrypoint
     assert '--inh=cap_net_raw' in entrypoint
     assert '--user=aegis' in entrypoint
-    assert '--drop=cap_setuid,cap_setgid,cap_setpcap' in entrypoint
+    assert entrypoint.index('--addamb=cap_net_raw') < entrypoint.index('--drop=cap_setuid,cap_setgid,cap_setpcap')
     assert '--caps=cap_net_raw+eip' in entrypoint
-    assert '--addamb=cap_net_raw' in entrypoint
     assert '-Q scanners' in entrypoint
     assert 'cap_net_admin' not in entrypoint
+
+
+def test_external_black_box_proves_final_scanner_runtime_capabilities():
+    workflow = (
+        Path(__file__).parents[1] / '.github/workflows/external-black-box-e2e.yml'
+    ).read_text(encoding='utf-8')
+    assert 'scanner-runtime pid=' in workflow
+    assert 'Uid' in workflow and 'Gid' in workflow
+    assert 'CapEff' in workflow and 'CapAmb' in workflow
+    assert 'CAP_NET_RAW' in workflow
+    assert 'CAP_NET_ADMIN' in workflow
+    assert 'CAP_SETUID' in workflow
+    assert 'CAP_SETGID' in workflow
+    assert 'CAP_SETPCAP' in workflow
+    assert 'expected 10001' in workflow
 
 
 def test_scanner_egress_image_installs_kernel_policy_tooling():
