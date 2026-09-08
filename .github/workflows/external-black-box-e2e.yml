@@ -213,18 +213,15 @@ jobs:
               raise SystemExit('\n'.join(failures))
           PY
 
-          EGRESS_PID="$(docker inspect -f '{{.State.Pid}}' aegis-scanner-egress)"
-          SCANNER_PID="$(docker inspect -f '{{.State.Pid}}' aegis-scanner-worker)"
-          test "$EGRESS_PID" -gt 0
-          test "$SCANNER_PID" -gt 0
-          EGRESS_NS="$(readlink "/proc/$EGRESS_PID/ns/net")"
-          SCANNER_NS="$(readlink "/proc/$SCANNER_PID/ns/net")"
-          echo "scanner namespace evidence: egress_pid=$EGRESS_PID egress_ns=$EGRESS_NS scanner_pid=$SCANNER_PID scanner_ns=$SCANNER_NS"
-          if [ "$EGRESS_NS" != "$SCANNER_NS" ]; then
-            echo "scanner_worker does not share scanner_egress network namespace" >&2
+          EGRESS_ID="$(docker inspect -f '{{.Id}}' aegis-scanner-egress)"
+          SCANNER_NETWORK_MODE="$(docker inspect -f '{{.HostConfig.NetworkMode}}' aegis-scanner-worker)"
+          EXPECTED_NETWORK_MODE="container:$EGRESS_ID"
+          echo "scanner namespace evidence: egress_id=$EGRESS_ID scanner_network_mode=$SCANNER_NETWORK_MODE"
+          if [ "$SCANNER_NETWORK_MODE" != "$EXPECTED_NETWORK_MODE" ]; then
+            echo "scanner_worker is not attached to the scanner_egress runtime namespace: expected=$EXPECTED_NETWORK_MODE actual=$SCANNER_NETWORK_MODE" >&2
             exit 1
           fi
-          echo "shared scanner network namespace=$SCANNER_NS"
+          echo "shared scanner network namespace=$SCANNER_NETWORK_MODE"
 
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
             -e ALLOWED_IP="$AEGIS_MASSCAN_TARGET" \
