@@ -93,6 +93,15 @@ def test_backend_images_drop_root_before_runtime():
         assert dockerfile.rfind('USER 10001:10001') < dockerfile.rfind('CMD ')
 
 
+def test_scanner_file_capabilities_match_runtime_least_privilege_boundary():
+    dockerfile = (
+        Path(__file__).parents[1] / 'aegis-platform/backend/Dockerfile.django'
+    ).read_text(encoding='utf-8')
+    assert 'cap_net_admin' not in dockerfile
+    assert dockerfile.count('setcap cap_net_raw+eip') == 2
+    assert dockerfile.count("grep -q 'cap_net_raw=eip'") == 2
+
+
 def test_scanner_egress_image_installs_kernel_policy_tooling():
     root = Path(__file__).parents[1] / 'aegis-platform/docker/scanner-egress'
     dockerfile = (root / 'Dockerfile').read_text(encoding='utf-8')
