@@ -115,10 +115,11 @@ services:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-scanner-worker
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app worker -l info -c 2 -Q scanners
+    user: "0:0"
+    command: /app/scanner-worker-entrypoint.sh
     network_mode: "service:scanner_egress"
     cap_drop: [ALL]
-    cap_add: [NET_RAW]
+    cap_add: [NET_RAW, SETUID, SETGID, SETPCAP]
     security_opt: [no-new-privileges:true]
     volumes: [./backend:/app]
     env_file: ./backend/.env
