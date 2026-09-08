@@ -80,6 +80,12 @@ add_allow_target() {
 command -v nft >/dev/null 2>&1 || fail 'nft command is unavailable'
 ip link show "$IFACE" >/dev/null 2>&1 || fail "egress interface does not exist: $IFACE"
 
+# Masscan's asynchronous raw-packet receive path requires the shared network
+# device to be in promiscuous mode. Configure that once from this trusted
+# sidecar, which already owns NET_ADMIN. scanner_worker shares the same network
+# namespace but keeps NET_RAW only and never receives NET_ADMIN.
+ip link set "$IFACE" promisc on
+
 nft delete table netdev "$TABLE" >/dev/null 2>&1 || true
 nft add table netdev "$TABLE"
 nft "add chain netdev $TABLE $CHAIN { type filter hook egress device \"$IFACE\" priority 0; policy accept; }"
