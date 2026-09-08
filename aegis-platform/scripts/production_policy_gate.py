@@ -13,6 +13,7 @@ INTERNAL_SERVICES = {
 }
 HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'scanner_worker', 'scanner_egress', 'celery_beat'}
 _TRUTHY = {'1', 'true', 'yes', 'on'}
+_SCANNER_BOOTSTRAP_CAPS = {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
 
 
 def _tokens(value) -> set[str]:
@@ -80,14 +81,19 @@ def validate(model: dict) -> list[str]:
 
     scanner_worker = services.get('scanner_worker', {})
     scanner_caps = _tokens(scanner_worker.get('cap_add'))
-    if 'NET_RAW' not in scanner_caps:
-        failures.append('scanner_worker lacks the minimum NET_RAW capability required by packet scanners')
+    if scanner_caps != _SCANNER_BOOTSTRAP_CAPS:
+        failures.append(
+            'scanner_worker bootstrap capabilities must be exactly '
+            'NET_RAW,SETUID,SETGID,SETPCAP before the non-root handoff'
+        )
     if 'NET_ADMIN' in scanner_caps:
         failures.append('scanner_worker must not receive NET_ADMIN; egress policy belongs to scanner_egress')
+    if str(scanner_worker.get('user', '')) not in {'0', '0:0'}:
+        failures.append('scanner_worker must start the bounded capability handoff as uid 0')
     if scanner_worker.get('network_mode') != 'service:scanner_egress':
         failures.append('scanner_worker does not share the scanner_egress network namespace')
-    if '-Q scanners' not in _command_text(scanner_worker):
-        failures.append('scanner_worker is not pinned to the scanners queue')
+    if 'scanner-worker-entrypoint.sh' not in _command_text(scanner_worker):
+        failures.append('scanner_worker does not use the audited non-root capability handoff launcher')
 
     egress = services.get('scanner_egress', {})
     egress_caps = _tokens(egress.get('cap_add'))
@@ -109,7 +115,7 @@ def main() -> int:
     args = parser.parse_args()
     model = json.loads(args.compose_json.read_text(encoding='utf-8'))
     failures = validate(model)
-    print(json.dumps({'policy': 'production-compose-v3', 'failures': failures}, indent=2))
+    print(json.dumps({'policy': 'production-compose-v4', 'failures': failures}, indent=2))
     return 1 if failures else 0
 
 
