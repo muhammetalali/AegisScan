@@ -144,6 +144,17 @@ def test_external_black_box_proves_final_scanner_runtime_capabilities():
     assert 'expected 10001' in workflow
 
 
+def test_external_black_box_proves_shared_network_namespace_from_runtime_pids():
+    workflow = (
+        Path(__file__).parents[1] / '.github/workflows/external-black-box-e2e.yml'
+    ).read_text(encoding='utf-8')
+    assert "docker inspect -f '{{.State.Pid}}' aegis-scanner-egress" in workflow
+    assert "docker inspect -f '{{.State.Pid}}' aegis-scanner-worker" in workflow
+    assert 'readlink "/proc/$EGRESS_PID/ns/net"' in workflow
+    assert 'readlink "/proc/$SCANNER_PID/ns/net"' in workflow
+    assert 'scanner_worker does not share scanner_egress network namespace' in workflow
+
+
 def test_scanner_egress_image_installs_kernel_policy_tooling():
     root = Path(__file__).parents[1] / 'aegis-platform/docker/scanner-egress'
     dockerfile = (root / 'Dockerfile').read_text(encoding='utf-8')

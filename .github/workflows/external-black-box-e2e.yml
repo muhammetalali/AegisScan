@@ -213,9 +213,17 @@ jobs:
               raise SystemExit('\n'.join(failures))
           PY
 
-          EGRESS_NS="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress readlink /proc/1/ns/net | tr -d '\r')"
-          SCANNER_NS="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker readlink /proc/1/ns/net | tr -d '\r')"
-          test "$EGRESS_NS" = "$SCANNER_NS"
+          EGRESS_PID="$(docker inspect -f '{{.State.Pid}}' aegis-scanner-egress)"
+          SCANNER_PID="$(docker inspect -f '{{.State.Pid}}' aegis-scanner-worker)"
+          test "$EGRESS_PID" -gt 0
+          test "$SCANNER_PID" -gt 0
+          EGRESS_NS="$(readlink "/proc/$EGRESS_PID/ns/net")"
+          SCANNER_NS="$(readlink "/proc/$SCANNER_PID/ns/net")"
+          echo "scanner namespace evidence: egress_pid=$EGRESS_PID egress_ns=$EGRESS_NS scanner_pid=$SCANNER_PID scanner_ns=$SCANNER_NS"
+          if [ "$EGRESS_NS" != "$SCANNER_NS" ]; then
+            echo "scanner_worker does not share scanner_egress network namespace" >&2
+            exit 1
+          fi
           echo "shared scanner network namespace=$SCANNER_NS"
 
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
