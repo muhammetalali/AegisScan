@@ -11,7 +11,7 @@ permissions: {contents: read}
 jobs:
   external-black-box:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     env:
       POSTGRES_DB: aegisdb
       POSTGRES_USER: aegis
@@ -29,6 +29,7 @@ jobs:
       CSRF_TRUSTED_ORIGINS: http://localhost,http://127.0.0.1,http://nginx
       AUTH_COOKIE_SECURE: 'False'
       AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      SCANNER_EGRESS_PRIVATE_TARGETS: aegis-scan-target
       SEMGREP_CONFIG: /app/e2e/semgrep-ci.yml
       FRONTEND_URL: http://localhost
       LOG_LEVEL: INFO
@@ -99,19 +100,24 @@ jobs:
             sleep 3
           done
           docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi celery_worker scan_target nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi celery_worker scanner_worker scanner_egress scan_target egress_forbidden_target nginx
           exit 1
-      - name: Resolve authorized scanner target
+      - name: Resolve authorized and forbidden scanner targets
         working-directory: aegis-platform
         shell: bash
         run: |
           set -euo pipefail
           TARGET_IP="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-scan-target)"
+          FORBIDDEN_IP="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-egress-forbidden-target)"
           test -n "$TARGET_IP"
+          test -n "$FORBIDDEN_IP"
+          test "$TARGET_IP" != "$FORBIDDEN_IP"
           echo "Resolved CI scanner target IP: $TARGET_IP"
+          echo "Resolved forbidden private target IP: $FORBIDDEN_IP"
           echo "AEGIS_MASSCAN_TARGET=$TARGET_IP" >> "$GITHUB_ENV"
+          echo "AEGIS_FORBIDDEN_TARGET_IP=$FORBIDDEN_IP" >> "$GITHUB_ENV"
           echo "AUTHORIZED_SCAN_TARGETS=aegis-scan-target,$TARGET_IP" >> "$GITHUB_ENV"
-          AUTHORIZED_SCAN_TARGETS="aegis-scan-target,$TARGET_IP" docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --force-recreate fastapi celery_worker celery_beat nginx
+          AUTHORIZED_SCAN_TARGETS="aegis-scan-target,$TARGET_IP" docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --force-recreate fastapi celery_worker scanner_worker celery_beat nginx
       - name: Wait after scanner environment refresh
         working-directory: aegis-platform
         shell: bash
@@ -124,15 +130,59 @@ jobs:
             fi
             sleep 2
           done
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps fastapi celery_worker celery_beat nginx
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=200 fastapi celery_worker celery_beat nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps fastapi celery_worker scanner_worker scanner_egress celery_beat nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=200 fastapi celery_worker scanner_worker scanner_egress celery_beat nginx
           exit 1
+      - name: Verify scanner execution-plane isolation
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress | tee /tmp/aegis-egress-rules.txt
+          grep -q 'hook egress' /tmp/aegis-egress-rules.txt
+          grep -q '169.254.0.0/16' /tmp/aegis-egress-rules.txt
+
+          GENERAL_CAPS="$(docker inspect -f '{{json .HostConfig.CapAdd}}' aegis-celery-worker)"
+          SCANNER_CAPS="$(docker inspect -f '{{json .HostConfig.CapAdd}}' aegis-scanner-worker)"
+          EGRESS_CAPS="$(docker inspect -f '{{json .HostConfig.CapAdd}}' aegis-scanner-egress)"
+          echo "general worker caps=$GENERAL_CAPS"
+          echo "scanner worker caps=$SCANNER_CAPS"
+          echo "egress caps=$EGRESS_CAPS"
+          ! printf '%s' "$GENERAL_CAPS" | grep -qE 'NET_RAW|NET_ADMIN'
+          printf '%s' "$SCANNER_CAPS" | grep -q 'NET_RAW'
+          ! printf '%s' "$SCANNER_CAPS" | grep -q 'NET_ADMIN'
+          printf '%s' "$EGRESS_CAPS" | grep -q 'NET_ADMIN'
+          ! printf '%s' "$EGRESS_CAPS" | grep -q 'NET_RAW'
+
+          EGRESS_NS="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress readlink /proc/1/ns/net | tr -d '\r')"
+          SCANNER_NS="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker readlink /proc/1/ns/net | tr -d '\r')"
+          test "$EGRESS_NS" = "$SCANNER_NS"
+          echo "shared scanner network namespace=$SCANNER_NS"
+
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
+            -e ALLOWED_IP="$AEGIS_MASSCAN_TARGET" \
+            -e FORBIDDEN_IP="$AEGIS_FORBIDDEN_TARGET_IP" \
+            scanner_worker python - <<'PY'
+          import os, socket
+          allowed = os.environ['ALLOWED_IP']
+          forbidden = os.environ['FORBIDDEN_IP']
+          with socket.create_connection((allowed, 80), timeout=3):
+              pass
+          with socket.create_connection(('postgres', 5432), timeout=3):
+              pass
+          try:
+              socket.create_connection((forbidden, 80), timeout=2)
+          except OSError:
+              print('forbidden private egress blocked: OK')
+          else:
+              raise SystemExit('forbidden private egress unexpectedly succeeded')
+          PY
       - name: Verify scanner target authorization
         working-directory: aegis-platform
         shell: bash
         run: |
           set -euo pipefail
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T celery_worker sh -c 'echo "AUTHORIZED_SCAN_TARGETS=$AUTHORIZED_SCAN_TARGETS"'
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker sh -c 'echo "AUTHORIZED_SCAN_TARGETS=$AUTHORIZED_SCAN_TARGETS"'
       - name: Provision CI E2E operator
         working-directory: aegis-platform
         shell: bash
@@ -168,6 +218,24 @@ jobs:
       - name: Run all scanner engines E2E
         working-directory: aegis-platform
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm --no-deps -v "$PWD/e2e:/e2e:ro" -e AEGIS_BASE_URL=http://nginx -e AEGIS_DJANGO_URL=http://nginx/api/v1 -e AEGIS_FASTAPI_URL=http://nginx -e AEGIS_API_URL=http://nginx/api/v1 -e AEGIS_E2E_TARGET=aegis-scan-target -e AEGIS_MASSCAN_TARGET="$AEGIS_MASSCAN_TARGET" -e AEGIS_E2E_TIMEOUT=600 -e AEGIS_VERIFY_TLS=false -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" fastapi python /e2e/scanner_engines_e2e.py
+      - name: Verify scanner queue consumption
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color scanner_worker > /tmp/scanner-worker.log
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color celery_worker > /tmp/general-worker.log
+          for task in \
+            fastapi_app.tasks.security_scan.run_nmap_scan \
+            fastapi_app.tasks.security_scan.run_nuclei_scan \
+            fastapi_app.tasks.advanced_scans.run_masscan_scan \
+            fastapi_app.tasks.advanced_scans.run_semgrep_scan; do
+            grep -F "Task ${task}[" /tmp/scanner-worker.log | grep -q 'received'
+            if grep -F "Task ${task}[" /tmp/general-worker.log | grep -q 'received'; then
+              echo "General worker consumed scanner task: $task" >&2
+              exit 1
+            fi
+          done
       - name: Print stack state
         if: always()
         working-directory: aegis-platform
@@ -180,7 +248,8 @@ jobs:
           set +e
           mkdir -p ci-artifacts
           docker compose -f docker-compose.yml -f docker-compose.ci.yml ps -a > ci-artifacts/compose-ps.txt 2>&1
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color --timestamps django fastapi celery_worker celery_beat scan_target nginx > ci-artifacts/compose.log 2>&1
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color --timestamps django fastapi celery_worker scanner_worker scanner_egress celery_beat scan_target egress_forbidden_target nginx > ci-artifacts/compose.log 2>&1
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress > ci-artifacts/scanner-egress-rules.txt 2>&1 || true
           docker images --digests > ci-artifacts/docker-images.txt 2>&1
           docker system df > ci-artifacts/docker-system-df.txt 2>&1
           tail -n 300 ci-artifacts/compose.log || true

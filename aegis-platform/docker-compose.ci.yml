@@ -7,11 +7,30 @@ services:
         aliases:
           - scan_target
           - aegis-scan-target
+  egress_forbidden_target:
+    image: nginx:alpine
+    container_name: aegis-egress-forbidden-target
+    expose: ["80"]
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
   fastapi:
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       ALLOW_SINGLE_LABEL_SCAN_TARGETS: "1"
+  scanner_egress:
+    environment:
+      SCANNER_EGRESS_PRIVATE_TARGETS: ${SCANNER_EGRESS_PRIVATE_TARGETS:-aegis-scan-target}
+    depends_on:
+      scan_target: {condition: service_healthy}
   celery_worker:
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: "1"
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
+  scanner_worker:
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       ALLOW_SINGLE_LABEL_SCAN_TARGETS: "1"

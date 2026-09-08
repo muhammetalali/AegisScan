@@ -35,13 +35,27 @@ services:
       django: {condition: service_started}
       redis: {condition: service_healthy}
 
+  scanner_egress:
+    read_only: true
+    tmpfs: [/tmp, /run]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    environment:
+      SCANNER_EGRESS_INTERFACE: ${SCANNER_EGRESS_INTERFACE:-eth0}
+      SCANNER_CONTROL_ENDPOINTS: ${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}
+      SCANNER_EGRESS_PRIVATE_TARGETS: ${SCANNER_EGRESS_PRIVATE_TARGETS:-}
+    depends_on: !override
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      django: {condition: service_started}
+
   celery_worker:
     volumes: !reset []
     read_only: true
     tmpfs: [/tmp]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    cap_add: [NET_RAW, NET_ADMIN]
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
@@ -49,6 +63,23 @@ services:
     depends_on: !override
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
+
+  scanner_worker:
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on: !override
+      scanner_egress: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      django: {condition: service_started}
 
   celery_beat:
     volumes: !reset []
