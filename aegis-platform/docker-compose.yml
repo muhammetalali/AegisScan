@@ -116,7 +116,7 @@ services:
     container_name: aegis-scanner-worker
     restart: unless-stopped
     user: "0:0"
-    command: /app/scanner-worker-entrypoint.sh
+    command: sh /app/scanner-worker-entrypoint.sh
     network_mode: "service:scanner_egress"
     cap_drop: [ALL]
     cap_add: [NET_RAW, SETUID, SETGID, SETPCAP]
