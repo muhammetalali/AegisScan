@@ -111,7 +111,7 @@ jobs:
           from django_project.intelligence.models import IntelligenceEnrichment
           from django_project.scans.models import Scan
           from django_project.vulnerabilities.models import Vulnerability
-          from enterprise.models import AttackPath, DecisionAction, DigitalTwin, FindingIntelligence, TwinScenario
+          from enterprise.models import AttackPath, ContinuousAssuranceExecution, DecisionAction, DigitalTwin, FindingIntelligence, TwinScenario
 
           critical_models = [
               get_user_model(),
@@ -125,6 +125,7 @@ jobs:
               TwinScenario,
               AttackPath,
               DecisionAction,
+              ContinuousAssuranceExecution,
           ]
           expected = [model._meta.db_table for model in critical_models]
           existing = set(connection.introspection.table_names())
@@ -154,6 +155,28 @@ jobs:
               raise SystemExit(
                   f'Decision action lineage migration is incomplete: '
                   f'columns={missing_lineage}, foreign_keys={missing_foreign_keys}'
+              )
+
+          assurance_table = ContinuousAssuranceExecution._meta.db_table
+          with connection.cursor() as cursor:
+              assurance_columns = {column.name for column in connection.introspection.get_table_description(cursor, assurance_table)}
+              assurance_constraints = connection.introspection.get_constraints(cursor, assurance_table)
+          required_assurance_lineage = {'schedule_id', 'organization_id', 'project_id', 'asset_id', 'authorization_decision_id', 'scan_id'}
+          missing_assurance_lineage = sorted(required_assurance_lineage - assurance_columns)
+          assurance_foreign_key_columns = {
+              column
+              for constraint in assurance_constraints.values()
+              if constraint.get('foreign_key')
+              for column in constraint.get('columns', [])
+          }
+          missing_assurance_foreign_keys = sorted(required_assurance_lineage - assurance_foreign_key_columns)
+          print('assurance_execution_lineage_columns=', sorted(required_assurance_lineage & assurance_columns))
+          print('assurance_execution_missing_lineage=', missing_assurance_lineage)
+          print('assurance_execution_missing_foreign_keys=', missing_assurance_foreign_keys)
+          if missing_assurance_lineage or missing_assurance_foreign_keys:
+              raise SystemExit(
+                  f'Continuous assurance execution lineage migration is incomplete: '
+                  f'columns={missing_assurance_lineage}, foreign_keys={missing_assurance_foreign_keys}'
               )
           PY
       - name: Verify no pending model migrations

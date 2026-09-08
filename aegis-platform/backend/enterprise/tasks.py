@@ -14,7 +14,7 @@ from django.utils import timezone
 from django_project.projects.models import Project
 from django_project.audit.models import DataExport
 from django_project.vulnerabilities.models import Vulnerability
-from .models import ContinuousAssuranceSchedule, Notification, ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution, CloudDiscoveryRun, ExternalIntegration
+from .models import ContinuousAssuranceExecution, ContinuousAssuranceSchedule, Notification, OrganizationMembership, ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution, CloudDiscoveryRun, ExternalIntegration, TenantProject
 from .services import build_twin, predict_scenario, generate_attack_paths, map_compliance, fetch_intel, fuse_finding
 from .integrations import send_integration, ingest_sbom
 
@@ -180,31 +180,158 @@ def send_notification(notification_id: str):
 def dispatch_integration(integration_id: str,event: dict): return send_integration(ExternalIntegration.objects.get(pk=integration_id),event)
 
 @shared_task(name='enterprise.run_continuous_assurance')
-def run_continuous_assurance(schedule_id: str):
-    schedule=ContinuousAssuranceSchedule.objects.select_related('project','asset','authorization_decision').get(pk=schedule_id)
-    if not schedule.enabled:return {'status':'disabled','schedule_id':schedule_id}
+def run_continuous_assurance(execution_id: str):
     from django_project.scans.models import Scan
     from fastapi_app.tasks.security_scan import run_nmap_scan,run_nuclei_scan
     from fastapi_app.tasks.advanced_scans import run_masscan_scan,run_semgrep_scan
-    task={'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}.get(schedule.engine)
-    if not task: raise ValueError(f'Unsupported assurance engine: {schedule.engine}')
-    asset=schedule.asset
-    if not asset or not asset.is_active or asset.project_id != schedule.project_id:
-        raise ValueError('Continuous assurance requires its persisted active project asset binding')
-    from fastapi_app.services.authorization_guard import current_asset_authorization
-    authorization, reason=current_asset_authorization(asset)
-    if authorization is None or authorization.id != schedule.authorization_decision_id:
-        raise ValueError(reason or 'Continuous assurance authorization was superseded; renew the schedule binding')
-    scan=Scan.objects.create(project=schedule.project,name=f'Continuous assurance {schedule.engine}',scan_type=schedule.scan_type,asset=asset,authorization_decision=authorization,engines=[schedule.engine],depth=Scan.Depth.QUICK,config={'target':authorization.target_snapshot},initiated_by_id=schedule.created_by_id)
-    result=task.delay(str(scan.id)); schedule.last_run=timezone.now(); schedule.next_run=timezone.now()+timedelta(minutes=schedule.interval_minutes); schedule.save(update_fields=['last_run','next_run']); return {'status':'queued','scan_id':str(scan.id),'task_id':result.id}
+    task_map={'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}
+    now=timezone.now()
+    with transaction.atomic():
+        execution=ContinuousAssuranceExecution.objects.select_for_update().get(pk=execution_id)
+        schedule=ContinuousAssuranceSchedule.objects.select_for_update().get(pk=execution.schedule_id)
+        if execution.status==ContinuousAssuranceExecution.Status.COMPLETED and execution.scan_id:
+            return {'status':'completed','execution_id':str(execution.id),'scan_id':str(execution.scan_id),'task_id':execution.scanner_task_id,'replayed':True}
+        if execution.status==ContinuousAssuranceExecution.Status.FAILED and execution.scan_id and execution.scan.is_finished:
+            return {'status':'failed','execution_id':str(execution.id),'scan_id':str(execution.scan_id),'reason':execution.reason,'replayed':True}
+        if execution.status==ContinuousAssuranceExecution.Status.QUEUED and execution.scan_id:
+            return {'status':'queued','execution_id':str(execution.id),'scan_id':str(execution.scan_id),'task_id':execution.scanner_task_id,'replayed':True}
+        if execution.status==ContinuousAssuranceExecution.Status.BLOCKED:
+            return {'status':'blocked','execution_id':str(execution.id),'reason':execution.reason,'replayed':True}
+        execution.status=ContinuousAssuranceExecution.Status.RUNNING
+        execution.attempts+=1
+        execution.started_at=execution.started_at or now
+        execution.reason=''
+        execution.save(update_fields=['status','attempts','started_at','reason','updated_at'])
+
+        reason=''
+        if not schedule.enabled:
+            reason=schedule.disabled_reason or 'Continuous assurance schedule is disabled.'
+        elif not schedule.organization.is_active:
+            reason='Continuous assurance organization is inactive.'
+        elif not TenantProject.objects.filter(project_id=schedule.project_id,organization_id=schedule.organization_id).exists():
+            reason='Continuous assurance tenant binding no longer matches the project.'
+        elif schedule.project.status != schedule.project.Status.ACTIVE:
+            reason='Continuous assurance project is not active.'
+        elif not (schedule.project.owner_id==schedule.created_by_id or schedule.project.memberships.filter(user_id=schedule.created_by_id).exists()):
+            reason='Continuous assurance creator no longer has project access.'
+        elif not OrganizationMembership.objects.filter(organization_id=schedule.organization_id,user_id=schedule.created_by_id,is_active=True).exists():
+            reason='Continuous assurance creator no longer has active organization membership.'
+        elif execution.organization_id != schedule.organization_id or execution.project_id != schedule.project_id:
+            reason='Continuous assurance execution tenant lineage does not match its schedule.'
+        elif execution.asset_id != schedule.asset_id or execution.authorization_decision_id != schedule.authorization_decision_id:
+            reason='Continuous assurance execution authorization lineage does not match its schedule.'
+        elif not schedule.asset or not schedule.asset.is_active or schedule.asset.project_id != schedule.project_id:
+            reason='Continuous assurance requires its persisted active project asset binding.'
+        if not reason:
+            from fastapi_app.services.continuous_assurance import validate_assurance_engine_contract
+            reason=validate_assurance_engine_contract(schedule.asset,schedule.scan_type,schedule.engine)
+
+        authorization=None
+        if not reason:
+            from fastapi_app.services.authorization_guard import current_asset_authorization
+            authorization,reason=current_asset_authorization(schedule.asset)
+            if authorization is not None and authorization.id != schedule.authorization_decision_id:
+                reason='Continuous assurance authorization was superseded; renew the schedule binding.'
+        task=task_map.get(schedule.engine)
+        if not reason and task is None:
+            reason=f'Unsupported assurance engine: {schedule.engine}'
+        if reason:
+            execution.status=ContinuousAssuranceExecution.Status.BLOCKED
+            execution.reason=reason
+            execution.completed_at=now
+            execution.save(update_fields=['status','reason','completed_at','updated_at'])
+            schedule.enabled=False
+            schedule.disabled_at=now
+            schedule.disabled_reason=reason
+            schedule.save(update_fields=['enabled','disabled_at','disabled_reason'])
+            return {'status':'blocked','execution_id':str(execution.id),'reason':reason,'replayed':False}
+
+        scan=execution.scan
+        if scan is None:
+            scan=Scan.objects.create(
+                project=schedule.project,name=f'Continuous assurance {schedule.engine}',scan_type=schedule.scan_type,
+                asset=schedule.asset,authorization_decision=authorization,engines=[schedule.engine],depth=Scan.Depth.QUICK,
+                config={'target':authorization.target_snapshot,'assurance_execution_id':str(execution.id)},initiated_by_id=schedule.created_by_id,
+            )
+            execution.scan=scan
+            execution.save(update_fields=['scan','updated_at'])
+        schedule.last_run=now
+        schedule.save(update_fields=['last_run'])
+
+    try:
+        result=task.delay(str(scan.id))
+    except Exception as exc:
+        with transaction.atomic():
+            failed=ContinuousAssuranceExecution.objects.select_for_update().get(pk=execution_id)
+            failed.status=ContinuousAssuranceExecution.Status.FAILED
+            failed.reason=f'Scanner enqueue failed: {exc}'
+            failed.completed_at=timezone.now()
+            failed.save(update_fields=['status','reason','completed_at','updated_at'])
+            Scan.objects.filter(pk=scan.id,status__in=[Scan.Status.PENDING,Scan.Status.QUEUED,Scan.Status.RUNNING]).update(status=Scan.Status.FAILED,error_message=failed.reason,completed_at=failed.completed_at)
+        raise
+    ContinuousAssuranceExecution.objects.filter(pk=execution_id,status=ContinuousAssuranceExecution.Status.RUNNING).update(status=ContinuousAssuranceExecution.Status.QUEUED,scanner_task_id=result.id)
+    return {'status':'queued','execution_id':str(execution.id),'scan_id':str(scan.id),'task_id':result.id,'replayed':False}
+
+
+def claim_continuous_assurance_execution(schedule_id: str, scheduled_for=None, *, advance_schedule: bool=False):
+    """Claim one intended occurrence and snapshot every authority-bearing relation."""
+    now=timezone.now()
+    with transaction.atomic():
+        schedule=ContinuousAssuranceSchedule.objects.select_for_update().get(pk=schedule_id)
+        if advance_schedule and (not schedule.enabled or schedule.next_run > now):
+            return None,False
+        if not schedule.asset_id or not schedule.authorization_decision_id:
+            reason='Continuous assurance schedule has no durable asset authorization binding.'
+            schedule.enabled=False; schedule.disabled_at=now; schedule.disabled_reason=reason
+            schedule.save(update_fields=['enabled','disabled_at','disabled_reason'])
+            return None,False
+        intended_for=schedule.next_run if advance_schedule else (scheduled_for or now)
+        execution,created=ContinuousAssuranceExecution.objects.get_or_create(
+            schedule=schedule,scheduled_for=intended_for,
+            defaults={'organization_id':schedule.organization_id,'project_id':schedule.project_id,'asset_id':schedule.asset_id,'authorization_decision_id':schedule.authorization_decision_id},
+        )
+        if advance_schedule:
+            next_run=schedule.next_run
+            step=timedelta(minutes=schedule.interval_minutes)
+            while next_run <= now:
+                next_run += step
+            schedule.next_run=next_run
+            schedule.save(update_fields=['next_run'])
+        return execution,created
 
 @shared_task(name='enterprise.dispatch_due_schedules')
 def dispatch_due_schedules():
-    now=timezone.now(); assurances=list(ContinuousAssuranceSchedule.objects.filter(enabled=True,next_run__lte=now)); queued=0
+    now=timezone.now(); execution_ids=[]; malformed=[]
     # Report schedules have one durable django-celery-beat PeriodicTask each.
     # Dispatching them here as well would enqueue the same report twice.
-    for schedule in assurances: run_continuous_assurance.delay(str(schedule.id)); queued+=1
-    return {'queued':queued,'reports':0,'assurance':len(assurances)}
+    schedule_ids=list(ContinuousAssuranceSchedule.objects.filter(enabled=True,next_run__lte=now).values_list('id',flat=True))
+    for schedule_id in schedule_ids:
+        execution,created=claim_continuous_assurance_execution(schedule_id,advance_schedule=True)
+        if execution is None:
+            if ContinuousAssuranceSchedule.objects.filter(pk=schedule_id,enabled=False,disabled_reason__gt='').exists():
+                malformed.append(str(schedule_id))
+            continue
+        if created or (execution.status==ContinuousAssuranceExecution.Status.FAILED and not execution.scan_id):
+            execution_ids.append(str(execution.id))
+    queued=0
+    for execution_id in execution_ids:
+        try:
+            result=run_continuous_assurance.delay(execution_id)
+            ContinuousAssuranceExecution.objects.filter(pk=execution_id).update(celery_task_id=result.id)
+            queued+=1
+        except Exception as exc:
+            with transaction.atomic():
+                failed=ContinuousAssuranceExecution.objects.select_for_update().select_related('schedule').get(pk=execution_id)
+                failed.status=ContinuousAssuranceExecution.Status.FAILED
+                failed.reason=f'Assurance worker enqueue failed: {exc}'
+                failed.completed_at=timezone.now()
+                failed.save(update_fields=['status','reason','completed_at','updated_at'])
+                if failed.schedule.enabled and failed.schedule.next_run > failed.scheduled_for:
+                    failed.schedule.next_run=failed.scheduled_for
+                    failed.schedule.save(update_fields=['next_run'])
+    result={'queued':queued,'reports':0,'assurance':len(execution_ids)}
+    if malformed: result['malformed']=malformed
+    return result
 
 @shared_task(name='enterprise.cloud_discovery')
 def cloud_discovery_task(run_id: str):
