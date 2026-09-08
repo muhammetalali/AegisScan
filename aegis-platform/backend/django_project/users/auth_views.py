@@ -1,16 +1,23 @@
 from django.conf import settings
+from django.db import transaction
 from django.middleware.csrf import get_token
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from django.utils.decorators import method_decorator
+from django.utils import timezone
 from django_ratelimit.decorators import ratelimit
 from rest_framework import status
+from rest_framework.exceptions import APIException, Throttled
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit, client_ip_from_request
+
+from .models import LoginAttempt
 from .serializers import UserSerializer, UserCreateSerializer
 
 
@@ -36,16 +43,65 @@ def _set_auth_cookies(response, access: str, refresh: str | None = None) -> None
         )
 
 
+@transaction.atomic
+def _record_login_event(request, *, email: str, success: bool, user=None, failure_reason: str = '') -> None:
+    attempted_email = (email or '').strip().lower()[:254]
+    ip_address = client_ip_from_request(request)
+    user_agent = request.META.get('HTTP_USER_AGENT', '')[:10000]
+    LoginAttempt.objects.create(
+        email=attempted_email,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        success=success,
+        failure_reason=failure_reason[:100],
+    )
+    append_audit(
+        user=user,
+        action=AuditLog.Action.LOGIN if success else AuditLog.Action.LOGIN_FAILED,
+        result=AuditLog.Result.SUCCESS if success else AuditLog.Result.FAILURE,
+        resource_type='authentication',
+        resource_id=str(getattr(user, 'pk', '') or ''),
+        resource_repr='Interactive user login',
+        metadata={'attempted_email': attempted_email, 'authentication_method': 'password'},
+        ip_address=ip_address,
+        user_agent=user_agent,
+        session_id=getattr(getattr(request, 'session', None), 'session_key', None) or '',
+        request_id=(
+            getattr(request, '_audit_request_id', None)
+            or AuditLog._meta.get_field('request_id').default()
+        ),
+        error_message='' if success else 'Authentication rejected',
+    )
+    request._auth_audit_recorded = True
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
     @method_decorator(csrf_protect)
-    @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=True))
+    @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=False))
     def post(self, request):
+        email = str(request.data.get('email') or '')
+        if getattr(request, 'limited', False):
+            _record_login_event(request, email=email, success=False, failure_reason='rate_limited')
+            raise Throttled(detail='Too many login attempts.')
         serializer = TokenObtainPairSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except APIException as exc:
+            _record_login_event(
+                request,
+                email=email,
+                success=False,
+                failure_reason=str(getattr(exc, 'default_code', 'authentication_failed')),
+            )
+            raise
         data = serializer.validated_data
         user = serializer.user
+        user.last_login_ip = client_ip_from_request(request)
+        user.last_activity = timezone.now()
+        user.save(update_fields=['last_login_ip', 'last_activity'])
+        _record_login_event(request, email=email, success=True, user=user)
         response = Response({
             'user': UserSerializer(user, context={'request': request}).data,
             'authenticated': True,
