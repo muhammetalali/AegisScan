@@ -146,13 +146,72 @@ jobs:
           SCANNER_CAPS="$(docker inspect -f '{{json .HostConfig.CapAdd}}' aegis-scanner-worker)"
           EGRESS_CAPS="$(docker inspect -f '{{json .HostConfig.CapAdd}}' aegis-scanner-egress)"
           echo "general worker caps=$GENERAL_CAPS"
-          echo "scanner worker caps=$SCANNER_CAPS"
+          echo "scanner worker bootstrap caps=$SCANNER_CAPS"
           echo "egress caps=$EGRESS_CAPS"
           ! printf '%s' "$GENERAL_CAPS" | grep -qE 'NET_RAW|NET_ADMIN'
           printf '%s' "$SCANNER_CAPS" | grep -q 'NET_RAW'
+          printf '%s' "$SCANNER_CAPS" | grep -q 'SETPCAP'
+          printf '%s' "$SCANNER_CAPS" | grep -q 'SETUID'
+          printf '%s' "$SCANNER_CAPS" | grep -q 'SETGID'
           ! printf '%s' "$SCANNER_CAPS" | grep -q 'NET_ADMIN'
           printf '%s' "$EGRESS_CAPS" | grep -q 'NET_ADMIN'
           ! printf '%s' "$EGRESS_CAPS" | grep -q 'NET_RAW'
+
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker python - <<'PY'
+          from pathlib import Path
+
+          BITS = {
+              'CAP_SETGID': 6,
+              'CAP_SETUID': 7,
+              'CAP_SETPCAP': 8,
+              'CAP_NET_ADMIN': 12,
+              'CAP_NET_RAW': 13,
+          }
+
+          def read_status(pid: int) -> dict[str, list[str]]:
+              values: dict[str, list[str]] = {}
+              for line in Path(f'/proc/{pid}/status').read_text(encoding='utf-8').splitlines():
+                  if ':' not in line:
+                      continue
+                  key, value = line.split(':', 1)
+                  if key in {'Name', 'Uid', 'Gid', 'CapEff', 'CapAmb'}:
+                      values[key] = value.strip().split()
+              return values
+
+          celery_pids: list[int] = []
+          for proc in Path('/proc').iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  cmdline = (proc / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='ignore')
+              except OSError:
+                  continue
+              if 'celery' in cmdline and 'worker' in cmdline:
+                  celery_pids.append(int(proc.name))
+          if not celery_pids:
+              raise SystemExit('no celery worker process found inside scanner_worker')
+
+          failures: list[str] = []
+          for pid in sorted(set(celery_pids)):
+              status = read_status(pid)
+              uid = int(status.get('Uid', ['-1'])[0])
+              gid = int(status.get('Gid', ['-1'])[0])
+              eff = int(status.get('CapEff', ['0'])[0], 16)
+              amb = int(status.get('CapAmb', ['0'])[0], 16)
+              print(f'scanner-runtime pid={pid} uid={uid} gid={gid} CapEff=0x{eff:x} CapAmb=0x{amb:x}')
+              if uid != 10001:
+                  failures.append(f'scanner runtime pid {pid} runs as uid {uid}, expected 10001')
+              if gid != 10001:
+                  failures.append(f'scanner runtime pid {pid} runs as gid {gid}, expected 10001')
+              for field_name, caps in (('CapEff', eff), ('CapAmb', amb)):
+                  if not caps & (1 << BITS['CAP_NET_RAW']):
+                      failures.append(f'scanner runtime pid {pid} {field_name} lacks CAP_NET_RAW')
+                  for cap_name in ('CAP_NET_ADMIN', 'CAP_SETUID', 'CAP_SETGID', 'CAP_SETPCAP'):
+                      if caps & (1 << BITS[cap_name]):
+                          failures.append(f'scanner runtime pid {pid} {field_name} still has {cap_name}')
+          if failures:
+              raise SystemExit('\n'.join(failures))
+          PY
 
           EGRESS_NS="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress readlink /proc/1/ns/net | tr -d '\r')"
           SCANNER_NS="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker readlink /proc/1/ns/net | tr -d '\r')"
