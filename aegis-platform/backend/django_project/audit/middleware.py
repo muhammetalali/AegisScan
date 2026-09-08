@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import time
 import uuid
 
@@ -8,6 +7,7 @@ from django.conf import settings
 from django.utils.deprecation import MiddlewareMixin
 
 from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit, client_ip_from_request
 
 
 class EnterpriseAuditMiddleware(MiddlewareMixin):
@@ -58,7 +58,7 @@ class EnterpriseAuditMiddleware(MiddlewareMixin):
         session_id = getattr(session, 'session_key', None) or ''
 
         try:
-            AuditLog.objects.create(
+            append_audit(
                 user=user,
                 action=AuditLog.Action.API_REQUEST,
                 result=result,
@@ -71,7 +71,7 @@ class EnterpriseAuditMiddleware(MiddlewareMixin):
                     'status_code': status_code,
                     'query_keys': sorted(request.GET.keys()),
                 },
-                ip_address=self._client_ip(request),
+                ip_address=client_ip_from_request(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', '')[:10000],
                 session_id=session_id,
                 request_id=getattr(request, '_audit_request_id', uuid.uuid4()),
@@ -90,17 +90,3 @@ class EnterpriseAuditMiddleware(MiddlewareMixin):
         resource_type = parts[2][:50]
         resource_id = parts[3][:100] if len(parts) > 3 else ''
         return resource_type, resource_id
-
-    @staticmethod
-    def _client_ip(request) -> str:
-        forwarded = request.META.get('HTTP_X_FORWARDED_FOR', '')
-        candidates = [value.strip() for value in forwarded.split(',') if value.strip()]
-        candidates.append(request.META.get('HTTP_X_REAL_IP', '').strip())
-        candidates.append(request.META.get('REMOTE_ADDR', '').strip())
-        for candidate in candidates:
-            try:
-                ipaddress.ip_address(candidate)
-                return candidate
-            except ValueError:
-                continue
-        return '127.0.0.1'

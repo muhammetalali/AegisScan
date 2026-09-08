@@ -1,7 +1,24 @@
 from django.db import models
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
+from django.core.exceptions import ValidationError
+import hashlib
+import json
 import uuid
+
+
+class ImmutableAuditQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Audit records are append-only and cannot be updated.')
+
+    def delete(self):
+        raise ValidationError('Audit records are append-only and cannot be deleted.')
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('Audit records may only be created through append_audit().')
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise ValidationError('Audit records are append-only and cannot be updated.')
 
 
 class AuditLog(models.Model):
@@ -98,6 +115,11 @@ class AuditLog(models.Model):
     error_message = models.TextField(_('error message'), blank=True)
     duration_ms = models.PositiveIntegerField(_('duration (ms)'), default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    chain_index = models.PositiveBigIntegerField(_('chain index'), unique=True, editable=False)
+    previous_hash = models.CharField(_('previous entry hash'), max_length=64, blank=True, editable=False)
+    entry_hash = models.CharField(_('entry hash'), max_length=64, unique=True, editable=False)
+
+    objects = ImmutableAuditQuerySet.as_manager()
 
     class Meta:
         verbose_name = _('Audit Log')
@@ -113,6 +135,39 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.get_action_display()} by {self.user or 'System'} - {self.get_result_display()}"
+
+    @staticmethod
+    def calculate_hash(entry: 'AuditLog', previous_hash: str) -> str:
+        payload = {
+            'id': str(entry.id),
+            'chain_index': entry.chain_index,
+            'previous_hash': previous_hash,
+            'action': entry.action,
+            'result': entry.result,
+            'resource_type': entry.resource_type,
+            'resource_id': entry.resource_id,
+            'resource_repr': entry.resource_repr,
+            'changes': entry.changes,
+            'metadata': entry.metadata,
+            'ip_address': str(entry.ip_address),
+            'user_agent': entry.user_agent,
+            'location': entry.location,
+            'session_id': entry.session_id,
+            'request_id': str(entry.request_id),
+            'error_message': entry.error_message,
+            'duration_ms': entry.duration_ms,
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'), default=str)
+        return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+    def save(self, *args, **kwargs):
+        append_only = kwargs.pop('_append_only', False)
+        if not self._state.adding or not append_only:
+            raise ValidationError('Audit records may only be created through append_audit().')
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Audit records are append-only and cannot be deleted.')
 
 
 class SecurityEvent(models.Model):

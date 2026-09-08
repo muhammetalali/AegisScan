@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit
 from django_project.assets.models import Asset, AssetAuthorization
 from ..core.dependencies import get_current_user
 from ..services.authorization_guard import asset_target
@@ -106,7 +107,7 @@ def _set_authorization(asset_id: str, user_id: str, is_staff: bool, update: Auth
             )
         except IntegrityError as exc:
             raise HTTPException(status_code=409, detail='Authorization decision could not be committed idempotently') from exc
-        AuditLog.objects.create(
+        append_audit(
             user_id=user_id,
             action='asset_authorization_grant' if update.authorized else 'asset_authorization_revoke',
             result=AuditLog.Result.SUCCESS,
