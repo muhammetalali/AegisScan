@@ -107,6 +107,11 @@ def test_scanner_egress_image_installs_kernel_policy_tooling():
     dockerfile = (root / 'Dockerfile').read_text(encoding='utf-8')
     entrypoint = (root / 'entrypoint.sh').read_text(encoding='utf-8')
     assert 'nftables' in dockerfile
+    assert 'iproute2' in dockerfile
     assert 'table netdev' in entrypoint
     assert 'hook egress' in entrypoint
     assert '169.254.0.0/16' in entrypoint
+    promisc = 'ip link set "$IFACE" promisc on'
+    policy_install = 'nft delete table netdev "$TABLE"'
+    assert promisc in entrypoint
+    assert entrypoint.index(promisc) < entrypoint.index(policy_install)
