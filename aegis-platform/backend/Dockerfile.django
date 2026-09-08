@@ -37,10 +37,10 @@ RUN groupadd --gid 10001 aegis \
     && masscan_binary="$(readlink -f "$(command -v masscan)")" \
     && test -f "$nmap_binary" \
     && test -f "$masscan_binary" \
-    && setcap cap_net_raw,cap_net_admin+eip "$nmap_binary" \
-    && setcap cap_net_raw,cap_net_admin+eip "$masscan_binary" \
-    && getcap "$nmap_binary" | grep -q 'cap_net_admin,cap_net_raw=eip' \
-    && getcap "$masscan_binary" | grep -q 'cap_net_admin,cap_net_raw=eip'
+    && setcap cap_net_raw+eip "$nmap_binary" \
+    && setcap cap_net_raw+eip "$masscan_binary" \
+    && getcap "$nmap_binary" | grep -q 'cap_net_raw=eip' \
+    && getcap "$masscan_binary" | grep -q 'cap_net_raw=eip'
 
 # Verify required scanner/analysis binaries are installed without relying on
 # non-zero CLI exit semantics (masscan prints its version but returns 1).
