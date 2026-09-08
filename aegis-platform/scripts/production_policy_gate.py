@@ -12,6 +12,7 @@ INTERNAL_SERVICES = {
     'scanner_egress', 'celery_beat', 'frontend',
 }
 HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'scanner_worker', 'scanner_egress', 'celery_beat'}
+NO_NEW_PRIVILEGES_SERVICES = HARDENED_SERVICES - {'scanner_worker'}
 _TRUTHY = {'1', 'true', 'yes', 'on'}
 _SCANNER_BOOTSTRAP_CAPS = {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
 
@@ -22,6 +23,17 @@ def _tokens(value) -> set[str]:
     if value in (None, ''):
         return set()
     return {str(value).upper()}
+
+
+def _security_opts(service: dict) -> list[str]:
+    value = service.get('security_opt') or []
+    if isinstance(value, list):
+        return [str(item).lower() for item in value]
+    return [str(value).lower()]
+
+
+def _has_no_new_privileges(service: dict) -> bool:
+    return any(item == 'no-new-privileges:true' for item in _security_opts(service))
 
 
 def _command_text(service: dict) -> str:
@@ -51,8 +63,7 @@ def validate(model: dict) -> list[str]:
         service = services.get(name, {})
         if service.get('read_only') is not True:
             failures.append(f'{name} root filesystem is not read-only')
-        security_opt = service.get('security_opt') or []
-        if not any(str(item).lower() == 'no-new-privileges:true' for item in security_opt):
+        if name in NO_NEW_PRIVILEGES_SERVICES and not _has_no_new_privileges(service):
             failures.append(f'{name} does not enforce no-new-privileges')
         cap_drop = _tokens(service.get('cap_drop'))
         if 'ALL' not in cap_drop:
@@ -88,6 +99,11 @@ def validate(model: dict) -> list[str]:
         )
     if 'NET_ADMIN' in scanner_caps:
         failures.append('scanner_worker must not receive NET_ADMIN; egress policy belongs to scanner_egress')
+    if _has_no_new_privileges(scanner_worker):
+        failures.append(
+            'scanner_worker cannot enforce no-new-privileges before the bounded '
+            'CAP_NET_RAW ambient handoff; runtime gates must verify the final non-root process'
+        )
     if str(scanner_worker.get('user', '')) not in {'0', '0:0'}:
         failures.append('scanner_worker must start the bounded capability handoff as uid 0')
     if scanner_worker.get('network_mode') != 'service:scanner_egress':
