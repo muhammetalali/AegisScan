@@ -9,6 +9,7 @@ from pathlib import Path
 
 INTERNAL_SERVICES = {'postgres', 'redis', 'django', 'fastapi', 'celery_worker', 'celery_beat', 'frontend'}
 HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'celery_beat'}
+_TRUTHY = {'1', 'true', 'yes', 'on'}
 
 
 def validate(model: dict) -> list[str]:
@@ -42,9 +43,13 @@ def validate(model: dict) -> list[str]:
     if not password or password == 'change-me':
         failures.append('Production PostgreSQL password is missing or uses the development default')
     for name in ('fastapi', 'celery_worker', 'celery_beat'):
-        allowed = str((services.get(name, {}).get('environment') or {}).get('AUTHORIZED_SCAN_TARGETS', '')).strip()
+        environment = services.get(name, {}).get('environment') or {}
+        allowed = str(environment.get('AUTHORIZED_SCAN_TARGETS', '')).strip()
         if not allowed or allowed == 'aegis-scan-target':
             failures.append(f'{name} uses an absent or CI fixture authorization scope')
+        allow_single_label = str(environment.get('ALLOW_SINGLE_LABEL_SCAN_TARGETS', '')).strip().lower()
+        if allow_single_label in _TRUTHY:
+            failures.append(f'{name} enables single-label scanner targets in production')
     return failures
 
 
@@ -54,7 +59,7 @@ def main() -> int:
     args = parser.parse_args()
     model = json.loads(args.compose_json.read_text(encoding='utf-8'))
     failures = validate(model)
-    print(json.dumps({'policy': 'production-compose-v1', 'failures': failures}, indent=2))
+    print(json.dumps({'policy': 'production-compose-v2', 'failures': failures}, indent=2))
     return 1 if failures else 0
 
 

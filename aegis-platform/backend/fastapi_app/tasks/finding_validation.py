@@ -52,7 +52,7 @@ def _run_nuclei_template(target: str, template_path: str, timeout: int) -> tuple
     if not candidate.is_file():
         raise ValueError(f'Finding template file is missing: {candidate}')
     completed = subprocess.run(
-        [executable, '-u', target, '-t', str(candidate), '-jsonl', '-silent', '-no-color'],
+        [executable, '-u', target, '-t', str(candidate), '-jsonl', '-silent', '-no-color', '-dr'],
         capture_output=True,
         text=True,
         timeout=timeout,
