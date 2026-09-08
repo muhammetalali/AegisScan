@@ -17,9 +17,13 @@ env = environ.Env(
     AUTH_COOKIE_SECURE=(bool, False), SECURE_SSL_REDIRECT=(bool, True), EMAIL_HOST=(str, 'smtp.gmail.com'), EMAIL_PORT=(int, 587), EMAIL_HOST_USER=(str, ''),
     EMAIL_HOST_PASSWORD=(str, ''), EMAIL_USE_TLS=(bool, True), EMAIL_TIMEOUT=(int, 30), DEFAULT_FROM_EMAIL=(str, 'AegisScan <noreply@aegisscan.local>'),
     FRONTEND_URL=(str, 'http://localhost:5173'), SENTRY_DSN=(str, ''), LOG_LEVEL=(str, 'INFO'), REPORT_RETENTION_DAYS=(int, 7),
+    AUTH_BRUTE_FORCE_THRESHOLD=(int, 5), AUTH_BRUTE_FORCE_WINDOW_SECONDS=(int, 600),
 )
 environ.Env.read_env(BASE_DIR / '.env')
 SECRET_KEY = env('SECRET_KEY'); DEBUG = env('DEBUG'); ALLOWED_HOSTS = env('ALLOWED_HOSTS'); JWT_SECRET_KEY = env('JWT_SECRET_KEY'); REDIS_URL = env('REDIS_URL')
+AUTH_BRUTE_FORCE_THRESHOLD = env('AUTH_BRUTE_FORCE_THRESHOLD'); AUTH_BRUTE_FORCE_WINDOW_SECONDS = env('AUTH_BRUTE_FORCE_WINDOW_SECONDS')
+if not 3 <= AUTH_BRUTE_FORCE_THRESHOLD <= 100: raise ImproperlyConfigured('AUTH_BRUTE_FORCE_THRESHOLD must be between 3 and 100.')
+if not 60 <= AUTH_BRUTE_FORCE_WINDOW_SECONDS <= 86400: raise ImproperlyConfigured('AUTH_BRUTE_FORCE_WINDOW_SECONDS must be between 60 and 86400.')
 if not DEBUG:
     if not SECRET_KEY or SECRET_KEY in {'django-insecure-change-me', 'replace-with-a-long-random-secret'}: raise ImproperlyConfigured('SECRET_KEY must be explicitly configured when DEBUG=False.')
     if not JWT_SECRET_KEY or JWT_SECRET_KEY in {'jwt-secret-change-me', 'replace-with-a-separate-long-random-secret'}: raise ImproperlyConfigured('JWT_SECRET_KEY must be explicitly configured when DEBUG=False.')
