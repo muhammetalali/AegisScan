@@ -28,9 +28,10 @@ def valid_model():
         ),
         'scanner_worker': hardened_service(
             environment={'AUTHORIZED_SCAN_TARGETS':'security.example'},
-            command='celery -A fastapi_app.celery_app worker -Q scanners',
+            command='sh /app/scanner-worker-entrypoint.sh',
+            user='0:0',
             network_mode='service:scanner_egress',
-            cap_add=['NET_RAW'],
+            cap_add=['NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'],
         ),
         'scanner_egress': hardened_service(
             cap_add=['NET_ADMIN'],
@@ -63,29 +64,32 @@ def test_rejects_internal_ports_bind_mounts_fixture_scope_and_ci_target():
 def test_rejects_scanner_privilege_or_namespace_regressions():
     model = valid_model()
     model['services']['celery_worker']['cap_add'] = ['NET_RAW']
-    model['services']['scanner_worker']['cap_add'] = ['NET_RAW', 'NET_ADMIN']
+    model['services']['scanner_worker']['cap_add'] = ['NET_RAW', 'NET_ADMIN', 'SETUID', 'SETGID', 'SETPCAP']
     model['services']['scanner_worker']['network_mode'] = 'default'
+    model['services']['scanner_worker']['user'] = '10001:10001'
     model['services']['scanner_egress']['cap_add'] = ['NET_RAW']
     model['services']['scanner_egress']['environment']['SCANNER_EGRESS_PRIVATE_TARGETS'] = 'aegis-scan-target'
     failures = MODULE.validate(model)
     assert any('general celery_worker retains' in item for item in failures)
+    assert any('bootstrap capabilities must be exactly' in item for item in failures)
     assert any('scanner_worker must not receive NET_ADMIN' in item for item in failures)
+    assert any('bounded capability handoff as uid 0' in item for item in failures)
     assert any('does not share the scanner_egress' in item for item in failures)
     assert any('scanner_egress lacks NET_ADMIN' in item for item in failures)
     assert any('scanner_egress should not receive NET_RAW' in item for item in failures)
     assert any('CI scan target' in item for item in failures)
 
 
-def test_rejects_queue_routing_regression():
+def test_rejects_queue_or_handoff_regression():
     model = valid_model()
     model['services']['celery_worker']['command'] = 'celery -A fastapi_app.celery_app worker'
-    model['services']['scanner_worker']['command'] = 'celery -A fastapi_app.celery_app worker'
+    model['services']['scanner_worker']['command'] = 'celery -A fastapi_app.celery_app worker -Q scanners'
     failures = MODULE.validate(model)
     assert any('default queue' in item for item in failures)
-    assert any('scanners queue' in item for item in failures)
+    assert any('capability handoff launcher' in item for item in failures)
 
 
-def test_backend_images_drop_root_before_runtime():
+def test_backend_images_drop_root_before_default_runtime():
     root = Path(__file__).parents[1] / 'aegis-platform/backend'
     for name in ('Dockerfile.django', 'Dockerfile.fastapi'):
         dockerfile = (root / name).read_text(encoding='utf-8')
@@ -93,13 +97,30 @@ def test_backend_images_drop_root_before_runtime():
         assert dockerfile.rfind('USER 10001:10001') < dockerfile.rfind('CMD ')
 
 
-def test_scanner_file_capabilities_match_runtime_least_privilege_boundary():
+def test_scanner_binaries_do_not_depend_on_file_capability_escalation():
     dockerfile = (
         Path(__file__).parents[1] / 'aegis-platform/backend/Dockerfile.django'
     ).read_text(encoding='utf-8')
     assert 'cap_net_admin' not in dockerfile
-    assert dockerfile.count('setcap cap_net_raw+eip') == 2
-    assert dockerfile.count("grep -q 'cap_net_raw=eip'") == 2
+    assert 'setcap cap_net_raw' not in dockerfile
+    assert 'libpcap0.8' in dockerfile
+    assert 'command -v capsh' in dockerfile
+    assert 'test -z "$(getcap "$nmap_binary")"' in dockerfile
+    assert 'test -z "$(getcap "$masscan_binary")"' in dockerfile
+
+
+def test_scanner_handoff_ends_nonroot_with_only_net_raw_and_scanners_queue():
+    entrypoint = (
+        Path(__file__).parents[1] / 'aegis-platform/backend/scanner-worker-entrypoint.sh'
+    ).read_text(encoding='utf-8')
+    assert '--keep=1' in entrypoint
+    assert '--inh=cap_net_raw' in entrypoint
+    assert '--user=aegis' in entrypoint
+    assert '--drop=cap_setuid,cap_setgid,cap_setpcap' in entrypoint
+    assert '--caps=cap_net_raw+eip' in entrypoint
+    assert '--addamb=cap_net_raw' in entrypoint
+    assert '-Q scanners' in entrypoint
+    assert 'cap_net_admin' not in entrypoint
 
 
 def test_scanner_egress_image_installs_kernel_policy_tooling():
