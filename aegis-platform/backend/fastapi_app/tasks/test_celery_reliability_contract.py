@@ -24,6 +24,7 @@ def test_scanner_tasks_are_routed_to_dedicated_queue():
         'fastapi_app.tasks.finding_validation.validate_finding_e2e',
         'fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e',
         'fastapi_app.tasks.native_capabilities.run_native_capability_scan',
+        'fastapi_app.tasks.offensive_validation_tasks.validate_offensive_finding',
     }
     assert set(SCANNER_TASK_ROUTES) == expected
     assert SCANNER_QUEUE == 'scanners'
