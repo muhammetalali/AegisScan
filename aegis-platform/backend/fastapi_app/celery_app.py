@@ -24,6 +24,7 @@ SCANNER_TASK_ROUTES = {
     "fastapi_app.tasks.security_scan.validate_finding_task": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.advanced_scans.run_masscan_scan": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.advanced_scans.run_semgrep_scan": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.native_capabilities.run_native_capability_scan": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.finding_validation.validate_finding_e2e": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e": {"queue": SCANNER_QUEUE},
 }
@@ -42,6 +43,7 @@ celery_app.conf.update(
     task_routes=SCANNER_TASK_ROUTES,
     imports=(
         "fastapi_app.tasks.advanced_scans",
+        "fastapi_app.tasks.native_capabilities",
         "fastapi_app.tasks.finding_validation",
         "fastapi_app.tasks.nmap_finding_validation",
         "fastapi_app.tasks.security_scan",
