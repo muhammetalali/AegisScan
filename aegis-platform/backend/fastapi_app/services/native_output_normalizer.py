@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from urllib.parse import urlsplit
 
 
 def _json(value: str) -> Any:
@@ -18,12 +17,7 @@ def _bounded(items: list[dict[str, Any]], limit: int = 2000) -> list[dict[str, A
 
 
 def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
-    """Convert stable tool output formats into bounded AegisScan observations.
-
-    Raw scanner output remains the evidence source of truth. Normalized values
-    are derived metadata for correlation and UI consumption, never a substitute
-    for the immutable raw evidence and SHA-256 digest.
-    """
+    """Convert stable tool output formats into bounded AegisScan observations."""
     raw = stdout or ''
     observations: list[dict[str, Any]] = []
 
@@ -32,10 +26,9 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
         for item in data.get('results', []) if isinstance(data, dict) else []:
             if not isinstance(item, dict):
                 continue
-            url = str(item.get('url') or '')[:2048]
             observations.append({
                 'kind': 'web-endpoint',
-                'url': url,
+                'url': str(item.get('url') or '')[:2048],
                 'status': int(item.get('status') or 0),
                 'length': int(item.get('length') or 0),
                 'words': int(item.get('words') or 0),
@@ -46,27 +39,33 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
         pattern = re.compile(r'^(?P<path>/\S*)\s+\(Status:\s*(?P<status>\d{3})\)(?:\s+\[Size:\s*(?P<size>\d+)\])?')
         for line in raw.splitlines():
             match = pattern.search(line.strip())
-            if not match:
-                continue
-            observations.append({
-                'kind': 'web-path',
-                'path': match.group('path')[:2048],
-                'status': int(match.group('status')),
-                'length': int(match.group('size') or 0),
-            })
+            if match:
+                observations.append({
+                    'kind': 'web-path', 'path': match.group('path')[:2048],
+                    'status': int(match.group('status')), 'length': int(match.group('size') or 0),
+                })
+
+    elif capability_id == 'web.dirb':
+        pattern = re.compile(r'^(?:\+|==>)\s+(?P<url>https?://\S+).*?(?:CODE:(?P<status>\d{3})|\((?P<status2>\d{3})\))?', re.I)
+        for line in raw.splitlines():
+            match = pattern.search(line.strip())
+            if match:
+                observations.append({
+                    'kind': 'web-endpoint',
+                    'url': match.group('url')[:2048],
+                    'status': int(match.group('status') or match.group('status2') or 0),
+                })
 
     elif capability_id == 'forensics.exiftool':
         data = _json(raw)
         records = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
         for item in records:
-            if not isinstance(item, dict):
-                continue
-            safe = {
-                str(key)[:100]: value
-                for key, value in item.items()
-                if isinstance(value, (str, int, float, bool)) or value is None
-            }
-            observations.append({'kind': 'file-metadata', 'attributes': safe})
+            if isinstance(item, dict):
+                safe = {
+                    str(key)[:100]: value for key, value in item.items()
+                    if isinstance(value, (str, int, float, bool)) or value is None
+                }
+                observations.append({'kind': 'file-metadata', 'attributes': safe})
 
     elif capability_id == 'web.waf-detection':
         lowered = raw.lower()
@@ -90,12 +89,23 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
                     seen.add(key)
                     observations.append({'kind': 'dns-hostname', 'value': value})
 
-    elif capability_id in {'binary.checksec', 'binary.strings', 'binary.objdump', 'binary.readelf', 'binary.binwalk'}:
+    elif capability_id in {'network.nbtscan-host', 'network.nbtscan-range'}:
+        pattern = re.compile(r'^\s*(?P<ip>(?:\d{1,3}\.){3}\d{1,3})\s+(?P<name>\S+)(?:\s+(?P<service>\S+))?')
+        for line in raw.splitlines():
+            match = pattern.search(line)
+            if match:
+                observations.append({
+                    'kind': 'netbios-host', 'ip': match.group('ip'),
+                    'name': match.group('name')[:255], 'service': (match.group('service') or '')[:255],
+                })
+
+    elif capability_id in {
+        'binary.checksec', 'binary.strings', 'binary.objdump', 'binary.readelf',
+        'binary.xxd', 'binary.gdb-metadata', 'binary.binwalk',
+    }:
         nonempty = [line.strip() for line in raw.splitlines() if line.strip()]
         observations.append({
-            'kind': 'binary-analysis-summary',
-            'line_count': len(nonempty),
-            'preview': nonempty[:50],
+            'kind': 'binary-analysis-summary', 'line_count': len(nonempty), 'preview': nonempty[:50],
         })
 
     return {
