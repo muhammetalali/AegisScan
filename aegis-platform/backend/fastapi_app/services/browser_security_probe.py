@@ -86,7 +86,16 @@ class BrowserDomParser(HTMLParser):
         elif self.in_script and data.strip():
             self.inline_script_count += 1
 
-    def snapshot(self, dom: str, truncated: bool, browser: str, virtual_time_budget_ms: int, max_dom_bytes: int) -> dict[str, Any]:
+    def snapshot(
+        self,
+        dom: str,
+        truncated: bool,
+        browser: str,
+        virtual_time_budget_ms: int,
+        max_dom_bytes: int,
+        disable_javascript: bool,
+        block_third_party_dns: bool,
+    ) -> dict[str, Any]:
         target_scheme = urlparse(self.base_url).scheme.lower()
         target_host = self.target_host
         resource_hosts: set[str] = set()
@@ -114,8 +123,8 @@ class BrowserDomParser(HTMLParser):
             'dom_bytes': len(dom.encode('utf-8', errors='ignore')),
             'dom_truncated': truncated,
             'navigation_policy': {
-                'javascript_disabled': True,
-                'third_party_dns_blocked': True,
+                'javascript_disabled': disable_javascript,
+                'third_party_dns_blocked': block_third_party_dns,
                 'virtual_time_budget_ms': virtual_time_budget_ms,
                 'max_dom_bytes': max_dom_bytes,
             },
@@ -155,7 +164,14 @@ def _host_resolver_rule(url: str) -> str:
     return f'MAP * ~NOTFOUND, EXCLUDE {host}'
 
 
-def capture_dom(url: str, virtual_time_budget_ms: int, max_dom_bytes: int) -> tuple[str, bool, str]:
+def capture_dom(
+    url: str,
+    virtual_time_budget_ms: int,
+    max_dom_bytes: int,
+    *,
+    disable_javascript: bool = False,
+    block_third_party_dns: bool = False,
+) -> tuple[str, bool, str]:
     browser = _browser_binary()
     with tempfile.TemporaryDirectory(prefix='aegis-browser-profile-') as profile:
         argv = [
@@ -172,17 +188,18 @@ def capture_dom(url: str, virtual_time_budget_ms: int, max_dom_bytes: int) -> tu
             '--disable-translate',
             '--disable-component-update',
             '--disable-features=MediaRouter,OptimizationHints,AutofillServerCommunication',
-            '--blink-settings=imagesEnabled=false',
-            '--disable-javascript',
             '--mute-audio',
             '--no-first-run',
             '--no-default-browser-check',
-            f'--host-resolver-rules={_host_resolver_rule(url)}',
             f'--user-data-dir={profile}',
             f'--virtual-time-budget={virtual_time_budget_ms}',
             '--dump-dom',
             url,
         ]
+        if disable_javascript:
+            argv.insert(-2, '--disable-javascript')
+        if block_third_party_dns:
+            argv.insert(-2, f'--host-resolver-rules={_host_resolver_rule(url)}')
         completed = subprocess.run(
             argv,
             stdout=subprocess.PIPE,
@@ -203,11 +220,28 @@ def capture_dom(url: str, virtual_time_budget_ms: int, max_dom_bytes: int) -> tu
     return dom, truncated, browser
 
 
-def analyze_dom(url: str, dom: str, truncated: bool, browser: str = 'test-browser', virtual_time_budget_ms: int = 3000, max_dom_bytes: int = 262144) -> dict[str, Any]:
+def analyze_dom(
+    url: str,
+    dom: str,
+    truncated: bool,
+    browser: str = 'test-browser',
+    virtual_time_budget_ms: int = 3000,
+    max_dom_bytes: int = 262144,
+    disable_javascript: bool = False,
+    block_third_party_dns: bool = False,
+) -> dict[str, Any]:
     parser = BrowserDomParser(url)
     parser.feed(dom)
     parser.close()
-    return parser.snapshot(dom, truncated, browser, virtual_time_budget_ms, max_dom_bytes)
+    return parser.snapshot(
+        dom,
+        truncated,
+        browser,
+        virtual_time_budget_ms,
+        max_dom_bytes,
+        disable_javascript,
+        block_third_party_dns,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -215,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('url')
     parser.add_argument('--virtual-time-budget-ms', type=int, default=3000)
     parser.add_argument('--max-dom-bytes', type=int, default=262144)
+    parser.add_argument('--disable-javascript', action='store_true')
+    parser.add_argument('--block-third-party-dns', action='store_true')
     args = parser.parse_args(argv)
     if args.virtual_time_budget_ms < 1000 or args.virtual_time_budget_ms > 10000:
         raise SystemExit('virtual-time-budget-ms must be between 1000 and 10000')
@@ -223,8 +259,23 @@ def main(argv: list[str] | None = None) -> int:
     parsed = urlparse(args.url)
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         raise SystemExit('Only absolute http/https URLs are supported')
-    dom, truncated, browser = capture_dom(args.url, args.virtual_time_budget_ms, args.max_dom_bytes)
-    print(json.dumps(analyze_dom(args.url, dom, truncated, browser, args.virtual_time_budget_ms, args.max_dom_bytes), sort_keys=True))
+    dom, truncated, browser = capture_dom(
+        args.url,
+        args.virtual_time_budget_ms,
+        args.max_dom_bytes,
+        disable_javascript=args.disable_javascript,
+        block_third_party_dns=args.block_third_party_dns,
+    )
+    print(json.dumps(analyze_dom(
+        args.url,
+        dom,
+        truncated,
+        browser,
+        args.virtual_time_budget_ms,
+        args.max_dom_bytes,
+        args.disable_javascript,
+        args.block_third_party_dns,
+    ), sort_keys=True))
     return 0
 
 
