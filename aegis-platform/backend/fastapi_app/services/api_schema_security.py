@@ -8,8 +8,9 @@ import sys
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-import requests
 import yaml
+
+from fastapi_app.services.pinned_http import get_pinned_same_origin, origin
 
 SCHEMA = 'aegis.api-schema-security.v1'
 METHODS = ('get', 'put', 'post', 'delete', 'patch', 'options', 'head', 'trace')
@@ -21,16 +22,7 @@ REQUEST_HEADERS = {
 
 
 def _origin(url: str) -> tuple[str, str, int]:
-    parsed = urlsplit(url)
-    scheme = parsed.scheme.lower()
-    host = (parsed.hostname or '').lower()
-    if scheme not in {'http', 'https'} or not host or parsed.username or parsed.password:
-        raise ValueError('target must be an absolute HTTP(S) URL without embedded credentials')
-    try:
-        port = parsed.port or (443 if scheme == 'https' else 80)
-    except ValueError as exc:
-        raise ValueError('target contains an invalid port') from exc
-    return scheme, host, port
+    return origin(url)
 
 
 def schema_url(target: str, spec_path: str) -> str:
@@ -43,56 +35,18 @@ def schema_url(target: str, spec_path: str) -> str:
     return result
 
 
-def _bounded_response_body(response: requests.Response, max_bytes: int) -> bytes:
-    length = response.headers.get('Content-Length')
-    if length:
-        try:
-            declared = int(length)
-        except ValueError:
-            declared = -1
-        if declared > max_bytes:
-            raise ValueError(f'API schema exceeds max_spec_bytes={max_bytes}')
-    chunks: list[bytes] = []
-    total = 0
-    for chunk in response.iter_content(chunk_size=65536):
-        if not chunk:
-            continue
-        total += len(chunk)
-        if total > max_bytes:
-            raise ValueError(f'API schema exceeds max_spec_bytes={max_bytes}')
-        chunks.append(chunk)
-    return b''.join(chunks)
-
-
-def _get(url: str, timeout: int) -> requests.Response:
-    return requests.get(
+def fetch_schema(target: str, spec_path: str, max_bytes: int, timeout: int) -> tuple[str, bytes, str]:
+    url = schema_url(target, spec_path)
+    response = get_pinned_same_origin(
         url,
         headers=REQUEST_HEADERS,
         timeout=timeout,
-        allow_redirects=False,
-        stream=True,
+        max_body_bytes=max_bytes,
+        max_redirects=1,
     )
-
-
-def fetch_schema(target: str, spec_path: str, max_bytes: int, timeout: int) -> tuple[str, bytes, str]:
-    url = schema_url(target, spec_path)
-    response = _get(url, timeout)
-    try:
-        if response.is_redirect:
-            location = response.headers.get('Location', '')
-            redirected = urljoin(url, location)
-            if not location or _origin(redirected) != _origin(url):
-                raise RuntimeError('API schema redirect crossed the authorized target origin')
-            response.close()
-            response = _get(redirected, timeout)
-            url = redirected
-            if response.is_redirect:
-                raise RuntimeError('API schema redirect limit exceeded')
-        response.raise_for_status()
-        body = _bounded_response_body(response, max_bytes)
-        return url, body, response.headers.get('Content-Type', '').split(';', 1)[0]
-    finally:
-        response.close()
+    if not 200 <= response.status < 300:
+        raise RuntimeError(f'API schema request returned HTTP {response.status}')
+    return response.url, response.body, response.content_type
 
 
 def parse_document(body: bytes) -> dict[str, Any]:
@@ -224,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         url, body, content_type = fetch_schema(args.target_url, args.spec_path, args.max_spec_bytes, args.timeout_seconds)
         payload = analyze_bytes(body, url)
         payload['content_type'] = content_type
-    except (ValueError, RuntimeError, requests.RequestException) as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
         print(json.dumps({'schema': SCHEMA, 'error': str(exc)}, sort_keys=True), file=sys.stderr)
         return 2
     print(json.dumps(payload, sort_keys=True, separators=(',', ':')))
