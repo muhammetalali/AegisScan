@@ -23,7 +23,7 @@ RUN apt-get update \
         curl nmap masscan libpcap0.8 ca-certificates libcap2-bin \
         binutils checksec binwalk libimage-exiftool-perl xxd gdb \
         gobuster ffuf dirb dnsenum fierce wafw00f nbtscan \
-        git openssh-client \
+        git openssh-client libc6 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
