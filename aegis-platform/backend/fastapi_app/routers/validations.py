@@ -12,8 +12,8 @@ from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from evidence.models import Evidence, ValidationRun
-from vulnerabilities.models import Vulnerability
+from django_project.evidence.models import Evidence, ValidationRun
+from django_project.vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 from ..services.authorization_guard import current_asset_authorization
@@ -254,7 +254,7 @@ def _list(user_id: str, limit: int):
 
 @router.get('/validations', response_model=List[ValidationOut])
 async def list_validations(limit: int = Query(20, le=100), user=Depends(get_current_user)):
-    return [await _serialize(v) for v in await _list(str(user.get('user_id')), limit)]
+    return [await _serialize(v) for v in await _list(str(user.get('user_id')), int(limit))]
 
 
 @sync_to_async
@@ -323,7 +323,8 @@ async def get_validation_result(vid: UUID, user=Depends(get_current_user)):
 
 @router.get('/validations/{vid}/evidence', response_model=List[ValidationEvidenceOut])
 async def get_validation_evidence(vid: UUID, limit: int = Query(50, le=100), user=Depends(get_current_user)):
-    evidence = await _get_validation_evidence(vid, str(user.get('user_id')), limit)
+    limit_value = limit if isinstance(limit, int) else 50
+    evidence = await _get_validation_evidence(vid, str(user.get('user_id')), int(limit_value))
     if evidence is None:
         raise HTTPException(status_code=404, detail='Validation not found')
     return evidence
