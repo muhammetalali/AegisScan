@@ -15,7 +15,7 @@ TargetKind = Literal['host', 'network', 'url', 'path', 'image']
 
 @dataclass(frozen=True)
 class OptionSpec:
-    flag: str
+    flag: str | None
     kind: Literal['str', 'int', 'bool', 'choice'] = 'str'
     default: Any = None
     minimum: int | None = None
@@ -45,10 +45,10 @@ class NativeToolSpec:
         return dict(self.options)
 
 
-# AegisScan-owned execution specifications. They describe stable public CLI
-# contracts only. No external orchestration implementation is imported.
 NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'network.rustscan': NativeToolSpec('network.rustscan', 'rustscan', 'network-reconnaissance', 'Fast authorized TCP discovery with service handoff.', 'ip', ('ip_address', 'domain'), 'active-medium', 'host', '-a', suffix_args=('--', '-sV'), timeout=420),
+    'network.nbtscan-host': NativeToolSpec('network.nbtscan-host', 'nbtscan', 'network-reconnaissance', 'NetBIOS name discovery for an authorized host.', 'ip', ('ip_address',), 'active-low', 'host', None, timeout=180),
+    'network.nbtscan-range': NativeToolSpec('network.nbtscan-range', 'nbtscan', 'network-reconnaissance', 'NetBIOS name discovery across an authorized network range.', 'network', ('network_range',), 'active-low', 'network', None, timeout=300),
     'recon.amass': NativeToolSpec('recon.amass', 'amass', 'asset-discovery', 'Passive DNS and subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', prefix_args=('enum', '-passive'), timeout=900),
     'recon.subfinder': NativeToolSpec('recon.subfinder', 'subfinder', 'asset-discovery', 'Passive subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', suffix_args=('-silent',), timeout=600),
     'recon.dnsenum': NativeToolSpec('recon.dnsenum', 'dnsenum', 'dns-reconnaissance', 'Authorized DNS enumeration.', 'ip', ('domain',), 'active-low', 'host', None, timeout=600),
@@ -56,6 +56,7 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'web.httpx': NativeToolSpec('web.httpx', 'httpx', 'web-discovery', 'HTTP service probing and metadata collection.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u', suffix_args=('-json', '-silent'), timeout=600),
     'web.katana': NativeToolSpec('web.katana', 'katana', 'web-discovery', 'Web crawling and endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u', suffix_args=('-jsonl', '-silent'), options=(('depth', OptionSpec('-d', 'int', 3, 1, 5)),), timeout=900),
     'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
+    'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
     'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent'), options=(('threads', OptionSpec('-t', 'int', 10, 1, 50)),), timeout=1200),
     'web.ffuf': NativeToolSpec('web.ffuf', 'ffuf', 'content-discovery', 'Wordlist-driven endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-medium', 'url', '-u', target_suffix='/FUZZ', suffix_args=('-of', 'json', '-o', '/dev/stdout'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 20, 1, 50))), timeout=1200),
     'web.nikto': NativeToolSpec('web.nikto', 'nikto', 'web-vulnerability-assessment', 'Web server misconfiguration and exposure assessment.', 'url', ('website',), 'active-medium', 'url', '-h', suffix_args=('-Format', 'json', '-output', '/dev/stdout'), timeout=1200),
@@ -68,6 +69,8 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'binary.strings': NativeToolSpec('binary.strings', 'strings', 'binary-analysis', 'Printable string extraction for binary triage.', 'file', ('file',), 'passive', 'path', None, prefix_args=('-a',), timeout=180),
     'binary.objdump': NativeToolSpec('binary.objdump', 'objdump', 'binary-analysis', 'Object file headers and metadata inspection.', 'file', ('file',), 'passive', 'path', None, prefix_args=('-x',), timeout=300),
     'binary.readelf': NativeToolSpec('binary.readelf', 'readelf', 'binary-analysis', 'ELF headers, sections and program metadata inspection.', 'file', ('file',), 'passive', 'path', None, prefix_args=('-a',), timeout=300),
+    'binary.xxd': NativeToolSpec('binary.xxd', 'xxd', 'binary-analysis', 'Bounded hexadecimal dump for binary triage.', 'file', ('file',), 'passive', 'path', None, prefix_args=('-g', '1', '-l', '65536'), timeout=180),
+    'binary.gdb-metadata': NativeToolSpec('binary.gdb-metadata', 'gdb', 'binary-analysis', 'Non-interactive debugger metadata inspection with fixed commands.', 'file', ('file',), 'passive', 'path', None, prefix_args=('-q', '-batch', '-ex', 'info files', '-ex', 'info functions'), timeout=300),
     'binary.binwalk': NativeToolSpec('binary.binwalk', 'binwalk', 'binary-analysis', 'Embedded file signature and firmware structure analysis.', 'file', ('file',), 'passive', 'path', None, timeout=600),
     'forensics.exiftool': NativeToolSpec('forensics.exiftool', 'exiftool', 'forensics', 'Metadata extraction for uploaded evidence and files.', 'file', ('file',), 'passive', 'path', None, prefix_args=('-json',), timeout=180),
 }
@@ -157,10 +160,12 @@ def build_native_argv(spec: NativeToolSpec, target: str, options: dict[str, Any]
             continue
         value = normalized[name]
         if definition.kind == 'bool':
-            if value:
+            if value and definition.flag:
                 argv.append(definition.flag)
-        else:
+        elif definition.flag:
             argv.extend([definition.flag, str(value)])
+        else:
+            argv.append(str(value))
     argv.extend(spec.suffix_args)
     return argv, target
 
