@@ -81,9 +81,10 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     ),
     'browser.dom-snapshot': NativeToolSpec(
         'browser.dom-snapshot', 'aegis-browser-security', 'browser-security',
-        'Governed headless Chromium DOM and browser security posture snapshot for an authorized web asset.',
+        'Headless browser DOM and browser-security posture snapshot for an authorized web asset.',
         'url', ('website',), 'active-low', 'url', None,
         options=(
+            ('browser', OptionSpec('--browser', 'choice', 'auto', choices=('auto', 'chromium', 'firefox'))),
             ('virtual_time_budget_ms', OptionSpec('--virtual-time-budget-ms', 'int', 3000, 1000, 10000)),
             ('max_dom_bytes', OptionSpec('--max-dom-bytes', 'int', 262144, 65536, 1048576)),
         ),
