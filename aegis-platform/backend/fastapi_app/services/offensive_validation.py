@@ -86,11 +86,43 @@ def _assert_no_live_session_payload(value: str) -> None:
         raise ValueError('Live shell/session payloads are not part of offensive validation evidence capture')
 
 
+def _authorization_scope_url(url: str) -> str:
+    """Return the URL form used only for scope authorization.
+
+    Scope authorization intentionally validates the destination authority and path
+    without trusting probe query strings. Probes may need harmless query markers,
+    but those markers must never widen the host/scope decision.
+    """
+    parsed = urllib.parse.urlparse(str(url).strip())
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+        raise ValueError('Offensive validation requires an HTTP(S) URL target')
+    return urllib.parse.urlunparse(parsed._replace(query='', fragment=''))
+
+
+def _require_authorized_http_url(url: str, *, resolve_dns: bool) -> None:
+    require_authorized_target(_authorization_scope_url(url), url=True, resolve_dns=resolve_dns)
+
+
+def _redacted_probe_url(url: str, secrets_to_redact: tuple[str, ...]) -> str:
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    if not query:
+        return _redact(url, secrets_to_redact)
+    safe_query: list[tuple[str, str]] = []
+    for key, value in query:
+        key_lower = key.lower()
+        if 'token' in key_lower or key_lower in {'q', 'query', 'search', 'redirect', 'next', 'url', 'return'}:
+            safe_query.append((key, '[REDACTED]'))
+        else:
+            safe_query.append((key, _redact(value, secrets_to_redact)))
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(safe_query)))
+
+
 def _default_http_client(probe: ProbeRequest) -> HTTPProbeResponse:
     method = probe.method.upper().strip()
     if method not in SAFE_METHODS:
         raise ValueError(f'Unsupported offensive validation HTTP method: {method}')
-    require_authorized_target(probe.url, url=True, resolve_dns=True)
+    _require_authorized_http_url(probe.url, resolve_dns=True)
     request = urllib.request.Request(
         probe.url,
         method=method,
@@ -164,7 +196,7 @@ def _redirect_url(url: str, parameter: str, inert_target: str) -> str:
 
 def build_validation_plan(finding: Any, *, token: str | None = None) -> list[ProbeRequest]:
     target_url = _candidate_url(finding)
-    require_authorized_target(target_url, url=True, resolve_dns=False)
+    _require_authorized_http_url(target_url, resolve_dns=False)
     labels = _classifiers(finding)
     plan: list[ProbeRequest] = [ProbeRequest(
         kind='http-reachability',
@@ -213,10 +245,11 @@ def _proof_from_http(
 ) -> ProbeProof:
     body = response.body or ''
     headers = {key.lower(): value for key, value in response.headers.items()}
+    stored_url = _redacted_probe_url(probe.url, secrets_to_redact)
     evidence_material = json.dumps({
         'kind': probe.kind,
         'method': probe.method,
-        'url': probe.url,
+        'url': stored_url,
         'status': response.status,
         'headers': headers,
         'body_sha256': hashlib.sha256(body.encode('utf-8', errors='ignore')).hexdigest(),
@@ -237,7 +270,7 @@ def _proof_from_http(
     return ProbeProof(
         kind=probe.kind,
         method=probe.method,
-        url=probe.url,
+        url=stored_url,
         status=response.status,
         evidence_sha256=hashlib.sha256(evidence_material.encode()).hexdigest(),
         exploitability_proven=proven,
@@ -249,14 +282,14 @@ def _proof_from_http(
     )
 
 
-def _semantic_browser_proof(finding: Any, probe: ProbeRequest) -> ProbeProof:
+def _semantic_browser_proof(finding: Any, probe: ProbeRequest, *, secrets_to_redact: tuple[str, ...]) -> ProbeProof:
     raw_data = getattr(finding, 'raw_data', {}) if isinstance(getattr(finding, 'raw_data', {}), dict) else {}
     affected = raw_data.get('affected_urls') if isinstance(raw_data.get('affected_urls'), list) else []
     material = json.dumps({'finding_id': str(getattr(finding, 'id', '')), 'affected_urls': affected}, sort_keys=True)
     return ProbeProof(
         kind=probe.kind,
         method='EVIDENCE',
-        url=probe.url,
+        url=_redacted_probe_url(probe.url, secrets_to_redact),
         status=0,
         evidence_sha256=hashlib.sha256(material.encode()).hexdigest(),
         exploitability_proven=bool(affected),
@@ -278,7 +311,7 @@ def run_offensive_validation(
 ) -> dict[str, Any]:
     target_url = _candidate_url(finding)
     _assert_no_live_session_payload(json.dumps(getattr(finding, 'raw_data', {}), default=str))
-    require_authorized_target(target_url, url=True, resolve_dns=False)
+    _require_authorized_http_url(target_url, resolve_dns=False)
     actor = actor or getattr(getattr(finding, 'scan', None), 'initiated_by', None)
     if actor is None:
         raise ValueError('Offensive validation requires an actor for audit attribution')
@@ -295,7 +328,7 @@ def run_offensive_validation(
             user=actor,
             finding=finding,
             target_type='url',
-            target_value=target_url,
+            target_value=_authorization_scope_url(target_url),
             scope=str(getattr(getattr(finding, 'project', None), 'id', '')),
             profile=profile,
             engines=[ENGINE],
@@ -318,7 +351,7 @@ def run_offensive_validation(
         try:
             _assert_no_live_session_payload(probe.url)
             if probe.kind == 'semantic-browser-transport':
-                proofs.append(_semantic_browser_proof(finding, probe))
+                proofs.append(_semantic_browser_proof(finding, probe, secrets_to_redact=secrets_to_redact))
             else:
                 proofs.append(_proof_from_http(probe, client(probe), secrets_to_redact=secrets_to_redact))
         except Exception as exc:
@@ -331,7 +364,7 @@ def run_offensive_validation(
         'schema': SCHEMA,
         'engine': ENGINE,
         'finding_id': str(finding.id),
-        'target_url': target_url,
+        'target_url': _redacted_probe_url(target_url, secrets_to_redact),
         'profile': profile,
         'status': 'completed' if proofs else 'failed',
         'exploitability': {
@@ -376,7 +409,7 @@ def run_offensive_validation(
                     'schema': SCHEMA,
                     'validation_run_id': str(run.id),
                     'finding_id': str(finding.id),
-                    'target_url': target_url,
+                    'target_url': _authorization_scope_url(target_url),
                     'profile': profile,
                     'proof_count': len(proofs),
                     'proven_count': result['exploitability']['proven_count'],
