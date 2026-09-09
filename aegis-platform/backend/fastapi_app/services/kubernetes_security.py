@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
-from .pinned_http import PinnedHTTPDestination, pin_http_destination, request_pinned
+from fastapi_app.services.pinned_http import PinnedHTTPDestination, pin_http_destination, request_pinned
 
 SCHEMA = 'aegis.kubernetes-security.v1'
 REQUEST_TIMEOUT = 20
@@ -204,9 +204,8 @@ def load_kubeconfig(path: str, authorized_target: str) -> KubernetesTransport:
                     'kubeconfig embedded client certificate credentials are invalid'
                 ) from exc
 
-        # Pin once for the whole scan.  Every later Kubernetes request reuses
-        # this authorization-checked IP set, so a DNS answer cannot change
-        # egress between authorization and later collection requests.
+        # Pin once for the whole scan. Every later Kubernetes request reuses
+        # this authorization-checked IP set so DNS cannot redirect later egress.
         destination = pin_http_destination(server)
         return KubernetesTransport(
             server=server,
@@ -552,7 +551,7 @@ def analyze_resources(
         'coverage_gaps': sum(1 for item in coverage if not item.get('accessible')),
         'truncated_collections': sum(1 for item in coverage if item.get('truncated')),
         'pinned_destination_ips': resolved_ips,
-        'dns_pinned_for_scan': len(resolved_ips) == 1,
+        'dns_pinned_for_scan': bool(resolved_ips),
     }
     return {
         'schema': SCHEMA,
