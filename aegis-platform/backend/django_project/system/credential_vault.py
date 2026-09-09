@@ -34,6 +34,18 @@ _SECRET_FIELD_NAMES = {
     'secret', 'password', 'token', 'api_key', 'apikey', 'authorization', 'private_key',
     'access_key', 'secret_key', 'credential', 'credentials', 'bearer', 'cookie',
 }
+_MISSING = object()
+
+
+def _explicit_setting(name: str) -> object:
+    return getattr(settings, name, _MISSING)
+
+
+def _setting_preferred_value(name: str) -> str:
+    configured = _explicit_setting(name)
+    if configured is _MISSING:
+        return os.environ.get(name, '')
+    return str(configured or '')
 
 
 def _derive_development_key() -> bytes:
@@ -42,7 +54,7 @@ def _derive_development_key() -> bytes:
 
 
 def _configured_vault_keys() -> list[bytes]:
-    configured = getattr(settings, 'CREDENTIAL_VAULT_KEYS', '') or os.environ.get('CREDENTIAL_VAULT_KEYS', '')
+    configured = _setting_preferred_value('CREDENTIAL_VAULT_KEYS')
     if not configured:
         if getattr(settings, 'DEBUG', False):
             return [_derive_development_key()]
@@ -69,7 +81,7 @@ def _fernet() -> MultiFernet:
 
 
 def _fingerprint_key() -> bytes:
-    configured = getattr(settings, 'CREDENTIAL_FINGERPRINT_KEY', '') or os.environ.get('CREDENTIAL_FINGERPRINT_KEY', '')
+    configured = _setting_preferred_value('CREDENTIAL_FINGERPRINT_KEY')
     if configured:
         return configured.encode('utf-8')
     fallback = getattr(settings, 'JWT_SECRET_KEY', '') or getattr(settings, 'SECRET_KEY', '')
@@ -269,10 +281,12 @@ def authorize_credential_use(
     return credential
 
 
-@transaction.atomic
 def resolve_credential_secret(
     *, credential: CredentialSecret, actor: Any, purpose: str, request: Any | None = None
 ) -> str:
+    # Keep this function outside a broad atomic block so authorization denials are
+    # persisted in the append-only ledger instead of being rolled back with the
+    # raised CredentialVaultDenied exception.
     authorize_credential_use(credential=credential, actor=actor, purpose=purpose, request=request)
     plaintext = decrypt_secret(credential.encrypted_secret)
     access = _append_access(
