@@ -4,9 +4,10 @@ from fastapi_app.services.browser_security_probe import SCHEMA, analyze_dom
 
 
 def test_browser_security_probe_emits_bounded_security_observations() -> None:
+    sensitive_value = 'secret-browser-password-value'
     payload = analyze_dom(
         'https://app.example.test/login',
-        '''
+        f'''
         <html>
           <head>
             <title>Secure Login</title>
@@ -16,7 +17,7 @@ def test_browser_security_probe_emits_bounded_security_observations() -> None:
           </head>
           <body>
             <form action="http://app.example.test/login" method="post">
-              <input type="password" name="password">
+              <input type="password" name="password" value="{sensitive_value}">
             </form>
             <iframe src="https://analytics.example.invalid/frame"></iframe>
             <img src="http://app.example.test/insecure.png">
@@ -47,4 +48,4 @@ def test_browser_security_probe_emits_bounded_security_observations() -> None:
     assert 'stylesheet' in observation['link_rel_values']
     assert payload['navigation_policy']['javascript_disabled'] is True
     assert payload['navigation_policy']['third_party_dns_blocked'] is True
-    assert 'password' not in str(payload).lower()
+    assert sensitive_value not in str(payload)
