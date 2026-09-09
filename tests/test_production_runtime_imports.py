@@ -95,12 +95,14 @@ def test_capability_registry_is_typed_and_fail_closed() -> None:
         list_capabilities,
         validate_capability_options,
     )
+    from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
     from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
 
     capabilities = {item.id: item for item in list_capabilities()}
     core = {"network.nmap", "network.masscan", "web.nuclei", "code.semgrep"}
     assert core <= set(capabilities)
     assert set(NATIVE_TOOL_SPECS) <= set(capabilities)
+    assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
     assert len(capabilities) >= 26
     assert all(item.authorization_required for item in capabilities.values())
     assert all(item.evidence_required for item in capabilities.values())
@@ -154,7 +156,7 @@ def test_capability_api_is_part_of_production_openapi_surface() -> None:
 
     paths = app.openapi()["paths"]
     assert "/api/v1/capabilities/" in paths
-    assert "/api/v1/capabilities/worker-availability" in paths
+    assert "/api/v1/capabilities/packaging" in paths
     assert "/api/v1/capabilities/{capability_id}/execute" in paths
     execute = paths["/api/v1/capabilities/{capability_id}/execute"]["post"]
     assert execute["responses"]["202"]["description"] == "Successful Response"
