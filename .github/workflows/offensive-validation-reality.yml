@@ -22,7 +22,7 @@ jobs:
       JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
       ALLOWED_HOSTS: 'localhost,127.0.0.1'
       CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
-      AUTHORIZED_SCAN_TARGETS: 'app.example,approved.example'
+      AUTHORIZED_SCAN_TARGETS: 'app.example,approved.example,127.0.0.1/32'
     services:
       postgres:
         image: postgres:16
@@ -67,4 +67,7 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
-        run: python -m pytest -q fastapi_app/services/test_offensive_validation.py
+        run: >-
+          python -m pytest -q
+          fastapi_app/services/test_offensive_validation.py
+          django_project/evidence/test_offensive_validation_plane.py
