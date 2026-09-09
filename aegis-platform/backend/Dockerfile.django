@@ -14,7 +14,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl nmap masscan libpcap0.8 ca-certificates libcap2-bin \
+    && apt-get install -y --no-install-recommends \
+        curl nmap masscan libpcap0.8 ca-certificates libcap2-bin \
+        binutils checksec binwalk libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
@@ -41,11 +43,18 @@ RUN groupadd --gid 10001 aegis \
     && test -z "$(getcap "$nmap_binary")" \
     && test -z "$(getcap "$masscan_binary")"
 
-# Verify required scanner/analysis binaries are installed without relying on
-# non-zero CLI exit semantics (masscan prints its version but returns 1).
+# Build-time capability reality: every binary listed here is a real executable
+# available to the unprivileged scanner worker, not merely a registry entry.
 RUN command -v nmap >/dev/null \
     && command -v masscan >/dev/null \
     && command -v semgrep >/dev/null \
+    && command -v nuclei >/dev/null \
+    && command -v strings >/dev/null \
+    && command -v objdump >/dev/null \
+    && command -v readelf >/dev/null \
+    && command -v checksec >/dev/null \
+    && command -v binwalk >/dev/null \
+    && command -v exiftool >/dev/null \
     && command -v capsh >/dev/null
 
 EXPOSE 8000
