@@ -29,7 +29,7 @@ from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 from .scans import ScanCreate, _attach_celery_task, _create_scan, _serialize_scan
 
 router = APIRouter()
-_POLICY_VERSION = 'capability-execution.v2'
+_POLICY_VERSION = 'capability-execution.v3'
 _TASKS = {
     'nmap': run_nmap_scan,
     'masscan': run_masscan_scan,
@@ -61,7 +61,13 @@ def _asset_for_execution(asset_id: str, project_id: str, user_id: str):
 
 @sync_to_async
 def _authorize_credential_bindings(
-    *, project_id: str, user_id: str, refs: list[str], capability_id: str, allowed_kinds: tuple[str, ...]
+    *,
+    project_id: str,
+    user_id: str,
+    refs: list[str],
+    capability_id: str,
+    allowed_kinds: tuple[str, ...],
+    target: str,
 ) -> dict[str, Any]:
     return authorize_credential_refs_for_execution(
         project_id=project_id,
@@ -70,6 +76,7 @@ def _authorize_credential_bindings(
         capability_id=capability_id,
         allowed_kinds=allowed_kinds,
         purpose=f'capability:{capability_id}:schedule',
+        target=target,
     )
 
 
@@ -122,7 +129,7 @@ async def capabilities(user=Depends(get_current_user)):
     return {
         'policy_version': _POLICY_VERSION,
         'execution_model': 'authorized-asset -> isolated-celery -> evidence -> governance',
-        'credential_model': 'credential_ref -> worker resolve -> redacted adapter binding',
+        'credential_model': 'credential_ref -> target-scope check -> worker resolve -> redacted adapter binding',
         'capabilities': [item.public_dict() for item in list_capabilities()],
     }
 
@@ -166,6 +173,11 @@ async def execute_capability(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if capability.credential_required and len(credential_refs) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail=f'Capability {capability.id} requires exactly one credential reference',
+        )
     if credential_refs and capability.credential_mode == 'none':
         raise HTTPException(status_code=409, detail=f'Capability {capability.id} does not support credential-bound execution')
 
@@ -197,6 +209,7 @@ async def execute_capability(
                 refs=credential_refs,
                 capability_id=capability.id,
                 allowed_kinds=capability.credential_kinds,
+                target=target,
             )
             if credential_refs
             else empty_credential_context()
@@ -217,6 +230,7 @@ async def execute_capability(
         'capability_source': capability.source,
         'capability_adapter': capability.adapter,
         'credential_mode': capability.credential_mode,
+        'credential_required': capability.credential_required,
     }
 
     if capability.id in NATIVE_TOOL_SPECS:
