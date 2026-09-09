@@ -21,8 +21,8 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl nmap masscan libpcap0.8 ca-certificates libcap2-bin \
-        binutils checksec binwalk libimage-exiftool-perl \
-        gobuster ffuf dnsenum fierce wafw00f \
+        binutils checksec binwalk libimage-exiftool-perl xxd gdb \
+        gobuster ffuf dirb dnsenum fierce wafw00f nbtscan \
         git openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
@@ -77,12 +77,16 @@ RUN command -v nmap >/dev/null \
     && command -v readelf >/dev/null \
     && command -v checksec >/dev/null \
     && command -v binwalk >/dev/null \
+    && command -v xxd >/dev/null \
+    && command -v gdb >/dev/null \
     && command -v exiftool >/dev/null \
     && command -v gobuster >/dev/null \
     && command -v ffuf >/dev/null \
+    && command -v dirb >/dev/null \
     && command -v dnsenum >/dev/null \
     && command -v fierce >/dev/null \
     && command -v wafw00f >/dev/null \
+    && command -v nbtscan >/dev/null \
     && test -s /opt/aegis-wordlists/web-common.txt \
     && command -v capsh >/dev/null
 
