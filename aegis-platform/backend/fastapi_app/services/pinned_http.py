@@ -4,8 +4,10 @@ import http.client
 import ipaddress
 import socket
 import ssl
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Iterator, Mapping
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .scope_authorization import require_authorized_target
@@ -30,12 +32,7 @@ class PinnedHTTPResponse:
 
 @dataclass(frozen=True)
 class PinnedHTTPDestination:
-    """One authorization-checked logical origin bound to a fixed IP set.
-
-    Instances are created by :func:`pin_http_destination`. Reusing the same
-    destination across a multi-request security operation prevents later DNS
-    answers from changing egress after authorization has been evaluated.
-    """
+    """One authorization-checked logical origin bound to a fixed IP set."""
 
     scheme: str
     host: str
@@ -45,6 +42,11 @@ class PinnedHTTPDestination:
     @property
     def origin(self) -> tuple[str, str, int]:
         return self.scheme, self.host, self.port
+
+
+_OPERATION_DESTINATION: ContextVar[PinnedHTTPDestination | None] = ContextVar(
+    'aegis_pinned_http_destination', default=None
+)
 
 
 def origin(url: str) -> tuple[str, str, int]:
@@ -91,6 +93,28 @@ def pin_http_destination(url: str) -> PinnedHTTPDestination:
     return PinnedHTTPDestination(scheme=scheme, host=host, port=port, resolved_ips=unique)
 
 
+@contextmanager
+def pinned_http_operation(url: str) -> Iterator[PinnedHTTPDestination]:
+    """Pin one authorized origin for the lifetime of a multi-request operation.
+
+    ContextVar scoping prevents a pin from leaking into another thread, async
+    context, Celery delivery, or later execution in the same worker process.
+    """
+    destination = pin_http_destination(url)
+    token = _OPERATION_DESTINATION.set(destination)
+    try:
+        yield destination
+    finally:
+        _OPERATION_DESTINATION.reset(token)
+
+
+def _operation_destination(url: str) -> PinnedHTTPDestination | None:
+    destination = _OPERATION_DESTINATION.get()
+    if destination is None:
+        return None
+    return destination if destination.origin == origin(url) else None
+
+
 def request_pinned(
     method: str,
     url: str,
@@ -103,12 +127,10 @@ def request_pinned(
 ) -> PinnedHTTPResponse:
     """Send one HTTP request only to an authorization-approved pinned IP.
 
-    By default DNS is resolved and authorized immediately before this request.
-    Callers performing a multi-request operation can create one destination via
-    :func:`pin_http_destination` and pass it to every request. The socket then
-    connects directly to the fixed approved IP set while preserving the logical
-    Host header and TLS SNI/certificate validation. Proxy environment variables
-    and a second DNS lookup are never consulted.
+    A caller can pass an explicit destination or open ``pinned_http_operation``
+    for a multi-request operation. The socket connects directly to the fixed
+    approved IP set while preserving the logical Host header and TLS SNI.
+    Proxy environment variables and a second DNS lookup are never consulted.
     """
     verb = str(method).strip().upper()
     if verb not in {'GET', 'HEAD', 'OPTIONS'}:
@@ -119,11 +141,14 @@ def request_pinned(
         raise ValueError('Pinned HTTP response limit must be between 0 and 8388608 bytes')
 
     scheme, host, port = origin(url)
+    reused = destination is not None
+    if destination is None:
+        destination = _operation_destination(url)
+        reused = destination is not None
     if destination is None:
         destination = pin_http_destination(url)
-    else:
-        # Re-check logical scope without performing DNS. The destination's IP
-        # set was already authorization-checked when it was pinned.
+    elif reused:
+        # Re-check logical authorization while deliberately not consulting DNS.
         require_authorized_target(_scope_url(url), url=True, resolve_dns=False)
         if destination.origin != (scheme, host, port):
             raise ValueError('Pinned HTTP destination does not match the requested origin')
@@ -215,7 +240,7 @@ def get_pinned_same_origin(
 ) -> PinnedHTTPResponse:
     current = str(url).strip()
     initial_origin = origin(current)
-    destination = pin_http_destination(current)
+    destination = _operation_destination(current) or pin_http_destination(current)
     for redirect_count in range(max_redirects + 1):
         response = request_pinned(
             'GET',
