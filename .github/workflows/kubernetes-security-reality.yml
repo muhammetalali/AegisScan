@@ -10,6 +10,7 @@ name: Kubernetes Security Reality
       - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
       - 'aegis-platform/backend/fastapi_app/services/native_finding_projection.py'
       - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_credential_scope_regression.py'
       - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
       - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
       - 'aegis-platform/backend/fastapi_app/routers/test_kubernetes_capability_api.py'
@@ -29,6 +30,7 @@ name: Kubernetes Security Reality
       - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
       - 'aegis-platform/backend/fastapi_app/services/native_finding_projection.py'
       - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_credential_scope_regression.py'
       - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
       - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
       - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
@@ -125,6 +127,7 @@ jobs:
           python -m pytest -q \
             fastapi_app/services/test_kubernetes_security.py \
             fastapi_app/services/test_kubernetes_capability_contract.py \
+            fastapi_app/services/test_credential_scope_regression.py \
             fastapi_app/routers/test_kubernetes_capability_api.py \
             django_project/evidence/test_kubernetes_security_plane.py
 
@@ -319,10 +322,10 @@ jobs:
           sudo chown 10001:10001 /tmp/aegis-container.kubeconfig
           sudo chmod 0400 /tmp/aegis-container.kubeconfig
           docker run --rm --network host \
-            -v /tmp/aegis-container.kubeconfig:/run/aegis/kubeconfig:ro \
-            --entrypoint aegis-kubernetes-security \
+            -v /tmp/aegis-container.kubeconfig:/tmp/aegis-kubeconfig:ro \
+            --entrypoint /usr/local/bin/aegis-kubernetes-security \
             aegisscan-kubernetes:ci \
-            "$AEGIS_KUBE_TARGET" --kubeconfig /run/aegis/kubeconfig > /tmp/kubernetes-container-result.json
+            "$AEGIS_KUBE_TARGET" --kubeconfig /tmp/aegis-kubeconfig > /tmp/kubernetes-container-result.json
           python - <<'PY'
           import json
           data = json.load(open('/tmp/kubernetes-container-result.json', encoding='utf-8'))
