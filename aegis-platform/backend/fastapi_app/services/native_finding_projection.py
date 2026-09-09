@@ -24,6 +24,7 @@ class NativeFindingSpec:
     remediation: str = ''
     affected_urls: tuple[str, ...] = ()
     raw_data: dict[str, Any] | None = None
+    identity_key: str = ''
 
 
 def _bounded_urls(values: Any, limit: int = 100) -> tuple[str, ...]:
@@ -38,13 +39,7 @@ def _bounded_urls(values: Any, limit: int = 100) -> tuple[str, ...]:
 
 
 def browser_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
-    """Map explicit browser security violations to stable semantic findings.
-
-    Informational browser characteristics (third-party hosts, iframe counts,
-    inline scripts, and password-field presence alone) remain Evidence only.
-    Findings are emitted only for observations that directly demonstrate a
-    transport downgrade or cleartext form submission path.
-    """
+    """Map explicit browser security violations to stable semantic findings."""
     observations = normalized.get('observations') if isinstance(normalized, dict) else None
     if not isinstance(observations, list):
         return []
@@ -104,8 +99,53 @@ def browser_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]
     return findings
 
 
-def _finding_id(scan_id: str, capability_id: str, rule_id: str) -> UUID:
-    key = ':'.join((str(scan_id).lower(), capability_id.strip().lower(), rule_id.strip().lower()))
+def api_schema_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
+    """Project only explicit security findings emitted by the defensive schema analyzer."""
+    observations = normalized.get('observations') if isinstance(normalized, dict) else None
+    if not isinstance(observations, list):
+        return []
+    findings: list[NativeFindingSpec] = []
+    severities = {'critical', 'high', 'medium', 'low', 'info'}
+    confidences = {'high', 'medium', 'low'}
+    for observation in observations[:2000]:
+        if not isinstance(observation, dict) or observation.get('kind') != 'api-schema-security-finding':
+            continue
+        rule_id = str(observation.get('rule_id') or '').strip()[:200]
+        title = str(observation.get('title') or '').strip()[:500]
+        description = str(observation.get('description') or '').strip()[:5000]
+        remediation = str(observation.get('remediation') or '').strip()[:5000]
+        severity = str(observation.get('severity') or 'info').lower()
+        confidence = str(observation.get('confidence') or 'medium').lower()
+        if not rule_id or not title or not description or severity not in severities or confidence not in confidences:
+            continue
+        location = str(observation.get('location') or '').strip()[:2048]
+        method = str(observation.get('method') or '').strip().upper()[:16]
+        path = str(observation.get('path') or '').strip()[:2048]
+        identity = '|'.join((rule_id, location, method, path))
+        findings.append(NativeFindingSpec(
+            rule_id=rule_id,
+            title=title,
+            description=description,
+            severity=severity,
+            confidence=confidence,
+            category='api-security',
+            cwe_id=str(observation.get('cwe_id') or '')[:64],
+            owasp_category=str(observation.get('owasp_category') or '')[:200],
+            remediation=remediation,
+            affected_urls=_bounded_urls(observation.get('affected_urls'), 20),
+            raw_data={
+                'location': location,
+                'method': method,
+                'path': path,
+            },
+            identity_key=identity,
+        ))
+    return findings
+
+
+def _finding_id(scan_id: str, capability_id: str, spec: NativeFindingSpec) -> UUID:
+    identity = spec.identity_key or spec.rule_id
+    key = ':'.join((str(scan_id).lower(), capability_id.strip().lower(), identity.strip().lower()))
     return uuid5(FINDING_NAMESPACE, key)
 
 
@@ -121,7 +161,7 @@ def _technical_defaults(scan: Any, capability_id: str, source_engine: str, targe
         'category': spec.category,
         'cwe_id': spec.cwe_id,
         'owasp_category': spec.owasp_category,
-        'tags': ['aegisscan-native', 'browser-security', spec.rule_id],
+        'tags': ['aegisscan-native', spec.category, spec.rule_id],
         'url': str(target)[:200],
         'risk_score': {'critical': 9.5, 'high': 8.0, 'medium': 5.0, 'low': 2.0, 'info': 0.5}.get(spec.severity, 0.0),
         'evidence_count': 1,
@@ -151,7 +191,11 @@ def project_native_findings(
     state such as status, assignee, accepted-risk decisions, validation data,
     and remediation tracking already governed by users or later workflows.
     """
-    if capability_id != 'browser.dom-snapshot':
+    if capability_id == 'browser.dom-snapshot':
+        specs = browser_finding_specs(normalized)
+    elif capability_id == 'api.openapi-contract-security':
+        specs = api_schema_finding_specs(normalized)
+    else:
         return [], []
 
     from django_project.evidence.models import Evidence
@@ -159,8 +203,8 @@ def project_native_findings(
 
     finding_ids: list[str] = []
     evidence_ids: list[str] = []
-    for spec in browser_finding_specs(normalized):
-        finding_pk = _finding_id(str(scan.id), capability_id, spec.rule_id)
+    for spec in specs:
+        finding_pk = _finding_id(str(scan.id), capability_id, spec)
         technical = _technical_defaults(scan, capability_id, source_engine, target, spec)
         create_defaults = {**technical, 'status': Vulnerability.Status.OPEN}
         finding, created = Vulnerability.objects.get_or_create(id=finding_pk, defaults=create_defaults)
