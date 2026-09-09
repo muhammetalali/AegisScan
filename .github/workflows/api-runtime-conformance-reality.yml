@@ -1,0 +1,311 @@
+name: API Runtime Conformance Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/api_runtime_*.py'
+      - 'aegis-platform/backend/fastapi_app/services/api_schema_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/pinned_http.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_finding_projection.py'
+      - 'aegis-platform/backend/django_project/evidence/test_api_runtime_conformance_plane.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - '.github/workflows/api-runtime-conformance-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/api_runtime_*.py'
+      - 'aegis-platform/backend/fastapi_app/services/api_schema_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/pinned_http.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_finding_projection.py'
+      - 'aegis-platform/backend/django_project/evidence/test_api_runtime_conformance_plane.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - '.github/workflows/api-runtime-conformance-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api-runtime-conformance-reality:
+    runs-on: ubuntu-latest
+    env:
+      DEBUG: 'True'
+      SECRET_KEY: ci-api-runtime-django-secret-key-0123456789abcdef0123456789abcdef
+      DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
+      REDIS_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
+      JWT_SECRET_KEY: ci-api-runtime-jwt-signing-key-0123456789abcdef0123456789abcdef
+      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile migrate and verify contracts
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m compileall -q \
+            fastapi_app/services/pinned_http.py \
+            fastapi_app/services/api_schema_security.py \
+            fastapi_app/services/api_runtime_conformance.py \
+            fastapi_app/services/api_runtime_launcher.py \
+            fastapi_app/services/api_runtime_capability.py
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+      - name: Prove runtime parser registry vault bridge normalization and persistence
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            fastapi_app/services/test_api_schema_security.py \
+            fastapi_app/services/test_api_runtime_conformance.py \
+            fastapi_app/services/test_api_runtime_capability_contract.py \
+            django_project/evidence/test_api_runtime_conformance_plane.py
+      - name: Reject unsafe operation execution paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number --fixed-strings 'shell=True' \
+            aegis-platform/backend/fastapi_app/services/api_runtime_*.py \
+            aegis-platform/backend/fastapi_app/services/pinned_http.py
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('aegis-platform/backend/fastapi_app/services/api_runtime_conformance.py').read_text()
+          assert "SAFE_METHODS = ('get', 'head')" in source
+          assert "verb not in {'GET', 'HEAD', 'OPTIONS'}" in Path('aegis-platform/backend/fastapi_app/services/pinned_http.py').read_text()
+          print('safe-method-boundary-source-contract-ok')
+          PY
+      - name: Build scanner image and prove runtime executable
+        run: |
+          set -euo pipefail
+          docker build -f aegis-platform/backend/Dockerfile.django -t aegisscan-api-runtime:ci aegis-platform/backend
+          docker run --rm --entrypoint sh aegisscan-api-runtime:ci -c '
+            set -eu
+            command -v aegis-api-schema-security
+            command -v aegis-api-runtime-conformance
+            test -x /app/fastapi_app/services/api_runtime_launcher.py
+            test -x /app/fastapi_app/services/api_runtime_conformance.py
+          '
+      - name: Prove pinned credential-bound GET-only runtime against live OpenAPI service
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --network host \
+            --add-host aegis-runtime.test:127.0.0.1 \
+            -e AUTHORIZED_SCAN_TARGETS='aegis-runtime.test,127.0.0.1/32' \
+            -e HTTP_PROXY='http://127.0.0.1:9' \
+            -e HTTPS_PROXY='http://127.0.0.1:9' \
+            -e NO_PROXY='' \
+            --entrypoint python aegisscan-api-runtime:ci - <<'PY'
+          import json
+          import threading
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+          from urllib.parse import urlsplit, parse_qs
+
+          from fastapi_app.services.capability_registry import get_capability
+          from fastapi_app.services.native_finding_projection import api_runtime_finding_specs
+          from fastapi_app.services.native_output_normalizer import normalize_native_output
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          secret = 'api-runtime-vault-secret-123456789'
+          seen = []
+          document = {
+              'openapi': '3.1.0',
+              'info': {'title': 'Runtime CI', 'version': '1'},
+              'components': {
+                  'securitySchemes': {
+                      'BearerAuth': {'type': 'http', 'scheme': 'bearer'},
+                  },
+                  'schemas': {
+                      'Item': {
+                          'type': 'object',
+                          'required': ['id'],
+                          'properties': {'id': {'type': 'string'}},
+                      },
+                  },
+              },
+              'paths': {
+                  '/items': {
+                      'get': {
+                          'parameters': [{
+                              'name': 'limit', 'in': 'query', 'required': True,
+                              'schema': {'type': 'integer', 'minimum': 1},
+                          }],
+                          'responses': {
+                              '200': {
+                                  'description': 'ok',
+                                  'content': {'application/json': {'schema': {'$ref': '#/components/schemas/Item'}}},
+                              },
+                          },
+                      },
+                  },
+                  '/shape': {
+                      'get': {
+                          'responses': {
+                              '200': {
+                                  'description': 'ok',
+                                  'content': {'application/json': {'schema': {'$ref': '#/components/schemas/Item'}}},
+                              },
+                          },
+                      },
+                  },
+                  '/secure': {
+                      'get': {
+                          'security': [{'BearerAuth': []}],
+                          'responses': {'200': {'description': 'ok'}},
+                      },
+                  },
+                  '/write': {
+                      'post': {'responses': {'202': {'description': 'accepted'}}},
+                  },
+              },
+          }
+          schema_body = json.dumps(document).encode()
+
+          class Handler(BaseHTTPRequestHandler):
+              def _json(self, status, payload):
+                  body = json.dumps(payload).encode()
+                  self.send_response(status)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Content-Length', str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              def do_GET(self):
+                  parsed = urlsplit(self.path)
+                  seen.append((self.command, parsed.path, parsed.query, self.headers.get('Authorization', '')))
+                  if parsed.path == '/openapi.json':
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Content-Length', str(len(schema_body)))
+                      self.end_headers()
+                      self.wfile.write(schema_body)
+                      return
+                  if parsed.path == '/items':
+                      values = parse_qs(parsed.query)
+                      # Deliberately violate the contract by also accepting the
+                      # negative case where required limit is absent.
+                      self._json(200, {'id': f"item-{values.get('limit', ['missing'])[0]}"})
+                      return
+                  if parsed.path == '/shape':
+                      self._json(200, {})
+                      return
+                  if parsed.path == '/secure':
+                      if self.headers.get('Authorization') != f'Bearer {secret}':
+                          self._json(401, {'error': 'unauthorized'})
+                      else:
+                          self._json(200, {'ok': True})
+                      return
+                  self._json(404, {'error': 'not-found'})
+
+              def do_HEAD(self):
+                  seen.append((self.command, urlsplit(self.path).path, urlsplit(self.path).query, self.headers.get('Authorization', '')))
+                  self.send_response(200)
+                  self.end_headers()
+
+              def do_POST(self):
+                  seen.append((self.command, urlsplit(self.path).path, urlsplit(self.path).query, self.headers.get('Authorization', '')))
+                  self._json(500, {'error': 'unsafe-method-was-called'})
+
+              def do_PUT(self):
+                  seen.append((self.command, urlsplit(self.path).path, urlsplit(self.path).query, self.headers.get('Authorization', '')))
+                  self._json(500, {'error': 'unsafe-method-was-called'})
+
+              def do_PATCH(self):
+                  seen.append((self.command, urlsplit(self.path).path, urlsplit(self.path).query, self.headers.get('Authorization', '')))
+                  self._json(500, {'error': 'unsafe-method-was-called'})
+
+              def do_DELETE(self):
+                  seen.append((self.command, urlsplit(self.path).path, urlsplit(self.path).query, self.headers.get('Authorization', '')))
+                  self._json(500, {'error': 'unsafe-method-was-called'})
+
+              def log_message(self, *_args):
+                  pass
+
+          server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+          thread = threading.Thread(target=server.serve_forever, daemon=True)
+          thread.start()
+          try:
+              capability = get_capability('api.openapi-runtime-conformance')
+              assert capability.tool == 'aegis-api-runtime-conformance'
+              target = f'http://aegis-runtime.test:{server.server_port}'
+              result = run_native_tool(
+                  capability.id,
+                  target,
+                  {'max_operations': 10, 'timeout_seconds': 5},
+                  credential_materials=({
+                      'credential_ref': 'ci-runtime-token',
+                      'kind': 'token',
+                      'version': 1,
+                      'secret': secret,
+                  },),
+              )
+          finally:
+              server.shutdown()
+              server.server_close()
+              thread.join(timeout=5)
+
+          assert result.exit_code == 0, result.stderr
+          assert secret not in result.stdout
+          assert secret not in result.stderr
+          payload = json.loads(result.stdout)
+          assert payload['schema'] == 'aegis.api-runtime-conformance.v1', payload
+          assert payload['spec']['resolved_ip'] == '127.0.0.1', payload
+          normalized = normalize_native_output(capability.id, result.stdout)
+          specs = api_runtime_finding_specs(normalized)
+          rules = {item.rule_id for item in specs}
+          assert 'api.runtime.required-query-not-enforced' in rules, rules
+          assert 'api.runtime.response-shape-mismatch' in rules, rules
+          assert all(method in {'GET', 'HEAD'} for method, *_ in seen), seen
+          assert not any(path == '/write' for _, path, _, _ in seen), seen
+          secure = [item for item in seen if item[1] == '/secure']
+          assert len(secure) == 1 and secure[0][3] == f'Bearer {secret}', secure
+          assert [item[1] for item in seen].count('/openapi.json') == 1, seen
+          print('api-runtime-pinned-transport-ok')
+          print('api-runtime-vault-credential-ok')
+          print('api-runtime-get-head-only-ok')
+          print('api-runtime-semantic-findings-ok')
+          PY
