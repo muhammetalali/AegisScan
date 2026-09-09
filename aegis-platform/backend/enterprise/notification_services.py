@@ -61,7 +61,7 @@ def create_security_event_notifications(event: SecurityEvent) -> list[Notificati
                         'source_ip': str(event.source_ip) if event.source_ip else None,
                         'target_user_id': str(event.target_user_id),
                         'observed_failures': event.raw_data.get('observed_failures'),
-                        'action_url': '/audit',
+                        'action_url': '/security-events',
                     },
                 },
             )
