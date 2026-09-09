@@ -11,9 +11,14 @@ PACKAGED_NATIVE_CAPABILITIES = frozenset({
     'forensics.exiftool',
     'recon.dnsenum',
     'recon.fierce',
+    'recon.subfinder',
     'web.gobuster',
     'web.ffuf',
+    'web.httpx',
     'web.waf-detection',
+    'container.trivy-image',
+    'code.checkov',
+    'code.trufflehog',
 })
 
 
