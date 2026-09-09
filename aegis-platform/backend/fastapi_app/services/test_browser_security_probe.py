@@ -27,14 +27,20 @@ def test_browser_security_probe_emits_security_observations_without_secret_value
         ''',
         truncated=False,
         browser='/usr/bin/chromium',
+        browser_family='chromium',
+        capture_method='chromium-dump-dom',
+        browser_log='console and browser logs stay visible',
         virtual_time_budget_ms=2000,
         max_dom_bytes=131072,
     )
     assert payload['schema'] == SCHEMA
+    assert payload['browser_family'] == 'chromium'
     assert payload['dom_sha256']
     assert payload['runtime'] == {
         'virtual_time_budget_ms': 2000,
         'max_dom_bytes': 131072,
+        'capture_method': 'chromium-dump-dom',
+        'browser_log': 'console and browser logs stay visible',
     }
     observation = payload['observations'][0]
     assert observation['kind'] == 'browser-dom-security-snapshot'
@@ -51,3 +57,19 @@ def test_browser_security_probe_emits_security_observations_without_secret_value
     assert observation['insecure_form_actions'] == ['http://app.example.test/login']
     assert 'stylesheet' in observation['link_rel_values']
     assert sensitive_value not in str(payload)
+
+
+def test_browser_security_probe_records_firefox_metadata() -> None:
+    payload = analyze_dom(
+        'https://app.example.test/',
+        '<html><head><title>Firefox</title></head><body></body></html>',
+        truncated=False,
+        browser='/usr/bin/firefox-esr',
+        browser_family='firefox',
+        capture_method='firefox-headless-load-plus-dom-fetch',
+        browser_log='firefox log line',
+    )
+    assert payload['browser_family'] == 'firefox'
+    assert payload['runtime']['capture_method'] == 'firefox-headless-load-plus-dom-fetch'
+    assert payload['runtime']['browser_log'] == 'firefox log line'
+    assert payload['observations'][0]['title'] == 'Firefox'
