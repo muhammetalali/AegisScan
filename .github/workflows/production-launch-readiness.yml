@@ -46,6 +46,31 @@ jobs:
             -subj '/CN=security.example.com' \
             -keyout /tmp/aegis-tls/privkey.pem -out /tmp/aegis-tls/fullchain.pem
           chmod 0600 /tmp/aegis-tls/privkey.pem
+      - name: Start production TLS gateway and prove response headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() {
+            docker rm -f aegis-launch-gateway aegis-launch-frontend aegis-launch-django aegis-launch-fastapi >/dev/null 2>&1 || true
+            docker network rm aegis-launch-proof >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create aegis-launch-proof
+          docker run -d --name aegis-launch-frontend --network aegis-launch-proof --network-alias frontend nginx:alpine
+          docker run -d --name aegis-launch-django --network aegis-launch-proof --network-alias django nginx:alpine
+          docker run -d --name aegis-launch-fastapi --network aegis-launch-proof --network-alias fastapi nginx:alpine
+          docker run -d --name aegis-launch-gateway --network aegis-launch-proof -p 8443:443 \
+            -v "$PWD/aegis-platform/docker/nginx-ssl.conf:/etc/nginx/nginx.conf:ro" \
+            -v /tmp/aegis-tls:/etc/nginx/ssl:ro nginx:alpine
+          for attempt in $(seq 1 20); do
+            curl -ksSf -D /tmp/aegis-headers -o /dev/null https://127.0.0.1:8443/ && break
+            sleep 1
+          done
+          grep -qi '^strict-transport-security:' /tmp/aegis-headers
+          grep -qi '^content-security-policy:' /tmp/aegis-headers
+          grep -qi '^permissions-policy:' /tmp/aegis-headers
+          grep -qi '^cross-origin-opener-policy:' /tmp/aegis-headers
+          grep -qi '^cross-origin-resource-policy:' /tmp/aegis-headers
       - name: Prove production preflight accepts only explicit secure configuration
         env:
           DEBUG: 'False'
