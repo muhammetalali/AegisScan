@@ -1,0 +1,85 @@
+name: Monitoring Alerting Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/monitoring-alerting-reality.yml'
+      - 'aegis-platform/monitoring/**'
+      - 'aegis-platform/scripts/render_alertmanager_config.py'
+      - 'tests/test_alertmanager_config.py'
+      - 'tests/alert_receiver.py'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  monitoring-alerting-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - run: python -m pip install pytest==9.1.1
+      - run: python -m pytest -q tests/test_alertmanager_config.py
+      - name: Validate Prometheus rules and configuration with promtool
+        run: |
+          docker run --rm --entrypoint=/bin/promtool -v "$PWD/aegis-platform/monitoring:/etc/prometheus:ro" prom/prometheus:v3.6.0 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint=/bin/promtool -v "$PWD/aegis-platform/monitoring:/etc/prometheus:ro" prom/prometheus:v3.6.0 \
+            check rules /etc/prometheus/rules/aegis.yml
+      - name: Render production route and deliver a real alert
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-alert-evidence /tmp/aegis-alertmanager
+          ALERT_WEBHOOK_URL=http://alert-receiver:8080/aegis python aegis-platform/scripts/render_alertmanager_config.py \
+            --allow-http-for-test --template aegis-platform/monitoring/alertmanager.yml.tpl \
+            --output /tmp/aegis-alertmanager/alertmanager.yml
+          test "$(stat -c '%a' /tmp/aegis-alertmanager/alertmanager.yml)" = "600"
+          ALERT_UID="$(stat -c '%u' /tmp/aegis-alertmanager/alertmanager.yml)"
+          ALERT_GID="$(stat -c '%g' /tmp/aegis-alertmanager/alertmanager.yml)"
+          docker run --rm --user "${ALERT_UID}:${ALERT_GID}" --entrypoint=/bin/amtool \
+            -v /tmp/aegis-alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro \
+            prom/alertmanager:v0.28.1 check-config /etc/alertmanager/alertmanager.yml
+          cleanup() {
+            docker rm -f aegis-alertmanager-proof aegis-alert-receiver >/dev/null 2>&1 || true
+            docker network rm aegis-monitoring-proof >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create aegis-monitoring-proof
+          docker run -d --name aegis-alert-receiver --network aegis-monitoring-proof --network-alias alert-receiver \
+            -v "$PWD/tests/alert_receiver.py:/receiver.py:ro" -v /tmp/aegis-alert-evidence:/evidence \
+            python:3.12-alpine python /receiver.py
+          docker run -d --name aegis-alertmanager-proof --network aegis-monitoring-proof -p 9093:9093 \
+            --user "${ALERT_UID}:${ALERT_GID}" \
+            -v /tmp/aegis-alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro \
+            prom/alertmanager:v0.28.1 \
+            --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/tmp/alertmanager
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9093/-/ready; then ready=1; break; fi
+            if ! docker inspect -f '{{.State.Running}}' aegis-alertmanager-proof 2>/dev/null | grep -q '^true$'; then
+              echo 'Alertmanager exited before readiness' >&2
+              docker logs aegis-alertmanager-proof >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo 'Alertmanager did not become ready within the bounded readiness window' >&2
+            docker logs aegis-alertmanager-proof >&2 || true
+            exit 1
+          fi
+          curl -fsS -H 'Content-Type: application/json' -d '[{"labels":{"alertname":"AegisRoutingProof","severity":"critical","service":"release"},"annotations":{"summary":"routing reality proof"}}]' http://127.0.0.1:9093/api/v2/alerts
+          for attempt in $(seq 1 30); do test -s /tmp/aegis-alert-evidence/alert.json && break; sleep 1; done
+          test -s /tmp/aegis-alert-evidence/alert.json
+          grep -q 'AegisRoutingProof' /tmp/aegis-alert-evidence/alert.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alert-routing-proof-${{ github.sha }}
+          path: /tmp/aegis-alert-evidence/alert.json
+          if-no-files-found: error
+          retention-days: 30
