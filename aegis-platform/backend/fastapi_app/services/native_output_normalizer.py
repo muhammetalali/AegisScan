@@ -92,6 +92,55 @@ def _normalize_api_observations(data: dict[str, Any], fallback_kind: str) -> lis
     return result
 
 
+def _normalize_kubernetes_observations(data: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    observations = data.get('observations') if isinstance(data.get('observations'), list) else []
+    for item in observations[:2000]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get('kind') or 'kubernetes-observation')[:100]
+        safe: dict[str, Any] = {'kind': kind}
+        for key in (
+            'rule_id', 'title', 'description', 'remediation', 'severity', 'confidence',
+            'category', 'location', 'namespace', 'resource_kind', 'resource_name', 'container',
+            'cwe_id', 'owasp_category', 'server', 'git_version',
+        ):
+            if key in item:
+                safe[key] = str(item.get(key) or '')[:4096]
+        for key in (
+            'namespace_count', 'pod_count', 'deployment_count', 'clusterrole_count',
+            'clusterrolebinding_count', 'finding_count', 'coverage_gaps', 'truncated_collections',
+        ):
+            if key in item:
+                try:
+                    safe[key] = max(0, int(item.get(key) or 0))
+                except (TypeError, ValueError):
+                    safe[key] = 0
+        for key in ('read_only', 'secrets_endpoint_requested'):
+            if key in item:
+                safe[key] = bool(item.get(key))
+        if isinstance(item.get('requested_paths'), list):
+            safe['requested_paths'] = [str(value)[:512] for value in item['requested_paths'][:20]]
+        if isinstance(item.get('coverage'), list):
+            coverage: list[dict[str, Any]] = []
+            for entry in item['coverage'][:20]:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    status = int(entry.get('status') or 0)
+                except (TypeError, ValueError):
+                    status = 0
+                coverage.append({
+                    'path': str(entry.get('path') or '')[:512],
+                    'status': status,
+                    'accessible': bool(entry.get('accessible')),
+                    'truncated': bool(entry.get('truncated')),
+                })
+            safe['coverage'] = coverage
+        result.append(safe)
+    return result
+
+
 def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     """Convert stable tool output formats into bounded AegisScan observations."""
     raw = stdout or ''
@@ -159,6 +208,13 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
             observations.extend(_normalize_api_observations(data, 'api-runtime-observation'))
             if not observations and data.get('error'):
                 observations.append({'kind': 'api-runtime-error', 'summary': str(data['error'])[:2000]})
+
+    elif capability_id == 'kubernetes.read-only-posture':
+        data = _json(raw)
+        if isinstance(data, dict):
+            observations.extend(_normalize_kubernetes_observations(data))
+            if not observations and data.get('error'):
+                observations.append({'kind': 'kubernetes-error', 'summary': str(data['error'])[:2000]})
 
     elif capability_id == 'forensics.exiftool':
         data = _json(raw)
