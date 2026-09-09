@@ -12,6 +12,7 @@ from django_project.assets.models import Asset
 from ..core.dependencies import get_current_user
 from ..services.authorization_guard import asset_target
 from ..services.capability_registry import get_capability, list_capabilities, validate_capability_options
+from ..services.hexstrike_catalog import hexstrike_catalog
 from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 from .scans import ScanCreate, _attach_celery_task, _create_scan, _serialize_scan
@@ -53,6 +54,14 @@ async def capabilities(user=Depends(get_current_user)):
         'execution_model': 'authorized-asset -> isolated-celery -> evidence -> governance',
         'capabilities': [item.public_dict() for item in list_capabilities()],
     }
+
+
+@router.get('/upstream/hexstrike')
+async def upstream_hexstrike_capabilities(user=Depends(get_current_user)):
+    try:
+        return hexstrike_catalog()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post('/{capability_id}/execute', status_code=202)
