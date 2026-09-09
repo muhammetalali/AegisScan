@@ -94,6 +94,7 @@ jobs:
             -e DEBUG=True \
             -e SECRET_KEY=ci-only-native-capability-secret-key-0123456789abcdef \
             --entrypoint python aegisscan-native-capability:ci -m pytest -q \
+            --confcutdir=fastapi_app/services \
             fastapi_app/services/test_native_output_normalizer.py
           docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
           from fastapi_app.services.capability_planner import planning_summary
