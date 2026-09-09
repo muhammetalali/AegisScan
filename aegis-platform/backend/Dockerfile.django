@@ -39,7 +39,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        curl chromium nmap masscan libpcap0.8 ca-certificates libcap2-bin \
+        curl chromium firefox-esr nmap masscan libpcap0.8 ca-certificates libcap2-bin \
         binutils checksec binwalk libimage-exiftool-perl xxd gdb \
         gobuster ffuf dirb dnsenum fierce wafw00f nbtscan \
         git openssh-client \
@@ -58,6 +58,7 @@ RUN chmod 0755 /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/subfind
     && /usr/local/bin/subfinder -version \
     && /usr/local/bin/katana -version \
     && chromium --version \
+    && firefox-esr --version \
     && /usr/local/bin/trivy --version \
     && /usr/local/bin/trufflehog --version \
     && test -f /opt/nuclei-templates/http/misconfiguration/http-missing-security-headers.yaml
@@ -92,6 +93,7 @@ RUN command -v nmap >/dev/null \
     && command -v nuclei >/dev/null \
     && command -v curl >/dev/null \
     && command -v chromium >/dev/null \
+    && command -v firefox-esr >/dev/null \
     && command -v aegis-browser-security >/dev/null \
     && command -v httpx >/dev/null \
     && command -v subfinder >/dev/null \
