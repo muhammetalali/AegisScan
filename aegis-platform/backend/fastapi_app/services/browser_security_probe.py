@@ -86,16 +86,7 @@ class BrowserDomParser(HTMLParser):
         elif self.in_script and data.strip():
             self.inline_script_count += 1
 
-    def snapshot(
-        self,
-        dom: str,
-        truncated: bool,
-        browser: str,
-        virtual_time_budget_ms: int,
-        max_dom_bytes: int,
-        disable_javascript: bool,
-        block_third_party_dns: bool,
-    ) -> dict[str, Any]:
+    def snapshot(self, dom: str, truncated: bool, browser: str, virtual_time_budget_ms: int, max_dom_bytes: int) -> dict[str, Any]:
         target_scheme = urlparse(self.base_url).scheme.lower()
         target_host = self.target_host
         resource_hosts: set[str] = set()
@@ -122,30 +113,26 @@ class BrowserDomParser(HTMLParser):
             'dom_sha256': hashlib.sha256(dom.encode('utf-8', errors='ignore')).hexdigest(),
             'dom_bytes': len(dom.encode('utf-8', errors='ignore')),
             'dom_truncated': truncated,
-            'navigation_policy': {
-                'javascript_disabled': disable_javascript,
-                'third_party_dns_blocked': block_third_party_dns,
+            'runtime': {
                 'virtual_time_budget_ms': virtual_time_budget_ms,
                 'max_dom_bytes': max_dom_bytes,
             },
-            'observations': [
-                {
-                    'kind': 'browser-dom-security-snapshot',
-                    'title': ' '.join(part for part in self.title_parts if part)[:512],
-                    'script_count': self.script_count,
-                    'inline_script_count': self.inline_script_count,
-                    'iframe_count': self.iframe_count,
-                    'form_count': self.form_count,
-                    'password_field_count': self.password_field_count,
-                    'meta_csp_present': self.meta_csp_present,
-                    'base_tag_present': self.base_tag_present,
-                    'resource_host_count': len(resource_hosts),
-                    'third_party_resource_hosts': sorted(third_party_hosts)[:100],
-                    'mixed_content_urls': mixed_content[:100],
-                    'insecure_form_actions': insecure_form_actions[:100],
-                    'link_rel_values': sorted(self.rel_values)[:100],
-                }
-            ],
+            'observations': [{
+                'kind': 'browser-dom-security-snapshot',
+                'title': ' '.join(part for part in self.title_parts if part)[:512],
+                'script_count': self.script_count,
+                'inline_script_count': self.inline_script_count,
+                'iframe_count': self.iframe_count,
+                'form_count': self.form_count,
+                'password_field_count': self.password_field_count,
+                'meta_csp_present': self.meta_csp_present,
+                'base_tag_present': self.base_tag_present,
+                'resource_host_count': len(resource_hosts),
+                'third_party_resource_hosts': sorted(third_party_hosts)[:100],
+                'mixed_content_urls': mixed_content[:100],
+                'insecure_form_actions': insecure_form_actions[:100],
+                'link_rel_values': sorted(self.rel_values)[:100],
+            }],
         }
 
 
@@ -157,38 +144,14 @@ def _browser_binary() -> str:
     raise RuntimeError('No supported headless browser binary is installed on the scanner worker')
 
 
-def _host_resolver_rule(url: str) -> str:
-    host = (urlparse(url).hostname or '').strip().lower()
-    if not host or any(ch in host for ch in ',\r\n\x00'):
-        raise ValueError('Invalid browser target host')
-    return f'MAP * ~NOTFOUND, EXCLUDE {host}'
-
-
-def capture_dom(
-    url: str,
-    virtual_time_budget_ms: int,
-    max_dom_bytes: int,
-    *,
-    disable_javascript: bool = False,
-    block_third_party_dns: bool = False,
-) -> tuple[str, bool, str]:
+def capture_dom(url: str, virtual_time_budget_ms: int, max_dom_bytes: int) -> tuple[str, bool, str]:
     browser = _browser_binary()
     with tempfile.TemporaryDirectory(prefix='aegis-browser-profile-') as profile:
         argv = [
             browser,
             '--headless=new',
             '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-gpu',
             '--disable-dev-shm-usage',
-            '--disable-extensions',
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-sync',
-            '--disable-translate',
-            '--disable-component-update',
-            '--disable-features=MediaRouter,OptimizationHints,AutofillServerCommunication',
-            '--mute-audio',
             '--no-first-run',
             '--no-default-browser-check',
             f'--user-data-dir={profile}',
@@ -196,17 +159,13 @@ def capture_dom(
             '--dump-dom',
             url,
         ]
-        if disable_javascript:
-            argv.insert(-2, '--disable-javascript')
-        if block_third_party_dns:
-            argv.insert(-2, f'--host-resolver-rules={_host_resolver_rule(url)}')
         completed = subprocess.run(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             shell=False,
-            timeout=max(15, min(90, (virtual_time_budget_ms // 1000) + 20)),
+            timeout=max(30, (max(0, virtual_time_budget_ms) // 1000) + 30),
             check=False,
             env={**os.environ, 'NO_COLOR': '1'},
         )
@@ -220,62 +179,28 @@ def capture_dom(
     return dom, truncated, browser
 
 
-def analyze_dom(
-    url: str,
-    dom: str,
-    truncated: bool,
-    browser: str = 'test-browser',
-    virtual_time_budget_ms: int = 3000,
-    max_dom_bytes: int = 262144,
-    disable_javascript: bool = False,
-    block_third_party_dns: bool = False,
-) -> dict[str, Any]:
+def analyze_dom(url: str, dom: str, truncated: bool, browser: str = 'test-browser', virtual_time_budget_ms: int = 3000, max_dom_bytes: int = 262144) -> dict[str, Any]:
     parser = BrowserDomParser(url)
     parser.feed(dom)
     parser.close()
-    return parser.snapshot(
-        dom,
-        truncated,
-        browser,
-        virtual_time_budget_ms,
-        max_dom_bytes,
-        disable_javascript,
-        block_third_party_dns,
-    )
+    return parser.snapshot(dom, truncated, browser, virtual_time_budget_ms, max_dom_bytes)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='AegisScan governed browser security snapshot probe')
+    parser = argparse.ArgumentParser(description='AegisScan headless browser security snapshot probe')
     parser.add_argument('url')
     parser.add_argument('--virtual-time-budget-ms', type=int, default=3000)
     parser.add_argument('--max-dom-bytes', type=int, default=262144)
-    parser.add_argument('--disable-javascript', action='store_true')
-    parser.add_argument('--block-third-party-dns', action='store_true')
     args = parser.parse_args(argv)
-    if args.virtual_time_budget_ms < 1000 or args.virtual_time_budget_ms > 10000:
-        raise SystemExit('virtual-time-budget-ms must be between 1000 and 10000')
-    if args.max_dom_bytes < 65536 or args.max_dom_bytes > 1048576:
-        raise SystemExit('max-dom-bytes must be between 65536 and 1048576')
+    if args.virtual_time_budget_ms < 0:
+        raise SystemExit('virtual-time-budget-ms must be >= 0')
+    if args.max_dom_bytes <= 0:
+        raise SystemExit('max-dom-bytes must be > 0')
     parsed = urlparse(args.url)
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         raise SystemExit('Only absolute http/https URLs are supported')
-    dom, truncated, browser = capture_dom(
-        args.url,
-        args.virtual_time_budget_ms,
-        args.max_dom_bytes,
-        disable_javascript=args.disable_javascript,
-        block_third_party_dns=args.block_third_party_dns,
-    )
-    print(json.dumps(analyze_dom(
-        args.url,
-        dom,
-        truncated,
-        browser,
-        args.virtual_time_budget_ms,
-        args.max_dom_bytes,
-        args.disable_javascript,
-        args.block_third_party_dns,
-    ), sort_keys=True))
+    dom, truncated, browser = capture_dom(args.url, args.virtual_time_budget_ms, args.max_dom_bytes)
+    print(json.dumps(analyze_dom(args.url, dom, truncated, browser, args.virtual_time_budget_ms, args.max_dom_bytes), sort_keys=True))
     return 0
 
 
