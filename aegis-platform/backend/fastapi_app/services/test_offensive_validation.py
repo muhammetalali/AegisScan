@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from django_project.assets.models import Asset
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
@@ -49,6 +49,7 @@ def _finding(*, status: str = Vulnerability.Status.OPEN, raw_data: dict[str, Any
         config={'target': 'https://app.example/vulnerable'},
         initiated_by=user,
     )
+    AssetAuthorization.objects.create(asset=asset, actor=user, authorized=True, target_snapshot=asset.configuration['url'], reason='Validation test grant')
     return Vulnerability.objects.create(
         scan=scan,
         project=project,
@@ -80,7 +81,7 @@ def _http_client(probe: ProbeRequest) -> HTTPProbeResponse:
 
 
 @pytest.mark.django_db
-def test_offensive_validation_confirms_exploitability_with_deterministic_evidence(monkeypatch):
+def test_reflection_is_inconclusive_with_deterministic_evidence(monkeypatch):
     monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'app.example')
     finding = _finding(status=Vulnerability.Status.ACCEPTED_RISK)
 
@@ -94,8 +95,9 @@ def test_offensive_validation_confirms_exploitability_with_deterministic_evidenc
     assert result['schema'] == SCHEMA
     assert result['engine'] == ENGINE
     assert result['status'] == 'completed'
-    assert result['exploitability']['state'] == 'confirmed'
-    assert result['exploitability']['proven_count'] == 1
+    assert result['exploitability']['state'] == 'inconclusive'
+    assert result['exploitability']['proven_count'] == 0
+    assert result['probes'][1]['observation_confirmed'] is True
     assert run.status == ValidationRun.Status.COMPLETED
     assert run.progress == 100
     assert run.finding_id == finding.id
@@ -107,15 +109,16 @@ def test_offensive_validation_confirms_exploitability_with_deterministic_evidenc
     assert evidence.metadata['runtime'] == {
         'live_session_opened': False,
         'unrestricted_shell_opened': False,
-        'raw_secret_material_stored': False,
+        'response_body_stored': False,
+        'response_header_values_stored': False,
     }
     assert payload['schema'] == SCHEMA
     assert payload['runtime']['live_session_opened'] is False
     assert finding.status == Vulnerability.Status.ACCEPTED_RISK
-    assert finding.validation_status == 'confirmed'
-    assert finding.confidence == Vulnerability.Confidence.CONFIRMED
-    assert finding.exploitability >= 0.9
-    assert finding.verified_evidence_count == 1
+    assert finding.validation_status == 'inconclusive'
+    assert finding.confidence == Vulnerability.Confidence.UNVERIFIED
+    assert finding.exploitability < 0.9
+    assert finding.verified_evidence_count == 0
 
     second = run_offensive_validation(
         finding=finding,
