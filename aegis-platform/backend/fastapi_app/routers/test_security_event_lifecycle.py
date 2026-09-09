@@ -6,6 +6,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.db import close_old_connections, connection
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from django_project.audit.models import AuditLog, SecurityEvent
 from django_project.users.models import Permission, User, UserRole
@@ -50,6 +51,11 @@ def test_security_event_permissions_match_operational_roles():
     assert auditor.has_permission(Permission.SECURITY_EVENT_READ)
     assert not auditor.has_permission(Permission.SECURITY_EVENT_RESPOND)
     assert not viewer.has_permission(Permission.SECURITY_EVENT_READ)
+
+
+def test_security_event_transition_rejects_unknown_contract_fields():
+    with pytest.raises(ValidationError):
+        SecurityEventTransition.model_validate({'status': 'investigating', 'synthetic_success': True})
 
 
 def test_security_event_visibility_is_tenant_scoped():

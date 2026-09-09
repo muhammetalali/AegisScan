@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import ipaddress
-from datetime import timezone
-from typing import Literal, Optional
+from datetime import datetime, timezone
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
 from django.utils import timezone as django_timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.dependencies import get_current_user, require_permission
 from django_project.audit.models import AuditLog, SecurityEvent
@@ -19,7 +19,44 @@ from django_project.users.models import APIKey, LoginAttempt, Permission, Team, 
 router = APIRouter()
 
 
+EventStatus = Literal['new', 'investigating', 'resolved', 'false_positive']
+EventSeverity = Literal['low', 'medium', 'high', 'critical']
+
+
+class SecurityEventOut(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    id: UUID
+    event_type: str
+    severity: EventSeverity
+    status: EventStatus
+    title: str
+    description: str
+    source_ip: Optional[str]
+    target_user_id: Optional[str]
+    target_user_email: Optional[str]
+    indicators: list[str]
+    raw_data: dict[str, Any]
+    assigned_to_id: Optional[str]
+    resolved_by_id: Optional[str]
+    resolved_at: Optional[datetime]
+    resolution_notes: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SecurityEventListOut(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    items: list[SecurityEventOut]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=200)
+    offset: int = Field(ge=0)
+
+
 class SecurityEventTransition(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     status: Literal['investigating', 'resolved', 'false_positive']
     resolution_notes: str = Field(default='', max_length=10000)
 
@@ -260,7 +297,7 @@ async def list_login_attempts(limit: int = Query(20, ge=1, le=100), current_user
     return {'items': await _login_attempts(str(current_user.get('user_id')), limit)}
 
 
-@router.get('/security-events')
+@router.get('/security-events', response_model=SecurityEventListOut)
 async def list_security_events(
     limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
     status: Optional[str] = None, severity: Optional[str] = None,
@@ -269,12 +306,12 @@ async def list_security_events(
     return await _security_events(str(current_user.get('user_id')), limit, offset, status, severity)
 
 
-@router.get('/security-events/{event_id}')
+@router.get('/security-events/{event_id}', response_model=SecurityEventOut)
 async def get_security_event(event_id: str, current_user=Depends(require_permission(Permission.SECURITY_EVENT_READ))):
     return await _security_event(str(current_user.get('user_id')), event_id)
 
 
-@router.post('/security-events/{event_id}/transition')
+@router.post('/security-events/{event_id}/transition', response_model=SecurityEventOut)
 async def transition_security_event(
     event_id: str, transition: SecurityEventTransition, request: Request,
     current_user=Depends(require_permission(Permission.SECURITY_EVENT_RESPOND)),
