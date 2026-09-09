@@ -28,6 +28,25 @@ class PinnedHTTPResponse:
         return self.status in {301, 302, 303, 307, 308}
 
 
+@dataclass(frozen=True)
+class PinnedHTTPDestination:
+    """One authorization-checked logical origin bound to a fixed IP set.
+
+    Instances are created by :func:`pin_http_destination`.  Reusing the same
+    destination across a multi-request security operation prevents later DNS
+    answers from changing egress after authorization has been evaluated.
+    """
+
+    scheme: str
+    host: str
+    port: int
+    resolved_ips: tuple[str, ...]
+
+    @property
+    def origin(self) -> tuple[str, str, int]:
+        return self.scheme, self.host, self.port
+
+
 def origin(url: str) -> tuple[str, str, int]:
     parsed = urlsplit(str(url).strip())
     scheme = parsed.scheme.lower()
@@ -53,29 +72,8 @@ def _socket_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address, port
     return (str(address), port)
 
 
-def request_pinned(
-    method: str,
-    url: str,
-    *,
-    headers: Mapping[str, str] | None = None,
-    timeout: int = 10,
-    max_body_bytes: int = 262144,
-) -> PinnedHTTPResponse:
-    """Send one HTTP request to the exact IP addresses approved by scope authorization.
-
-    DNS is resolved and authorized immediately before the connection. The socket is
-    then connected directly to that checked IP while preserving the original Host
-    header and TLS SNI/certificate validation. Proxy environment variables and a
-    second DNS lookup are never consulted.
-    """
-    verb = str(method).strip().upper()
-    if verb not in {'GET', 'HEAD', 'OPTIONS'}:
-        raise ValueError(f'Pinned HTTP transport does not permit method: {verb}')
-    if not 1 <= int(timeout) <= 30:
-        raise ValueError('Pinned HTTP timeout must be between 1 and 30 seconds')
-    if not 0 <= int(max_body_bytes) <= 2097152:
-        raise ValueError('Pinned HTTP response limit must be between 0 and 2097152 bytes')
-
+def pin_http_destination(url: str) -> PinnedHTTPDestination:
+    """Resolve and authorize an HTTP(S) origin exactly once for later reuse."""
     scheme, host, port = origin(url)
     checked = require_authorized_target(_scope_url(url), url=True, resolve_dns=True)
     addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
@@ -86,6 +84,58 @@ def request_pinned(
             continue
     if not addresses:
         raise ValueError('HTTP execution requires at least one explicitly resolved authorized destination')
+    unique = tuple(
+        str(item)
+        for item in sorted(set(addresses), key=lambda value: (value.version, int(value)))
+    )
+    return PinnedHTTPDestination(scheme=scheme, host=host, port=port, resolved_ips=unique)
+
+
+def request_pinned(
+    method: str,
+    url: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    timeout: int = 10,
+    max_body_bytes: int = 262144,
+    destination: PinnedHTTPDestination | None = None,
+    ssl_context: ssl.SSLContext | None = None,
+) -> PinnedHTTPResponse:
+    """Send one HTTP request only to an authorization-approved pinned IP.
+
+    By default DNS is resolved and authorized immediately before this request.
+    Callers performing a multi-request operation can create one destination via
+    :func:`pin_http_destination` and pass it to every request.  The socket then
+    connects directly to the fixed approved IP set while preserving the logical
+    Host header and TLS SNI/certificate validation.  Proxy environment variables
+    and a second DNS lookup are never consulted.
+    """
+    verb = str(method).strip().upper()
+    if verb not in {'GET', 'HEAD', 'OPTIONS'}:
+        raise ValueError(f'Pinned HTTP transport does not permit method: {verb}')
+    if not 1 <= int(timeout) <= 30:
+        raise ValueError('Pinned HTTP timeout must be between 1 and 30 seconds')
+    if not 0 <= int(max_body_bytes) <= 8388608:
+        raise ValueError('Pinned HTTP response limit must be between 0 and 8388608 bytes')
+
+    scheme, host, port = origin(url)
+    if destination is None:
+        destination = pin_http_destination(url)
+    else:
+        # Re-check logical scope without performing DNS.  The destination's IP
+        # set was already authorization-checked when it was pinned.
+        require_authorized_target(_scope_url(url), url=True, resolve_dns=False)
+        if destination.origin != (scheme, host, port):
+            raise ValueError('Pinned HTTP destination does not match the requested origin')
+        if not destination.resolved_ips:
+            raise ValueError('Pinned HTTP destination contains no authorized IP addresses')
+
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for raw in destination.resolved_ips:
+        try:
+            addresses.append(ipaddress.ip_address(raw))
+        except ValueError as exc:
+            raise ValueError('Pinned HTTP destination contains an invalid IP address') from exc
 
     parsed = urlsplit(url)
     request_path = urlunsplit(('', '', parsed.path or '/', parsed.query, ''))
@@ -107,7 +157,8 @@ def request_pinned(
             raw_socket.settimeout(timeout)
             raw_socket.connect(_socket_address(address, port))
             if scheme == 'https':
-                transport_socket = ssl.create_default_context().wrap_socket(raw_socket, server_hostname=host)
+                context = ssl_context or ssl.create_default_context()
+                transport_socket = context.wrap_socket(raw_socket, server_hostname=host)
             connection.sock = transport_socket
             connection.request(verb, request_path, headers=request_headers)
             response = connection.getresponse()
