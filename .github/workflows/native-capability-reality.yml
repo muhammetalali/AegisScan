@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm --entrypoint python aegisscan-native-capability:ci - <<'PY'
+          docker run --rm -i --entrypoint python aegisscan-native-capability:ci - <<'PY'
           from fastapi_app.services.native_tool_runtime import (
               NATIVE_TOOL_SPECS, NativeExecutionCancelled, NativeToolSpec, run_native_tool,
           )
