@@ -6,17 +6,20 @@ import base64
 import binascii
 import json
 import os
+import ssl
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-import requests
 import yaml
 
+from .pinned_http import PinnedHTTPDestination, pin_http_destination, request_pinned
+
 SCHEMA = 'aegis.kubernetes-security.v1'
-REQUEST_TIMEOUT = (5, 20)
+REQUEST_TIMEOUT = 20
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_ITEMS = 1000
 _READ_PATHS = (
@@ -33,10 +36,19 @@ class KubernetesSecurityError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class KubernetesTransport:
+    server: str
+    destination: PinnedHTTPDestination
+    ssl_context: ssl.SSLContext
+    headers: dict[str, str]
+    cleanup_paths: tuple[str, ...]
+
+
 def canonical_server(value: str) -> str:
     parsed = urlsplit(str(value or '').strip())
     scheme = parsed.scheme.lower()
-    host = (parsed.hostname or '').lower().rstrip('.')
+    host = (parsed.hostname or '').encode('idna').decode('ascii').lower().rstrip('.')
     if scheme != 'https' or not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise KubernetesSecurityError(
             'Kubernetes API server must be an absolute HTTPS URL without embedded credentials, query, or fragment'
@@ -81,7 +93,15 @@ def _temp_file(data: bytes, suffix: str, cleanup: list[str]) -> str:
     return path
 
 
-def load_kubeconfig(path: str, authorized_target: str) -> tuple[requests.Session, str, list[str]]:
+def _cleanup(paths: tuple[str, ...] | list[str]) -> None:
+    for item in paths:
+        try:
+            Path(item).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def load_kubeconfig(path: str, authorized_target: str) -> KubernetesTransport:
     candidate = Path(path)
     try:
         if not candidate.is_file() or candidate.stat().st_size > 262144:
@@ -133,7 +153,8 @@ def load_kubeconfig(path: str, authorized_target: str) -> tuple[requests.Session
     try:
         ca_path = _temp_file(
             _decode_embedded(cluster.get('certificate-authority-data'), 'certificate-authority-data'),
-            '.ca.crt', cleanup,
+            '.ca.crt',
+            cleanup,
         )
         token = str(user.get('token') or '').strip()
         client_cert_data = user.get('client-certificate-data')
@@ -154,50 +175,54 @@ def load_kubeconfig(path: str, authorized_target: str) -> tuple[requests.Session
                 'kubeconfig embedded client certificate authentication requires both certificate and key data'
             )
 
-        session = requests.Session()
-        session.trust_env = False
-        session.verify = ca_path
-        session.headers.update({
+        try:
+            tls_context = ssl.create_default_context(cafile=ca_path)
+        except (OSError, ssl.SSLError) as exc:
+            raise KubernetesSecurityError('kubeconfig certificate-authority-data is not a valid CA bundle') from exc
+
+        headers = {
             'Accept': 'application/json',
             'User-Agent': 'AegisScan-KubernetesSecurity/1.0',
-        })
+        }
         if token:
-            session.headers['Authorization'] = f'Bearer {token}'
+            headers['Authorization'] = f'Bearer {token}'
         else:
             cert_path = _temp_file(
-                _decode_embedded(client_cert_data, 'client-certificate-data'), '.client.crt', cleanup
+                _decode_embedded(client_cert_data, 'client-certificate-data'),
+                '.client.crt',
+                cleanup,
             )
             key_path = _temp_file(
-                _decode_embedded(client_key_data, 'client-key-data'), '.client.key', cleanup
+                _decode_embedded(client_key_data, 'client-key-data'),
+                '.client.key',
+                cleanup,
             )
-            session.cert = (cert_path, key_path)
-        return session, server, cleanup
+            try:
+                tls_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            except (OSError, ssl.SSLError) as exc:
+                raise KubernetesSecurityError(
+                    'kubeconfig embedded client certificate credentials are invalid'
+                ) from exc
+
+        # Pin once for the whole scan.  Every later Kubernetes request reuses
+        # this authorization-checked IP set, so a DNS answer cannot change
+        # egress between authorization and later collection requests.
+        destination = pin_http_destination(server)
+        return KubernetesTransport(
+            server=server,
+            destination=destination,
+            ssl_context=tls_context,
+            headers=headers,
+            cleanup_paths=tuple(cleanup),
+        )
     except BaseException:
-        for item in cleanup:
-            Path(item).unlink(missing_ok=True)
+        _cleanup(cleanup)
         raise
 
 
-def _bounded_json(response: requests.Response) -> dict[str, Any]:
-    length = response.headers.get('Content-Length')
-    if length:
-        try:
-            declared = int(length)
-        except ValueError:
-            declared = -1
-        if declared > MAX_RESPONSE_BYTES:
-            raise KubernetesSecurityError('Kubernetes API response exceeds the allowed size')
-    chunks: list[bytes] = []
-    total = 0
-    for chunk in response.iter_content(chunk_size=65536):
-        if not chunk:
-            continue
-        total += len(chunk)
-        if total > MAX_RESPONSE_BYTES:
-            raise KubernetesSecurityError('Kubernetes API response exceeds the allowed size')
-        chunks.append(chunk)
+def _decode_json(body: bytes) -> dict[str, Any]:
     try:
-        value = json.loads(b''.join(chunks))
+        value = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise KubernetesSecurityError('Kubernetes API returned invalid JSON') from exc
     if not isinstance(value, dict):
@@ -206,8 +231,7 @@ def _bounded_json(response: requests.Response) -> dict[str, Any]:
 
 
 def _read(
-    session: requests.Session,
-    server: str,
+    transport: KubernetesTransport,
     path: str,
     *,
     list_request: bool = False,
@@ -215,28 +239,36 @@ def _read(
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     if path not in _READ_PATHS:
         raise KubernetesSecurityError('Kubernetes analyzer attempted an unapproved API path')
-    params = {'limit': str(MAX_ITEMS)} if list_request else None
-    with session.get(
-        f'{server}{path}',
-        params=params,
+    query = f'?limit={MAX_ITEMS}' if list_request else ''
+    response = request_pinned(
+        'GET',
+        f'{transport.server}{path}{query}',
+        headers=transport.headers,
         timeout=REQUEST_TIMEOUT,
-        allow_redirects=False,
-        stream=True,
-    ) as response:
-        status = int(response.status_code)
-        coverage = {'path': path, 'status': status, 'accessible': status == 200, 'truncated': False}
-        if 300 <= status < 400:
-            raise KubernetesSecurityError(f'Kubernetes API redirect is forbidden for {path}')
-        if status == 401:
-            raise KubernetesSecurityError('Kubernetes API rejected the configured credential')
-        if status in {403, 404} and not required:
-            return None, coverage
-        if status != 200:
-            raise KubernetesSecurityError(f'Kubernetes API read failed with HTTP {status} for {path}')
-        value = _bounded_json(response)
-        metadata = value.get('metadata') if isinstance(value.get('metadata'), dict) else {}
-        coverage['truncated'] = bool(metadata.get('continue'))
-        return value, coverage
+        max_body_bytes=MAX_RESPONSE_BYTES,
+        destination=transport.destination,
+        ssl_context=transport.ssl_context,
+    )
+    status = int(response.status)
+    coverage = {
+        'path': path,
+        'status': status,
+        'accessible': status == 200,
+        'truncated': False,
+        'resolved_ip': response.resolved_ip,
+    }
+    if 300 <= status < 400:
+        raise KubernetesSecurityError(f'Kubernetes API redirect is forbidden for {path}')
+    if status == 401:
+        raise KubernetesSecurityError('Kubernetes API rejected the configured credential')
+    if status in {403, 404} and not required:
+        return None, coverage
+    if status != 200:
+        raise KubernetesSecurityError(f'Kubernetes API read failed with HTTP {status} for {path}')
+    value = _decode_json(response.body)
+    metadata = value.get('metadata') if isinstance(value.get('metadata'), dict) else {}
+    coverage['truncated'] = bool(metadata.get('continue'))
+    return value, coverage
 
 
 def _items(value: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -456,7 +488,10 @@ def rbac_findings(
             for subject in subjects[:500]:
                 if not isinstance(subject, dict):
                     continue
-                if str(subject.get('kind') or '') == 'ServiceAccount' and str(subject.get('name') or '') == 'default':
+                if (
+                    str(subject.get('kind') or '') == 'ServiceAccount'
+                    and str(subject.get('name') or '') == 'default'
+                ):
                     subject_namespace = str(subject.get('namespace') or 'default')
                     findings.append(_finding(
                         'kubernetes.rbac.default-service-account-cluster-admin',
@@ -495,6 +530,11 @@ def analyze_resources(
     for finding in findings:
         unique[(str(finding.get('rule_id') or ''), str(finding.get('location') or ''))] = finding
     bounded = list(unique.values())[:2000]
+    resolved_ips = sorted({
+        str(item.get('resolved_ip'))
+        for item in coverage
+        if item.get('resolved_ip')
+    })
     summary = {
         'kind': 'kubernetes-security-summary',
         'server': server,
@@ -511,6 +551,8 @@ def analyze_resources(
         'coverage': coverage[:20],
         'coverage_gaps': sum(1 for item in coverage if not item.get('accessible')),
         'truncated_collections': sum(1 for item in coverage if item.get('truncated')),
+        'pinned_destination_ips': resolved_ips,
+        'dns_pinned_for_scan': len(resolved_ips) == 1,
     }
     return {
         'schema': SCHEMA,
@@ -521,32 +563,31 @@ def analyze_resources(
 
 
 def analyze_cluster(target: str, kubeconfig_path: str) -> dict[str, Any]:
-    session, server, cleanup = load_kubeconfig(kubeconfig_path, target)
+    transport = load_kubeconfig(kubeconfig_path, target)
     try:
         coverage: list[dict[str, Any]] = []
-        version, item = _read(session, server, '/version', required=True)
+        version, item = _read(transport, '/version', required=True)
         coverage.append(item)
-        namespaces_doc, item = _read(session, server, '/api/v1/namespaces', list_request=True)
+        namespaces_doc, item = _read(transport, '/api/v1/namespaces', list_request=True)
         coverage.append(item)
-        pods_doc, item = _read(session, server, '/api/v1/pods', list_request=True)
+        pods_doc, item = _read(transport, '/api/v1/pods', list_request=True)
         coverage.append(item)
         deployments_doc, item = _read(
-            session, server, '/apis/apps/v1/deployments', list_request=True
+            transport, '/apis/apps/v1/deployments', list_request=True
         )
         coverage.append(item)
         roles_doc, item = _read(
-            session, server, '/apis/rbac.authorization.k8s.io/v1/clusterroles', list_request=True
+            transport, '/apis/rbac.authorization.k8s.io/v1/clusterroles', list_request=True
         )
         coverage.append(item)
         bindings_doc, item = _read(
-            session,
-            server,
+            transport,
             '/apis/rbac.authorization.k8s.io/v1/clusterrolebindings',
             list_request=True,
         )
         coverage.append(item)
         return analyze_resources(
-            server=server,
+            server=transport.server,
             version=version or {},
             namespaces=_items(namespaces_doc),
             pods=_items(pods_doc),
@@ -556,9 +597,7 @@ def analyze_cluster(target: str, kubeconfig_path: str) -> dict[str, Any]:
             coverage=coverage,
         )
     finally:
-        session.close()
-        for item in cleanup:
-            Path(item).unlink(missing_ok=True)
+        _cleanup(transport.cleanup_paths)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -570,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = analyze_cluster(args.target, args.kubeconfig)
-    except (KubernetesSecurityError, requests.RequestException, OSError, ValueError) as exc:
+    except (KubernetesSecurityError, OSError, ssl.SSLError, ValueError, RuntimeError) as exc:
         print(json.dumps({'schema': SCHEMA, 'error': str(exc)}, sort_keys=True), file=sys.stderr)
         return 2
     print(json.dumps(result, sort_keys=True, separators=(',', ':')))
