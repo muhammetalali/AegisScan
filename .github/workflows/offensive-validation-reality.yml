@@ -88,7 +88,7 @@ jobs:
           cat offensive-validation-worker.log
           echo "Celery worker did not become ready" >&2
           exit 1
-      - name: Offensive validation service, API, Celery and evidence reality
+      - name: Offensive validation service, API and task contract reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
@@ -99,6 +99,12 @@ jobs:
           django_project/evidence/test_offensive_validation_plane.py
           fastapi_app/routers/test_offensive_validation_integration.py
           fastapi_app/routers/test_offensive_validation_celery_e2e.py
+      - name: Redis Celery API to evidence reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: python scripts/offensive_validation_celery_e2e.py
       - name: Stop offensive validation worker
         if: always()
         working-directory: aegis-platform/backend
