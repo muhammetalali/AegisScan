@@ -6,6 +6,9 @@ import uuid
 
 
 class CredentialSecretQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Credential secrets must be rotated or revoked through the vault service.')
+
     def delete(self):
         raise ValidationError('Credential secrets cannot be bulk deleted; revoke them instead.')
 
