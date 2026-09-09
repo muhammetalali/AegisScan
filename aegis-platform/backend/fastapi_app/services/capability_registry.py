@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
+from .api_schema_capability import CAPABILITY_ID as API_SCHEMA_CAPABILITY_ID, register_api_schema_capability
 from .native_tool_runtime import NATIVE_TOOL_SPECS, validate_native_options
+
+register_api_schema_capability()
 
 
 @dataclass(frozen=True)
@@ -85,13 +89,25 @@ def get_capability(capability_id: str) -> Capability:
         raise ValueError(f'Unknown capability: {capability_id}') from exc
 
 
+def _validate_api_schema_options(normalized: dict[str, Any]) -> dict[str, Any]:
+    spec_path = str(normalized.get('spec_path') or '/openapi.json').strip()
+    parsed = urlsplit(spec_path)
+    if parsed.scheme or parsed.netloc or parsed.fragment or not parsed.path.startswith('/'):
+        raise ValueError('spec_path must be an absolute path on the authorized target origin')
+    normalized['spec_path'] = spec_path
+    return normalized
+
+
 def validate_capability_options(capability: Capability, options: dict[str, Any]) -> dict[str, Any]:
     unknown = sorted(set(options) - set(capability.allowed_options))
     if unknown:
         raise ValueError(f'Unsupported options for {capability.id}: {unknown}')
 
     if capability.id in NATIVE_TOOL_SPECS:
-        return validate_native_options(NATIVE_TOOL_SPECS[capability.id], options)
+        normalized = validate_native_options(NATIVE_TOOL_SPECS[capability.id], options)
+        if capability.id == API_SCHEMA_CAPABILITY_ID:
+            return _validate_api_schema_options(normalized)
+        return normalized
 
     normalized = dict(options)
     if capability.tool == 'masscan':
