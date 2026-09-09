@@ -34,6 +34,7 @@ class NativeToolSpec:
     risk: str
     target_kind: TargetKind
     target_flag: str | None = None
+    target_suffix: str = ''
     prefix_args: tuple[str, ...] = ()
     suffix_args: tuple[str, ...] = ()
     options: tuple[tuple[str, OptionSpec], ...] = ()
@@ -44,8 +45,8 @@ class NativeToolSpec:
         return dict(self.options)
 
 
-# AegisScan-owned execution specifications.  They describe only stable public
-# CLI contracts; no external orchestration code is embedded or imported.
+# AegisScan-owned execution specifications. They describe stable public CLI
+# contracts only. No external orchestration implementation is imported.
 NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'network.rustscan': NativeToolSpec('network.rustscan', 'rustscan', 'network-reconnaissance', 'Fast authorized TCP discovery with service handoff.', 'ip', ('ip_address', 'domain'), 'active-medium', 'host', '-a', suffix_args=('--', '-sV'), timeout=420),
     'recon.amass': NativeToolSpec('recon.amass', 'amass', 'asset-discovery', 'Passive DNS and subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', prefix_args=('enum', '-passive'), timeout=900),
@@ -54,9 +55,9 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'recon.fierce': NativeToolSpec('recon.fierce', 'fierce', 'dns-reconnaissance', 'Authorized DNS discovery and hostname enumeration.', 'ip', ('domain',), 'active-low', 'host', '--domain', timeout=600),
     'web.httpx': NativeToolSpec('web.httpx', 'httpx', 'web-discovery', 'HTTP service probing and metadata collection.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u', suffix_args=('-json', '-silent'), timeout=600),
     'web.katana': NativeToolSpec('web.katana', 'katana', 'web-discovery', 'Web crawling and endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u', suffix_args=('-jsonl', '-silent'), options=(('depth', OptionSpec('-d', 'int', 3, 1, 5)),), timeout=900),
-    'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
+    'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
     'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent'), options=(('threads', OptionSpec('-t', 'int', 10, 1, 50)),), timeout=1200),
-    'web.ffuf': NativeToolSpec('web.ffuf', 'ffuf', 'content-discovery', 'Wordlist-driven endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-medium', 'url', '-u', suffix_args=('-of', 'json', '-o', '/dev/stdout'), options=(('wordlist', OptionSpec('-w', 'str')), ('threads', OptionSpec('-t', 'int', 20, 1, 50))), timeout=1200),
+    'web.ffuf': NativeToolSpec('web.ffuf', 'ffuf', 'content-discovery', 'Wordlist-driven endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-medium', 'url', '-u', target_suffix='/FUZZ', suffix_args=('-of', 'json', '-o', '/dev/stdout'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 20, 1, 50))), timeout=1200),
     'web.nikto': NativeToolSpec('web.nikto', 'nikto', 'web-vulnerability-assessment', 'Web server misconfiguration and exposure assessment.', 'url', ('website',), 'active-medium', 'url', '-h', suffix_args=('-Format', 'json', '-output', '/dev/stdout'), timeout=1200),
     'web.waf-detection': NativeToolSpec('web.waf-detection', 'wafw00f', 'web-fingerprinting', 'Web application firewall fingerprinting.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=300),
     'container.trivy-image': NativeToolSpec('container.trivy-image', 'trivy', 'container-security', 'Container image vulnerability and misconfiguration assessment.', 'docker', ('docker_image',), 'passive', 'image', None, prefix_args=('image', '--format', 'json', '--quiet'), timeout=1800),
@@ -112,8 +113,6 @@ def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> di
                 allowed_root = Path(os.getenv('AEGIS_WORDLIST_ROOT', '/opt/aegis-wordlists')).resolve()
                 if allowed_root != path and allowed_root not in path.parents:
                     raise ValueError('wordlist must be inside AEGIS_WORDLIST_ROOT')
-                if not path.is_file():
-                    raise ValueError('wordlist does not exist on the worker')
                 value = str(path)
         normalized[name] = value
     return normalized
@@ -145,11 +144,14 @@ def build_native_argv(spec: NativeToolSpec, target: str, options: dict[str, Any]
         raise RuntimeError(f'{spec.binary} is not installed on the scanner worker')
     target = _validated_target(spec, target)
     normalized = validate_native_options(spec, options)
+    if 'wordlist' in normalized and not Path(str(normalized['wordlist'])).is_file():
+        raise ValueError('wordlist does not exist on the scanner worker')
+    command_target = target.rstrip('/') + spec.target_suffix if spec.target_suffix else target
     argv = [executable, *spec.prefix_args]
     if spec.target_flag:
-        argv.extend([spec.target_flag, target])
+        argv.extend([spec.target_flag, command_target])
     else:
-        argv.append(target)
+        argv.append(command_target)
     for name, definition in spec.options:
         if name not in normalized:
             continue
@@ -176,7 +178,3 @@ def run_native_tool(capability_id: str, target: str, options: dict[str, Any]) ->
         env={**os.environ, 'NO_COLOR': '1'},
     )
     return ScanResult(spec.binary, canonical_target, completed.returncode, completed.stdout, completed.stderr)
-
-
-def native_worker_availability() -> dict[str, bool]:
-    return {capability_id: shutil.which(spec.binary) is not None for capability_id, spec in NATIVE_TOOL_SPECS.items()}
