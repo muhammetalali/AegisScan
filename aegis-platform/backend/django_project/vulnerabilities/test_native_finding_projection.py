@@ -60,7 +60,7 @@ def test_browser_finding_rules_only_emit_explicit_security_violations() -> None:
 
 
 @pytest.mark.django_db
-def test_browser_finding_projection_is_idempotent_and_links_evidence() -> None:
+def test_browser_finding_projection_is_idempotent_links_evidence_and_preserves_governance() -> None:
     User = get_user_model()
     user = User.objects.create_user(
         email='browser-reality@example.test',
@@ -92,6 +92,10 @@ def test_browser_finding_projection_is_idempotent_and_links_evidence() -> None:
         target='https://app.example.test/login',
         normalized=NORMALIZED,
     )
+    governed = Vulnerability.objects.get(pk=first_ids[0])
+    governed.status = Vulnerability.Status.ACCEPTED_RISK
+    governed.save(update_fields=['status', 'updated_at'])
+
     second_ids, second_evidence = project_native_findings(
         scan=scan,
         capability_id='browser.dom-snapshot',
@@ -111,6 +115,9 @@ def test_browser_finding_projection_is_idempotent_and_links_evidence() -> None:
     assert Evidence.objects.filter(scan=scan, finding__isnull=False).count() == 2
     assert set(Vulnerability.objects.filter(scan=scan).values_list('source_engine', flat=True)) == {'aegis-browser-security'}
     assert set(Vulnerability.objects.filter(scan=scan).values_list('severity', flat=True)) == {'medium', 'high'}
+
+    governed.refresh_from_db()
+    assert governed.status == Vulnerability.Status.ACCEPTED_RISK
 
     scan.refresh_from_db()
     assert scan.findings_count == 2
