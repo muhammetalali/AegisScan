@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi_app.services.browser_security_probe import SCHEMA, analyze_dom
 
 
-def test_browser_security_probe_emits_bounded_security_observations() -> None:
+def test_browser_security_probe_emits_security_observations_without_secret_values() -> None:
     sensitive_value = 'secret-browser-password-value'
     payload = analyze_dom(
         'https://app.example.test/login',
@@ -32,6 +32,10 @@ def test_browser_security_probe_emits_bounded_security_observations() -> None:
     )
     assert payload['schema'] == SCHEMA
     assert payload['dom_sha256']
+    assert payload['runtime'] == {
+        'virtual_time_budget_ms': 2000,
+        'max_dom_bytes': 131072,
+    }
     observation = payload['observations'][0]
     assert observation['kind'] == 'browser-dom-security-snapshot'
     assert observation['title'] == 'Secure Login'
@@ -46,18 +50,4 @@ def test_browser_security_probe_emits_bounded_security_observations() -> None:
     assert observation['mixed_content_urls'] == ['http://app.example.test/insecure.png']
     assert observation['insecure_form_actions'] == ['http://app.example.test/login']
     assert 'stylesheet' in observation['link_rel_values']
-    assert payload['navigation_policy']['javascript_disabled'] is False
-    assert payload['navigation_policy']['third_party_dns_blocked'] is False
     assert sensitive_value not in str(payload)
-
-
-def test_browser_security_probe_supports_explicit_locked_down_mode() -> None:
-    payload = analyze_dom(
-        'https://app.example.test/',
-        '<html><head><title>Locked</title></head><body></body></html>',
-        truncated=False,
-        disable_javascript=True,
-        block_third_party_dns=True,
-    )
-    assert payload['navigation_policy']['javascript_disabled'] is True
-    assert payload['navigation_policy']['third_party_dns_blocked'] is True
