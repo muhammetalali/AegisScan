@@ -1,5 +1,5 @@
 FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
-FROM golang:1.25-bookworm AS pd_tools
+FROM golang:1.26-bookworm AS pd_tools
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0 \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0
 FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy
