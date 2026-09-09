@@ -7,9 +7,9 @@ from django_project.system.credential_models import CredentialSecret
 
 class CredentialSecretSerializer(serializers.ModelSerializer):
     credential_ref = serializers.UUIDField(source='id', read_only=True)
-    project_id = serializers.UUIDField(source='project.id', read_only=True)
-    created_by_id = serializers.UUIDField(source='created_by.id', read_only=True)
-    last_used_by_id = serializers.UUIDField(source='last_used_by.id', read_only=True)
+    project_id = serializers.UUIDField(read_only=True)
+    created_by_id = serializers.UUIDField(read_only=True)
+    last_used_by_id = serializers.UUIDField(read_only=True)
 
     class Meta:
         model = CredentialSecret
