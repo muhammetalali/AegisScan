@@ -99,8 +99,12 @@ def browser_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]
     return findings
 
 
-def api_schema_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
-    """Project only explicit security findings emitted by the defensive schema analyzer."""
+def _api_finding_specs(
+    normalized: dict[str, Any],
+    *,
+    observation_kind: str,
+    category: str,
+) -> list[NativeFindingSpec]:
     observations = normalized.get('observations') if isinstance(normalized, dict) else None
     if not isinstance(observations, list):
         return []
@@ -108,7 +112,7 @@ def api_schema_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSp
     severities = {'critical', 'high', 'medium', 'low', 'info'}
     confidences = {'high', 'medium', 'low'}
     for observation in observations[:2000]:
-        if not isinstance(observation, dict) or observation.get('kind') != 'api-schema-security-finding':
+        if not isinstance(observation, dict) or observation.get('kind') != observation_kind:
             continue
         rule_id = str(observation.get('rule_id') or '').strip()[:200]
         title = str(observation.get('title') or '').strip()[:500]
@@ -121,26 +125,60 @@ def api_schema_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSp
         location = str(observation.get('location') or '').strip()[:2048]
         method = str(observation.get('method') or '').strip().upper()[:16]
         path = str(observation.get('path') or '').strip()[:2048]
-        identity = '|'.join((rule_id, location, method, path))
+        parameter = str(observation.get('parameter') or '').strip()[:200]
+        identity = '|'.join((rule_id, location, method, path, parameter))
+        validation_errors = observation.get('validation_errors')
+        safe_errors = (
+            [str(value)[:500] for value in validation_errors[:20]]
+            if isinstance(validation_errors, list)
+            else []
+        )
+        raw_data: dict[str, Any] = {
+            'location': location,
+            'method': method,
+            'path': path,
+            'parameter': parameter,
+        }
+        try:
+            if observation.get('status') is not None:
+                raw_data['status'] = int(observation.get('status'))
+        except (TypeError, ValueError):
+            pass
+        if safe_errors:
+            raw_data['validation_errors'] = safe_errors
         findings.append(NativeFindingSpec(
             rule_id=rule_id,
             title=title,
             description=description,
             severity=severity,
             confidence=confidence,
-            category='api-security',
+            category=category,
             cwe_id=str(observation.get('cwe_id') or '')[:64],
             owasp_category=str(observation.get('owasp_category') or '')[:200],
             remediation=remediation,
             affected_urls=_bounded_urls(observation.get('affected_urls'), 20),
-            raw_data={
-                'location': location,
-                'method': method,
-                'path': path,
-            },
+            raw_data=raw_data,
             identity_key=identity,
         ))
     return findings
+
+
+def api_schema_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
+    """Project explicit security findings emitted by the defensive schema analyzer."""
+    return _api_finding_specs(
+        normalized,
+        observation_kind='api-schema-security-finding',
+        category='api-security',
+    )
+
+
+def api_runtime_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
+    """Project explicit runtime contract violations from safe authorized API probes."""
+    return _api_finding_specs(
+        normalized,
+        observation_kind='api-runtime-security-finding',
+        category='api-runtime-security',
+    )
 
 
 def _finding_id(scan_id: str, capability_id: str, spec: NativeFindingSpec) -> UUID:
@@ -195,6 +233,8 @@ def project_native_findings(
         specs = browser_finding_specs(normalized)
     elif capability_id == 'api.openapi-contract-security':
         specs = api_schema_finding_specs(normalized)
+    elif capability_id == 'api.openapi-runtime-conformance':
+        specs = api_runtime_finding_specs(normalized)
     else:
         return [], []
 
