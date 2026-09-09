@@ -1,0 +1,54 @@
+name: HexStrike Native Integration
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - '.gitmodules'
+      - 'third_party/hexstrike-ai'
+      - 'aegis-platform/backend/fastapi_app/services/hexstrike_catalog.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
+      - 'tests/test_hexstrike_upstream_contract.py'
+      - '.github/workflows/hexstrike-native-integration.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.gitmodules'
+      - 'third_party/hexstrike-ai'
+      - 'aegis-platform/backend/fastapi_app/services/hexstrike_catalog.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
+      - 'tests/test_hexstrike_upstream_contract.py'
+      - '.github/workflows/hexstrike-native-integration.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install contract test dependency
+        run: python -m pip install pytest
+      - name: Prove pinned upstream and discover complete source surface
+        env:
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: python -m pytest -q tests/test_hexstrike_upstream_contract.py
+      - name: Prove upstream source is pinned, not floating
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='d689933ff579d839c676c82b231f8e98326c5f04'
+          actual="$(git -C third_party/hexstrike-ai rev-parse HEAD)"
+          test "$actual" = "$expected"
+          test -f third_party/hexstrike-ai/LICENSE
+          test -f third_party/hexstrike-ai/hexstrike_mcp.py
+          test -f third_party/hexstrike-ai/hexstrike_server.py
