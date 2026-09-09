@@ -43,6 +43,7 @@ jobs:
             command -v dirb
             command -v ffuf
             command -v wafw00f
+            command -v curl
             command -v httpx
             command -v subfinder
             command -v katana
@@ -61,7 +62,7 @@ jobs:
           assert xxd.stdout.strip()
           print("native-runtime-ok")
           '
-      - name: Prove real Katana crawl against isolated fixture
+      - name: Prove real web discovery and header capture against isolated fixture
         shell: bash
         run: |
           set -euo pipefail
@@ -85,7 +86,20 @@ jobs:
             test -s /tmp/aegis-katana.jsonl
             grep -q "127.0.0.1:18080" /tmp/aegis-katana.jsonl
             grep -q "/admin" /tmp/aegis-katana.jsonl
-            echo katana-real-crawl-ok
+            AUTHORIZED_SCAN_TARGETS=127.0.0.1/32 python - <<"PY"
+          from fastapi_app.services.native_output_normalizer import normalize_native_output
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          result = run_native_tool("web.security-headers", "http://127.0.0.1:18080", {})
+          assert result.exit_code == 0, result.stderr
+          assert "HTTP/" in result.stdout, result.stdout
+          assert "Server:" in result.stdout, result.stdout
+          normalized = normalize_native_output("web.security-headers", result.stdout)
+          assert normalized["count"] >= 1, normalized
+          assert normalized["observations"][0]["status"] == 200, normalized
+          print("security-headers-real-curl-ok")
+          PY
+            echo web-discovery-and-headers-ok
           '
       - name: Prove real pause resume cancel process control
         shell: bash
@@ -128,10 +142,11 @@ jobs:
           from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
           from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
           assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
-          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 22
+          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 23
           assert "web.katana" in PACKAGED_NATIVE_CAPABILITIES
+          assert "web.security-headers" in PACKAGED_NATIVE_CAPABILITIES
           web = planning_summary("website", "standard")
-          assert web["ready"] >= 6
+          assert web["ready"] >= 7
           code = planning_summary("repository", "quick")
           assert code["ready"] >= 2
           file_plan = planning_summary("file", "quick")
