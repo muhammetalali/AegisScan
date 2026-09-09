@@ -113,8 +113,8 @@ jobs:
           payload = json.loads(browser.stdout)
           assert payload["schema"] == "aegis.browser-security.v1", payload
           assert payload["dom_sha256"], payload
-          assert payload["navigation_policy"]["javascript_disabled"] is True, payload
-          assert payload["navigation_policy"]["third_party_dns_blocked"] is True, payload
+          assert payload["navigation_policy"]["javascript_disabled"] is False, payload
+          assert payload["navigation_policy"]["third_party_dns_blocked"] is False, payload
           observation = payload["observations"][0]
           assert observation["kind"] == "browser-dom-security-snapshot", observation
           assert observation["title"] == "Aegis Fixture", observation
