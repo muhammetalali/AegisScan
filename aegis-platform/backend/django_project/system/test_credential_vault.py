@@ -1,13 +1,16 @@
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.test import override_settings
 from rest_framework.test import APIClient
 
 from django_project.projects.models import Project
+from django_project.system import credential_vault
 from django_project.system.credential_models import CredentialAccess, CredentialSecret
 from django_project.system.credential_vault import (
     CredentialVaultDenied,
     CredentialVaultUnavailable,
+    authorize_credential_use,
     create_credential_secret,
     resolve_credential_secret,
     revoke_credential_secret,
@@ -203,3 +206,145 @@ def test_production_vault_fails_closed_without_key(project, actor):
                 secret='not-written-without-key',
             )
     assert not CredentialSecret.objects.filter(name='no-key-secret').exists()
+
+
+def _exercise_operation(operation, credential, actor):
+    if operation == 'rotate':
+        return rotate_credential_secret(credential=credential, actor=actor, secret='replacement-regression-secret')
+    service = authorize_credential_use if operation == 'authorize' else resolve_credential_secret
+    return service(credential=credential, actor=actor, purpose='credential-regression')
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize('operation', ['authorize', 'resolve', 'rotate'])
+@pytest.mark.parametrize('stale_instance', [False, True], ids=['fresh-reference', 'cached-reference'])
+def test_revoked_denial_is_committed_without_mutating_secret(project, actor, operation, stale_instance):
+    # Use real autocommit, not pytest-django's wrapping transaction, so closing
+    # and reopening the PostgreSQL connection proves the denial was committed.
+    assert not connection.in_atomic_block
+    credential = create_credential_secret(
+        project=project, actor=actor, name='denial-proof',
+        kind=CredentialSecret.Kind.TOKEN, secret='denial-regression-secret',
+    )
+    original_ciphertext = credential.encrypted_secret
+    original_fingerprint = credential.secret_fingerprint
+    revoke_credential_secret(credential=CredentialSecret.objects.get(pk=credential.pk), actor=actor)
+    if stale_instance:
+        assert credential.status == CredentialSecret.Status.ACTIVE
+    else:
+        credential.refresh_from_db()
+
+    with pytest.raises(CredentialVaultDenied):
+        _exercise_operation(operation, credential, actor)
+
+    assert not connection.in_atomic_block
+    connection.close()
+    credential.refresh_from_db()
+    denied = CredentialAccess.objects.get(credential=credential, result=CredentialAccess.Result.DENIED)
+    expected_operation = CredentialAccess.Operation.ROTATE if operation == 'rotate' else CredentialAccess.Operation.AUTHORIZE_USE
+    assert denied.operation == expected_operation
+    assert denied.project_id == project.pk
+    assert denied.actor_id == actor.pk
+    assert credential.status == CredentialSecret.Status.REVOKED
+    assert credential.version == 1
+    assert credential.encrypted_secret == original_ciphertext
+    assert credential.secret_fingerprint == original_fingerprint
+    assert credential.last_used_at is None
+    assert credential.rotated_at is None
+    assert credential.access_events.count() == 3  # create, revoke, denial
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize('operation', ['authorize', 'resolve', 'rotate'])
+def test_ledger_failure_rolls_back_successful_operation(project, actor, monkeypatch, operation):
+    credential = create_credential_secret(
+        project=project, actor=actor, name='ledger-failure-proof',
+        kind=CredentialSecret.Kind.TOKEN, secret='ledger-failure-regression-secret',
+    )
+    original_ciphertext = credential.encrypted_secret
+    original_fingerprint = credential.secret_fingerprint
+    append_access = credential_vault._append_access
+    fail_operation = {
+        'authorize': CredentialAccess.Operation.AUTHORIZE_USE,
+        'resolve': CredentialAccess.Operation.RESOLVE_INTERNAL,
+        'rotate': CredentialAccess.Operation.ROTATE,
+    }[operation]
+
+    def fail_access_write(**kwargs):
+        if kwargs['operation'] == fail_operation:
+            raise RuntimeError('injected ledger write failure')
+        return append_access(**kwargs)
+
+    monkeypatch.setattr(credential_vault, '_append_access', fail_access_write)
+    with pytest.raises(RuntimeError, match='injected ledger write failure'):
+        _exercise_operation(operation, credential, actor)
+
+    connection.close()
+    credential.refresh_from_db()
+    assert credential.version == 1
+    assert credential.encrypted_secret == original_ciphertext
+    assert credential.secret_fingerprint == original_fingerprint
+    assert credential.last_used_at is None
+    assert credential.last_used_by_id is None
+    assert credential.rotated_at is None
+    assert credential.rotated_by_id is None
+    assert credential.access_events.count() == 1  # Only the original create.
+
+
+@pytest.mark.django_db
+def test_rotation_and_resolution_reload_current_database_version(project, actor):
+    credential = create_credential_secret(
+        project=project, actor=actor, name='current-version-proof',
+        kind=CredentialSecret.Kind.TOKEN, secret='version-one-regression-secret',
+    )
+    cached = CredentialSecret.objects.get(pk=credential.pk)
+    first = rotate_credential_secret(credential=credential, actor=actor, secret='version-two-regression-secret')
+    second = rotate_credential_secret(credential=cached, actor=actor, secret='version-three-regression-secret')
+    assert first.version == 2
+    assert second.version == 3
+    assert resolve_credential_secret(credential=cached, actor=actor, purpose='current-version') == 'version-three-regression-secret'
+    resolved = CredentialAccess.objects.get(credential=credential, operation=CredentialAccess.Operation.RESOLVE_INTERNAL)
+    assert resolved.metadata['version'] == 3
+
+
+@pytest.mark.django_db
+def test_decryption_failure_does_not_record_successful_use(project, actor):
+    credential = create_credential_secret(
+        project=project, actor=actor, name='decryption-failure-proof',
+        kind=CredentialSecret.Kind.TOKEN, secret='decryption-regression-secret',
+    )
+    with override_settings(CREDENTIAL_VAULT_KEYS=credential_vault.Fernet.generate_key().decode('ascii')):
+        with pytest.raises(CredentialVaultUnavailable):
+            resolve_credential_secret(credential=credential, actor=actor, purpose='decryption-failure')
+    credential.refresh_from_db()
+    assert credential.last_used_at is None
+    assert credential.last_used_by_id is None
+    assert credential.access_events.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize('action,payload,operation', [
+    ('authorize-use', {'purpose': 'revoked-api-proof'}, CredentialAccess.Operation.AUTHORIZE_USE),
+    ('rotate', {'secret': 'denied-api-replacement-secret'}, CredentialAccess.Operation.ROTATE),
+])
+def test_revoked_api_returns_conflict_and_preserves_denial(project, actor, action, payload, operation):
+    credential = create_credential_secret(
+        project=project, actor=actor, name='revoked-api-proof',
+        kind=CredentialSecret.Kind.TOKEN, secret='revoked-api-regression-secret',
+    )
+    client = APIClient()
+    client.force_authenticate(actor)
+    assert client.delete(f'/api/v1/credentials/{credential.pk}/').status_code == 204
+
+    response = client.post(f'/api/v1/credentials/{credential.pk}/{action}/', payload, format='json')
+    assert response.status_code == 409
+    assert 'revoked-api-regression-secret' not in response.content.decode('utf-8')
+    assert 'denied-api-replacement-secret' not in response.content.decode('utf-8')
+    connection.close()
+    credential.refresh_from_db()
+    assert credential.status == CredentialSecret.Status.REVOKED
+    assert credential.version == 1
+    assert credential.last_used_at is None
+    assert CredentialAccess.objects.filter(
+        credential=credential, operation=operation, result=CredentialAccess.Result.DENIED,
+    ).count() == 1

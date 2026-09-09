@@ -95,12 +95,15 @@ class CredentialSecretViewSet(viewsets.ModelViewSet):
         get_object_or_404(self._manageable_projects(), pk=credential.project_id)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        credential = rotate_credential_secret(
-            credential=credential,
-            actor=request.user,
-            secret=serializer.validated_data['secret'],
-            request=request,
-        )
+        try:
+            credential = rotate_credential_secret(
+                credential=credential,
+                actor=request.user,
+                secret=serializer.validated_data['secret'],
+                request=request,
+            )
+        except CredentialVaultDenied as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_409_CONFLICT)
         return Response(CredentialSecretSerializer(credential, context={'request': request}).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='revoke')

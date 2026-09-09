@@ -200,9 +200,27 @@ def create_credential_secret(
     return credential
 
 
-@transaction.atomic
 def rotate_credential_secret(*, credential: CredentialSecret, actor: Any, secret: str, request: Any | None = None) -> CredentialSecret:
-    if credential.status != CredentialSecret.Status.ACTIVE:
+    with transaction.atomic():
+        credential = CredentialSecret.objects.select_for_update().get(pk=credential.pk)
+        if credential.status == CredentialSecret.Status.ACTIVE:
+            credential.encrypted_secret = encrypt_secret(secret)
+            credential.secret_fingerprint = credential_fingerprint(secret)
+            credential.version += 1
+            credential.rotated_by = actor
+            credential.rotated_at = timezone.now()
+            credential.save(update_fields=['encrypted_secret', 'secret_fingerprint', 'version', 'rotated_by', 'rotated_at', 'updated_at'])
+            access = _append_access(
+                credential=credential,
+                actor=actor,
+                operation=CredentialAccess.Operation.ROTATE,
+                result=CredentialAccess.Result.SUCCESS,
+                purpose='credential-rotate',
+                metadata={'version': credential.version},
+                request=request,
+            )
+            assert_no_secret_material(secret, credential.encrypted_secret, access.metadata, access.reason)
+            return credential
         _append_access(
             credential=credential,
             actor=actor,
@@ -212,28 +230,13 @@ def rotate_credential_secret(*, credential: CredentialSecret, actor: Any, secret
             reason='revoked credentials cannot be rotated',
             request=request,
         )
-        raise CredentialVaultDenied('Revoked credentials cannot be rotated.')
-    credential.encrypted_secret = encrypt_secret(secret)
-    credential.secret_fingerprint = credential_fingerprint(secret)
-    credential.version += 1
-    credential.rotated_by = actor
-    credential.rotated_at = timezone.now()
-    credential.save(update_fields=['encrypted_secret', 'secret_fingerprint', 'version', 'rotated_by', 'rotated_at', 'updated_at'])
-    access = _append_access(
-        credential=credential,
-        actor=actor,
-        operation=CredentialAccess.Operation.ROTATE,
-        result=CredentialAccess.Result.SUCCESS,
-        purpose='credential-rotate',
-        metadata={'version': credential.version},
-        request=request,
-    )
-    assert_no_secret_material(secret, credential.encrypted_secret, access.metadata, access.reason)
-    return credential
+    # Exit the transaction normally before raising, so the denial is retained.
+    raise CredentialVaultDenied('Revoked credentials cannot be rotated.')
 
 
 @transaction.atomic
 def revoke_credential_secret(*, credential: CredentialSecret, actor: Any, request: Any | None = None, reason: str = '') -> CredentialSecret:
+    credential = CredentialSecret.objects.select_for_update().get(pk=credential.pk)
     if credential.status != CredentialSecret.Status.REVOKED:
         credential.status = CredentialSecret.Status.REVOKED
         credential.revoked_by = actor
@@ -251,10 +254,14 @@ def revoke_credential_secret(*, credential: CredentialSecret, actor: Any, reques
     return credential
 
 
-@transaction.atomic
-def authorize_credential_use(
+def _authorize_credential_use_locked(
     *, credential: CredentialSecret, actor: Any, purpose: str, request: Any | None = None
-) -> CredentialSecret:
+) -> bool:
+    """Record an authorization decision while the caller holds the row lock.
+
+    Return a denial instead of raising inside the caller's transaction. The
+    public service raises only after that transaction has exited successfully.
+    """
     if credential.status != CredentialSecret.Status.ACTIVE:
         _append_access(
             credential=credential,
@@ -265,7 +272,7 @@ def authorize_credential_use(
             reason='credential revoked',
             request=request,
         )
-        raise CredentialVaultDenied('Credential is revoked.')
+        return False
     credential.last_used_by = actor
     credential.last_used_at = timezone.now()
     credential.save(update_fields=['last_used_by', 'last_used_at', 'updated_at'])
@@ -278,25 +285,37 @@ def authorize_credential_use(
         metadata={'credential_ref': str(credential.id), 'kind': credential.kind, 'version': credential.version},
         request=request,
     )
-    return credential
+    return True
+
+
+def authorize_credential_use(
+    *, credential: CredentialSecret, actor: Any, purpose: str, request: Any | None = None
+) -> CredentialSecret:
+    with transaction.atomic():
+        credential = CredentialSecret.objects.select_for_update().get(pk=credential.pk)
+        if _authorize_credential_use_locked(credential=credential, actor=actor, purpose=purpose, request=request):
+            return credential
+    raise CredentialVaultDenied('Credential is revoked.')
 
 
 def resolve_credential_secret(
     *, credential: CredentialSecret, actor: Any, purpose: str, request: Any | None = None
 ) -> str:
-    # Keep this function outside a broad atomic block so authorization denials are
-    # persisted in the append-only ledger instead of being rolled back with the
-    # raised CredentialVaultDenied exception.
-    authorize_credential_use(credential=credential, actor=actor, purpose=purpose, request=request)
-    plaintext = decrypt_secret(credential.encrypted_secret)
-    access = _append_access(
-        credential=credential,
-        actor=actor,
-        operation=CredentialAccess.Operation.RESOLVE_INTERNAL,
-        result=CredentialAccess.Result.SUCCESS,
-        purpose=purpose,
-        metadata={'credential_ref': str(credential.id), 'version': credential.version},
-        request=request,
-    )
-    assert_no_secret_material(plaintext, access.metadata, access.reason, access.user_agent)
-    return plaintext
+    with transaction.atomic():
+        # Resolve the current database version under the same lock used by
+        # rotation/revocation; a cached model instance cannot bypass revocation.
+        credential = CredentialSecret.objects.select_for_update().get(pk=credential.pk)
+        if _authorize_credential_use_locked(credential=credential, actor=actor, purpose=purpose, request=request):
+            plaintext = decrypt_secret(credential.encrypted_secret)
+            access = _append_access(
+                credential=credential,
+                actor=actor,
+                operation=CredentialAccess.Operation.RESOLVE_INTERNAL,
+                result=CredentialAccess.Result.SUCCESS,
+                purpose=purpose,
+                metadata={'credential_ref': str(credential.id), 'version': credential.version},
+                request=request,
+            )
+            assert_no_secret_material(plaintext, access.metadata, access.reason, access.user_agent)
+            return plaintext
+    raise CredentialVaultDenied('Credential is revoked.')
