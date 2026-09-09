@@ -22,7 +22,7 @@ class NativeExecutionCancelled(RuntimeError):
 @dataclass(frozen=True)
 class OptionSpec:
     flag: str | None
-    kind: Literal['str', 'int', 'bool', 'choice'] = 'str'
+    kind: Literal['str', 'int', 'bool', 'choice', 'ports'] = 'str'
     default: Any = None
     minimum: int | None = None
     maximum: int | None = None
@@ -52,7 +52,18 @@ class NativeToolSpec:
 
 
 NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
-    'network.rustscan': NativeToolSpec('network.rustscan', 'rustscan', 'network-reconnaissance', 'Fast authorized TCP discovery with service handoff.', 'ip', ('ip_address', 'domain'), 'active-medium', 'host', '-a', suffix_args=('--', '-sV'), timeout=420),
+    'network.rustscan': NativeToolSpec(
+        'network.rustscan', 'rustscan', 'network-reconnaissance',
+        'Bounded authorized TCP discovery using greppable output without implicit Nmap handoff.',
+        'ip', ('ip_address', 'domain'), 'active-medium', 'host', '-a',
+        prefix_args=('--greppable', '--no-banner', '--no-config', '--tries', '1'),
+        options=(
+            ('ports', OptionSpec('-p', 'ports', '22,80,443,8080,8443')),
+            ('batch_size', OptionSpec('-b', 'int', 100, 1, 500)),
+            ('timeout_ms', OptionSpec('-t', 'int', 1500, 100, 10000)),
+        ),
+        timeout=420,
+    ),
     'network.nbtscan-host': NativeToolSpec('network.nbtscan-host', 'nbtscan', 'network-reconnaissance', 'NetBIOS name discovery for an authorized host.', 'ip', ('ip_address',), 'active-low', 'host', None, timeout=180),
     'network.nbtscan-range': NativeToolSpec('network.nbtscan-range', 'nbtscan', 'network-reconnaissance', 'NetBIOS name discovery across an authorized network range.', 'network', ('network_range',), 'active-low', 'network', None, timeout=300),
     'recon.amass': NativeToolSpec('recon.amass', 'amass', 'asset-discovery', 'Passive DNS and subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', prefix_args=('enum', '-passive'), timeout=900),
@@ -60,12 +71,32 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'recon.dnsenum': NativeToolSpec('recon.dnsenum', 'dnsenum', 'dns-reconnaissance', 'Authorized DNS enumeration.', 'ip', ('domain',), 'active-low', 'host', None, timeout=600),
     'recon.fierce': NativeToolSpec('recon.fierce', 'fierce', 'dns-reconnaissance', 'Authorized DNS discovery and hostname enumeration.', 'ip', ('domain',), 'active-low', 'host', '--domain', timeout=600),
     'web.httpx': NativeToolSpec('web.httpx', 'httpx', 'web-discovery', 'HTTP service probing and metadata collection.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u', suffix_args=('-json', '-silent'), timeout=600),
-    'web.katana': NativeToolSpec('web.katana', 'katana', 'web-discovery', 'Web crawling and endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u', suffix_args=('-jsonl', '-silent'), options=(('depth', OptionSpec('-d', 'int', 3, 1, 5)),), timeout=900),
+    'web.katana': NativeToolSpec(
+        'web.katana', 'katana', 'web-discovery', 'Bounded web crawling and endpoint discovery.',
+        'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u',
+        suffix_args=('-j', '-silent', '-nc'),
+        options=(('depth', OptionSpec('-d', 'int', 2, 1, 5)),), timeout=900,
+    ),
     'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
     'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
-    'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent'), options=(('threads', OptionSpec('-t', 'int', 10, 1, 50)),), timeout=1200),
+    'web.feroxbuster': NativeToolSpec(
+        'web.feroxbuster', 'feroxbuster', 'content-discovery',
+        'Bounded content discovery against an authorized web asset.', 'url', ('website',),
+        'active-medium', 'url', '-u',
+        suffix_args=('--depth', '1', '--json', '--silent', '--no-state', '--dont-extract-links'),
+        options=(
+            ('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')),
+            ('threads', OptionSpec('-t', 'int', 10, 1, 50)),
+        ), timeout=1200,
+    ),
     'web.ffuf': NativeToolSpec('web.ffuf', 'ffuf', 'content-discovery', 'Wordlist-driven endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-medium', 'url', '-u', target_suffix='/FUZZ', suffix_args=('-of', 'json', '-o', '/dev/stdout'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 20, 1, 50))), timeout=1200),
-    'web.nikto': NativeToolSpec('web.nikto', 'nikto', 'web-vulnerability-assessment', 'Web server misconfiguration and exposure assessment.', 'url', ('website',), 'active-medium', 'url', '-h', suffix_args=('-Format', 'json', '-output', '/dev/stdout'), timeout=1200),
+    'web.nikto': NativeToolSpec(
+        'web.nikto', 'nikto', 'web-vulnerability-assessment',
+        'Bounded web server misconfiguration and exposure assessment.', 'url', ('website',),
+        'active-medium', 'url', '-h',
+        suffix_args=('-maxtime', '60s', '-nocheck', '-nointeractive', '-nolookup', '-Format', 'json', '-output', '/dev/stdout'),
+        timeout=120,
+    ),
     'web.waf-detection': NativeToolSpec('web.waf-detection', 'wafw00f', 'web-fingerprinting', 'Web application firewall fingerprinting.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=300),
     'container.trivy-image': NativeToolSpec('container.trivy-image', 'trivy', 'container-security', 'Container image vulnerability and misconfiguration assessment.', 'docker', ('docker_image',), 'passive', 'image', None, prefix_args=('image', '--format', 'json', '--quiet'), timeout=1800),
     'code.checkov': NativeToolSpec('code.checkov', 'checkov', 'iac-security', 'Infrastructure-as-code policy and misconfiguration analysis.', 'code', ('source_code', 'repository'), 'passive', 'path', '-d', suffix_args=('-o', 'json', '--quiet'), timeout=1200),
@@ -89,6 +120,27 @@ def get_native_tool_spec(capability_id: str) -> NativeToolSpec:
         raise ValueError(f'No native tool adapter for capability: {capability_id}') from exc
 
 
+def _validate_ports(value: Any, *, maximum_items: int = 128) -> str:
+    raw = str(value).strip()
+    if not raw or len(raw) > 1024 or any(ch in raw for ch in '\r\n\x00'):
+        raise ValueError('ports is invalid')
+    values = [item.strip() for item in raw.split(',')]
+    if not values or len(values) > maximum_items or any(not item for item in values):
+        raise ValueError(f'ports must contain between 1 and {maximum_items} comma-separated ports')
+    normalized: list[str] = []
+    seen: set[int] = set()
+    for item in values:
+        if not item.isdigit():
+            raise ValueError('ports must be comma-separated numeric TCP ports')
+        port = int(item)
+        if port < 1 or port > 65535:
+            raise ValueError('ports must be between 1 and 65535')
+        if port not in seen:
+            seen.add(port)
+            normalized.append(str(port))
+    return ','.join(normalized)
+
+
 def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> dict[str, Any]:
     definitions = spec.option_map
     unknown = sorted(set(options) - set(definitions))
@@ -108,6 +160,8 @@ def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> di
                 raise ValueError(f'{name} must be >= {definition.minimum}')
             if definition.maximum is not None and value > definition.maximum:
                 raise ValueError(f'{name} must be <= {definition.maximum}')
+        elif definition.kind == 'ports':
+            value = _validate_ports(value)
         elif definition.kind == 'bool':
             if not isinstance(value, bool):
                 raise ValueError(f'{name} must be a boolean')
@@ -213,23 +267,28 @@ def run_native_tool(
     )
     deadline = time.monotonic() + spec.timeout
     paused = False
-    while True:
-        state = state_getter() if state_getter is not None else 'running'
-        if state == 'cancelled':
+    try:
+        while True:
+            state = state_getter() if state_getter is not None else 'running'
+            if state == 'cancelled':
+                _terminate_process_group(process)
+                raise NativeExecutionCancelled('Native capability execution cancelled')
+            if state == 'paused' and not paused and process.poll() is None:
+                os.killpg(process.pid, signal.SIGSTOP)
+                paused = True
+            elif state != 'paused' and paused and process.poll() is None:
+                os.killpg(process.pid, signal.SIGCONT)
+                paused = False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_group(process)
+                raise subprocess.TimeoutExpired(argv, spec.timeout)
+            try:
+                stdout, stderr = process.communicate(timeout=min(poll_interval, remaining))
+                return ScanResult(spec.binary, canonical_target, process.returncode or 0, stdout, stderr)
+            except subprocess.TimeoutExpired:
+                continue
+    except BaseException:
+        if process.poll() is None:
             _terminate_process_group(process)
-            raise NativeExecutionCancelled('Native capability execution cancelled')
-        if state == 'paused' and not paused and process.poll() is None:
-            os.killpg(process.pid, signal.SIGSTOP)
-            paused = True
-        elif state != 'paused' and paused and process.poll() is None:
-            os.killpg(process.pid, signal.SIGCONT)
-            paused = False
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            _terminate_process_group(process)
-            raise subprocess.TimeoutExpired(argv, spec.timeout)
-        try:
-            stdout, stderr = process.communicate(timeout=min(poll_interval, remaining))
-            return ScanResult(spec.binary, canonical_target, process.returncode or 0, stdout, stderr)
-        except subprocess.TimeoutExpired:
-            continue
+        raise
