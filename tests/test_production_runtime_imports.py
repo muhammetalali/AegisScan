@@ -95,22 +95,54 @@ def test_capability_registry_is_typed_and_fail_closed() -> None:
         list_capabilities,
         validate_capability_options,
     )
+    from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
 
     capabilities = {item.id: item for item in list_capabilities()}
-    assert set(capabilities) == {"network.nmap", "network.masscan", "web.nuclei", "code.semgrep"}
+    core = {"network.nmap", "network.masscan", "web.nuclei", "code.semgrep"}
+    assert core <= set(capabilities)
+    assert set(NATIVE_TOOL_SPECS) <= set(capabilities)
+    assert len(capabilities) >= 26
     assert all(item.authorization_required for item in capabilities.values())
     assert all(item.evidence_required for item in capabilities.values())
+    assert all(item.execution_mode == "isolated-celery" for item in capabilities.values())
+    assert all(capabilities[item].adapter == "native-cli" for item in NATIVE_TOOL_SPECS)
     assert get_capability("network.masscan").execution_mode == "isolated-celery"
     assert validate_capability_options(capabilities["network.masscan"], {"ports": "80,443", "rate": 2500}) == {
         "ports": "80,443",
         "rate": 2500,
     }
+    assert validate_capability_options(capabilities["web.katana"], {"depth": 5}) == {"depth": 5}
     with pytest.raises(ValueError, match="Unsupported options"):
         validate_capability_options(capabilities["network.nmap"], {"arbitrary_flags": "-Pn --script anything"})
+    with pytest.raises(ValueError, match="Unsupported options"):
+        validate_capability_options(capabilities["web.katana"], {"additional_args": "anything"})
+    with pytest.raises(ValueError, match="<= 5"):
+        validate_capability_options(capabilities["web.katana"], {"depth": 50})
     with pytest.raises(ValueError, match="between 1 and 10000"):
         validate_capability_options(capabilities["network.masscan"], {"rate": 1000000})
     with pytest.raises(ValueError, match="Unknown capability"):
         get_capability("command.shell")
+
+
+def test_native_cli_builds_argv_without_shell_strings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _bootstrap_backend()
+    from fastapi_app.services.native_tool_runtime import build_native_argv, get_native_tool_spec
+
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"aegis")
+    monkeypatch.setattr("fastapi_app.services.native_tool_runtime.shutil.which", lambda _: "/usr/bin/strings")
+    argv, target = build_native_argv(get_native_tool_spec("binary.strings"), str(sample), {})
+    assert argv == ["/usr/bin/strings", "-a", str(sample.resolve())]
+    assert target == str(sample.resolve())
+    assert all(isinstance(part, str) for part in argv)
+
+
+def test_native_capability_task_is_routed_to_scanner_plane() -> None:
+    _bootstrap_backend()
+    from fastapi_app.celery_app import SCANNER_QUEUE, SCANNER_TASK_ROUTES
+
+    route = SCANNER_TASK_ROUTES["fastapi_app.tasks.native_capabilities.run_native_capability_scan"]
+    assert route == {"queue": SCANNER_QUEUE}
 
 
 def test_capability_api_is_part_of_production_openapi_surface() -> None:
@@ -122,6 +154,7 @@ def test_capability_api_is_part_of_production_openapi_surface() -> None:
 
     paths = app.openapi()["paths"]
     assert "/api/v1/capabilities/" in paths
+    assert "/api/v1/capabilities/worker-availability" in paths
     assert "/api/v1/capabilities/{capability_id}/execute" in paths
     execute = paths["/api/v1/capabilities/{capability_id}/execute"]["post"]
     assert execute["responses"]["202"]["description"] == "Successful Response"
