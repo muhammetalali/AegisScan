@@ -1,0 +1,113 @@
+name: Native Capability Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scanner-native-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Reject arbitrary shell execution in native runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number --fixed-strings 'shell=True' aegis-platform/backend/fastapi_app/services/native_tool_runtime.py aegis-platform/backend/fastapi_app/tasks/native_capabilities.py
+          ! grep -R --line-number 'additional_args\|arbitrary_flags' aegis-platform/backend/fastapi_app/services/native_tool_runtime.py
+      - name: Build scanner image with native capabilities
+        run: docker build -f aegis-platform/backend/Dockerfile.django -t aegisscan-native-capability:ci aegis-platform/backend
+      - name: Prove packaged binaries and native argv runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh aegisscan-native-capability:ci -c '
+            set -eu
+            command -v strings
+            command -v objdump
+            command -v readelf
+            command -v checksec
+            command -v binwalk
+            command -v xxd
+            command -v gdb
+            command -v exiftool
+            command -v dnsenum
+            command -v fierce
+            command -v nbtscan
+            command -v gobuster
+            command -v dirb
+            command -v ffuf
+            command -v wafw00f
+            command -v httpx
+            command -v subfinder
+            command -v trivy
+            command -v trufflehog
+            command -v checkov
+            test -s /opt/aegis-wordlists/web-common.txt
+          '
+          docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+          result = run_native_tool("binary.strings", "/bin/sh", {})
+          assert result.exit_code == 0, result.stderr
+          assert result.stdout.strip()
+          xxd = run_native_tool("binary.xxd", "/bin/sh", {})
+          assert xxd.exit_code == 0, xxd.stderr
+          assert xxd.stdout.strip()
+          print("native-runtime-ok")
+          '
+      - name: Prove real pause resume cancel process control
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --entrypoint python aegisscan-native-capability:ci - <<'PY'
+          from fastapi_app.services.native_tool_runtime import (
+              NATIVE_TOOL_SPECS, NativeExecutionCancelled, NativeToolSpec, run_native_tool,
+          )
+          NATIVE_TOOL_SPECS['ci.sleep'] = NativeToolSpec(
+              'ci.sleep', 'sleep', 'ci', 'CI process control probe', 'file', ('file',),
+              'passive', 'image', timeout=10,
+          )
+          states = iter(['paused', 'paused', 'running', 'running', 'running'])
+          result = run_native_tool('ci.sleep', '1', {}, state_getter=lambda: next(states, 'running'), poll_interval=0.2)
+          assert result.exit_code == 0
+          calls = {'n': 0}
+          def cancel_state():
+              calls['n'] += 1
+              return 'cancelled' if calls['n'] >= 2 else 'running'
+          try:
+              run_native_tool('ci.sleep', '10', {}, state_getter=cancel_state, poll_interval=0.2)
+          except NativeExecutionCancelled:
+              print('native-process-control-ok')
+          else:
+              raise AssertionError('cancel did not terminate native process')
+          PY
+      - name: Prove packaging, planning and normalization contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e DEBUG=True \
+            -e SECRET_KEY=ci-only-native-capability-secret-key-0123456789abcdef \
+            --entrypoint python aegisscan-native-capability:ci -m pytest -q \
+            --confcutdir=fastapi_app/services \
+            fastapi_app/services/test_native_output_normalizer.py
+          docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
+          from fastapi_app.services.capability_planner import planning_summary
+          from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
+          from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
+          assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
+          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 21
+          web = planning_summary("website", "standard")
+          assert web["ready"] >= 5
+          assert web["pending_packaging"] >= 1
+          code = planning_summary("repository", "quick")
+          assert code["ready"] >= 2
+          file_plan = planning_summary("file", "quick")
+          assert file_plan["ready"] >= 8
+          print(sorted(PACKAGED_NATIVE_CAPABILITIES))
+          '
