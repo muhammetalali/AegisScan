@@ -163,6 +163,13 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
     credential_context = config.get('credential_context') if isinstance(config.get('credential_context'), dict) else empty_credential_context()
     credential_materials: tuple[dict[str, Any], ...] = ()
     try:
+        if spec.credential_required and len(credential_refs) != 1:
+            return _fail(
+                scan,
+                execution,
+                f'{capability.id} requires exactly one credential reference',
+                credential_context,
+            )
         if credential_refs:
             if spec.credential_mode == 'none':
                 return _fail(scan, execution, f'{capability.id} does not support credential-bound execution', credential_context)
@@ -173,6 +180,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 capability_id=capability.id,
                 allowed_kinds=spec.credential_kinds,
                 purpose=f'native:{capability.id}:execute',
+                target=str(target),
             )
         result = run_native_tool(
             capability_id,
