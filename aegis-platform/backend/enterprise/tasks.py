@@ -165,7 +165,9 @@ def expire_report_exports(limit: int = 500):
 def send_notification(self, notification_id: str):
     stale_before=timezone.now()-timedelta(minutes=10)
     with transaction.atomic():
-        n=Notification.objects.select_for_update().select_related('user','organization').get(pk=notification_id)
+        # Lock only the notification row. Joining the nullable recipient here creates
+        # an outer join that PostgreSQL correctly refuses to lock with FOR UPDATE.
+        n=Notification.objects.select_for_update().get(pk=notification_id)
         if n.status==Notification.Status.SENT:
             return {'status':'sent','notification_id':notification_id,'replayed':True}
         if n.status==Notification.Status.SENDING and n.updated_at>=stale_before:
