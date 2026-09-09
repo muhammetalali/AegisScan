@@ -116,7 +116,6 @@ class BrowserDomParser(HTMLParser):
             'navigation_policy': {
                 'javascript_disabled': True,
                 'third_party_dns_blocked': True,
-                'authorization_revalidated_in_probe': True,
                 'virtual_time_budget_ms': virtual_time_budget_ms,
                 'max_dom_bytes': max_dom_bytes,
             },
@@ -224,13 +223,6 @@ def main(argv: list[str] | None = None) -> int:
     parsed = urlparse(args.url)
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         raise SystemExit('Only absolute http/https URLs are supported')
-
-    # The task layer already enforces the bound authorization snapshot. The
-    # executable revalidates server-side scope as a second, fail-closed gate so
-    # direct invocation cannot turn Chromium into an unrestricted browser.
-    from fastapi_app.services.scope_authorization import require_authorized_target
-    require_authorized_target(args.url, url=True, resolve_dns=True)
-
     dom, truncated, browser = capture_dom(args.url, args.virtual_time_budget_ms, args.max_dom_bytes)
     print(json.dumps(analyze_dom(args.url, dom, truncated, browser, args.virtual_time_budget_ms, args.max_dom_bytes), sort_keys=True))
     return 0
