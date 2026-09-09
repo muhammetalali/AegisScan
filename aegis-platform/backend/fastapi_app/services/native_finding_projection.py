@@ -109,6 +109,34 @@ def _finding_id(scan_id: str, capability_id: str, rule_id: str) -> UUID:
     return uuid5(FINDING_NAMESPACE, key)
 
 
+def _technical_defaults(scan: Any, capability_id: str, source_engine: str, target: str, spec: NativeFindingSpec) -> dict[str, Any]:
+    return {
+        'scan': scan,
+        'project': scan.project,
+        'asset': scan.asset,
+        'title': spec.title,
+        'description': spec.description,
+        'severity': spec.severity,
+        'confidence': spec.confidence,
+        'category': spec.category,
+        'cwe_id': spec.cwe_id,
+        'owasp_category': spec.owasp_category,
+        'tags': ['aegisscan-native', 'browser-security', spec.rule_id],
+        'url': str(target)[:200],
+        'risk_score': {'critical': 9.5, 'high': 8.0, 'medium': 5.0, 'low': 2.0, 'info': 0.5}.get(spec.severity, 0.0),
+        'evidence_count': 1,
+        'remediation': spec.remediation,
+        'fix_available': True,
+        'source_engine': source_engine,
+        'raw_data': {
+            'schema': 'aegis.native-finding.v1',
+            'capability_id': capability_id,
+            'rule_id': spec.rule_id,
+            **(spec.raw_data or {}),
+        },
+    }
+
+
 def project_native_findings(
     *,
     scan: Any,
@@ -117,7 +145,12 @@ def project_native_findings(
     target: str,
     normalized: dict[str, Any],
 ) -> tuple[list[str], list[str]]:
-    """Persist idempotent semantic findings and finding-linked evidence."""
+    """Persist idempotent semantic findings and finding-linked evidence.
+
+    Redelivery updates technical evidence but deliberately preserves workflow
+    state such as status, assignee, accepted-risk decisions, validation data,
+    and remediation tracking already governed by users or later workflows.
+    """
     if capability_id != 'browser.dom-snapshot':
         return [], []
 
@@ -128,35 +161,14 @@ def project_native_findings(
     evidence_ids: list[str] = []
     for spec in browser_finding_specs(normalized):
         finding_pk = _finding_id(str(scan.id), capability_id, spec.rule_id)
-        finding, _ = Vulnerability.objects.update_or_create(
-            id=finding_pk,
-            defaults={
-                'scan': scan,
-                'project': scan.project,
-                'asset': scan.asset,
-                'title': spec.title,
-                'description': spec.description,
-                'severity': spec.severity,
-                'status': Vulnerability.Status.OPEN,
-                'confidence': spec.confidence,
-                'category': spec.category,
-                'cwe_id': spec.cwe_id,
-                'owasp_category': spec.owasp_category,
-                'tags': ['aegisscan-native', 'browser-security', spec.rule_id],
-                'url': str(target)[:2000],
-                'risk_score': {'critical': 9.5, 'high': 8.0, 'medium': 5.0, 'low': 2.0, 'info': 0.5}.get(spec.severity, 0.0),
-                'evidence_count': 1,
-                'remediation': spec.remediation,
-                'fix_available': True,
-                'source_engine': source_engine,
-                'raw_data': {
-                    'schema': 'aegis.native-finding.v1',
-                    'capability_id': capability_id,
-                    'rule_id': spec.rule_id,
-                    **(spec.raw_data or {}),
-                },
-            },
-        )
+        technical = _technical_defaults(scan, capability_id, source_engine, target, spec)
+        create_defaults = {**technical, 'status': Vulnerability.Status.OPEN}
+        finding, created = Vulnerability.objects.get_or_create(id=finding_pk, defaults=create_defaults)
+        if not created:
+            for field, value in technical.items():
+                setattr(finding, field, value)
+            finding.save(update_fields=[*technical.keys(), 'last_seen', 'updated_at'])
+
         evidence_payload = {
             'schema': 'aegis.native-finding-evidence.v1',
             'capability_id': capability_id,
