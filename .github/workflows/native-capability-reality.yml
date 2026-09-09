@@ -44,6 +44,9 @@ jobs:
             command -v ffuf
             command -v wafw00f
             command -v curl
+            command -v chromium
+            command -v firefox-esr
+            command -v aegis-browser-security
             command -v httpx
             command -v subfinder
             command -v katana
@@ -62,14 +65,14 @@ jobs:
           assert xxd.stdout.strip()
           print("native-runtime-ok")
           '
-      - name: Prove real web discovery and header capture against isolated fixture
+      - name: Prove real web discovery, headers, and browser DOM security capture
         shell: bash
         run: |
           set -euo pipefail
           docker run --rm --entrypoint sh aegisscan-native-capability:ci -c '
             set -eu
             mkdir -p /tmp/aegis-katana-fixture
-            printf "%s\n" "<html><body><a href=/admin>admin</a><a href=/api/v1/health>health</a></body></html>" > /tmp/aegis-katana-fixture/index.html
+            printf "%s\n" "<html><head><title>Aegis Fixture</title><meta http-equiv=Content-Security-Policy content=\"default-src self\"><script src=\"https://cdn.example.invalid/app.js\"></script></head><body><a href=/admin>admin</a><a href=/api/v1/health>health</a><form action=\"http://127.0.0.1:18080/login\" method=post><input type=password name=password value=secret-browser-password-value></form><img src=\"http://127.0.0.1:18080/insecure.png\"><script>console.log(1)</script></body></html>" > /tmp/aegis-katana-fixture/index.html
             printf "%s\n" "ok" > /tmp/aegis-katana-fixture/admin
             mkdir -p /tmp/aegis-katana-fixture/api/v1
             printf "%s\n" "{\"status\":\"ok\"}" > /tmp/aegis-katana-fixture/api/v1/health
@@ -87,11 +90,25 @@ jobs:
             grep -q "127.0.0.1:18080" /tmp/aegis-katana.jsonl
             grep -q "/admin" /tmp/aegis-katana.jsonl
             AUTHORIZED_SCAN_TARGETS=127.0.0.1/32 python - <<"PY"
+          import json
           import threading
           from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
           from fastapi_app.services.native_output_normalizer import normalize_native_output
           from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          def browser_run(payload, family):
+              matches = [item for item in payload.get("browser_runs", []) if item.get("browser_family") == family]
+              assert len(matches) == 1, payload
+              return matches[0]
+
+          def browser_observation(payload, family, kind="browser-dom-security-snapshot"):
+              matches = [
+                  item for item in payload.get("observations", [])
+                  if item.get("browser_family") == family and item.get("kind") == kind
+              ]
+              assert len(matches) == 1, payload
+              return matches[0]
 
           result = run_native_tool("web.security-headers", "http://127.0.0.1:18080", {})
           assert result.exit_code == 0, result.stderr
@@ -100,6 +117,53 @@ jobs:
           normalized = normalize_native_output("web.security-headers", result.stdout)
           assert normalized["count"] >= 1, normalized
           assert normalized["observations"][0]["status"] == 200, normalized
+
+          chromium = run_native_tool(
+              "browser.dom-snapshot",
+              "http://127.0.0.1:18080",
+              {"browser": "chromium", "virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
+          )
+          assert chromium.exit_code == 0, chromium.stderr
+          chromium_payload = json.loads(chromium.stdout)
+          assert chromium_payload["schema"] == "aegis.browser-security.v1", chromium_payload
+          assert chromium_payload["browser_engines"] == ["chromium"], chromium_payload
+          chromium_run = browser_run(chromium_payload, "chromium")
+          assert chromium_run["dom_sha256"], chromium_run
+          assert chromium_run["runtime"]["capture_method"] == "chromium-dump-dom", chromium_run
+          assert chromium_run["runtime"]["virtual_time_budget_ms"] == 2000, chromium_run
+          assert chromium_run["runtime"]["max_dom_bytes"] == 131072, chromium_run
+          chromium_observation = browser_observation(chromium_payload, "chromium")
+          assert chromium_observation["title"] == "Aegis Fixture", chromium_observation
+          assert chromium_observation["password_field_count"] == 1, chromium_observation
+          assert chromium_observation["meta_csp_present"] is True, chromium_observation
+          assert "cdn.example.invalid" in chromium_observation["third_party_resource_hosts"], chromium_observation
+          assert "secret-browser-password-value" not in chromium.stdout
+          assert "secret-browser-password-value" not in chromium.stderr
+          normalized_browser = normalize_native_output("browser.dom-snapshot", chromium.stdout)
+          assert normalized_browser["count"] == 1, normalized_browser
+          assert normalized_browser["observations"][0]["password_field_count"] == 1, normalized_browser
+
+          firefox = run_native_tool(
+              "browser.dom-snapshot",
+              "http://127.0.0.1:18080",
+              {"browser": "firefox", "virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
+          )
+          assert firefox.exit_code == 0, firefox.stderr
+          firefox_payload = json.loads(firefox.stdout)
+          assert firefox_payload["schema"] == "aegis.browser-security.v1", firefox_payload
+          assert firefox_payload["browser_engines"] == ["firefox"], firefox_payload
+          firefox_run = browser_run(firefox_payload, "firefox")
+          assert firefox_run["dom_sha256"], firefox_run
+          assert firefox_run["runtime"]["capture_method"] == "firefox-headless-render-plus-dom-fetch", firefox_run
+          assert firefox_run["runtime"]["virtual_time_budget_ms"] == 2000, firefox_run
+          firefox_snapshot = browser_observation(firefox_payload, "firefox")
+          assert firefox_snapshot["title"] == "Aegis Fixture", firefox_snapshot
+          firefox_render = browser_observation(firefox_payload, "firefox", "browser-render-verification")
+          assert firefox_render["rendered"] is True, firefox_render
+          assert firefox_render["screenshot_sha256"], firefox_render
+          assert firefox_render["screenshot_bytes"] > 0, firefox_render
+          assert "secret-browser-password-value" not in firefox.stdout
+          assert "secret-browser-password-value" not in firefox.stderr
 
           secret = "native-vault-fixture-token-789"
           seen = []
@@ -142,8 +206,10 @@ jobs:
           assert secret not in authenticated.stderr
           print("security-headers-real-curl-ok")
           print("credential-bound-native-runtime-ok")
+          print("browser-dom-security-real-chromium-ok")
+          print("browser-dom-security-real-firefox-ok")
           PY
-            echo web-discovery-and-headers-ok
+            echo web-discovery-headers-and-browser-ok
           '
       - name: Prove real pause resume cancel process control
         shell: bash
@@ -180,17 +246,20 @@ jobs:
             -e SECRET_KEY=ci-only-native-capability-secret-key-0123456789abcdef \
             --entrypoint python aegisscan-native-capability:ci -m pytest -q \
             --confcutdir=fastapi_app/services \
-            fastapi_app/services/test_native_output_normalizer.py
+            fastapi_app/services/test_native_output_normalizer.py \
+            fastapi_app/services/test_browser_security_probe.py
           docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
           from fastapi_app.services.capability_planner import planning_summary
           from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
           from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
           assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
-          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 23
+          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 24
           assert "web.katana" in PACKAGED_NATIVE_CAPABILITIES
           assert "web.security-headers" in PACKAGED_NATIVE_CAPABILITIES
+          assert "browser.dom-snapshot" in PACKAGED_NATIVE_CAPABILITIES
           web = planning_summary("website", "standard")
-          assert web["ready"] >= 7
+          assert web["ready"] >= 8
+          assert any(item["capability_id"] == "browser.dom-snapshot" and item["execution_ready"] for item in web["plan"])
           code = planning_summary("repository", "quick")
           assert code["ready"] >= 2
           file_plan = planning_summary("file", "quick")

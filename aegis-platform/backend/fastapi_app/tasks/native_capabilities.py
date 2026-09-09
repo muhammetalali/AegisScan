@@ -21,6 +21,7 @@ from fastapi_app.services.credential_execution import (
     resolve_credential_refs_for_worker,
 )
 from fastapi_app.services.evidence_identity import evidence_id
+from fastapi_app.services.native_finding_projection import project_native_findings, sync_scan_finding_counts
 from fastapi_app.services.native_output_normalizer import normalize_native_output
 from fastapi_app.services.native_tool_runtime import (
     NativeExecutionCancelled,
@@ -196,6 +197,9 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 credential_context,
                 snapshot,
             )
+        successful = result.exit_code == 0
+        finding_ids: list[str] = []
+        finding_evidence_ids: list[str] = []
         with transaction.atomic():
             evidence, _ = Evidence.objects.update_or_create(
                 id=evidence_id('scan', scan_id, capability.tool, 'scanner_output'),
@@ -220,7 +224,16 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                     'collected_by': scan.initiated_by,
                 },
             )
-            successful = result.exit_code == 0
+            if successful:
+                finding_ids, finding_evidence_ids = project_native_findings(
+                    scan=scan,
+                    capability_id=capability.id,
+                    source_engine=capability.tool,
+                    target=result.target,
+                    normalized=normalized,
+                )
+                sync_scan_finding_counts(scan)
+
             execution.status = (
                 ScanEngineExecution.ExecutionStatus.COMPLETED
                 if successful
@@ -228,7 +241,8 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             )
             execution.progress = 100
             execution.completed_at = now
-            execution.evidences_collected = 1
+            execution.findings_found = len(finding_ids)
+            execution.evidences_collected = 1 + len(finding_evidence_ids)
             execution.error_message = '' if successful else result.stderr[:10000]
             execution.result_data = {
                 'tool': capability.tool,
@@ -236,13 +250,14 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 'target': result.target,
                 'exit_code': result.exit_code,
                 'scanner_evidence_id': str(evidence.id),
+                'finding_evidence_ids': finding_evidence_ids,
                 'observation_count': normalized['count'],
-                'finding_ids': [],
+                'finding_ids': finding_ids,
                 'credential_context': credential_context,
                 **snapshot,
             }
             execution.save(update_fields=[
-                'status', 'progress', 'completed_at', 'evidences_collected',
+                'status', 'progress', 'completed_at', 'findings_found', 'evidences_collected',
                 'error_message', 'result_data', 'updated_at',
             ])
             scan.status = Scan.Status.COMPLETED if successful else Scan.Status.PARTIAL
@@ -250,7 +265,11 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             scan.completed_at = now
             scan.current_phase = 'completed' if successful else 'partial'
             scan.engine_results = {**(scan.engine_results or {}), capability.tool: execution.result_data}
-            scan.save(update_fields=['status', 'progress', 'completed_at', 'current_phase', 'engine_results', 'updated_at'])
+            scan.save(update_fields=[
+                'status', 'progress', 'completed_at', 'current_phase', 'engine_results',
+                'findings_count', 'critical_count', 'high_count', 'medium_count', 'low_count', 'info_count',
+                'updated_at',
+            ])
         return {
             'status': scan.status,
             'scan_id': scan_id,
@@ -258,6 +277,8 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             'capability_id': capability.id,
             'target': result.target,
             'evidence_id': str(evidence.id),
+            'finding_ids': finding_ids,
+            'finding_evidence_ids': finding_evidence_ids,
             'observation_count': normalized['count'],
             'credential_context': credential_context,
             **snapshot,

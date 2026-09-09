@@ -79,6 +79,17 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
         credential_mode='curl-bearer-config',
         credential_kinds=('token', 'api_key', 'generic'),
     ),
+    'browser.dom-snapshot': NativeToolSpec(
+        'browser.dom-snapshot', 'aegis-browser-security', 'browser-security',
+        'Headless browser DOM and browser-security posture snapshot for an authorized web asset.',
+        'url', ('website',), 'active-low', 'url', None,
+        options=(
+            ('browser', OptionSpec('--browser', 'choice', 'auto', choices=('auto', 'chromium', 'firefox'))),
+            ('virtual_time_budget_ms', OptionSpec('--virtual-time-budget-ms', 'int', 3000, 1000, 10000)),
+            ('max_dom_bytes', OptionSpec('--max-dom-bytes', 'int', 262144, 65536, 1048576)),
+        ),
+        timeout=120,
+    ),
     'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
     'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
     'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent'), options=(('threads', OptionSpec('-t', 'int', 10, 1, 50)),), timeout=1200),

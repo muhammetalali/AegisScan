@@ -23,6 +23,7 @@ PACKAGED_NATIVE_CAPABILITIES = frozenset({
     'web.katana',
     'web.security-headers',
     'web.waf-detection',
+    'browser.dom-snapshot',
     'container.trivy-image',
     'code.checkov',
     'code.trufflehog',

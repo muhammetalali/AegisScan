@@ -112,6 +112,17 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     elif capability_id == 'web.security-headers':
         observations.extend(_normalize_headers(raw))
 
+    elif capability_id == 'browser.dom-snapshot':
+        data = _json(raw)
+        if isinstance(data, dict):
+            for item in data.get('observations', []):
+                if isinstance(item, dict):
+                    safe = dict(item)
+                    safe['kind'] = str(safe.get('kind') or 'browser-dom-security-snapshot')[:100]
+                    observations.append(safe)
+            if not observations and data.get('error'):
+                observations.append({'kind': 'browser-error', 'summary': str(data['error'])[:2000]})
+
     elif capability_id == 'forensics.exiftool':
         data = _json(raw)
         records = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
