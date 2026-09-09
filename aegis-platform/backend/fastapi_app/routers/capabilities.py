@@ -14,7 +14,8 @@ from django_project.scans.models import Scan
 from ..core.dependencies import get_current_user
 from ..services.authorization_guard import asset_target
 from ..services.capability_registry import get_capability, list_capabilities, validate_capability_options
-from ..services.native_tool_runtime import NATIVE_TOOL_SPECS, native_worker_availability
+from ..services.native_packaging import PACKAGED_NATIVE_CAPABILITIES, is_packaged_native_capability
+from ..services.native_tool_runtime import NATIVE_TOOL_SPECS
 from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
 from ..tasks.native_capabilities import run_native_capability_scan
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
@@ -61,15 +62,11 @@ def _create_native_scan(
 ) -> Scan:
     capability = get_capability(capability_id)
     with transaction.atomic():
-        asset = (
-            Asset.objects.select_for_update()
-            .select_related('project')
-            .filter(pk=asset_id, project_id=project_id)
-            .filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
-            .distinct()
-            .first()
-        )
+        asset = Asset.objects.select_for_update().filter(pk=asset_id, project_id=project_id).first()
         if asset is None:
+            raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
+        project = asset.project
+        if str(project.owner_id) != str(user_id) and not project.members.filter(pk=user_id).exists():
             raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
         target = asset_target(asset)
         if not target:
@@ -85,7 +82,7 @@ def _create_native_scan(
         if decision.asset_identity_snapshot != asset.id or decision.target_snapshot != target:
             raise HTTPException(status_code=409, detail='Asset authorization no longer matches the current asset target')
         return Scan.objects.create(
-            project=asset.project,
+            project=project,
             name=f'{capability.id} validation for {asset.name}',
             scan_type=capability.scan_type,
             asset=asset,
@@ -107,12 +104,13 @@ async def capabilities(user=Depends(get_current_user)):
     }
 
 
-@router.get('/worker-availability')
-async def worker_availability(user=Depends(get_current_user)):
+@router.get('/packaging')
+async def capability_packaging(user=Depends(get_current_user)):
     return {
         'policy_version': _POLICY_VERSION,
-        'native_cli': native_worker_availability(),
-        'specialized': {name: True for name in sorted(_TASKS)},
+        'specialized': sorted(_TASKS),
+        'native_packaged': sorted(PACKAGED_NATIVE_CAPABILITIES),
+        'native_registered': sorted(NATIVE_TOOL_SPECS),
     }
 
 
@@ -127,6 +125,12 @@ async def execute_capability(
         options = validate_capability_options(capability, request.options)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if capability.id in NATIVE_TOOL_SPECS and not is_packaged_native_capability(capability.id):
+        raise HTTPException(
+            status_code=409,
+            detail='Capability adapter is registered but its binary is not yet part of the proven scanner image.',
+        )
 
     user_id = str(user.get('user_id'))
     asset = await _asset_for_execution(request.asset_id, request.project_id, user_id)
