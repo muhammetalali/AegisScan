@@ -63,9 +63,33 @@ jobs:
             aegis-platform/backend/requirements.txt
 
       - name: Install Nmap
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y nmap
+          set -euo pipefail
+          sudo mkdir -p /tmp/aegis-disabled-apt-sources
+          shopt -s nullglob
+          for source in /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*microsoft*; do
+            if [ -e "$source" ]; then
+              sudo mv "$source" "/tmp/aegis-disabled-apt-sources/$(basename "$source")"
+            fi
+          done
+          sudo rm -rf /var/lib/apt/lists/*
+          for attempt in 1 2 3; do
+            if sudo apt-get \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::No-Cache=True \
+              -o Acquire::https::No-Cache=True \
+              update; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sudo rm -rf /var/lib/apt/lists/*
+            sleep $((attempt * 5))
+          done
+          sudo apt-get install -y --no-install-recommends nmap
+          nmap --version
 
       - name: Install root Aegis package
         run: python -m pip install -e '.[dev]'
