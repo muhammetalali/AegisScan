@@ -4,6 +4,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -19,9 +20,9 @@ router=APIRouter()
 class NotificationCreate(BaseModel):
     project_id:UUID
     channel:str
-    event_type:str
+    event_type:str=Field(min_length=1,max_length=100)
     payload:dict[str,Any]=Field(default_factory=dict)
-    user_id:UUID|None=None
+    user_id:int|None=Field(default=None,ge=1)
 
 class IntegrationCreate(BaseModel):
     project_id:UUID
@@ -65,6 +66,40 @@ def _notification_json(item:Notification):
         'created_at':item.created_at.isoformat(),
     }
 
+
+def _create_notification(org, body:NotificationCreate, requester_id:str) -> Notification:
+    channel=str(body.channel).strip().lower()
+    if channel not in set(Notification.Channel.values):
+        raise HTTPException(status_code=422,detail='Unsupported notification channel')
+    recipient_id=str(body.user_id) if body.user_id else requester_id
+    recipient_exists=org.memberships.filter(user_id=recipient_id,is_active=True,user__is_active=True).exists()
+    if not recipient_exists:
+        raise HTTPException(status_code=404,detail='Notification recipient is not an active organization member')
+    payload=dict(body.payload or {})
+    if 'url' in payload:
+        raise HTTPException(status_code=422,detail='Direct notification URLs are forbidden; use a tenant-owned integration_id')
+    external_channels={Notification.Channel.WEBHOOK,Notification.Channel.SLACK,Notification.Channel.TEAMS,Notification.Channel.SIEM}
+    if channel in external_channels:
+        integration_id=str(payload.get('integration_id') or '').strip()
+        integration=ExternalIntegration.objects.filter(id=integration_id,organization=org,enabled=True).first()
+        if integration is None:
+            raise HTTPException(status_code=422,detail='External notification requires an active tenant-owned integration_id')
+        allowed_kinds={
+            Notification.Channel.WEBHOOK:{ExternalIntegration.Kind.GENERIC_WEBHOOK},
+            Notification.Channel.SLACK:{ExternalIntegration.Kind.SLACK},
+            Notification.Channel.TEAMS:{ExternalIntegration.Kind.TEAMS},
+            Notification.Channel.SIEM:{ExternalIntegration.Kind.SPLUNK,ExternalIntegration.Kind.ELASTIC},
+        }
+        if integration.kind not in allowed_kinds[channel]:
+            raise HTTPException(status_code=422,detail='Integration kind does not match the notification channel')
+    with transaction.atomic():
+        item=Notification.objects.create(
+            organization=org,user_id=recipient_id,channel=channel,
+            event_type=body.event_type.strip(),payload=payload,
+        )
+        transaction.on_commit(lambda:send_notification.delay(str(item.id)),robust=True)
+    return item
+
 @router.get('/notifications')
 async def list_notifications(project_id:Optional[str]=None,status:Optional[str]=None,limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),user=Depends(get_current_user)):
     return [_notification_json(item) for item in await _notifications(str(user.get('user_id')),project_id,status,limit,offset)]
@@ -80,8 +115,8 @@ async def get_notification(notification_id:UUID,user=Depends(get_current_user)):
 @router.post('/notifications',status_code=202)
 async def create_notification(body:NotificationCreate,user=Depends(get_current_user)):
     project=await _project(body.project_id,user); org=await sync_to_async(ensure_project_tenant)(project,str(user.get('user_id')))
-    item=await sync_to_async(Notification.objects.create)(organization=org,user_id=str(body.user_id) if body.user_id else str(user.get('user_id')),channel=body.channel,event_type=body.event_type,payload=body.payload)
-    task=send_notification.delay(str(item.id)); return {'id':str(item.id),'task_id':task.id,'status':item.status}
+    item=await sync_to_async(_create_notification)(org,body,str(user.get('user_id')))
+    return {'id':str(item.id),'status':item.status}
 
 @router.post('/integrations',status_code=201)
 async def create_integration(body:IntegrationCreate,user=Depends(get_current_user)):

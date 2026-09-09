@@ -6,7 +6,8 @@ from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
-from django.core.mail import EmailMessage, send_mail
+from channels.layers import get_channel_layer
+from django.core.mail import EmailMessage
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -160,21 +161,59 @@ def expire_report_exports(limit: int = 500):
             failed.append({'report_id':str(report_id),'error':str(exc)})
     return {'expired':len(expired),'expired_ids':expired,'failed':failed}
 
-@shared_task(name='enterprise.send_notification',autoretry_for=(Exception,),retry_backoff=True,max_retries=3)
-def send_notification(notification_id: str):
-    n=Notification.objects.select_related('user','organization').get(pk=notification_id); n.attempts+=1
+@shared_task(bind=True,name='enterprise.send_notification',autoretry_for=(Exception,),retry_backoff=True,max_retries=3)
+def send_notification(self, notification_id: str):
+    stale_before=timezone.now()-timedelta(minutes=10)
+    with transaction.atomic():
+        # Lock only the notification row. Joining the nullable recipient here creates
+        # an outer join that PostgreSQL correctly refuses to lock with FOR UPDATE.
+        n=Notification.objects.select_for_update().get(pk=notification_id)
+        if n.status==Notification.Status.SENT:
+            return {'status':'sent','notification_id':notification_id,'replayed':True}
+        if n.status==Notification.Status.SENDING and n.updated_at>=stale_before:
+            return {'status':'in_progress','notification_id':notification_id,'replayed':True}
+        n.status=Notification.Status.SENDING; n.attempts+=1; n.last_error=''
+        n.save(update_fields=['status','attempts','last_error','updated_at'])
     try:
-        if n.channel==Notification.Channel.EMAIL:
+        if n.channel==Notification.Channel.IN_APP:
+            if not n.user_id: raise ValueError('In-app notification requires a recipient user')
+            payload=n.payload or {}
+            async_to_sync(get_channel_layer().group_send)(f'user_{n.user_id}',{
+                'type':'notification','id':str(n.id),'title':str(payload.get('title') or n.event_type),
+                'message':str(payload.get('message') or ''),'level':str(payload.get('severity') or 'info'),
+                'action_url':payload.get('action_url'),'created_at':n.created_at.isoformat(),
+            })
+        elif n.channel==Notification.Channel.EMAIL:
             if not n.user or not n.user.email: raise ValueError('Email notification requires a recipient user')
-            send_mail(n.event_type,json.dumps(n.payload,ensure_ascii=False,indent=2),None,[n.user.email],fail_silently=False)
+            message=EmailMessage(
+                subject=n.event_type,body=json.dumps(n.payload,ensure_ascii=False,indent=2),to=[n.user.email],
+                headers={'Message-ID':f'<aegis-notification-{n.id}@aegisscan.local>'},
+            )
+            if message.send(fail_silently=False)!=1: raise RuntimeError('Email backend did not accept the notification')
         else:
-            url=str(n.payload.get('url') or '').strip()
-            if not url: raise ValueError('Webhook-style notification requires payload.url')
-            import requests
-            response=requests.post(url,json=n.payload.get('body',n.payload),timeout=15); response.raise_for_status()
-        n.status=Notification.Status.SENT; n.sent_at=timezone.now(); n.last_error=''; n.save(update_fields=['attempts','status','sent_at','last_error']); return {'status':'sent','notification_id':notification_id}
+            integration_id=str((n.payload or {}).get('integration_id') or '').strip()
+            if not integration_id: raise ValueError('External notification requires a configured integration_id')
+            integration=ExternalIntegration.objects.get(pk=integration_id,organization_id=n.organization_id,enabled=True)
+            send_integration(integration,(n.payload or {}).get('body',n.payload))
+        with transaction.atomic():
+            current=Notification.objects.select_for_update().get(pk=notification_id)
+            current.status=Notification.Status.SENT; current.sent_at=timezone.now(); current.last_error=''
+            current.save(update_fields=['status','sent_at','last_error','updated_at'])
+        return {'status':'sent','notification_id':notification_id,'replayed':False}
     except Exception as exc:
-        n.status=Notification.Status.FAILED; n.last_error=str(exc); n.save(update_fields=['attempts','status','last_error']); raise
+        Notification.objects.filter(pk=notification_id).exclude(status=Notification.Status.SENT).update(status=Notification.Status.FAILED,last_error=str(exc),updated_at=timezone.now())
+        raise
+
+@shared_task(name='enterprise.dispatch_notification_deliveries')
+def dispatch_notification_deliveries(limit: int = 100):
+    stale_before=timezone.now()-timedelta(minutes=10)
+    ids=list(Notification.objects.filter(
+        Q(status__in=[Notification.Status.PENDING,Notification.Status.FAILED]) |
+        Q(status=Notification.Status.SENDING,updated_at__lt=stale_before),
+        attempts__lt=4,
+    ).order_by('created_at').values_list('id',flat=True)[:max(1,min(limit,500))])
+    for notification_id in ids: send_notification.delay(str(notification_id))
+    return {'queued':len(ids),'notification_ids':[str(item) for item in ids]}
 
 @shared_task(name='enterprise.dispatch_integration')
 def dispatch_integration(integration_id: str,event: dict): return send_integration(ExternalIntegration.objects.get(pk=integration_id),event)
