@@ -16,6 +16,59 @@ def _bounded(items: list[dict[str, Any]], limit: int = 2000) -> list[dict[str, A
     return items[:limit]
 
 
+def _normalize_headers(raw: str) -> list[dict[str, Any]]:
+    required_security_headers = {
+        'content-security-policy',
+        'strict-transport-security',
+        'x-content-type-options',
+        'x-frame-options',
+        'referrer-policy',
+        'permissions-policy',
+    }
+    observations: list[dict[str, Any]] = []
+    current_status = 0
+    headers: dict[str, str] = {}
+
+    def flush() -> None:
+        nonlocal current_status, headers
+        if not current_status and not headers:
+            return
+        present = sorted(required_security_headers & set(headers))
+        observations.append({
+            'kind': 'web-response-headers',
+            'status': current_status,
+            'headers': dict(sorted(headers.items())) if len(headers) <= 100 else dict(sorted(headers.items())[:100]),
+            'present_security_headers': present,
+            'missing_security_headers': sorted(required_security_headers - set(headers)),
+        })
+        current_status = 0
+        headers = {}
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            flush()
+            continue
+        if stripped.startswith('HTTP/'):
+            flush()
+            parts = stripped.split()
+            try:
+                current_status = int(parts[1])
+            except (IndexError, ValueError):
+                current_status = 0
+            continue
+        if ':' not in stripped:
+            continue
+        name, value = stripped.split(':', 1)
+        name = name.strip().lower()
+        value = value.strip()
+        if not name or len(name) > 100:
+            continue
+        headers[name] = value[:2048]
+    flush()
+    return observations
+
+
 def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     """Convert stable tool output formats into bounded AegisScan observations."""
     raw = stdout or ''
@@ -55,6 +108,9 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
                     'url': match.group('url')[:2048],
                     'status': int(match.group('status') or match.group('status2') or 0),
                 })
+
+    elif capability_id == 'web.security-headers':
+        observations.extend(_normalize_headers(raw))
 
     elif capability_id == 'forensics.exiftool':
         data = _json(raw)
