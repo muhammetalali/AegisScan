@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
 import asyncio,logging
 from datetime import datetime,timezone
-from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization
+from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -120,6 +120,7 @@ async def readiness_check():
     except Exception as exc: raise HTTPException(status_code=503,detail={'ready':False,'reason':'dependency_unavailable'}) from exc
     return {'ready':True,'dependencies':dependencies,'timestamp':datetime.now(timezone.utc).isoformat()}
 app.include_router(scans.router,prefix='/scans',tags=['Scans']); app.include_router(scans.router,prefix='/api/v1/scans',tags=['Scans'])
+app.include_router(capabilities.router,prefix='/api/v1/capabilities',tags=['Security Capabilities'])
 app.include_router(vulnerabilities.router,prefix='/vulnerabilities',tags=['Vulnerabilities']); app.include_router(vulnerabilities.router,prefix='/api/v1/vulnerabilities',tags=['Vulnerabilities'])
 app.include_router(remediation.router,tags=['Remediation Workflow']); app.include_router(remediation.router,prefix='/api/v1',tags=['Remediation Workflow'])
 app.include_router(reports.router,prefix='/reports',tags=['Reports']); app.include_router(reports.router,prefix='/api/v1/reports',tags=['Reports'])
