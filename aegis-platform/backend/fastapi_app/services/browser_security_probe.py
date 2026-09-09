@@ -12,6 +12,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
@@ -99,6 +100,7 @@ class BrowserDomParser(HTMLParser):
         max_dom_bytes: int,
         capture_method: str,
         browser_log: str,
+        render_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         target_scheme = urlparse(self.base_url).scheme.lower()
         target_host = self.target_host
@@ -115,6 +117,29 @@ class BrowserDomParser(HTMLParser):
             if target_scheme == 'https' and parsed.scheme == 'http':
                 mixed_content.append(value[:2048])
         insecure_form_actions = [value[:2048] for value in self.form_actions if urlparse(value).scheme == 'http']
+        observations: list[dict[str, Any]] = [{
+            'kind': 'browser-dom-security-snapshot',
+            'browser_family': browser_family,
+            'title': ' '.join(part for part in self.title_parts if part)[:512],
+            'script_count': self.script_count,
+            'inline_script_count': self.inline_script_count,
+            'iframe_count': self.iframe_count,
+            'form_count': self.form_count,
+            'password_field_count': self.password_field_count,
+            'meta_csp_present': self.meta_csp_present,
+            'base_tag_present': self.base_tag_present,
+            'resource_host_count': len(resource_hosts),
+            'third_party_resource_hosts': sorted(third_party_hosts)[:100],
+            'mixed_content_urls': mixed_content[:100],
+            'insecure_form_actions': insecure_form_actions[:100],
+            'link_rel_values': sorted(self.rel_values)[:100],
+        }]
+        if render_evidence:
+            observations.append({
+                'kind': 'browser-render-verification',
+                'browser_family': browser_family,
+                **render_evidence,
+            })
         return {
             'schema': SCHEMA,
             'browser': browser,
@@ -129,36 +154,21 @@ class BrowserDomParser(HTMLParser):
                 'capture_method': capture_method,
                 'browser_log': browser_log[-12000:],
             },
-            'observations': [{
-                'kind': 'browser-dom-security-snapshot',
-                'title': ' '.join(part for part in self.title_parts if part)[:512],
-                'script_count': self.script_count,
-                'inline_script_count': self.inline_script_count,
-                'iframe_count': self.iframe_count,
-                'form_count': self.form_count,
-                'password_field_count': self.password_field_count,
-                'meta_csp_present': self.meta_csp_present,
-                'base_tag_present': self.base_tag_present,
-                'resource_host_count': len(resource_hosts),
-                'third_party_resource_hosts': sorted(third_party_hosts)[:100],
-                'mixed_content_urls': mixed_content[:100],
-                'insecure_form_actions': insecure_form_actions[:100],
-                'link_rel_values': sorted(self.rel_values)[:100],
-            }],
+            'observations': observations,
         }
 
 
-def _browser_binary(preferred: BrowserChoice = 'auto') -> tuple[str, str]:
+def _browser_binary(preferred: BrowserChoice) -> tuple[str, str]:
     candidates: dict[str, tuple[str, ...]] = {
         'chromium': ('chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable'),
-        'firefox': ('firefox', 'firefox-esr'),
+        'firefox': ('firefox-esr', 'firefox'),
     }
-    order = ('chromium', 'firefox') if preferred == 'auto' else (preferred,)
-    for family in order:
-        for candidate in candidates[family]:
-            value = shutil.which(candidate)
-            if value:
-                return value, family
+    if preferred not in {'chromium', 'firefox'}:
+        raise ValueError(f'Explicit browser required, got {preferred}')
+    for candidate in candidates[preferred]:
+        value = shutil.which(candidate)
+        if value:
+            return value, preferred
     raise RuntimeError(f'No supported browser binary is installed for preference: {preferred}')
 
 
@@ -178,7 +188,13 @@ def _fetch_dom(url: str, max_dom_bytes: int, timeout_seconds: int) -> tuple[str,
     return _bounded_dom(raw, max_dom_bytes)
 
 
-def _capture_with_chromium(browser: str, url: str, virtual_time_budget_ms: int, max_dom_bytes: int, profile: str) -> tuple[str, bool, str, str]:
+def _capture_with_chromium(
+    browser: str,
+    url: str,
+    virtual_time_budget_ms: int,
+    max_dom_bytes: int,
+    profile: str,
+) -> tuple[str, bool, str, str, dict[str, Any] | None]:
     argv = [
         browser,
         '--headless=new',
@@ -202,43 +218,58 @@ def _capture_with_chromium(browser: str, url: str, virtual_time_budget_ms: int, 
         env={**os.environ, 'NO_COLOR': '1'},
     )
     if completed.returncode != 0:
-        raise RuntimeError((completed.stderr.decode('utf-8', errors='ignore') or 'headless browser failed')[-12000:])
+        raise RuntimeError((completed.stderr.decode('utf-8', errors='ignore') or 'headless Chromium failed')[-12000:])
     dom, truncated = _bounded_dom(completed.stdout or b'', max_dom_bytes)
-    return dom, truncated, 'chromium-dump-dom', completed.stderr.decode('utf-8', errors='ignore')
+    return dom, truncated, 'chromium-dump-dom', completed.stderr.decode('utf-8', errors='ignore'), None
 
 
-def _capture_with_firefox(browser: str, url: str, virtual_time_budget_ms: int, max_dom_bytes: int, profile: str) -> tuple[str, bool, str, str]:
-    screenshot_path = os.path.join(profile, 'aegis-firefox-check.png')
+def _capture_with_firefox(
+    browser: str,
+    url: str,
+    virtual_time_budget_ms: int,
+    max_dom_bytes: int,
+    profile: str,
+) -> tuple[str, bool, str, str, dict[str, Any] | None]:
+    screenshot_path = Path(profile) / 'aegis-firefox-check.png'
     completed = subprocess.run(
-        [browser, '--headless', '--screenshot', screenshot_path, url],
+        [browser, '--headless', '--screenshot', str(screenshot_path), url],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         shell=False,
         timeout=max(30, (max(0, virtual_time_budget_ms) // 1000) + 30),
         check=False,
-        env={**os.environ, 'NO_COLOR': '1'},
+        env={**os.environ, 'HOME': profile, 'TMPDIR': profile, 'MOZ_HEADLESS': '1', 'NO_COLOR': '1'},
     )
-    if completed.returncode != 0:
-        raise RuntimeError((completed.stderr or completed.stdout or 'headless firefox failed')[-12000:])
+    if completed.returncode != 0 or not screenshot_path.is_file():
+        raise RuntimeError((completed.stderr or completed.stdout or 'headless Firefox failed')[-12000:])
+    screenshot = screenshot_path.read_bytes()
     dom, truncated = _fetch_dom(url, max_dom_bytes, max(10, (max(0, virtual_time_budget_ms) // 1000) + 10))
     log = '\n'.join(part for part in (completed.stdout, completed.stderr) if part)
-    return dom, truncated, 'firefox-headless-load-plus-dom-fetch', log
+    return dom, truncated, 'firefox-headless-render-plus-dom-fetch', log, {
+        'rendered': True,
+        'screenshot_sha256': hashlib.sha256(screenshot).hexdigest(),
+        'screenshot_bytes': len(screenshot),
+    }
 
 
 def capture_dom(
     url: str,
     virtual_time_budget_ms: int,
     max_dom_bytes: int,
-    browser_choice: BrowserChoice = 'auto',
-) -> tuple[str, bool, str, str, str, str]:
+    browser_choice: Literal['chromium', 'firefox'],
+) -> tuple[str, bool, str, str, str, str, dict[str, Any] | None]:
     browser, family = _browser_binary(browser_choice)
-    with tempfile.TemporaryDirectory(prefix='aegis-browser-profile-') as profile:
+    with tempfile.TemporaryDirectory(prefix=f'aegis-{family}-profile-') as profile:
         if family == 'firefox':
-            dom, truncated, method, log = _capture_with_firefox(browser, url, virtual_time_budget_ms, max_dom_bytes, profile)
+            dom, truncated, method, log, render_evidence = _capture_with_firefox(
+                browser, url, virtual_time_budget_ms, max_dom_bytes, profile
+            )
         else:
-            dom, truncated, method, log = _capture_with_chromium(browser, url, virtual_time_budget_ms, max_dom_bytes, profile)
-    return dom, truncated, browser, family, method, log
+            dom, truncated, method, log, render_evidence = _capture_with_chromium(
+                browser, url, virtual_time_budget_ms, max_dom_bytes, profile
+            )
+    return dom, truncated, browser, family, method, log, render_evidence
 
 
 def analyze_dom(
@@ -251,15 +282,74 @@ def analyze_dom(
     browser_family: str = 'test',
     capture_method: str = 'unit-test',
     browser_log: str = '',
+    render_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     parser = BrowserDomParser(url)
     parser.feed(dom)
     parser.close()
-    return parser.snapshot(dom, truncated, browser, browser_family, virtual_time_budget_ms, max_dom_bytes, capture_method, browser_log)
+    return parser.snapshot(
+        dom,
+        truncated,
+        browser,
+        browser_family,
+        virtual_time_budget_ms,
+        max_dom_bytes,
+        capture_method,
+        browser_log,
+        render_evidence,
+    )
+
+
+def _run_browser(
+    url: str,
+    virtual_time_budget_ms: int,
+    max_dom_bytes: int,
+    browser_choice: Literal['chromium', 'firefox'],
+) -> dict[str, Any]:
+    dom, truncated, browser, family, method, log, render_evidence = capture_dom(
+        url,
+        virtual_time_budget_ms,
+        max_dom_bytes,
+        browser_choice,
+    )
+    return analyze_dom(
+        url,
+        dom,
+        truncated,
+        browser,
+        virtual_time_budget_ms,
+        max_dom_bytes,
+        family,
+        method,
+        log,
+        render_evidence,
+    )
+
+
+def _combine_runs(url: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
+    observations: list[dict[str, Any]] = []
+    summaries: list[dict[str, Any]] = []
+    for run in runs:
+        observations.extend(run.get('observations', []))
+        summaries.append({
+            'browser': run.get('browser'),
+            'browser_family': run.get('browser_family'),
+            'dom_sha256': run.get('dom_sha256'),
+            'dom_bytes': run.get('dom_bytes'),
+            'dom_truncated': run.get('dom_truncated'),
+            'runtime': run.get('runtime'),
+        })
+    return {
+        'schema': SCHEMA,
+        'target_url': url,
+        'browser_engines': [str(run.get('browser_family')) for run in runs],
+        'browser_runs': summaries,
+        'observations': observations,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='AegisScan headless browser security snapshot probe')
+    parser = argparse.ArgumentParser(description='AegisScan multi-browser security snapshot probe')
     parser.add_argument('url')
     parser.add_argument('--browser', choices=('auto', 'chromium', 'firefox'), default='auto')
     parser.add_argument('--virtual-time-budget-ms', type=int, default=3000)
@@ -272,23 +362,11 @@ def main(argv: list[str] | None = None) -> int:
     parsed = urlparse(args.url)
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         raise SystemExit('Only absolute http/https URLs are supported')
-    dom, truncated, browser, family, method, log = capture_dom(
-        args.url,
-        args.virtual_time_budget_ms,
-        args.max_dom_bytes,
-        args.browser,
-    )
-    print(json.dumps(analyze_dom(
-        args.url,
-        dom,
-        truncated,
-        browser,
-        args.virtual_time_budget_ms,
-        args.max_dom_bytes,
-        family,
-        method,
-        log,
-    ), sort_keys=True))
+
+    choices: tuple[Literal['chromium', 'firefox'], ...]
+    choices = ('chromium', 'firefox') if args.browser == 'auto' else (args.browser,)
+    runs = [_run_browser(args.url, args.virtual_time_budget_ms, args.max_dom_bytes, choice) for choice in choices]
+    print(json.dumps(_combine_runs(args.url, runs), sort_keys=True))
     return 0
 
 
