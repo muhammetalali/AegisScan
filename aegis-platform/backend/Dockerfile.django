@@ -1,6 +1,6 @@
 FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
 FROM projectdiscovery/httpx:v1.10.0 AS httpx
-FROM projectdiscovery/subfinder:v2.15.0 AS subfinder
+FROM projectdiscovery/subfinder:v2.16.0 AS subfinder
 FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy
 FROM trufflesecurity/trufflehog:3.97.1 AS trufflehog
 
