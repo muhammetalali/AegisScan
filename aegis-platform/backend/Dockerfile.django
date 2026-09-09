@@ -1,8 +1,25 @@
 FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
 FROM golang:1.26-bookworm AS pd_tools
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0 \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0 \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/katana/cmd/katana@v1.7.0
+RUN set -eux; \
+    export CGO_ENABLED=0 GOOS=linux GOARCH=amd64; \
+    export GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org GODEBUG=http2client=0; \
+    go_install_with_retry() { \
+        module="$1"; \
+        attempt=1; \
+        until go install "$module"; do \
+            if [ "$attempt" -ge 5 ]; then \
+                echo "go install failed after $attempt attempts: $module" >&2; \
+                exit 1; \
+            fi; \
+            sleep_seconds=$((attempt * 15)); \
+            echo "retrying go install for $module in ${sleep_seconds}s" >&2; \
+            sleep "$sleep_seconds"; \
+            attempt=$((attempt + 1)); \
+        done; \
+    }; \
+    go_install_with_retry github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
+    go_install_with_retry github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
+    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0
 FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy
 FROM trufflesecurity/trufflehog:3.97.1 AS trufflehog
 
