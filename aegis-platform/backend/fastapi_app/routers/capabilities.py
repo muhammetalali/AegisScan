@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from asgiref.sync import sync_to_async
 from django.db.models import Q
@@ -31,7 +31,7 @@ class CapabilityExecutionRequest(BaseModel):
 
     project_id: str
     asset_id: str
-    depth: str = 'standard'
+    depth: Literal['quick', 'standard', 'deep', 'comprehensive'] = 'standard'
     options: dict[str, Any] = Field(default_factory=dict)
 
 
