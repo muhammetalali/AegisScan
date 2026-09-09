@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from .scanner_adapters import ScanResult, validate_authorized_target, validate_authorized_web_target
 from .scope_authorization import require_authorized_target
 
 TargetKind = Literal['host', 'network', 'url', 'path', 'image']
+
+
+class NativeExecutionCancelled(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -170,16 +176,60 @@ def build_native_argv(spec: NativeToolSpec, target: str, options: dict[str, Any]
     return argv, target
 
 
-def run_native_tool(capability_id: str, target: str, options: dict[str, Any]) -> ScanResult:
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGCONT)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+    except ProcessLookupError:
+        pass
+
+
+def run_native_tool(
+    capability_id: str,
+    target: str,
+    options: dict[str, Any],
+    state_getter: Callable[[], str] | None = None,
+    poll_interval: float = 0.5,
+) -> ScanResult:
     spec = get_native_tool_spec(capability_id)
     argv, canonical_target = build_native_argv(spec, target, options)
-    completed = subprocess.run(
+    process = subprocess.Popen(
         argv,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=spec.timeout,
-        check=False,
         shell=False,
+        start_new_session=True,
         env={**os.environ, 'NO_COLOR': '1'},
     )
-    return ScanResult(spec.binary, canonical_target, completed.returncode, completed.stdout, completed.stderr)
+    deadline = time.monotonic() + spec.timeout
+    paused = False
+    while True:
+        state = state_getter() if state_getter is not None else 'running'
+        if state == 'cancelled':
+            _terminate_process_group(process)
+            raise NativeExecutionCancelled('Native capability execution cancelled')
+        if state == 'paused' and not paused and process.poll() is None:
+            os.killpg(process.pid, signal.SIGSTOP)
+            paused = True
+        elif state != 'paused' and paused and process.poll() is None:
+            os.killpg(process.pid, signal.SIGCONT)
+            paused = False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _terminate_process_group(process)
+            raise subprocess.TimeoutExpired(argv, spec.timeout)
+        try:
+            stdout, stderr = process.communicate(timeout=min(poll_interval, remaining))
+            return ScanResult(spec.binary, canonical_target, process.returncode or 0, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            continue
