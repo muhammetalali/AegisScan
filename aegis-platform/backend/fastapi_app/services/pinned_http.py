@@ -32,7 +32,7 @@ class PinnedHTTPResponse:
 class PinnedHTTPDestination:
     """One authorization-checked logical origin bound to a fixed IP set.
 
-    Instances are created by :func:`pin_http_destination`.  Reusing the same
+    Instances are created by :func:`pin_http_destination`. Reusing the same
     destination across a multi-request security operation prevents later DNS
     answers from changing egress after authorization has been evaluated.
     """
@@ -105,9 +105,9 @@ def request_pinned(
 
     By default DNS is resolved and authorized immediately before this request.
     Callers performing a multi-request operation can create one destination via
-    :func:`pin_http_destination` and pass it to every request.  The socket then
+    :func:`pin_http_destination` and pass it to every request. The socket then
     connects directly to the fixed approved IP set while preserving the logical
-    Host header and TLS SNI/certificate validation.  Proxy environment variables
+    Host header and TLS SNI/certificate validation. Proxy environment variables
     and a second DNS lookup are never consulted.
     """
     verb = str(method).strip().upper()
@@ -122,7 +122,7 @@ def request_pinned(
     if destination is None:
         destination = pin_http_destination(url)
     else:
-        # Re-check logical scope without performing DNS.  The destination's IP
+        # Re-check logical scope without performing DNS. The destination's IP
         # set was already authorization-checked when it was pinned.
         require_authorized_target(_scope_url(url), url=True, resolve_dns=False)
         if destination.origin != (scheme, host, port):
@@ -215,6 +215,7 @@ def get_pinned_same_origin(
 ) -> PinnedHTTPResponse:
     current = str(url).strip()
     initial_origin = origin(current)
+    destination = pin_http_destination(current)
     for redirect_count in range(max_redirects + 1):
         response = request_pinned(
             'GET',
@@ -222,6 +223,7 @@ def get_pinned_same_origin(
             headers=headers,
             timeout=timeout,
             max_body_bytes=max_body_bytes,
+            destination=destination,
         )
         if not response.is_redirect:
             return response
