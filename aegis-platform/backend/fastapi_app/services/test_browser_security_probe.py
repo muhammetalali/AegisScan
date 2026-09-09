@@ -66,10 +66,21 @@ def test_browser_security_probe_records_firefox_metadata() -> None:
         truncated=False,
         browser='/usr/bin/firefox-esr',
         browser_family='firefox',
-        capture_method='firefox-headless-load-plus-dom-fetch',
+        capture_method='firefox-headless-render-plus-dom-fetch',
         browser_log='firefox log line',
+        render_evidence={
+            'rendered': True,
+            'screenshot_sha256': 'abc123',
+            'screenshot_bytes': 42,
+        },
     )
     assert payload['browser_family'] == 'firefox'
-    assert payload['runtime']['capture_method'] == 'firefox-headless-load-plus-dom-fetch'
+    assert payload['runtime']['capture_method'] == 'firefox-headless-render-plus-dom-fetch'
     assert payload['runtime']['browser_log'] == 'firefox log line'
     assert payload['observations'][0]['title'] == 'Firefox'
+    render = payload['observations'][1]
+    assert render['kind'] == 'browser-render-verification'
+    assert render['browser_family'] == 'firefox'
+    assert render['rendered'] is True
+    assert render['screenshot_sha256'] == 'abc123'
+    assert render['screenshot_bytes'] == 42
