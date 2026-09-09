@@ -9,12 +9,12 @@ import sys
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
-from .api_schema_security import parse_document, schema_url
-from .pinned_http import PinnedHTTPResponse, get_pinned_same_origin, origin, request_pinned
+from fastapi_app.services.api_schema_security import parse_document, schema_url
+from fastapi_app.services.pinned_http import PinnedHTTPResponse, get_pinned_same_origin, origin, request_pinned
 
 SCHEMA = 'aegis.api-runtime-conformance.v1'
 SAFE_METHODS = ('get', 'head')
-_HEADER_NAME_RE = re.compile(r'^[!#$%&\'*+.^_`|~0-9A-Za-z-]{1,100}$')
+_HEADER_NAME_RE = re.compile(r'^[!#$%&*+.^_`|~0-9A-Za-z-]{1,100}$')
 _CONTROL_RE = re.compile(r'[\x00-\x1f\x7f]')
 
 
@@ -152,7 +152,6 @@ def _parameter_value(document: dict[str, Any], parameter: dict[str, Any]) -> tup
                 return resolved['value'], True
     schema = _local_ref(document, parameter.get('schema'))
     if not isinstance(schema, dict):
-        # Swagger 2 parameters put type/default/enum directly on the parameter.
         schema = parameter
     return _example_from_schema(schema)
 
@@ -201,8 +200,6 @@ def _build_request(
                 required_queries.append(name)
             if name == omit_query or value is None:
                 continue
-            # Send required query values and optional values only when the contract
-            # supplied an explicit example/default/enum. This keeps probes bounded.
             if required or explicit:
                 query.append((name, _string_value(value)))
                 if not explicit:
@@ -470,8 +467,6 @@ def validate_runtime(
             })
             findings.extend(_baseline_findings(document, method, str(path_template), operation, response, synthetic))
 
-            # Negative contract check: omit at most one required query parameter and
-            # only for a safe read operation whose baseline was accepted (2xx).
             if 200 <= response.status < 300 and required_queries:
                 omitted = required_queries[0]
                 try:
@@ -511,7 +506,6 @@ def validate_runtime(
                         'error': str(exc)[:1000],
                     })
 
-    # De-duplicate findings by stable semantic location before persistence.
     unique: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
     for item in findings:
         key = (
@@ -530,9 +524,10 @@ def validate_runtime(
         'safe_methods': [item.upper() for item in SAFE_METHODS],
         'max_operations': max_operations,
     }
+    target_origin = origin(target)
     return {
         'schema': SCHEMA,
-        'target_origin': f'{origin(target)[0]}://{origin(target)[1]}:{origin(target)[2]}',
+        'target_origin': f'{target_origin[0]}://{target_origin[1]}:{target_origin[2]}',
         'observations': [summary, *observations[:2000], *bounded_findings],
         'finding_count': len(bounded_findings),
     }
