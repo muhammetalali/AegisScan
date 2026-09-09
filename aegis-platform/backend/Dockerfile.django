@@ -76,8 +76,9 @@ RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
     && mkdir -p /app/staticfiles /app/media \
     && chown -R aegis:aegis /app \
-    && chmod 0755 /app/scanner-worker-entrypoint.sh /app/fastapi_app/services/browser_security_probe.py \
+    && chmod 0755 /app/scanner-worker-entrypoint.sh /app/fastapi_app/services/browser_security_probe.py /app/fastapi_app/services/api_schema_security.py \
     && ln -sf /app/fastapi_app/services/browser_security_probe.py /usr/local/bin/aegis-browser-security \
+    && ln -sf /app/fastapi_app/services/api_schema_security.py /usr/local/bin/aegis-api-schema-security \
     && nmap_binary="$(readlink -f "$(command -v nmap)")" \
     && masscan_binary="$(readlink -f "$(command -v masscan)")" \
     && test -f "$nmap_binary" \
@@ -95,6 +96,7 @@ RUN command -v nmap >/dev/null \
     && command -v chromium >/dev/null \
     && command -v firefox-esr >/dev/null \
     && command -v aegis-browser-security >/dev/null \
+    && command -v aegis-api-schema-security >/dev/null \
     && command -v httpx >/dev/null \
     && command -v subfinder >/dev/null \
     && command -v katana >/dev/null \
