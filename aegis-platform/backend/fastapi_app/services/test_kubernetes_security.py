@@ -5,7 +5,7 @@ import base64
 import pytest
 import yaml
 
-from fastapi_app.services import kubernetes_security
+from fastapi_app.services import kubernetes_security, pinned_http
 from fastapi_app.services.kubernetes_security import (
     KubernetesSecurityError,
     KubernetesTransport,
@@ -156,6 +156,74 @@ def test_cluster_collection_reuses_one_pinned_destination(monkeypatch):
     summary = result['observations'][0]
     assert summary['dns_pinned_for_scan'] is True
     assert summary['pinned_destination_ips'] == ['192.0.2.44']
+
+
+def test_pinned_destination_prevents_second_dns_resolution(monkeypatch):
+    authorization_calls: list[bool] = []
+    connects: list[tuple] = []
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            return None
+
+        def connect(self, address):
+            connects.append(address)
+
+        def close(self):
+            return None
+
+    class FakeResponse:
+        status = 200
+
+        def getheader(self, _name):
+            return None
+
+        def read(self, _size):
+            return b'{}'
+
+        def getheaders(self):
+            return [('Content-Type', 'application/json')]
+
+    class FakeConnection:
+        def __init__(self, _host, _port, timeout=None):
+            self.sock = None
+            self.timeout = timeout
+
+        def request(self, _method, _path, headers=None):
+            assert headers is not None
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            return None
+
+    def authorize(_target, *, url=False, resolve_dns=False):
+        assert url is True
+        authorization_calls.append(resolve_dns)
+        if resolve_dns:
+            if authorization_calls.count(True) > 1:
+                raise AssertionError('DNS was resolved more than once for the pinned operation')
+            return ('192.0.2.40',)
+        return ()
+
+    monkeypatch.setattr(pinned_http, 'require_authorized_target', authorize)
+    monkeypatch.setattr(pinned_http.http.client, 'HTTPConnection', FakeConnection)
+    monkeypatch.setattr(pinned_http.socket, 'socket', lambda *_args, **_kwargs: FakeSocket())
+
+    destination = pinned_http.pin_http_destination('http://cluster.example.test:8080')
+    first = pinned_http.request_pinned(
+        'GET', 'http://cluster.example.test:8080/version', destination=destination
+    )
+    second = pinned_http.request_pinned(
+        'GET',
+        'http://cluster.example.test:8080/api/v1/pods?limit=1000',
+        destination=destination,
+    )
+
+    assert first.resolved_ip == second.resolved_ip == '192.0.2.40'
+    assert authorization_calls == [True, False, False]
+    assert connects == [('192.0.2.40', 8080), ('192.0.2.40', 8080)]
 
 
 def _kubeconfig(server: str, *, user: dict | None = None, cluster_extra: dict | None = None) -> str:
