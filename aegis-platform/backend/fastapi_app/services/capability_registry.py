@@ -6,10 +6,12 @@ from urllib.parse import urlsplit
 
 from .api_runtime_capability import CAPABILITY_ID as API_RUNTIME_CAPABILITY_ID, register_api_runtime_capability
 from .api_schema_capability import CAPABILITY_ID as API_SCHEMA_CAPABILITY_ID, register_api_schema_capability
+from .kubernetes_capability import register_kubernetes_capability
 from .native_tool_runtime import NATIVE_TOOL_SPECS, validate_native_options
 
 register_api_schema_capability()
 register_api_runtime_capability()
+register_kubernetes_capability()
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class Capability:
     adapter: str = 'specialized'
     credential_mode: str = 'none'
     credential_kinds: tuple[str, ...] = ()
+    credential_required: bool = False
 
     def public_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -77,6 +80,7 @@ for _id, _spec in NATIVE_TOOL_SPECS.items():
         adapter='native-cli',
         credential_mode=_spec.credential_mode,
         credential_kinds=_spec.credential_kinds,
+        credential_required=_spec.credential_required,
     )
 
 
