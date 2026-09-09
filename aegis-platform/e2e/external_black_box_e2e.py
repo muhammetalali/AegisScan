@@ -31,7 +31,7 @@ def prove_detection_response(session:requests.Session,email:str,password:str)->s
  event=matching[0]; event_id=event.get('id')
  deadline=time.monotonic()+60; delivered=None
  while time.monotonic()<deadline:
-  notifications=http(session,'GET',f'{API_V1}/notifications','Detection notification retrieval',{200},params={'limit':200},timeout=20)
+  notifications=http(session,'GET',f'{API_V1}/enterprise/notifications','Detection notification retrieval',{200},params={'limit':200},timeout=20)
   rows=notifications if isinstance(notifications,list) else []
   delivered=next((item for item in rows if (item.get('payload') or {}).get('security_event_id')==event_id),None)
   if delivered and delivered.get('status')=='sent':break
