@@ -115,6 +115,7 @@ def test_capability_registry_is_typed_and_fail_closed() -> None:
     assert browser.risk == "active-low"
     assert browser.asset_types == ("website",)
     assert browser.credential_mode == "none"
+    assert set(browser.allowed_options) == {"browser", "virtual_time_budget_ms", "max_dom_bytes"}
     assert validate_capability_options(capabilities["network.masscan"], {"ports": "80,443", "rate": 2500}) == {
         "ports": "80,443",
         "rate": 2500,
@@ -122,8 +123,8 @@ def test_capability_registry_is_typed_and_fail_closed() -> None:
     assert validate_capability_options(capabilities["web.katana"], {"depth": 5}) == {"depth": 5}
     assert validate_capability_options(
         capabilities["browser.dom-snapshot"],
-        {"virtual_time_budget_ms": 5000, "max_dom_bytes": 131072},
-    ) == {"virtual_time_budget_ms": 5000, "max_dom_bytes": 131072}
+        {"browser": "firefox", "virtual_time_budget_ms": 5000, "max_dom_bytes": 131072},
+    ) == {"browser": "firefox", "virtual_time_budget_ms": 5000, "max_dom_bytes": 131072}
     with pytest.raises(ValueError, match="Unsupported options"):
         validate_capability_options(capabilities["network.nmap"], {"arbitrary_flags": "-Pn --script anything"})
     with pytest.raises(ValueError, match="Unsupported options"):
@@ -134,6 +135,8 @@ def test_capability_registry_is_typed_and_fail_closed() -> None:
         validate_capability_options(capabilities["network.masscan"], {"rate": 1000000})
     with pytest.raises(ValueError, match="<= 10000"):
         validate_capability_options(capabilities["browser.dom-snapshot"], {"virtual_time_budget_ms": 60000})
+    with pytest.raises(ValueError, match="one of"):
+        validate_capability_options(capabilities["browser.dom-snapshot"], {"browser": "tor"})
     with pytest.raises(ValueError, match="Unknown capability"):
         get_capability("command.shell")
 
@@ -160,11 +163,13 @@ def test_browser_native_cli_builds_bounded_argv_without_shell(monkeypatch: pytes
     argv, target = build_native_argv(
         get_native_tool_spec("browser.dom-snapshot"),
         "https://app.example.test/login",
-        {"virtual_time_budget_ms": 5000, "max_dom_bytes": 131072},
+        {"browser": "firefox", "virtual_time_budget_ms": 5000, "max_dom_bytes": 131072},
     )
     assert argv == [
         "/usr/local/bin/aegis-browser-security",
         "https://app.example.test/login",
+        "--browser",
+        "firefox",
         "--virtual-time-budget-ms",
         "5000",
         "--max-dom-bytes",
