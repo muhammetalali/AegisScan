@@ -15,7 +15,7 @@ from .scanner_adapters import ScanResult, validate_authorized_target, validate_a
 from .scope_authorization import require_authorized_target
 
 TargetKind = Literal['host', 'network', 'url', 'path', 'image']
-CredentialMode = Literal['none', 'curl-bearer-config']
+CredentialMode = Literal['none', 'curl-bearer-config', 'kubeconfig-file']
 
 
 class NativeExecutionCancelled(RuntimeError):
@@ -50,6 +50,7 @@ class NativeToolSpec:
     timeout: int = 600
     credential_mode: CredentialMode = 'none'
     credential_kinds: tuple[str, ...] = ()
+    credential_required: bool = False
 
     @property
     def option_map(self) -> dict[str, OptionSpec]:
@@ -212,6 +213,13 @@ def _material_secret(material: Mapping[str, Any]) -> str:
     return secret
 
 
+def _multiline_material_secret(material: Mapping[str, Any]) -> str:
+    secret = str(material.get('secret') or '')
+    if not secret or '\x00' in secret or len(secret.encode('utf-8')) > 262144:
+        raise ValueError('Kubeconfig credential material must be UTF-8 text no larger than 256 KiB')
+    return secret
+
+
 def _curl_config_for_bearer(secret: str) -> str:
     escaped = secret.replace('\\', '\\\\').replace('"', '\\"')
     fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.curlrc')
@@ -221,11 +229,21 @@ def _curl_config_for_bearer(secret: str) -> str:
     return path
 
 
+def _kubeconfig_file(secret: str) -> str:
+    fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.kubeconfig')
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
+        handle.write(secret)
+    return path
+
+
 def _credential_runtime_args(
     spec: NativeToolSpec,
     credential_materials: tuple[Mapping[str, Any], ...],
 ) -> tuple[list[str], list[str]]:
     if not credential_materials:
+        if spec.credential_required:
+            raise ValueError(f'{spec.capability_id} requires credential-bound execution')
         return [], []
     if spec.credential_mode == 'none':
         raise ValueError(f'{spec.capability_id} does not support credential-bound execution')
@@ -234,6 +252,14 @@ def _credential_runtime_args(
             raise ValueError('curl bearer credential execution accepts exactly one credential reference')
         path = _curl_config_for_bearer(_material_secret(credential_materials[0]))
         return ['--config', path], [path]
+    if spec.credential_mode == 'kubeconfig-file':
+        if len(credential_materials) != 1:
+            raise ValueError('kubeconfig execution accepts exactly one credential reference')
+        material = credential_materials[0]
+        if str(material.get('kind') or '') != 'kubeconfig':
+            raise ValueError('kubeconfig execution requires a kubeconfig credential')
+        path = _kubeconfig_file(_multiline_material_secret(material))
+        return ['--kubeconfig', path], [path]
     raise ValueError(f'Unsupported credential execution mode: {spec.credential_mode}')
 
 
