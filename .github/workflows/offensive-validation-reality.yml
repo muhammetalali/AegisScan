@@ -12,7 +12,7 @@ permissions:
 jobs:
   offensive-validation-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       DEBUG: 'True'
       SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
@@ -63,7 +63,32 @@ jobs:
           python manage.py check
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
-      - name: Governed offensive validation persistence and safety reality
+      - name: Start Redis-backed offensive validation worker
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m celery -A fastapi_app.celery_app:celery_app worker \
+            -Q scanners --concurrency=1 --loglevel=INFO \
+            --hostname=offensive-validation-ci@%h \
+            > offensive-validation-worker.log 2>&1 &
+          echo $! > offensive-validation-worker.pid
+          for attempt in $(seq 1 20); do
+            if grep -q "ready" offensive-validation-worker.log; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat offensive-validation-worker.pid)" 2>/dev/null; then
+              cat offensive-validation-worker.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat offensive-validation-worker.log
+          echo "Celery worker did not become ready" >&2
+          exit 1
+      - name: Offensive validation service, API, Celery and evidence reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
@@ -72,11 +97,22 @@ jobs:
           python -m pytest -q --junitxml=offensive-validation-results.xml
           fastapi_app/services/test_offensive_validation.py
           django_project/evidence/test_offensive_validation_plane.py
+          fastapi_app/routers/test_offensive_validation_integration.py
+          fastapi_app/routers/test_offensive_validation_celery_e2e.py
+      - name: Stop offensive validation worker
+        if: always()
+        working-directory: aegis-platform/backend
+        run: |
+          if [ -f offensive-validation-worker.pid ]; then
+            kill "$(cat offensive-validation-worker.pid)" 2>/dev/null || true
+          fi
       - name: Retain validation test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: offensive-validation-${{ github.sha }}
-          path: aegis-platform/backend/offensive-validation-results.xml
+          path: |
+            aegis-platform/backend/offensive-validation-results.xml
+            aegis-platform/backend/offensive-validation-worker.log
           if-no-files-found: error
           retention-days: 14
