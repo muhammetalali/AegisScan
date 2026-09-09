@@ -1,0 +1,82 @@
+name: Offensive Validation Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  offensive-validation-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DEBUG: 'True'
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
+      DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
+      REDIS_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
+      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
+      AUTHORIZED_SCAN_TARGETS: 'app.example,approved.example,127.0.0.1/32'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            aegis-platform/backend/requirements.txt
+      - name: Install package and backend dependencies
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Django migration reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+      - name: Governed offensive validation persistence and safety reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: >-
+          python -m pytest -q --junitxml=offensive-validation-results.xml
+          fastapi_app/services/test_offensive_validation.py
+          django_project/evidence/test_offensive_validation_plane.py
+      - name: Retain validation test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offensive-validation-${{ github.sha }}
+          path: aegis-platform/backend/offensive-validation-results.xml
+          if-no-files-found: error
+          retention-days: 14
