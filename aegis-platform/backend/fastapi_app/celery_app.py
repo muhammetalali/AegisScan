@@ -27,6 +27,7 @@ SCANNER_TASK_ROUTES = {
     "fastapi_app.tasks.native_capabilities.run_native_capability_scan": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.finding_validation.validate_finding_e2e": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.offensive_validation_tasks.validate_offensive_finding": {"queue": SCANNER_QUEUE},
 }
 
 celery_app.conf.update(
@@ -46,6 +47,7 @@ celery_app.conf.update(
         "fastapi_app.tasks.native_capabilities",
         "fastapi_app.tasks.finding_validation",
         "fastapi_app.tasks.nmap_finding_validation",
+        "fastapi_app.tasks.offensive_validation_tasks",
         "fastapi_app.tasks.security_scan",
         "fastapi_app.tasks.workflow_tasks",
         "enterprise.tasks",
