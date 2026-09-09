@@ -39,6 +39,11 @@ jobs:
             command -v gobuster
             command -v ffuf
             command -v wafw00f
+            command -v httpx
+            command -v subfinder
+            command -v trivy
+            command -v trufflehog
+            command -v checkov
             test -s /opt/aegis-wordlists/web-common.txt
           '
           docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
@@ -60,9 +65,11 @@ jobs:
           from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
           from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
           assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
-          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 11
+          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 16
           web = planning_summary("website", "standard")
-          assert web["ready"] >= 3
+          assert web["ready"] >= 4
           assert web["pending_packaging"] >= 1
+          code = planning_summary("repository", "quick")
+          assert code["ready"] >= 2
           print(sorted(PACKAGED_NATIVE_CAPABILITIES))
           '
