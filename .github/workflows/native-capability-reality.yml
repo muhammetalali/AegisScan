@@ -87,6 +87,9 @@ jobs:
             grep -q "127.0.0.1:18080" /tmp/aegis-katana.jsonl
             grep -q "/admin" /tmp/aegis-katana.jsonl
             AUTHORIZED_SCAN_TARGETS=127.0.0.1/32 python - <<"PY"
+          import threading
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
           from fastapi_app.services.native_output_normalizer import normalize_native_output
           from fastapi_app.services.native_tool_runtime import run_native_tool
 
@@ -97,7 +100,48 @@ jobs:
           normalized = normalize_native_output("web.security-headers", result.stdout)
           assert normalized["count"] >= 1, normalized
           assert normalized["observations"][0]["status"] == 200, normalized
+
+          secret = "native-vault-fixture-token-789"
+          seen = []
+          class Handler(BaseHTTPRequestHandler):
+              def do_HEAD(self):
+                  seen.append(self.headers.get("Authorization", ""))
+                  if seen[-1] == f"Bearer {secret}":
+                      self.send_response(200)
+                      self.send_header("X-Aegis-Auth", "accepted")
+                  else:
+                      self.send_response(401)
+                      self.send_header("X-Aegis-Auth", "missing")
+                  self.end_headers()
+              def log_message(self, format, *args):
+                  return
+
+          server = ThreadingHTTPServer(("127.0.0.1", 18081), Handler)
+          thread = threading.Thread(target=server.serve_forever, daemon=True)
+          thread.start()
+          try:
+              authenticated = run_native_tool(
+                  "web.security-headers",
+                  "http://127.0.0.1:18081",
+                  {},
+                  credential_materials=({
+                      "credential_ref": "ci-fixture",
+                      "kind": "token",
+                      "version": 1,
+                      "secret": secret,
+                  },),
+              )
+          finally:
+              server.shutdown()
+              thread.join(timeout=3)
+              server.server_close()
+          assert authenticated.exit_code == 0, authenticated.stderr
+          assert seen == [f"Bearer {secret}"]
+          assert "X-Aegis-Auth: accepted" in authenticated.stdout, authenticated.stdout
+          assert secret not in authenticated.stdout
+          assert secret not in authenticated.stderr
           print("security-headers-real-curl-ok")
+          print("credential-bound-native-runtime-ok")
           PY
             echo web-discovery-and-headers-ok
           '

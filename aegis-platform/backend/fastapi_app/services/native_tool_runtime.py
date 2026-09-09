@@ -4,7 +4,9 @@ import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -13,6 +15,7 @@ from .scanner_adapters import ScanResult, validate_authorized_target, validate_a
 from .scope_authorization import require_authorized_target
 
 TargetKind = Literal['host', 'network', 'url', 'path', 'image']
+CredentialMode = Literal['none', 'curl-bearer-config']
 
 
 class NativeExecutionCancelled(RuntimeError):
@@ -45,6 +48,8 @@ class NativeToolSpec:
     suffix_args: tuple[str, ...] = ()
     options: tuple[tuple[str, OptionSpec], ...] = ()
     timeout: int = 600
+    credential_mode: CredentialMode = 'none'
+    credential_kinds: tuple[str, ...] = ()
 
     @property
     def option_map(self) -> dict[str, OptionSpec]:
@@ -71,6 +76,8 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
             '--output', '/dev/null',
         ),
         timeout=120,
+        credential_mode='curl-bearer-config',
+        credential_kinds=('token', 'api_key', 'generic'),
     ),
     'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
     'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
@@ -187,6 +194,38 @@ def build_native_argv(spec: NativeToolSpec, target: str, options: dict[str, Any]
     return argv, target
 
 
+def _material_secret(material: Mapping[str, Any]) -> str:
+    secret = str(material.get('secret') or '')
+    if not secret or len(secret) > 8192 or any(ch in secret for ch in '\r\n\x00'):
+        raise ValueError('Credential material is not valid for native runtime injection')
+    return secret
+
+
+def _curl_config_for_bearer(secret: str) -> str:
+    escaped = secret.replace('\\', '\\\\').replace('"', '\\"')
+    fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.curlrc')
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        handle.write(f'header = "Authorization: Bearer {escaped}"\n')
+    return path
+
+
+def _credential_runtime_args(
+    spec: NativeToolSpec,
+    credential_materials: tuple[Mapping[str, Any], ...],
+) -> tuple[list[str], list[str]]:
+    if not credential_materials:
+        return [], []
+    if spec.credential_mode == 'none':
+        raise ValueError(f'{spec.capability_id} does not support credential-bound execution')
+    if spec.credential_mode == 'curl-bearer-config':
+        if len(credential_materials) != 1:
+            raise ValueError('curl bearer credential execution accepts exactly one credential reference')
+        path = _curl_config_for_bearer(_material_secret(credential_materials[0]))
+        return ['--config', path], [path]
+    raise ValueError(f'Unsupported credential execution mode: {spec.credential_mode}')
+
+
 def _terminate_process_group(process: subprocess.Popen[str]) -> None:
     if process.poll() is not None:
         return
@@ -210,37 +249,54 @@ def run_native_tool(
     options: dict[str, Any],
     state_getter: Callable[[], str] | None = None,
     poll_interval: float = 0.5,
+    credential_materials: tuple[Mapping[str, Any], ...] | None = None,
 ) -> ScanResult:
     spec = get_native_tool_spec(capability_id)
     argv, canonical_target = build_native_argv(spec, target, options)
-    process = subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        shell=False,
-        start_new_session=True,
-        env={**os.environ, 'NO_COLOR': '1'},
-    )
-    deadline = time.monotonic() + spec.timeout
-    paused = False
-    while True:
-        state = state_getter() if state_getter is not None else 'running'
-        if state == 'cancelled':
+    cleanup_paths: list[str] = []
+    process: subprocess.Popen[str] | None = None
+    try:
+        credential_args, cleanup_paths = _credential_runtime_args(spec, tuple(credential_materials or ()))
+        if credential_args:
+            argv = [argv[0], *credential_args, *argv[1:]]
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=False,
+            start_new_session=True,
+            env={**os.environ, 'NO_COLOR': '1'},
+        )
+        deadline = time.monotonic() + spec.timeout
+        paused = False
+        while True:
+            state = state_getter() if state_getter is not None else 'running'
+            if state == 'cancelled':
+                _terminate_process_group(process)
+                raise NativeExecutionCancelled('Native capability execution cancelled')
+            if state == 'paused' and not paused and process.poll() is None:
+                os.killpg(process.pid, signal.SIGSTOP)
+                paused = True
+            elif state != 'paused' and paused and process.poll() is None:
+                os.killpg(process.pid, signal.SIGCONT)
+                paused = False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_group(process)
+                raise subprocess.TimeoutExpired(argv, spec.timeout)
+            try:
+                stdout, stderr = process.communicate(timeout=min(poll_interval, remaining))
+                return ScanResult(spec.binary, canonical_target, process.returncode or 0, stdout, stderr)
+            except subprocess.TimeoutExpired:
+                continue
+    except BaseException:
+        if process is not None and process.poll() is None:
             _terminate_process_group(process)
-            raise NativeExecutionCancelled('Native capability execution cancelled')
-        if state == 'paused' and not paused and process.poll() is None:
-            os.killpg(process.pid, signal.SIGSTOP)
-            paused = True
-        elif state != 'paused' and paused and process.poll() is None:
-            os.killpg(process.pid, signal.SIGCONT)
-            paused = False
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            _terminate_process_group(process)
-            raise subprocess.TimeoutExpired(argv, spec.timeout)
-        try:
-            stdout, stderr = process.communicate(timeout=min(poll_interval, remaining))
-            return ScanResult(spec.binary, canonical_target, process.returncode or 0, stdout, stderr)
-        except subprocess.TimeoutExpired:
-            continue
+        raise
+    finally:
+        for path in cleanup_paths:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass

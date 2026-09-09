@@ -21,11 +21,14 @@ class Capability:
     authorization_required: bool = True
     allowed_options: tuple[str, ...] = ()
     adapter: str = 'specialized'
+    credential_mode: str = 'none'
+    credential_kinds: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data['asset_types'] = list(self.asset_types)
         data['allowed_options'] = list(self.allowed_options)
+        data['credential_kinds'] = list(self.credential_kinds)
         return data
 
 
@@ -66,6 +69,8 @@ for _id, _spec in NATIVE_TOOL_SPECS.items():
         risk=_spec.risk,
         allowed_options=tuple(_spec.option_map),
         adapter='native-cli',
+        credential_mode=_spec.credential_mode,
+        credential_kinds=_spec.credential_kinds,
     )
 
 
