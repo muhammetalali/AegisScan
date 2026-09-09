@@ -142,14 +142,14 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: python -m pytest -q fastapi_app/routers/test_contract_surfaces.py fastapi_app/routers/test_attack_path_real.py fastapi_app/routers/test_compliance_contract_real.py fastapi_app/routers/test_reliability_contracts.py fastapi_app/routers/test_realtime_and_assurance.py fastapi_app/services/test_scope_authorization.py django_project/compliance/test_framework_catalog.py django_project/audit/test_middleware.py
-      - name: Authentication audit chain and append-only policy reality
+      - name: Authentication detection, response, audit chain and append-only policy reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
           ALLOWED_HOSTS: 'localhost,127.0.0.1,nginx'
           CSRF_TRUSTED_ORIGINS: 'http://localhost,http://127.0.0.1,http://nginx'
-        run: python -m pytest -q django_project/audit/test_hash_chain.py django_project/users/test_auth_security.py django_project/users/test_auth_detection.py ../../tests/test_audit_append_policy.py
+        run: python -m pytest -q django_project/audit/test_hash_chain.py django_project/users/test_auth_security.py django_project/users/test_auth_detection.py enterprise/test_notification_response.py ../../tests/test_audit_append_policy.py
       - name: Bulk import atomicity and intelligence lineage reality
         working-directory: aegis-platform/backend
         env:

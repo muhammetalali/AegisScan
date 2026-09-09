@@ -208,9 +208,24 @@ class ContinuousAssuranceExecution(models.Model):
 
 
 class Notification(models.Model):
-    class Channel(models.TextChoices): EMAIL='email','Email'; WEBHOOK='webhook','Webhook'; SLACK='slack','Slack'; TEAMS='teams','Teams'; SIEM='siem','SIEM'
-    class Status(models.TextChoices): PENDING='pending','Pending'; SENT='sent','Sent'; FAILED='failed','Failed'
-    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False); organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='notifications'); user=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True,blank=True); channel=models.CharField(max_length=20,choices=Channel.choices); event_type=models.CharField(max_length=100); payload=models.JSONField(default=dict); status=models.CharField(max_length=20,choices=Status.choices,default=Status.PENDING); attempts=models.PositiveIntegerField(default=0); last_error=models.TextField(blank=True); sent_at=models.DateTimeField(null=True,blank=True); created_at=models.DateTimeField(auto_now_add=True)
+    class Channel(models.TextChoices): IN_APP='in_app','In-App'; EMAIL='email','Email'; WEBHOOK='webhook','Webhook'; SLACK='slack','Slack'; TEAMS='teams','Teams'; SIEM='siem','SIEM'
+    class Status(models.TextChoices): PENDING='pending','Pending'; SENDING='sending','Sending'; SENT='sent','Sent'; FAILED='failed','Failed'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='notifications')
+    user=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True,blank=True)
+    source_security_event=models.ForeignKey('audit.SecurityEvent',on_delete=models.PROTECT,null=True,blank=True,related_name='notifications')
+    channel=models.CharField(max_length=20,choices=Channel.choices)
+    event_type=models.CharField(max_length=100)
+    payload=models.JSONField(default=dict)
+    status=models.CharField(max_length=20,choices=Status.choices,default=Status.PENDING)
+    attempts=models.PositiveIntegerField(default=0)
+    last_error=models.TextField(blank=True)
+    sent_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['source_security_event','user','channel'],name='uniq_security_event_recipient_channel')]
+        indexes=[models.Index(fields=['status','updated_at'],name='idx_notification_delivery')]
 
 
 class ExternalIntegration(models.Model):

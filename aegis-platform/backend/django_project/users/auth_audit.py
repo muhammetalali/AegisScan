@@ -49,7 +49,7 @@ def _create_detection_if_needed(*, key: str, query: Q, event_query: Q, attempt, 
         ).filter(event_query).exists()
         if active:
             return
-        SecurityEvent.objects.create(
+        event = SecurityEvent.objects.create(
             event_type=SecurityEvent.EventType.BRUTE_FORCE,
             severity=SecurityEvent.Severity.HIGH,
             title='Repeated authentication failures detected',
@@ -65,6 +65,9 @@ def _create_detection_if_needed(*, key: str, query: Q, event_query: Q, attempt, 
                 'last_attempt_id': str(attempt.id),
             },
         )
+        from enterprise.notification_services import create_security_event_notifications
+
+        create_security_event_notifications(event)
 
 
 def _detect_brute_force(*, attempt, attempted_email: str, target_user) -> None:
