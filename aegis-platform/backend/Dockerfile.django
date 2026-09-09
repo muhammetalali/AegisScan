@@ -1,7 +1,39 @@
 FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
 FROM golang:1.26-bookworm AS pd_tools
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0 \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0 \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/katana/cmd/katana@v1.7.0
+
+FROM rust:1.98-bookworm AS rustscan_build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/bee-san/RustScan.git /src/rustscan \
+    && cd /src/rustscan \
+    && git checkout e9dadb4a30dd0f3cc8b9b1c630a28ad351f8dbc3 \
+    && test "$(git rev-parse HEAD)" = "e9dadb4a30dd0f3cc8b9b1c630a28ad351f8dbc3" \
+    && cargo build --release --locked \
+    && /src/rustscan/target/release/rustscan --version
+
+FROM debian:bookworm-slim AS feroxbuster
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /tmp/ferox
+RUN curl -fsSL https://github.com/epi052/feroxbuster/releases/download/v2.13.1/x86_64-linux-feroxbuster.tar.gz -o /tmp/feroxbuster.tar.gz \
+    && echo '7985c00e6803b0f25d5e9139f7472279f3f4d891429627a5cedc629e53992d80  /tmp/feroxbuster.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/feroxbuster.tar.gz -C /tmp/ferox \
+    && test "$(find /tmp/ferox -type f -name feroxbuster | wc -l)" -eq 1 \
+    && install -m 0755 "$(find /tmp/ferox -type f -name feroxbuster)" /usr/local/bin/feroxbuster \
+    && /usr/local/bin/feroxbuster --version
+
+FROM alpine/git:2.47.2 AS nikto_source
+RUN git clone https://github.com/sullo/nikto.git /opt/nikto-src \
+    && cd /opt/nikto-src \
+    && git checkout 69681e2e4213c15b85a90c53b2169ecb2a88fb01 \
+    && test "$(git rev-parse HEAD)" = "69681e2e4213c15b85a90c53b2169ecb2a88fb01" \
+    && rm -rf /opt/nikto-src/.git
+
 FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy
 FROM trufflesecurity/trufflehog:3.97.1 AS trufflehog
 
@@ -24,19 +56,32 @@ RUN apt-get update \
         curl nmap masscan libpcap0.8 ca-certificates libcap2-bin \
         binutils checksec binwalk libimage-exiftool-perl xxd gdb \
         gobuster ffuf dirb dnsenum fierce wafw00f nbtscan \
+        perl libnet-ssleay-perl libjson-perl libio-socket-ssl-perl \
+        libxml-writer-perl libxml-libxml-perl libmime-base64-perl \
         git openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
 COPY --from=pd_tools /go/bin/httpx /usr/local/bin/httpx
 COPY --from=pd_tools /go/bin/subfinder /usr/local/bin/subfinder
+COPY --from=pd_tools /go/bin/katana /usr/local/bin/katana
+COPY --from=rustscan_build /src/rustscan/target/release/rustscan /usr/local/bin/rustscan
+COPY --from=feroxbuster /usr/local/bin/feroxbuster /usr/local/bin/feroxbuster
+COPY --from=nikto_source /opt/nikto-src/program /opt/nikto
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=trufflehog /usr/bin/trufflehog /usr/local/bin/trufflehog
 COPY --from=nuclei_templates /opt/nuclei-templates /opt/nuclei-templates
-RUN chmod 0755 /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/subfinder /usr/local/bin/trivy /usr/local/bin/trufflehog \
+RUN chmod 0755 /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/subfinder /usr/local/bin/katana \
+        /usr/local/bin/rustscan /usr/local/bin/feroxbuster /opt/nikto/nikto.pl \
+        /usr/local/bin/trivy /usr/local/bin/trufflehog \
+    && ln -s /opt/nikto/nikto.pl /usr/local/bin/nikto \
     && /usr/local/bin/nuclei -version \
     && /usr/local/bin/httpx -version \
     && /usr/local/bin/subfinder -version \
+    && /usr/local/bin/katana -version \
+    && /usr/local/bin/rustscan --version \
+    && /usr/local/bin/feroxbuster --version \
+    && /usr/local/bin/nikto -Version \
     && /usr/local/bin/trivy --version \
     && /usr/local/bin/trufflehog --version \
     && test -f /opt/nuclei-templates/http/misconfiguration/http-missing-security-headers.yaml
@@ -70,6 +115,10 @@ RUN command -v nmap >/dev/null \
     && command -v nuclei >/dev/null \
     && command -v httpx >/dev/null \
     && command -v subfinder >/dev/null \
+    && command -v katana >/dev/null \
+    && command -v rustscan >/dev/null \
+    && command -v feroxbuster >/dev/null \
+    && command -v nikto >/dev/null \
     && command -v trivy >/dev/null \
     && command -v trufflehog >/dev/null \
     && command -v checkov >/dev/null \
