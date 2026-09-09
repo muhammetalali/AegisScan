@@ -13,6 +13,7 @@ from django_project.scans.models import Scan
 
 from ..core.dependencies import get_current_user
 from ..services.authorization_guard import asset_target
+from ..services.capability_planner import planning_summary
 from ..services.capability_registry import get_capability, list_capabilities, validate_capability_options
 from ..services.native_packaging import PACKAGED_NATIVE_CAPABILITIES, is_packaged_native_capability
 from ..services.native_tool_runtime import NATIVE_TOOL_SPECS
@@ -111,6 +112,22 @@ async def capability_packaging(user=Depends(get_current_user)):
         'specialized': sorted(_TASKS),
         'native_packaged': sorted(PACKAGED_NATIVE_CAPABILITIES),
         'native_registered': sorted(NATIVE_TOOL_SPECS),
+    }
+
+
+@router.get('/plan/{asset_id}')
+async def capability_plan(
+    asset_id: str,
+    project_id: str,
+    depth: Literal['quick', 'standard', 'deep', 'comprehensive'] = 'standard',
+    user=Depends(get_current_user),
+):
+    asset = await _asset_for_execution(asset_id, project_id, str(user.get('user_id')))
+    if asset is None:
+        raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
+    return {
+        'policy_version': _POLICY_VERSION,
+        **planning_summary(asset.type, depth),
     }
 
 
