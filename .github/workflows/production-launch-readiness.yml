@@ -1,0 +1,100 @@
+name: Production Launch Readiness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/backup_postgres.sh'
+      - 'aegis-platform/scripts/verify_postgres_restore.sh'
+      - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'tests/test_production_preflight.py'
+      - '.github/workflows/production-launch-readiness.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  production-launch-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: launch-readiness-password
+          POSTGRES_DB: aegisdb
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - name: Install launch-gate dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client openssl && python -m pip install pytest==9.1.1
+      - name: Unit-test fail-closed production preflight
+        run: python -m pytest -q tests/test_production_preflight.py
+      - name: Generate short-lived TLS proof material
+        run: |
+          mkdir -p /tmp/aegis-tls
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 30 \
+            -subj '/CN=security.example.com' \
+            -keyout /tmp/aegis-tls/privkey.pem -out /tmp/aegis-tls/fullchain.pem
+          chmod 0600 /tmp/aegis-tls/privkey.pem
+      - name: Prove production preflight accepts only explicit secure configuration
+        env:
+          DEBUG: 'False'
+          SECRET_KEY: django-ci-launch-secret-012345678901234567890123456789
+          JWT_SECRET_KEY: jwt-ci-launch-secret-012345678901234567890123456789
+          POSTGRES_PASSWORD: postgres-ci-launch-secret-01234567890123456789
+          DATABASE_URL: postgresql://aegis:secret@postgres:5432/aegisdb
+          REDIS_URL: redis://redis:6379/0
+          CELERY_BROKER_URL: redis://redis:6379/0
+          CELERY_RESULT_BACKEND: redis://redis:6379/1
+          ALLOWED_HOSTS: security.example.com
+          CORS_ALLOWED_ORIGINS: https://security.example.com
+          CSRF_TRUSTED_ORIGINS: https://security.example.com
+          AUTHORIZED_SCAN_TARGETS: authorized.example.com,203.0.113.10
+        run: python aegis-platform/scripts/production_preflight.py --tls-dir /tmp/aegis-tls
+      - name: Seed authoritative backup fixture
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: launch-readiness-password
+          PGDATABASE: aegisdb
+        run: |
+          psql --set ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE django_migrations (id bigint PRIMARY KEY, app varchar(255), name varchar(255), applied timestamptz);
+          CREATE TABLE users_user (id uuid PRIMARY KEY, email varchar(255) NOT NULL);
+          INSERT INTO django_migrations VALUES (1, 'launch', '0001_reality', now());
+          INSERT INTO users_user VALUES ('00000000-0000-0000-0000-000000000001', 'restore-proof@aegisscan.local');
+          SQL
+      - name: Create atomic PostgreSQL backup
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: launch-readiness-password
+          PGDATABASE: aegisdb
+          AEGIS_BACKUP_DIR: /tmp/aegis-backups
+          AEGIS_BACKUP_RETENTION_DAYS: '30'
+        run: |
+          backup="$(sh aegis-platform/scripts/backup_postgres.sh)"
+          test -s "$backup"
+          test -s "${backup}.sha256"
+          printf 'AEGIS_BACKUP=%s\n' "$backup" >> "$GITHUB_ENV"
+      - name: Restore into disposable database and verify authoritative records
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: launch-readiness-password
+          PGDATABASE: aegisdb
+          AEGIS_RESTORE_REQUIRED_TABLES: django_migrations,users_user
+        run: sh aegis-platform/scripts/verify_postgres_restore.sh "$AEGIS_BACKUP"
