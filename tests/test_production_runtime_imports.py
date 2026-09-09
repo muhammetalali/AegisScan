@@ -103,17 +103,27 @@ def test_capability_registry_is_typed_and_fail_closed() -> None:
     assert core <= set(capabilities)
     assert set(NATIVE_TOOL_SPECS) <= set(capabilities)
     assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
-    assert len(capabilities) >= 26
+    assert len(capabilities) >= 27
     assert all(item.authorization_required for item in capabilities.values())
     assert all(item.evidence_required for item in capabilities.values())
     assert all(item.execution_mode == "isolated-celery" for item in capabilities.values())
     assert all(capabilities[item].adapter == "native-cli" for item in NATIVE_TOOL_SPECS)
     assert get_capability("network.masscan").execution_mode == "isolated-celery"
+    browser = get_capability("browser.dom-snapshot")
+    assert browser.tool == "aegis-browser-security"
+    assert browser.category == "browser-security"
+    assert browser.risk == "active-low"
+    assert browser.asset_types == ("website",)
+    assert browser.credential_mode == "none"
     assert validate_capability_options(capabilities["network.masscan"], {"ports": "80,443", "rate": 2500}) == {
         "ports": "80,443",
         "rate": 2500,
     }
     assert validate_capability_options(capabilities["web.katana"], {"depth": 5}) == {"depth": 5}
+    assert validate_capability_options(
+        capabilities["browser.dom-snapshot"],
+        {"virtual_time_budget_ms": 5000, "max_dom_bytes": 131072},
+    ) == {"virtual_time_budget_ms": 5000, "max_dom_bytes": 131072}
     with pytest.raises(ValueError, match="Unsupported options"):
         validate_capability_options(capabilities["network.nmap"], {"arbitrary_flags": "-Pn --script anything"})
     with pytest.raises(ValueError, match="Unsupported options"):
@@ -122,6 +132,8 @@ def test_capability_registry_is_typed_and_fail_closed() -> None:
         validate_capability_options(capabilities["web.katana"], {"depth": 50})
     with pytest.raises(ValueError, match="between 1 and 10000"):
         validate_capability_options(capabilities["network.masscan"], {"rate": 1000000})
+    with pytest.raises(ValueError, match="<= 10000"):
+        validate_capability_options(capabilities["browser.dom-snapshot"], {"virtual_time_budget_ms": 60000})
     with pytest.raises(ValueError, match="Unknown capability"):
         get_capability("command.shell")
 
@@ -139,16 +151,40 @@ def test_native_cli_builds_argv_without_shell_strings(tmp_path: Path, monkeypatc
     assert all(isinstance(part, str) for part in argv)
 
 
+def test_browser_native_cli_builds_bounded_argv_without_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    _bootstrap_backend()
+    from fastapi_app.services.native_tool_runtime import build_native_argv, get_native_tool_spec
+
+    monkeypatch.setattr("fastapi_app.services.native_tool_runtime.shutil.which", lambda _: "/usr/local/bin/aegis-browser-security")
+    monkeypatch.setattr("fastapi_app.services.native_tool_runtime.require_authorized_target", lambda *args, **kwargs: None)
+    argv, target = build_native_argv(
+        get_native_tool_spec("browser.dom-snapshot"),
+        "https://app.example.test/login",
+        {"virtual_time_budget_ms": 5000, "max_dom_bytes": 131072},
+    )
+    assert argv == [
+        "/usr/local/bin/aegis-browser-security",
+        "https://app.example.test/login",
+        "--virtual-time-budget-ms",
+        "5000",
+        "--max-dom-bytes",
+        "131072",
+    ]
+    assert target == "https://app.example.test/login"
+    assert "shell" not in " ".join(argv).lower()
+
+
 def test_capability_planner_prefers_ready_tools_and_exposes_packaging_gaps() -> None:
     _bootstrap_backend()
     from fastapi_app.services.capability_planner import planning_summary
 
     web = planning_summary("website", "standard")
-    assert web["ready"] >= 3
+    assert web["ready"] >= 8
     assert web["pending_packaging"] >= 1
     ready = [item for item in web["plan"] if item["execution_ready"]]
     pending = [item for item in web["plan"] if not item["execution_ready"]]
     assert ready and pending
+    assert any(item["id"] == "browser.dom-snapshot" for item in ready)
     assert max(item["order"] for item in ready) < min(item["order"] for item in pending)
     file_plan = planning_summary("file", "quick")
     assert file_plan["ready"] >= 6
