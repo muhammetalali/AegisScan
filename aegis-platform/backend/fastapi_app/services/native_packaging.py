@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-# This manifest is deliberately small and explicit. Every entry is backed by a
-# command -v assertion in Dockerfile.django. Registry presence alone never
-# means that a capability is executable in the scanner image.
+# Every entry is backed by a command -v assertion in Dockerfile.django.
+# Registry presence alone never means that a capability is executable.
 PACKAGED_NATIVE_CAPABILITIES = frozenset({
     'binary.checksec',
     'binary.strings',
@@ -10,6 +9,11 @@ PACKAGED_NATIVE_CAPABILITIES = frozenset({
     'binary.readelf',
     'binary.binwalk',
     'forensics.exiftool',
+    'recon.dnsenum',
+    'recon.fierce',
+    'web.gobuster',
+    'web.ffuf',
+    'web.waf-detection',
 })
 
 
