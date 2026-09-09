@@ -15,6 +15,7 @@ from fastapi_app.services.authorization_guard import (
 )
 from fastapi_app.services.capability_registry import get_capability
 from fastapi_app.services.evidence_identity import evidence_id
+from fastapi_app.services.native_output_normalizer import normalize_native_output
 from fastapi_app.services.native_tool_runtime import get_native_tool_spec, run_native_tool
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 
@@ -111,6 +112,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
     options = config.get('capability_options') if isinstance(config.get('capability_options'), dict) else {}
     try:
         result = run_native_tool(capability_id, str(target), options)
+        normalized = normalize_native_output(capability_id, result.stdout)
         ok, reason = revalidate_bound_authorization(scan, authorization)
         if not ok:
             return _fail(scan, execution, reason, authorization_snapshot(authorization))
@@ -134,6 +136,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                         'category': capability.category,
                         'risk': capability.risk,
                         'adapter': capability.adapter,
+                        'normalized': normalized,
                         **snapshot,
                     },
                     'collected_by': scan.initiated_by,
@@ -155,6 +158,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 'target': result.target,
                 'exit_code': result.exit_code,
                 'scanner_evidence_id': str(evidence.id),
+                'observation_count': normalized['count'],
                 'finding_ids': [],
                 **snapshot,
             }
@@ -174,6 +178,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             'capability_id': capability.id,
             'target': result.target,
             'evidence_id': str(evidence.id),
+            'observation_count': normalized['count'],
             **snapshot,
         }
     except Exception as exc:
