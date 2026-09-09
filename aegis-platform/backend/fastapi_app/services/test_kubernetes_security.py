@@ -123,7 +123,7 @@ def test_cluster_collection_reuses_one_pinned_destination(monkeypatch):
     transport = KubernetesTransport(
         server='https://kube.example.test:6443',
         destination=destination,
-        ssl_context=object(),  # request transport is replaced below
+        ssl_context=object(),
         headers={'Authorization': 'Bearer redacted-fixture'},
         cleanup_paths=(),
     )
@@ -158,7 +158,7 @@ def test_cluster_collection_reuses_one_pinned_destination(monkeypatch):
     assert summary['pinned_destination_ips'] == ['192.0.2.44']
 
 
-def test_pinned_destination_prevents_second_dns_resolution(monkeypatch):
+def test_operation_scope_prevents_second_dns_resolution(monkeypatch):
     authorization_calls: list[bool] = []
     connects: list[tuple] = []
 
@@ -211,15 +211,10 @@ def test_pinned_destination_prevents_second_dns_resolution(monkeypatch):
     monkeypatch.setattr(pinned_http.http.client, 'HTTPConnection', FakeConnection)
     monkeypatch.setattr(pinned_http.socket, 'socket', lambda *_args, **_kwargs: FakeSocket())
 
-    destination = pinned_http.pin_http_destination('http://cluster.example.test:8080')
-    first = pinned_http.request_pinned(
-        'GET', 'http://cluster.example.test:8080/version', destination=destination
-    )
-    second = pinned_http.request_pinned(
-        'GET',
-        'http://cluster.example.test:8080/api/v1/pods?limit=1000',
-        destination=destination,
-    )
+    base = 'http://cluster.example.test:8080'
+    with pinned_http.pinned_http_operation(base):
+        first = pinned_http.request_pinned('GET', f'{base}/version')
+        second = pinned_http.request_pinned('GET', f'{base}/api/v1/pods?limit=1000')
 
     assert first.resolved_ip == second.resolved_ip == '192.0.2.40'
     assert authorization_calls == [True, False, False]
