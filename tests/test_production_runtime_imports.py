@@ -86,3 +86,42 @@ def test_aepex_target_authorization_is_not_prefix_bypass(target: str, allowed: t
     subject = object.__new__(AePEX)
     subject.allowed_target_prefixes = allowed
     assert subject._target_allowed(target) is expected
+
+
+def test_capability_registry_is_typed_and_fail_closed() -> None:
+    _bootstrap_backend()
+    from fastapi_app.services.capability_registry import (
+        get_capability,
+        list_capabilities,
+        validate_capability_options,
+    )
+
+    capabilities = {item.id: item for item in list_capabilities()}
+    assert set(capabilities) == {"network.nmap", "network.masscan", "web.nuclei", "code.semgrep"}
+    assert all(item.authorization_required for item in capabilities.values())
+    assert all(item.evidence_required for item in capabilities.values())
+    assert get_capability("network.masscan").execution_mode == "isolated-celery"
+    assert validate_capability_options(capabilities["network.masscan"], {"ports": "80,443", "rate": 2500}) == {
+        "ports": "80,443",
+        "rate": 2500,
+    }
+    with pytest.raises(ValueError, match="Unsupported options"):
+        validate_capability_options(capabilities["network.nmap"], {"arbitrary_flags": "-Pn --script anything"})
+    with pytest.raises(ValueError, match="between 1 and 10000"):
+        validate_capability_options(capabilities["network.masscan"], {"rate": 1000000})
+    with pytest.raises(ValueError, match="Unknown capability"):
+        get_capability("command.shell")
+
+
+def test_capability_api_is_part_of_production_openapi_surface() -> None:
+    _bootstrap_backend()
+    import django
+
+    django.setup()
+    from fastapi_app.main import app
+
+    paths = app.openapi()["paths"]
+    assert "/api/v1/capabilities/" in paths
+    assert "/api/v1/capabilities/{capability_id}/execute" in paths
+    execute = paths["/api/v1/capabilities/{capability_id}/execute"]["post"]
+    assert execute["responses"]["202"]["description"] == "Successful Response"
