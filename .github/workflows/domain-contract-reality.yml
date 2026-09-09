@@ -149,7 +149,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
           ALLOWED_HOSTS: 'localhost,127.0.0.1,nginx'
           CSRF_TRUSTED_ORIGINS: 'http://localhost,http://127.0.0.1,http://nginx'
-        run: python -m pytest -q django_project/audit/test_hash_chain.py django_project/users/test_auth_security.py django_project/users/test_auth_detection.py enterprise/test_notification_response.py ../../tests/test_audit_append_policy.py
+        run: python -m pytest -q django_project/audit/test_hash_chain.py django_project/users/test_auth_security.py django_project/users/test_auth_detection.py enterprise/test_notification_response.py fastapi_app/routers/test_security_event_lifecycle.py ../../tests/test_audit_append_policy.py
       - name: Bulk import atomicity and intelligence lineage reality
         working-directory: aegis-platform/backend
         env:

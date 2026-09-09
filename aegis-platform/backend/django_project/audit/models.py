@@ -32,6 +32,7 @@ class AuditLog(models.Model):
         TWO_FACTOR_ENABLE = '2fa_enable', _('2FA Enabled')
         TWO_FACTOR_DISABLE = '2fa_disable', _('2FA Disabled')
         API_REQUEST = 'api_request', _('API Request')
+        SECURITY_EVENT_STATUS_CHANGE = 'security_event_status_change', _('Security Event Status Changed')
 
         # User Management
         USER_CREATE = 'user_create', _('User Created')
