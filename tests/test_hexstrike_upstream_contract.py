@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
-from aegis_platform.backend.fastapi_app.services.hexstrike_catalog import (
+from fastapi_app.services.hexstrike_catalog import (
     UPSTREAM_COMMIT,
     discover_hexstrike_capabilities,
     hexstrike_catalog,
