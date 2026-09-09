@@ -61,6 +61,17 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'recon.fierce': NativeToolSpec('recon.fierce', 'fierce', 'dns-reconnaissance', 'Authorized DNS discovery and hostname enumeration.', 'ip', ('domain',), 'active-low', 'host', '--domain', timeout=600),
     'web.httpx': NativeToolSpec('web.httpx', 'httpx', 'web-discovery', 'HTTP service probing and metadata collection.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u', suffix_args=('-json', '-silent'), timeout=600),
     'web.katana': NativeToolSpec('web.katana', 'katana', 'web-discovery', 'Web crawling and endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', '-u', suffix_args=('-jsonl', '-silent'), options=(('depth', OptionSpec('-d', 'int', 3, 1, 5)),), timeout=900),
+    'web.security-headers': NativeToolSpec(
+        'web.security-headers', 'curl', 'web-fingerprinting',
+        'HTTP response header and redirect inspection for an authorized web asset.',
+        'url', ('website', 'api_endpoint'), 'active-low', 'url', None,
+        prefix_args=(
+            '--head', '--location', '--max-redirs', '3', '--connect-timeout', '5',
+            '--max-time', '20', '--silent', '--show-error', '--dump-header', '-',
+            '--output', '/dev/null',
+        ),
+        timeout=120,
+    ),
     'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
     'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
     'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent'), options=(('threads', OptionSpec('-t', 'int', 10, 1, 50)),), timeout=1200),
