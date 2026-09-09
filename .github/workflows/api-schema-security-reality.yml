@@ -1,0 +1,182 @@
+name: API Schema Security Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/api_schema_*.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_finding_projection.py'
+      - 'aegis-platform/backend/django_project/evidence/test_api_schema_security_plane.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - '.github/workflows/api-schema-security-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/api_schema_*.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_finding_projection.py'
+      - 'aegis-platform/backend/django_project/evidence/test_api_schema_security_plane.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - '.github/workflows/api-schema-security-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api-schema-security-reality:
+    runs-on: ubuntu-latest
+    env:
+      DEBUG: 'True'
+      SECRET_KEY: ci-api-schema-django-secret-key-0123456789abcdef0123456789abcdef
+      DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
+      REDIS_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
+      JWT_SECRET_KEY: ci-api-schema-jwt-signing-key-0123456789abcdef0123456789abcdef
+      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile and migrate contract
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m compileall -q fastapi_app/services/api_schema_security.py fastapi_app/services/api_schema_capability.py
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+      - name: Prove parser preflight normalization and persistence
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            fastapi_app/services/test_api_schema_security.py \
+            fastapi_app/services/test_api_schema_capability_contract.py \
+            django_project/evidence/test_api_schema_security_plane.py
+      - name: Build scanner image and prove packaged executable
+        run: |
+          set -euo pipefail
+          docker build -f aegis-platform/backend/Dockerfile.django -t aegisscan-api-schema:ci aegis-platform/backend
+          docker run --rm --entrypoint sh aegisscan-api-schema:ci -c '
+            set -eu
+            command -v aegis-api-schema-security
+            test -x /app/fastapi_app/services/api_schema_security.py
+          '
+      - name: Prove authorized native runtime performs schema GET only
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --network host \
+            -e AUTHORIZED_SCAN_TARGETS=127.0.0.1/32 \
+            --entrypoint python aegisscan-api-schema:ci - <<'PY'
+          import json
+          import threading
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          from fastapi_app.services.capability_registry import get_capability
+          from fastapi_app.services.native_finding_projection import api_schema_finding_specs
+          from fastapi_app.services.native_output_normalizer import normalize_native_output
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          document = {
+              'openapi': '3.1.0',
+              'info': {'title': 'CI Contract', 'version': '1'},
+              'components': {'securitySchemes': {
+                  'BearerAuth': {'type': 'http', 'scheme': 'bearer'},
+                  'QueryKey': {'type': 'apiKey', 'in': 'query', 'name': 'api_key'},
+              }},
+              'security': [{'BearerAuth': []}],
+              'paths': {
+                  '/health': {'get': {'responses': {'200': {'description': 'ok'}}}},
+                  '/public-write': {'post': {'security': [], 'responses': {'202': {'description': 'accepted'}}}},
+              },
+          }
+          body = json.dumps(document).encode()
+          requests_seen = []
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  requests_seen.append((self.command, self.path))
+                  if self.path != '/openapi.json':
+                      self.send_response(404)
+                      self.end_headers()
+                      return
+                  self.send_response(200)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Content-Length', str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+              def do_POST(self):
+                  requests_seen.append((self.command, self.path))
+                  self.send_response(500)
+                  self.end_headers()
+              def log_message(self, *_args):
+                  pass
+
+          server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+          thread = threading.Thread(target=server.serve_forever, daemon=True)
+          thread.start()
+          try:
+              capability = get_capability('api.openapi-contract-security')
+              assert capability.tool == 'aegis-api-schema-security'
+              target = f'http://127.0.0.1:{server.server_port}'
+              result = run_native_tool(capability.id, target, {})
+          finally:
+              server.shutdown()
+              server.server_close()
+              thread.join(timeout=5)
+
+          assert result.exit_code == 0, result.stderr
+          assert requests_seen == [('GET', '/openapi.json')], requests_seen
+          payload = json.loads(result.stdout)
+          assert payload['schema'] == 'aegis.api-schema-security.v1', payload
+          normalized = normalize_native_output(capability.id, result.stdout)
+          specs = api_schema_finding_specs(normalized)
+          assert {item.rule_id for item in specs} == {
+              'api.openapi.api-key-in-query',
+              'api.openapi.explicit-public-state-change',
+          }, specs
+          print('api-schema-authorized-runtime-ok')
+          print('api-schema-get-only-proof-ok')
+          PY

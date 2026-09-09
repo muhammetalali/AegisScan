@@ -123,6 +123,23 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
             if not observations and data.get('error'):
                 observations.append({'kind': 'browser-error', 'summary': str(data['error'])[:2000]})
 
+    elif capability_id == 'api.openapi-contract-security':
+        data = _json(raw)
+        if isinstance(data, dict):
+            for item in data.get('observations', []):
+                if not isinstance(item, dict):
+                    continue
+                safe = dict(item)
+                safe['kind'] = str(safe.get('kind') or 'api-schema-observation')[:100]
+                for key in ('title', 'description', 'remediation', 'location', 'path', 'spec_url'):
+                    if key in safe:
+                        safe[key] = str(safe[key])[:4096]
+                if isinstance(safe.get('affected_urls'), list):
+                    safe['affected_urls'] = [str(value)[:2048] for value in safe['affected_urls'][:20]]
+                observations.append(safe)
+            if not observations and data.get('error'):
+                observations.append({'kind': 'api-schema-error', 'summary': str(data['error'])[:2000]})
+
     elif capability_id == 'forensics.exiftool':
         data = _json(raw)
         records = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
