@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import django
+import yaml
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
 django.setup()
@@ -20,7 +21,6 @@ from django_project.scans.models import Scan, ScanEngineExecution
 from django_project.system.credential_models import CredentialAccess, CredentialSecret
 from django_project.system.credential_vault import create_credential_secret
 from django_project.vulnerabilities.models import Vulnerability
-from fastapi_app.celery_app import celery_app
 from fastapi_app.services.capability_registry import get_capability, validate_capability_options
 from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution
 from fastapi_app.tasks.native_capabilities import run_native_capability_scan
@@ -34,10 +34,12 @@ def require_env(name: str) -> str:
 
 
 def assert_secret_absent(secret: str, *payloads) -> None:
+    if not secret:
+        raise AssertionError('secret redaction proof requires non-empty secret material')
     for payload in payloads:
         rendered = payload if isinstance(payload, str) else json.dumps(payload, default=str, sort_keys=True)
         if secret in rendered:
-            raise AssertionError('kubeconfig secret leaked into durable non-secret payload')
+            raise AssertionError('kubeconfig secret material leaked into durable non-secret payload')
 
 
 def main() -> int:
@@ -46,6 +48,10 @@ def main() -> int:
     kubeconfig = kubeconfig_path.read_text(encoding='utf-8')
     if not kubeconfig.strip():
         raise RuntimeError('kubeconfig fixture is empty')
+    kubeconfig_doc = yaml.safe_load(kubeconfig)
+    token = str(kubeconfig_doc['users'][0]['user']['token'])
+    if not token:
+        raise RuntimeError('kubeconfig fixture token is empty')
 
     User = get_user_model()
     user = User.objects.create_user(email='kubernetes-e2e@example.test', password='Kubernetes-E2E-123!')
@@ -111,6 +117,9 @@ def main() -> int:
         status=Scan.Status.QUEUED,
     )
 
+    assert_secret_absent(kubeconfig, scan.config)
+    assert_secret_absent(token, scan.config)
+
     async_result = run_native_capability_scan.delay(str(scan.id))
     result = async_result.get(timeout=240, disable_sync_subtasks=False)
     if result.get('status') != Scan.Status.COMPLETED:
@@ -131,6 +140,20 @@ def main() -> int:
         raise AssertionError('Kubernetes summary observation is missing')
     if summary.get('read_only') is not True or summary.get('secrets_endpoint_requested') is not False:
         raise AssertionError(f'Read-only proof is invalid: {summary!r}')
+    if summary.get('dns_pinned_for_scan') is not True:
+        raise AssertionError(f'Kubernetes scan-wide DNS pin proof is missing: {summary!r}')
+    pinned_ips = [str(value) for value in summary.get('pinned_destination_ips', [])]
+    if not pinned_ips:
+        raise AssertionError(f'Kubernetes pinned destination IP evidence is missing: {summary!r}')
+    coverage_ips = {
+        str(item.get('resolved_ip'))
+        for item in summary.get('coverage', [])
+        if isinstance(item, dict) and item.get('resolved_ip')
+    }
+    if not coverage_ips or not coverage_ips.issubset(set(pinned_ips)):
+        raise AssertionError(
+            f'Kubernetes request coverage escaped the pinned destination set: coverage={coverage_ips} pinned={pinned_ips}'
+        )
     if any('/secrets' in str(path) for path in summary.get('requested_paths', [])):
         raise AssertionError('Kubernetes analyzer requested a secrets API path')
 
@@ -155,15 +178,18 @@ def main() -> int:
     ).exists():
         raise AssertionError('Worker credential resolution was not recorded in the append-only vault ledger')
 
-    assert_secret_absent(
-        kubeconfig,
+    durable_payloads = (
         scanner_evidence.raw_output,
         scanner_evidence.metadata,
         execution.result_data,
+        scan.config,
         scan.engine_results,
+        result,
         [item.raw_data for item in findings],
         list(Evidence.objects.filter(scan=scan).values('raw_output', 'metadata')),
     )
+    assert_secret_absent(kubeconfig, *durable_payloads)
+    assert_secret_absent(token, *durable_payloads)
 
     before = {
         'findings': Vulnerability.objects.filter(scan=scan).count(),
@@ -180,6 +206,8 @@ def main() -> int:
         raise AssertionError(f'Redelivery duplicated durable records: before={before}, after={after}')
     if redelivery.get('scan_id') != str(scan.id):
         raise AssertionError(f'Redelivery returned unexpected scan identity: {redelivery!r}')
+    assert_secret_absent(kubeconfig, redelivery)
+    assert_secret_absent(token, redelivery)
 
     print(json.dumps({
         'status': 'ok',
@@ -190,6 +218,8 @@ def main() -> int:
         'credential_access_count': CredentialAccess.objects.filter(credential=credential).count(),
         'read_only': summary['read_only'],
         'secrets_endpoint_requested': summary['secrets_endpoint_requested'],
+        'dns_pinned_for_scan': summary['dns_pinned_for_scan'],
+        'pinned_destination_ips': pinned_ips,
         'coverage_gaps': summary.get('coverage_gaps', 0),
         'rules': sorted(rules),
     }, sort_keys=True))
