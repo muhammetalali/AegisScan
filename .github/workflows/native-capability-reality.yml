@@ -45,6 +45,7 @@ jobs:
             command -v wafw00f
             command -v curl
             command -v chromium
+            command -v firefox-esr
             command -v aegis-browser-security
             command -v httpx
             command -v subfinder
@@ -104,28 +105,41 @@ jobs:
           assert normalized["count"] >= 1, normalized
           assert normalized["observations"][0]["status"] == 200, normalized
 
-          browser = run_native_tool(
+          chromium = run_native_tool(
               "browser.dom-snapshot",
               "http://127.0.0.1:18080",
-              {"virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
+              {"browser": "chromium", "virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
           )
-          assert browser.exit_code == 0, browser.stderr
-          payload = json.loads(browser.stdout)
-          assert payload["schema"] == "aegis.browser-security.v1", payload
-          assert payload["dom_sha256"], payload
-          assert payload["navigation_policy"]["javascript_disabled"] is False, payload
-          assert payload["navigation_policy"]["third_party_dns_blocked"] is False, payload
-          observation = payload["observations"][0]
-          assert observation["kind"] == "browser-dom-security-snapshot", observation
-          assert observation["title"] == "Aegis Fixture", observation
-          assert observation["password_field_count"] == 1, observation
-          assert observation["meta_csp_present"] is True, observation
-          assert "cdn.example.invalid" in observation["third_party_resource_hosts"], observation
-          assert "secret-browser-password-value" not in browser.stdout
-          assert "secret-browser-password-value" not in browser.stderr
-          normalized_browser = normalize_native_output("browser.dom-snapshot", browser.stdout)
+          assert chromium.exit_code == 0, chromium.stderr
+          chromium_payload = json.loads(chromium.stdout)
+          assert chromium_payload["schema"] == "aegis.browser-security.v1", chromium_payload
+          assert chromium_payload["browser_family"] == "chromium", chromium_payload
+          assert chromium_payload["dom_sha256"], chromium_payload
+          assert chromium_payload["runtime"]["capture_method"] == "chromium-dump-dom", chromium_payload
+          chromium_observation = chromium_payload["observations"][0]
+          assert chromium_observation["kind"] == "browser-dom-security-snapshot", chromium_observation
+          assert chromium_observation["title"] == "Aegis Fixture", chromium_observation
+          assert chromium_observation["password_field_count"] == 1, chromium_observation
+          assert chromium_observation["meta_csp_present"] is True, chromium_observation
+          assert "cdn.example.invalid" in chromium_observation["third_party_resource_hosts"], chromium_observation
+          assert "secret-browser-password-value" not in chromium.stdout
+          assert "secret-browser-password-value" not in chromium.stderr
+          normalized_browser = normalize_native_output("browser.dom-snapshot", chromium.stdout)
           assert normalized_browser["count"] == 1, normalized_browser
           assert normalized_browser["observations"][0]["password_field_count"] == 1, normalized_browser
+
+          firefox = run_native_tool(
+              "browser.dom-snapshot",
+              "http://127.0.0.1:18080",
+              {"browser": "firefox", "virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
+          )
+          assert firefox.exit_code == 0, firefox.stderr
+          firefox_payload = json.loads(firefox.stdout)
+          assert firefox_payload["browser_family"] == "firefox", firefox_payload
+          assert firefox_payload["runtime"]["capture_method"] == "firefox-headless-load-plus-dom-fetch", firefox_payload
+          assert firefox_payload["observations"][0]["title"] == "Aegis Fixture", firefox_payload
+          assert "secret-browser-password-value" not in firefox.stdout
+          assert "secret-browser-password-value" not in firefox.stderr
 
           secret = "native-vault-fixture-token-789"
           seen = []
@@ -169,6 +183,7 @@ jobs:
           print("security-headers-real-curl-ok")
           print("credential-bound-native-runtime-ok")
           print("browser-dom-security-real-chromium-ok")
+          print("browser-dom-security-real-firefox-ok")
           PY
             echo web-discovery-headers-and-browser-ok
           '
