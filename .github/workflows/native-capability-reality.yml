@@ -1,0 +1,64 @@
+name: Native Capability Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scanner-native-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject arbitrary shell execution in native runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number --fixed-strings 'shell=True' aegis-platform/backend/fastapi_app/services/native_tool_runtime.py aegis-platform/backend/fastapi_app/tasks/native_capabilities.py
+          ! grep -R --line-number 'additional_args\|arbitrary_flags' aegis-platform/backend/fastapi_app/services/native_tool_runtime.py
+      - name: Build scanner image with native capabilities
+        run: docker build -f aegis-platform/backend/Dockerfile.django -t aegisscan-native-capability:ci aegis-platform/backend
+      - name: Prove packaged binaries and native argv runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh aegisscan-native-capability:ci -c '
+            set -eu
+            command -v strings
+            command -v objdump
+            command -v readelf
+            command -v checksec
+            command -v binwalk
+            command -v exiftool
+            command -v dnsenum
+            command -v fierce
+            command -v gobuster
+            command -v ffuf
+            command -v wafw00f
+            test -s /opt/aegis-wordlists/web-common.txt
+          '
+          docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+          result = run_native_tool("binary.strings", "/bin/sh", {})
+          assert result.exit_code == 0, result.stderr
+          assert result.stdout.strip()
+          assert result.tool == "strings"
+          print("native-runtime-ok")
+          '
+      - name: Prove packaging manifest matches Dockerfile reality gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'aegis-platform/backend')
+          from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
+          from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
+          assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
+          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 11
+          print(sorted(PACKAGED_NATIVE_CAPABILITIES))
+          PY
