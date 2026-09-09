@@ -139,6 +139,21 @@ def test_native_cli_builds_argv_without_shell_strings(tmp_path: Path, monkeypatc
     assert all(isinstance(part, str) for part in argv)
 
 
+def test_capability_planner_prefers_ready_tools_and_exposes_packaging_gaps() -> None:
+    _bootstrap_backend()
+    from fastapi_app.services.capability_planner import planning_summary
+
+    web = planning_summary("website", "standard")
+    assert web["ready"] >= 3
+    assert web["pending_packaging"] >= 1
+    ready = [item for item in web["plan"] if item["execution_ready"]]
+    pending = [item for item in web["plan"] if not item["execution_ready"]]
+    assert ready and pending
+    assert max(item["order"] for item in ready) < min(item["order"] for item in pending)
+    file_plan = planning_summary("file", "quick")
+    assert file_plan["ready"] >= 6
+
+
 def test_native_capability_task_is_routed_to_scanner_plane() -> None:
     _bootstrap_backend()
     from fastapi_app.celery_app import SCANNER_QUEUE, SCANNER_TASK_ROUTES
@@ -157,6 +172,7 @@ def test_capability_api_is_part_of_production_openapi_surface() -> None:
     paths = app.openapi()["paths"]
     assert "/api/v1/capabilities/" in paths
     assert "/api/v1/capabilities/packaging" in paths
+    assert "/api/v1/capabilities/plan/{asset_id}" in paths
     assert "/api/v1/capabilities/{capability_id}/execute" in paths
     execute = paths["/api/v1/capabilities/{capability_id}/execute"]["post"]
     assert execute["responses"]["202"]["description"] == "Successful Response"
