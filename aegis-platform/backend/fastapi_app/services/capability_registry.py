@@ -4,10 +4,12 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from .api_runtime_capability import CAPABILITY_ID as API_RUNTIME_CAPABILITY_ID, register_api_runtime_capability
 from .api_schema_capability import CAPABILITY_ID as API_SCHEMA_CAPABILITY_ID, register_api_schema_capability
 from .native_tool_runtime import NATIVE_TOOL_SPECS, validate_native_options
 
 register_api_schema_capability()
+register_api_runtime_capability()
 
 
 @dataclass(frozen=True)
@@ -89,7 +91,7 @@ def get_capability(capability_id: str) -> Capability:
         raise ValueError(f'Unknown capability: {capability_id}') from exc
 
 
-def _validate_api_schema_options(normalized: dict[str, Any]) -> dict[str, Any]:
+def _validate_api_spec_path_options(normalized: dict[str, Any]) -> dict[str, Any]:
     spec_path = str(normalized.get('spec_path') or '/openapi.json').strip()
     parsed = urlsplit(spec_path)
     if parsed.scheme or parsed.netloc or parsed.fragment or not parsed.path.startswith('/'):
@@ -105,8 +107,8 @@ def validate_capability_options(capability: Capability, options: dict[str, Any])
 
     if capability.id in NATIVE_TOOL_SPECS:
         normalized = validate_native_options(NATIVE_TOOL_SPECS[capability.id], options)
-        if capability.id == API_SCHEMA_CAPABILITY_ID:
-            return _validate_api_schema_options(normalized)
+        if capability.id in {API_SCHEMA_CAPABILITY_ID, API_RUNTIME_CAPABILITY_ID}:
+            return _validate_api_spec_path_options(normalized)
         return normalized
 
     normalized = dict(options)
