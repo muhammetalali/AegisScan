@@ -33,10 +33,14 @@ jobs:
             command -v readelf
             command -v checksec
             command -v binwalk
+            command -v xxd
+            command -v gdb
             command -v exiftool
             command -v dnsenum
             command -v fierce
+            command -v nbtscan
             command -v gobuster
+            command -v dirb
             command -v ffuf
             command -v wafw00f
             command -v httpx
@@ -51,7 +55,9 @@ jobs:
           result = run_native_tool("binary.strings", "/bin/sh", {})
           assert result.exit_code == 0, result.stderr
           assert result.stdout.strip()
-          assert result.tool == "strings"
+          xxd = run_native_tool("binary.xxd", "/bin/sh", {})
+          assert xxd.exit_code == 0, xxd.stderr
+          assert xxd.stdout.strip()
           print("native-runtime-ok")
           '
       - name: Prove packaging, planning and normalization contracts
@@ -65,11 +71,13 @@ jobs:
           from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
           from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
           assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
-          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 16
+          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 21
           web = planning_summary("website", "standard")
-          assert web["ready"] >= 4
+          assert web["ready"] >= 5
           assert web["pending_packaging"] >= 1
           code = planning_summary("repository", "quick")
           assert code["ready"] >= 2
+          file_plan = planning_summary("file", "quick")
+          assert file_plan["ready"] >= 8
           print(sorted(PACKAGED_NATIVE_CAPABILITIES))
           '
