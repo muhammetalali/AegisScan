@@ -20,6 +20,7 @@ PACKAGED_NATIVE_CAPABILITIES = frozenset({
     'web.dirb',
     'web.ffuf',
     'web.httpx',
+    'web.katana',
     'web.waf-detection',
     'container.trivy-image',
     'code.checkov',

@@ -45,6 +45,7 @@ jobs:
             command -v wafw00f
             command -v httpx
             command -v subfinder
+            command -v katana
             command -v trivy
             command -v trufflehog
             command -v checkov
@@ -59,6 +60,32 @@ jobs:
           assert xxd.exit_code == 0, xxd.stderr
           assert xxd.stdout.strip()
           print("native-runtime-ok")
+          '
+      - name: Prove real Katana crawl against isolated fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh aegisscan-native-capability:ci -c '
+            set -eu
+            mkdir -p /tmp/aegis-katana-fixture
+            printf "%s\n" "<html><body><a href=/admin>admin</a><a href=/api/v1/health>health</a></body></html>" > /tmp/aegis-katana-fixture/index.html
+            printf "%s\n" "ok" > /tmp/aegis-katana-fixture/admin
+            mkdir -p /tmp/aegis-katana-fixture/api/v1
+            printf "%s\n" "{\"status\":\"ok\"}" > /tmp/aegis-katana-fixture/api/v1/health
+            python -m http.server 18080 --bind 127.0.0.1 --directory /tmp/aegis-katana-fixture >/tmp/aegis-katana-http.log 2>&1 &
+            server_pid=$!
+            trap "kill $server_pid >/dev/null 2>&1 || true" EXIT
+            ready=0
+            for attempt in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:18080/ >/dev/null; then ready=1; break; fi
+              sleep 0.25
+            done
+            test "$ready" -eq 1
+            katana -u http://127.0.0.1:18080 -d 1 -silent -jsonl > /tmp/aegis-katana.jsonl
+            test -s /tmp/aegis-katana.jsonl
+            grep -q "127.0.0.1:18080" /tmp/aegis-katana.jsonl
+            grep -q "/admin" /tmp/aegis-katana.jsonl
+            echo katana-real-crawl-ok
           '
       - name: Prove real pause resume cancel process control
         shell: bash
@@ -101,10 +128,10 @@ jobs:
           from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
           from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
           assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
-          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 21
+          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 22
+          assert "web.katana" in PACKAGED_NATIVE_CAPABILITIES
           web = planning_summary("website", "standard")
-          assert web["ready"] >= 5
-          assert web["pending_packaging"] >= 1
+          assert web["ready"] >= 6
           code = planning_summary("repository", "quick")
           assert code["ready"] >= 2
           file_plan = planning_summary("file", "quick")
