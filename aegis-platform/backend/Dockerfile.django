@@ -39,7 +39,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        curl nmap masscan libpcap0.8 ca-certificates libcap2-bin \
+        curl chromium nmap masscan libpcap0.8 ca-certificates libcap2-bin \
         binutils checksec binwalk libimage-exiftool-perl xxd gdb \
         gobuster ffuf dirb dnsenum fierce wafw00f nbtscan \
         git openssh-client \
@@ -57,6 +57,7 @@ RUN chmod 0755 /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/subfind
     && /usr/local/bin/httpx -version \
     && /usr/local/bin/subfinder -version \
     && /usr/local/bin/katana -version \
+    && chromium --version \
     && /usr/local/bin/trivy --version \
     && /usr/local/bin/trufflehog --version \
     && test -f /opt/nuclei-templates/http/misconfiguration/http-missing-security-headers.yaml
@@ -74,7 +75,7 @@ RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
     && mkdir -p /app/staticfiles /app/media \
     && chown -R aegis:aegis /app \
-    && chmod 0755 /app/scanner-worker-entrypoint.sh \
+    && chmod 0755 /app/scanner-worker-entrypoint.sh /app/fastapi_app/services/browser_security_probe.py \
     && nmap_binary="$(readlink -f "$(command -v nmap)")" \
     && masscan_binary="$(readlink -f "$(command -v masscan)")" \
     && test -f "$nmap_binary" \
@@ -89,6 +90,7 @@ RUN command -v nmap >/dev/null \
     && command -v semgrep >/dev/null \
     && command -v nuclei >/dev/null \
     && command -v curl >/dev/null \
+    && command -v chromium >/dev/null \
     && command -v httpx >/dev/null \
     && command -v subfinder >/dev/null \
     && command -v katana >/dev/null \
