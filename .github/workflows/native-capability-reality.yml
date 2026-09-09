@@ -49,16 +49,20 @@ jobs:
           assert result.tool == "strings"
           print("native-runtime-ok")
           '
-      - name: Prove packaging manifest matches Dockerfile reality gate
+      - name: Prove packaging, planning and normalization contracts
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import sys
-          sys.path.insert(0, 'aegis-platform/backend')
+          docker run --rm --entrypoint python aegisscan-native-capability:ci -m pytest -q \
+            fastapi_app/services/test_native_output_normalizer.py
+          docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
+          from fastapi_app.services.capability_planner import planning_summary
           from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
           from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
           assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
           assert len(PACKAGED_NATIVE_CAPABILITIES) >= 11
+          web = planning_summary("website", "standard")
+          assert web["ready"] >= 3
+          assert web["pending_packaging"] >= 1
           print(sorted(PACKAGED_NATIVE_CAPABILITIES))
-          PY
+          '
