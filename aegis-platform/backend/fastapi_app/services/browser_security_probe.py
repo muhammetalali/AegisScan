@@ -9,11 +9,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
 SCHEMA = 'aegis.browser-security.v1'
+BrowserChoice = Literal['auto', 'chromium', 'firefox']
 
 
 class BrowserDomParser(HTMLParser):
@@ -86,7 +89,17 @@ class BrowserDomParser(HTMLParser):
         elif self.in_script and data.strip():
             self.inline_script_count += 1
 
-    def snapshot(self, dom: str, truncated: bool, browser: str, virtual_time_budget_ms: int, max_dom_bytes: int) -> dict[str, Any]:
+    def snapshot(
+        self,
+        dom: str,
+        truncated: bool,
+        browser: str,
+        browser_family: str,
+        virtual_time_budget_ms: int,
+        max_dom_bytes: int,
+        capture_method: str,
+        browser_log: str,
+    ) -> dict[str, Any]:
         target_scheme = urlparse(self.base_url).scheme.lower()
         target_host = self.target_host
         resource_hosts: set[str] = set()
@@ -101,14 +114,11 @@ class BrowserDomParser(HTMLParser):
                     third_party_hosts.add(host)
             if target_scheme == 'https' and parsed.scheme == 'http':
                 mixed_content.append(value[:2048])
-        insecure_form_actions = [
-            value[:2048]
-            for value in self.form_actions
-            if urlparse(value).scheme == 'http'
-        ]
+        insecure_form_actions = [value[:2048] for value in self.form_actions if urlparse(value).scheme == 'http']
         return {
             'schema': SCHEMA,
             'browser': browser,
+            'browser_family': browser_family,
             'target_url': self.base_url,
             'dom_sha256': hashlib.sha256(dom.encode('utf-8', errors='ignore')).hexdigest(),
             'dom_bytes': len(dom.encode('utf-8', errors='ignore')),
@@ -116,6 +126,8 @@ class BrowserDomParser(HTMLParser):
             'runtime': {
                 'virtual_time_budget_ms': virtual_time_budget_ms,
                 'max_dom_bytes': max_dom_bytes,
+                'capture_method': capture_method,
+                'browser_log': browser_log[-12000:],
             },
             'observations': [{
                 'kind': 'browser-dom-security-snapshot',
@@ -136,59 +148,120 @@ class BrowserDomParser(HTMLParser):
         }
 
 
-def _browser_binary() -> str:
-    for candidate in ('chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable'):
-        value = shutil.which(candidate)
-        if value:
-            return value
-    raise RuntimeError('No supported headless browser binary is installed on the scanner worker')
+def _browser_binary(preferred: BrowserChoice = 'auto') -> tuple[str, str]:
+    candidates: dict[str, tuple[str, ...]] = {
+        'chromium': ('chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable'),
+        'firefox': ('firefox', 'firefox-esr'),
+    }
+    order = ('chromium', 'firefox') if preferred == 'auto' else (preferred,)
+    for family in order:
+        for candidate in candidates[family]:
+            value = shutil.which(candidate)
+            if value:
+                return value, family
+    raise RuntimeError(f'No supported browser binary is installed for preference: {preferred}')
 
 
-def capture_dom(url: str, virtual_time_budget_ms: int, max_dom_bytes: int) -> tuple[str, bool, str]:
-    browser = _browser_binary()
-    with tempfile.TemporaryDirectory(prefix='aegis-browser-profile-') as profile:
-        argv = [
-            browser,
-            '--headless=new',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-            '--no-first-run',
-            '--no-default-browser-check',
-            f'--user-data-dir={profile}',
-            f'--virtual-time-budget={virtual_time_budget_ms}',
-            '--dump-dom',
-            url,
-        ]
-        completed = subprocess.run(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            shell=False,
-            timeout=max(30, (max(0, virtual_time_budget_ms) // 1000) + 30),
-            check=False,
-            env={**os.environ, 'NO_COLOR': '1'},
-        )
+def _bounded_dom(raw: bytes, max_dom_bytes: int) -> tuple[str, bool]:
+    truncated = len(raw) > max_dom_bytes
+    data = raw[:max_dom_bytes] if truncated else raw
+    return data.decode('utf-8', errors='ignore'), truncated
+
+
+def _fetch_dom(url: str, max_dom_bytes: int, timeout_seconds: int) -> tuple[str, bool]:
+    request = urllib.request.Request(url, headers={'User-Agent': 'AegisScan-BrowserSecurity/1.0'})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read(max_dom_bytes + 1)
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f'Firefox navigation succeeded but DOM fetch failed: {exc}') from exc
+    return _bounded_dom(raw, max_dom_bytes)
+
+
+def _capture_with_chromium(browser: str, url: str, virtual_time_budget_ms: int, max_dom_bytes: int, profile: str) -> tuple[str, bool, str, str]:
+    argv = [
+        browser,
+        '--headless=new',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--no-first-run',
+        '--no-default-browser-check',
+        f'--user-data-dir={profile}',
+        f'--virtual-time-budget={virtual_time_budget_ms}',
+        '--dump-dom',
+        url,
+    ]
+    completed = subprocess.run(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=False,
+        shell=False,
+        timeout=max(30, (max(0, virtual_time_budget_ms) // 1000) + 30),
+        check=False,
+        env={**os.environ, 'NO_COLOR': '1'},
+    )
     if completed.returncode != 0:
-        raise RuntimeError((completed.stderr or 'headless browser failed').strip()[:2000])
-    dom = completed.stdout or ''
-    encoded = dom.encode('utf-8', errors='ignore')
-    truncated = len(encoded) > max_dom_bytes
-    if truncated:
-        dom = encoded[:max_dom_bytes].decode('utf-8', errors='ignore')
-    return dom, truncated, browser
+        raise RuntimeError((completed.stderr.decode('utf-8', errors='ignore') or 'headless browser failed')[-12000:])
+    dom, truncated = _bounded_dom(completed.stdout or b'', max_dom_bytes)
+    return dom, truncated, 'chromium-dump-dom', completed.stderr.decode('utf-8', errors='ignore')
 
 
-def analyze_dom(url: str, dom: str, truncated: bool, browser: str = 'test-browser', virtual_time_budget_ms: int = 3000, max_dom_bytes: int = 262144) -> dict[str, Any]:
+def _capture_with_firefox(browser: str, url: str, virtual_time_budget_ms: int, max_dom_bytes: int, profile: str) -> tuple[str, bool, str, str]:
+    screenshot_path = os.path.join(profile, 'aegis-firefox-check.png')
+    completed = subprocess.run(
+        [browser, '--headless', '--screenshot', screenshot_path, url],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        shell=False,
+        timeout=max(30, (max(0, virtual_time_budget_ms) // 1000) + 30),
+        check=False,
+        env={**os.environ, 'NO_COLOR': '1'},
+    )
+    if completed.returncode != 0:
+        raise RuntimeError((completed.stderr or completed.stdout or 'headless firefox failed')[-12000:])
+    dom, truncated = _fetch_dom(url, max_dom_bytes, max(10, (max(0, virtual_time_budget_ms) // 1000) + 10))
+    log = '\n'.join(part for part in (completed.stdout, completed.stderr) if part)
+    return dom, truncated, 'firefox-headless-load-plus-dom-fetch', log
+
+
+def capture_dom(
+    url: str,
+    virtual_time_budget_ms: int,
+    max_dom_bytes: int,
+    browser_choice: BrowserChoice = 'auto',
+) -> tuple[str, bool, str, str, str, str]:
+    browser, family = _browser_binary(browser_choice)
+    with tempfile.TemporaryDirectory(prefix='aegis-browser-profile-') as profile:
+        if family == 'firefox':
+            dom, truncated, method, log = _capture_with_firefox(browser, url, virtual_time_budget_ms, max_dom_bytes, profile)
+        else:
+            dom, truncated, method, log = _capture_with_chromium(browser, url, virtual_time_budget_ms, max_dom_bytes, profile)
+    return dom, truncated, browser, family, method, log
+
+
+def analyze_dom(
+    url: str,
+    dom: str,
+    truncated: bool,
+    browser: str = 'test-browser',
+    virtual_time_budget_ms: int = 3000,
+    max_dom_bytes: int = 262144,
+    browser_family: str = 'test',
+    capture_method: str = 'unit-test',
+    browser_log: str = '',
+) -> dict[str, Any]:
     parser = BrowserDomParser(url)
     parser.feed(dom)
     parser.close()
-    return parser.snapshot(dom, truncated, browser, virtual_time_budget_ms, max_dom_bytes)
+    return parser.snapshot(dom, truncated, browser, browser_family, virtual_time_budget_ms, max_dom_bytes, capture_method, browser_log)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='AegisScan headless browser security snapshot probe')
     parser.add_argument('url')
+    parser.add_argument('--browser', choices=('auto', 'chromium', 'firefox'), default='auto')
     parser.add_argument('--virtual-time-budget-ms', type=int, default=3000)
     parser.add_argument('--max-dom-bytes', type=int, default=262144)
     args = parser.parse_args(argv)
@@ -199,8 +272,23 @@ def main(argv: list[str] | None = None) -> int:
     parsed = urlparse(args.url)
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         raise SystemExit('Only absolute http/https URLs are supported')
-    dom, truncated, browser = capture_dom(args.url, args.virtual_time_budget_ms, args.max_dom_bytes)
-    print(json.dumps(analyze_dom(args.url, dom, truncated, browser, args.virtual_time_budget_ms, args.max_dom_bytes), sort_keys=True))
+    dom, truncated, browser, family, method, log = capture_dom(
+        args.url,
+        args.virtual_time_budget_ms,
+        args.max_dom_bytes,
+        args.browser,
+    )
+    print(json.dumps(analyze_dom(
+        args.url,
+        dom,
+        truncated,
+        browser,
+        args.virtual_time_budget_ms,
+        args.max_dom_bytes,
+        family,
+        method,
+        log,
+    ), sort_keys=True))
     return 0
 
 
@@ -208,5 +296,5 @@ if __name__ == '__main__':
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(json.dumps({'schema': SCHEMA, 'error': str(exc)[:2000], 'observations': []}, sort_keys=True), file=sys.stderr)
+        print(json.dumps({'schema': SCHEMA, 'error': str(exc)[-12000:], 'observations': []}, sort_keys=True), file=sys.stderr)
         raise SystemExit(2)
