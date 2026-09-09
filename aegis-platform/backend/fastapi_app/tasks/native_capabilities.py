@@ -8,12 +8,18 @@ from django.db import transaction
 
 from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
+from django_project.system.credential_vault import CredentialVaultDenied
 from fastapi_app.services.authorization_guard import (
     authorization_snapshot,
     require_bound_scan_authorization,
     revalidate_bound_authorization,
 )
 from fastapi_app.services.capability_registry import get_capability
+from fastapi_app.services.credential_execution import (
+    assert_no_credential_material_leaked,
+    empty_credential_context,
+    resolve_credential_refs_for_worker,
+)
 from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.native_output_normalizer import normalize_native_output
 from fastapi_app.services.native_tool_runtime import (
@@ -105,6 +111,11 @@ def _scan_control_state(scan_id: str) -> str:
     return str(Scan.objects.only('status').get(pk=scan_id).status)
 
 
+def _configured_credential_refs(config: dict[str, Any]) -> list[str]:
+    refs = config.get('credential_refs')
+    return [str(item) for item in refs] if isinstance(refs, list) else []
+
+
 @shared_task(
     bind=True,
     name='fastapi_app.tasks.native_capabilities.run_native_capability_scan',
@@ -147,12 +158,27 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
     scan.save(update_fields=['status', 'current_phase', 'current_engine', 'started_at', 'updated_at'])
 
     options = config.get('capability_options') if isinstance(config.get('capability_options'), dict) else {}
+    credential_refs = _configured_credential_refs(config)
+    credential_context = config.get('credential_context') if isinstance(config.get('credential_context'), dict) else empty_credential_context()
+    credential_materials: tuple[dict[str, Any], ...] = ()
     try:
+        if credential_refs:
+            if spec.credential_mode == 'none':
+                return _fail(scan, execution, f'{capability.id} does not support credential-bound execution', credential_context)
+            credential_materials, credential_context = resolve_credential_refs_for_worker(
+                project_id=scan.project_id,
+                actor_id=scan.initiated_by_id,
+                refs=credential_refs,
+                capability_id=capability.id,
+                allowed_kinds=spec.credential_kinds,
+                purpose=f'native:{capability.id}:execute',
+            )
         result = run_native_tool(
             capability_id,
             str(target),
             options,
             state_getter=lambda: _scan_control_state(scan_id),
+            credential_materials=credential_materials,
         )
         normalized = normalize_native_output(capability_id, result.stdout)
         ok, reason = revalidate_bound_authorization(scan, authorization)
@@ -161,6 +187,15 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
 
         now = datetime.now(timezone.utc)
         snapshot = authorization_snapshot(authorization)
+        if credential_materials:
+            assert_no_credential_material_leaked(
+                credential_materials,
+                result.stdout,
+                result.stderr,
+                normalized,
+                credential_context,
+                snapshot,
+            )
         with transaction.atomic():
             evidence, _ = Evidence.objects.update_or_create(
                 id=evidence_id('scan', scan_id, capability.tool, 'scanner_output'),
@@ -179,6 +214,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                         'risk': capability.risk,
                         'adapter': capability.adapter,
                         'normalized': normalized,
+                        'credential_context': credential_context,
                         **snapshot,
                     },
                     'collected_by': scan.initiated_by,
@@ -202,6 +238,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 'scanner_evidence_id': str(evidence.id),
                 'observation_count': normalized['count'],
                 'finding_ids': [],
+                'credential_context': credential_context,
                 **snapshot,
             }
             execution.save(update_fields=[
@@ -222,11 +259,14 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             'target': result.target,
             'evidence_id': str(evidence.id),
             'observation_count': normalized['count'],
+            'credential_context': credential_context,
             **snapshot,
         }
     except NativeExecutionCancelled:
         return _cancelled(scan, execution)
+    except CredentialVaultDenied as exc:
+        return _fail(scan, execution, str(exc), credential_context)
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
-        return _fail(scan, execution, str(exc), authorization_snapshot(authorization))
+        return _fail(scan, execution, str(exc), {**authorization_snapshot(authorization), 'credential_context': credential_context})
