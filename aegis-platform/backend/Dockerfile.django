@@ -9,7 +9,8 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app:/app/django_project \
-    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates
+    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates \
+    AEGIS_WORDLIST_ROOT=/opt/aegis-wordlists
 
 WORKDIR /app
 
@@ -17,6 +18,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl nmap masscan libpcap0.8 ca-certificates libcap2-bin \
         binutils checksec binwalk libimage-exiftool-perl \
+        gobuster ffuf dnsenum fierce wafw00f \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
@@ -30,6 +32,9 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && python -m pip install --no-cache-dir semgrep
 
 COPY . .
+RUN mkdir -p /opt/aegis-wordlists \
+    && cp /app/resources/wordlists/web-common.txt /opt/aegis-wordlists/web-common.txt \
+    && chmod 0444 /opt/aegis-wordlists/web-common.txt
 
 RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
@@ -55,6 +60,12 @@ RUN command -v nmap >/dev/null \
     && command -v checksec >/dev/null \
     && command -v binwalk >/dev/null \
     && command -v exiftool >/dev/null \
+    && command -v gobuster >/dev/null \
+    && command -v ffuf >/dev/null \
+    && command -v dnsenum >/dev/null \
+    && command -v fierce >/dev/null \
+    && command -v wafw00f >/dev/null \
+    && test -s /opt/aegis-wordlists/web-common.txt \
     && command -v capsh >/dev/null
 
 EXPOSE 8000
