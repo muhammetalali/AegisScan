@@ -14,6 +14,10 @@ import yaml
 SCHEMA = 'aegis.api-schema-security.v1'
 METHODS = ('get', 'put', 'post', 'delete', 'patch', 'options', 'head', 'trace')
 MUTATING = {'post', 'put', 'patch', 'delete'}
+REQUEST_HEADERS = {
+    'User-Agent': 'AegisScan-APISchemaSecurity/1.0',
+    'Accept': 'application/json, application/yaml, text/yaml',
+}
 
 
 def _origin(url: str) -> tuple[str, str, int]:
@@ -22,7 +26,11 @@ def _origin(url: str) -> tuple[str, str, int]:
     host = (parsed.hostname or '').lower()
     if scheme not in {'http', 'https'} or not host or parsed.username or parsed.password:
         raise ValueError('target must be an absolute HTTP(S) URL without embedded credentials')
-    return scheme, host, parsed.port or (443 if scheme == 'https' else 80)
+    try:
+        port = parsed.port or (443 if scheme == 'https' else 80)
+    except ValueError as exc:
+        raise ValueError('target contains an invalid port') from exc
+    return scheme, host, port
 
 
 def schema_url(target: str, spec_path: str) -> str:
@@ -35,30 +43,63 @@ def schema_url(target: str, spec_path: str) -> str:
     return result
 
 
-def fetch_schema(target: str, spec_path: str, max_bytes: int, timeout: int) -> tuple[str, bytes, str]:
-    url = schema_url(target, spec_path)
-    response = requests.get(
+def _bounded_response_body(response: requests.Response, max_bytes: int) -> bytes:
+    length = response.headers.get('Content-Length')
+    if length:
+        try:
+            declared = int(length)
+        except ValueError:
+            declared = -1
+        if declared > max_bytes:
+            raise ValueError(f'API schema exceeds max_spec_bytes={max_bytes}')
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f'API schema exceeds max_spec_bytes={max_bytes}')
+        chunks.append(chunk)
+    return b''.join(chunks)
+
+
+def _get(url: str, timeout: int) -> requests.Response:
+    return requests.get(
         url,
-        headers={'User-Agent': 'AegisScan-APISchemaSecurity/1.0', 'Accept': 'application/json, application/yaml, text/yaml'},
+        headers=REQUEST_HEADERS,
         timeout=timeout,
         allow_redirects=False,
+        stream=True,
     )
-    if response.is_redirect:
-        location = response.headers.get('Location', '')
-        redirected = urljoin(url, location)
-        if not location or _origin(redirected) != _origin(url):
-            raise RuntimeError('API schema redirect crossed the authorized target origin')
-        response = requests.get(redirected, headers={'User-Agent': 'AegisScan-APISchemaSecurity/1.0'}, timeout=timeout, allow_redirects=False)
-        url = redirected
-    response.raise_for_status()
-    body = response.content
-    if len(body) > max_bytes:
-        raise ValueError(f'API schema exceeds max_spec_bytes={max_bytes}')
-    return url, body, response.headers.get('Content-Type', '').split(';', 1)[0]
+
+
+def fetch_schema(target: str, spec_path: str, max_bytes: int, timeout: int) -> tuple[str, bytes, str]:
+    url = schema_url(target, spec_path)
+    response = _get(url, timeout)
+    try:
+        if response.is_redirect:
+            location = response.headers.get('Location', '')
+            redirected = urljoin(url, location)
+            if not location or _origin(redirected) != _origin(url):
+                raise RuntimeError('API schema redirect crossed the authorized target origin')
+            response.close()
+            response = _get(redirected, timeout)
+            url = redirected
+            if response.is_redirect:
+                raise RuntimeError('API schema redirect limit exceeded')
+        response.raise_for_status()
+        body = _bounded_response_body(response, max_bytes)
+        return url, body, response.headers.get('Content-Type', '').split(';', 1)[0]
+    finally:
+        response.close()
 
 
 def parse_document(body: bytes) -> dict[str, Any]:
-    text = body.decode('utf-8')
+    try:
+        text = body.decode('utf-8')
+    except UnicodeDecodeError as exc:
+        raise ValueError('API schema must be UTF-8 JSON or YAML') from exc
     try:
         value = json.loads(text)
     except json.JSONDecodeError:
@@ -183,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         url, body, content_type = fetch_schema(args.target_url, args.spec_path, args.max_spec_bytes, args.timeout_seconds)
         payload = analyze_bytes(body, url)
         payload['content_type'] = content_type
-    except Exception as exc:  # fail closed; Celery records stderr and non-zero status as evidence
+    except (ValueError, RuntimeError, requests.RequestException) as exc:
         print(json.dumps({'schema': SCHEMA, 'error': str(exc)}, sort_keys=True), file=sys.stderr)
         return 2
     print(json.dumps(payload, sort_keys=True, separators=(',', ':')))
