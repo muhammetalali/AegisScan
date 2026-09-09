@@ -69,6 +69,29 @@ def _normalize_headers(raw: str) -> list[dict[str, Any]]:
     return observations
 
 
+def _normalize_api_observations(data: dict[str, Any], fallback_kind: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in data.get('observations', []) if isinstance(data.get('observations'), list) else []:
+        if not isinstance(item, dict):
+            continue
+        safe = dict(item)
+        safe['kind'] = str(safe.get('kind') or fallback_kind)[:100]
+        for key in (
+            'title', 'description', 'remediation', 'location', 'path', 'spec_url',
+            'parameter', 'reason', 'error', 'content_type', 'auth_mode',
+        ):
+            if key in safe:
+                safe[key] = str(safe[key])[:4096]
+        if isinstance(safe.get('affected_urls'), list):
+            safe['affected_urls'] = [str(value)[:2048] for value in safe['affected_urls'][:20]]
+        if isinstance(safe.get('validation_errors'), list):
+            safe['validation_errors'] = [str(value)[:500] for value in safe['validation_errors'][:20]]
+        if isinstance(safe.get('synthetic_inputs'), list):
+            safe['synthetic_inputs'] = [str(value)[:200] for value in safe['synthetic_inputs'][:50]]
+        result.append(safe)
+    return result
+
+
 def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     """Convert stable tool output formats into bounded AegisScan observations."""
     raw = stdout or ''
@@ -126,19 +149,16 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     elif capability_id == 'api.openapi-contract-security':
         data = _json(raw)
         if isinstance(data, dict):
-            for item in data.get('observations', []):
-                if not isinstance(item, dict):
-                    continue
-                safe = dict(item)
-                safe['kind'] = str(safe.get('kind') or 'api-schema-observation')[:100]
-                for key in ('title', 'description', 'remediation', 'location', 'path', 'spec_url'):
-                    if key in safe:
-                        safe[key] = str(safe[key])[:4096]
-                if isinstance(safe.get('affected_urls'), list):
-                    safe['affected_urls'] = [str(value)[:2048] for value in safe['affected_urls'][:20]]
-                observations.append(safe)
+            observations.extend(_normalize_api_observations(data, 'api-schema-observation'))
             if not observations and data.get('error'):
                 observations.append({'kind': 'api-schema-error', 'summary': str(data['error'])[:2000]})
+
+    elif capability_id == 'api.openapi-runtime-conformance':
+        data = _json(raw)
+        if isinstance(data, dict):
+            observations.extend(_normalize_api_observations(data, 'api-runtime-observation'))
+            if not observations and data.get('error'):
+                observations.append({'kind': 'api-runtime-error', 'summary': str(data['error'])[:2000]})
 
     elif capability_id == 'forensics.exiftool':
         data = _json(raw)
