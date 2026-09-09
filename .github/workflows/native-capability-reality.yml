@@ -44,6 +44,8 @@ jobs:
             command -v ffuf
             command -v wafw00f
             command -v curl
+            command -v chromium
+            command -v aegis-browser-security
             command -v httpx
             command -v subfinder
             command -v katana
@@ -62,14 +64,14 @@ jobs:
           assert xxd.stdout.strip()
           print("native-runtime-ok")
           '
-      - name: Prove real web discovery and header capture against isolated fixture
+      - name: Prove real web discovery, headers, and browser DOM security capture
         shell: bash
         run: |
           set -euo pipefail
           docker run --rm --entrypoint sh aegisscan-native-capability:ci -c '
             set -eu
             mkdir -p /tmp/aegis-katana-fixture
-            printf "%s\n" "<html><body><a href=/admin>admin</a><a href=/api/v1/health>health</a></body></html>" > /tmp/aegis-katana-fixture/index.html
+            printf "%s\n" "<html><head><title>Aegis Fixture</title><meta http-equiv=Content-Security-Policy content=\"default-src self\"><script src=\"https://cdn.example.invalid/app.js\"></script></head><body><a href=/admin>admin</a><a href=/api/v1/health>health</a><form action=\"http://127.0.0.1:18080/login\" method=post><input type=password name=password value=secret-browser-password-value></form><img src=\"http://127.0.0.1:18080/insecure.png\"><script>console.log(1)</script></body></html>" > /tmp/aegis-katana-fixture/index.html
             printf "%s\n" "ok" > /tmp/aegis-katana-fixture/admin
             mkdir -p /tmp/aegis-katana-fixture/api/v1
             printf "%s\n" "{\"status\":\"ok\"}" > /tmp/aegis-katana-fixture/api/v1/health
@@ -87,6 +89,7 @@ jobs:
             grep -q "127.0.0.1:18080" /tmp/aegis-katana.jsonl
             grep -q "/admin" /tmp/aegis-katana.jsonl
             AUTHORIZED_SCAN_TARGETS=127.0.0.1/32 python - <<"PY"
+          import json
           import threading
           from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -100,6 +103,29 @@ jobs:
           normalized = normalize_native_output("web.security-headers", result.stdout)
           assert normalized["count"] >= 1, normalized
           assert normalized["observations"][0]["status"] == 200, normalized
+
+          browser = run_native_tool(
+              "browser.dom-snapshot",
+              "http://127.0.0.1:18080",
+              {"virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
+          )
+          assert browser.exit_code == 0, browser.stderr
+          payload = json.loads(browser.stdout)
+          assert payload["schema"] == "aegis.browser-security.v1", payload
+          assert payload["dom_sha256"], payload
+          assert payload["navigation_policy"]["javascript_disabled"] is True, payload
+          assert payload["navigation_policy"]["third_party_dns_blocked"] is True, payload
+          observation = payload["observations"][0]
+          assert observation["kind"] == "browser-dom-security-snapshot", observation
+          assert observation["title"] == "Aegis Fixture", observation
+          assert observation["password_field_count"] == 1, observation
+          assert observation["meta_csp_present"] is True, observation
+          assert "cdn.example.invalid" in observation["third_party_resource_hosts"], observation
+          assert "secret-browser-password-value" not in browser.stdout
+          assert "secret-browser-password-value" not in browser.stderr
+          normalized_browser = normalize_native_output("browser.dom-snapshot", browser.stdout)
+          assert normalized_browser["count"] == 1, normalized_browser
+          assert normalized_browser["observations"][0]["password_field_count"] == 1, normalized_browser
 
           secret = "native-vault-fixture-token-789"
           seen = []
@@ -142,8 +168,9 @@ jobs:
           assert secret not in authenticated.stderr
           print("security-headers-real-curl-ok")
           print("credential-bound-native-runtime-ok")
+          print("browser-dom-security-real-chromium-ok")
           PY
-            echo web-discovery-and-headers-ok
+            echo web-discovery-headers-and-browser-ok
           '
       - name: Prove real pause resume cancel process control
         shell: bash
@@ -180,17 +207,20 @@ jobs:
             -e SECRET_KEY=ci-only-native-capability-secret-key-0123456789abcdef \
             --entrypoint python aegisscan-native-capability:ci -m pytest -q \
             --confcutdir=fastapi_app/services \
-            fastapi_app/services/test_native_output_normalizer.py
+            fastapi_app/services/test_native_output_normalizer.py \
+            fastapi_app/services/test_browser_security_probe.py
           docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
           from fastapi_app.services.capability_planner import planning_summary
           from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
           from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
           assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
-          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 23
+          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 24
           assert "web.katana" in PACKAGED_NATIVE_CAPABILITIES
           assert "web.security-headers" in PACKAGED_NATIVE_CAPABILITIES
+          assert "browser.dom-snapshot" in PACKAGED_NATIVE_CAPABILITIES
           web = planning_summary("website", "standard")
-          assert web["ready"] >= 7
+          assert web["ready"] >= 8
+          assert any(item["id"] == "browser.dom-snapshot" and item["execution_ready"] for item in web["plan"])
           code = planning_summary("repository", "quick")
           assert code["ready"] >= 2
           file_plan = planning_summary("file", "quick")
