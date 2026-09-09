@@ -1,0 +1,151 @@
+name: Browser Security Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/browser-security-reality.yml'
+      - '.github/workflows/native-capability-reality.yml'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/browser_security_probe.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_browser_security_probe.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_native_output_normalizer.py'
+      - 'tests/test_production_runtime_imports.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/browser-security-reality.yml'
+      - '.github/workflows/native-capability-reality.yml'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/browser_security_probe.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_browser_security_probe.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_native_output_normalizer.py'
+      - 'tests/test_production_runtime_imports.py'
+
+permissions:
+  contents: read
+
+jobs:
+  browser-security-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Unit-test browser security parser and normalizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd aegis-platform/backend
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pytest -q \
+            fastapi_app/services/test_browser_security_probe.py \
+            fastapi_app/services/test_native_output_normalizer.py
+      - name: Build scanner image with governed browser engine
+        run: docker build -f aegis-platform/backend/Dockerfile.django -t aegisscan-browser-security:ci aegis-platform/backend
+      - name: Prove Chromium DOM capture is real, bounded, and non-leaking
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh aegisscan-browser-security:ci -c '
+            set -eu
+            command -v chromium
+            command -v aegis-browser-security
+            mkdir -p /tmp/aegis-browser-fixture
+            cat > /tmp/aegis-browser-fixture/index.html <<"HTML"
+          <html>
+            <head>
+              <title>Browser Reality Fixture</title>
+              <meta http-equiv="Content-Security-Policy" content="default-src 'self'">
+              <script src="https://cdn.example.invalid/app.js"></script>
+            </head>
+            <body>
+              <form action="http://127.0.0.1:18082/login" method="post">
+                <input type="password" name="password" value="browser-reality-secret-value">
+              </form>
+              <iframe src="https://analytics.example.invalid/frame"></iframe>
+              <img src="http://127.0.0.1:18082/insecure.png">
+              <script>window.__inline = true</script>
+            </body>
+          </html>
+          HTML
+            python -m http.server 18082 --bind 127.0.0.1 --directory /tmp/aegis-browser-fixture >/tmp/aegis-browser-http.log 2>&1 &
+            server_pid=$!
+            trap "kill $server_pid >/dev/null 2>&1 || true" EXIT
+            ready=0
+            for attempt in $(seq 1 40); do
+              if curl -fsS http://127.0.0.1:18082/ >/dev/null; then ready=1; break; fi
+              sleep 0.25
+            done
+            test "$ready" -eq 1
+            AUTHORIZED_SCAN_TARGETS=127.0.0.1/32 python - <<"PY"
+          import json
+          from fastapi_app.services.native_output_normalizer import normalize_native_output
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          result = run_native_tool(
+              "browser.dom-snapshot",
+              "http://127.0.0.1:18082",
+              {"virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
+          )
+          assert result.exit_code == 0, result.stderr
+          payload = json.loads(result.stdout)
+          assert payload["schema"] == "aegis.browser-security.v1", payload
+          assert payload["dom_sha256"], payload
+          assert payload["dom_bytes"] > 0, payload
+          assert payload["navigation_policy"] == {
+              "javascript_disabled": True,
+              "third_party_dns_blocked": True,
+              "virtual_time_budget_ms": 2000,
+              "max_dom_bytes": 131072,
+          }
+          observation = payload["observations"][0]
+          assert observation["kind"] == "browser-dom-security-snapshot", observation
+          assert observation["title"] == "Browser Reality Fixture", observation
+          assert observation["password_field_count"] == 1, observation
+          assert observation["script_count"] == 2, observation
+          assert observation["inline_script_count"] == 1, observation
+          assert observation["iframe_count"] == 1, observation
+          assert observation["meta_csp_present"] is True, observation
+          assert "cdn.example.invalid" in observation["third_party_resource_hosts"], observation
+          assert "analytics.example.invalid" in observation["third_party_resource_hosts"], observation
+          assert "browser-reality-secret-value" not in result.stdout
+          assert "browser-reality-secret-value" not in result.stderr
+          normalized = normalize_native_output("browser.dom-snapshot", result.stdout)
+          assert normalized["schema"] == "aegis.native-observations.v1", normalized
+          assert normalized["count"] == 1, normalized
+          assert normalized["observations"][0]["password_field_count"] == 1, normalized
+          print("browser-security-runtime-ok")
+          PY
+          '
+      - name: Prove browser capability is packaged and planned
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python aegisscan-browser-security:ci - <<'PY'
+          from fastapi_app.services.capability_planner import planning_summary
+          from fastapi_app.services.capability_registry import get_capability, validate_capability_options
+          from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
+          from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
+
+          capability = get_capability("browser.dom-snapshot")
+          assert capability.tool == "aegis-browser-security"
+          assert capability.category == "browser-security"
+          assert capability.credential_mode == "none"
+          assert "browser.dom-snapshot" in NATIVE_TOOL_SPECS
+          assert "browser.dom-snapshot" in PACKAGED_NATIVE_CAPABILITIES
+          assert validate_capability_options(capability, {"virtual_time_budget_ms": 3000, "max_dom_bytes": 262144}) == {
+              "virtual_time_budget_ms": 3000,
+              "max_dom_bytes": 262144,
+          }
+          plan = planning_summary("website", "standard")
+          assert any(item["id"] == "browser.dom-snapshot" and item["execution_ready"] for item in plan["plan"]), plan
+          print("browser-security-capability-contract-ok")
+          PY
