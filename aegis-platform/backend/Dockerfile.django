@@ -1,6 +1,7 @@
 FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
-FROM projectdiscovery/httpx:v1.10.0 AS httpx
-FROM projectdiscovery/subfinder:v2.16.0 AS subfinder
+FROM golang:1.25-bookworm AS pd_tools
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0 \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0
 FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy
 FROM trufflesecurity/trufflehog:3.97.1 AS trufflehog
 
@@ -23,12 +24,12 @@ RUN apt-get update \
         curl nmap masscan libpcap0.8 ca-certificates libcap2-bin \
         binutils checksec binwalk libimage-exiftool-perl xxd gdb \
         gobuster ffuf dirb dnsenum fierce wafw00f nbtscan \
-        git openssh-client libc6 libstdc++6 \
+        git openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
-COPY --from=httpx /usr/local/bin/httpx /usr/local/bin/httpx
-COPY --from=subfinder /usr/local/bin/subfinder /usr/local/bin/subfinder
+COPY --from=pd_tools /go/bin/httpx /usr/local/bin/httpx
+COPY --from=pd_tools /go/bin/subfinder /usr/local/bin/subfinder
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=trufflehog /usr/bin/trufflehog /usr/local/bin/trufflehog
 COPY --from=nuclei_templates /opt/nuclei-templates /opt/nuclei-templates
