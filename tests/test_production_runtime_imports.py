@@ -189,7 +189,7 @@ def test_capability_planner_prefers_ready_tools_and_exposes_packaging_gaps() -> 
     ready = [item for item in web["plan"] if item["execution_ready"]]
     pending = [item for item in web["plan"] if not item["execution_ready"]]
     assert ready and pending
-    assert any(item["id"] == "browser.dom-snapshot" for item in ready)
+    assert any(item["capability_id"] == "browser.dom-snapshot" for item in ready)
     assert max(item["order"] for item in ready) < min(item["order"] for item in pending)
     file_plan = planning_summary("file", "quick")
     assert file_plan["ready"] >= 6
