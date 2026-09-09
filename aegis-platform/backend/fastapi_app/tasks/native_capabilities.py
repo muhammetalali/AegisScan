@@ -16,7 +16,11 @@ from fastapi_app.services.authorization_guard import (
 from fastapi_app.services.capability_registry import get_capability
 from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.native_output_normalizer import normalize_native_output
-from fastapi_app.services.native_tool_runtime import get_native_tool_spec, run_native_tool
+from fastapi_app.services.native_tool_runtime import (
+    NativeExecutionCancelled,
+    get_native_tool_spec,
+    run_native_tool,
+)
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 
 
@@ -70,8 +74,35 @@ def _fail(scan: Scan, execution: ScanEngineExecution, message: str, context: dic
     scan.error_message = message
     scan.completed_at = now
     scan.progress = 100
-    scan.save(update_fields=['status', 'error_message', 'completed_at', 'progress', 'updated_at'])
+    scan.current_phase = 'failed'
+    scan.save(update_fields=['status', 'error_message', 'completed_at', 'progress', 'current_phase', 'updated_at'])
     return {'status': 'failed', 'scan_id': str(scan.id), 'error': message}
+
+
+def _cancelled(scan: Scan, execution: ScanEngineExecution) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    execution.status = ScanEngineExecution.ExecutionStatus.SKIPPED
+    execution.progress = 100
+    execution.completed_at = now
+    execution.error_message = 'Execution cancelled by scan control state'
+    execution.save(update_fields=['status', 'progress', 'completed_at', 'error_message', 'updated_at'])
+    scan.status = Scan.Status.CANCELLED
+    scan.progress = 100
+    scan.completed_at = now
+    scan.current_phase = 'cancelled'
+    scan.save(update_fields=['status', 'progress', 'completed_at', 'current_phase', 'updated_at'])
+    ScanLog.objects.create(
+        scan=scan,
+        engine_execution=execution,
+        level=ScanLog.Level.INFO,
+        message='native capability execution cancelled',
+        context={'scan_id': str(scan.id)},
+    )
+    return {'status': 'cancelled', 'scan_id': str(scan.id)}
+
+
+def _scan_control_state(scan_id: str) -> str:
+    return str(Scan.objects.only('status').get(pk=scan_id).status)
 
 
 @shared_task(
@@ -108,10 +139,21 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
     execution = _execution(scan, engine)
     execution.result_data = authorization_snapshot(authorization)
     execution.save(update_fields=['result_data', 'updated_at'])
+    scan.status = Scan.Status.RUNNING
+    scan.current_phase = 'native-execution'
+    scan.current_engine = capability.tool
+    if scan.started_at is None:
+        scan.started_at = datetime.now(timezone.utc)
+    scan.save(update_fields=['status', 'current_phase', 'current_engine', 'started_at', 'updated_at'])
 
     options = config.get('capability_options') if isinstance(config.get('capability_options'), dict) else {}
     try:
-        result = run_native_tool(capability_id, str(target), options)
+        result = run_native_tool(
+            capability_id,
+            str(target),
+            options,
+            state_getter=lambda: _scan_control_state(scan_id),
+        )
         normalized = normalize_native_output(capability_id, result.stdout)
         ok, reason = revalidate_bound_authorization(scan, authorization)
         if not ok:
@@ -169,8 +211,9 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             scan.status = Scan.Status.COMPLETED if successful else Scan.Status.PARTIAL
             scan.progress = 100
             scan.completed_at = now
+            scan.current_phase = 'completed' if successful else 'partial'
             scan.engine_results = {**(scan.engine_results or {}), capability.tool: execution.result_data}
-            scan.save(update_fields=['status', 'progress', 'completed_at', 'engine_results', 'updated_at'])
+            scan.save(update_fields=['status', 'progress', 'completed_at', 'current_phase', 'engine_results', 'updated_at'])
         return {
             'status': scan.status,
             'scan_id': scan_id,
@@ -181,6 +224,8 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             'observation_count': normalized['count'],
             **snapshot,
         }
+    except NativeExecutionCancelled:
+        return _cancelled(scan, execution)
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
