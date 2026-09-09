@@ -97,6 +97,19 @@ jobs:
           from fastapi_app.services.native_output_normalizer import normalize_native_output
           from fastapi_app.services.native_tool_runtime import run_native_tool
 
+          def browser_run(payload, family):
+              matches = [item for item in payload.get("browser_runs", []) if item.get("browser_family") == family]
+              assert len(matches) == 1, payload
+              return matches[0]
+
+          def browser_observation(payload, family, kind="browser-dom-security-snapshot"):
+              matches = [
+                  item for item in payload.get("observations", [])
+                  if item.get("browser_family") == family and item.get("kind") == kind
+              ]
+              assert len(matches) == 1, payload
+              return matches[0]
+
           result = run_native_tool("web.security-headers", "http://127.0.0.1:18080", {})
           assert result.exit_code == 0, result.stderr
           assert "HTTP/" in result.stdout, result.stdout
@@ -113,11 +126,13 @@ jobs:
           assert chromium.exit_code == 0, chromium.stderr
           chromium_payload = json.loads(chromium.stdout)
           assert chromium_payload["schema"] == "aegis.browser-security.v1", chromium_payload
-          assert chromium_payload["browser_family"] == "chromium", chromium_payload
-          assert chromium_payload["dom_sha256"], chromium_payload
-          assert chromium_payload["runtime"]["capture_method"] == "chromium-dump-dom", chromium_payload
-          chromium_observation = chromium_payload["observations"][0]
-          assert chromium_observation["kind"] == "browser-dom-security-snapshot", chromium_observation
+          assert chromium_payload["browser_engines"] == ["chromium"], chromium_payload
+          chromium_run = browser_run(chromium_payload, "chromium")
+          assert chromium_run["dom_sha256"], chromium_run
+          assert chromium_run["runtime"]["capture_method"] == "chromium-dump-dom", chromium_run
+          assert chromium_run["runtime"]["virtual_time_budget_ms"] == 2000, chromium_run
+          assert chromium_run["runtime"]["max_dom_bytes"] == 131072, chromium_run
+          chromium_observation = browser_observation(chromium_payload, "chromium")
           assert chromium_observation["title"] == "Aegis Fixture", chromium_observation
           assert chromium_observation["password_field_count"] == 1, chromium_observation
           assert chromium_observation["meta_csp_present"] is True, chromium_observation
@@ -135,9 +150,18 @@ jobs:
           )
           assert firefox.exit_code == 0, firefox.stderr
           firefox_payload = json.loads(firefox.stdout)
-          assert firefox_payload["browser_family"] == "firefox", firefox_payload
-          assert firefox_payload["runtime"]["capture_method"] == "firefox-headless-load-plus-dom-fetch", firefox_payload
-          assert firefox_payload["observations"][0]["title"] == "Aegis Fixture", firefox_payload
+          assert firefox_payload["schema"] == "aegis.browser-security.v1", firefox_payload
+          assert firefox_payload["browser_engines"] == ["firefox"], firefox_payload
+          firefox_run = browser_run(firefox_payload, "firefox")
+          assert firefox_run["dom_sha256"], firefox_run
+          assert firefox_run["runtime"]["capture_method"] == "firefox-headless-render-plus-dom-fetch", firefox_run
+          assert firefox_run["runtime"]["virtual_time_budget_ms"] == 2000, firefox_run
+          firefox_snapshot = browser_observation(firefox_payload, "firefox")
+          assert firefox_snapshot["title"] == "Aegis Fixture", firefox_snapshot
+          firefox_render = browser_observation(firefox_payload, "firefox", "browser-render-verification")
+          assert firefox_render["rendered"] is True, firefox_render
+          assert firefox_render["screenshot_sha256"], firefox_render
+          assert firefox_render["screenshot_bytes"] > 0, firefox_render
           assert "secret-browser-password-value" not in firefox.stdout
           assert "secret-browser-password-value" not in firefox.stderr
 
@@ -235,7 +259,7 @@ jobs:
           assert "browser.dom-snapshot" in PACKAGED_NATIVE_CAPABILITIES
           web = planning_summary("website", "standard")
           assert web["ready"] >= 8
-          assert any(item["id"] == "browser.dom-snapshot" and item["execution_ready"] for item in web["plan"])
+          assert any(item["capability_id"] == "browser.dom-snapshot" and item["execution_ready"] for item in web["plan"])
           code = planning_summary("repository", "quick")
           assert code["ready"] >= 2
           file_plan = planning_summary("file", "quick")
