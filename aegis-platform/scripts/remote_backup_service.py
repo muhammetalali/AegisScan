@@ -42,22 +42,42 @@ def _publish_state(payload: dict) -> None:
     STATE_FILE.chmod(0o600)
 
 
+
+def _pending_backup(backup_dir: Path) -> Path | None:
+    candidates: list[Path] = []
+    for candidate in backup_dir.glob("aegisscan-*.dump"):
+        resolved = candidate.resolve()
+        if resolved.parent != backup_dir:
+            raise RuntimeError("pending backup path escaped the configured backup directory")
+        sidecar = Path(str(resolved) + ".sha256")
+        if not resolved.is_file() or not sidecar.is_file():
+            continue
+        candidates.append(resolved)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda path: (path.stat().st_mtime_ns, path.name))
+    return candidates[0]
+
+
 def run_once() -> dict:
     backup_dir = Path(os.environ["AEGIS_BACKUP_DIR"]).resolve()
     backup_dir.mkdir(parents=True, exist_ok=True)
-    backup = subprocess.run(
-        ["sh", str(LOCAL_BACKUP)],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=_seconds("AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS", 7200, 60),
-    )
-    lines = [line.strip() for line in backup.stdout.splitlines() if line.strip()]
-    if not lines:
-        raise RuntimeError("local backup script did not return a backup path")
-    source = Path(lines[-1]).resolve()
-    if source.parent != backup_dir or not source.is_file():
-        raise RuntimeError("local backup path escaped the configured backup directory")
+    source = _pending_backup(backup_dir)
+    reused_pending = source is not None
+    if source is None:
+        backup = subprocess.run(
+            ["sh", str(LOCAL_BACKUP)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_seconds("AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS", 7200, 60),
+        )
+        lines = [line.strip() for line in backup.stdout.splitlines() if line.strip()]
+        if not lines:
+            raise RuntimeError("local backup script did not return a backup path")
+        source = Path(lines[-1]).resolve()
+        if source.parent != backup_dir or not source.is_file():
+            raise RuntimeError("local backup path escaped the configured backup directory")
 
     command = [
         sys.executable,
@@ -93,6 +113,7 @@ def run_once() -> dict:
         "completed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "manifest_key": result["manifest_key"],
         "manifest_version_id": result["manifest_version_id"],
+        "reused_pending_dump": reused_pending,
         "object_version_id": result["object_version_id"],
         "schema": result["schema"],
         "source_sha256": result["source_sha256"],
