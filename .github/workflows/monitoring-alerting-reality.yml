@@ -155,6 +155,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/aegis-alert-evidence
+          chmod 0700 /tmp/aegis-alert-evidence
+          RECEIVER_UID="$(id -u)"
+          RECEIVER_GID="$(id -g)"
           OBS_NET="${COMPOSE_PROJECT_NAME}_observability"
           DELIVERY_NET="${COMPOSE_PROJECT_NAME}_alert_delivery"
           COMPOSE="docker compose -f docker-compose.yml -f docker-compose.monitoring.yml"
@@ -184,12 +187,33 @@ jobs:
           $COMPOSE up -d --no-deps alertmanager blackbox-exporter postgres-exporter redis-exporter
 
           docker run -d --name aegis-alert-receiver \
+            --user "${RECEIVER_UID}:${RECEIVER_GID}" \
             --network "$DELIVERY_NET" --network-alias alert-receiver \
             --read-only --cap-drop ALL --security-opt no-new-privileges:true \
             --tmpfs /tmp \
             -v "$GITHUB_WORKSPACE/tests/alert_receiver.py:/receiver.py:ro" \
             -v /tmp/aegis-alert-evidence:/evidence \
             python:3.12-alpine python /receiver.py
+
+          receiver_ready=0
+          for attempt in $(seq 1 30); do
+            if docker run --rm --network "$DELIVERY_NET" python:3.12-alpine \
+              python -c "import urllib.request; r=urllib.request.urlopen('http://alert-receiver:8080/ready', timeout=2); assert r.status == 200" >/dev/null 2>&1; then
+              receiver_ready=1
+              break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' aegis-alert-receiver 2>/dev/null || true)" != true ]; then
+              echo 'Alert receiver exited before readiness' >&2
+              docker logs aegis-alert-receiver >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$receiver_ready" -ne 1 ]; then
+            echo 'Alert receiver did not become ready within the bounded window' >&2
+            docker logs aegis-alert-receiver >&2 || true
+            exit 1
+          fi
 
           docker run -d --name aegis-monitoring-gateway \
             --network "$OBS_NET" --network-alias nginx \
@@ -203,7 +227,6 @@ jobs:
           cat > /tmp/aegis-prom-query.py <<'PY'
           import json
           import os
-          import sys
           import urllib.parse
           import urllib.request
 
@@ -243,6 +266,7 @@ jobs:
           if [ "$ready" -ne 1 ]; then
             $COMPOSE ps >&2 || true
             $COMPOSE logs --no-color prometheus alertmanager blackbox-exporter postgres-exporter redis-exporter >&2 || true
+            docker logs aegis-alert-receiver >&2 || true
             exit 1
           fi
 
@@ -280,6 +304,11 @@ jobs:
 
           delivered=0
           for attempt in $(seq 1 48); do
+            if [ "$(docker inspect -f '{{.State.Running}}' aegis-alert-receiver 2>/dev/null || true)" != true ]; then
+              echo 'Alert receiver exited while waiting for delivery' >&2
+              docker logs aegis-alert-receiver >&2 || true
+              exit 1
+            fi
             if test -s /tmp/aegis-alert-evidence/alert.json \
               && grep -q 'AegisGatewayDown' /tmp/aegis-alert-evidence/alert.json \
               && grep -q '"status":"firing"' /tmp/aegis-alert-evidence/alert.json; then
@@ -290,6 +319,7 @@ jobs:
           done
           if [ "$delivered" -ne 1 ]; then
             $COMPOSE logs --no-color prometheus alertmanager blackbox-exporter >&2 || true
+            docker logs aegis-alert-receiver >&2 || true
             exit 1
           fi
 
@@ -308,7 +338,7 @@ jobs:
           assert any(alert.get('state') == 'firing' for alert in match), match
           Path('/evidence/prometheus-alerts.json').write_text(json.dumps(payload, indent=2))
           PY
-          docker run --rm --network "$OBS_NET" \
+          docker run --rm --user "${RECEIVER_UID}:${RECEIVER_GID}" --network "$OBS_NET" \
             -v /tmp/aegis-prom-alerts.py:/alerts.py:ro \
             -v /tmp/aegis-alert-evidence:/evidence \
             python:3.12-alpine python /alerts.py
@@ -332,6 +362,7 @@ jobs:
         run: |
           docker compose -f docker-compose.yml -f docker-compose.monitoring.yml ps || true
           docker compose -f docker-compose.yml -f docker-compose.monitoring.yml logs --no-color prometheus alertmanager blackbox-exporter postgres-exporter redis-exporter || true
+          docker logs aegis-alert-receiver || true
 
       - name: Upload alert delivery evidence
         if: always()
