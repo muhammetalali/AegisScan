@@ -42,6 +42,18 @@ def valid_model():
             environment={'SCANNER_EGRESS_PRIVATE_TARGETS':''},
         ),
         'celery_beat': hardened_service(environment={'AUTHORIZED_SCAN_TARGETS':'security.example'}),
+        'backup': hardened_service(
+            user='10001:10001',
+            environment={
+                'AEGIS_BACKUP_KEEP_LOCAL_PLAINTEXT':'false',
+                'AEGIS_BACKUP_REQUIRE_VERSIONING':'true',
+                'AEGIS_BACKUP_S3_ENDPOINT':'https://backups.example.com',
+            },
+            volumes=[
+                {'type':'bind','source':'/run/aegis/s3.json','target':'/run/secrets/s3-credentials.json','read_only':True},
+                {'type':'bind','source':'/run/aegis/backup.key','target':'/run/secrets/encryption.key','read_only':True},
+            ],
+        ),
     }}
 
 
@@ -167,3 +179,32 @@ def test_scanner_egress_image_installs_kernel_policy_tooling():
     policy_install = 'nft delete table netdev "$TABLE"'
     assert promisc in entrypoint
     assert entrypoint.index(promisc) < entrypoint.index(policy_install)
+
+
+def test_backup_service_allows_only_audited_readonly_secret_binds():
+    model = valid_model()
+    assert MODULE.validate(model) == []
+    model['services']['backup']['volumes'].append(
+        {'type':'bind','source':'/etc','target':'/host-etc','read_only':True}
+    )
+    failures = MODULE.validate(model)
+    assert any('backup uses host bind mount' in item for item in failures)
+
+
+def test_backup_service_rejects_root_plaintext_retention_or_missing_versioning():
+    model = valid_model()
+    backup = model['services']['backup']
+    backup['user'] = '0:0'
+    backup['environment']['AEGIS_BACKUP_KEEP_LOCAL_PLAINTEXT'] = 'true'
+    backup['environment']['AEGIS_BACKUP_REQUIRE_VERSIONING'] = 'false'
+    failures = MODULE.validate(model)
+    assert any('non-root' in item for item in failures)
+    assert any('delete local plaintext' in item for item in failures)
+    assert any('require remote bucket versioning' in item for item in failures)
+
+
+def test_backup_service_requires_exact_secret_mount_targets():
+    model = valid_model()
+    model['services']['backup']['volumes'][0]['target'] = '/tmp/s3.json'
+    failures = MODULE.validate(model)
+    assert any('exactly the two audited read-only secret files' in item for item in failures)
