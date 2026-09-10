@@ -238,8 +238,12 @@ jobs:
           from pathlib import Path
           result = json.loads(Path('/tmp/aegis-backup-proof/container-backup.json').read_text().splitlines()[-1])
           assert result['status'] == 'success', result
+          assert result.get('manifest_version_id'), result
+          assert result.get('object_version_id'), result
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
               env.write(f"AEGIS_REMOTE_MANIFEST_KEY={result['manifest_key']}\n")
+              env.write(f"AEGIS_REMOTE_MANIFEST_VERSION_ID={result['manifest_version_id']}\n")
+              env.write(f"AEGIS_REMOTE_OBJECT_VERSION_ID={result['object_version_id']}\n")
           PY
 
       - name: Prove only encrypted committed objects exist remotely
@@ -271,10 +275,36 @@ jobs:
           payload = [key for key in keys if key.endswith('.aegis.enc')]
           assert len(manifest) == 1 and len(payload) == 1, keys
           assert not any(key.endswith('.dump') or key.endswith('.sha256') for key in keys), keys
-          first = s3.get_object(Bucket=bucket, Key=payload[0])['Body'].read(8)
-          assert first == b'AEGISBK1', first
+          payload_response = s3.get_object(
+              Bucket=bucket,
+              Key=payload[0],
+              VersionId=os.environ['AEGIS_REMOTE_OBJECT_VERSION_ID'],
+          )
+          encrypted_body = payload_response['Body'].read()
+          assert encrypted_body[:8] == b'AEGISBK1', encrypted_body[:8]
+          assert b'remote-restore-proof@aegisscan.local' not in encrypted_body
+
+          versions = s3.list_object_versions(Bucket=bucket, Prefix=prefix)
+          version_rows = [
+              {'key': item['Key'], 'version_id': item['VersionId'], 'is_latest': item['IsLatest']}
+              for item in versions.get('Versions', [])
+          ]
+          assert any(
+              row['key'] == payload[0]
+              and row['version_id'] == os.environ['AEGIS_REMOTE_OBJECT_VERSION_ID']
+              for row in version_rows
+          ), version_rows
+          assert any(
+              row['key'] == manifest[0]
+              and row['version_id'] == os.environ['AEGIS_REMOTE_MANIFEST_VERSION_ID']
+              for row in version_rows
+          ), version_rows
           Path('/tmp/aegis-backup-proof/remote-objects.json').write_text(
-              json.dumps({'keys': keys, 'payload_magic': first.decode('ascii')}, indent=2)
+              json.dumps({
+                  'keys': keys,
+                  'payload_magic': encrypted_body[:8].decode('ascii'),
+                  'versions': version_rows,
+              }, indent=2)
           )
           PY
 
@@ -283,15 +313,29 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/aegis-remote-recovery
-          python aegis-platform/scripts/remote_backup.py restore \
+          sudo chown 10001:10001 /tmp/aegis-remote-recovery
+          sudo chmod 0700 /tmp/aegis-remote-recovery
+          docker run --rm --network host \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=536870912,uid=10001,gid=10001,mode=0700 \
+            -v /tmp/aegis-backup-container-secrets/s3.json:/run/secrets/s3.json:ro \
+            -v /tmp/aegis-backup-container-secrets/encryption.key:/run/secrets/encryption.key:ro \
+            -v /tmp/aegis-remote-recovery:/recovery \
+            --entrypoint python \
+            aegis-remote-backup:reality \
+            /app/scripts/remote_backup.py restore \
             --endpoint "$AEGIS_BACKUP_S3_ENDPOINT" \
             --region "$AEGIS_BACKUP_S3_REGION" \
             --bucket "$AEGIS_BACKUP_S3_BUCKET" \
             --prefix "$AEGIS_BACKUP_S3_PREFIX" \
-            --credentials-file /tmp/aegis-backup-host-secrets/s3.json \
-            --encryption-key-file /tmp/aegis-backup-host-secrets/encryption.key \
+            --credentials-file /run/secrets/s3.json \
+            --encryption-key-file /run/secrets/encryption.key \
             --manifest-key "$AEGIS_REMOTE_MANIFEST_KEY" \
-            --output /tmp/aegis-remote-recovery/recovered.dump \
+            --manifest-version-id "$AEGIS_REMOTE_MANIFEST_VERSION_ID" \
+            --output /recovery/recovered.dump \
+            --work-dir /tmp \
             --allow-http \
             > /tmp/aegis-backup-proof/remote-restore.json
           test -s /tmp/aegis-remote-recovery/recovered.dump
@@ -399,6 +443,10 @@ jobs:
           assert 'no-new-privileges:true' in service.get('security_opt', [])
           assert not service.get('ports')
           assert service.get('healthcheck')
+          assert set(service.get('networks', {})) == {'backup_db', 'backup_egress'}, service.get('networks')
+          assert cfg['networks']['backup_db'].get('internal') is True
+          assert cfg['networks']['backup_egress'].get('internal') is not True
+          assert 'backup_db' in cfg['services']['postgres'].get('networks', {})
           volumes = service.get('volumes', [])
           assert volumes, service
           for volume in volumes:
