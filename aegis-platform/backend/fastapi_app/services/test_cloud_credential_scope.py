@@ -92,5 +92,7 @@ def test_worker_resolves_cloud_secret_only_after_scope_revalidation():
     assert context['credential_material_handling'] == 'worker-resolved-redacted'
     assert 'worker-secret-value' not in json.dumps(context)
     assert CredentialAccess.objects.filter(
-        credential=credential, operation=CredentialAccess.Operation.RESOLVE, result=CredentialAccess.Result.ALLOWED
+        credential=credential,
+        operation=CredentialAccess.Operation.RESOLVE_INTERNAL,
+        result=CredentialAccess.Result.SUCCESS,
     ).exists()
