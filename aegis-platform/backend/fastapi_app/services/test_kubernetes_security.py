@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import pytest
 import yaml
@@ -16,6 +17,7 @@ from fastapi_app.services.kubernetes_security import (
     workload_findings,
 )
 from fastapi_app.services.pinned_http import PinnedHTTPDestination, PinnedHTTPResponse
+from fastapi_app.services.native_output_normalizer import normalize_native_output
 
 
 def test_canonical_server_requires_clean_https_target():
@@ -156,6 +158,34 @@ def test_cluster_collection_reuses_one_pinned_destination(monkeypatch):
     summary = result['observations'][0]
     assert summary['dns_pinned_for_scan'] is True
     assert summary['pinned_destination_ips'] == ['192.0.2.44']
+    normalized = normalize_native_output('kubernetes.read-only-posture', json.dumps(result))
+    persisted_summary = normalized['observations'][0]
+    assert persisted_summary['dns_pinned_for_scan'] is True
+    assert persisted_summary['pinned_destination_ips'] == ['192.0.2.44']
+    assert persisted_summary['coverage'] == summary['coverage']
+
+
+def test_normalized_pin_evidence_validates_addresses_and_preserves_false():
+    payload = {'observations': [{
+        'kind': 'kubernetes-security-summary',
+        'dns_pinned_for_scan': False,
+        'pinned_destination_ips': ['192.0.2.44', '2001:db8::1', 'Bearer secret-fixture', None, 42],
+        'coverage': [
+            {'path': '/version', 'status': 200, 'resolved_ip': '2001:db8::1'},
+            {'path': '/api/v1/pods', 'status': 403, 'resolved_ip': 'Bearer secret-fixture'},
+        ],
+        'token': 'secret-fixture',
+    }]}
+    result = normalize_native_output('kubernetes.read-only-posture', json.dumps(payload))
+    summary = result['observations'][0]
+    assert summary['dns_pinned_for_scan'] is False
+    assert summary['pinned_destination_ips'] == ['192.0.2.44', '2001:db8::1']
+    assert summary['coverage'][0]['resolved_ip'] == '2001:db8::1'
+    assert 'resolved_ip' not in summary['coverage'][1]
+    assert 'secret-fixture' not in json.dumps(result)
+    payload['observations'][0]['dns_pinned_for_scan'] = 'false'
+    result = normalize_native_output('kubernetes.read-only-posture', json.dumps(payload))
+    assert result['observations'][0]['dns_pinned_for_scan'] is False
 
 
 def test_operation_scope_prevents_second_dns_resolution(monkeypatch):

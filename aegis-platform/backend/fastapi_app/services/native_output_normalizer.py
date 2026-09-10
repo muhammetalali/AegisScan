@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
 from typing import Any
 
@@ -92,6 +93,17 @@ def _normalize_api_observations(data: dict[str, Any], fallback_kind: str) -> lis
     return result
 
 
+def _normalized_ip(value: Any) -> str | None:
+    # Only literal IPs belong in transport evidence, never arbitrary strings,
+    # numeric coercions, or IPv6 zone identifiers that may carry other data.
+    if not isinstance(value, str) or len(value) > 45 or '%' in value:
+        return None
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return None
+
+
 def _normalize_kubernetes_observations(data: dict[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     observations = data.get('observations') if isinstance(data.get('observations'), list) else []
@@ -119,6 +131,13 @@ def _normalize_kubernetes_observations(data: dict[str, Any]) -> list[dict[str, A
         for key in ('read_only', 'secrets_endpoint_requested'):
             if key in item:
                 safe[key] = bool(item.get(key))
+        if 'dns_pinned_for_scan' in item:
+            safe['dns_pinned_for_scan'] = item['dns_pinned_for_scan'] is True
+        if isinstance(item.get('pinned_destination_ips'), list):
+            safe['pinned_destination_ips'] = list(dict.fromkeys(
+                address for value in item['pinned_destination_ips'][:64]
+                if (address := _normalized_ip(value)) is not None
+            ))
         if isinstance(item.get('requested_paths'), list):
             safe['requested_paths'] = [str(value)[:512] for value in item['requested_paths'][:20]]
         if isinstance(item.get('coverage'), list):
@@ -136,6 +155,9 @@ def _normalize_kubernetes_observations(data: dict[str, Any]) -> list[dict[str, A
                     'accessible': bool(entry.get('accessible')),
                     'truncated': bool(entry.get('truncated')),
                 })
+                address = _normalized_ip(entry.get('resolved_ip'))
+                if address is not None:
+                    coverage[-1]['resolved_ip'] = address
             safe['coverage'] = coverage
         result.append(safe)
     return result
