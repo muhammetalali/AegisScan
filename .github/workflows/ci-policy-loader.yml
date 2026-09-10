@@ -1,0 +1,21 @@
+name: CI Policy Loader
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-policy-loader-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - run: python scripts/verify_ci_policy.py
