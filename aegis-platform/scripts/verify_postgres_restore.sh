@@ -29,4 +29,14 @@ for table in $required; do
   IFS=','
 done
 IFS="$old_ifs"
+
+if [ -n "${AEGIS_RESTORE_ASSERTION_SQL:-}" ]; then
+  : "${AEGIS_RESTORE_ASSERTION_EXPECTED:?AEGIS_RESTORE_ASSERTION_EXPECTED is required when assertion SQL is set}"
+  actual="$(psql --dbname="$restore_db" --tuples-only --no-align --set ON_ERROR_STOP=1 --command="$AEGIS_RESTORE_ASSERTION_SQL")"
+  test "$actual" = "$AEGIS_RESTORE_ASSERTION_EXPECTED" || {
+    echo "restored authoritative-record assertion failed" >&2
+    exit 1
+  }
+fi
+
 printf 'RESTORE_VERIFICATION=PASS database=%s\n' "$restore_db"
