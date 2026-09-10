@@ -39,6 +39,32 @@ def _is_forbidden_scan_target(value: str) -> bool:
     return address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast
 
 
+def _is_unsafe_delivery_host(hostname: str) -> bool:
+    host = hostname.strip().lower().strip("[]")
+    if host in {"localhost", "metadata.google.internal"}:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast
+
+
+def _check_alert_webhook(value: str, failures: list[str]) -> None:
+    parsed = urlparse(value.strip())
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or _is_unsafe_delivery_host(parsed.hostname or "")
+    ):
+        failures.append(
+            "ALERT_WEBHOOK_URL must be an explicit HTTPS destination without URL credentials, fragment, loopback or link-local host"
+        )
+
+
 def _check_certificate(cert: Path, key: Path, failures: list[str]) -> None:
     if not cert.is_file() or not key.is_file():
         failures.append("TLS fullchain.pem and privkey.pem must both exist")
@@ -88,6 +114,7 @@ def validate(environment: dict[str, str], tls_dir: Path, check_tls: bool = True)
     targets = _items(environment.get("AUTHORIZED_SCAN_TARGETS", ""))
     if not targets or any(_is_forbidden_scan_target(target) for target in targets):
         failures.append("AUTHORIZED_SCAN_TARGETS must be explicit and exclude wildcard, loopback, link-local and CI targets")
+    _check_alert_webhook(environment.get("ALERT_WEBHOOK_URL", ""), failures)
     if check_tls:
         _check_certificate(tls_dir / "fullchain.pem", tls_dir / "privkey.pem", failures)
     return failures
