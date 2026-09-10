@@ -335,14 +335,12 @@ jobs:
           print('AUTHORIZED_RAW_PACKET_SCAN=PASS')
           PY
 
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress > /tmp/raw-l2-egress-before.txt
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker \
             masscan "$AEGIS_FORBIDDEN_TARGET_IP" -p 80 --rate 1000 --wait 1 --output-format json --output-filename - > /tmp/raw-l2-forbidden.json
-          python - <<'PY'
-          import json
-          data = json.load(open('/tmp/raw-l2-forbidden.json', encoding='utf-8'))
-          assert not any(any(port.get('port') == 80 for port in item.get('ports', [])) for item in data), data
-          print('FORBIDDEN_RAW_PACKET_SCAN_BLOCKED=PASS')
-          PY
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress > /tmp/raw-l2-egress-after.txt
+          python e2e/raw_l2_egress_proof.py /tmp/raw-l2-forbidden.json \
+            /tmp/raw-l2-egress-before.txt /tmp/raw-l2-egress-after.txt "$AEGIS_FORBIDDEN_TARGET_IP"
 
       - name: Provision Raw/L2 E2E operator
         working-directory: aegis-platform
@@ -427,6 +425,7 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress > ci-artifacts/scanner-egress-rules.txt 2>&1 || true
           cp /tmp/raw-l2-allowed.json ci-artifacts/allowed-masscan.json 2>/dev/null || true
           cp /tmp/raw-l2-forbidden.json ci-artifacts/forbidden-masscan.json 2>/dev/null || true
+          cp /tmp/raw-l2-egress-before.txt /tmp/raw-l2-egress-after.txt ci-artifacts/ 2>/dev/null || true
           tail -n 300 ci-artifacts/compose.log || true
           exit 0
 

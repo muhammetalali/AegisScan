@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import runpy
 
+import pytest
 import yaml
 
 
@@ -97,6 +99,40 @@ def test_raw_l2_reality_workflow_keeps_runtime_proofs() -> None:
         "Validate development and production compose boundaries",
         "Verify exact runtime identities capabilities and no-new-privileges",
         "Prove scanner namespace cannot gain NET_ADMIN",
+        "Prove kernel egress policy covers raw packet scans",
         "Run real authorized scanner engine E2E",
         "Verify scanner queue exclusivity",
     } <= names
+
+
+VERIFY_BLOCKED = runpy.run_path(
+    str(ROOT / "aegis-platform" / "e2e" / "raw_l2_egress_proof.py")
+)["verify_blocked"]
+BEFORE = 'ip daddr 172.16.0.0/12 counter packets 2 bytes 120 drop'
+AFTER = 'ip daddr 172.16.0.0/12 counter packets 3 bytes 180 drop'
+
+
+@pytest.mark.parametrize("raw", ["", " \n", "[]", "[\n]\n"])
+def test_zero_discoveries_require_real_kernel_drop(raw: str) -> None:
+    VERIFY_BLOCKED(raw, BEFORE, AFTER, "172.18.0.4")
+
+
+@pytest.mark.parametrize("raw", [
+    "[", "not json", "null", "{}", "false",
+    '[{"ip":"172.18.0.4","ports":[{"port":80}]}]',
+])
+def test_malformed_or_nonempty_scan_cannot_pass(raw: str) -> None:
+    with pytest.raises(ValueError):
+        VERIFY_BLOCKED(raw, BEFORE, AFTER, "172.18.0.4")
+
+
+@pytest.mark.parametrize("before,after,target", [
+    (BEFORE, BEFORE, "172.18.0.4"),
+    (AFTER, BEFORE, "172.18.0.4"),
+    (BEFORE, AFTER, "10.0.0.4"),
+    (BEFORE, "", "172.18.0.4"),
+    (BEFORE, BEFORE + '\nip daddr 10.0.0.0/8 counter packets 9 bytes 540 drop', "172.18.0.4"),
+])
+def test_missing_reset_or_unrelated_drop_cannot_pass(before, after, target) -> None:
+    with pytest.raises(ValueError):
+        VERIFY_BLOCKED("", before, after, target)
