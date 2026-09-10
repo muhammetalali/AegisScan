@@ -38,7 +38,7 @@ permissions: {contents: read}
 jobs:
   remote-encrypted-backup-reality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16-alpine
@@ -66,6 +66,11 @@ jobs:
       - uses: actions/setup-python@v6
         with: {python-version: '3.12'}
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.8'
+          cache: false
+
       - name: Install backup reality dependencies
         shell: bash
         run: |
@@ -91,26 +96,35 @@ jobs:
           test "$user" = "10001:10001"
           test "$(docker run --rm --entrypoint id aegis-remote-backup:reality -u)" = "10001"
 
-      - name: Start isolated S3-compatible remote object store
+      - name: Build and start pinned upstream S3-compatible object store
         shell: bash
         run: |
           set -euo pipefail
-          docker run -d --name aegis-backup-object-store \
-            -p 127.0.0.1:9000:9000 \
-            -e MINIO_ROOT_USER="$MINIO_ROOT_USER" \
-            -e MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
-            minio/minio:RELEASE.2024-06-13T22-53-53Z \
-            server /data
+          mkdir -p "$RUNNER_TEMP/aegis-minio-bin" /tmp/aegis-minio-data
+          GOBIN="$RUNNER_TEMP/aegis-minio-bin" \
+            go install github.com/minio/minio@RELEASE.2025-10-15T17-29-55Z
+          "$RUNNER_TEMP/aegis-minio-bin/minio" --version \
+            | tee /tmp/aegis-backup-proof-minio-version.txt
+          nohup "$RUNNER_TEMP/aegis-minio-bin/minio" \
+            server /tmp/aegis-minio-data \
+            --address 127.0.0.1:9000 \
+            --console-address 127.0.0.1:9001 \
+            > /tmp/aegis-minio.log 2>&1 &
+          echo "$!" > /tmp/aegis-minio.pid
           ready=0
-          for attempt in $(seq 1 40); do
+          for attempt in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
               ready=1
               break
             fi
+            if ! kill -0 "$(cat /tmp/aegis-minio.pid)" 2>/dev/null; then
+              cat /tmp/aegis-minio.log >&2 || true
+              exit 1
+            fi
             sleep 2
           done
           if [ "$ready" -ne 1 ]; then
-            docker logs aegis-backup-object-store >&2 || true
+            cat /tmp/aegis-minio.log >&2 || true
             exit 1
           fi
 
@@ -473,7 +487,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          docker logs aegis-backup-object-store 2>&1 | tail -300 || true
+          tail -300 /tmp/aegis-minio.log 2>/dev/null || true
           ls -la /tmp/aegis-backup-proof /tmp/aegis-remote-recovery 2>/dev/null || true
 
       - name: Upload remote backup reality evidence
@@ -487,4 +501,8 @@ jobs:
 
       - name: Stop disposable object store
         if: always()
-        run: docker rm -f aegis-backup-object-store >/dev/null 2>&1 || true
+        shell: bash
+        run: |
+          if [ -s /tmp/aegis-minio.pid ]; then
+            kill "$(cat /tmp/aegis-minio.pid)" >/dev/null 2>&1 || true
+          fi
