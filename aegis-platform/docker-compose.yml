@@ -122,7 +122,6 @@ services:
     network_mode: "service:scanner_egress"
     cap_drop: [ALL]
     cap_add: [NET_RAW, SETUID, SETGID, SETPCAP]
-    security_opt: [no-new-privileges:true]
     volumes: [./backend:/app]
     env_file: ./backend/.env
     environment:
