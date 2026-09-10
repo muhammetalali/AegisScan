@@ -16,7 +16,7 @@ def register_cloud_capability() -> None:
             'Credential-scoped, authorization-bound, read-only cloud posture assessment '
             'for AWS accounts, Azure subscriptions, and Google Cloud projects.'
         ),
-        scan_type='cloud',
+        scan_type='full_validation',
         asset_types=('cloud_resource',),
         risk='active-low',
         target_kind='cloud',
