@@ -94,8 +94,10 @@ def test_trivy_config_argv_is_offline_at_execution_time(tmp_path: Path, monkeypa
     assert argv[-1] == str(fixture.resolve())
 
 
-def test_nikto_adapter_disables_update_checks_and_interaction():
+def test_nikto_adapter_disables_updates_and_uses_secure_file_capture():
     spec = get_native_tool_spec('web.nikto')
     assert '-nocheck' in spec.suffix_args
     assert '-nointeractive' in spec.suffix_args
-    assert spec.suffix_args[-4:] == ('-Format', 'json', '-output', '/dev/stdout')
+    assert spec.suffix_args[-2:] == ('-Format', 'json')
+    assert spec.capture_mode == 'nikto-json-file'
+    assert '/dev/stdout' not in spec.suffix_args
