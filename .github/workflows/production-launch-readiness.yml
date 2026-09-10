@@ -7,7 +7,11 @@ on:
       - 'aegis-platform/scripts/production_preflight.py'
       - 'aegis-platform/scripts/backup_postgres.sh'
       - 'aegis-platform/scripts/verify_postgres_restore.sh'
+      - 'aegis-platform/scripts/render_alertmanager_config.py'
       - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'aegis-platform/docker-compose.monitoring.yml'
+      - 'aegis-platform/docker/alertmanager/**'
+      - 'aegis-platform/monitoring/**'
       - 'tests/test_production_preflight.py'
       - '.github/workflows/production-launch-readiness.yml'
   push:
@@ -113,6 +117,7 @@ jobs:
           CORS_ALLOWED_ORIGINS: https://security.example.com
           CSRF_TRUSTED_ORIGINS: https://security.example.com
           AUTHORIZED_SCAN_TARGETS: authorized.example.com,203.0.113.10
+          ALERT_WEBHOOK_URL: https://alerts.example.com/aegis
         run: python aegis-platform/scripts/production_preflight.py --tls-dir /tmp/aegis-tls
       - name: Seed authoritative backup fixture
         env:
