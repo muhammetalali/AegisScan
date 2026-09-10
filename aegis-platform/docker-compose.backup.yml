@@ -1,4 +1,9 @@
 services:
+  postgres:
+    networks:
+      default: {}
+      backup_db: {}
+
   backup:
     build:
       context: .
@@ -36,9 +41,17 @@ services:
       AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS: ${AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS:-7200}
       AEGIS_BACKUP_UPLOAD_TIMEOUT_SECONDS: ${AEGIS_BACKUP_UPLOAD_TIMEOUT_SECONDS:-7200}
       AEGIS_BACKUP_KEEP_LOCAL_PLAINTEXT: "false"
+    networks:
+      backup_db: {}
+      backup_egress: {}
     depends_on:
       postgres:
         condition: service_healthy
+
+networks:
+  backup_db:
+    internal: true
+  backup_egress:
     healthcheck:
       test: ["CMD", "python", "/app/scripts/remote_backup_service.py", "health"]
       interval: 5m
