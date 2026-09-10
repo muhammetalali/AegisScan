@@ -110,7 +110,7 @@ RUN command -v nmap >/dev/null \
     && command -v aegis-api-runtime-conformance >/dev/null \
     && command -v aegis-kubernetes-security >/dev/null \
     && command -v aegis-cloud-security >/dev/null \
-    && python -c 'import boto3; import azure.identity; import azure.mgmt.network; import azure.mgmt.resource; import google.cloud.asset_v1' \
+    && python -c 'import boto3; import azure.identity; import azure.mgmt.network; from azure.mgmt.resource.resources import ResourceManagementClient; from azure.mgmt.resource.subscriptions import SubscriptionClient; import google.cloud.asset_v1; assert ResourceManagementClient; assert SubscriptionClient' \
     && command -v httpx >/dev/null \
     && command -v subfinder >/dev/null \
     && command -v katana >/dev/null \
