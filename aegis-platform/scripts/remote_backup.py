@@ -425,12 +425,13 @@ def _validate_endpoint(endpoint: str, allow_http: bool) -> None:
             "query, or fragment"
         )
     host = parsed.hostname.strip().lower()
-    unsafe = host in {"localhost", "metadata.google.internal"}
+    test_loopback = host == "localhost"
+    blocked = host == "metadata.google.internal"
     with suppress(ValueError):
         address = ipaddress.ip_address(host)
-        unsafe = (
-            unsafe
-            or address.is_loopback
+        test_loopback = test_loopback or address.is_loopback
+        blocked = (
+            blocked
             or address.is_link_local
             or address.is_unspecified
             or address.is_multicast
@@ -438,9 +439,9 @@ def _validate_endpoint(endpoint: str, allow_http: bool) -> None:
     if parsed.scheme == "http":
         if not allow_http:
             raise BackupError("S3 endpoint must use HTTPS")
-        if not unsafe:
+        if not test_loopback or blocked:
             raise BackupError("HTTP S3 endpoints are permitted only for loopback test stores")
-    elif unsafe:
+    elif test_loopback or blocked:
         raise BackupError(
             "S3 endpoint must not use loopback, link-local, unspecified, "
             "multicast, or metadata hosts"
