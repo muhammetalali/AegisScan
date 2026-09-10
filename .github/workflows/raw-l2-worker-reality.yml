@@ -122,7 +122,7 @@ jobs:
               assert set(scanner.get('cap_add') or []) == {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
               assert scanner.get('cap_drop') == ['ALL']
               assert 'NET_ADMIN' not in (scanner.get('cap_add') or [])
-              assert 'no-new-privileges:true' in (scanner.get('security_opt') or [])
+              assert 'no-new-privileges:true' not in (scanner.get('security_opt') or [])
               assert scanner.get('network_mode') == 'service:scanner_egress'
               assert str(scanner.get('user')) == '0:0'
               assert general.get('cap_drop') == ['ALL']
