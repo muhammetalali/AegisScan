@@ -60,10 +60,10 @@ class NativeToolSpec:
 
 
 NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
-    'network.rustscan': NativeToolSpec('network.rustscan', 'rustscan', 'network-reconnaissance', 'Fast authorized TCP discovery with service handoff.', 'ip', ('ip_address', 'domain'), 'active-medium', 'host', '-a', suffix_args=('--', '-sV'), timeout=420),
+    'network.rustscan': NativeToolSpec('network.rustscan', 'rustscan', 'network-reconnaissance', 'Fast authorized TCP discovery with service handoff.', 'ip', ('ip_address', 'domain'), 'active-medium', 'host', '-a', options=(('ports', OptionSpec('-p', 'str', None)),), suffix_args=('--', '-sV'), timeout=420),
     'network.nbtscan-host': NativeToolSpec('network.nbtscan-host', 'nbtscan', 'network-reconnaissance', 'NetBIOS name discovery for an authorized host.', 'ip', ('ip_address',), 'active-low', 'host', None, timeout=180),
     'network.nbtscan-range': NativeToolSpec('network.nbtscan-range', 'nbtscan', 'network-reconnaissance', 'NetBIOS name discovery across an authorized network range.', 'network', ('network_range',), 'active-low', 'network', None, timeout=300),
-    'recon.amass': NativeToolSpec('recon.amass', 'amass', 'asset-discovery', 'Passive DNS and subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', prefix_args=('enum', '-passive'), timeout=900),
+    'recon.amass': NativeToolSpec('recon.amass', 'amass', 'asset-discovery', 'Passive DNS and subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', prefix_args=('enum', '-passive'), options=(('timeout_minutes', OptionSpec('-timeout', 'int', 5, 1, 30)),), timeout=900),
     'recon.subfinder': NativeToolSpec('recon.subfinder', 'subfinder', 'asset-discovery', 'Passive subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', suffix_args=('-silent',), timeout=600),
     'recon.dnsenum': NativeToolSpec('recon.dnsenum', 'dnsenum', 'dns-reconnaissance', 'Authorized DNS enumeration.', 'ip', ('domain',), 'active-low', 'host', None, timeout=600),
     'recon.fierce': NativeToolSpec('recon.fierce', 'fierce', 'dns-reconnaissance', 'Authorized DNS discovery and hostname enumeration.', 'ip', ('domain',), 'active-low', 'host', '--domain', timeout=600),
@@ -95,13 +95,13 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     ),
     'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
     'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
-    'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent'), options=(('threads', OptionSpec('-t', 'int', 10, 1, 50)),), timeout=1200),
+    'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
     'web.ffuf': NativeToolSpec('web.ffuf', 'ffuf', 'content-discovery', 'Wordlist-driven endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-medium', 'url', '-u', target_suffix='/FUZZ', suffix_args=('-of', 'json', '-o', '/dev/stdout'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 20, 1, 50))), timeout=1200),
-    'web.nikto': NativeToolSpec('web.nikto', 'nikto', 'web-vulnerability-assessment', 'Web server misconfiguration and exposure assessment.', 'url', ('website',), 'active-medium', 'url', '-h', suffix_args=('-Format', 'json', '-output', '/dev/stdout'), timeout=1200),
+    'web.nikto': NativeToolSpec('web.nikto', 'nikto', 'web-vulnerability-assessment', 'Web server misconfiguration and exposure assessment.', 'url', ('website',), 'active-medium', 'url', '-h', suffix_args=('-nocheck', '-nointeractive', '-Format', 'json', '-output', '/dev/stdout'), timeout=1200),
     'web.waf-detection': NativeToolSpec('web.waf-detection', 'wafw00f', 'web-fingerprinting', 'Web application firewall fingerprinting.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=300),
     'container.trivy-image': NativeToolSpec('container.trivy-image', 'trivy', 'container-security', 'Container image vulnerability and misconfiguration assessment.', 'docker', ('docker_image',), 'passive', 'image', None, prefix_args=('image', '--format', 'json', '--quiet'), timeout=1800),
     'code.checkov': NativeToolSpec('code.checkov', 'checkov', 'iac-security', 'Infrastructure-as-code policy and misconfiguration analysis.', 'code', ('source_code', 'repository'), 'passive', 'path', '-d', suffix_args=('-o', 'json', '--quiet'), timeout=1200),
-    'code.terrascan': NativeToolSpec('code.terrascan', 'terrascan', 'iac-security', 'Infrastructure-as-code security policy analysis.', 'code', ('source_code', 'repository'), 'passive', 'path', '-d', prefix_args=('scan',), suffix_args=('-o', 'json'), timeout=1200),
+    'code.trivy-config': NativeToolSpec('code.trivy-config', 'trivy', 'iac-security', 'Maintained infrastructure-as-code misconfiguration analysis using the pinned Trivy checks bundle.', 'code', ('source_code', 'repository'), 'passive', 'path', None, prefix_args=('--cache-dir', '/opt/trivy-cache', 'config', '--format', 'json', '--quiet', '--skip-check-update', '--skip-version-check'), timeout=1200),
     'code.trufflehog': NativeToolSpec('code.trufflehog', 'trufflehog', 'secret-detection', 'Repository and filesystem secret discovery.', 'code', ('source_code', 'repository'), 'passive', 'path', None, prefix_args=('filesystem',), suffix_args=('--json', '--no-update'), timeout=1200),
     'binary.checksec': NativeToolSpec('binary.checksec', 'checksec', 'binary-analysis', 'Executable hardening and mitigation inspection.', 'file', ('file',), 'passive', 'path', '--file', timeout=180),
     'binary.strings': NativeToolSpec('binary.strings', 'strings', 'binary-analysis', 'Printable string extraction for binary triage.', 'file', ('file',), 'passive', 'path', None, prefix_args=('-a',), timeout=180),
@@ -149,6 +149,9 @@ def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> di
                 raise ValueError(f'{name} is invalid')
             if definition.kind == 'choice' and value not in definition.choices:
                 raise ValueError(f'{name} must be one of {definition.choices}')
+            if name == 'ports':
+                if len(value) > 128 or any(ch not in '0123456789,-' for ch in value):
+                    raise ValueError('ports must be a numeric port/range expression')
             if name == 'wordlist':
                 path = Path(value).expanduser().resolve()
                 allowed_root = Path(os.getenv('AEGIS_WORDLIST_ROOT', '/opt/aegis-wordlists')).resolve()
