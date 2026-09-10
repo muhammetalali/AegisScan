@@ -1,0 +1,47 @@
+services:
+  backup:
+    build:
+      context: .
+      dockerfile: docker/backup/Dockerfile
+    container_name: aegis-remote-backup
+    restart: unless-stopped
+    user: "${AEGIS_BACKUP_RUNTIME_UID:-10001}:${AEGIS_BACKUP_RUNTIME_GID:-10001}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=2g,mode=0700,uid=${AEGIS_BACKUP_RUNTIME_UID:-10001},gid=${AEGIS_BACKUP_RUNTIME_GID:-10001}
+      - /run/aegis-backup:size=16m,mode=0700,uid=${AEGIS_BACKUP_RUNTIME_UID:-10001},gid=${AEGIS_BACKUP_RUNTIME_GID:-10001}
+    volumes:
+      - ${AEGIS_BACKUP_S3_CREDENTIALS_FILE:?AEGIS_BACKUP_S3_CREDENTIALS_FILE is required}:/run/secrets/s3-credentials.json:ro
+      - ${AEGIS_BACKUP_ENCRYPTION_KEY_FILE:?AEGIS_BACKUP_ENCRYPTION_KEY_FILE is required}:/run/secrets/encryption.key:ro
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-aegis}
+      PGDATABASE: ${POSTGRES_DB:-aegisdb}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      AEGIS_BACKUP_DIR: /tmp/backups
+      AEGIS_BACKUP_RETENTION_DAYS: "1"
+      AEGIS_BACKUP_S3_ENDPOINT: ${AEGIS_BACKUP_S3_ENDPOINT:?AEGIS_BACKUP_S3_ENDPOINT is required}
+      AEGIS_BACKUP_S3_REGION: ${AEGIS_BACKUP_S3_REGION:-us-east-1}
+      AEGIS_BACKUP_S3_BUCKET: ${AEGIS_BACKUP_S3_BUCKET:?AEGIS_BACKUP_S3_BUCKET is required}
+      AEGIS_BACKUP_S3_PREFIX: ${AEGIS_BACKUP_S3_PREFIX:-aegisscan/postgres}
+      AEGIS_BACKUP_S3_CREDENTIALS_FILE: /run/secrets/s3-credentials.json
+      AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/encryption.key
+      AEGIS_BACKUP_S3_ADDRESSING_STYLE: ${AEGIS_BACKUP_S3_ADDRESSING_STYLE:-path}
+      AEGIS_BACKUP_REQUIRE_VERSIONING: "true"
+      AEGIS_BACKUP_INTERVAL_SECONDS: ${AEGIS_BACKUP_INTERVAL_SECONDS:-86400}
+      AEGIS_BACKUP_RETRY_SECONDS: ${AEGIS_BACKUP_RETRY_SECONDS:-300}
+      AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS: ${AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS:-7200}
+      AEGIS_BACKUP_UPLOAD_TIMEOUT_SECONDS: ${AEGIS_BACKUP_UPLOAD_TIMEOUT_SECONDS:-7200}
+      AEGIS_BACKUP_KEEP_LOCAL_PLAINTEXT: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/remote_backup_service.py", "health"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 15m
