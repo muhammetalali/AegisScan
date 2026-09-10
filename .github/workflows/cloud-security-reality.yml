@@ -166,7 +166,8 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' '{"provider":"aws","access_key_id":"AKIAINVALID","secret_access_key":"never-real"}' > /tmp/cloud-invalid.json
-          chmod 0600 /tmp/cloud-invalid.json
+          sudo chown 10001:10001 /tmp/cloud-invalid.json
+          sudo chmod 0400 /tmp/cloud-invalid.json
           set +e
           docker run --rm \
             -v /tmp/cloud-invalid.json:/tmp/cloud-credential.json:ro \
@@ -184,7 +185,8 @@ jobs:
           assert 'never-real' not in json.dumps(data)
           print('packaged-cloud-fail-closed-ok')
           PY
-          rm -f /tmp/cloud-invalid.json /tmp/cloud-invalid-result.json
+          sudo rm -f -- /tmp/cloud-invalid.json
+          rm -f -- /tmp/cloud-invalid-result.json
 
       - name: Run configured live provider proofs
         shell: bash
@@ -203,7 +205,7 @@ jobs:
             output="/tmp/aegis-${provider}-result.json"
             umask 077
             printf '%s' "$credential" > "$file"
-            python fastapi_app/services/cloud_security.py "$target" --credentials-file "$file" > "$output"
+            python -m fastapi_app.services.cloud_security "$target" --credentials-file "$file" > "$output"
             PROVIDER="$provider" TARGET="$target" CREDENTIAL_FILE="$file" OUTPUT_FILE="$output" python - <<'PY'
           import json
           import os
