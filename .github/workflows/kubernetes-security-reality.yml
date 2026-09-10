@@ -21,6 +21,7 @@ name: Kubernetes Security Reality
       - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/e2e/kubernetes_security_e2e.py'
       - '.github/workflows/kubernetes-security-reality.yml'
+      - 'tests/test_kubernetes_workflow.py'
   push:
     branches: [main]
     paths:
@@ -39,6 +40,7 @@ name: Kubernetes Security Reality
       - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/e2e/kubernetes_security_e2e.py'
       - '.github/workflows/kubernetes-security-reality.yml'
+      - 'tests/test_kubernetes_workflow.py'
   workflow_dispatch:
 
 permissions:
@@ -97,6 +99,9 @@ jobs:
           set -euo pipefail
           python -m pip install -e '.[dev]'
           python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Test packaged analyzer workflow boundary
+        run: python -m pytest -q tests/test_kubernetes_workflow.py
 
       - name: Configure ephemeral credential-vault keys
         shell: bash
@@ -322,6 +327,7 @@ jobs:
           sudo chown 10001:10001 /tmp/aegis-container.kubeconfig
           sudo chmod 0400 /tmp/aegis-container.kubeconfig
           docker run --rm --network host \
+            --env "AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS:?explicit scan scope is required}" \
             -v /tmp/aegis-container.kubeconfig:/tmp/aegis-kubeconfig:ro \
             --entrypoint /usr/local/bin/aegis-kubernetes-security \
             aegisscan-kubernetes:ci \
@@ -429,4 +435,5 @@ jobs:
             kill "$(cat /tmp/kubernetes-worker.pid)" 2>/dev/null || true
           fi
           kind delete cluster --name aegis-kube-ci || true
-          rm -f /tmp/aegis-readonly.kubeconfig /tmp/aegis-container.kubeconfig
+          rm -f -- /tmp/aegis-readonly.kubeconfig
+          sudo rm -f -- /tmp/aegis-container.kubeconfig
