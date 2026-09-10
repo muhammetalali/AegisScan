@@ -436,7 +436,9 @@ def _validate_endpoint(endpoint: str, allow_http: bool) -> None:
             or address.is_multicast
         )
     if parsed.scheme == "http":
-        if not allow_http or not unsafe:
+        if not allow_http:
+            raise BackupError("S3 endpoint must use HTTPS")
+        if not unsafe:
             raise BackupError("HTTP S3 endpoints are permitted only for loopback test stores")
     elif unsafe:
         raise BackupError(
@@ -733,8 +735,8 @@ def _restore(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     output = Path(args.output).resolve()
-    if output.exists():
-        raise BackupError("restore output path already exists")
+    if output.exists() or Path(str(output) + ".sha256").exists():
+        raise BackupError("restore output path or SHA-256 sidecar already exists")
     work_dir = (
         Path(args.work_dir).resolve()
         if args.work_dir
