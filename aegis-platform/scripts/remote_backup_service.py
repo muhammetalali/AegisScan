@@ -45,14 +45,23 @@ def _publish_state(payload: dict) -> None:
 
 def _pending_backup(backup_dir: Path) -> Path | None:
     candidates: list[Path] = []
-    for candidate in backup_dir.glob("aegisscan-*.dump"):
+    dumps = sorted(backup_dir.glob("aegisscan-*.dump"))
+    sidecars = sorted(backup_dir.glob("aegisscan-*.dump.sha256"))
+
+    for candidate in dumps:
         resolved = candidate.resolve()
-        if resolved.parent != backup_dir:
+        if resolved.parent != backup_dir or not resolved.is_file():
             raise RuntimeError("pending backup path escaped the configured backup directory")
         sidecar = Path(str(resolved) + ".sha256")
-        if not resolved.is_file() or not sidecar.is_file():
-            continue
+        if not sidecar.is_file():
+            raise RuntimeError("pending backup is missing SHA-256 sidecar")
         candidates.append(resolved)
+
+    for sidecar in sidecars:
+        dump = Path(str(sidecar)[:-7])
+        if not dump.is_file():
+            raise RuntimeError("orphaned backup SHA-256 sidecar has no dump")
+
     if not candidates:
         return None
     candidates.sort(key=lambda path: (path.stat().st_mtime_ns, path.name))
