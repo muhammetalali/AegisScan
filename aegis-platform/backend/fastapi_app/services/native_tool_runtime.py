@@ -150,8 +150,16 @@ def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> di
             if definition.kind == 'choice' and value not in definition.choices:
                 raise ValueError(f'{name} must be one of {definition.choices}')
             if name == 'ports':
-                if len(value) > 128 or any(ch not in '0123456789,-' for ch in value):
-                    raise ValueError('ports must be a numeric port/range expression')
+                if len(value) > 128 or any(ch not in '0123456789,' for ch in value):
+                    raise ValueError('ports must be a comma-separated numeric port list')
+                parts = value.split(',')
+                if (
+                    not parts
+                    or any(not part or not part.isdigit() for part in parts)
+                    or any(int(part) < 1 or int(part) > 65535 for part in parts)
+                ):
+                    raise ValueError('ports must contain integers between 1 and 65535')
+                value = ','.join(str(int(part)) for part in parts)
             if name == 'wordlist':
                 path = Path(value).expanduser().resolve()
                 allowed_root = Path(os.getenv('AEGIS_WORDLIST_ROOT', '/opt/aegis-wordlists')).resolve()
