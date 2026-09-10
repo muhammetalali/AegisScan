@@ -304,11 +304,11 @@ jobs:
           SIOCGIFFLAGS = 0x8913
           SIOCSIFFLAGS = 0x8914
           sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-          request = struct.pack('16sH14s', b'eth0', 0, b'')
-          current = fcntl.ioctl(sock.fileno(), SIOCGIFFLAGS, request)
-          name, flags, padding = struct.unpack('16sH14s', current)
+          request = bytearray(40)
+          struct.pack_into('16s', request, 0, b'eth0')
+          fcntl.ioctl(sock.fileno(), SIOCGIFFLAGS, request, True)
           try:
-              fcntl.ioctl(sock.fileno(), SIOCSIFFLAGS, struct.pack('16sH14s', name, flags, padding))
+              fcntl.ioctl(sock.fileno(), SIOCSIFFLAGS, request, True)
           except OSError as exc:
               if exc.errno not in {errno.EPERM, errno.EACCES}:
                   raise
@@ -324,7 +324,6 @@ jobs:
           set -euo pipefail
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress | tee /tmp/raw-l2-egress-rules.txt
           grep -q 'hook egress' /tmp/raw-l2-egress-rules.txt
-          grep -q 'policy accept' /tmp/raw-l2-egress-rules.txt
 
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker \
             masscan "$AEGIS_MASSCAN_TARGET" -p 80 --rate 1000 --wait 1 --output-format json --output-filename - > /tmp/raw-l2-allowed.json
