@@ -8,6 +8,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 BASE_COMPOSE = ROOT / "aegis-platform" / "docker-compose.yml"
 ENTRYPOINT = ROOT / "aegis-platform" / "backend" / "scanner-worker-entrypoint.sh"
+DOCKERFILE = ROOT / "aegis-platform" / "backend" / "Dockerfile.django"
 CELERY_APP = ROOT / "aegis-platform" / "backend" / "fastapi_app" / "celery_app.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "raw-l2-worker-reality.yml"
 
@@ -27,7 +28,9 @@ def test_compose_separates_raw_worker_from_network_administration() -> None:
     assert scanner["cap_drop"] == ["ALL"]
     assert set(scanner["cap_add"]) == {"NET_RAW", "SETUID", "SETGID", "SETPCAP"}
     assert "NET_ADMIN" not in scanner["cap_add"]
-    assert scanner["security_opt"] == ["no-new-privileges:true"]
+    # no_new_privs is deliberately applied only after the bounded root->aegis
+    # capability handoff; applying it at container start would constrain that bootstrap.
+    assert "no-new-privileges:true" not in (scanner.get("security_opt") or [])
     assert "scanner-worker-entrypoint.sh" in scanner["command"]
 
     assert general["cap_drop"] == ["ALL"]
@@ -46,7 +49,7 @@ def test_compose_separates_raw_worker_from_network_administration() -> None:
             assert "/run/docker.sock" not in str(volume)
 
 
-def test_scanner_entrypoint_drops_bootstrap_capabilities_before_celery() -> None:
+def test_scanner_entrypoint_locks_privileges_after_capability_handoff() -> None:
     text = ENTRYPOINT.read_text(encoding="utf-8")
     executable = "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("#")
@@ -58,8 +61,16 @@ def test_scanner_entrypoint_drops_bootstrap_capabilities_before_celery() -> None
     assert "--addamb=cap_net_raw" in executable
     assert "--drop=cap_setuid,cap_setgid,cap_setpcap" in executable
     assert "--caps=cap_net_raw+eip" in executable
+    assert "setpriv --no-new-privs -- celery" in executable
+    assert executable.index("--drop=cap_setuid,cap_setgid,cap_setpcap") < executable.index("setpriv --no-new-privs")
     assert "cap_net_admin" not in executable
     assert "-q scanners" in executable
+
+
+def test_scanner_image_guarantees_setpriv_runtime_dependency() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "util-linux" in text
+    assert "command -v setpriv >/dev/null" in text
 
 
 def test_raw_scanner_tasks_are_routed_away_from_default_worker() -> None:
