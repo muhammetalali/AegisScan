@@ -212,6 +212,7 @@ def _normalize_cloud_observations(data: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+
 def _json_lines(raw: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for line in raw.splitlines():
@@ -245,7 +246,7 @@ def _positive_int(value: Any, maximum: int = 2_147_483_647) -> int:
 
 def _normalize_rustscan(raw: str) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
-    seen: set[tuple[str, int]] = set()
+    seen_open: set[tuple[str, int]] = set()
     open_pattern = re.compile(r'^Open\s+(?P<host>\[[^\]]+\]|[^:\s]+):(?P<port>\d{1,5})\s*    """Convert stable tool output formats into bounded AegisScan observations."""
     raw = stdout or ''
     observations: list[dict[str, Any]] = []
@@ -551,9 +552,9 @@ def _normalize_rustscan(raw: str) -> list[dict[str, Any]]:
                 continue
             host = match.group('host').strip('[]')[:253]
             key = (host, port)
-            if key in seen:
+            if key in seen_open:
                 continue
-            seen.add(key)
+            seen_open.add(key)
             observations.append({
                 'kind': 'network-open-port',
                 'host': host,
@@ -569,14 +570,12 @@ def _normalize_rustscan(raw: str) -> list[dict[str, Any]]:
         port = _positive_int(match.group('port'), 65535)
         if not 1 <= port <= 65535:
             continue
-        service = (match.group('service') or '')[:100]
-        version = (match.group('version') or '')[:1000]
         observations.append({
             'kind': 'network-service',
             'port': port,
             'protocol': (match.group('protocol') or 'tcp').lower(),
-            'service': service,
-            'version': version,
+            'service': (match.group('service') or '')[:100],
+            'version': (match.group('version') or '')[:1000],
         })
     return observations
 
@@ -634,7 +633,7 @@ def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
         ip = str(report.get('ip') or '')[:64]
         port = _positive_int(report.get('port'), 65535)
         vulnerabilities = report.get('vulnerabilities')
-        if isinstance(vulnerabilities, list):
+        if isinstance(vulnerabilities, list) and vulnerabilities:
             for item in vulnerabilities[:2000]:
                 if not isinstance(item, dict):
                     continue
@@ -658,7 +657,7 @@ def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
                     'references': [str(value)[:2048] for value in refs[:20]] if isinstance(refs, list) else [],
                     'remediation': 'Review the affected web-server configuration or resource and remove the reported exposure.',
                 })
-        if not vulnerabilities:
+        else:
             observations.append({
                 'kind': 'web-scan-summary',
                 'host': host,
@@ -709,8 +708,7 @@ def _normalize_trivy_config(raw: str) -> list[dict[str, Any]]:
                 'confidence': 'high',
                 'category': 'iac-security',
                 'location': location[:2048],
-                'resource': str(item.get('CauseMetadata', {}).get('Resource') or item.get('Message') or '')[:1000]
-                    if isinstance(item.get('CauseMetadata'), dict) else '',
+                'resource': str(cause.get('Resource') or '')[:1000],
                 'remediation': str(item.get('Resolution') or item.get('RecommendedActions') or '')[:5000],
                 'references': [str(value)[:2048] for value in refs[:20]] if isinstance(refs, list) else [],
                 'primary_url': str(item.get('PrimaryURL') or '')[:2048],
