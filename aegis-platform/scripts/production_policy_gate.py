@@ -151,6 +151,18 @@ def validate(model: dict) -> list[str]:
             failures.append('backup service must require remote bucket versioning')
         if not str(environment.get('AEGIS_BACKUP_S3_ENDPOINT', '')).strip():
             failures.append('backup service is missing AEGIS_BACKUP_S3_ENDPOINT')
+        networks = set((backup.get('networks') or {}).keys()) if isinstance(backup.get('networks'), dict) else set(backup.get('networks') or [])
+        if networks != {'backup_db', 'backup_egress'}:
+            failures.append('backup service must attach only to backup_db and backup_egress networks')
+        model_networks = model.get('networks') or {}
+        if (model_networks.get('backup_db') or {}).get('internal') is not True:
+            failures.append('backup_db network must be internal')
+        if (model_networks.get('backup_egress') or {}).get('internal') is True:
+            failures.append('backup_egress network must permit remote object-storage egress')
+        postgres_networks = services.get('postgres', {}).get('networks') or {}
+        postgres_network_names = set(postgres_networks.keys()) if isinstance(postgres_networks, dict) else set(postgres_networks)
+        if 'backup_db' not in postgres_network_names:
+            failures.append('postgres service must join the isolated backup_db network')
         secret_targets = set()
         for volume in backup.get('volumes') or []:
             if isinstance(volume, dict):
