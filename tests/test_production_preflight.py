@@ -22,6 +22,7 @@ def valid_environment() -> dict[str, str]:
         "CORS_ALLOWED_ORIGINS": "https://security.example.com",
         "CSRF_TRUSTED_ORIGINS": "https://security.example.com",
         "AUTHORIZED_SCAN_TARGETS": "authorized.example.com,203.0.113.10",
+        "ALERT_WEBHOOK_URL": "https://alerts.example.com/aegis",
     }
 
 
@@ -29,7 +30,7 @@ def test_accepts_explicit_non_default_production_configuration(tmp_path: Path):
     assert preflight.validate(valid_environment(), tmp_path, check_tls=False) == []
 
 
-def test_rejects_default_secrets_insecure_origins_and_dangerous_targets(tmp_path: Path):
+def test_rejects_default_secrets_insecure_origins_dangerous_targets_and_alert_route(tmp_path: Path):
     environment = valid_environment()
     environment.update({
         "SECRET_KEY": "change-me",
@@ -39,11 +40,26 @@ def test_rejects_default_secrets_insecure_origins_and_dangerous_targets(tmp_path
         "CORS_ALLOWED_ORIGINS": "http://localhost",
         "CSRF_TRUSTED_ORIGINS": "http://localhost",
         "AUTHORIZED_SCAN_TARGETS": "127.0.0.1,169.254.169.254",
+        "ALERT_WEBHOOK_URL": "http://127.0.0.1/hook",
     })
     failures = preflight.validate(environment, tmp_path, check_tls=False)
-    assert len(failures) >= 7
+    assert len(failures) >= 8
     assert any("distinct" in failure for failure in failures)
     assert any("AUTHORIZED_SCAN_TARGETS" in failure for failure in failures)
+    assert any("ALERT_WEBHOOK_URL" in failure for failure in failures)
+
+
+def test_rejects_webhook_credentials_fragment_and_link_local_destination(tmp_path: Path):
+    for webhook in (
+        "https://user:pass@alerts.example.com/hook",
+        "https://alerts.example.com/hook#secret",
+        "https://169.254.169.254/hook",
+        "",
+    ):
+        environment = valid_environment()
+        environment["ALERT_WEBHOOK_URL"] = webhook
+        failures = preflight.validate(environment, tmp_path, check_tls=False)
+        assert any("ALERT_WEBHOOK_URL" in failure for failure in failures), webhook
 
 
 def test_rejects_missing_tls_material(tmp_path: Path):
