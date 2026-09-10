@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import stat
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -35,8 +34,11 @@ def _finding(
     resource_kind: str = '',
     resource_name: str = '',
 ) -> dict[str, Any]:
+    parts = rule_id.split('.')
+    provider = parts[1] if len(parts) > 2 and parts[0] == 'cloud' else ''
     return {
         'kind': 'cloud-security-finding',
+        'provider': provider,
         'rule_id': rule_id,
         'title': title,
         'description': description,
@@ -206,7 +208,11 @@ def _aws_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
         region_name=values['region'],
     )
     config = Config(retries={'max_attempts': 3, 'mode': 'standard'}, connect_timeout=5, read_timeout=20)
-    identity = session.client('sts', config=config).get_caller_identity()
+    try:
+        identity = session.client('sts', config=config).get_caller_identity()
+    except ClientError as exc:
+        code = str(exc.response.get('Error', {}).get('Code') or 'ClientError')
+        raise CloudSecurityError(f'AWS identity verification failed ({code[:100]})') from exc
     account_id = str(identity.get('Account') or '')
     if account_id != target.identifier:
         raise CloudSecurityError('AWS credential identity does not match the authorized account target')
@@ -413,7 +419,7 @@ def _gcp_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
         raise CloudSecurityError('Google Cloud SDK dependencies are not installed') from exc
     try:
         credentials = service_account.Credentials.from_service_account_info(
-            values['service_account'], scopes=['https://www.googleapis.com/auth/cloud-platform.read-only']
+            values['service_account'], scopes=['https://www.googleapis.com/auth/cloud-platform']
         )
     except Exception as exc:
         raise CloudSecurityError('GCP service-account credential could not be constructed') from exc
