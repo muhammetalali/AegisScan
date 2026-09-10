@@ -97,6 +97,9 @@ jobs:
           user="$(docker image inspect aegis-remote-backup:reality --format '{{.Config.User}}')"
           test "$user" = "10001:10001"
           test "$(docker run --rm --entrypoint id aegis-remote-backup:reality -u)" = "10001"
+          docker run --rm --entrypoint pg_dump aegis-remote-backup:reality --version | tee /tmp/aegis-pg-client-version.txt
+          test "$(docker run --rm --entrypoint pg_dump aegis-remote-backup:reality --version | awk '{print $3}' | cut -d. -f1)" = "16"
+          test "$(docker run --rm --entrypoint pg_restore aegis-remote-backup:reality --version | awk '{print $3}' | cut -d. -f1)" = "16"
 
       - name: Build and start pinned upstream S3-compatible object store
         shell: bash
