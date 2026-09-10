@@ -7,6 +7,11 @@ on:
       - 'aegis-platform/scripts/production_preflight.py'
       - 'aegis-platform/scripts/backup_postgres.sh'
       - 'aegis-platform/scripts/verify_postgres_restore.sh'
+      - 'aegis-platform/scripts/remote_backup.py'
+      - 'aegis-platform/scripts/remote_backup_service.py'
+      - 'aegis-platform/docker-compose.backup.yml'
+      - 'aegis-platform/docker/backup/**'
+      - 'tests/test_remote_backup.py'
       - 'aegis-platform/scripts/render_alertmanager_config.py'
       - 'aegis-platform/docker/nginx-ssl.conf'
       - 'aegis-platform/docker-compose.monitoring.yml'
@@ -78,6 +83,28 @@ jobs:
             -subj '/CN=security.example.com' \
             -keyout /tmp/aegis-tls/privkey.pem -out /tmp/aegis-tls/fullchain.pem
           chmod 0600 /tmp/aegis-tls/privkey.pem
+      - name: Generate private remote backup launch proof material
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-launch-backup
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('/tmp/aegis-launch-backup')
+          (root / 'encryption.key').write_bytes(os.urandom(32))
+          (root / 's3.json').write_text(json.dumps({
+              'access_key_id': 'launch-proof-access',
+              'secret_access_key': 'launch-proof-secret-value',
+          }))
+          for path in root.iterdir():
+              path.chmod(0o600)
+          PY
+          printf 'AEGIS_BACKUP_RUNTIME_UID=%s\n' "$(id -u)" >> "$GITHUB_ENV"
+          printf 'AEGIS_BACKUP_RUNTIME_GID=%s\n' "$(id -g)" >> "$GITHUB_ENV"
+
       - name: Start production TLS gateway and prove response headers
         shell: bash
         run: |
@@ -118,6 +145,16 @@ jobs:
           CSRF_TRUSTED_ORIGINS: https://security.example.com
           AUTHORIZED_SCAN_TARGETS: authorized.example.com,203.0.113.10
           ALERT_WEBHOOK_URL: https://alerts.example.com/aegis
+          AEGIS_REMOTE_BACKUP_ENABLED: 'true'
+          AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
+          AEGIS_BACKUP_S3_REGION: us-east-1
+          AEGIS_BACKUP_S3_BUCKET: aegisscan-production-backups
+          AEGIS_BACKUP_S3_PREFIX: aegisscan/postgres
+          AEGIS_BACKUP_S3_ADDRESSING_STYLE: path
+          AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
+          AEGIS_BACKUP_INTERVAL_SECONDS: '86400'
+          AEGIS_BACKUP_S3_CREDENTIALS_FILE: /tmp/aegis-launch-backup/s3.json
+          AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /tmp/aegis-launch-backup/encryption.key
         run: python aegis-platform/scripts/production_preflight.py --tls-dir /tmp/aegis-tls
       - name: Seed authoritative backup fixture
         env:
@@ -155,4 +192,6 @@ jobs:
           PGPASSWORD: launch-readiness-password
           PGDATABASE: aegisdb
           AEGIS_RESTORE_REQUIRED_TABLES: django_migrations,users_user
+          AEGIS_RESTORE_ASSERTION_SQL: "SELECT email FROM users_user WHERE id = '00000000-0000-0000-0000-000000000001'"
+          AEGIS_RESTORE_ASSERTION_EXPECTED: restore-proof@aegisscan.local
         run: sh aegis-platform/scripts/verify_postgres_restore.sh "$AEGIS_BACKUP"

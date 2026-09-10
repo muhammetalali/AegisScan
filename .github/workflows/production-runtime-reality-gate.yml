@@ -7,6 +7,8 @@ on:
       - 'aegis-platform/backend/**'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/docker-compose.backup.yml'
+      - 'aegis-platform/docker/backup/**'
       - 'aegis-platform/docker/scanner-egress/**'
       - 'aegis-platform/scripts/production_policy_gate.py'
       - 'aegis/**'
@@ -17,6 +19,8 @@ on:
       - 'aegis-platform/backend/**'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/docker-compose.backup.yml'
+      - 'aegis-platform/docker/backup/**'
       - 'aegis-platform/docker/scanner-egress/**'
       - 'aegis-platform/scripts/production_policy_gate.py'
       - 'aegis/**'
@@ -92,12 +96,18 @@ jobs:
         env:
           AUTHORIZED_SCAN_TARGETS: production-policy.example
           POSTGRES_PASSWORD: ci-production-policy-password
+          AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
+          AEGIS_BACKUP_S3_BUCKET: aegisscan-production-backups
+          AEGIS_BACKUP_S3_CREDENTIALS_FILE: /run/aegis-policy/s3.json
+          AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /run/aegis-policy/backup.key
+          AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
         run: |
           set -euo pipefail
           : > aegis-platform/backend/.env
           docker compose \
             -f aegis-platform/docker-compose.yml \
             -f aegis-platform/docker-compose.prod.yml \
+            -f aegis-platform/docker-compose.backup.yml \
             config --format json > /tmp/aegis-production-compose.json
           python aegis-platform/scripts/production_policy_gate.py /tmp/aegis-production-compose.json
       - name: Django system checks

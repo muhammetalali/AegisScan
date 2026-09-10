@@ -9,12 +9,13 @@ from pathlib import Path
 
 INTERNAL_SERVICES = {
     'postgres', 'redis', 'django', 'fastapi', 'celery_worker', 'scanner_worker',
-    'scanner_egress', 'celery_beat', 'frontend',
+    'scanner_egress', 'celery_beat', 'frontend', 'backup',
 }
-HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'scanner_worker', 'scanner_egress', 'celery_beat'}
+HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'scanner_worker', 'scanner_egress', 'celery_beat', 'backup'}
 NO_NEW_PRIVILEGES_SERVICES = HARDENED_SERVICES - {'scanner_worker'}
 _TRUTHY = {'1', 'true', 'yes', 'on'}
 _SCANNER_BOOTSTRAP_CAPS = {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
+_BACKUP_SECRET_TARGETS = {'/run/secrets/s3-credentials.json', '/run/secrets/encryption.key'}
 
 
 def _tokens(value) -> set[str]:
@@ -56,9 +57,26 @@ def validate(model: dict) -> list[str]:
         if service.get('ports'):
             failures.append(f'{name} publishes a host port in production')
         for volume in service.get('volumes') or []:
-            source = volume.get('source') if isinstance(volume, dict) else str(volume).split(':', 1)[0]
+            if isinstance(volume, dict):
+                source = volume.get('source')
+                target = str(volume.get('target') or '')
+                volume_type = str(volume.get('type') or '')
+                read_only = bool(volume.get('read_only'))
+            else:
+                parts = str(volume).split(':')
+                source = parts[0]
+                target = parts[1] if len(parts) > 1 else ''
+                volume_type = 'bind' if str(source).startswith(('.', '/')) else 'volume'
+                read_only = len(parts) > 2 and parts[2] == 'ro'
             if str(source).startswith('.') or str(source).startswith('/'):
-                failures.append(f'{name} uses host bind mount {source!r} in production')
+                allowed_backup_secret = (
+                    name == 'backup'
+                    and volume_type == 'bind'
+                    and target in _BACKUP_SECRET_TARGETS
+                    and read_only
+                )
+                if not allowed_backup_secret:
+                    failures.append(f'{name} uses host bind mount {source!r} in production')
     for name in HARDENED_SERVICES:
         service = services.get(name, {})
         if service.get('read_only') is not True:
@@ -121,6 +139,37 @@ def validate(model: dict) -> list[str]:
     private_targets = str(egress_env.get('SCANNER_EGRESS_PRIVATE_TARGETS', '')).strip()
     if 'aegis-scan-target' in {item.strip() for item in private_targets.split(',') if item.strip()}:
         failures.append('scanner_egress enables the CI scan target in production')
+
+    backup = services.get('backup', {})
+    if backup:
+        if str(backup.get('user', '')).strip() in {'', '0', '0:0', 'root'}:
+            failures.append('backup service must run as a non-root uid/gid')
+        environment = backup.get('environment') or {}
+        if str(environment.get('AEGIS_BACKUP_KEEP_LOCAL_PLAINTEXT', '')).strip().lower() not in {'false', '0', 'no', 'off'}:
+            failures.append('backup service must delete local plaintext after remote commit')
+        if str(environment.get('AEGIS_BACKUP_REQUIRE_VERSIONING', '')).strip().lower() not in _TRUTHY:
+            failures.append('backup service must require remote bucket versioning')
+        if not str(environment.get('AEGIS_BACKUP_S3_ENDPOINT', '')).strip():
+            failures.append('backup service is missing AEGIS_BACKUP_S3_ENDPOINT')
+        networks = set((backup.get('networks') or {}).keys()) if isinstance(backup.get('networks'), dict) else set(backup.get('networks') or [])
+        if networks != {'backup_db', 'backup_egress'}:
+            failures.append('backup service must attach only to backup_db and backup_egress networks')
+        model_networks = model.get('networks') or {}
+        if (model_networks.get('backup_db') or {}).get('internal') is not True:
+            failures.append('backup_db network must be internal')
+        if (model_networks.get('backup_egress') or {}).get('internal') is True:
+            failures.append('backup_egress network must permit remote object-storage egress')
+        postgres_networks = services.get('postgres', {}).get('networks') or {}
+        postgres_network_names = set(postgres_networks.keys()) if isinstance(postgres_networks, dict) else set(postgres_networks)
+        if 'backup_db' not in postgres_network_names:
+            failures.append('postgres service must join the isolated backup_db network')
+        secret_targets = set()
+        for volume in backup.get('volumes') or []:
+            if isinstance(volume, dict):
+                if str(volume.get('type') or '') == 'bind' and volume.get('read_only') is True:
+                    secret_targets.add(str(volume.get('target') or ''))
+        if secret_targets != _BACKUP_SECRET_TARGETS:
+            failures.append('backup service must mount exactly the two audited read-only secret files')
 
     return failures
 
