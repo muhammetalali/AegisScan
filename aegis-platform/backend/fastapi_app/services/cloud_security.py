@@ -425,7 +425,8 @@ def _azure_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str,
         from azure.core.exceptions import AzureError
         from azure.identity import ClientSecretCredential
         from azure.mgmt.network import NetworkManagementClient
-        from azure.mgmt.resource import ResourceManagementClient, SubscriptionClient
+        from azure.mgmt.resource.resources import ResourceManagementClient
+        from azure.mgmt.resource.subscriptions import SubscriptionClient
     except ImportError as exc:
         raise CloudSecurityError('Azure SDK dependencies are not installed') from exc
     credential = ClientSecretCredential(
