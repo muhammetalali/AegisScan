@@ -77,7 +77,15 @@ def test_pending_backup_is_reused_after_remote_failure(tmp_path, monkeypatch):
 def test_pending_backup_requires_sidecar(tmp_path):
     orphan = tmp_path / "aegisscan-aegisdb-orphan.dump"
     orphan.write_bytes(b"orphan")
-    assert service._pending_backup(tmp_path) is None
+    with pytest.raises(RuntimeError, match="missing SHA-256 sidecar"):
+        service._pending_backup(tmp_path)
+
+
+def test_orphaned_sidecar_is_rejected(tmp_path):
+    sidecar = tmp_path / "aegisscan-aegisdb-orphan.dump.sha256"
+    sidecar.write_text("deadbeef  missing.dump\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="sidecar has no dump"):
+        service._pending_backup(tmp_path)
 
 
 def test_pending_backup_uses_oldest_verified_snapshot(tmp_path):
