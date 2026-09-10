@@ -346,6 +346,7 @@ def _manifest_unsigned(
     envelope: dict[str, Any],
     bucket: str,
     object_key: str,
+    object_version_id: str,
 ) -> dict[str, Any]:
     return {
         "algorithm": envelope["algorithm"],
@@ -356,6 +357,7 @@ def _manifest_unsigned(
         "created_at": envelope["created_at"],
         "key_id": envelope["key_id"],
         "object_key": object_key,
+        "object_version_id": object_version_id,
         "schema": SCHEMA,
         "source_name": envelope["source_name"],
         "source_sha256": envelope["source_sha256"],
@@ -528,8 +530,12 @@ def _read_s3_object_bounded(
     bucket: str,
     key: str,
     limit: int,
+    version_id: str | None = None,
 ) -> bytes:
-    response = s3.get_object(Bucket=bucket, Key=key)
+    request: dict[str, Any] = {"Bucket": bucket, "Key": key}
+    if version_id:
+        request["VersionId"] = version_id
+    response = s3.get_object(**request)
     body = response["Body"]
     data = body.read(limit + 1)
     if len(data) > limit:
@@ -542,13 +548,17 @@ def _download_s3_object(
     bucket: str,
     key: str,
     destination: Path,
+    version_id: str | None = None,
 ) -> tuple[str, int]:
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = Path(str(destination) + ".partial")
     digest = hashlib.sha256()
     size = 0
     try:
-        response = s3.get_object(Bucket=bucket, Key=key)
+        request: dict[str, Any] = {"Bucket": bucket, "Key": key}
+        if version_id:
+            request["VersionId"] = version_id
+        response = s3.get_object(**request)
         body = response["Body"]
         with partial.open("wb") as dst:
             os.chmod(partial, 0o600)
@@ -592,9 +602,6 @@ def _push(args: argparse.Namespace) -> dict[str, Any]:
     work_dir.mkdir(parents=True, exist_ok=True)
     encrypted = work_dir / f".{source_name}.{backup_id}.aegis.enc"
     envelope = _encrypt_file(source, encrypted, root_key, backup_id)
-    unsigned = _manifest_unsigned(envelope, args.bucket, object_key)
-    manifest = _sign_manifest(unsigned, root_key)
-    manifest_bytes = _canonical_json(manifest) + b"\n"
 
     try:
         s3.upload_file(
@@ -616,6 +623,9 @@ def _push(args: argparse.Namespace) -> dict[str, Any]:
             raise BackupError(
                 "remote encrypted object size verification failed"
             )
+        object_version_id = str(head.get("VersionId") or "")
+        if args.require_versioning and not object_version_id:
+            raise BackupError("remote encrypted object has no version ID")
         metadata = {
             str(k).lower(): str(v)
             for k, v in (head.get("Metadata") or {}).items()
@@ -628,9 +638,18 @@ def _push(args: argparse.Namespace) -> dict[str, Any]:
                 "remote encrypted object metadata verification failed"
             )
 
+        unsigned = _manifest_unsigned(
+            envelope,
+            args.bucket,
+            object_key,
+            object_version_id,
+        )
+        manifest = _sign_manifest(unsigned, root_key)
+        manifest_bytes = _canonical_json(manifest) + b"\n"
+
         # Manifest is the commit marker and is uploaded only after payload HEAD
         # verification succeeds.
-        s3.put_object(
+        manifest_put = s3.put_object(
             Bucket=args.bucket,
             Key=manifest_key,
             Body=manifest_bytes,
@@ -640,11 +659,15 @@ def _push(args: argparse.Namespace) -> dict[str, Any]:
                 "aegis-backup-id": backup_id,
             },
         )
+        manifest_version_id = str(manifest_put.get("VersionId") or "")
+        if args.require_versioning and not manifest_version_id:
+            raise BackupError("remote manifest has no version ID")
         committed = _read_s3_object_bounded(
             s3,
             args.bucket,
             manifest_key,
             MAX_MANIFEST_SIZE,
+            manifest_version_id or None,
         )
         if committed != manifest_bytes:
             raise BackupError(
@@ -660,7 +683,9 @@ def _push(args: argparse.Namespace) -> dict[str, Any]:
         "bucket": args.bucket,
         "cipher_sha256": envelope["cipher_sha256"],
         "manifest_key": manifest_key,
+        "manifest_version_id": manifest_version_id,
         "object_key": object_key,
+        "object_version_id": object_version_id,
         "schema": SCHEMA,
         "source_sha256": envelope["source_sha256"],
         "source_size": envelope["source_size"],
@@ -673,11 +698,13 @@ def _restore(args: argparse.Namespace) -> dict[str, Any]:
     s3 = _s3_client(args)
     _require_bucket(s3, args.bucket, args.require_versioning)
 
+    manifest_version_id = str(getattr(args, "manifest_version_id", "") or "")
     manifest_bytes = _read_s3_object_bounded(
         s3,
         args.bucket,
         args.manifest_key,
         MAX_MANIFEST_SIZE,
+        manifest_version_id or None,
     )
     try:
         manifest = json.loads(manifest_bytes)
@@ -696,6 +723,9 @@ def _restore(args: argparse.Namespace) -> dict[str, Any]:
             "remote backup manifest bucket does not match requested bucket"
         )
     object_key = str(unsigned.get("object_key", ""))
+    object_version_id = str(unsigned.get("object_version_id", ""))
+    if args.require_versioning and not object_version_id:
+        raise BackupError("authenticated manifest is missing payload version ID")
     prefix = _validate_prefix(args.prefix)
     if not object_key.startswith(prefix + "/"):
         raise BackupError(
@@ -726,6 +756,7 @@ def _restore(args: argparse.Namespace) -> dict[str, Any]:
             args.bucket,
             object_key,
             encrypted,
+            object_version_id or None,
         )
         if not hmac.compare_digest(
             cipher_sha256,
@@ -751,6 +782,8 @@ def _restore(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "backup_id": header["backup_id"],
         "manifest_key": args.manifest_key,
+        "manifest_version_id": manifest_version_id,
+        "object_version_id": object_version_id,
         "output": str(output),
         "schema": SCHEMA,
         "source_sha256": header["source_sha256"],
@@ -841,6 +874,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_remote_args(restore)
     restore.add_argument("--manifest-key", required=True)
+    restore.add_argument("--manifest-version-id")
     restore.add_argument("--output", required=True)
     restore.add_argument("--work-dir")
     return parser
