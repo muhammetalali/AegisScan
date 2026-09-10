@@ -18,6 +18,7 @@ from .scope_authorization import require_authorized_target
 
 TargetKind = Literal['host', 'network', 'url', 'path', 'image', 'cloud']
 CredentialMode = Literal['none', 'curl-bearer-config', 'kubeconfig-file', 'cloud-credentials-file']
+CaptureMode = Literal['stdout', 'nikto-json-file']
 
 
 class NativeExecutionCancelled(RuntimeError):
@@ -53,6 +54,7 @@ class NativeToolSpec:
     credential_mode: CredentialMode = 'none'
     credential_kinds: tuple[str, ...] = ()
     credential_required: bool = False
+    capture_mode: CaptureMode = 'stdout'
 
     @property
     def option_map(self) -> dict[str, OptionSpec]:
@@ -97,7 +99,7 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
     'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent', '--no-state'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50)), ('depth', OptionSpec('-d', 'int', 2, 1, 4))), timeout=1200),
     'web.ffuf': NativeToolSpec('web.ffuf', 'ffuf', 'content-discovery', 'Wordlist-driven endpoint discovery.', 'url', ('website', 'api_endpoint'), 'active-medium', 'url', '-u', target_suffix='/FUZZ', suffix_args=('-of', 'json', '-o', '/dev/stdout'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 20, 1, 50))), timeout=1200),
-    'web.nikto': NativeToolSpec('web.nikto', 'nikto', 'web-vulnerability-assessment', 'Web server misconfiguration and exposure assessment.', 'url', ('website',), 'active-medium', 'url', '-h', suffix_args=('-nocheck', '-nointeractive', '-Format', 'json', '-output', '/dev/stdout'), timeout=1200),
+    'web.nikto': NativeToolSpec('web.nikto', 'nikto', 'web-vulnerability-assessment', 'Web server misconfiguration and exposure assessment.', 'url', ('website',), 'active-medium', 'url', '-h', suffix_args=('-nocheck', '-nointeractive', '-Format', 'json'), timeout=1200, capture_mode='nikto-json-file'),
     'web.waf-detection': NativeToolSpec('web.waf-detection', 'wafw00f', 'web-fingerprinting', 'Web application firewall fingerprinting.', 'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=300),
     'container.trivy-image': NativeToolSpec('container.trivy-image', 'trivy', 'container-security', 'Container image vulnerability and misconfiguration assessment.', 'docker', ('docker_image',), 'passive', 'image', None, prefix_args=('image', '--format', 'json', '--quiet'), timeout=1800),
     'code.checkov': NativeToolSpec('code.checkov', 'checkov', 'iac-security', 'Infrastructure-as-code policy and misconfiguration analysis.', 'code', ('source_code', 'repository'), 'passive', 'path', '-d', suffix_args=('-o', 'json', '--quiet'), timeout=1200),
@@ -352,11 +354,21 @@ def run_native_tool(
     spec = get_native_tool_spec(capability_id)
     argv, canonical_target = build_native_argv(spec, target, options)
     cleanup_paths: list[str] = []
+    captured_report_path: str | None = None
     process: subprocess.Popen[str] | None = None
     try:
         credential_args, cleanup_paths = _credential_runtime_args(spec, tuple(credential_materials or ()))
         if credential_args:
             argv = [argv[0], *credential_args, *argv[1:]]
+        if spec.capture_mode == 'nikto-json-file':
+            report_fd, captured_report_path = tempfile.mkstemp(
+                prefix='aegis-nikto-',
+                suffix='.json',
+            )
+            os.fchmod(report_fd, 0o600)
+            os.close(report_fd)
+            cleanup_paths.append(captured_report_path)
+            argv.extend(['-output', captured_report_path])
         process = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
@@ -385,6 +397,15 @@ def run_native_tool(
                 raise subprocess.TimeoutExpired(argv, spec.timeout)
             try:
                 stdout, stderr = process.communicate(timeout=min(poll_interval, remaining))
+                if captured_report_path is not None:
+                    report_path = Path(captured_report_path)
+                    if not report_path.is_file() or report_path.stat().st_size <= 0:
+                        raise RuntimeError('Nikto did not produce its required JSON report')
+                    report = report_path.read_text(encoding='utf-8', errors='replace')
+                    console = stdout.strip()
+                    if console:
+                        stderr = '\n'.join(part for part in (stderr.strip(), console) if part)
+                    stdout = report
                 return ScanResult(spec.binary, canonical_target, process.returncode or 0, stdout, stderr)
             except subprocess.TimeoutExpired:
                 continue
