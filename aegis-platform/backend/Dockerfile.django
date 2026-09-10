@@ -121,7 +121,7 @@ RUN mkdir -p /opt/aegis-wordlists \
 RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
     && mkdir -p /app/staticfiles /app/media \
-    && chown -R aegis:aegis /app \
+    && chown -R aegis:aegis /app /opt/trivy-cache \
     && chmod 0755 \
         /app/scanner-worker-entrypoint.sh \
         /app/fastapi_app/services/browser_security_probe.py \
