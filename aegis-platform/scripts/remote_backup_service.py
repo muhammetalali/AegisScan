@@ -92,6 +92,8 @@ def run_once() -> dict:
         "backup_id": result["backup_id"],
         "completed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "manifest_key": result["manifest_key"],
+        "manifest_version_id": result["manifest_version_id"],
+        "object_version_id": result["object_version_id"],
         "schema": result["schema"],
         "source_sha256": result["source_sha256"],
         "status": "success",
