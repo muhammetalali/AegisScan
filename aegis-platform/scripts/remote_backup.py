@@ -90,13 +90,20 @@ def _load_credentials(path: Path) -> dict[str, str]:
         raise BackupError("S3 credentials file must be valid JSON") from exc
     if not isinstance(payload, dict):
         raise BackupError("S3 credentials file must contain a JSON object")
+    allowed = {"access_key_id", "secret_access_key", "session_token"}
+    if set(payload) - allowed:
+        raise BackupError("S3 credentials file contains unsupported fields")
     access_key = str(payload.get("access_key_id", "")).strip()
     secret_key = str(payload.get("secret_access_key", "")).strip()
     session_token = str(payload.get("session_token", "")).strip()
+    if any(ch in access_key + secret_key + session_token for ch in "\r\n\x00"):
+        raise BackupError("S3 credentials contain invalid control characters")
     if not access_key or len(access_key) > 512:
         raise BackupError("S3 access_key_id is missing or invalid")
     if not secret_key or len(secret_key) > 4096:
         raise BackupError("S3 secret_access_key is missing or invalid")
+    if len(session_token) > 8192:
+        raise BackupError("S3 session_token is invalid")
     result = {
         "aws_access_key_id": access_key,
         "aws_secret_access_key": secret_key,
@@ -401,12 +408,13 @@ def _verify_manifest(
 
 def _validate_endpoint(endpoint: str, allow_http: bool) -> None:
     parsed = urlparse(endpoint)
-    if parsed.scheme not in ({"http", "https"} if allow_http else {"https"}):
+    if parsed.scheme not in {"http", "https"}:
         raise BackupError("S3 endpoint must use HTTPS")
     if (
         not parsed.hostname
         or parsed.username
         or parsed.password
+        or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
     ):
@@ -425,7 +433,10 @@ def _validate_endpoint(endpoint: str, allow_http: bool) -> None:
             or address.is_unspecified
             or address.is_multicast
         )
-    if unsafe and not allow_http:
+    if parsed.scheme == "http":
+        if not allow_http or not unsafe:
+            raise BackupError("HTTP S3 endpoints are permitted only for loopback test stores")
+    elif unsafe:
         raise BackupError(
             "S3 endpoint must not use loopback, link-local, unspecified, "
             "multicast, or metadata hosts"
@@ -449,6 +460,8 @@ def _validate_prefix(prefix: str) -> str:
         or len(value) > 512
         or any(part in {"", ".", ".."} for part in value.split("/"))
         or "//" in value
+        or "\\" in value
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
     ):
         raise BackupError("S3 object prefix is invalid")
     return value
@@ -690,6 +703,8 @@ def _restore(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     output = Path(args.output).resolve()
+    if output.exists():
+        raise BackupError("restore output path already exists")
     work_dir = (
         Path(args.work_dir).resolve()
         if args.work_dir
