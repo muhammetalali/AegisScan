@@ -39,7 +39,6 @@ services:
       DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB:-aegisdb}?sslmode=disable
       DATA_SOURCE_USER: ${POSTGRES_USER:-aegis}
       DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for monitoring}
-      PG_EXPORTER_DISABLE_SETTINGS_METRICS: "true"
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
