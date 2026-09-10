@@ -1,26 +1,71 @@
 groups:
   - name: aegis-production
     rules:
-      - alert: AegisPublicEndpointDown
-        expr: probe_success{job="aegis-https"} == 0
+      - alert: AegisGatewayDown
+        expr: probe_success{job="aegis-gateway"} == 0
         for: 2m
         labels: {severity: critical, service: gateway}
         annotations:
-          summary: AegisScan public HTTPS endpoint is unavailable
+          summary: AegisScan gateway readiness path is unavailable
+
+      - alert: AegisBlackboxExporterDown
+        expr: up{job="aegis-gateway"} == 0
+        for: 1m
+        labels: {severity: critical, service: monitoring}
+        annotations:
+          summary: AegisScan gateway probe exporter is unavailable
+
+      - alert: AegisPostgresExporterDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels: {severity: critical, service: monitoring}
+        annotations:
+          summary: AegisScan PostgreSQL exporter is unavailable
+
       - alert: AegisPostgresDown
-        expr: pg_up == 0
+        expr: pg_up{job="postgres"} == 0
         for: 1m
         labels: {severity: critical, service: postgres}
         annotations:
-          summary: AegisScan PostgreSQL is unavailable
+          summary: AegisScan PostgreSQL is unavailable to the monitoring identity
+
+      - alert: AegisRedisExporterDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels: {severity: critical, service: monitoring}
+        annotations:
+          summary: AegisScan Redis exporter is unavailable
+
       - alert: AegisRedisDown
-        expr: redis_up == 0
+        expr: redis_up{job="redis"} == 0
         for: 1m
         labels: {severity: critical, service: redis}
         annotations:
-          summary: AegisScan Redis is unavailable
+          summary: AegisScan Redis is unavailable to the monitoring identity
+
+      - alert: AegisAlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 1m
+        labels: {severity: critical, service: monitoring}
+        annotations:
+          summary: AegisScan Alertmanager is unavailable to Prometheus
+
+      - alert: AegisPrometheusRuleEvaluationFailures
+        expr: increase(prometheus_rule_evaluation_failures_total[5m]) > 0
+        for: 1m
+        labels: {severity: critical, service: monitoring}
+        annotations:
+          summary: Prometheus rule evaluation failures were detected
+
+      - alert: AegisPrometheusConfigReloadFailure
+        expr: prometheus_config_last_reload_successful == 0
+        for: 1m
+        labels: {severity: critical, service: monitoring}
+        annotations:
+          summary: Prometheus failed to load its active configuration
+
       - alert: AegisPostgresConnectionsHigh
-        expr: sum(pg_stat_activity_count) / clamp_min(sum(pg_settings_max_connections), 1) > 0.85
+        expr: sum(pg_stat_activity_count{datname!=""}) / clamp_min(max(pg_settings_max_connections), 1) > 0.85
         for: 10m
         labels: {severity: warning, service: postgres}
         annotations:
