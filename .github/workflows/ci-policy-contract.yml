@@ -20,5 +20,5 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: {python-version: '3.12'}
-      - run: python -m pip install pytest==9.1.1
-      - run: python -m pytest -q tests/test_ci_policy_semantics.py
+      - run: python -m pip install pytest==9.1.1 PyYAML==6.0.2
+      - run: python -m pytest -q tests/test_ci_policy_semantics.py tests/test_ci_policy_release.py
