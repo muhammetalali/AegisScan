@@ -103,6 +103,8 @@ services:
     command: celery -A fastapi_app.celery_app worker -l info -c 4 -Q default
     volumes: [./backend:/app]
     env_file: ./backend/.env
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
