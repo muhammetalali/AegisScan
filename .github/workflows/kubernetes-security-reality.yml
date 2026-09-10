@@ -65,6 +65,7 @@ jobs:
       ALLOWED_HOSTS: 'localhost,127.0.0.1'
       CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
       AUTHORIZED_SCAN_TARGETS: '127.0.0.1/32'
+      AEGIS_CELERY_NODE: 'kubernetes-reality@ci'
     services:
       postgres:
         image: postgres:16
@@ -373,17 +374,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          celery -A celery_app worker --loglevel=INFO --pool=solo -Q scanners --hostname=kubernetes-reality@%h > /tmp/kubernetes-worker.log 2>&1 &
+          celery -A celery_app worker --loglevel=INFO --pool=solo -Q scanners --hostname="$AEGIS_CELERY_NODE" > /tmp/kubernetes-worker.log 2>&1 &
           echo "$!" > /tmp/kubernetes-worker.pid
           ready=0
           for _ in $(seq 1 40); do
-            if celery -A celery_app inspect ping --timeout=1 2>/dev/null | grep -q 'pong'; then
+            # Consume the complete CLI response: grep -q can close its pipe before
+            # Celery prints its node summary, making a healthy ping fail under pipefail.
+            if celery -A celery_app inspect ping --timeout=3 --destination="$AEGIS_CELERY_NODE" --json > /tmp/kubernetes-worker-ping.json 2>/tmp/kubernetes-worker-ping.stderr &&
+              python -c 'import json, os; data=json.load(open("/tmp/kubernetes-worker-ping.json")); assert data.get(os.environ["AEGIS_CELERY_NODE"]) == {"ok": "pong"}'; then
               ready=1
               break
             fi
             sleep 1
           done
           if [ "$ready" != 1 ]; then
+            cat /tmp/kubernetes-worker-ping.stderr
+            cat /tmp/kubernetes-worker-ping.json
             cat /tmp/kubernetes-worker.log
             exit 1
           fi
@@ -405,9 +411,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          celery -A celery_app inspect active --timeout=3
-          celery -A celery_app inspect reserved --timeout=3
-          celery -A celery_app inspect scheduled --timeout=3
+          celery -A celery_app inspect active --timeout=3 --destination="$AEGIS_CELERY_NODE"
+          celery -A celery_app inspect reserved --timeout=3 --destination="$AEGIS_CELERY_NODE"
+          celery -A celery_app inspect scheduled --timeout=3 --destination="$AEGIS_CELERY_NODE"
           test -s /tmp/kubernetes-worker.log
           ! grep -Eiq '(Traceback|WorkerLostError|task.*failed unexpectedly)' /tmp/kubernetes-worker.log
 
