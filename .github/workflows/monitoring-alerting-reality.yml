@@ -1,16 +1,38 @@
 name: Monitoring Alerting Reality
 
-on:
+'on':
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/monitoring-alerting-reality.yml'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/docker-compose.monitoring.yml'
+      - 'aegis-platform/docker/nginx.conf'
+      - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'aegis-platform/docker/alertmanager/**'
       - 'aegis-platform/monitoring/**'
       - 'aegis-platform/scripts/render_alertmanager_config.py'
+      - 'aegis-platform/scripts/production_preflight.py'
       - 'tests/test_alertmanager_config.py'
+      - 'tests/test_production_preflight.py'
       - 'tests/alert_receiver.py'
   push:
     branches: [main]
+    paths:
+      - '.github/workflows/monitoring-alerting-reality.yml'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/docker-compose.monitoring.yml'
+      - 'aegis-platform/docker/nginx.conf'
+      - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'aegis-platform/docker/alertmanager/**'
+      - 'aegis-platform/monitoring/**'
+      - 'aegis-platform/scripts/render_alertmanager_config.py'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'tests/test_alertmanager_config.py'
+      - 'tests/test_production_preflight.py'
+      - 'tests/alert_receiver.py'
   workflow_dispatch:
 
 permissions: {contents: read}
@@ -18,68 +40,304 @@ permissions: {contents: read}
 jobs:
   monitoring-alerting-reality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: aegis-monitoring-proof
+      POSTGRES_DB: aegisdb
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: monitoring-reality-password-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:monitoring-reality-password-0123456789abcdef@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SECRET_KEY: ci-monitoring-django-secret-0123456789abcdef0123456789abcdef
+      JWT_SECRET_KEY: ci-monitoring-jwt-secret-0123456789abcdef0123456789abcdef
+      DEBUG: 'False'
+      ALLOWED_HOSTS: localhost,127.0.0.1,nginx
+      CORS_ALLOWED_ORIGINS: http://localhost
+      CSRF_TRUSTED_ORIGINS: http://localhost,http://nginx
+      AUTH_COOKIE_SECURE: 'False'
+      AUTHORIZED_SCAN_TARGETS: 203.0.113.10
+      ALERT_WEBHOOK_URL: http://alert-receiver:8080/aegis
+      AEGIS_ALLOW_HTTP_ALERT_WEBHOOK: 'true'
+      PROMETHEUS_RETENTION: 1h
+
     steps:
       - uses: actions/checkout@v5
+
       - uses: actions/setup-python@v6
         with: {python-version: '3.12'}
-      - run: python -m pip install pytest==9.1.1
-      - run: python -m pytest -q tests/test_alertmanager_config.py
-      - name: Validate Prometheus rules and configuration with promtool
-        run: |
-          docker run --rm --entrypoint=/bin/promtool -v "$PWD/aegis-platform/monitoring:/etc/prometheus:ro" prom/prometheus:v3.6.0 \
-            check config /etc/prometheus/prometheus.yml
-          docker run --rm --entrypoint=/bin/promtool -v "$PWD/aegis-platform/monitoring:/etc/prometheus:ro" prom/prometheus:v3.6.0 \
-            check rules /etc/prometheus/rules/aegis.yml
-      - name: Render production route and deliver a real alert
+
+      - name: Unit-test fail-closed monitoring configuration
         run: |
           set -euo pipefail
-          mkdir -p /tmp/aegis-alert-evidence /tmp/aegis-alertmanager
-          ALERT_WEBHOOK_URL=http://alert-receiver:8080/aegis python aegis-platform/scripts/render_alertmanager_config.py \
-            --allow-http-for-test --template aegis-platform/monitoring/alertmanager.yml.tpl \
-            --output /tmp/aegis-alertmanager/alertmanager.yml
-          test "$(stat -c '%a' /tmp/aegis-alertmanager/alertmanager.yml)" = "600"
-          ALERT_UID="$(stat -c '%u' /tmp/aegis-alertmanager/alertmanager.yml)"
-          ALERT_GID="$(stat -c '%g' /tmp/aegis-alertmanager/alertmanager.yml)"
-          docker run --rm --user "${ALERT_UID}:${ALERT_GID}" --entrypoint=/bin/amtool \
-            -v /tmp/aegis-alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro \
-            prom/alertmanager:v0.28.1 check-config /etc/alertmanager/alertmanager.yml
+          python -m pip install pytest==9.1.1
+          python -m pytest -q tests/test_alertmanager_config.py tests/test_production_preflight.py
+
+      - name: Validate Prometheus rules and configuration with pinned promtool
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint=/bin/promtool \
+            -v "$PWD/aegis-platform/monitoring:/etc/prometheus:ro" \
+            prom/prometheus:v3.13.3 check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint=/bin/promtool \
+            -v "$PWD/aegis-platform/monitoring:/etc/prometheus:ro" \
+            prom/prometheus:v3.13.3 check rules /etc/prometheus/rules/aegis.yml
+
+      - name: Prepare bounded CI runtime environment
+        working-directory: aegis-platform
+        run: |
+          set -euo pipefail
+          cat > backend/.env <<EOF
+          DEBUG=${DEBUG}
+          SECRET_KEY=${SECRET_KEY}
+          JWT_SECRET_KEY=${JWT_SECRET_KEY}
+          ALLOWED_HOSTS=${ALLOWED_HOSTS}
+          CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+          CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+          DATABASE_URL=${DATABASE_URL}
+          REDIS_URL=${REDIS_URL}
+          CELERY_BROKER_URL=${CELERY_BROKER_URL}
+          CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+          AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
+          AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          POSTGRES_DB=${POSTGRES_DB}
+          POSTGRES_USER=${POSTGRES_USER}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          EOF
+
+      - name: Validate development and production monitoring topology
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config --quiet
+          ALERT_WEBHOOK_URL=https://alerts.example.com/aegis \
+          AUTHORIZED_SCAN_TARGETS=203.0.113.10 \
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.monitoring.yml config --quiet
+
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config --format json > /tmp/aegis-monitoring-compose.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path('/tmp/aegis-monitoring-compose.json').read_text())
+          services = config['services']
+          required = {'prometheus', 'alertmanager', 'blackbox-exporter', 'postgres-exporter', 'redis-exporter'}
+          assert required <= set(services), set(services)
+          assert config['networks']['observability'].get('internal') is True
+          assert config['networks']['alert_delivery'].get('internal') is not True
+
+          for name in required:
+              service = services[name]
+              assert not service.get('ports'), (name, service.get('ports'))
+              assert service.get('read_only') is True, name
+              assert 'ALL' in service.get('cap_drop', []), (name, service.get('cap_drop'))
+              assert 'no-new-privileges:true' in service.get('security_opt', []), (name, service.get('security_opt'))
+
+          assert 'observability' not in services['alertmanager']['networks']
+          assert {'observability', 'alert_delivery'} <= set(services['prometheus']['networks'])
+          assert set(services['blackbox-exporter']['networks']) == {'observability'}
+          assert set(services['postgres-exporter']['networks']) == {'observability'}
+          assert set(services['redis-exporter']['networks']) == {'observability'}
+          print('monitoring-topology-contract-ok')
+          PY
+
+      - name: Build hardened Alertmanager delivery image
+        working-directory: aegis-platform
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml build --pull alertmanager
+
+      - name: Run real scrape rule and alert-delivery chain
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-alert-evidence
+          OBS_NET="${COMPOSE_PROJECT_NAME}_observability"
+          DELIVERY_NET="${COMPOSE_PROJECT_NAME}_alert_delivery"
+          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.monitoring.yml"
+
           cleanup() {
-            docker rm -f aegis-alertmanager-proof aegis-alert-receiver >/dev/null 2>&1 || true
-            docker network rm aegis-monitoring-proof >/dev/null 2>&1 || true
+            docker rm -f aegis-monitoring-gateway aegis-alert-receiver >/dev/null 2>&1 || true
+            $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          docker network create aegis-monitoring-proof
-          docker run -d --name aegis-alert-receiver --network aegis-monitoring-proof --network-alias alert-receiver \
-            -v "$PWD/tests/alert_receiver.py:/receiver.py:ro" -v /tmp/aegis-alert-evidence:/evidence \
-            python:3.12-alpine python /receiver.py
-          docker run -d --name aegis-alertmanager-proof --network aegis-monitoring-proof -p 9093:9093 \
-            --user "${ALERT_UID}:${ALERT_GID}" \
-            -v /tmp/aegis-alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro \
-            prom/alertmanager:v0.28.1 \
-            --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/tmp/alertmanager
-          ready=0
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:9093/-/ready; then ready=1; break; fi
-            if ! docker inspect -f '{{.State.Running}}' aegis-alertmanager-proof 2>/dev/null | grep -q '^true$'; then
-              echo 'Alertmanager exited before readiness' >&2
-              docker logs aegis-alertmanager-proof >&2 || true
+
+          $COMPOSE up -d postgres redis
+          for service in aegis-postgres aegis-redis; do
+            ready=0
+            for attempt in $(seq 1 30); do
+              if [ "$(docker inspect -f '{{.State.Health.Status}}' "$service" 2>/dev/null || true)" = healthy ]; then
+                ready=1
+                break
+              fi
+              sleep 2
+            done
+            if [ "$ready" -ne 1 ]; then
+              docker logs "$service" >&2 || true
               exit 1
             fi
-            sleep 1
+          done
+
+          $COMPOSE up -d --no-deps alertmanager blackbox-exporter postgres-exporter redis-exporter
+
+          docker run -d --name aegis-alert-receiver \
+            --network "$DELIVERY_NET" --network-alias alert-receiver \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp \
+            -v "$GITHUB_WORKSPACE/tests/alert_receiver.py:/receiver.py:ro" \
+            -v /tmp/aegis-alert-evidence:/evidence \
+            python:3.12-alpine python /receiver.py
+
+          docker run -d --name aegis-monitoring-gateway \
+            --network "$OBS_NET" --network-alias nginx \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp --tmpfs /srv \
+            python:3.12-alpine sh -c \
+              "printf 'ready\\n' > /srv/health && exec python -m http.server 8080 --directory /srv"
+
+          $COMPOSE up -d --no-deps prometheus
+
+          cat > /tmp/aegis-prom-query.py <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          expression = os.environ['EXPR']
+          url = 'http://prometheus:9090/api/v1/query?' + urllib.parse.urlencode({'query': expression})
+          with urllib.request.urlopen(url, timeout=5) as response:
+              payload = json.load(response)
+          result = payload.get('data', {}).get('result', [])
+          if not result:
+              raise SystemExit(2)
+          value = float(result[0]['value'][1])
+          expected = float(os.environ.get('EXPECTED', '1'))
+          print(json.dumps({'expression': expression, 'value': value, 'expected': expected}))
+          raise SystemExit(0 if value == expected else 3)
+          PY
+
+          query_expect() {
+            expression="$1"
+            expected="$2"
+            docker run --rm --network "$OBS_NET" \
+              -e EXPR="$expression" -e EXPECTED="$expected" \
+              -v /tmp/aegis-prom-query.py:/query.py:ro \
+              python:3.12-alpine python /query.py
+          }
+
+          ready=0
+          for attempt in $(seq 1 36); do
+            if query_expect 'probe_success{job="aegis-gateway"}' 1 >/tmp/aegis-alert-evidence/gateway-initial.json 2>/dev/null \
+              && query_expect 'pg_up{job="postgres"}' 1 >/tmp/aegis-alert-evidence/postgres.json 2>/dev/null \
+              && query_expect 'redis_up{job="redis"}' 1 >/tmp/aegis-alert-evidence/redis.json 2>/dev/null \
+              && query_expect 'up{job="alertmanager"}' 1 >/tmp/aegis-alert-evidence/alertmanager.json 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 5
           done
           if [ "$ready" -ne 1 ]; then
-            echo 'Alertmanager did not become ready within the bounded readiness window' >&2
-            docker logs aegis-alertmanager-proof >&2 || true
+            $COMPOSE ps >&2 || true
+            $COMPOSE logs --no-color prometheus alertmanager blackbox-exporter postgres-exporter redis-exporter >&2 || true
             exit 1
           fi
-          curl -fsS -H 'Content-Type: application/json' -d '[{"labels":{"alertname":"AegisRoutingProof","severity":"critical","service":"release"},"annotations":{"summary":"routing reality proof"}}]' http://127.0.0.1:9093/api/v2/alerts
-          for attempt in $(seq 1 30); do test -s /tmp/aegis-alert-evidence/alert.json && break; sleep 1; done
-          test -s /tmp/aegis-alert-evidence/alert.json
-          grep -q 'AegisRoutingProof' /tmp/aegis-alert-evidence/alert.json
-      - uses: actions/upload-artifact@v4
+
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          names = ['aegis-prometheus', 'aegis-alertmanager', 'aegis-blackbox-exporter', 'aegis-postgres-exporter', 'aegis-redis-exporter']
+          proof = {}
+          for name in names:
+              raw = subprocess.check_output(['docker', 'inspect', name], text=True)
+              item = json.loads(raw)[0]
+              host = item['HostConfig']
+              config = item['Config']
+              proof[name] = {
+                  'user': config.get('User'),
+                  'readonly_rootfs': host.get('ReadonlyRootfs'),
+                  'cap_drop': host.get('CapDrop'),
+                  'security_opt': host.get('SecurityOpt'),
+                  'port_bindings': host.get('PortBindings'),
+              }
+              assert proof[name]['user'] not in {'', '0', 'root', '0:0'}, proof[name]
+              assert proof[name]['readonly_rootfs'] is True, proof[name]
+              assert 'ALL' in (proof[name]['cap_drop'] or []), proof[name]
+              assert any('no-new-privileges' in value for value in (proof[name]['security_opt'] or [])), proof[name]
+              assert not proof[name]['port_bindings'], proof[name]
+          Path('/tmp/aegis-alert-evidence/runtime-hardening.json').write_text(json.dumps(proof, indent=2))
+          PY
+
+          # Removing the only gateway endpoint forces a real blackbox failure.
+          # Prometheus must evaluate the configured two-minute rule and route it
+          # through Alertmanager; no request is sent directly to Alertmanager.
+          docker rm -f aegis-monitoring-gateway
+
+          delivered=0
+          for attempt in $(seq 1 48); do
+            if test -s /tmp/aegis-alert-evidence/alert.json \
+              && grep -q 'AegisGatewayDown' /tmp/aegis-alert-evidence/alert.json \
+              && grep -q '"status":"firing"' /tmp/aegis-alert-evidence/alert.json; then
+              delivered=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$delivered" -ne 1 ]; then
+            $COMPOSE logs --no-color prometheus alertmanager blackbox-exporter >&2 || true
+            exit 1
+          fi
+
+          query_expect 'probe_success{job="aegis-gateway"}' 0 > /tmp/aegis-alert-evidence/gateway-failed.json
+
+          cat > /tmp/aegis-prom-alerts.py <<'PY'
+          import json
+          import urllib.request
+          from pathlib import Path
+
+          with urllib.request.urlopen('http://prometheus:9090/api/v1/alerts', timeout=5) as response:
+              payload = json.load(response)
+          alerts = payload.get('data', {}).get('alerts', [])
+          match = [alert for alert in alerts if alert.get('labels', {}).get('alertname') == 'AegisGatewayDown']
+          assert match, payload
+          assert any(alert.get('state') == 'firing' for alert in match), match
+          Path('/evidence/prometheus-alerts.json').write_text(json.dumps(payload, indent=2))
+          PY
+          docker run --rm --network "$OBS_NET" \
+            -v /tmp/aegis-prom-alerts.py:/alerts.py:ro \
+            -v /tmp/aegis-alert-evidence:/evidence \
+            python:3.12-alpine python /alerts.py
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          lines = [line for line in Path('/tmp/aegis-alert-evidence/alert.json').read_text().splitlines() if line.strip()]
+          payloads = [json.loads(line) for line in lines]
+          assert any(
+              item.get('status') == 'firing'
+              and any(alert.get('labels', {}).get('alertname') == 'AegisGatewayDown' for alert in item.get('alerts', []))
+              for item in payloads
+          ), payloads
+          print('monitoring-alert-delivery-e2e-ok')
+          PY
+
+      - name: Capture diagnostics on failure
+        if: failure()
+        working-directory: aegis-platform
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml ps || true
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml logs --no-color prometheus alertmanager blackbox-exporter postgres-exporter redis-exporter || true
+
+      - name: Upload alert delivery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: alert-routing-proof-${{ github.sha }}
-          path: /tmp/aegis-alert-evidence/alert.json
-          if-no-files-found: error
+          name: monitoring-alert-delivery-proof-${{ github.sha }}
+          path: /tmp/aegis-alert-evidence
+          if-no-files-found: warn
           retention-days: 30
