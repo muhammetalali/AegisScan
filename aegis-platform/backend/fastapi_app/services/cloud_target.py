@@ -38,7 +38,11 @@ def parse_cloud_target(value: str) -> CloudTarget:
     provider = parsed.scheme.lower()
     if provider not in {'aws', 'azure', 'gcp'}:
         raise ValueError('Cloud target provider must be aws, azure, or gcp')
-    if parsed.username or parsed.password or parsed.port is not None:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError('Cloud target contains an invalid port') from exc
+    if parsed.username or parsed.password or port is not None:
         raise ValueError('Cloud target must not contain credentials or a port')
     if parsed.path not in {'', '/'} or parsed.query or parsed.fragment:
         raise ValueError('Cloud target must contain only provider and scope identifier')
