@@ -45,6 +45,7 @@ reportlab>=4.2
 boto3>=1.35
 azure-identity>=1.17
 azure-mgmt-resource>=23.1
+azure-mgmt-network>=32.0.0
 google-cloud-asset>=3.25
 semgrep>=1.90
 pytest>=7.4
