@@ -20,9 +20,14 @@ def scanner_handoff_service(**extra):
 
 
 def valid_model():
-    return {'services': {
+    return {
+        'networks': {
+            'backup_db': {'internal': True},
+            'backup_egress': {'internal': False},
+        },
+        'services': {
         'nginx': {'ports': [{'published': '443', 'target': 443}]},
-        'postgres': {'environment': {'POSTGRES_PASSWORD': 'non-default-secret'}},
+        'postgres': {'environment': {'POSTGRES_PASSWORD': 'non-default-secret'}, 'networks': {'default': {}, 'backup_db': {}}},
         'redis': {}, 'frontend': {},
         'django': hardened_service(volumes=[{'type':'volume','source':'media_data'}]),
         'fastapi': hardened_service(environment={'AUTHORIZED_SCAN_TARGETS':'security.example'}),
@@ -44,6 +49,7 @@ def valid_model():
         'celery_beat': hardened_service(environment={'AUTHORIZED_SCAN_TARGETS':'security.example'}),
         'backup': hardened_service(
             user='10001:10001',
+            networks={'backup_db': {}, 'backup_egress': {}},
             environment={
                 'AEGIS_BACKUP_KEEP_LOCAL_PLAINTEXT':'false',
                 'AEGIS_BACKUP_REQUIRE_VERSIONING':'true',
@@ -208,3 +214,12 @@ def test_backup_service_requires_exact_secret_mount_targets():
     model['services']['backup']['volumes'][0]['target'] = '/tmp/s3.json'
     failures = MODULE.validate(model)
     assert any('exactly the two audited read-only secret files' in item for item in failures)
+
+
+def test_backup_service_rejects_network_reachability_regressions():
+    model = valid_model()
+    model['services']['backup']['networks']['default'] = {}
+    model['networks']['backup_db']['internal'] = False
+    failures = MODULE.validate(model)
+    assert any('attach only to backup_db and backup_egress' in item for item in failures)
+    assert any('backup_db network must be internal' in item for item in failures)
