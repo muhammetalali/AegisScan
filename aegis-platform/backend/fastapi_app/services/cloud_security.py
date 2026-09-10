@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import stat
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -16,10 +17,44 @@ _MAX_AWS_REGIONS = 32
 _MAX_AWS_BUCKETS = 200
 _MAX_AZURE_NSGS = 500
 _MAX_GCP_IAM_RESULTS = 1000
+_GCP_TOKEN_URI = 'https://oauth2.googleapis.com/token'
+_GCP_AUTH_URI = 'https://accounts.google.com/o/oauth2/auth'
+_GCP_RESOURCE_MANAGER = 'https://cloudresourcemanager.googleapis.com/v3/projects/'
 
 
 class CloudSecurityError(RuntimeError):
     pass
+
+
+def sanitize_cloud_runtime_environment() -> None:
+    """Remove ambient credentials and routing overrides before any cloud SDK call.
+
+    Cloud execution is intentionally bound to one Vault credential document and
+    the public provider endpoints. Proxy/endpoint environment inheritance would
+    create a second, unaudited routing and credential plane, so it is removed.
+    """
+    blocked_exact = {
+        'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN',
+        'AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE',
+        'AWS_WEB_IDENTITY_TOKEN_FILE', 'AWS_ROLE_ARN', 'AWS_ROLE_SESSION_NAME',
+        'AWS_ENDPOINT_URL', 'AWS_CA_BUNDLE',
+        'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_CLIENT_CERTIFICATE_PATH',
+        'AZURE_USERNAME', 'AZURE_PASSWORD', 'AZURE_SUBSCRIPTION_ID', 'AZURE_AUTHORITY_HOST',
+        'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT',
+        'GOOGLE_CLOUD_QUOTA_PROJECT', 'GOOGLE_API_USE_CLIENT_CERTIFICATE', 'GOOGLE_API_USE_MTLS_ENDPOINT',
+        'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE',
+    }
+    proxy_names = {'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'}
+    for key in list(os.environ):
+        upper = key.upper()
+        if (
+            key in blocked_exact
+            or upper in proxy_names
+            or key.startswith('AWS_ENDPOINT_URL_')
+            or key.startswith('CLOUDSDK_')
+        ):
+            os.environ.pop(key, None)
+    os.environ['AWS_EC2_METADATA_DISABLED'] = 'true'
 
 
 def _finding(
@@ -141,17 +176,42 @@ def _gcp_credentials(data: dict[str, Any]) -> dict[str, Any]:
     if set(data) - allowed:
         raise CloudSecurityError('GCP credential contains unsupported fields')
     project_id = _bounded_text(data.get('project_id'), maximum=63).lower()
+    parse_cloud_target(f'gcp://{project_id}')
     service_account = data.get('service_account')
     if not isinstance(service_account, dict):
         raise CloudSecurityError('GCP credential requires a service_account JSON object')
+    allowed_service_account = {
+        'type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id',
+        'auth_uri', 'token_uri', 'auth_provider_x509_cert_url', 'client_x509_cert_url', 'universe_domain',
+    }
+    if set(service_account) - allowed_service_account:
+        raise CloudSecurityError('GCP service-account credential contains unsupported fields')
     required = {'type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id', 'token_uri'}
     if not required <= set(service_account):
         raise CloudSecurityError('GCP service-account credential is incomplete')
     if str(service_account.get('type') or '') != 'service_account':
         raise CloudSecurityError('GCP credential type must be service_account')
-    if str(service_account.get('project_id') or '').strip().lower() != project_id:
-        raise CloudSecurityError('GCP service-account project metadata does not match credential project_id')
-    return {'project_id': project_id, 'service_account': service_account}
+    home_project = _bounded_text(service_account.get('project_id'), maximum=63).lower()
+    parse_cloud_target(f'gcp://{home_project}')
+    _bounded_text(service_account.get('private_key_id'), maximum=256)
+    _bounded_text(service_account.get('client_email'), maximum=320)
+    _bounded_text(service_account.get('client_id'), maximum=128)
+    if str(service_account.get('token_uri') or '').strip() != _GCP_TOKEN_URI:
+        raise CloudSecurityError('GCP token endpoint must be the official Google OAuth endpoint')
+    auth_uri = str(service_account.get('auth_uri') or '').strip()
+    if auth_uri and auth_uri != _GCP_AUTH_URI:
+        raise CloudSecurityError('GCP authorization endpoint must be the official Google OAuth endpoint')
+    universe = str(service_account.get('universe_domain') or '').strip().lower()
+    if universe and universe != 'googleapis.com':
+        raise CloudSecurityError('GCP universe_domain must be googleapis.com')
+    private_key = str(service_account.get('private_key') or '')
+    if not private_key or '\x00' in private_key or len(private_key.encode('utf-8')) > 32768:
+        raise CloudSecurityError('GCP service-account private key is invalid')
+    return {
+        'project_id': project_id,
+        'credential_home_project_id': home_project,
+        'service_account': service_account,
+    }
 
 
 def _port_range_exposes_admin(start: Any, end: Any) -> bool:
@@ -176,21 +236,26 @@ def _aws_sg_findings(groups: Iterable[Any], region: str) -> list[dict[str, Any]]
             if not {'0.0.0.0/0', '::/0'} & set(sources):
                 continue
             protocol = str(permission.get('IpProtocol') or '')
-            all_traffic = protocol == '-1'
-            admin = _port_range_exposes_admin(permission.get('FromPort'), permission.get('ToPort'))
-            if not all_traffic and not admin:
+            if protocol != '-1' and not _port_range_exposes_admin(permission.get('FromPort'), permission.get('ToPort')):
                 continue
             findings.append(_finding(
                 'cloud.aws.security-group.world-admin-or-all',
                 'AWS security group exposes administrative or all traffic to the Internet',
                 'An ingress rule allows 0.0.0.0/0 or ::/0 to all protocols or an administrative port.',
-                'high',
-                f'aws://ec2/{region}/security-group/{group_id}',
+                'high', f'aws://ec2/{region}/security-group/{group_id}',
                 'Restrict ingress to explicitly required source networks and ports; remove world-open administrative access.',
-                resource_kind='aws.ec2.security-group',
-                resource_name=group_id,
+                resource_kind='aws.ec2.security-group', resource_name=group_id,
             ))
     return findings
+
+
+def _aws_error_code(exc: BaseException) -> str:
+    response = getattr(exc, 'response', None)
+    if isinstance(response, dict):
+        error = response.get('Error')
+        if isinstance(error, dict):
+            return str(error.get('Code') or type(exc).__name__)[:100]
+    return type(exc).__name__[:100]
 
 
 def _aws_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, str]]]:
@@ -198,9 +263,10 @@ def _aws_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
     try:
         import boto3
         from botocore.config import Config
-        from botocore.exceptions import ClientError
+        from botocore.exceptions import BotoCoreError, ClientError
     except ImportError as exc:
         raise CloudSecurityError('AWS SDK is not installed') from exc
+    sdk_errors = (ClientError, BotoCoreError)
     session = boto3.Session(
         aws_access_key_id=values['access_key_id'],
         aws_secret_access_key=values['secret_access_key'],
@@ -210,9 +276,8 @@ def _aws_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
     config = Config(retries={'max_attempts': 3, 'mode': 'standard'}, connect_timeout=5, read_timeout=20)
     try:
         identity = session.client('sts', config=config).get_caller_identity()
-    except ClientError as exc:
-        code = str(exc.response.get('Error', {}).get('Code') or 'ClientError')
-        raise CloudSecurityError(f'AWS identity verification failed ({code[:100]})') from exc
+    except sdk_errors as exc:
+        raise CloudSecurityError('AWS account identity verification failed') from exc
     account_id = str(identity.get('Account') or '')
     if account_id != target.identifier:
         raise CloudSecurityError('AWS credential identity does not match the authorized account target')
@@ -228,25 +293,27 @@ def _aws_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
             findings.append(_finding(
                 'cloud.aws.root-access-key-present', 'AWS root account has an access key',
                 'The AWS account summary reports one or more root-account access keys.', 'critical',
-                f'aws://{account_id}/root', 'Remove root access keys and use least-privilege IAM roles with short-lived credentials.',
+                f'aws://{account_id}/root',
+                'Remove root access keys and use least-privilege IAM roles with short-lived credentials.',
                 resource_kind='aws.iam.root', resource_name='root',
             ))
         if int(summary.get('AccountMFAEnabled') or 0) == 0:
             findings.append(_finding(
                 'cloud.aws.root-mfa-disabled', 'AWS root account MFA is not enabled',
                 'The AWS account summary reports that MFA is not enabled for the root account.', 'high',
-                f'aws://{account_id}/root', 'Enable phishing-resistant MFA for the root account and securely protect recovery paths.',
+                f'aws://{account_id}/root',
+                'Enable phishing-resistant MFA for the root account and securely protect recovery paths.',
                 resource_kind='aws.iam.root', resource_name='root',
             ))
-    except ClientError as exc:
-        gaps.append(_gap('aws', 'iam.get_account_summary', exc.response.get('Error', {}).get('Code', 'ClientError')))
+    except sdk_errors as exc:
+        gaps.append(_gap('aws', 'iam.get_account_summary', _aws_error_code(exc)))
 
     discovery = session.client('ec2', region_name=values['region'], config=config)
     try:
         regions = [str(row.get('RegionName') or '') for row in discovery.describe_regions(AllRegions=False).get('Regions') or []]
         regions = [region for region in regions if region][:_MAX_AWS_REGIONS]
-    except ClientError as exc:
-        gaps.append(_gap('aws', 'ec2.describe_regions', exc.response.get('Error', {}).get('Code', 'ClientError')))
+    except sdk_errors as exc:
+        gaps.append(_gap('aws', 'ec2.describe_regions', _aws_error_code(exc)))
         regions = [values['region']]
     counts['regions'] = len(regions)
     for region in regions:
@@ -268,8 +335,8 @@ def _aws_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
                     break
             counts['security_groups'] += len(groups)
             findings.extend(_aws_sg_findings(groups, region))
-        except ClientError as exc:
-            gaps.append(_gap('aws', f'ec2.describe_security_groups:{region}', exc.response.get('Error', {}).get('Code', 'ClientError')))
+        except sdk_errors as exc:
+            gaps.append(_gap('aws', f'ec2.describe_security_groups:{region}', _aws_error_code(exc)))
 
     s3 = session.client('s3', config=config)
     try:
@@ -284,8 +351,8 @@ def _aws_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
                 enabled = all(block.get(key) is True for key in (
                     'BlockPublicAcls', 'IgnorePublicAcls', 'BlockPublicPolicy', 'RestrictPublicBuckets'
                 ))
-            except ClientError as exc:
-                code = str(exc.response.get('Error', {}).get('Code') or 'ClientError')
+            except sdk_errors as exc:
+                code = _aws_error_code(exc)
                 if code in {'NoSuchPublicAccessBlockConfiguration', 'NoSuchPublicAccessBlock'}:
                     enabled = False
                 else:
@@ -295,11 +362,12 @@ def _aws_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
                 findings.append(_finding(
                     'cloud.aws.s3.public-access-block-incomplete', 'S3 bucket public access block is incomplete',
                     'The bucket does not enforce all four S3 public-access-block controls.', 'high',
-                    f'aws://s3/{name}', 'Enable all S3 public-access-block settings and review bucket/access-point policies.',
+                    f'aws://s3/{name}',
+                    'Enable all S3 public-access-block settings and review bucket/access-point policies.',
                     resource_kind='aws.s3.bucket', resource_name=name,
                 ))
-    except ClientError as exc:
-        gaps.append(_gap('aws', 's3.list_buckets', exc.response.get('Error', {}).get('Code', 'ClientError')))
+    except sdk_errors as exc:
+        gaps.append(_gap('aws', 's3.list_buckets', _aws_error_code(exc)))
     return {'account_id': account_id, 'principal': principal, **counts}, findings, gaps
 
 
@@ -321,8 +389,7 @@ def _azure_nsg_findings(nsgs: Iterable[Any]) -> list[dict[str, Any]]:
     for nsg in list(nsgs)[:_MAX_AZURE_NSGS]:
         nsg_id = str(getattr(nsg, 'id', '') or '')[:2048]
         nsg_name = str(getattr(nsg, 'name', '') or 'unknown')[:500]
-        rules = list(getattr(nsg, 'security_rules', None) or [])
-        for rule in rules:
+        for rule in list(getattr(nsg, 'security_rules', None) or []):
             if str(getattr(rule, 'direction', '') or '').lower() != 'inbound':
                 continue
             if str(getattr(rule, 'access', '') or '').lower() != 'allow':
@@ -342,9 +409,10 @@ def _azure_nsg_findings(nsgs: Iterable[Any]) -> list[dict[str, Any]]:
                 continue
             rule_name = str(getattr(rule, 'name', '') or 'unnamed')[:500]
             findings.append(_finding(
-                'cloud.azure.nsg.world-admin-or-all', 'Azure NSG allows Internet-wide administrative or all-port ingress',
-                'An inbound Allow rule accepts Internet-wide sources for all ports or an administrative port.', 'high',
-                f'{nsg_id}/securityRules/{rule_name}' if nsg_id else rule_name,
+                'cloud.azure.nsg.world-admin-or-all',
+                'Azure NSG allows Internet-wide administrative or all-port ingress',
+                'An inbound Allow rule accepts Internet-wide sources for all ports or an administrative port.',
+                'high', f'{nsg_id}/securityRules/{rule_name}' if nsg_id else rule_name,
                 'Restrict NSG ingress sources and destination ports to the minimum required ranges and services.',
                 resource_kind='azure.network.security-rule', resource_name=f'{nsg_name}/{rule_name}',
             ))
@@ -354,7 +422,7 @@ def _azure_nsg_findings(nsgs: Iterable[Any]) -> list[dict[str, Any]]:
 def _azure_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, str]]]:
     values = _azure_credentials(data, target)
     try:
-        from azure.core.exceptions import HttpResponseError
+        from azure.core.exceptions import AzureError
         from azure.identity import ClientSecretCredential
         from azure.mgmt.network import NetworkManagementClient
         from azure.mgmt.resource import ResourceManagementClient, SubscriptionClient
@@ -363,11 +431,10 @@ def _azure_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str,
     credential = ClientSecretCredential(
         tenant_id=values['tenant_id'], client_id=values['client_id'], client_secret=values['client_secret']
     )
-    subscription_client = SubscriptionClient(credential)
     try:
-        subscription = subscription_client.subscriptions.get(values['subscription_id'])
-    except HttpResponseError as exc:
-        raise CloudSecurityError(f'Azure subscription identity verification failed ({type(exc).__name__})') from exc
+        subscription = SubscriptionClient(credential).subscriptions.get(values['subscription_id'])
+    except AzureError as exc:
+        raise CloudSecurityError('Azure subscription identity verification failed') from exc
     actual = str(getattr(subscription, 'subscription_id', '') or '').lower()
     if actual != target.identifier:
         raise CloudSecurityError('Azure credential identity does not match the authorized subscription target')
@@ -378,11 +445,11 @@ def _azure_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str,
     resources: list[Any] = []
     try:
         groups = list(resource_client.resource_groups.list())[:_MAX_ITEMS]
-    except HttpResponseError as exc:
+    except AzureError as exc:
         gaps.append(_gap('azure', 'resource_groups.list', type(exc).__name__))
     try:
         resources = list(resource_client.resources.list())[:_MAX_ITEMS]
-    except HttpResponseError as exc:
+    except AzureError as exc:
         gaps.append(_gap('azure', 'resources.list', type(exc).__name__))
     network = NetworkManagementClient(credential, values['subscription_id'])
     nsgs: list[Any] = []
@@ -390,11 +457,11 @@ def _azure_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str,
     try:
         nsgs = list(network.network_security_groups.list_all())[:_MAX_AZURE_NSGS]
         findings.extend(_azure_nsg_findings(nsgs))
-    except HttpResponseError as exc:
+    except AzureError as exc:
         gaps.append(_gap('azure', 'network_security_groups.list_all', type(exc).__name__))
     try:
         public_ips = list(network.public_ip_addresses.list_all())[:_MAX_ITEMS]
-    except HttpResponseError as exc:
+    except AzureError as exc:
         gaps.append(_gap('azure', 'public_ip_addresses.list_all', type(exc).__name__))
     return {
         'subscription_id': actual,
@@ -405,6 +472,35 @@ def _azure_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str,
         'network_security_groups': len(nsgs),
         'public_ip_addresses': len(public_ips),
     }, findings, gaps
+
+
+def _verify_gcp_target_identity(credentials: Any, target: CloudTarget) -> dict[str, str]:
+    try:
+        import requests
+        from google.auth.exceptions import GoogleAuthError
+        from google.auth.transport.requests import AuthorizedSession
+    except ImportError as exc:
+        raise CloudSecurityError('Google authentication dependencies are not installed') from exc
+    session = AuthorizedSession(credentials)
+    session.trust_env = False
+    url = _GCP_RESOURCE_MANAGER + target.identifier
+    try:
+        response = session.get(url, timeout=20)
+    except (requests.RequestException, GoogleAuthError) as exc:
+        raise CloudSecurityError('GCP project identity verification failed') from exc
+    if int(getattr(response, 'status_code', 0) or 0) != 200:
+        raise CloudSecurityError('GCP project identity verification failed')
+    try:
+        payload = response.json()
+    except (TypeError, ValueError) as exc:
+        raise CloudSecurityError('GCP project identity response is invalid') from exc
+    if not isinstance(payload, dict) or str(payload.get('projectId') or '').strip().lower() != target.identifier:
+        raise CloudSecurityError('GCP credential identity does not match the authorized project target')
+    return {
+        'project_id': target.identifier,
+        'project_number': str(payload.get('name') or '')[:256],
+        'state': str(payload.get('state') or '')[:64],
+    }
 
 
 def _gcp_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, str]]]:
@@ -426,7 +522,11 @@ def _gcp_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
     principal = str(getattr(credentials, 'service_account_email', '') or '')[:1000]
     if not principal:
         raise CloudSecurityError('GCP service-account identity is unavailable')
-    client = asset_v1.AssetServiceClient(credentials=credentials)
+    verified_project = _verify_gcp_target_identity(credentials, target)
+    try:
+        client = asset_v1.AssetServiceClient(credentials=credentials)
+    except Exception as exc:
+        raise CloudSecurityError('GCP Cloud Asset client could not be constructed') from exc
     scope = f'projects/{target.identifier}'
     gaps: list[dict[str, str]] = []
     findings: list[dict[str, Any]] = []
@@ -446,7 +546,10 @@ def _gcp_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
             iam_count += 1
             policy = getattr(result, 'policy', None)
             for binding in list(getattr(policy, 'bindings', None) or []):
-                public = sorted({str(member) for member in (getattr(binding, 'members', None) or []) if str(member) in {'allUsers', 'allAuthenticatedUsers'}})
+                public = sorted({
+                    str(member) for member in (getattr(binding, 'members', None) or [])
+                    if str(member) in {'allUsers', 'allAuthenticatedUsers'}
+                })
                 if not public:
                     continue
                 resource = str(getattr(result, 'resource', '') or '')[:2048]
@@ -463,7 +566,8 @@ def _gcp_collect(target: CloudTarget, data: dict[str, Any]) -> tuple[dict[str, A
     except (PermissionDenied, GoogleAPICallError) as exc:
         gaps.append(_gap('gcp', 'asset.search_all_iam_policies', type(exc).__name__))
     return {
-        'project_id': target.identifier,
+        **verified_project,
+        'credential_home_project_id': values['credential_home_project_id'],
         'principal': principal,
         'resources': resource_count,
         'iam_policy_results': iam_count,
@@ -510,10 +614,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    sanitize_cloud_runtime_environment()
     try:
         result = collect_cloud_posture(args.target, args.credentials_file)
     except (CloudSecurityError, ValueError) as exc:
         print(json.dumps({'schema': SCHEMA, 'error': str(exc)}, sort_keys=True, separators=(',', ':')))
+        return 2
+    except Exception as exc:
+        print(json.dumps({
+            'schema': SCHEMA,
+            'error': f'Cloud provider operation failed safely ({type(exc).__name__})',
+        }, sort_keys=True, separators=(',', ':')))
         return 2
     print(json.dumps(result, sort_keys=True, separators=(',', ':')))
     return 0
