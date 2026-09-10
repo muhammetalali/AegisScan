@@ -22,6 +22,8 @@ FORBIDDEN_SECRET_VALUES = {
 }
 FORBIDDEN_SCAN_HOSTS = {"localhost", "metadata.google.internal", "aegis-scan-target"}
 HOST_RE = re.compile(r"^[A-Za-z0-9.-]+$")
+BACKUP_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _items(value: str) -> list[str]:
@@ -63,6 +65,119 @@ def _check_alert_webhook(value: str, failures: list[str]) -> None:
         failures.append(
             "ALERT_WEBHOOK_URL must be an explicit HTTPS destination without URL credentials, fragment, loopback or link-local host"
         )
+
+
+
+def _truthy(value: str) -> bool:
+    return value.strip().lower() in TRUTHY
+
+
+def _check_private_backup_file(
+    name: str,
+    value: str,
+    runtime_uid: int,
+    failures: list[str],
+    *,
+    max_bytes: int,
+) -> None:
+    if not value.strip():
+        failures.append(f"{name} must point to a private runtime file")
+        return
+    path = Path(value)
+    if not path.is_file():
+        failures.append(f"{name} must point to an existing file")
+        return
+    info = path.stat()
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        failures.append(f"{name} must not be readable or writable by group or others")
+    if os.name == "posix" and info.st_uid != runtime_uid:
+        failures.append(f"{name} must be owned by AEGIS_BACKUP_RUNTIME_UID")
+    if info.st_size <= 0 or info.st_size > max_bytes:
+        failures.append(f"{name} has an invalid size")
+
+
+def _check_remote_backup(environment: dict[str, str], failures: list[str]) -> None:
+    if not _truthy(environment.get("AEGIS_REMOTE_BACKUP_ENABLED", "")):
+        failures.append("AEGIS_REMOTE_BACKUP_ENABLED must be explicitly true")
+        return
+
+    endpoint = environment.get("AEGIS_BACKUP_S3_ENDPOINT", "").strip()
+    parsed = urlparse(endpoint)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or _is_unsafe_delivery_host(parsed.hostname or "")
+    ):
+        failures.append(
+            "AEGIS_BACKUP_S3_ENDPOINT must be an explicit HTTPS origin without URL "
+            "credentials, query, fragment, loopback or link-local host"
+        )
+
+    bucket = environment.get("AEGIS_BACKUP_S3_BUCKET", "").strip()
+    if (
+        not BACKUP_BUCKET_RE.fullmatch(bucket)
+        or ".." in bucket
+        or ".-" in bucket
+        or "-." in bucket
+    ):
+        failures.append("AEGIS_BACKUP_S3_BUCKET must be a valid explicit bucket name")
+
+    prefix = environment.get("AEGIS_BACKUP_S3_PREFIX", "").strip().strip("/")
+    if (
+        not prefix
+        or len(prefix) > 512
+        or any(part in {"", ".", ".."} for part in prefix.split("/"))
+    ):
+        failures.append("AEGIS_BACKUP_S3_PREFIX must be an explicit safe object prefix")
+
+    if environment.get("AEGIS_BACKUP_S3_ADDRESSING_STYLE", "path").strip() not in {
+        "auto",
+        "path",
+        "virtual",
+    }:
+        failures.append("AEGIS_BACKUP_S3_ADDRESSING_STYLE must be auto, path or virtual")
+
+    if not _truthy(environment.get("AEGIS_BACKUP_REQUIRE_VERSIONING", "")):
+        failures.append("AEGIS_BACKUP_REQUIRE_VERSIONING must be explicitly true")
+
+    try:
+        interval = int(environment.get("AEGIS_BACKUP_INTERVAL_SECONDS", ""))
+    except ValueError:
+        interval = 0
+    if interval < 3600:
+        failures.append("AEGIS_BACKUP_INTERVAL_SECONDS must be at least 3600")
+
+    try:
+        runtime_uid = int(environment.get("AEGIS_BACKUP_RUNTIME_UID", "10001"))
+        runtime_gid = int(environment.get("AEGIS_BACKUP_RUNTIME_GID", "10001"))
+    except ValueError:
+        runtime_uid = runtime_gid = 0
+    if runtime_uid <= 0 or runtime_gid <= 0:
+        failures.append("AEGIS_BACKUP_RUNTIME_UID and AEGIS_BACKUP_RUNTIME_GID must be non-root numeric IDs")
+        runtime_uid = 10001
+
+    _check_private_backup_file(
+        "AEGIS_BACKUP_S3_CREDENTIALS_FILE",
+        environment.get("AEGIS_BACKUP_S3_CREDENTIALS_FILE", ""),
+        runtime_uid,
+        failures,
+        max_bytes=16 * 1024,
+    )
+    _check_private_backup_file(
+        "AEGIS_BACKUP_ENCRYPTION_KEY_FILE",
+        environment.get("AEGIS_BACKUP_ENCRYPTION_KEY_FILE", ""),
+        runtime_uid,
+        failures,
+        max_bytes=256,
+    )
+
+    ca_bundle = environment.get("AEGIS_BACKUP_S3_CA_BUNDLE", "").strip()
+    if ca_bundle and not Path(ca_bundle).is_file():
+        failures.append("AEGIS_BACKUP_S3_CA_BUNDLE must point to an existing CA bundle")
 
 
 def _check_certificate(cert: Path, key: Path, failures: list[str]) -> None:
@@ -115,6 +230,7 @@ def validate(environment: dict[str, str], tls_dir: Path, check_tls: bool = True)
     if not targets or any(_is_forbidden_scan_target(target) for target in targets):
         failures.append("AUTHORIZED_SCAN_TARGETS must be explicit and exclude wildcard, loopback, link-local and CI targets")
     _check_alert_webhook(environment.get("ALERT_WEBHOOK_URL", ""), failures)
+    _check_remote_backup(environment, failures)
     if check_tls:
         _check_certificate(tls_dir / "fullchain.pem", tls_dir / "privkey.pem", failures)
     return failures
