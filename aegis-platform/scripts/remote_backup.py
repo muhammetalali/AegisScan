@@ -454,7 +454,25 @@ def _validate_prefix(prefix: str) -> str:
     return value
 
 
+def _sanitize_s3_environment() -> None:
+    blocked = {
+        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+        "AWS_SECURITY_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE",
+        "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_ROLE_SESSION_NAME",
+        "AWS_ENDPOINT_URL", "AWS_CA_BUNDLE",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+        "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    }
+    for key in list(os.environ):
+        if key in blocked or key.startswith("AWS_ENDPOINT_URL_"):
+            os.environ.pop(key, None)
+    os.environ["AWS_EC2_METADATA_DISABLED"] = "true"
+
+
 def _s3_client(args: argparse.Namespace):
+    _sanitize_s3_environment()
     _validate_endpoint(args.endpoint, args.allow_http)
     _validate_bucket(args.bucket)
     credentials = _load_credentials(Path(args.credentials_file))
