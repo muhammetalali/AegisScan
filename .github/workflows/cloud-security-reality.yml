@@ -136,7 +136,8 @@ jobs:
           import boto3
           from azure.identity import ClientSecretCredential
           from azure.mgmt.network import NetworkManagementClient
-          from azure.mgmt.resource import ResourceManagementClient, SubscriptionClient
+          from azure.mgmt.resource.resources import ResourceManagementClient
+          from azure.mgmt.resource.subscriptions import SubscriptionClient
           from google.cloud.asset_v1 import AssetServiceClient
           assert boto3.Session
           assert ClientSecretCredential
@@ -158,7 +159,7 @@ jobs:
             test "$(id -u)" = "10001"
             command -v aegis-cloud-security
             test -x /app/fastapi_app/services/cloud_security.py
-            python -c "import boto3; import azure.identity; import azure.mgmt.network; import azure.mgmt.resource; import google.cloud.asset_v1"
+            python -c "import boto3; import azure.identity; import azure.mgmt.network; from azure.mgmt.resource.resources import ResourceManagementClient; from azure.mgmt.resource.subscriptions import SubscriptionClient; import google.cloud.asset_v1; assert ResourceManagementClient; assert SubscriptionClient"
           '
 
       - name: Prove packaged analyzer fails closed before provider access
