@@ -85,7 +85,9 @@ def test_cloud_vault_to_worker_to_finding_evidence_is_idempotent_and_secret_free
     assert first['capability_id'] == 'cloud.read-only-posture'
     assert len(first['finding_ids']) == 1
     assert CredentialAccess.objects.filter(
-        credential=credential, operation=CredentialAccess.Operation.RESOLVE, result=CredentialAccess.Result.ALLOWED
+        credential=credential,
+        operation=CredentialAccess.Operation.RESOLVE_INTERNAL,
+        result=CredentialAccess.Result.SUCCESS,
     ).exists()
     assert Vulnerability.objects.filter(scan=scan, category='cloud-security').count() == 1
     assert Evidence.objects.filter(scan=scan).count() == 2
