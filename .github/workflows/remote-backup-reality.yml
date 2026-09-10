@@ -319,6 +319,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          AEGIS_MODIFIED_MANIFEST_KEY="$AEGIS_BACKUP_S3_PREFIX/modified-manifest.json"
+          export AEGIS_MODIFIED_MANIFEST_KEY
           python - <<'PY'
           import json
           import os
@@ -339,10 +341,11 @@ jobs:
           original = s3.get_object(Bucket=bucket, Key=os.environ['AEGIS_REMOTE_MANIFEST_KEY'])['Body'].read()
           manifest = json.loads(original)
           manifest['source_size'] = int(manifest['source_size']) + 1
-          modified_key = os.environ['AEGIS_BACKUP_S3_PREFIX'] + '/modified-manifest.json'
-          s3.put_object(Bucket=bucket, Key=modified_key, Body=json.dumps(manifest).encode())
-          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
-              env.write(f"AEGIS_MODIFIED_MANIFEST_KEY={modified_key}\n")
+          s3.put_object(
+              Bucket=bucket,
+              Key=os.environ['AEGIS_MODIFIED_MANIFEST_KEY'],
+              Body=json.dumps(manifest).encode(),
+          )
           PY
 
           set +e
