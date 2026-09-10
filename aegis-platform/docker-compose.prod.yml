@@ -49,8 +49,6 @@ services:
     volumes: !reset []
     read_only: true
     tmpfs: [/tmp]
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
