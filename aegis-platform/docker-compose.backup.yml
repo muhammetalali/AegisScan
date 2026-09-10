@@ -47,14 +47,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-networks:
-  backup_db:
-    internal: true
-  backup_egress:
     healthcheck:
       test: ["CMD", "python", "/app/scripts/remote_backup_service.py", "health"]
       interval: 5m
       timeout: 10s
       retries: 3
       start_period: 15m
+
+networks:
+  backup_db:
+    internal: true
+  backup_egress: {}
