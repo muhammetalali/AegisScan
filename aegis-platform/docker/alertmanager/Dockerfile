@@ -2,7 +2,8 @@ FROM prom/alertmanager:v0.34.0 AS upstream
 
 FROM python:3.12-alpine
 
-RUN addgroup -S -g 10003 aegis-monitoring \
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S -g 10003 aegis-monitoring \
     && adduser -S -D -H -u 10003 -G aegis-monitoring aegis-monitoring \
     && mkdir -p /alertmanager /etc/aegis-alertmanager \
     && chown -R 10003:10003 /alertmanager /etc/aegis-alertmanager
