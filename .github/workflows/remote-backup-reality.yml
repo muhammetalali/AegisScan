@@ -396,7 +396,13 @@ jobs:
           assert 'no-new-privileges:true' in service.get('security_opt', [])
           assert not service.get('ports')
           assert service.get('healthcheck')
-          assert all(volume.get('read_only') for volume in service.get('volumes', []))
+          volumes = service.get('volumes', [])
+          assert volumes, service
+          for volume in volumes:
+              if isinstance(volume, dict):
+                  assert volume.get('read_only') is True, volume
+              else:
+                  assert str(volume).endswith(':ro'), volume
           print('remote-backup-compose-isolation-ok')
           PY
 
