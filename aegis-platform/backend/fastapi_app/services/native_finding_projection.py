@@ -181,6 +181,53 @@ def api_runtime_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingS
     )
 
 
+def kubernetes_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
+    """Project explicit Kubernetes posture observations to location-stable findings."""
+    observations = normalized.get('observations') if isinstance(normalized, dict) else None
+    if not isinstance(observations, list):
+        return []
+    findings: list[NativeFindingSpec] = []
+    severities = {'critical', 'high', 'medium', 'low', 'info'}
+    confidences = {'high', 'medium', 'low'}
+    for observation in observations[:2000]:
+        if not isinstance(observation, dict) or observation.get('kind') != 'kubernetes-security-finding':
+            continue
+        rule_id = str(observation.get('rule_id') or '').strip()[:200]
+        title = str(observation.get('title') or '').strip()[:500]
+        description = str(observation.get('description') or '').strip()[:5000]
+        remediation = str(observation.get('remediation') or '').strip()[:5000]
+        severity = str(observation.get('severity') or 'info').lower()
+        confidence = str(observation.get('confidence') or 'medium').lower()
+        if not rule_id or not title or not description or severity not in severities or confidence not in confidences:
+            continue
+        location = str(observation.get('location') or '').strip()[:2048]
+        namespace = str(observation.get('namespace') or '').strip()[:253]
+        resource_kind = str(observation.get('resource_kind') or '').strip()[:100]
+        resource_name = str(observation.get('resource_name') or '').strip()[:253]
+        container = str(observation.get('container') or '').strip()[:253]
+        identity = '|'.join((rule_id, location, namespace, resource_kind, resource_name, container))
+        findings.append(NativeFindingSpec(
+            rule_id=rule_id,
+            title=title,
+            description=description,
+            severity=severity,
+            confidence=confidence,
+            category='kubernetes-security',
+            cwe_id=str(observation.get('cwe_id') or '')[:64],
+            owasp_category=str(observation.get('owasp_category') or '')[:200],
+            remediation=remediation,
+            raw_data={
+                'location': location,
+                'namespace': namespace,
+                'resource_kind': resource_kind,
+                'resource_name': resource_name,
+                'container': container,
+            },
+            identity_key=identity,
+        ))
+    return findings
+
+
 def _finding_id(scan_id: str, capability_id: str, spec: NativeFindingSpec) -> UUID:
     identity = spec.identity_key or spec.rule_id
     key = ':'.join((str(scan_id).lower(), capability_id.strip().lower(), identity.strip().lower()))
@@ -235,6 +282,8 @@ def project_native_findings(
         specs = api_schema_finding_specs(normalized)
     elif capability_id == 'api.openapi-runtime-conformance':
         specs = api_runtime_finding_specs(normalized)
+    elif capability_id == 'kubernetes.read-only-posture':
+        specs = kubernetes_finding_specs(normalized)
     else:
         return [], []
 

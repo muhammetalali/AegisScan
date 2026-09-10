@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi_app.services.api_runtime_conformance import main as conformance_main
+from fastapi_app.services.pinned_http import pinned_http_operation
 
 _CURL_BEARER_RE = re.compile(r'^header\s*=\s*"Authorization:\s*Bearer\s+(.+)"\s*$')
 
@@ -57,7 +58,13 @@ def main(argv: list[str] | None = None) -> int:
             secret = _extract_bearer_config(config_path)
             secret_path = _write_secret(secret)
             args.extend(['--credential-file', secret_path])
-        return conformance_main(args)
+        if not args or args[0].startswith('-'):
+            # Native runtime always supplies the authorized target first. Fail
+            # closed rather than creating an unscoped multi-request pin.
+            print('authorized target URL must be the first runtime argument', file=sys.stderr)
+            return 2
+        with pinned_http_operation(args[0]):
+            return conformance_main(args)
     except ValueError as exc:
         print(str(exc)[:1000], file=sys.stderr)
         return 2

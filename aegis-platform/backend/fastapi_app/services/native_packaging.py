@@ -2,17 +2,20 @@ from __future__ import annotations
 
 from .api_runtime_capability import register_api_runtime_capability
 from .api_schema_capability import register_api_schema_capability
+from .kubernetes_capability import register_kubernetes_capability
 
 # Package declarations and runtime registrations must stay synchronized even
 # when this module is imported independently by CI/reality checks.
 register_api_schema_capability()
 register_api_runtime_capability()
+register_kubernetes_capability()
 
 # Every entry is backed by a command -v assertion in Dockerfile.django.
 # Registry presence alone never means that a capability is executable.
 PACKAGED_NATIVE_CAPABILITIES = frozenset({
     'api.openapi-contract-security',
     'api.openapi-runtime-conformance',
+    'kubernetes.read-only-posture',
     'binary.checksec',
     'binary.strings',
     'binary.objdump',

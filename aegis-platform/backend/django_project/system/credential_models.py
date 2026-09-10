@@ -29,6 +29,7 @@ class CredentialSecret(models.Model):
         TOKEN = 'token', _('Token')
         SSH_PRIVATE_KEY = 'ssh_private_key', _('SSH Private Key')
         CLOUD_ACCESS_KEY = 'cloud_access_key', _('Cloud Access Key')
+        KUBECONFIG = 'kubeconfig', _('Kubeconfig')
         GENERIC = 'generic', _('Generic Secret')
 
     class Status(models.TextChoices):
