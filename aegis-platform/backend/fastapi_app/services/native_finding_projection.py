@@ -39,7 +39,6 @@ def _bounded_urls(values: Any, limit: int = 100) -> tuple[str, ...]:
 
 
 def browser_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
-    """Map explicit browser security violations to stable semantic findings."""
     observations = normalized.get('observations') if isinstance(normalized, dict) else None
     if not isinstance(observations, list):
         return []
@@ -164,7 +163,6 @@ def _api_finding_specs(
 
 
 def api_schema_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
-    """Project explicit security findings emitted by the defensive schema analyzer."""
     return _api_finding_specs(
         normalized,
         observation_kind='api-schema-security-finding',
@@ -173,7 +171,6 @@ def api_schema_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSp
 
 
 def api_runtime_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
-    """Project explicit runtime contract violations from safe authorized API probes."""
     return _api_finding_specs(
         normalized,
         observation_kind='api-runtime-security-finding',
@@ -182,7 +179,6 @@ def api_runtime_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingS
 
 
 def kubernetes_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
-    """Project explicit Kubernetes posture observations to location-stable findings."""
     observations = normalized.get('observations') if isinstance(normalized, dict) else None
     if not isinstance(observations, list):
         return []
@@ -222,6 +218,48 @@ def kubernetes_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSp
                 'resource_kind': resource_kind,
                 'resource_name': resource_name,
                 'container': container,
+            },
+            identity_key=identity,
+        ))
+    return findings
+
+
+def cloud_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
+    observations = normalized.get('observations') if isinstance(normalized, dict) else None
+    if not isinstance(observations, list):
+        return []
+    findings: list[NativeFindingSpec] = []
+    severities = {'critical', 'high', 'medium', 'low', 'info'}
+    confidences = {'high', 'medium', 'low'}
+    for observation in observations[:2000]:
+        if not isinstance(observation, dict) or observation.get('kind') != 'cloud-security-finding':
+            continue
+        rule_id = str(observation.get('rule_id') or '').strip()[:200]
+        title = str(observation.get('title') or '').strip()[:500]
+        description = str(observation.get('description') or '').strip()[:5000]
+        remediation = str(observation.get('remediation') or '').strip()[:5000]
+        severity = str(observation.get('severity') or 'info').lower()
+        confidence = str(observation.get('confidence') or 'medium').lower()
+        if not rule_id or not title or not description or severity not in severities or confidence not in confidences:
+            continue
+        provider = str(observation.get('provider') or '').strip().lower()[:20]
+        location = str(observation.get('location') or '').strip()[:2048]
+        resource_kind = str(observation.get('resource_kind') or '').strip()[:100]
+        resource_name = str(observation.get('resource_name') or '').strip()[:500]
+        identity = '|'.join((rule_id, provider, location, resource_kind, resource_name))
+        findings.append(NativeFindingSpec(
+            rule_id=rule_id,
+            title=title,
+            description=description,
+            severity=severity,
+            confidence=confidence,
+            category='cloud-security',
+            remediation=remediation,
+            raw_data={
+                'provider': provider,
+                'location': location,
+                'resource_kind': resource_kind,
+                'resource_name': resource_name,
             },
             identity_key=identity,
         ))
@@ -270,12 +308,6 @@ def project_native_findings(
     target: str,
     normalized: dict[str, Any],
 ) -> tuple[list[str], list[str]]:
-    """Persist idempotent semantic findings and finding-linked evidence.
-
-    Redelivery updates technical evidence but deliberately preserves workflow
-    state such as status, assignee, accepted-risk decisions, validation data,
-    and remediation tracking already governed by users or later workflows.
-    """
     if capability_id == 'browser.dom-snapshot':
         specs = browser_finding_specs(normalized)
     elif capability_id == 'api.openapi-contract-security':
@@ -284,6 +316,8 @@ def project_native_findings(
         specs = api_runtime_finding_specs(normalized)
     elif capability_id == 'kubernetes.read-only-posture':
         specs = kubernetes_finding_specs(normalized)
+    elif capability_id == 'cloud.read-only-posture':
+        specs = cloud_finding_specs(normalized)
     else:
         return [], []
 
@@ -332,7 +366,6 @@ def project_native_findings(
 
 
 def sync_scan_finding_counts(scan: Any) -> None:
-    """Recompute scan counters from persisted findings; never increment blindly."""
     from django_project.vulnerabilities.models import Vulnerability
 
     counts = {severity: 0 for severity in ('critical', 'high', 'medium', 'low', 'info')}
