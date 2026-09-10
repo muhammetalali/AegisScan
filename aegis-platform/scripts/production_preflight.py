@@ -108,6 +108,7 @@ def _check_remote_backup(environment: dict[str, str], failures: list[str]) -> No
         or not parsed.hostname
         or parsed.username
         or parsed.password
+        or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
         or _is_unsafe_delivery_host(parsed.hostname or "")
@@ -131,6 +132,8 @@ def _check_remote_backup(environment: dict[str, str], failures: list[str]) -> No
         not prefix
         or len(prefix) > 512
         or any(part in {"", ".", ".."} for part in prefix.split("/"))
+        or "\\" in prefix
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in prefix)
     ):
         failures.append("AEGIS_BACKUP_S3_PREFIX must be an explicit safe object prefix")
 
