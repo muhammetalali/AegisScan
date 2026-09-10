@@ -186,3 +186,16 @@ def test_restore_refuses_to_overwrite_existing_output(tmp_path, monkeypatch):
             )
         )
     assert output.read_bytes() == b"must-survive"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://169.254.169.254:9000",
+        "http://metadata.google.internal:9000",
+        "http://0.0.0.0:9000",
+    ],
+)
+def test_http_test_override_rejects_metadata_and_special_networks(endpoint):
+    with pytest.raises(remote.BackupError, match="loopback test stores"):
+        remote._validate_endpoint(endpoint, allow_http=True)
