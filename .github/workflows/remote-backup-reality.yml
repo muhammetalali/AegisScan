@@ -357,8 +357,18 @@ jobs:
             --work-dir /tmp \
             --allow-http \
             > /tmp/aegis-backup-proof/remote-restore.json
-          test -s /tmp/aegis-remote-recovery/recovered.dump
-          test -s /tmp/aegis-remote-recovery/recovered.dump.sha256
+          # The hardened recovery container writes as uid 10001 into a
+          # host bind that is deliberately mode 0700. Prove that boundary
+          # first as root, then hand the recovered artifacts to the CI
+          # operator uid for the separate PostgreSQL restore verifier.
+          sudo test -s /tmp/aegis-remote-recovery/recovered.dump
+          sudo test -s /tmp/aegis-remote-recovery/recovered.dump.sha256
+          test "$(sudo stat -c '%u:%g' /tmp/aegis-remote-recovery/recovered.dump)" = "10001:10001"
+          test "$(sudo stat -c '%a' /tmp/aegis-remote-recovery/recovered.dump)" = "600"
+          test "$(sudo stat -c '%a' /tmp/aegis-remote-recovery/recovered.dump.sha256)" = "600"
+          sudo chown -R "$(id -u):$(id -g)" /tmp/aegis-remote-recovery
+          chmod 0700 /tmp/aegis-remote-recovery
+          chmod 0600 /tmp/aegis-remote-recovery/recovered.dump /tmp/aegis-remote-recovery/recovered.dump.sha256
 
       - name: Restore PostgreSQL and prove authoritative record
         env:
