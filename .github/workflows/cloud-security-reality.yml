@@ -1,0 +1,233 @@
+name: Cloud Security Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/cloud_*.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_finding_projection.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_cloud_capability_api.py'
+      - 'aegis-platform/backend/django_project/evidence/test_cloud_*.py'
+      - 'aegis-platform/backend/requirements.txt'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - '.github/workflows/cloud-security-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/cloud_*.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_finding_projection.py'
+      - 'aegis-platform/backend/requirements.txt'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - '.github/workflows/cloud-security-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-security-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DEBUG: 'True'
+      SECRET_KEY: ci-cloud-django-secret-key-0123456789abcdef0123456789abcdef
+      DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
+      REDIS_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
+      JWT_SECRET_KEY: ci-cloud-jwt-signing-key-0123456789abcdef0123456789abcdef
+      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
+      AEGIS_AWS_CLOUD_TARGET: ${{ secrets.AEGIS_AWS_CLOUD_TARGET }}
+      AEGIS_AWS_CLOUD_CREDENTIAL_JSON: ${{ secrets.AEGIS_AWS_CLOUD_CREDENTIAL_JSON }}
+      AEGIS_AZURE_CLOUD_TARGET: ${{ secrets.AEGIS_AZURE_CLOUD_TARGET }}
+      AEGIS_AZURE_CLOUD_CREDENTIAL_JSON: ${{ secrets.AEGIS_AZURE_CLOUD_CREDENTIAL_JSON }}
+      AEGIS_GCP_CLOUD_TARGET: ${{ secrets.AEGIS_GCP_CLOUD_TARGET }}
+      AEGIS_GCP_CLOUD_CREDENTIAL_JSON: ${{ secrets.AEGIS_GCP_CLOUD_CREDENTIAL_JSON }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Configure ephemeral credential-vault keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_ENV"
+          import base64
+          import os
+          print('CREDENTIAL_VAULT_KEYS=' + base64.urlsafe_b64encode(os.urandom(32)).decode())
+          print('CREDENTIAL_FINGERPRINT_KEY=' + os.urandom(32).hex())
+          PY
+
+      - name: Compile migrate and test cloud contracts
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m compileall -q \
+            fastapi_app/services/cloud_target.py \
+            fastapi_app/services/cloud_security.py \
+            fastapi_app/services/cloud_capability.py \
+            fastapi_app/services/cloud_launcher.py \
+            fastapi_app/services/native_tool_runtime.py \
+            fastapi_app/services/credential_execution.py \
+            fastapi_app/services/native_output_normalizer.py \
+            fastapi_app/services/native_finding_projection.py
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python -m pytest -q \
+            fastapi_app/services/test_cloud_security.py \
+            fastapi_app/services/test_cloud_capability_contract.py \
+            fastapi_app/services/test_cloud_credential_scope.py \
+            fastapi_app/services/test_credential_scope_regression.py \
+            fastapi_app/routers/test_cloud_capability_api.py \
+            django_project/evidence/test_cloud_security_plane.py \
+            django_project/evidence/test_cloud_native_delivery.py
+
+      - name: Prove explicit provider SDK surfaces
+        working-directory: aegis-platform/backend
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import boto3
+          from azure.identity import ClientSecretCredential
+          from azure.mgmt.network import NetworkManagementClient
+          from azure.mgmt.resource.resources import ResourceManagementClient
+          from azure.mgmt.resource.subscriptions import SubscriptionClient
+          from google.cloud.asset_v1 import AssetServiceClient
+          assert boto3.Session
+          assert ClientSecretCredential
+          assert NetworkManagementClient
+          assert ResourceManagementClient
+          assert SubscriptionClient
+          assert hasattr(AssetServiceClient, 'search_all_resources')
+          assert hasattr(AssetServiceClient, 'search_all_iam_policies')
+          print('provider-sdk-contracts-ok')
+          PY
+
+      - name: Build scanner image and prove packaged cloud executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -f aegis-platform/backend/Dockerfile.django -t aegisscan-cloud:ci aegis-platform/backend
+          docker run --rm --entrypoint sh aegisscan-cloud:ci -c '
+            set -eu
+            test "$(id -u)" = "10001"
+            command -v aegis-cloud-security
+            test -x /app/fastapi_app/services/cloud_security.py
+            python -c "import boto3; import azure.identity; import azure.mgmt.network; from azure.mgmt.resource.resources import ResourceManagementClient; from azure.mgmt.resource.subscriptions import SubscriptionClient; import google.cloud.asset_v1; assert ResourceManagementClient; assert SubscriptionClient"
+          '
+
+      - name: Prove packaged analyzer fails closed before provider access
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' '{"provider":"aws","access_key_id":"AKIAINVALID","secret_access_key":"never-real"}' > /tmp/cloud-invalid.json
+          sudo chown 10001:10001 /tmp/cloud-invalid.json
+          sudo chmod 0400 /tmp/cloud-invalid.json
+          set +e
+          docker run --rm \
+            -v /tmp/cloud-invalid.json:/tmp/cloud-credential.json:ro \
+            --entrypoint /usr/local/bin/aegis-cloud-security \
+            aegisscan-cloud:ci \
+            'aws://1234' --credentials-file /tmp/cloud-credential.json > /tmp/cloud-invalid-result.json
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          python - <<'PY'
+          import json
+          data = json.load(open('/tmp/cloud-invalid-result.json', encoding='utf-8'))
+          assert data['schema'] == 'aegis.cloud-security.v1'
+          assert '12-digit account ID' in data['error']
+          assert 'never-real' not in json.dumps(data)
+          print('packaged-cloud-fail-closed-ok')
+          PY
+          sudo rm -f -- /tmp/cloud-invalid.json
+          rm -f -- /tmp/cloud-invalid-result.json
+
+      - name: Run configured live provider proofs
+        shell: bash
+        working-directory: aegis-platform/backend
+        run: |
+          set -euo pipefail
+          run_provider() {
+            provider="$1"
+            target="$2"
+            credential="$3"
+            if [ -z "$target" ] || [ -z "$credential" ]; then
+              echo "${provider}: live-provider proof not configured" >> "$GITHUB_STEP_SUMMARY"
+              return 0
+            fi
+            file="/tmp/aegis-${provider}-credential.json"
+            output="/tmp/aegis-${provider}-result.json"
+            umask 077
+            printf '%s' "$credential" > "$file"
+            python -m fastapi_app.services.cloud_security "$target" --credentials-file "$file" > "$output"
+            PROVIDER="$provider" TARGET="$target" CREDENTIAL_FILE="$file" OUTPUT_FILE="$output" python - <<'PY'
+          import json
+          import os
+          provider = os.environ['PROVIDER']
+          target = os.environ['TARGET']
+          secret = open(os.environ['CREDENTIAL_FILE'], encoding='utf-8').read()
+          raw = open(os.environ['OUTPUT_FILE'], encoding='utf-8').read()
+          data = json.loads(raw)
+          assert data['schema'] == 'aegis.cloud-security.v1', data
+          assert data['provider'] == provider, data
+          assert data['target'] == target, data
+          summary = data['observations'][0]
+          assert summary['identity_verified'] is True, summary
+          assert summary['read_only'] is True, summary
+          assert summary['ambient_credentials_used'] is False, summary
+          assert secret not in raw
+          print(f'{provider}-live-provider-proof-ok')
+          PY
+            rm -f -- "$file" "$output"
+            echo "${provider}: live-provider proof PASSED" >> "$GITHUB_STEP_SUMMARY"
+          }
+          run_provider aws "${AEGIS_AWS_CLOUD_TARGET:-}" "${AEGIS_AWS_CLOUD_CREDENTIAL_JSON:-}"
+          run_provider azure "${AEGIS_AZURE_CLOUD_TARGET:-}" "${AEGIS_AZURE_CLOUD_CREDENTIAL_JSON:-}"
+          run_provider gcp "${AEGIS_GCP_CLOUD_TARGET:-}" "${AEGIS_GCP_CLOUD_CREDENTIAL_JSON:-}"

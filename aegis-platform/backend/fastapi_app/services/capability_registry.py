@@ -6,12 +6,14 @@ from urllib.parse import urlsplit
 
 from .api_runtime_capability import CAPABILITY_ID as API_RUNTIME_CAPABILITY_ID, register_api_runtime_capability
 from .api_schema_capability import CAPABILITY_ID as API_SCHEMA_CAPABILITY_ID, register_api_schema_capability
+from .cloud_capability import register_cloud_capability
 from .kubernetes_capability import register_kubernetes_capability
 from .native_tool_runtime import NATIVE_TOOL_SPECS, validate_native_options
 
 register_api_schema_capability()
 register_api_runtime_capability()
 register_kubernetes_capability()
+register_cloud_capability()
 
 
 @dataclass(frozen=True)

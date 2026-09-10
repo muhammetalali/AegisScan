@@ -94,8 +94,6 @@ def _normalize_api_observations(data: dict[str, Any], fallback_kind: str) -> lis
 
 
 def _normalized_ip(value: Any) -> str | None:
-    # Only literal IPs belong in transport evidence, never arbitrary strings,
-    # numeric coercions, or IPv6 zone identifiers that may carry other data.
     if not isinstance(value, str) or len(value) > 45 or '%' in value:
         return None
     try:
@@ -159,6 +157,57 @@ def _normalize_kubernetes_observations(data: dict[str, Any]) -> list[dict[str, A
                 if address is not None:
                     coverage[-1]['resolved_ip'] = address
             safe['coverage'] = coverage
+        result.append(safe)
+    return result
+
+
+def _normalize_cloud_observations(data: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    observations = data.get('observations') if isinstance(data.get('observations'), list) else []
+    for item in observations[:2000]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get('kind') or 'cloud-observation')[:100]
+        safe: dict[str, Any] = {'kind': kind}
+        for key in (
+            'provider', 'target', 'rule_id', 'title', 'description', 'remediation',
+            'severity', 'confidence', 'category', 'location', 'resource_kind', 'resource_name',
+        ):
+            if key in item:
+                safe[key] = str(item.get(key) or '')[:4096]
+        for key in ('identity_verified', 'read_only', 'ambient_credentials_used'):
+            if key in item:
+                safe[key] = item.get(key) is True
+        if 'finding_count' in item:
+            try:
+                safe['finding_count'] = max(0, int(item.get('finding_count') or 0))
+            except (TypeError, ValueError):
+                safe['finding_count'] = 0
+        inventory = item.get('inventory')
+        if isinstance(inventory, dict):
+            safe_inventory: dict[str, Any] = {}
+            for key, value in list(inventory.items())[:50]:
+                name = str(key)[:100]
+                if isinstance(value, bool) or value is None:
+                    safe_inventory[name] = value
+                elif isinstance(value, int):
+                    safe_inventory[name] = max(0, value)
+                elif isinstance(value, str):
+                    safe_inventory[name] = value[:1000]
+            safe['inventory'] = safe_inventory
+        gaps = item.get('coverage_gaps')
+        if isinstance(gaps, list):
+            safe['coverage_gaps'] = [
+                {
+                    'provider': str(entry.get('provider') or '')[:20],
+                    'operation': str(entry.get('operation') or '')[:200],
+                    'code': str(entry.get('code') or '')[:100],
+                }
+                for entry in gaps[:100]
+                if isinstance(entry, dict)
+            ]
+        if 'credential_source' in item:
+            safe['credential_source'] = str(item.get('credential_source') or '')[:100]
         result.append(safe)
     return result
 
@@ -237,6 +286,13 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
             observations.extend(_normalize_kubernetes_observations(data))
             if not observations and data.get('error'):
                 observations.append({'kind': 'kubernetes-error', 'summary': str(data['error'])[:2000]})
+
+    elif capability_id == 'cloud.read-only-posture':
+        data = _json(raw)
+        if isinstance(data, dict):
+            observations.extend(_normalize_cloud_observations(data))
+            if not observations and data.get('error'):
+                observations.append({'kind': 'cloud-error', 'summary': str(data['error'])[:2000]})
 
     elif capability_id == 'forensics.exiftool':
         data = _json(raw)

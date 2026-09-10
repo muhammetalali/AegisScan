@@ -14,8 +14,9 @@ from django_project.system.credential_vault import (
     authorize_credential_use,
     resolve_credential_secret,
 )
+from fastapi_app.services.cloud_target import parse_cloud_target
 
-_POLICY_VERSION = 'credential-execution.v2'
+_POLICY_VERSION = 'credential-execution.v3'
 _MAX_CREDENTIAL_REFS = 3
 
 
@@ -111,11 +112,7 @@ def _canonical_api_server(value: str) -> str:
     return urlunsplit(('https', authority, parsed.path.rstrip('/'), '', ''))
 
 
-def _validate_scope(
-    *, credential: CredentialSecret, actor: Any, purpose: str, target: str
-) -> None:
-    if credential.kind != CredentialSecret.Kind.KUBECONFIG:
-        return
+def _validate_kube_scope(*, credential: CredentialSecret, actor: Any, purpose: str, target: str) -> None:
     scope = credential.scope if isinstance(credential.scope, dict) else {}
     scoped_target = str(scope.get('api_server') or '').strip()
     try:
@@ -124,20 +121,65 @@ def _validate_scope(
     except ValueError:
         expected = ''
         actual = ''
-    if not expected or not actual or expected != actual:
-        _record_denied(
-            credential=credential,
-            actor=actor,
-            purpose=purpose,
-            reason='kubeconfig credential scope does not match the authorized cluster target',
-            metadata={
-                'credential_ref': str(credential.id),
-                'kind': credential.kind,
-                'scope_type': 'api_server',
-                'scope_matches_target': False,
-            },
-        )
-        raise CredentialVaultDenied('Kubeconfig credential is not scoped to this authorized cluster target.')
+    if expected and actual and expected == actual:
+        return
+    _record_denied(
+        credential=credential,
+        actor=actor,
+        purpose=purpose,
+        reason='kubeconfig credential scope does not match the authorized cluster target',
+        metadata={
+            'credential_ref': str(credential.id),
+            'kind': credential.kind,
+            'scope_type': 'api_server',
+            'scope_matches_target': False,
+        },
+    )
+    raise CredentialVaultDenied('Kubeconfig credential is not scoped to this authorized cluster target.')
+
+
+def _validate_cloud_scope(*, credential: CredentialSecret, actor: Any, purpose: str, target: str) -> None:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    try:
+        cloud_target = parse_cloud_target(target)
+    except ValueError:
+        cloud_target = None
+    provider = str(scope.get('provider') or '').strip().lower()
+    expected_identifier = ''
+    scope_key = ''
+    if cloud_target is not None:
+        scope_key = cloud_target.scope_key
+        expected_identifier = str(scope.get(scope_key) or '').strip().lower()
+    if (
+        cloud_target is not None
+        and provider == cloud_target.provider
+        and expected_identifier == cloud_target.identifier
+    ):
+        return
+    _record_denied(
+        credential=credential,
+        actor=actor,
+        purpose=purpose,
+        reason='cloud credential scope does not match the authorized provider target',
+        metadata={
+            'credential_ref': str(credential.id),
+            'kind': credential.kind,
+            'scope_type': 'cloud-provider-target',
+            'scope_provider': provider[:20],
+            'scope_identifier_key': scope_key,
+            'scope_matches_target': False,
+        },
+    )
+    raise CredentialVaultDenied('Cloud credential is not scoped to this authorized provider target.')
+
+
+def _validate_scope(
+    *, credential: CredentialSecret, actor: Any, purpose: str, target: str
+) -> None:
+    if credential.kind == CredentialSecret.Kind.KUBECONFIG:
+        _validate_kube_scope(credential=credential, actor=actor, purpose=purpose, target=target)
+    elif credential.kind == CredentialSecret.Kind.CLOUD_ACCESS_KEY:
+        _validate_cloud_scope(credential=credential, actor=actor, purpose=purpose, target=target)
 
 
 def authorize_credential_refs_for_execution(
