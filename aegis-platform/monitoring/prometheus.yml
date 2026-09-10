@@ -1,18 +1,22 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+
 rule_files:
   - /etc/prometheus/rules/*.yml
+
 alerting:
   alertmanagers:
     - static_configs:
         - targets: [alertmanager:9093]
+
 scrape_configs:
-  - job_name: aegis-https
+  - job_name: aegis-gateway
     metrics_path: /probe
-    params: {module: [http_2xx]}
+    params:
+      module: [http_2xx]
     static_configs:
-      - targets: ['https://nginx/health']
+      - targets: ['http://nginx:8080/health']
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -20,9 +24,19 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: blackbox-exporter:9115
+
   - job_name: postgres
     static_configs:
       - targets: [postgres-exporter:9187]
+
   - job_name: redis
     static_configs:
       - targets: [redis-exporter:9121]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: [alertmanager:9093]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
