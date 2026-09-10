@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -11,11 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+from .cloud_target import canonical_cloud_target
 from .scanner_adapters import ScanResult, validate_authorized_target, validate_authorized_web_target
 from .scope_authorization import require_authorized_target
 
-TargetKind = Literal['host', 'network', 'url', 'path', 'image']
-CredentialMode = Literal['none', 'curl-bearer-config', 'kubeconfig-file']
+TargetKind = Literal['host', 'network', 'url', 'path', 'image', 'cloud']
+CredentialMode = Literal['none', 'curl-bearer-config', 'kubeconfig-file', 'cloud-credentials-file']
 
 
 class NativeExecutionCancelled(RuntimeError):
@@ -171,6 +173,8 @@ def _validated_target(spec: NativeToolSpec, target: str) -> str:
         if not path.exists():
             raise ValueError(f'Asset path does not exist on the worker: {path}')
         return str(path)
+    if spec.target_kind == 'cloud':
+        return canonical_cloud_target(target)
     value = str(target).strip()
     if not value or len(value) > 1024 or any(ch in value for ch in '\r\n\x00'):
         raise ValueError('Invalid asset target')
@@ -220,6 +224,19 @@ def _multiline_material_secret(material: Mapping[str, Any]) -> str:
     return secret
 
 
+def _cloud_material_secret(material: Mapping[str, Any]) -> str:
+    secret = str(material.get('secret') or '')
+    if not secret or '\x00' in secret or len(secret.encode('utf-8')) > 65536:
+        raise ValueError('Cloud credential material must be UTF-8 JSON no larger than 64 KiB')
+    try:
+        data = json.loads(secret)
+    except json.JSONDecodeError as exc:
+        raise ValueError('Cloud credential material must be valid JSON') from exc
+    if not isinstance(data, dict):
+        raise ValueError('Cloud credential material must be a JSON object')
+    return secret
+
+
 def _curl_config_for_bearer(secret: str) -> str:
     escaped = secret.replace('\\', '\\\\').replace('"', '\\"')
     fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.curlrc')
@@ -231,6 +248,14 @@ def _curl_config_for_bearer(secret: str) -> str:
 
 def _kubeconfig_file(secret: str) -> str:
     fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.kubeconfig')
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
+        handle.write(secret)
+    return path
+
+
+def _cloud_credentials_file(secret: str) -> str:
+    fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.cloud.json')
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
         handle.write(secret)
@@ -260,7 +285,32 @@ def _credential_runtime_args(
             raise ValueError('kubeconfig execution requires a kubeconfig credential')
         path = _kubeconfig_file(_multiline_material_secret(material))
         return ['--kubeconfig', path], [path]
+    if spec.credential_mode == 'cloud-credentials-file':
+        if len(credential_materials) != 1:
+            raise ValueError('cloud execution accepts exactly one credential reference')
+        material = credential_materials[0]
+        if str(material.get('kind') or '') != 'cloud_access_key':
+            raise ValueError('cloud execution requires a cloud_access_key credential')
+        path = _cloud_credentials_file(_cloud_material_secret(material))
+        return ['--credentials-file', path], [path]
     raise ValueError(f'Unsupported credential execution mode: {spec.credential_mode}')
+
+
+def _native_environment(spec: NativeToolSpec) -> dict[str, str]:
+    environment = dict(os.environ)
+    if spec.credential_mode == 'cloud-credentials-file':
+        blocked = {
+            'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN',
+            'AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE',
+            'AWS_WEB_IDENTITY_TOKEN_FILE', 'AWS_ROLE_ARN', 'AWS_ROLE_SESSION_NAME',
+            'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_CLIENT_CERTIFICATE_PATH',
+            'AZURE_USERNAME', 'AZURE_PASSWORD', 'AZURE_SUBSCRIPTION_ID',
+            'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT', 'CLOUDSDK_CONFIG',
+        }
+        for key in blocked:
+            environment.pop(key, None)
+    environment['NO_COLOR'] = '1'
+    return environment
 
 
 def _terminate_process_group(process: subprocess.Popen[str]) -> None:
@@ -303,7 +353,7 @@ def run_native_tool(
             text=True,
             shell=False,
             start_new_session=True,
-            env={**os.environ, 'NO_COLOR': '1'},
+            env=_native_environment(spec),
         )
         deadline = time.monotonic() + spec.timeout
         paused = False
