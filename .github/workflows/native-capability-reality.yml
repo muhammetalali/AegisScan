@@ -9,6 +9,10 @@ name: Native Capability Reality
 permissions:
   contents: read
 
+concurrency:
+  group: native-capability-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   scanner-native-runtime:
     runs-on: ubuntu-latest
@@ -48,9 +52,19 @@ jobs:
             command -v firefox-esr
             command -v aegis-browser-security
             command -v httpx
+            command -v rustscan
+            rustscan --version | grep -F "2.4.1"
+            command -v amass
+            amass -version 2>&1 | grep -F "v5.1.1"
+            command -v feroxbuster
+            feroxbuster --version | grep -F "2.13.1"
+            command -v nikto
+            nikto -Version 2>&1 | grep -F "2.6.0"
             command -v subfinder
             command -v katana
             command -v trivy
+            trivy --version | grep -F "0.74.0"
+            test -s /opt/trivy-cache/policy/metadata.json
             command -v trufflehog
             command -v checkov
             test -s /opt/aegis-wordlists/web-common.txt
@@ -211,6 +225,81 @@ jobs:
           PY
             echo web-discovery-headers-and-browser-ok
           '
+      - name: Prove real parity capability execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            -e AUTHORIZED_SCAN_TARGETS=127.0.0.1/32,example.com \
+            -e AEGIS_WORDLIST_ROOT=/opt/aegis-wordlists \
+            --entrypoint sh aegisscan-native-capability:ci <<'SH'
+          set -eu
+          mkdir -p /tmp/aegis-parity-web /tmp/aegis-parity-iac
+          printf '%s\n' '<html><body>Aegis parity fixture</body></html>' > /tmp/aegis-parity-web/index.html
+          printf '%s\n' 'admin-ok' > /tmp/aegis-parity-web/admin
+          printf '%s\n' 'FROM alpine:3.20' 'USER root' > /tmp/aegis-parity-iac/Dockerfile
+          python -m http.server 18082 --bind 127.0.0.1 --directory /tmp/aegis-parity-web >/tmp/aegis-parity-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18082/ >/dev/null; then ready=1; break; fi
+            sleep 0.25
+          done
+          test "$ready" -eq 1
+
+          python - <<'PY'
+          from fastapi_app.services.native_output_normalizer import normalize_native_output
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          rustscan = run_native_tool('network.rustscan', '127.0.0.1', {'ports': '18082'})
+          assert rustscan.exit_code == 0, rustscan.stderr
+          rustscan_normalized = normalize_native_output('network.rustscan', rustscan.stdout)
+          assert any(
+              item.get('port') == 18082
+              for item in rustscan_normalized['observations']
+          ), rustscan_normalized
+          print('rustscan-real-local-target-ok')
+
+          ferox = run_native_tool(
+              'web.feroxbuster',
+              'http://127.0.0.1:18082',
+              {
+                  'wordlist': '/opt/aegis-wordlists/web-common.txt',
+                  'threads': 2,
+                  'depth': 1,
+              },
+          )
+          assert ferox.exit_code == 0, ferox.stderr
+          ferox_normalized = normalize_native_output('web.feroxbuster', ferox.stdout)
+          assert any(
+              item.get('kind') == 'web-endpoint' and item.get('url', '').endswith('/admin')
+              for item in ferox_normalized['observations']
+          ), ferox_normalized
+          print('feroxbuster-real-local-target-ok')
+
+          nikto = run_native_tool('web.nikto', 'http://127.0.0.1:18082', {})
+          assert nikto.exit_code == 0, nikto.stderr
+          nikto_normalized = normalize_native_output('web.nikto', nikto.stdout)
+          assert nikto_normalized['count'] >= 1, nikto.stdout[-4000:]
+          print('nikto-real-local-target-ok')
+
+          trivy = run_native_tool('code.trivy-config', '/tmp/aegis-parity-iac', {})
+          assert trivy.exit_code == 0, trivy.stderr
+          trivy_normalized = normalize_native_output('code.trivy-config', trivy.stdout)
+          assert any(
+              item.get('kind') == 'iac-security-finding'
+              for item in trivy_normalized['observations']
+          ), trivy_normalized
+          print('trivy-config-real-local-fixture-ok')
+
+          amass = run_native_tool('recon.amass', 'example.com', {'timeout_minutes': 1})
+          assert amass.exit_code == 0, amass.stderr
+          amass_normalized = normalize_native_output('recon.amass', amass.stdout)
+          assert amass_normalized['schema'] == 'aegis.native-observations.v1'
+          print('amass-real-passive-enumeration-ok')
+          PY
+          SH
       - name: Prove real pause resume cancel process control
         shell: bash
         run: |
@@ -247,13 +336,20 @@ jobs:
             --entrypoint python aegisscan-native-capability:ci -m pytest -q \
             --confcutdir=fastapi_app/services \
             fastapi_app/services/test_native_output_normalizer.py \
+            fastapi_app/services/test_native_parity_contract.py \
+            fastapi_app/services/test_native_parity_findings.py \
             fastapi_app/services/test_browser_security_probe.py
           docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
           from fastapi_app.services.capability_planner import planning_summary
           from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
           from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
-          assert PACKAGED_NATIVE_CAPABILITIES <= set(NATIVE_TOOL_SPECS)
-          assert len(PACKAGED_NATIVE_CAPABILITIES) >= 24
+          assert PACKAGED_NATIVE_CAPABILITIES == set(NATIVE_TOOL_SPECS), sorted(set(NATIVE_TOOL_SPECS) - PACKAGED_NATIVE_CAPABILITIES)
+          assert "network.rustscan" in PACKAGED_NATIVE_CAPABILITIES
+          assert "recon.amass" in PACKAGED_NATIVE_CAPABILITIES
+          assert "web.feroxbuster" in PACKAGED_NATIVE_CAPABILITIES
+          assert "web.nikto" in PACKAGED_NATIVE_CAPABILITIES
+          assert "code.trivy-config" in PACKAGED_NATIVE_CAPABILITIES
+          assert "code.terrascan" not in NATIVE_TOOL_SPECS
           assert "web.katana" in PACKAGED_NATIVE_CAPABILITIES
           assert "web.security-headers" in PACKAGED_NATIVE_CAPABILITIES
           assert "browser.dom-snapshot" in PACKAGED_NATIVE_CAPABILITIES
