@@ -27,9 +27,7 @@ if [ ! -r "$AEGIS_PRODUCTION_ENV_FILE" ]; then
   echo "production env file is missing or unreadable" >&2
   exit 1
 fi
-mode="$(stat -c '%a' "$AEGIS_PRODUCTION_ENV_FILE")"
-group_other="$((8#$mode & 077))"
-if [ "$group_other" -ne 0 ]; then
+if [ -n "$(find "$AEGIS_PRODUCTION_ENV_FILE" -maxdepth 0 -perm /077 -print -quit)" ]; then
   echo "production env file must not be accessible by group or others" >&2
   exit 1
 fi
