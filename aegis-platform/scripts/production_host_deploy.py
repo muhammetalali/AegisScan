@@ -115,7 +115,11 @@ def _compose(env_file: Path, *args: str) -> list[str]:
 
 
 def _git(*args: str, capture: bool = True) -> subprocess.CompletedProcess[str]:
-    return _run(["git", *args], capture=capture, timeout=600)
+    return _run(
+        ["git", "-c", f"safe.directory={REPO_ROOT}", *args],
+        capture=capture,
+        timeout=600,
+    )
 
 
 def _current_sha() -> str:
