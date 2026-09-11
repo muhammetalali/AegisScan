@@ -76,7 +76,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
           set -euo pipefail
-          python -m uvicorn fastapi_app.main:app --host 127.0.0.1 --port 8001 --workers 2 > /tmp/aegis-load-api.log 2>&1 &
+          python -m uvicorn fastapi_app.main:app --host 127.0.0.1 --port 8001 --workers 2 --no-access-log > /tmp/aegis-load-api.log 2>&1 &
           echo $! > /tmp/aegis-load-api.pid
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:8001/ready >/dev/null; then exit 0; fi
