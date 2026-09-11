@@ -251,6 +251,8 @@ jobs:
           test "$ready" -eq 1
 
           python - <<'PY'
+          import subprocess
+
           from fastapi_app.services.native_output_normalizer import normalize_native_output
           from fastapi_app.services.native_tool_runtime import run_native_tool
 
