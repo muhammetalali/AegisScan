@@ -29,7 +29,7 @@ from fastapi_app.services.external_fabric import (
 
 
 def _tenant():
-    user=User.objects.create_user(username='fabric-user',email='fabric@example.com',password='Passw0rd!fabric')
+    user=User.objects.create_user(email='fabric@example.com',password='Passw0rd!fabric',first_name='Fabric',last_name='User')
     project=Project.objects.create(name='Fabric Project',slug='fabric-project',owner=user)
     organization=Organization.objects.create(name='Fabric Org',slug='fabric-org',owner=user)
     TenantProject.objects.create(organization=organization,project=project)
