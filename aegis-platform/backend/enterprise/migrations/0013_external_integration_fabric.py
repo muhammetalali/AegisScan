@@ -78,11 +78,11 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='externalintelligencesnapshot',
-            index=models.Index(fields=['provider','indicator','observed_at'],name='idx_extintel_provider_indicator'),
+            index=models.Index(fields=['provider','indicator','observed_at'],name='idx_extintel_prov_ind'),
         ),
         migrations.AddIndex(
             model_name='externalintelligencesnapshot',
-            index=models.Index(fields=['indicator','observed_at'],name='idx_extintel_indicator_time'),
+            index=models.Index(fields=['indicator','observed_at'],name='idx_extintel_ind_time'),
         ),
         migrations.AddConstraint(
             model_name='pluginpackage',
