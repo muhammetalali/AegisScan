@@ -1,0 +1,182 @@
+name: Performance Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/**'
+      - 'aegis-platform/frontend/**'
+      - 'aegis-platform/e2e/performance_reality.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.ci.yml'
+      - 'aegis-platform/docker/**'
+      - '.github/workflows/performance-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/**'
+      - 'aegis-platform/frontend/**'
+      - 'aegis-platform/e2e/performance_reality.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.ci.yml'
+      - 'aegis-platform/docker/**'
+      - '.github/workflows/performance-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-reality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  performance-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      POSTGRES_DB: aegisdb
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis
+      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ci-performance-django-secret-key-0123456789abcdef0123456789abcdef
+      JWT_SECRET_KEY: ci-performance-jwt-signing-key-0123456789abcdef0123456789abcdef
+      DEBUG: 'False'
+      SECURE_SSL_REDIRECT: 'False'
+      ALLOWED_HOSTS: localhost,127.0.0.1,nginx
+      CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
+      CSRF_TRUSTED_ORIGINS: http://localhost,http://127.0.0.1,http://nginx
+      AUTH_COOKIE_SECURE: 'False'
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      SCANNER_EGRESS_PRIVATE_TARGETS: aegis-scan-target
+      SEMGREP_CONFIG: /app/e2e/semgrep-ci.yml
+      FRONTEND_URL: http://localhost
+      LOG_LEVEL: WARNING
+      AEGIS_BASE_URL: http://localhost
+      AEGIS_PERF_REQUESTS: '300'
+      AEGIS_PERF_CONCURRENCY: '16'
+      AEGIS_PERF_P95_MS: '2000'
+      AEGIS_PERF_P99_MS: '3500'
+      AEGIS_PERF_MIN_RPS: '5'
+      AEGIS_PERF_SOAK_SECONDS: '20'
+      AEGIS_PERF_TIMEOUT: '10'
+      AEGIS_PERF_OUTPUT: /tmp/aegis-performance-reality.json
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install performance client dependency
+        run: python -m pip install requests==2.32.5
+
+      - name: Compile performance harness
+        run: python -m py_compile aegis-platform/e2e/performance_reality.py
+
+      - name: Prepare isolated CI environment
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backend/.env <<EOF
+          DEBUG=${DEBUG}
+          SECRET_KEY=${SECRET_KEY}
+          JWT_SECRET_KEY=${JWT_SECRET_KEY}
+          SECURE_SSL_REDIRECT=${SECURE_SSL_REDIRECT}
+          ALLOWED_HOSTS=${ALLOWED_HOSTS}
+          CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+          CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+          DATABASE_URL=${DATABASE_URL}
+          REDIS_URL=${REDIS_URL}
+          CELERY_BROKER_URL=${CELERY_BROKER_URL}
+          CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+          AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
+          FRONTEND_URL=${FRONTEND_URL}
+          AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          SEMGREP_CONFIG=${SEMGREP_CONFIG}
+          LOG_LEVEL=${LOG_LEVEL}
+          POSTGRES_DB=${POSTGRES_DB}
+          POSTGRES_USER=${POSTGRES_USER}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          EOF
+
+      - name: Validate real stack configuration
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+
+      - name: Build real platform images
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --pull; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              echo 'Performance stack build failed after bounded retry.' >&2
+              exit 1
+            fi
+            sleep 15
+          done
+
+      - name: Start real platform stack
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build
+
+      - name: Wait for application readiness
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..80}; do
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then
+              exit 0
+            fi
+            sleep 3
+          done
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi nginx postgres redis
+          exit 1
+
+      - name: Run concurrent API DB and soak performance reality
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/e2e/performance_reality.py \
+            --base-url "$AEGIS_BASE_URL" \
+            --requests "$AEGIS_PERF_REQUESTS" \
+            --concurrency "$AEGIS_PERF_CONCURRENCY" \
+            --p95-ms "$AEGIS_PERF_P95_MS" \
+            --p99-ms "$AEGIS_PERF_P99_MS" \
+            --min-rps "$AEGIS_PERF_MIN_RPS" \
+            --soak-seconds "$AEGIS_PERF_SOAK_SECONDS" \
+            --timeout "$AEGIS_PERF_TIMEOUT" \
+            --output "$AEGIS_PERF_OUTPUT"
+
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-reality-${{ github.sha }}
+          path: /tmp/aegis-performance-reality.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Capture failure diagnostics
+        if: failure()
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=300 django fastapi nginx postgres redis celery_worker scanner_worker || true
+
+      - name: Stop real platform stack
+        if: always()
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v --remove-orphans
