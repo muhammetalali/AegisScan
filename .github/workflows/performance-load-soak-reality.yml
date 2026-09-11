@@ -76,7 +76,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
           set -euo pipefail
-          python -m uvicorn fastapi_app.main:app --host 127.0.0.1 --port 8001 > /tmp/aegis-load-api.log 2>&1 &
+          python -m uvicorn fastapi_app.main:app --host 127.0.0.1 --port 8001 --workers 2 > /tmp/aegis-load-api.log 2>&1 &
           echo $! > /tmp/aegis-load-api.pid
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:8001/ready >/dev/null; then exit 0; fi
@@ -91,11 +91,13 @@ jobs:
         run: |
           python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 10:15 --stage 30:20 --stage 60:20 --stage 25:90             --max-p95-ms 500 --max-error-rate 0.01 --min-rps 5 --min-requests 500             --output performance-reality.json
       - name: Upload performance evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: performance-load-soak-${{ github.sha }}
           path: performance-reality.json
           retention-days: 30
+          if-no-files-found: warn
       - name: Stop API
         if: always()
         run: |
