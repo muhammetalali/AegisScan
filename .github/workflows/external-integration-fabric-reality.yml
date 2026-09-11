@@ -100,7 +100,7 @@ jobs:
         run: |
           python - <<'PY'
           from fastapi_app.main import app
-          paths={route.path for route in app.routes}
+          paths=set(app.openapi().get('paths', {}))
           required={
               '/api/v1/plugins/packages',
               '/api/v1/plugins/packages/{package_id}/approve',
