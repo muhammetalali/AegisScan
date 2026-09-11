@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
 import asyncio,logging
 from datetime import datetime,timezone
-from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities
+from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -140,7 +140,7 @@ app.include_router(validation_contract.router,prefix='/api/v1',tags=['Validation
 app.include_router(dashboard.router,prefix='/api',tags=['Dashboard']); app.include_router(dashboard.router,prefix='/api/v1',tags=['Dashboard'])
 app.include_router(validations.router,prefix='/api',tags=['Validations']); app.include_router(validations.router,prefix='/api/v1',tags=['Validations'])
 app.include_router(audit.router,prefix='/api',tags=['Audit']); app.include_router(audit.router,prefix='/api/v1',tags=['Audit'])
-app.include_router(enterprise.router,prefix='/api/v1/enterprise',tags=['Enterprise']); app.include_router(enterprise_extra.router,prefix='/api/v1/enterprise',tags=['Enterprise Integrations'])
+app.include_router(enterprise.router,prefix='/api/v1/enterprise',tags=['Enterprise']); app.include_router(enterprise_extra.router,prefix='/api/v1/enterprise',tags=['Enterprise Integrations']); app.include_router(enterprise_gap.router,prefix='/api/v1/enterprise-gap',tags=['Enterprise Gap Closure'])
 @app.post('/scans/{scan_id}/start')
 @app.post('/api/v1/scans/{scan_id}/start')
 async def start_scan(scan_id:str,user=Depends(get_current_user)): return await scan_orchestrator.start_scan(scan_id,user)
