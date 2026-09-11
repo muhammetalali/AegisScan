@@ -123,6 +123,8 @@ def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
         return {'status':scan.status,'scan_id':scan_id,'tool':'masscan','target':result.target,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
     except ScannerExecutionCancelled as exc:
         return _finish_cancelled(scan,execution,str(exc))
+    except ScannerExecutionCancelled as exc:
+        return _finish_cancelled(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
         return _finish_failed(scan,execution,str(exc),authorization_snapshot(authorization))
@@ -160,6 +162,8 @@ def run_semgrep_scan(self,scan_id:str)->dict[str,Any]:
                 Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output',str(finding.id)),defaults={'scan':scan,'asset':scan.asset,'finding':finding,'source':'semgrep','evidence_type':'scanner_output','raw_output':scanner_evidence.raw_output,'metadata':{'scanner_evidence_id':str(scanner_evidence.id),'check_id':obs['check_id'],'path':obs['path'],'line':obs['line'],**authorization_snapshot(authorization)},'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
             execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':'semgrep','source':source,'exit_code':result.exit_code,'finding_ids':[str(v.id) for v in findings],'scanner_evidence_id':str(scanner_evidence.id),**authorization_snapshot(authorization)}; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=now; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'semgrep':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
         return {'status':scan.status,'scan_id':scan_id,'tool':'semgrep','target':source,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
+    except ScannerExecutionCancelled as exc:
+        return _finish_cancelled(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
         return _finish_failed(scan,execution,str(exc),authorization_snapshot(authorization))
