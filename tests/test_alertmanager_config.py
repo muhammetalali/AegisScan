@@ -50,6 +50,15 @@ def test_renderer_allows_http_only_for_explicit_loopback_tests(tmp_path):
         allow_http=True,
     )
     assert "http://127.0.0.1:8080/aegis" in output.read_text()
+
+    network_output = tmp_path / "network-out"
+    MODULE.render(
+        template,
+        network_output,
+        "http://alert-receiver:8080/aegis",
+        allow_http=True,
+    )
+    assert "http://alert-receiver:8080/aegis" in network_output.read_text()
     with pytest.raises(ValueError):
         MODULE.render(
             template,
