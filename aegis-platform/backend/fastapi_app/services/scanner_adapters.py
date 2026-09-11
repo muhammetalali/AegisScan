@@ -123,6 +123,11 @@ def _run_controlled(
             elif state != 'paused' and paused and process.poll() is None:
                 os.killpg(process.pid, signal.SIGCONT)
                 paused = False
+            if paused and process.poll() is None:
+                sleep_for=max(0.01,min(poll_interval,1.0))
+                time.sleep(sleep_for)
+                deadline += sleep_for
+                continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _terminate_process_group(process)
