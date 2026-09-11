@@ -149,6 +149,8 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
         return {'status':scan.status,'scan_id':scan_id,'tool':'nmap','target':result.target,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
     except ScannerExecutionCancelled as exc:
         return _cancelled_scan(scan,execution,str(exc))
+    except ScannerExecutionCancelled as exc:
+        return _cancelled_scan(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
         return _fail_scan(scan,execution,str(exc))
@@ -173,6 +175,8 @@ def run_nuclei_scan(self,scan_id:str)->dict[str,Any]:
         with transaction.atomic():
             evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source=result.tool,evidence_type='scanner_output',raw_output=result.stdout,metadata={'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'jsonl',**authorization_snapshot(authorization)},collected_by=scan.initiated_by); findings=_ingest_nuclei_findings(scan,evidence,result.stdout); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.duration=duration; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'result_count':len(findings),'finding_ids':[str(v.id) for v in findings],'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','duration','findings_found','evidences_collected','result_data','logs','updated_at']); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.INFO,message='nuclei execution completed',context={'target':result.target,'exit_code':result.exit_code,'result_count':len(findings),'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.engine_results={**(scan.engine_results or {}),'nuclei':execution.result_data}; scan.findings_count=Vulnerability.objects.filter(scan=scan).count(); scan.save(update_fields=['status','progress','completed_at','engine_results','findings_count','updated_at'])
         return {'status':scan.status,'scan_id':scan_id,'tool':'nuclei','target':result.target,'finding_count':len(findings),'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
+    except ScannerExecutionCancelled as exc:
+        return _cancelled_scan(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
         return _fail_scan(scan,execution,str(exc))
