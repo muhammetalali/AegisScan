@@ -105,7 +105,7 @@ def _validate_bucket(value: str) -> str:
     return bucket
 
 
-def _write_private(path: Path, data: bytes) -> None:
+def _write_private(path: Path, data: bytes, *, owner: tuple[int, int] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
     temporary = path.with_name(f".{path.name}.partial-{os.getpid()}")
@@ -117,6 +117,8 @@ def _write_private(path: Path, data: bytes) -> None:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         os.chmod(path, 0o600)
+        if owner is not None:
+            os.chown(path, owner[0], owner[1])
     finally:
         try:
             temporary.unlink()
@@ -163,10 +165,16 @@ def initialize(
 
     secrets_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(secrets_dir, 0o700)
+    if os.geteuid() == 0:
+        runtime_uid = runtime_gid = 10001
+        os.chown(secrets_dir, runtime_uid, runtime_gid)
+    else:
+        runtime_uid = os.getuid()
+        runtime_gid = os.getgid()
     target_credentials = secrets_dir / "s3-credentials.json"
     encryption_key = secrets_dir / "backup-encryption.key"
-    _write_private(target_credentials, credentials)
-    _write_private(encryption_key, secrets.token_bytes(32))
+    _write_private(target_credentials, credentials, owner=(runtime_uid, runtime_gid))
+    _write_private(encryption_key, secrets.token_bytes(32), owner=(runtime_uid, runtime_gid))
 
     django_secret = secrets.token_urlsafe(64)
     jwt_secret = secrets.token_urlsafe(64)
@@ -203,8 +211,8 @@ def initialize(
         "AEGIS_BACKUP_RETRY_SECONDS": "300",
         "AEGIS_BACKUP_DUMP_TIMEOUT_SECONDS": "7200",
         "AEGIS_BACKUP_UPLOAD_TIMEOUT_SECONDS": "7200",
-        "AEGIS_BACKUP_RUNTIME_UID": "10001",
-        "AEGIS_BACKUP_RUNTIME_GID": "10001",
+        "AEGIS_BACKUP_RUNTIME_UID": str(runtime_uid),
+        "AEGIS_BACKUP_RUNTIME_GID": str(runtime_gid),
         "AEGIS_BACKUP_S3_CREDENTIALS_FILE": str(target_credentials),
         "AEGIS_BACKUP_ENCRYPTION_KEY_FILE": str(encryption_key),
     }
