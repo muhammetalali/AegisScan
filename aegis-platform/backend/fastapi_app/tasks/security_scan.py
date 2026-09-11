@@ -149,8 +149,6 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
         return {'status':scan.status,'scan_id':scan_id,'tool':'nmap','target':result.target,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
     except ScannerExecutionCancelled as exc:
         return _cancelled_scan(scan,execution,str(exc))
-    except ScannerExecutionCancelled as exc:
-        return _cancelled_scan(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
         return _fail_scan(scan,execution,str(exc))
