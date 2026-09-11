@@ -98,7 +98,7 @@ async def websocket_system_monitor(websocket:WebSocket):
     except WebSocketDisconnect: websocket_manager.disconnect('system_monitor',websocket)
 @app.get('/health')
 async def health_check(): return {'status':'healthy','timestamp':datetime.now(timezone.utc).isoformat()}
-_READINESS_SUCCESS_TTL_SECONDS=1.0
+_READINESS_SUCCESS_TTL_SECONDS=5.0
 _readiness_cache={'expires_at':0.0,'dependencies':None}
 _readiness_lock=asyncio.Lock()
 
