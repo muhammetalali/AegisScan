@@ -83,16 +83,16 @@ def _remote_command(
     return " && ".join(
         [
             f"cd {q(repo_path)}",
-            "git status --porcelain --untracked-files=no | grep -q '^$'",
+            "test -z \"$(git status --porcelain --untracked-files=no)\"",
             "git fetch --no-tags origin main",
             f"git cat-file -e {q(release_sha + '^{commit}')}",
             f"git merge-base --is-ancestor {q(release_sha)} origin/main",
             (
-                "python3 aegis-platform/scripts/production_host_reality.py "
+                "sudo -n python3 aegis-platform/scripts/production_host_reality.py "
                 f"--env-file {q(env_path)}"
             ),
             (
-                "python3 aegis-platform/scripts/production_host_deploy.py "
+                "sudo -n python3 aegis-platform/scripts/production_host_deploy.py "
                 f"--release-sha {q(release_sha)} "
                 f"--env-file {q(env_path)} "
                 f"--origin {q(origin)}"
