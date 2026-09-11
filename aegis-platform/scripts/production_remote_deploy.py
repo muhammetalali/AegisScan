@@ -62,7 +62,39 @@ def _origin(value: str) -> str:
         or parsed.fragment
     ):
         raise RemoteDeployError("origin must be an explicit HTTPS origin")
-    return value.strip().rstrip("/")
+    host = parsed.hostname.strip().lower()
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise RemoteDeployError("origin port is invalid") from exc
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if not HOST_RE.fullmatch(host) or host.startswith(".") or host.endswith(".") or ".." in host:
+            raise RemoteDeployError("origin hostname is invalid")
+    else:
+        if address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast:
+            raise RemoteDeployError("origin must not use loopback, link-local, unspecified, or multicast addressing")
+    port_part = f":{port}" if port and port != 443 else ""
+    return f"https://{host}{port_part}"
+
+
+def _require_known_host(host: str, port: int, known_hosts: Path) -> None:
+    lookup = host if port == 22 else f"[{host}]:{port}"
+    try:
+        result = subprocess.run(
+            ["ssh-keygen", "-F", lookup, "-f", str(known_hosts)],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise RemoteDeployError(f"unable to validate pinned SSH host key: {exc}") from exc
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RemoteDeployError(
+            f"SSH known-hosts does not contain a pinned entry for {lookup}"
+        )
 
 
 def _remote_path(value: str, name: str) -> str:
@@ -126,6 +158,7 @@ def deploy(
     env_path = _remote_path(env_path, "remote env path")
     _private_file(private_key, "SSH private key", 64 * 1024)
     _private_file(known_hosts, "SSH known-hosts", 1024 * 1024)
+    _require_known_host(host, port, known_hosts)
 
     command = _remote_command(
         repo_path=repo_path,
