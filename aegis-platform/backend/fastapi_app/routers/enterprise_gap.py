@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import Project
+from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.core.dependencies import get_current_user
 from fastapi_app.services.enterprise_gap_closure import (
     append_finding_decision,
@@ -93,6 +94,14 @@ def _project_for_user(project_id:str,user_id:str):
     )
 
 
+@sync_to_async
+def _finding_for_user(finding_id:str,user_id:str):
+    return (
+        Vulnerability.objects.filter(pk=finding_id,project__owner_id=user_id).first()
+        or Vulnerability.objects.filter(pk=finding_id,project__members__id=user_id).first()
+    )
+
+
 def _uid(user:dict)->str:
     value=user.get('user_id') or user.get('sub')
     if not value:
@@ -103,6 +112,8 @@ def _uid(user:dict)->str:
 @router.post('/findings/{finding_id}/decisions',status_code=201)
 async def record_decision(finding_id:UUID,payload:DecisionIn,user=Depends(get_current_user)):
     uid=_uid(user)
+    finding=await _finding_for_user(str(finding_id),uid)
+    if finding is None: raise HTTPException(status_code=404,detail='Finding not found')
     try:
         row=await sync_to_async(append_finding_decision)(
             vulnerability_id=str(finding_id),actor_id=uid,**payload.model_dump()
@@ -114,13 +125,17 @@ async def record_decision(finding_id:UUID,payload:DecisionIn,user=Depends(get_cu
 
 @router.get('/findings/{finding_id}/decisions/verify')
 async def verify_decisions(finding_id:UUID,user=Depends(get_current_user)):
-    _uid(user)
+    uid=_uid(user)
+    finding=await _finding_for_user(str(finding_id),uid)
+    if finding is None: raise HTTPException(status_code=404,detail='Finding not found')
     return await sync_to_async(verify_finding_decision_chain)(str(finding_id))
 
 
 @router.post('/findings/{finding_id}/priority')
 async def enrich_priority(finding_id:UUID,user=Depends(get_current_user)):
-    _uid(user)
+    uid=_uid(user)
+    finding=await _finding_for_user(str(finding_id),uid)
+    if finding is None: raise HTTPException(status_code=404,detail='Finding not found')
     try:
         return await sync_to_async(enrich_finding_priority)(str(finding_id))
     except (ValueError,PermissionError) as exc:
