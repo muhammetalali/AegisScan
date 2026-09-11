@@ -30,7 +30,7 @@ class FakeProcess:
 
 def test_controlled_scanner_pause_resume_signals_process_group():
     proc=FakeProcess()
-    states=iter(['paused','running','running'])
+    states=iter(['paused','running','running','running'])
     with patch('fastapi_app.services.scanner_adapters.subprocess.Popen',return_value=proc), patch('fastapi_app.services.scanner_adapters.os.killpg') as killpg:
         result=_run_controlled(['tool'],tool='tool',target='127.0.0.1',timeout=10,state_getter=lambda:next(states),poll_interval=0.01)
     assert result.stdout=='ok'
