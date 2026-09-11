@@ -40,9 +40,11 @@ def validate_url(value: str, allow_http: bool = False) -> str:
         )
         loopback = loopback or address.is_loopback
     if parsed.scheme == "http":
-        if not allow_http or not loopback or blocked:
+        test_network_name = "." not in host and ":" not in host
+        if not allow_http or blocked or not (loopback or test_network_name):
             raise ValueError(
-                "HTTP alert webhooks are permitted only for explicit loopback tests"
+                "HTTP alert webhooks are permitted only for explicit loopback "
+                "or single-label test-network destinations"
             )
     elif loopback or blocked:
         raise ValueError(
