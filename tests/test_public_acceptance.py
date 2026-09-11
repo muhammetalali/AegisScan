@@ -30,9 +30,21 @@ def test_validate_requires_health_ready_frontend_and_security_headers(monkeypatc
         return 200, headers, body
 
     monkeypatch.setattr(acceptance, "_request", fake_request)
+    monkeypatch.setattr(
+        acceptance,
+        "_tls_evidence",
+        lambda origin: {
+            "version": "TLSv1.3",
+            "cipher": "TLS_AES_256_GCM_SHA384",
+            "certificate_sha256": "a" * 64,
+            "not_after": "Dec 31 23:59:59 2026 GMT",
+        },
+    )
     result = acceptance.validate("https://security.example.com")
     assert result["status"] == "success"
     assert result["checks"]["verified_https"] is True
+    assert result["checks"]["tls"]["version"] == "TLSv1.3"
+    assert len(result["checks"]["tls"]["certificate_sha256"]) == 64
 
 
 def test_validate_rejects_missing_security_headers(monkeypatch):
@@ -40,5 +52,15 @@ def test_validate_rejects_missing_security_headers(monkeypatch):
         return 200, {"strict-transport-security": "max-age=31536000"}, b'{"status":"ok"}'
 
     monkeypatch.setattr(acceptance, "_request", fake_request)
+    monkeypatch.setattr(
+        acceptance,
+        "_tls_evidence",
+        lambda origin: {
+            "version": "TLSv1.3",
+            "cipher": "TLS_AES_256_GCM_SHA384",
+            "certificate_sha256": "b" * 64,
+            "not_after": "Dec 31 23:59:59 2026 GMT",
+        },
+    )
     with pytest.raises(acceptance.AcceptanceError, match="missing required security headers"):
         acceptance.validate("https://security.example.com")
