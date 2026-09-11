@@ -9,6 +9,7 @@ from enterprise.integrations import send_integration
 from enterprise.models import (
     ExternalIntegration,
     ExternalIntelligenceSnapshot,
+    IntegrationSyncRun,
     Organization,
     PluginPackage,
     TenantProject,
@@ -169,3 +170,44 @@ def test_sentinel_qradar_and_soar_delivery_contracts(monkeypatch):
     assert calls[0][1]['headers']['Authorization']=='Bearer token-value'
     assert calls[1][1]['headers']['SEC']=='token-value'
     assert calls[2][1]['headers']['Authorization']=='Bearer token-value'
+
+
+@pytest.mark.django_db
+def test_failed_repository_sync_persists_failure_evidence(monkeypatch):
+    user,project,organization=_tenant()
+    integration=ExternalIntegration.objects.create(
+        organization=organization,kind=ExternalIntegration.Kind.GITHUB,name='GitHub failure',
+        base_url='https://api.github.com',secret_ref='GITHUB_SYNC_TOKEN',created_by=user,
+    )
+    monkeypatch.setattr(
+        external_fabric,'_github_repositories',
+        lambda item: (_ for _ in ()).throw(ExternalFabricError('provider unavailable')),
+    )
+    with pytest.raises(ExternalFabricError,match='provider unavailable'):
+        sync_external_integration(integration_id=str(integration.id),project=project,user_id=str(user.id))
+    run=IntegrationSyncRun.objects.get(integration=integration,project=project)
+    assert run.status==IntegrationSyncRun.Status.FAILED
+    assert 'provider unavailable' in run.error_message
+    assert run.completed_at is not None
+
+
+@pytest.mark.django_db
+def test_due_connector_dispatch_queues_project_bound_sync(monkeypatch):
+    from enterprise import tasks
+    user,project,organization=_tenant()
+    integration=ExternalIntegration.objects.create(
+        organization=organization,kind=ExternalIntegration.Kind.GHCR,name='GHCR',
+        base_url='https://ghcr.io',secret_ref='GHCR_TOKEN',
+        config={'auto_sync_minutes':5},created_by=user,
+    )
+    queued=[]
+    monkeypatch.setattr(
+        tasks.sync_external_integration_task,
+        'delay',
+        lambda integration_id,project_id,user_id: SimpleNamespace(
+            id=(queued.append((integration_id,project_id,user_id)) or 'task-1')
+        ),
+    )
+    result=tasks.dispatch_due_integration_syncs(limit=10)
+    assert result['queued']==1
+    assert queued==[(str(integration.id),str(project.id),str(user.id))]
