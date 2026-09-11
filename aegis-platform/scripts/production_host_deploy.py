@@ -142,7 +142,15 @@ def _ensure_release(release_sha: str) -> None:
         _git("cat-file", "-e", f"{release_sha}^{{commit}}")
     _git("fetch", "--no-tags", "origin", "main", capture=False)
     ancestor = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", release_sha, "origin/main"],
+        [
+            "git",
+            "-c",
+            f"safe.directory={REPO_ROOT}",
+            "merge-base",
+            "--is-ancestor",
+            release_sha,
+            "origin/main",
+        ],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
