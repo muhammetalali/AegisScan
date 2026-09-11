@@ -35,7 +35,15 @@ def _run(argv: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[
             text=True,
             timeout=timeout,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        if len(detail) > 4000:
+            detail = detail[-4000:]
+        suffix = f": {detail}" if detail else ""
+        raise HostValidationError(
+            f"command failed: {' '.join(argv)}: exit={exc.returncode}{suffix}"
+        ) from exc
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         raise HostValidationError(f"command failed: {' '.join(argv)}: {exc}") from exc
 
 
