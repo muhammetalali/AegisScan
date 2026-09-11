@@ -4,9 +4,10 @@ name: Performance Reality
   pull_request:
     branches: [main]
     paths:
+      - 'aegis-platform/e2e/performance_reality.py'
+      - 'aegis-platform/e2e/test_performance_reality.py'
       - 'aegis-platform/backend/**'
       - 'aegis-platform/frontend/**'
-      - 'aegis-platform/e2e/performance_reality.py'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.ci.yml'
       - 'aegis-platform/docker/**'
@@ -14,9 +15,10 @@ name: Performance Reality
   push:
     branches: [main]
     paths:
+      - 'aegis-platform/e2e/performance_reality.py'
+      - 'aegis-platform/e2e/test_performance_reality.py'
       - 'aegis-platform/backend/**'
       - 'aegis-platform/frontend/**'
-      - 'aegis-platform/e2e/performance_reality.py'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.ci.yml'
       - 'aegis-platform/docker/**'
@@ -72,11 +74,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install performance client dependency
-        run: python -m pip install requests==2.32.5
+      - name: Install performance harness dependencies
+        run: python -m pip install requests==2.32.5 pytest==8.4.2
 
-      - name: Compile performance harness
-        run: python -m py_compile aegis-platform/e2e/performance_reality.py
+      - name: Compile and unit-test performance harness
+        run: |
+          python -m py_compile aegis-platform/e2e/performance_reality.py
+          python -m pytest -q aegis-platform/e2e/test_performance_reality.py
 
       - name: Prepare isolated CI environment
         working-directory: aegis-platform
@@ -104,10 +108,7 @@ jobs:
           POSTGRES_USER=${POSTGRES_USER}
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
           EOF
-
-      - name: Validate real stack configuration
-        working-directory: aegis-platform
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
 
       - name: Build real platform images
         working-directory: aegis-platform
@@ -129,7 +130,7 @@ jobs:
         working-directory: aegis-platform
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build
 
-      - name: Wait for application readiness
+      - name: Wait for canonical HTTP readiness
         working-directory: aegis-platform
         shell: bash
         run: |
@@ -144,6 +145,15 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi nginx postgres redis
           exit 1
 
+      - name: Capture pre-load runtime state
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
+          docker stats --no-stream > /tmp/aegis-performance-before.txt
+          cat /tmp/aegis-performance-before.txt
+
       - name: Run concurrent API DB and soak performance reality
         shell: bash
         run: |
@@ -157,15 +167,37 @@ jobs:
             --min-rps "$AEGIS_PERF_MIN_RPS" \
             --soak-seconds "$AEGIS_PERF_SOAK_SECONDS" \
             --timeout "$AEGIS_PERF_TIMEOUT" \
-            --output "$AEGIS_PERF_OUTPUT"
+            --output "$AEGIS_PERF_OUTPUT" \
+            --insecure
+
+      - name: Prove post-load health and zero container restarts
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS http://localhost/ready >/dev/null
+          curl -fsS http://localhost/health >/dev/null
+          docker stats --no-stream > /tmp/aegis-performance-after.txt
+          cat /tmp/aegis-performance-after.txt
+          ids="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml ps -q)"
+          test -n "$ids"
+          for id in $ids; do
+            name="$(docker inspect -f '{{.Name}}' "$id" | sed 's#^/##')"
+            restarts="$(docker inspect -f '{{.RestartCount}}' "$id")"
+            printf '%s restart_count=%s\n' "$name" "$restarts"
+            test "$restarts" -eq 0
+          done
 
       - name: Upload performance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: performance-reality-${{ github.sha }}
-          path: /tmp/aegis-performance-reality.json
-          if-no-files-found: error
+          path: |
+            /tmp/aegis-performance-reality.json
+            /tmp/aegis-performance-before.txt
+            /tmp/aegis-performance-after.txt
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Capture failure diagnostics
