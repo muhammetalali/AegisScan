@@ -229,7 +229,7 @@ class Notification(models.Model):
 
 
 class ExternalIntegration(models.Model):
-    class Kind(models.TextChoices): SPLUNK='splunk','Splunk'; ELASTIC='elastic','Elastic'; GENERIC_WEBHOOK='generic_webhook','Generic Webhook'; SLACK='slack','Slack'; TEAMS='teams','Microsoft Teams'
+    class Kind(models.TextChoices): SPLUNK='splunk','Splunk'; ELASTIC='elastic','Elastic'; SENTINEL='sentinel','Microsoft Sentinel'; QRADAR='qradar','IBM QRadar'; SOAR_WEBHOOK='soar_webhook','SOAR Webhook'; GITHUB='github','GitHub'; GITLAB='gitlab','GitLab'; BITBUCKET='bitbucket','Bitbucket'; ECR='ecr','AWS ECR'; GCR='gcr','Google Container/Artifact Registry'; ACR='acr','Azure Container Registry'; HARBOR='harbor','Harbor'; GHCR='ghcr','GitHub Container Registry'; GENERIC_WEBHOOK='generic_webhook','Generic Webhook'; SLACK='slack','Slack'; TEAMS='teams','Microsoft Teams'
     organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='integrations'); kind=models.CharField(max_length=30,choices=Kind.choices); name=models.CharField(max_length=120); base_url=models.URLField(); secret_ref=models.CharField(max_length=200,blank=True); config=models.JSONField(default=dict,blank=True); enabled=models.BooleanField(default=True); created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
 
 
@@ -479,3 +479,68 @@ class FormalPolicyProof(models.Model):
     created_at=models.DateTimeField(auto_now_add=True)
     class Meta:
         indexes=[models.Index(fields=['project','proof_type','created_at'],name='idx_formal_proof_project')]
+
+
+# External integration and plugin lifecycle ------------------------------------
+
+class IntegrationSyncRun(models.Model):
+    class Status(models.TextChoices):
+        PENDING='pending','Pending'; RUNNING='running','Running'; COMPLETED='completed','Completed'; FAILED='failed','Failed'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='integration_sync_runs')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='integration_sync_runs')
+    integration=models.ForeignKey(ExternalIntegration,on_delete=models.CASCADE,related_name='sync_runs')
+    sync_type=models.CharField(max_length=40)
+    status=models.CharField(max_length=20,choices=Status.choices,default=Status.PENDING)
+    cursor=models.CharField(max_length=500,blank=True)
+    records_count=models.PositiveIntegerField(default=0)
+    summary=models.JSONField(default=dict,blank=True)
+    error_message=models.TextField(blank=True)
+    requested_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='integration_sync_runs')
+    started_at=models.DateTimeField(null=True,blank=True)
+    completed_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        indexes=[
+            models.Index(fields=['integration','status'],name='idx_integration_sync_state'),
+            models.Index(fields=['project','created_at'],name='idx_integration_sync_project'),
+        ]
+
+
+class ExternalIntelligenceSnapshot(models.Model):
+    class Provider(models.TextChoices):
+        SHODAN='shodan','Shodan'; CENSYS='censys','Censys'; GREYNOISE='greynoise','GreyNoise'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    provider=models.CharField(max_length=20,choices=Provider.choices)
+    indicator=models.CharField(max_length=255)
+    data=models.JSONField(default=dict)
+    source_url=models.URLField(max_length=1000)
+    snapshot_sha256=models.CharField(max_length=64)
+    observed_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True,blank=True,related_name='external_intelligence_snapshots')
+    observed_at=models.DateTimeField()
+    class Meta:
+        ordering=['-observed_at','-id']
+        indexes=[
+            models.Index(fields=['provider','indicator','observed_at'],name='idx_extintel_provider_indicator'),
+            models.Index(fields=['indicator','observed_at'],name='idx_extintel_indicator_time'),
+        ]
+
+
+class PluginPackage(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    name=models.CharField(max_length=160)
+    version=models.CharField(max_length=80)
+    source=models.URLField(max_length=1000)
+    digest=models.CharField(max_length=64)
+    manifest=models.JSONField(default=dict)
+    dependencies=models.JSONField(default=list)
+    approved=models.BooleanField(default=False)
+    enabled=models.BooleanField(default=False)
+    installed_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['name','version'],name='uniq_plugin_package_version')]
+        indexes=[
+            models.Index(fields=['name','enabled'],name='idx_plugin_package_enabled'),
+            models.Index(fields=['approved','enabled'],name='idx_plugin_package_approved'),
+        ]
