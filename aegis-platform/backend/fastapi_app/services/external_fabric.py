@@ -111,10 +111,16 @@ def fetch_indicator_intelligence(*,provider:str,indicator:str,actor_id:str|None=
     data=_request_json('GET',url,headers=headers,params=params,auth=auth)
     observed_at=datetime.now(timezone.utc)
     digest=hashlib.sha256(_canonical({'provider':provider,'indicator':address,'data':data,'source_url':url,'observed_at':observed_at.isoformat()})).hexdigest()
+    observed_by_field=ExternalIntelligenceSnapshot._meta.get_field('observed_by')
+    normalized_actor_id=(
+        None
+        if actor_id in {None,''}
+        else observed_by_field.target_field.to_python(actor_id)
+    )
     with transaction.atomic():
         return ExternalIntelligenceSnapshot.objects.create(
             provider=provider,indicator=address,data=data,source_url=url,snapshot_sha256=digest,
-            observed_by_id=actor_id,observed_at=observed_at,
+            observed_by_id=normalized_actor_id,observed_at=observed_at,
         )
 
 
