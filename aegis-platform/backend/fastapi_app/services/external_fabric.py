@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 from django.db import transaction
@@ -39,6 +39,24 @@ def _secret(ref: str) -> str:
 
 def _canonical(payload: Any) -> bytes:
     return json.dumps(payload,sort_keys=True,separators=(',',':'),default=str).encode('utf-8')
+
+
+def _request_array(
+    url: str,
+    *,
+    headers: dict[str,str]|None=None,
+    params: dict[str,Any]|None=None,
+) -> list[dict[str,Any]]:
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT,follow_redirects=False) as client:
+            response=client.get(url,headers=headers,params=params)
+            response.raise_for_status()
+            payload=response.json()
+    except (httpx.HTTPError,ValueError) as exc:
+        raise ExternalFabricError(f'External provider request failed: {url}') from exc
+    if not isinstance(payload,list):
+        raise ExternalFabricError(f'External provider returned non-array JSON: {url}')
+    return [item for item in payload if isinstance(item,dict)]
 
 
 def _request_json(
@@ -306,44 +324,168 @@ def _auth_headers(integration:ExternalIntegration) -> dict[str,str]:
     return headers
 
 
-def _sync_repository(integration:ExternalIntegration) -> list[dict[str,Any]]:
-    base=integration.base_url.rstrip('/')+'/'
-    headers=_auth_headers(integration)
-    if integration.kind==ExternalIntegration.Kind.GITLAB:
-        url=urljoin(base,'api/v4/projects')
-        try:
-            with httpx.Client(timeout=_HTTP_TIMEOUT,follow_redirects=False) as client:
-                response=client.get(url,headers=headers,params={'membership':'true','per_page':100})
-                response.raise_for_status(); payload=response.json()
-        except (httpx.HTTPError,ValueError) as exc:
-            raise ExternalFabricError(f'External provider request failed: {url}') from exc
-        if not isinstance(payload,list): raise ExternalFabricError('GitLab project response must be an array')
-        return [{'id':str(x.get('id')),'name':str(x.get('path_with_namespace') or x.get('name') or ''),'url':str(x.get('web_url') or '')} for x in payload if isinstance(x,dict)]
-    if integration.kind==ExternalIntegration.Kind.BITBUCKET:
-        workspace=str(integration.config.get('workspace') or '').strip()
-        if not workspace: raise ExternalFabricError('Bitbucket integration requires config.workspace')
-        url=urljoin(base,f'2.0/repositories/{workspace}')
-        payload=_request_json('GET',url,headers=headers,params={'pagelen':100})
-        values=payload.get('values') or []
-        if not isinstance(values,list): raise ExternalFabricError('Bitbucket values must be an array')
-        return [{'id':str(x.get('uuid') or ''),'name':str(x.get('full_name') or x.get('name') or ''),'url':str((x.get('links') or {}).get('html',{}).get('href') or '')} for x in values if isinstance(x,dict)]
-    raise ExternalFabricError('Unsupported repository integration kind')
+def _limited(value:Any,default:int,maximum:int)->int:
+    try:
+        number=int(value)
+    except (TypeError,ValueError):
+        number=default
+    return max(1,min(number,maximum))
 
 
 def _github_repositories(integration:ExternalIntegration) -> list[dict[str,Any]]:
     base=integration.base_url.rstrip('/')+'/'
-    url=urljoin(base,'user/repos')
-    try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT,follow_redirects=False) as client:
-            response=client.get(url,headers=_auth_headers(integration),params={'per_page':100,'affiliation':'owner,collaborator,organization_member'})
-            response.raise_for_status(); payload=response.json()
-    except (httpx.HTTPError,ValueError) as exc:
-        raise ExternalFabricError(f'External provider request failed: {url}') from exc
-    if not isinstance(payload,list): raise ExternalFabricError('GitHub repository response must be an array')
-    return [{'id':str(x.get('id')),'name':str(x.get('full_name') or x.get('name') or ''),'url':str(x.get('html_url') or '')} for x in payload if isinstance(x,dict)]
+    headers=_auth_headers(integration)
+    repos=_request_array(
+        urljoin(base,'user/repos'),headers=headers,
+        params={'per_page':100,'affiliation':'owner,collaborator,organization_member','sort':'updated'},
+    )
+    max_repositories=_limited(integration.config.get('max_repositories'),25,100)
+    activity_limit=_limited(integration.config.get('activity_limit'),20,100)
+    records=[]
+    for repo in repos[:max_repositories]:
+        full_name=str(repo.get('full_name') or repo.get('name') or '').strip()
+        if not full_name:
+            continue
+        encoded='/'.join(quote(part,safe='') for part in full_name.split('/'))
+        item={
+            'id':str(repo.get('id') or ''),
+            'name':full_name,
+            'url':str(repo.get('html_url') or ''),
+            'default_branch':str(repo.get('default_branch') or ''),
+            'private':bool(repo.get('private')),
+            'commits':[],
+            'pull_requests':[],
+            'webhooks':[],
+            'activity_errors':[],
+        }
+        endpoints={
+            'commits':(f'repos/{encoded}/commits',{'per_page':activity_limit}),
+            'pull_requests':(f'repos/{encoded}/pulls',{'state':'all','per_page':activity_limit}),
+            'webhooks':(f'repos/{encoded}/hooks',{'per_page':activity_limit}),
+        }
+        for key,(path,params) in endpoints.items():
+            try:
+                rows=_request_array(urljoin(base,path),headers=headers,params=params)
+                if key=='commits':
+                    item[key]=[{
+                        'id':str(row.get('sha') or ''),
+                        'url':str(row.get('html_url') or ''),
+                        'message':str(((row.get('commit') or {}).get('message') or ''))[:500],
+                    } for row in rows]
+                elif key=='pull_requests':
+                    item[key]=[{
+                        'id':str(row.get('id') or row.get('number') or ''),
+                        'number':row.get('number'),
+                        'state':str(row.get('state') or ''),
+                        'url':str(row.get('html_url') or ''),
+                    } for row in rows]
+                else:
+                    item[key]=[{
+                        'id':str(row.get('id') or ''),
+                        'active':bool(row.get('active')),
+                        'events':row.get('events') if isinstance(row.get('events'),list) else [],
+                    } for row in rows]
+            except ExternalFabricError as exc:
+                item['activity_errors'].append(f'{key}:{exc}')
+        records.append(item)
+    return records
+
+
+def _gitlab_repositories(integration:ExternalIntegration) -> list[dict[str,Any]]:
+    base=integration.base_url.rstrip('/')+'/'
+    headers=_auth_headers(integration)
+    repos=_request_array(urljoin(base,'api/v4/projects'),headers=headers,params={'membership':'true','per_page':100,'order_by':'updated_at'})
+    max_repositories=_limited(integration.config.get('max_repositories'),25,100)
+    activity_limit=_limited(integration.config.get('activity_limit'),20,100)
+    records=[]
+    for repo in repos[:max_repositories]:
+        project_id=str(repo.get('id') or '')
+        if not project_id:
+            continue
+        item={
+            'id':project_id,'name':str(repo.get('path_with_namespace') or repo.get('name') or ''),
+            'url':str(repo.get('web_url') or ''),'default_branch':str(repo.get('default_branch') or ''),
+            'private':str(repo.get('visibility') or '')!='public','commits':[],'pull_requests':[],'webhooks':[],'activity_errors':[],
+        }
+        endpoints={
+            'commits':(f'api/v4/projects/{quote(project_id,safe="")}/repository/commits',{'per_page':activity_limit}),
+            'pull_requests':(f'api/v4/projects/{quote(project_id,safe="")}/merge_requests',{'scope':'all','per_page':activity_limit}),
+            'webhooks':(f'api/v4/projects/{quote(project_id,safe="")}/hooks',{'per_page':activity_limit}),
+        }
+        for key,(path,params) in endpoints.items():
+            try:
+                rows=_request_array(urljoin(base,path),headers=headers,params=params)
+                if key=='commits':
+                    item[key]=[{'id':str(row.get('id') or ''),'url':str(row.get('web_url') or ''),'message':str(row.get('message') or row.get('title') or '')[:500]} for row in rows]
+                elif key=='pull_requests':
+                    item[key]=[{'id':str(row.get('id') or row.get('iid') or ''),'number':row.get('iid'),'state':str(row.get('state') or ''),'url':str(row.get('web_url') or '')} for row in rows]
+                else:
+                    item[key]=[{'id':str(row.get('id') or ''),'url':str(row.get('url') or ''),'enabled':bool(row.get('enable_ssl_verification',True))} for row in rows]
+            except ExternalFabricError as exc:
+                item['activity_errors'].append(f'{key}:{exc}')
+        records.append(item)
+    return records
+
+
+def _bitbucket_repositories(integration:ExternalIntegration) -> list[dict[str,Any]]:
+    base=integration.base_url.rstrip('/')+'/'
+    headers=_auth_headers(integration)
+    workspace=str(integration.config.get('workspace') or '').strip()
+    if not workspace:
+        raise ExternalFabricError('Bitbucket integration requires config.workspace')
+    payload=_request_json('GET',urljoin(base,f'2.0/repositories/{quote(workspace,safe="")}'),headers=headers,params={'pagelen':100,'sort':'-updated_on'})
+    repos=payload.get('values') or []
+    if not isinstance(repos,list):
+        raise ExternalFabricError('Bitbucket values must be an array')
+    max_repositories=_limited(integration.config.get('max_repositories'),25,100)
+    activity_limit=_limited(integration.config.get('activity_limit'),20,100)
+    records=[]
+    for repo in [row for row in repos if isinstance(row,dict)][:max_repositories]:
+        full_name=str(repo.get('full_name') or repo.get('name') or '').strip()
+        if not full_name:
+            continue
+        encoded=quote(full_name,safe='')
+        item={
+            'id':str(repo.get('uuid') or ''),'name':full_name,
+            'url':str((repo.get('links') or {}).get('html',{}).get('href') or ''),
+            'default_branch':str((repo.get('mainbranch') or {}).get('name') or ''),
+            'private':bool(repo.get('is_private')),'commits':[],'pull_requests':[],'webhooks':[],'activity_errors':[],
+        }
+        endpoints={
+            'commits':f'2.0/repositories/{encoded}/commits',
+            'pull_requests':f'2.0/repositories/{encoded}/pullrequests',
+            'webhooks':f'2.0/repositories/{encoded}/hooks',
+        }
+        for key,path in endpoints.items():
+            try:
+                response=_request_json('GET',urljoin(base,path),headers=headers,params={'pagelen':activity_limit})
+                rows=response.get('values') or []
+                if not isinstance(rows,list): raise ExternalFabricError(f'Bitbucket {key} values must be an array')
+                rows=[row for row in rows if isinstance(row,dict)]
+                if key=='commits':
+                    item[key]=[{'id':str(row.get('hash') or ''),'url':str((row.get('links') or {}).get('html',{}).get('href') or ''),'message':str(row.get('message') or '')[:500]} for row in rows]
+                elif key=='pull_requests':
+                    item[key]=[{'id':str(row.get('id') or ''),'number':row.get('id'),'state':str(row.get('state') or ''),'url':str((row.get('links') or {}).get('html',{}).get('href') or '')} for row in rows]
+                else:
+                    item[key]=[{'id':str(row.get('uuid') or ''),'active':bool(row.get('active')),'events':list((row.get('events') or {}).keys()) if isinstance(row.get('events'),dict) else []} for row in rows]
+            except ExternalFabricError as exc:
+                item['activity_errors'].append(f'{key}:{exc}')
+        records.append(item)
+    return records
+
+
+def _sync_repository(integration:ExternalIntegration) -> list[dict[str,Any]]:
+    if integration.kind==ExternalIntegration.Kind.GITHUB:
+        return _github_repositories(integration)
+    if integration.kind==ExternalIntegration.Kind.GITLAB:
+        return _gitlab_repositories(integration)
+    if integration.kind==ExternalIntegration.Kind.BITBUCKET:
+        return _bitbucket_repositories(integration)
+    raise ExternalFabricError('Unsupported repository integration kind')
 
 
 def _sync_registry(integration:ExternalIntegration) -> list[dict[str,Any]]:
+    image_limit=_limited(integration.config.get('image_limit'),50,200)
     if integration.kind==ExternalIntegration.Kind.ECR:
         raw=_secret(integration.secret_ref)
         try:
@@ -357,28 +499,69 @@ def _sync_registry(integration:ExternalIntegration) -> list[dict[str,Any]]:
             aws_secret_access_key=credentials.get('secret_access_key'),
             aws_session_token=credentials.get('session_token'),
         )
-        response=client.describe_repositories(maxResults=100)
-        return [{'id':str(x.get('repositoryArn') or ''),'name':str(x.get('repositoryName') or ''),'url':str(x.get('repositoryUri') or '')} for x in response.get('repositories',[])]
+        response=client.describe_repositories(maxResults=min(100,image_limit))
+        records=[]
+        for repo in response.get('repositories',[]):
+            name=str(repo.get('repositoryName') or '')
+            if not name: continue
+            images=client.describe_images(repositoryName=name,maxResults=min(100,image_limit)).get('imageDetails',[])
+            records.append({
+                'id':str(repo.get('repositoryArn') or ''),'name':name,'url':str(repo.get('repositoryUri') or ''),
+                'images':[{
+                    'digest':str(image.get('imageDigest') or ''),
+                    'tags':image.get('imageTags') if isinstance(image.get('imageTags'),list) else [],
+                    'pushed_at':str(image.get('imagePushedAt') or ''),
+                    'size_bytes':int(image.get('imageSizeInBytes') or 0),
+                } for image in images[:image_limit] if isinstance(image,dict)],
+            })
+        return records
 
     base=integration.base_url.rstrip('/')+'/'
     headers=_auth_headers(integration)
     if integration.kind==ExternalIntegration.Kind.HARBOR:
-        url=urljoin(base,'api/v2.0/projects')
-        try:
-            with httpx.Client(timeout=_HTTP_TIMEOUT,follow_redirects=False) as client:
-                response=client.get(url,headers=headers,params={'page_size':100})
-                response.raise_for_status(); payload=response.json()
-        except (httpx.HTTPError,ValueError) as exc:
-            raise ExternalFabricError(f'External provider request failed: {url}') from exc
-        if not isinstance(payload,list): raise ExternalFabricError('Harbor project response must be an array')
-        return [{'id':str(x.get('project_id') or ''),'name':str(x.get('name') or ''),'url':integration.base_url} for x in payload if isinstance(x,dict)]
+        projects=_request_array(urljoin(base,'api/v2.0/projects'),headers=headers,params={'page_size':100})
+        records=[]
+        for project in projects[:_limited(integration.config.get('max_projects'),20,100)]:
+            project_name=str(project.get('name') or '')
+            if not project_name: continue
+            repo_url=urljoin(base,f'api/v2.0/projects/{quote(project_name,safe="")}/repositories')
+            repositories=_request_array(repo_url,headers=headers,params={'page_size':100})
+            for repo in repositories:
+                name=str(repo.get('name') or '')
+                if not name: continue
+                artifact_url=urljoin(base,f'api/v2.0/projects/{quote(project_name,safe="")}/repositories/{quote(name,safe="")}/artifacts')
+                try:
+                    artifacts=_request_array(artifact_url,headers=headers,params={'page_size':image_limit,'with_tag':'true'})
+                except ExternalFabricError:
+                    artifacts=[]
+                records.append({
+                    'id':str(repo.get('id') or ''),'name':name,'url':integration.base_url,
+                    'images':[{
+                        'digest':str(artifact.get('digest') or ''),
+                        'tags':[str(tag.get('name')) for tag in (artifact.get('tags') or []) if isinstance(tag,dict) and tag.get('name')],
+                        'size_bytes':int(artifact.get('size') or 0),
+                        'pushed_at':str(artifact.get('push_time') or ''),
+                    } for artifact in artifacts[:image_limit]],
+                })
+        return records
 
-    path=str(integration.config.get('catalog_path') or '/v2/_catalog')
-    url=urljoin(base,path.lstrip('/'))
-    payload=_request_json('GET',url,headers=headers)
+    catalog_path=str(integration.config.get('catalog_path') or '/v2/_catalog')
+    payload=_request_json('GET',urljoin(base,catalog_path.lstrip('/')),headers=headers)
     repositories=payload.get('repositories') or []
-    if not isinstance(repositories,list): raise ExternalFabricError('Registry catalog repositories must be an array')
-    return [{'id':str(name),'name':str(name),'url':integration.base_url} for name in repositories[:1000]]
+    if not isinstance(repositories,list):
+        raise ExternalFabricError('Registry catalog repositories must be an array')
+    records=[]
+    for name_value in repositories[:_limited(integration.config.get('max_repositories'),100,500)]:
+        name=str(name_value)
+        tags=[]
+        try:
+            tag_payload=_request_json('GET',urljoin(base,f'v2/{quote(name,safe="/")}/tags/list'),headers=headers)
+            raw_tags=tag_payload.get('tags') or []
+            if isinstance(raw_tags,list): tags=[str(tag) for tag in raw_tags[:image_limit]]
+        except ExternalFabricError:
+            pass
+        records.append({'id':name,'name':name,'url':integration.base_url,'images':[{'tag':tag} for tag in tags]})
+    return records
 
 
 def sync_external_integration(*,integration_id:str,project,user_id:str) -> IntegrationSyncRun:
@@ -392,9 +575,7 @@ def sync_external_integration(*,integration_id:str,project,user_id:str) -> Integ
             status=IntegrationSyncRun.Status.RUNNING,requested_by_id=user_id,started_at=datetime.now(timezone.utc),
         )
     try:
-        if integration.kind==ExternalIntegration.Kind.GITHUB:
-            records=_github_repositories(integration)
-        elif integration.kind in {ExternalIntegration.Kind.GITLAB,ExternalIntegration.Kind.BITBUCKET}:
+        if integration.kind in {ExternalIntegration.Kind.GITHUB,ExternalIntegration.Kind.GITLAB,ExternalIntegration.Kind.BITBUCKET}:
             records=_sync_repository(integration)
         elif integration.kind in {ExternalIntegration.Kind.ECR,ExternalIntegration.Kind.GCR,ExternalIntegration.Kind.ACR,ExternalIntegration.Kind.HARBOR,ExternalIntegration.Kind.GHCR}:
             records=_sync_registry(integration)
