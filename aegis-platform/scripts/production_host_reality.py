@@ -20,6 +20,7 @@ COMPOSE_FILES = (
 )
 MIN_MEMORY_BYTES = 7 * 1024**3
 MIN_DISK_BYTES = 60 * 1024**3
+MIN_CPU_COUNT = 4
 
 
 class HostValidationError(RuntimeError):
@@ -174,6 +175,12 @@ def validate(env_file: Path) -> dict[str, object]:
     if not env_file.is_file():
         raise HostValidationError(f"production env file not found: {env_file}")
 
+    cpu_count = os.cpu_count() or 0
+    if cpu_count < MIN_CPU_COUNT:
+        raise HostValidationError(
+            f"host CPU count is below the {MIN_CPU_COUNT} vCPU production minimum: {cpu_count}"
+        )
+
     memory = _memory_bytes()
     if memory < MIN_MEMORY_BYTES:
         raise HostValidationError(
@@ -205,6 +212,7 @@ def validate(env_file: Path) -> dict[str, object]:
         "host": {
             "kernel": platform.release(),
             "machine": platform.machine(),
+            "cpu_count": cpu_count,
             "memory_bytes": memory,
             "free_disk_bytes": disk,
             "ipv4_forward": True,

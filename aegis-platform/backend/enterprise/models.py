@@ -246,3 +246,236 @@ class SBOMArtifact(models.Model):
 class SBOMComponent(models.Model):
     artifact=models.ForeignKey(SBOMArtifact,on_delete=models.CASCADE,related_name='components'); name=models.CharField(max_length=300); version=models.CharField(max_length=200,blank=True); ecosystem=models.CharField(max_length=100,blank=True); purl=models.CharField(max_length=500,blank=True); licenses=models.JSONField(default=list,blank=True); hashes=models.JSONField(default=list,blank=True); vulnerabilities=models.JSONField(default=list,blank=True)
     class Meta: indexes=[models.Index(fields=['name','version'])]
+
+
+# Enterprise gap-closure durable domain ----------------------------------------
+
+class _AppendOnlyQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise RuntimeError('append-only records cannot be updated')
+
+    def delete(self):
+        raise RuntimeError('append-only records cannot be deleted')
+
+
+class _AppendOnlyManager(models.Manager):
+    def get_queryset(self):
+        return _AppendOnlyQuerySet(self.model, using=self._db)
+
+
+class Team(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='teams')
+    name=models.CharField(max_length=160)
+    slug=models.SlugField(max_length=180)
+    parent=models.ForeignKey('self',on_delete=models.PROTECT,null=True,blank=True,related_name='children')
+    description=models.TextField(blank=True)
+    is_active=models.BooleanField(default=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['organization','slug'],name='uniq_team_org_slug')]
+        indexes=[models.Index(fields=['organization','is_active'],name='idx_team_org_active')]
+
+
+class TeamMembership(models.Model):
+    class Role(models.TextChoices):
+        LEAD='lead','Lead'; MEMBER='member','Member'; VIEWER='viewer','Viewer'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    team=models.ForeignKey(Team,on_delete=models.CASCADE,related_name='memberships')
+    user=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,related_name='enterprise_team_memberships')
+    role=models.CharField(max_length=20,choices=Role.choices,default=Role.MEMBER)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['team','user'],name='uniq_team_user')]
+        indexes=[models.Index(fields=['user','role'],name='idx_team_user_role')]
+
+
+class FindingDecisionProvenance(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='finding_decisions')
+    project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='finding_decisions')
+    vulnerability=models.ForeignKey('vulnerabilities.Vulnerability',on_delete=models.PROTECT,related_name='decision_provenance')
+    validation=models.ForeignKey('evidence.ValidationRun',on_delete=models.PROTECT,null=True,blank=True,related_name='finding_decisions')
+    actor=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='finding_decisions')
+    decision=models.CharField(max_length=80)
+    old_status=models.CharField(max_length=20,blank=True)
+    new_status=models.CharField(max_length=20,blank=True)
+    policy_ref=models.CharField(max_length=240)
+    reason=models.TextField()
+    evidence_refs=models.JSONField(default=list)
+    previous_hash=models.CharField(max_length=64,blank=True)
+    entry_hash=models.CharField(max_length=64,unique=True)
+    created_at=models.DateTimeField()
+    objects=_AppendOnlyManager()
+    class Meta:
+        ordering=['created_at','id']
+        indexes=[
+            models.Index(fields=['vulnerability','created_at'],name='idx_find_decision_created'),
+            models.Index(fields=['project','decision'],name='idx_find_decision_project'),
+        ]
+    def save(self,*args,**kwargs):
+        if not self._state.adding:
+            raise RuntimeError('finding decision provenance is immutable')
+        return super().save(*args,**kwargs)
+    def delete(self,*args,**kwargs):
+        raise RuntimeError('finding decision provenance is immutable')
+
+
+class ScanControlCheckpoint(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    scan=models.ForeignKey('scans.Scan',on_delete=models.CASCADE,related_name='control_checkpoints')
+    sequence=models.PositiveIntegerField()
+    state=models.CharField(max_length=20)
+    phase=models.CharField(max_length=80,blank=True)
+    engine=models.CharField(max_length=100,blank=True)
+    progress=models.FloatField(default=0)
+    task_id=models.CharField(max_length=255,blank=True)
+    resume_token=models.UUIDField(default=uuid.uuid4,editable=False)
+    metadata=models.JSONField(default=dict,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['scan','sequence'],name='uniq_scan_checkpoint_sequence')]
+        indexes=[models.Index(fields=['scan','created_at'],name='idx_scan_checkpoint_created')]
+
+
+class InvestigationCase(models.Model):
+    class Status(models.TextChoices):
+        OPEN='open','Open'; INVESTIGATING='investigating','Investigating'; DECIDED='decided','Decided'; CLOSED='closed','Closed'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='investigation_cases')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='investigation_cases')
+    title=models.CharField(max_length=240)
+    description=models.TextField(blank=True)
+    status=models.CharField(max_length=20,choices=Status.choices,default=Status.OPEN)
+    owner=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='owned_investigation_cases')
+    findings=models.ManyToManyField('vulnerabilities.Vulnerability',blank=True,related_name='investigation_cases')
+    evidence=models.ManyToManyField('evidence.Evidence',blank=True,related_name='investigation_cases')
+    decision_summary=models.TextField(blank=True)
+    closed_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        indexes=[
+            models.Index(fields=['project','status'],name='idx_case_project_status'),
+            models.Index(fields=['owner','status'],name='idx_case_owner_status'),
+        ]
+
+
+class InvestigationCaseEvent(models.Model):
+    id=models.BigAutoField(primary_key=True)
+    case=models.ForeignKey(InvestigationCase,on_delete=models.CASCADE,related_name='events')
+    actor=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='investigation_case_events')
+    event_type=models.CharField(max_length=80)
+    payload=models.JSONField(default=dict)
+    created_at=models.DateTimeField(auto_now_add=True)
+    objects=_AppendOnlyManager()
+    class Meta:
+        ordering=['id']
+    def save(self,*args,**kwargs):
+        if not self._state.adding:
+            raise RuntimeError('investigation case events are immutable')
+        return super().save(*args,**kwargs)
+    def delete(self,*args,**kwargs):
+        raise RuntimeError('investigation case events are immutable')
+
+
+class EvidenceGraphNode(models.Model):
+    class Kind(models.TextChoices):
+        ASSET='asset','Asset'; FINDING='finding','Finding'; EVIDENCE='evidence','Evidence'; SCAN='scan','Scan'; VALIDATION='validation','Validation'; REMEDIATION='remediation','Remediation'; USER='user','User'; AUDIT='audit','Audit'; CONTROL='control','Control'; THREAT='threat','Threat'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='evidence_graph_nodes')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='evidence_graph_nodes')
+    kind=models.CharField(max_length=20,choices=Kind.choices)
+    external_ref=models.CharField(max_length=255)
+    label=models.CharField(max_length=300)
+    confidence=models.FloatField(default=1.0)
+    properties=models.JSONField(default=dict,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['project','kind','external_ref'],name='uniq_egraph_project_kind_ref')]
+        indexes=[models.Index(fields=['project','kind'],name='idx_egraph_project_kind')]
+
+
+class EvidenceGraphEdge(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='evidence_graph_edges')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='evidence_graph_edges')
+    source=models.ForeignKey(EvidenceGraphNode,on_delete=models.CASCADE,related_name='outgoing_edges')
+    target=models.ForeignKey(EvidenceGraphNode,on_delete=models.CASCADE,related_name='incoming_edges')
+    edge_type=models.CharField(max_length=60)
+    weight=models.FloatField(default=1.0)
+    evidence_refs=models.JSONField(default=list,blank=True)
+    properties=models.JSONField(default=dict,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['project','source','target','edge_type'],name='uniq_egraph_edge')]
+        indexes=[models.Index(fields=['project','edge_type'],name='idx_egraph_project_edge')]
+
+
+class BlastRadiusSnapshot(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='blast_radius_snapshots')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='blast_radius_snapshots')
+    attack_path=models.ForeignKey(AttackPath,on_delete=models.SET_NULL,null=True,blank=True,related_name='blast_radius_snapshots')
+    root_ref=models.CharField(max_length=255)
+    crown_jewel_refs=models.JSONField(default=list)
+    impacted_nodes=models.JSONField(default=list)
+    score=models.FloatField(default=0)
+    evidence_refs=models.JSONField(default=list)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        indexes=[models.Index(fields=['project','created_at'],name='idx_blast_project_created')]
+
+
+class ArtifactIntegrityRecord(models.Model):
+    class State(models.TextChoices):
+        TRUSTED='trusted','Trusted'; REVIEW='review','Review'; QUARANTINED='quarantined','Quarantined'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='artifact_integrity_records')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='artifact_integrity_records')
+    artifact_type=models.CharField(max_length=40)
+    name=models.CharField(max_length=300)
+    source_ref=models.CharField(max_length=700)
+    sha256=models.CharField(max_length=64)
+    signature_verified=models.BooleanField(default=False)
+    provenance_verified=models.BooleanField(default=False)
+    package_namespace=models.CharField(max_length=300,blank=True)
+    state=models.CharField(max_length=20,choices=State.choices,default=State.REVIEW)
+    quarantine_reason=models.TextField(blank=True)
+    metadata=models.JSONField(default=dict,blank=True)
+    created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='artifact_integrity_records')
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['project','sha256'],name='uniq_project_artifact_sha')]
+        indexes=[models.Index(fields=['project','state'],name='idx_artifact_project_state')]
+
+
+class AdaptiveWeightProfile(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='adaptive_weight_profiles')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='adaptive_weight_profiles')
+    version=models.PositiveIntegerField()
+    weights=models.JSONField(default=dict)
+    learned_from=models.PositiveIntegerField(default=0)
+    reward_mean=models.FloatField(default=0)
+    algorithm=models.CharField(max_length=80,default='bounded-contextual-feedback-v1')
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['project','version'],name='uniq_project_weight_version')]
+
+
+class FormalPolicyProof(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='formal_policy_proofs')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='formal_policy_proofs')
+    proof_type=models.CharField(max_length=80)
+    input_sha256=models.CharField(max_length=64)
+    satisfiable=models.BooleanField()
+    model=models.JSONField(default=dict,blank=True)
+    solver=models.CharField(max_length=80,default='z3')
+    solver_version=models.CharField(max_length=80,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        indexes=[models.Index(fields=['project','proof_type','created_at'],name='idx_formal_proof_project')]

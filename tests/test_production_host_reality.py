@@ -133,6 +133,17 @@ def test_secret_initializer_rejects_non_private_s3_source(tmp_path: Path):
         )
 
 
+
+def test_host_reality_requires_four_vcpu_floor(tmp_path: Path, monkeypatch):
+    env_file = tmp_path / "production.env"
+    env_file.write_text("A=B\n", encoding="utf-8")
+    monkeypatch.setattr(reality.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(reality.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT - 1)
+    with pytest.raises(reality.HostValidationError, match="vCPU"):
+        reality.validate(env_file)
+
 def test_host_reality_requires_production_resource_floor(tmp_path: Path, monkeypatch):
     env_file = tmp_path / "production.env"
     env_file.write_text("A=B\n", encoding="utf-8")
@@ -140,6 +151,7 @@ def test_host_reality_requires_production_resource_floor(tmp_path: Path, monkeyp
     monkeypatch.setattr(reality.platform, "system", lambda: "Linux")
     monkeypatch.setattr(reality.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT)
     monkeypatch.setattr(reality, "_memory_bytes", lambda: reality.MIN_MEMORY_BYTES - 1)
 
     with pytest.raises(reality.HostValidationError, match="7 GiB"):
@@ -155,6 +167,7 @@ def test_host_reality_runs_capability_namespace_and_compose_probes(tmp_path: Pat
     monkeypatch.setattr(reality.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(reality.platform, "release", lambda: "6.8.0")
     monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT)
     monkeypatch.setattr(reality, "_memory_bytes", lambda: reality.MIN_MEMORY_BYTES + 1)
     monkeypatch.setattr(reality, "_disk_free_bytes", lambda _: reality.MIN_DISK_BYTES + 1)
     monkeypatch.setattr(reality, "_kernel_ipv4_forward", lambda: True)
