@@ -139,6 +139,12 @@ def _validate_plugin_manifest(manifest: dict[str,Any]) -> dict[str,Any]:
             get_capability(delegate)
         except ValueError as exc:
             raise ExternalFabricError(f'Plugin capability delegates to unknown built-in capability: {delegate}') from exc
+        try:
+            get_capability(capability_id)
+        except ValueError:
+            pass
+        else:
+            raise ExternalFabricError(f'Plugin capability cannot shadow built-in capability: {capability_id}')
         normalized.append({
             'id':capability_id,
             'delegate':delegate,
@@ -225,6 +231,12 @@ def activate_plugin_package(package_id:str) -> PluginPackage:
     if not package.approved:
         raise ExternalFabricError('Plugin package must be approved before activation')
     resolve_plugin_dependencies(package)
+    candidate_ids={str(item.get('id')) for item in (package.manifest.get('capabilities') or []) if isinstance(item,dict)}
+    for other in PluginPackage.objects.filter(approved=True,enabled=True).exclude(name=package.name):
+        other_ids={str(item.get('id')) for item in (other.manifest.get('capabilities') or []) if isinstance(item,dict)}
+        collision=sorted(candidate_ids & other_ids)
+        if collision:
+            raise ExternalFabricError(f'Plugin capability collision with {other.name}: {collision}')
     PluginPackage.objects.filter(name=package.name,enabled=True).exclude(pk=package.pk).update(enabled=False)
     package.enabled=True
     package.save(update_fields=['enabled','updated_at'])
