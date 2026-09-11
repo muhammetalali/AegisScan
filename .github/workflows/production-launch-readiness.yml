@@ -6,6 +6,7 @@ on:
     paths:
       - 'aegis-platform/scripts/production_preflight.py'
       - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'aegis-platform/scripts/production_remote_deploy.py'
       - 'aegis-platform/scripts/public_acceptance.py'
       - 'aegis-platform/scripts/backup_postgres.sh'
       - 'aegis-platform/scripts/verify_postgres_restore.sh'
@@ -21,8 +22,11 @@ on:
       - 'aegis-platform/monitoring/**'
       - 'tests/test_production_preflight.py'
       - 'tests/test_production_host_deploy.py'
+      - 'tests/test_production_remote_deploy.py'
+      - 'tests/test_production_live_workflow.py'
       - 'tests/test_public_acceptance.py'
       - '.github/workflows/production-launch-readiness.yml'
+      - '.github/workflows/production-live-deploy.yml'
   push:
     branches: [main]
   workflow_dispatch:
@@ -77,12 +81,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends postgresql-client openssl
           psql --version
           openssl version
-          python -m pip install pytest==9.1.1
+          python -m pip install pytest==9.1.1 pyyaml==6.0.2
       - name: Unit-test fail-closed production deployment contracts
         run: |
           python -m pytest -q \
             tests/test_production_preflight.py \
             tests/test_production_host_deploy.py \
+            tests/test_production_remote_deploy.py \
+            tests/test_production_live_workflow.py \
             tests/test_public_acceptance.py
       - name: Generate short-lived TLS proof material
         run: |

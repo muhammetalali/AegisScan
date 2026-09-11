@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
+import socket
 import ssl
 import sys
 from urllib.error import HTTPError, URLError
@@ -59,6 +61,35 @@ def _origin(value: str, allow_loopback_test: bool) -> str:
     return f"https://{parsed.hostname}{port}"
 
 
+def _tls_evidence(origin: str) -> dict[str, str]:
+    parsed = urlparse(origin)
+    host = parsed.hostname
+    if not host:
+        raise AcceptanceError("verified TLS origin hostname is missing")
+    port = parsed.port or 443
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((host, port), timeout=15) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                der = tls.getpeercert(binary_form=True)
+                certificate = tls.getpeercert()
+                cipher = tls.cipher()
+                version = tls.version()
+    except (OSError, ssl.SSLError, TimeoutError) as exc:
+        raise AcceptanceError(f"verified TLS handshake failed: {exc}") from exc
+    if not der or not certificate or not version or not cipher:
+        raise AcceptanceError("verified TLS handshake did not expose certificate/session evidence")
+    not_after = str(certificate.get("notAfter", "")).strip()
+    if not not_after:
+        raise AcceptanceError("verified TLS certificate is missing notAfter")
+    return {
+        "version": version,
+        "cipher": str(cipher[0]),
+        "certificate_sha256": hashlib.sha256(der).hexdigest(),
+        "not_after": not_after,
+    }
+
+
 def _request(origin: str, path: str) -> tuple[int, dict[str, str], bytes]:
     request = Request(
         origin + path,
@@ -87,6 +118,7 @@ def _request(origin: str, path: str) -> tuple[int, dict[str, str], bytes]:
 
 def validate(origin: str, *, allow_loopback_test: bool = False) -> dict[str, object]:
     canonical = _origin(origin, allow_loopback_test)
+    tls_evidence = _tls_evidence(canonical)
     health_status, health_headers, health_body = _request(canonical, "/health")
     ready_status, ready_headers, ready_body = _request(canonical, "/ready")
     root_status, root_headers, _ = _request(canonical, "/")
@@ -119,6 +151,7 @@ def validate(origin: str, *, allow_loopback_test: bool = False) -> dict[str, obj
         "origin": canonical,
         "checks": {
             "verified_https": True,
+            "tls": tls_evidence,
             "health_200": True,
             "ready_200": True,
             "frontend_200": True,
