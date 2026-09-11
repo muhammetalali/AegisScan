@@ -13,6 +13,7 @@ from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
 from fastapi_app.services.native_tool_runtime import (
     NATIVE_TOOL_SPECS,
     build_native_argv,
+    effective_native_timeout,
     get_native_tool_spec,
     validate_native_options,
 )
@@ -48,6 +49,9 @@ def test_amass_timeout_is_bounded():
     spec = get_native_tool_spec('recon.amass')
     assert validate_native_options(spec, {})['timeout_minutes'] == 5
     assert validate_native_options(spec, {'timeout_minutes': 1})['timeout_minutes'] == 1
+    assert effective_native_timeout(spec, {}) == 330
+    assert effective_native_timeout(spec, {'timeout_minutes': 1}) == 90
+    assert effective_native_timeout(spec, {'timeout_minutes': 30}) == 1830
     with pytest.raises(ValueError):
         validate_native_options(spec, {'timeout_minutes': 31})
 

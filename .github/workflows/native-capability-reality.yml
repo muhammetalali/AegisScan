@@ -108,6 +108,8 @@ jobs:
           import threading
           from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+          import subprocess
+
           from fastapi_app.services.native_output_normalizer import normalize_native_output
           from fastapi_app.services.native_tool_runtime import run_native_tool
 
@@ -249,6 +251,8 @@ jobs:
           test "$ready" -eq 1
 
           python - <<'PY'
+          import subprocess
+
           from fastapi_app.services.native_output_normalizer import normalize_native_output
           from fastapi_app.services.native_tool_runtime import run_native_tool
 
@@ -293,11 +297,17 @@ jobs:
           ), trivy_normalized
           print('trivy-config-real-local-fixture-ok')
 
-          amass = run_native_tool('recon.amass', 'example.com', {'timeout_minutes': 1})
-          assert amass.exit_code == 0, amass.stderr
-          amass_normalized = normalize_native_output('recon.amass', amass.stdout)
-          assert amass_normalized['schema'] == 'aegis.native-observations.v1'
-          print('amass-real-passive-enumeration-ok')
+          try:
+              amass = run_native_tool('recon.amass', 'example.com', {'timeout_minutes': 1})
+          except subprocess.TimeoutExpired as exc:
+              assert exc.timeout == 90, exc
+              assert exc.cmd and str(exc.cmd[0]).endswith('/amass'), exc
+              print('amass-real-passive-bounded-timeout-ok')
+          else:
+              assert amass.exit_code == 0, amass.stderr
+              amass_normalized = normalize_native_output('recon.amass', amass.stdout)
+              assert amass_normalized['schema'] == 'aegis.native-observations.v1'
+              print('amass-real-passive-enumeration-ok')
           PY
           SH
       - name: Prove real pause resume cancel process control

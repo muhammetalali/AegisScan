@@ -65,7 +65,7 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
     'network.rustscan': NativeToolSpec('network.rustscan', 'rustscan', 'network-reconnaissance', 'Fast authorized TCP discovery with service handoff.', 'ip', ('ip_address', 'domain'), 'active-medium', 'host', '-a', options=(('ports', OptionSpec('-p', 'str', None)),), suffix_args=('--', '-sV'), timeout=420),
     'network.nbtscan-host': NativeToolSpec('network.nbtscan-host', 'nbtscan', 'network-reconnaissance', 'NetBIOS name discovery for an authorized host.', 'ip', ('ip_address',), 'active-low', 'host', None, timeout=180),
     'network.nbtscan-range': NativeToolSpec('network.nbtscan-range', 'nbtscan', 'network-reconnaissance', 'NetBIOS name discovery across an authorized network range.', 'network', ('network_range',), 'active-low', 'network', None, timeout=300),
-    'recon.amass': NativeToolSpec('recon.amass', 'amass', 'asset-discovery', 'Passive DNS and subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', prefix_args=('enum', '-passive'), options=(('timeout_minutes', OptionSpec('-timeout', 'int', 5, 1, 30)),), timeout=900),
+    'recon.amass': NativeToolSpec('recon.amass', 'amass', 'asset-discovery', 'Passive DNS and subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', prefix_args=('enum', '-passive'), options=(('timeout_minutes', OptionSpec('-timeout', 'int', 5, 1, 30)),), timeout=1830),
     'recon.subfinder': NativeToolSpec('recon.subfinder', 'subfinder', 'asset-discovery', 'Passive subdomain enumeration.', 'ip', ('domain',), 'passive', 'host', '-d', suffix_args=('-silent',), timeout=600),
     'recon.dnsenum': NativeToolSpec('recon.dnsenum', 'dnsenum', 'dns-reconnaissance', 'Authorized DNS enumeration.', 'ip', ('domain',), 'active-low', 'host', None, timeout=600),
     'recon.fierce': NativeToolSpec('recon.fierce', 'fierce', 'dns-reconnaissance', 'Authorized DNS discovery and hostname enumeration.', 'ip', ('domain',), 'active-low', 'host', '--domain', timeout=600),
@@ -223,6 +223,16 @@ def build_native_argv(spec: NativeToolSpec, target: str, options: dict[str, Any]
     return argv, target
 
 
+def effective_native_timeout(spec: NativeToolSpec, options: dict[str, Any]) -> int:
+    """Return the process watchdog timeout after applying bounded tool-level limits."""
+    normalized = validate_native_options(spec, options)
+    timeout_minutes = normalized.get('timeout_minutes')
+    if timeout_minutes is not None:
+        requested = int(timeout_minutes) * 60 + 30
+        return min(spec.timeout, requested)
+    return spec.timeout
+
+
 def _material_secret(material: Mapping[str, Any]) -> str:
     secret = str(material.get('secret') or '')
     if not secret or len(secret) > 8192 or any(ch in secret for ch in '\r\n\x00'):
@@ -352,6 +362,7 @@ def run_native_tool(
     credential_materials: tuple[Mapping[str, Any], ...] | None = None,
 ) -> ScanResult:
     spec = get_native_tool_spec(capability_id)
+    execution_timeout = effective_native_timeout(spec, options)
     argv, canonical_target = build_native_argv(spec, target, options)
     cleanup_paths: list[str] = []
     cleanup_dirs: list[str] = []
@@ -378,7 +389,7 @@ def run_native_tool(
             env=_native_environment(spec),
             umask=0o077 if captured_report_path is not None else -1,
         )
-        deadline = time.monotonic() + spec.timeout
+        deadline = time.monotonic() + execution_timeout
         paused = False
         while True:
             state = state_getter() if state_getter is not None else 'running'
@@ -394,7 +405,7 @@ def run_native_tool(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _terminate_process_group(process)
-                raise subprocess.TimeoutExpired(argv, spec.timeout)
+                raise subprocess.TimeoutExpired(argv, execution_timeout)
             try:
                 stdout, stderr = process.communicate(timeout=min(poll_interval, remaining))
                 if captured_report_path is not None:
