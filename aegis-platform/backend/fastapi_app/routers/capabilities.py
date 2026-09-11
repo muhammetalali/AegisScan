@@ -15,7 +15,7 @@ from django_project.system.credential_vault import CredentialVaultDenied
 from ..core.dependencies import get_current_user
 from ..services.authorization_guard import asset_target
 from ..services.capability_planner import planning_summary
-from ..services.capability_registry import get_capability, list_capabilities, validate_capability_options
+from ..services.capability_registry import RETIRED_CAPABILITIES, RetiredCapabilityError, get_capability, list_capabilities, validate_capability_options
 from ..services.credential_execution import (
     authorize_credential_refs_for_execution,
     empty_credential_context,
@@ -141,6 +141,7 @@ async def capability_packaging(user=Depends(get_current_user)):
         'specialized': sorted(_TASKS),
         'native_packaged': sorted(PACKAGED_NATIVE_CAPABILITIES),
         'native_registered': sorted(NATIVE_TOOL_SPECS),
+        'retired': RETIRED_CAPABILITIES,
     }
 
 
@@ -170,6 +171,8 @@ async def execute_capability(
         capability = get_capability(capability_id)
         options = validate_capability_options(capability, request.options)
         credential_refs = normalize_credential_refs(request.credential_refs)
+    except RetiredCapabilityError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
