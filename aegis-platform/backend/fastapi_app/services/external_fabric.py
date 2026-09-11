@@ -61,7 +61,6 @@ def _request_json(
     return payload
 
 
-@transaction.atomic
 def fetch_indicator_intelligence(*,provider:str,indicator:str,actor_id:str|None=None) -> ExternalIntelligenceSnapshot:
     try:
         address=str(ipaddress.ip_address(indicator.strip()))
@@ -94,10 +93,11 @@ def fetch_indicator_intelligence(*,provider:str,indicator:str,actor_id:str|None=
     data=_request_json('GET',url,headers=headers,params=params,auth=auth)
     observed_at=datetime.now(timezone.utc)
     digest=hashlib.sha256(_canonical({'provider':provider,'indicator':address,'data':data,'source_url':url,'observed_at':observed_at.isoformat()})).hexdigest()
-    return ExternalIntelligenceSnapshot.objects.create(
-        provider=provider,indicator=address,data=data,source_url=url,snapshot_sha256=digest,
-        observed_by_id=actor_id,observed_at=observed_at,
-    )
+    with transaction.atomic():
+        return ExternalIntelligenceSnapshot.objects.create(
+            provider=provider,indicator=address,data=data,source_url=url,snapshot_sha256=digest,
+            observed_by_id=actor_id,observed_at=observed_at,
+        )
 
 
 def _normalize_dependencies(dependencies: list[dict[str,Any]]) -> list[dict[str,str]]:
@@ -309,10 +309,6 @@ def _auth_headers(integration:ExternalIntegration) -> dict[str,str]:
 def _sync_repository(integration:ExternalIntegration) -> list[dict[str,Any]]:
     base=integration.base_url.rstrip('/')+'/'
     headers=_auth_headers(integration)
-    if integration.kind==ExternalIntegration.Kind.GITHUB:
-        payload=_request_json('GET',urljoin(base,'user/repos'),headers=headers,params={'per_page':100,'affiliation':'owner,collaborator,organization_member'})
-        # GitHub returns an array, so use a dedicated client path.
-        raise ExternalFabricError('internal-array-dispatch')
     if integration.kind==ExternalIntegration.Kind.GITLAB:
         url=urljoin(base,'api/v4/projects')
         try:
@@ -385,16 +381,16 @@ def _sync_registry(integration:ExternalIntegration) -> list[dict[str,Any]]:
     return [{'id':str(name),'name':str(name),'url':integration.base_url} for name in repositories[:1000]]
 
 
-@transaction.atomic
 def sync_external_integration(*,integration_id:str,project,user_id:str) -> IntegrationSyncRun:
     integration=ExternalIntegration.objects.select_related('organization').get(pk=integration_id)
     if integration.organization_id!=project.tenant_link.organization_id:
         raise ExternalFabricError('Integration and project must belong to the same organization')
-    run=IntegrationSyncRun.objects.create(
-        organization=integration.organization,project=project,integration=integration,
-        sync_type='repository' if integration.kind in {ExternalIntegration.Kind.GITHUB,ExternalIntegration.Kind.GITLAB,ExternalIntegration.Kind.BITBUCKET} else 'registry',
-        status=IntegrationSyncRun.Status.RUNNING,requested_by_id=user_id,started_at=datetime.now(timezone.utc),
-    )
+    with transaction.atomic():
+        run=IntegrationSyncRun.objects.create(
+            organization=integration.organization,project=project,integration=integration,
+            sync_type='repository' if integration.kind in {ExternalIntegration.Kind.GITHUB,ExternalIntegration.Kind.GITLAB,ExternalIntegration.Kind.BITBUCKET} else 'registry',
+            status=IntegrationSyncRun.Status.RUNNING,requested_by_id=user_id,started_at=datetime.now(timezone.utc),
+        )
     try:
         if integration.kind==ExternalIntegration.Kind.GITHUB:
             records=_github_repositories(integration)
@@ -404,15 +400,19 @@ def sync_external_integration(*,integration_id:str,project,user_id:str) -> Integ
             records=_sync_registry(integration)
         else:
             raise ExternalFabricError('Integration kind is not a repository or registry connector')
-        run.records_count=len(records)
-        run.summary={'records':records[:1000],'truncated':len(records)>1000}
-        run.status=IntegrationSyncRun.Status.COMPLETED
-        run.completed_at=datetime.now(timezone.utc)
-        run.save(update_fields=['records_count','summary','status','completed_at'])
+        with transaction.atomic():
+            run=IntegrationSyncRun.objects.select_for_update().get(pk=run.pk)
+            run.records_count=len(records)
+            run.summary={'records':records[:1000],'truncated':len(records)>1000}
+            run.status=IntegrationSyncRun.Status.COMPLETED
+            run.completed_at=datetime.now(timezone.utc)
+            run.save(update_fields=['records_count','summary','status','completed_at'])
         return run
     except Exception as exc:
-        run.status=IntegrationSyncRun.Status.FAILED
-        run.error_message=str(exc)
-        run.completed_at=datetime.now(timezone.utc)
-        run.save(update_fields=['status','error_message','completed_at'])
+        with transaction.atomic():
+            failed=IntegrationSyncRun.objects.select_for_update().get(pk=run.pk)
+            failed.status=IntegrationSyncRun.Status.FAILED
+            failed.error_message=str(exc)[:4000]
+            failed.completed_at=datetime.now(timezone.utc)
+            failed.save(update_fields=['status','error_message','completed_at'])
         raise
