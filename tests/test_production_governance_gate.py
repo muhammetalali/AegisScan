@@ -74,7 +74,7 @@ def _go_live(tmp_path: Path) -> Path:
             },
         },
     )
-    (root / "external-black-box.log").write_text("external-black-box=PASS\n", encoding="utf-8")
+    (root / "external-black-box.log").write_text("EXTERNAL_REAL_E2E=PASS\n", encoding="utf-8")
     _write_json(root / "cli-platform-status.json", {"status": "ok"})
 
     evidence = ["deploy.json", "public-acceptance.json", "external-black-box.log", "cli-platform-status.json"]
