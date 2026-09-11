@@ -521,8 +521,8 @@ class ExternalIntelligenceSnapshot(models.Model):
     class Meta:
         ordering=['-observed_at','-id']
         indexes=[
-            models.Index(fields=['provider','indicator','observed_at'],name='idx_extintel_provider_indicator'),
-            models.Index(fields=['indicator','observed_at'],name='idx_extintel_indicator_time'),
+            models.Index(fields=['provider','indicator','observed_at'],name='idx_extintel_prov_ind'),
+            models.Index(fields=['indicator','observed_at'],name='idx_extintel_ind_time'),
         ]
 
 
