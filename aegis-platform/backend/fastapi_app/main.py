@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
-import asyncio,logging
+import asyncio,logging,time
 from datetime import datetime,timezone
 from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities
 from .services.scan_orchestrator import ScanOrchestrator
@@ -98,22 +98,52 @@ async def websocket_system_monitor(websocket:WebSocket):
     except WebSocketDisconnect: websocket_manager.disconnect('system_monitor',websocket)
 @app.get('/health')
 async def health_check(): return {'status':'healthy','timestamp':datetime.now(timezone.utc).isoformat()}
+_READINESS_SUCCESS_TTL_SECONDS=1.0
+_readiness_cache={'expires_at':0.0,'dependencies':None}
+_readiness_lock=asyncio.Lock()
+
 async def _dependency_readiness()->dict:
-    def check_dependencies():
-        from urllib.parse import urlparse
-        import redis,psycopg2
-        database=urlparse(settings.DATABASE_URL)
-        if database.scheme not in {'postgresql','postgres'}: raise RuntimeError(f'Unsupported DATABASE_URL scheme: {database.scheme}')
-        conn=psycopg2.connect(settings.DATABASE_URL,connect_timeout=3)
+    now=time.monotonic()
+    cached=_readiness_cache.get('dependencies')
+    if cached is not None and now < float(_readiness_cache.get('expires_at') or 0.0):
+        return dict(cached)
+
+    async with _readiness_lock:
+        now=time.monotonic()
+        cached=_readiness_cache.get('dependencies')
+        if cached is not None and now < float(_readiness_cache.get('expires_at') or 0.0):
+            return dict(cached)
+
+        def check_dependencies():
+            from urllib.parse import urlparse
+            import redis,psycopg2
+            database=urlparse(settings.DATABASE_URL)
+            if database.scheme not in {'postgresql','postgres'}:
+                raise RuntimeError(f'Unsupported DATABASE_URL scheme: {database.scheme}')
+            conn=psycopg2.connect(settings.DATABASE_URL,connect_timeout=3)
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute('SELECT 1')
+                    cursor.fetchone()
+            finally:
+                conn.close()
+            client=redis.from_url(settings.REDIS_URL,socket_connect_timeout=3,socket_timeout=3)
+            try:
+                if client.ping() is not True:
+                    raise RuntimeError('Redis ping returned false')
+            finally:
+                client.close()
+            return {'database':'ok','redis':'ok'}
+
         try:
-            with conn.cursor() as cursor: cursor.execute('SELECT 1'); cursor.fetchone()
-        finally: conn.close()
-        client=redis.from_url(settings.REDIS_URL,socket_connect_timeout=3,socket_timeout=3)
-        try:
-            if client.ping() is not True: raise RuntimeError('Redis ping returned false')
-        finally: client.close()
-        return {'database':'ok','redis':'ok'}
-    return await asyncio.to_thread(check_dependencies)
+            dependencies=await asyncio.to_thread(check_dependencies)
+        except Exception:
+            _readiness_cache['dependencies']=None
+            _readiness_cache['expires_at']=0.0
+            raise
+        _readiness_cache['dependencies']=dict(dependencies)
+        _readiness_cache['expires_at']=time.monotonic()+_READINESS_SUCCESS_TTL_SECONDS
+        return dependencies
 @app.get('/ready')
 async def readiness_check():
     try: dependencies=await _dependency_readiness()
