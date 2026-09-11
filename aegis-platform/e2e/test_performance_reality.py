@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ MODULE_PATH = Path(__file__).with_name("performance_reality.py")
 SPEC = importlib.util.spec_from_file_location("performance_reality", MODULE_PATH)
 assert SPEC and SPEC.loader
 performance_reality = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = performance_reality
 SPEC.loader.exec_module(performance_reality)
 
 
