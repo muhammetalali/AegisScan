@@ -12,6 +12,7 @@ from ..services.external_fabric import (
     ExternalFabricError,
     activate_plugin_package,
     approve_plugin_package,
+    auto_update_plugin_package,
     dynamic_plugin_capabilities,
     register_plugin_package,
     resolve_plugin_dependencies,
@@ -101,3 +102,17 @@ async def plugin_capabilities(user=Depends(get_current_user)):
     except ExternalFabricError as exc:
         raise HTTPException(status_code=409,detail=str(exc)) from exc
     return {'capabilities':items}
+
+
+@router.post('/packages/{name}/auto-update')
+async def auto_update_plugin(name:str,user=Depends(get_current_user)):
+    _staff(user)
+    try:
+        package=await sync_to_async(auto_update_plugin_package)(name)
+        resolution=await sync_to_async(resolve_plugin_dependencies)(package)
+    except ExternalFabricError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+    return {
+        'id':str(package.id),'name':package.name,'version':package.version,
+        'approved':package.approved,'enabled':package.enabled,'dependency_resolution':resolution,
+    }
