@@ -288,19 +288,24 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     backup = _backup_before_upgrade(env_file, deployment_env)
 
     _checkout(release_sha)
+    deployment_attempted = False
     try:
         _preflight(env_file, deployment_env)
+        deployment_attempted = True
         _deploy_stack(env_file, deployment_env)
         _accept(origin)
     except BaseException:
         if previous_sha != release_sha:
-            _rollback_application(
-                previous_sha=previous_sha,
-                failed_release_sha=release_sha,
-                env_file=env_file,
-                deployment_env=deployment_env,
-                origin=origin,
-            )
+            if deployment_attempted:
+                _rollback_application(
+                    previous_sha=previous_sha,
+                    failed_release_sha=release_sha,
+                    env_file=env_file,
+                    deployment_env=deployment_env,
+                    origin=origin,
+                )
+            else:
+                _checkout(previous_sha)
         raise
 
     result: dict[str, object] = {
