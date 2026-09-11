@@ -1,6 +1,6 @@
 name: Live Production Deploy and Acceptance
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       confirm:
