@@ -27,8 +27,10 @@ if [ ! -r "$AEGIS_PRODUCTION_ENV_FILE" ]; then
   echo "production env file is missing or unreadable" >&2
   exit 1
 fi
-if [ "$(stat -c '%a' "$AEGIS_PRODUCTION_ENV_FILE")" -gt 600 ]; then
-  echo "production env file must be mode 0600 or stricter" >&2
+mode="$(stat -c '%a' "$AEGIS_PRODUCTION_ENV_FILE")"
+group_other="$((8#$mode & 077))"
+if [ "$group_other" -ne 0 ]; then
+  echo "production env file must not be accessible by group or others" >&2
   exit 1
 fi
 
