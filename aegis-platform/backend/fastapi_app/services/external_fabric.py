@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from django.db import transaction
@@ -168,6 +168,9 @@ def register_plugin_package(
 ) -> PluginPackage:
     if not name.strip() or len(name)>160:
         raise ExternalFabricError('Plugin name is required and must be <= 160 characters')
+    parsed_source=urlsplit(source)
+    if parsed_source.scheme!='https' or not parsed_source.hostname or parsed_source.username or parsed_source.password:
+        raise ExternalFabricError('Plugin source must be a credential-free HTTPS URL')
     try:
         normalized_version=str(Version(version))
     except InvalidVersion as exc:
@@ -251,6 +254,27 @@ def approve_plugin_package(package_id:str) -> PluginPackage:
     package.approved=True
     package.save(update_fields=['approved','updated_at'])
     return package
+
+
+@transaction.atomic
+def auto_update_plugin_package(name:str) -> PluginPackage:
+    candidates=[]
+    for package in PluginPackage.objects.select_for_update().filter(name=name,approved=True):
+        try:
+            candidates.append((Version(package.version),package))
+        except InvalidVersion:
+            continue
+    if not candidates:
+        raise ExternalFabricError(f'No approved plugin package is available for {name}')
+    failures=[]
+    for _,package in sorted(candidates,key=lambda item:item[0],reverse=True):
+        try:
+            resolve_plugin_dependencies(package)
+        except ExternalFabricError as exc:
+            failures.append(f'{package.version}:{exc}')
+            continue
+        return activate_plugin_package(str(package.id))
+    raise ExternalFabricError('No dependency-compatible approved version is available: '+'; '.join(failures))
 
 
 def dynamic_plugin_capabilities() -> list[dict[str,Any]]:
