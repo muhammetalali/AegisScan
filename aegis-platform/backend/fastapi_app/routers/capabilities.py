@@ -179,10 +179,19 @@ async def execute_capability(
     user=Depends(get_current_user),
 ):
     requested_capability_id=capability_id
+    dynamic=None
     try:
-        dynamic=await sync_to_async(resolve_dynamic_capability)(capability_id)
-        resolved_capability_id=dynamic['delegate'] if dynamic else capability_id
-        capability = get_capability(resolved_capability_id)
+        try:
+            capability=get_capability(capability_id)
+            resolved_capability_id=capability_id
+        except RetiredCapabilityError:
+            raise
+        except ValueError:
+            dynamic=await sync_to_async(resolve_dynamic_capability)(capability_id)
+            if dynamic is None:
+                raise ValueError(f'Unknown capability: {capability_id}')
+            resolved_capability_id=dynamic['delegate']
+            capability=get_capability(resolved_capability_id)
         options = validate_capability_options(capability, request.options)
         credential_refs = normalize_credential_refs(request.credential_refs)
     except ExternalFabricError as exc:
