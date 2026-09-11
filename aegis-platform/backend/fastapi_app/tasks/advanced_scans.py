@@ -123,8 +123,6 @@ def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
         return {'status':scan.status,'scan_id':scan_id,'tool':'masscan','target':result.target,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
     except ScannerExecutionCancelled as exc:
         return _finish_cancelled(scan,execution,str(exc))
-    except ScannerExecutionCancelled as exc:
-        return _finish_cancelled(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
         return _finish_failed(scan,execution,str(exc),authorization_snapshot(authorization))
