@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Iterable
+from urllib.parse import urlparse
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -86,6 +86,24 @@ def _load_env_file(path: Path) -> dict[str, str]:
             raise DeployError(f"control characters are not allowed in env file line {line_number}")
         values[name] = value
     return values
+
+
+def _validate_origin(origin: str) -> str:
+    parsed = urlparse(origin.strip())
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise DeployError(
+            "public origin must be an explicit HTTPS origin without credentials, path, query or fragment"
+        )
+    return f"https://{parsed.hostname}" + (f":{parsed.port}" if parsed.port and parsed.port != 443 else "")
 
 
 def _compose(env_file: Path, *args: str) -> list[str]:
@@ -260,6 +278,7 @@ def _rollback_application(
 
 
 def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
+    origin = _validate_origin(origin)
     _assert_clean_repo()
     _ensure_release(release_sha)
     env_values = _load_env_file(env_file)
