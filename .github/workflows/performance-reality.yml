@@ -205,10 +205,20 @@ jobs:
         working-directory: aegis-platform
         shell: bash
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps || true
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=300 django fastapi nginx postgres redis celery_worker scanner_worker || true
+          if [ -f backend/.env ]; then
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml ps || true
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=300 django fastapi nginx postgres redis celery_worker scanner_worker || true
+          else
+            echo 'Stack bootstrap did not create backend/.env; no container diagnostics are available.'
+          fi
 
       - name: Stop real platform stack
         if: always()
         working-directory: aegis-platform
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v --remove-orphans
+        shell: bash
+        run: |
+          if [ -f backend/.env ]; then
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v --remove-orphans
+          else
+            echo 'Stack was not bootstrapped; cleanup is not required.'
+          fi
