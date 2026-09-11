@@ -354,6 +354,7 @@ def run_native_tool(
     spec = get_native_tool_spec(capability_id)
     argv, canonical_target = build_native_argv(spec, target, options)
     cleanup_paths: list[str] = []
+    cleanup_dirs: list[str] = []
     captured_report_path: str | None = None
     process: subprocess.Popen[str] | None = None
     try:
@@ -361,14 +362,12 @@ def run_native_tool(
         if credential_args:
             argv = [argv[0], *credential_args, *argv[1:]]
         if spec.capture_mode == 'nikto-json-file':
-            report_fd, captured_report_path = tempfile.mkstemp(
-                prefix='aegis-nikto-',
-                suffix='.json',
-            )
-            os.fchmod(report_fd, 0o600)
-            os.close(report_fd)
-            cleanup_paths.append(captured_report_path)
-            argv.extend(['-output', captured_report_path])
+            report_dir = tempfile.mkdtemp(prefix='aegis-nikto-')
+            os.chmod(report_dir, 0o700)
+            cleanup_dirs.append(report_dir)
+            report_prefix = str(Path(report_dir) / 'report')
+            captured_report_path = f'{report_prefix}.json'
+            argv.extend(['-output', report_prefix])
         process = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
@@ -377,6 +376,7 @@ def run_native_tool(
             shell=False,
             start_new_session=True,
             env=_native_environment(spec),
+            umask=0o077 if captured_report_path is not None else -1,
         )
         deadline = time.monotonic() + spec.timeout
         paused = False
@@ -419,3 +419,5 @@ def run_native_tool(
                 Path(path).unlink(missing_ok=True)
             except OSError:
                 pass
+        for directory in cleanup_dirs:
+            shutil.rmtree(directory, ignore_errors=True)
