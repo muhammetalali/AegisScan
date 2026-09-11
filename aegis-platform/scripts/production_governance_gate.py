@@ -37,7 +37,7 @@ class GovernanceError(RuntimeError):
 def _load_json(path: Path, label: str) -> dict[str, Any]:
     if not path.is_file():
         raise GovernanceError(f"{label} does not exist: {path}")
-    if path.stat().st_size <= 0 or path.stat().st_size > 16 * 1024 * 1024:
+    if path.stat().st_size <= 0 or path.stat().st_size > 128 * 1024 * 1024:
         raise GovernanceError(f"{label} has invalid size: {path}")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -155,6 +155,9 @@ def _verify_go_live(root: Path, release_sha: str) -> dict[str, Any]:
     black_box = _unique(root, "external-black-box.log", "go-live evidence")
     if black_box.stat().st_size <= 0:
         raise GovernanceError("external black-box evidence is empty")
+    black_box_text = black_box.read_text(encoding="utf-8", errors="replace")
+    if "EXTERNAL_REAL_E2E=PASS" not in black_box_text:
+        raise GovernanceError("external black-box evidence does not contain a PASS marker")
 
     cli = _load_json(
         _unique(root, "cli-platform-status.json", "go-live evidence"),
