@@ -74,6 +74,10 @@ celery_app.conf.update(
             "task": "enterprise.dispatch_notification_deliveries",
             "schedule": 60.0,
         },
+        "dispatch-due-external-integration-syncs": {
+            "task": "enterprise.dispatch_due_integration_syncs",
+            "schedule": 300.0,
+        },
         "expire-report-artifacts-hourly": {
             "task": "enterprise.expire_report_exports",
             "schedule": 3600.0,

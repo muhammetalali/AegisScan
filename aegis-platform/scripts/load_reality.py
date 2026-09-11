@@ -15,6 +15,7 @@ import httpx
 
 @dataclass
 class Sample:
+    path: str
     status: int
     latency_ms: float
     ok: bool
@@ -51,7 +52,7 @@ async def run_stage(base_url: str, paths: list[str], concurrency: int, duration:
                     ok=200 <= status < 300
                 except httpx.HTTPError:
                     pass
-                local.append(Sample(status,(time.perf_counter()-started)*1000.0,ok))
+                local.append(Sample(path,status,(time.perf_counter()-started)*1000.0,ok))
             async with lock:
                 samples.extend(local)
 
@@ -65,6 +66,26 @@ async def run_stage(base_url: str, paths: list[str], concurrency: int, duration:
     for sample in samples:
         key=str(sample.status)
         status_counts[key]=status_counts.get(key,0)+1
+
+    per_path={}
+    for path in paths:
+        path_samples=[sample for sample in samples if sample.path==path]
+        path_latencies=[sample.latency_ms for sample in path_samples]
+        path_failures=sum(1 for sample in path_samples if not sample.ok)
+        per_path[path]={
+            'requests':len(path_samples),
+            'failures':path_failures,
+            'error_rate':round(path_failures/max(1,len(path_samples)),6),
+            'throughput_rps':round(len(path_samples)/elapsed,3),
+            'latency_ms':{
+                'min':round(min(path_latencies),3) if path_latencies else 0,
+                'mean':round(statistics.fmean(path_latencies),3) if path_latencies else 0,
+                'p50':round(percentile(path_latencies,0.50),3),
+                'p95':round(percentile(path_latencies,0.95),3),
+                'p99':round(percentile(path_latencies,0.99),3),
+                'max':round(max(path_latencies),3) if path_latencies else 0,
+            },
+        }
     return {
         'concurrency':concurrency,
         'duration_seconds':round(elapsed,3),
@@ -80,6 +101,7 @@ async def run_stage(base_url: str, paths: list[str], concurrency: int, duration:
             'p99':round(percentile(latencies,0.99),3),
             'max':round(max(latencies),3) if latencies else 0,
         },
+        'per_path':per_path,
         'status_counts':status_counts,
     }
 

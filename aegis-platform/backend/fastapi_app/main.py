@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
 import asyncio,logging,time
 from datetime import datetime,timezone
-from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities
+from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,plugin_registry,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -23,7 +23,18 @@ logging.basicConfig(level=logging.INFO); logger=logging.getLogger(__name__)
 websocket_manager=WebSocketManager(); scan_orchestrator=ScanOrchestrator(websocket_manager); workflow_bridge=WorkflowLiveBridge(lambda event:websocket_manager.broadcast('workflow',event))
 @asynccontextmanager
 async def lifespan(app:FastAPI):
-    initialize_action_store(); initialize_policy_store(); await workflow_bridge.start(); await scan_orchestrator.start(); yield; await workflow_bridge.stop(); await scan_orchestrator.stop()
+    initialize_action_store()
+    initialize_policy_store()
+    await workflow_bridge.start()
+    await scan_orchestrator.start()
+    readiness_task=asyncio.create_task(_readiness_monitor_loop(),name='dependency-readiness-monitor')
+    try:
+        yield
+    finally:
+        readiness_task.cancel()
+        await asyncio.gather(readiness_task,return_exceptions=True)
+        await workflow_bridge.stop()
+        await scan_orchestrator.stop()
 app=FastAPI(title='AegisScan Platform API',description='Security Validation Platform - High Performance API Layer',version='1.0.0',lifespan=lifespan,docs_url='/docs',redoc_url='/redoc')
 app.add_middleware(CORSMiddleware,allow_origins=settings.CORS_ORIGINS,allow_credentials=True,allow_methods=['*'],allow_headers=['*']); security=HTTPBearer(auto_error=False)
 async def get_current_user(request:Request,credentials=Depends(security)):
@@ -98,57 +109,78 @@ async def websocket_system_monitor(websocket:WebSocket):
     except WebSocketDisconnect: websocket_manager.disconnect('system_monitor',websocket)
 @app.get('/health')
 async def health_check(): return {'status':'healthy','timestamp':datetime.now(timezone.utc).isoformat()}
-_READINESS_SUCCESS_TTL_SECONDS=5.0
-_readiness_cache={'expires_at':0.0,'dependencies':None}
-_readiness_lock=asyncio.Lock()
+_READINESS_PROBE_INTERVAL_SECONDS=2.0
+_READINESS_STALE_AFTER_SECONDS=6.0
+_readiness_state={
+    'ready':False,
+    'dependencies':None,
+    'checked_at':0.0,
+}
 
-async def _dependency_readiness()->dict:
-    now=time.monotonic()
-    cached=_readiness_cache.get('dependencies')
-    if cached is not None and now < float(_readiness_cache.get('expires_at') or 0.0):
-        return dict(cached)
+def _check_dependencies_sync()->dict:
+    from urllib.parse import urlparse
+    import redis,psycopg2
+    database=urlparse(settings.DATABASE_URL)
+    if database.scheme not in {'postgresql','postgres'}:
+        raise RuntimeError(f'Unsupported DATABASE_URL scheme: {database.scheme}')
+    conn=psycopg2.connect(settings.DATABASE_URL,connect_timeout=3)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+    finally:
+        conn.close()
+    client=redis.from_url(
+        settings.REDIS_URL,
+        socket_connect_timeout=3,
+        socket_timeout=3,
+    )
+    try:
+        if client.ping() is not True:
+            raise RuntimeError('Redis ping returned false')
+    finally:
+        client.close()
+    return {'database':'ok','redis':'ok'}
 
-    async with _readiness_lock:
-        now=time.monotonic()
-        cached=_readiness_cache.get('dependencies')
-        if cached is not None and now < float(_readiness_cache.get('expires_at') or 0.0):
-            return dict(cached)
+async def _refresh_dependency_readiness()->None:
+    try:
+        dependencies=await asyncio.to_thread(_check_dependencies_sync)
+    except Exception:
+        _readiness_state['ready']=False
+        _readiness_state['dependencies']=None
+        _readiness_state['checked_at']=time.monotonic()
+        logger.exception('Dependency readiness probe failed')
+        return
+    _readiness_state['ready']=True
+    _readiness_state['dependencies']=dict(dependencies)
+    _readiness_state['checked_at']=time.monotonic()
 
-        def check_dependencies():
-            from urllib.parse import urlparse
-            import redis,psycopg2
-            database=urlparse(settings.DATABASE_URL)
-            if database.scheme not in {'postgresql','postgres'}:
-                raise RuntimeError(f'Unsupported DATABASE_URL scheme: {database.scheme}')
-            conn=psycopg2.connect(settings.DATABASE_URL,connect_timeout=3)
-            try:
-                with conn.cursor() as cursor:
-                    cursor.execute('SELECT 1')
-                    cursor.fetchone()
-            finally:
-                conn.close()
-            client=redis.from_url(settings.REDIS_URL,socket_connect_timeout=3,socket_timeout=3)
-            try:
-                if client.ping() is not True:
-                    raise RuntimeError('Redis ping returned false')
-            finally:
-                client.close()
-            return {'database':'ok','redis':'ok'}
+async def _readiness_monitor_loop()->None:
+    while True:
+        await _refresh_dependency_readiness()
+        await asyncio.sleep(_READINESS_PROBE_INTERVAL_SECONDS)
 
-        try:
-            dependencies=await asyncio.to_thread(check_dependencies)
-        except Exception:
-            _readiness_cache['dependencies']=None
-            _readiness_cache['expires_at']=0.0
-            raise
-        _readiness_cache['dependencies']=dict(dependencies)
-        _readiness_cache['expires_at']=time.monotonic()+_READINESS_SUCCESS_TTL_SECONDS
-        return dependencies
+def _readiness_snapshot()->dict:
+    checked_at=float(_readiness_state.get('checked_at') or 0.0)
+    age=max(0.0,time.monotonic()-checked_at) if checked_at else float('inf')
+    ready=bool(_readiness_state.get('ready')) and age<=_READINESS_STALE_AFTER_SECONDS
+    dependencies=_readiness_state.get('dependencies') if ready else None
+    return {
+        'ready':ready,
+        'dependencies':dict(dependencies) if isinstance(dependencies,dict) else None,
+        'age_seconds':age,
+    }
+
 @app.get('/ready')
 async def readiness_check():
-    try: dependencies=await _dependency_readiness()
-    except Exception as exc: raise HTTPException(status_code=503,detail={'ready':False,'reason':'dependency_unavailable'}) from exc
-    return {'ready':True,'dependencies':dependencies,'timestamp':datetime.now(timezone.utc).isoformat()}
+    snapshot=_readiness_snapshot()
+    if not snapshot['ready']:
+        raise HTTPException(status_code=503,detail={'ready':False,'reason':'dependency_unavailable'})
+    return {
+        'ready':True,
+        'dependencies':snapshot['dependencies'],
+        'timestamp':datetime.now(timezone.utc).isoformat(),
+    }
 app.include_router(scans.router,prefix='/scans',tags=['Scans']); app.include_router(scans.router,prefix='/api/v1/scans',tags=['Scans'])
 app.include_router(capabilities.router,prefix='/api/v1/capabilities',tags=['Security Capabilities'])
 app.include_router(vulnerabilities.router,prefix='/vulnerabilities',tags=['Vulnerabilities']); app.include_router(vulnerabilities.router,prefix='/api/v1/vulnerabilities',tags=['Vulnerabilities'])
@@ -170,7 +202,7 @@ app.include_router(validation_contract.router,prefix='/api/v1',tags=['Validation
 app.include_router(dashboard.router,prefix='/api',tags=['Dashboard']); app.include_router(dashboard.router,prefix='/api/v1',tags=['Dashboard'])
 app.include_router(validations.router,prefix='/api',tags=['Validations']); app.include_router(validations.router,prefix='/api/v1',tags=['Validations'])
 app.include_router(audit.router,prefix='/api',tags=['Audit']); app.include_router(audit.router,prefix='/api/v1',tags=['Audit'])
-app.include_router(enterprise.router,prefix='/api/v1/enterprise',tags=['Enterprise']); app.include_router(enterprise_extra.router,prefix='/api/v1/enterprise',tags=['Enterprise Integrations']); app.include_router(enterprise_gap.router,prefix='/api/v1/enterprise-gap',tags=['Enterprise Gap Closure'])
+app.include_router(enterprise.router,prefix='/api/v1/enterprise',tags=['Enterprise']); app.include_router(enterprise_extra.router,prefix='/api/v1/enterprise',tags=['Enterprise Integrations']); app.include_router(enterprise_gap.router,prefix='/api/v1/enterprise-gap',tags=['Enterprise Gap Closure']); app.include_router(plugin_registry.router,prefix='/api/v1/plugins',tags=['Plugin Registry'])
 @app.post('/scans/{scan_id}/start')
 @app.post('/api/v1/scans/{scan_id}/start')
 async def start_scan(scan_id:str,user=Depends(get_current_user)): return await scan_orchestrator.start_scan(scan_id,user)
