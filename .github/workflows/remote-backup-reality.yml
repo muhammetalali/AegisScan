@@ -25,6 +25,10 @@ name: Remote Encrypted Backup Reality
     branches: [main]
     paths:
       - '.github/workflows/remote-backup-reality.yml'
+      - 'tests/test_production_resilience_workflow.py'
+      - 'tests/test_production_resilience_backup.py'
+      - 'aegis-platform/scripts/production_resilience_backup.py'
+      - '.github/workflows/production-resilience-acceptance.yml'
       - '.github/workflows/production-launch-readiness.yml'
       - 'aegis-platform/scripts/backup_postgres.sh'
       - 'aegis-platform/scripts/verify_postgres_restore.sh'
