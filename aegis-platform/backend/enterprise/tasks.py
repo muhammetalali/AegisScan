@@ -218,6 +218,13 @@ def dispatch_notification_deliveries(limit: int = 100):
 @shared_task(name='enterprise.dispatch_integration')
 def dispatch_integration(integration_id: str,event: dict): return send_integration(ExternalIntegration.objects.get(pk=integration_id),event)
 
+@shared_task(name='enterprise.sync_external_integration')
+def sync_external_integration_task(integration_id: str, project_id: str, user_id: str):
+    from fastapi_app.services.external_fabric import sync_external_integration
+    project=Project.objects.get(pk=project_id)
+    run=sync_external_integration(integration_id=integration_id,project=project,user_id=user_id)
+    return {'run_id':str(run.id),'status':run.status,'records_count':run.records_count,'sync_type':run.sync_type}
+
 @shared_task(name='enterprise.run_continuous_assurance')
 def run_continuous_assurance(execution_id: str):
     from django_project.scans.models import Scan
