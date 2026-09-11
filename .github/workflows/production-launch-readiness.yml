@@ -8,6 +8,7 @@ on:
       - 'aegis-platform/scripts/production_host_deploy.py'
       - 'aegis-platform/scripts/production_remote_deploy.py'
       - 'aegis-platform/scripts/production_resilience_backup.py'
+      - 'aegis-platform/scripts/production_governance_gate.py'
       - 'aegis-platform/scripts/public_acceptance.py'
       - 'aegis-platform/scripts/backup_postgres.sh'
       - 'aegis-platform/scripts/verify_postgres_restore.sh'
@@ -26,11 +27,15 @@ on:
       - 'tests/test_production_remote_deploy.py'
       - 'tests/test_production_resilience_backup.py'
       - 'tests/test_production_resilience_workflow.py'
+      - 'tests/test_production_governance_gate.py'
+      - 'tests/test_production_final_governance_workflow.py'
       - 'tests/test_production_live_workflow.py'
       - 'tests/test_public_acceptance.py'
       - '.github/workflows/production-launch-readiness.yml'
       - '.github/workflows/production-live-deploy.yml'
       - '.github/workflows/production-resilience-acceptance.yml'
+      - '.github/workflows/production-final-governance.yml'
+      - '.github/workflows/production-governance-reality.yml'
   push:
     branches: [main]
   workflow_dispatch:
@@ -94,6 +99,8 @@ jobs:
             tests/test_production_remote_deploy.py \
             tests/test_production_resilience_backup.py \
             tests/test_production_resilience_workflow.py \
+            tests/test_production_governance_gate.py \
+            tests/test_production_final_governance_workflow.py \
             tests/test_production_live_workflow.py \
             tests/test_public_acceptance.py
       - name: Generate short-lived TLS proof material
