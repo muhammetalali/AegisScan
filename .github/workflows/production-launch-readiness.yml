@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'aegis-platform/scripts/public_acceptance.py'
       - 'aegis-platform/scripts/backup_postgres.sh'
       - 'aegis-platform/scripts/verify_postgres_restore.sh'
       - 'aegis-platform/scripts/remote_backup.py'
@@ -18,6 +20,8 @@ on:
       - 'aegis-platform/docker/alertmanager/**'
       - 'aegis-platform/monitoring/**'
       - 'tests/test_production_preflight.py'
+      - 'tests/test_production_host_deploy.py'
+      - 'tests/test_public_acceptance.py'
       - '.github/workflows/production-launch-readiness.yml'
   push:
     branches: [main]
@@ -74,8 +78,12 @@ jobs:
           psql --version
           openssl version
           python -m pip install pytest==9.1.1
-      - name: Unit-test fail-closed production preflight
-        run: python -m pytest -q tests/test_production_preflight.py
+      - name: Unit-test fail-closed production deployment contracts
+        run: |
+          python -m pytest -q \
+            tests/test_production_preflight.py \
+            tests/test_production_host_deploy.py \
+            tests/test_public_acceptance.py
       - name: Generate short-lived TLS proof material
         run: |
           mkdir -p /tmp/aegis-tls
@@ -130,6 +138,63 @@ jobs:
           grep -qi '^permissions-policy:' /tmp/aegis-headers
           grep -qi '^cross-origin-opener-policy:' /tmp/aegis-headers
           grep -qi '^cross-origin-resource-policy:' /tmp/aegis-headers
+      - name: Prove verified HTTPS public acceptance transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-public
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 2 \
+            -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost' \
+            -keyout /tmp/aegis-public/privkey.pem \
+            -out /tmp/aegis-public/fullchain.pem
+          chmod 0600 /tmp/aegis-public/privkey.pem
+          cat >/tmp/aegis-public/server.py <<'PY'
+          import json
+          import ssl
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path not in {"/", "/health", "/ready"}:
+                      self.send_response(404)
+                      self.end_headers()
+                      return
+                  self.send_response(200)
+                  self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+                  self.send_header("Content-Security-Policy", "default-src 'self'")
+                  self.send_header("Permissions-Policy", "camera=(), microphone=()")
+                  self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+                  self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                  self.send_header("X-Content-Type-Options", "nosniff")
+                  self.send_header("Content-Type", "application/json")
+                  self.end_headers()
+                  payload = {"status": "ok"} if self.path != "/" else {"app": "AegisScan"}
+                  self.wfile.write(json.dumps(payload).encode())
+
+              def log_message(self, *_):
+                  pass
+
+          server = HTTPServer(("127.0.0.1", 9443), Handler)
+          context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+          context.load_cert_chain("/tmp/aegis-public/fullchain.pem", "/tmp/aegis-public/privkey.pem")
+          server.socket = context.wrap_socket(server.socket, server_side=True)
+          server.serve_forever()
+          PY
+          python /tmp/aegis-public/server.py >/tmp/aegis-public/server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --cacert /tmp/aegis-public/fullchain.pem -fsS https://localhost:9443/health >/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          SSL_CERT_FILE=/tmp/aegis-public/fullchain.pem \
+            python aegis-platform/scripts/public_acceptance.py \
+              --origin https://localhost:9443 \
+              --allow-loopback-test
+
       - name: Prove production preflight accepts only explicit secure configuration
         env:
           DEBUG: 'False'
