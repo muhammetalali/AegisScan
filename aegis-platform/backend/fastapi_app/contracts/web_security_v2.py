@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -46,6 +47,7 @@ class AuthorizationPolicyIn(StrictModel):
     role: str = Field(default='*', max_length=120)
     tenant_ref: str = Field(default='*', max_length=255)
     endpoint: str = Field(min_length=1, max_length=700)
+    session_ref: str = Field(default='', max_length=255)
     method: str = Field(default='*', min_length=1, max_length=16)
     operation: str = Field(default='*', max_length=160)
     resource_type: str = Field(default='*', max_length=160)
@@ -172,6 +174,7 @@ class WebSocketSecurityCaseIn(StrictModel):
     identity: IdentityIn
     resource: ResourceIn
     channel: str = Field(min_length=1, max_length=700)
+    session_ref: str = Field(default='', max_length=255)
     origin: str = Field(default='', max_length=700)
     allowed_origins: list[str] = Field(default_factory=list, max_length=128)
     authentication_required: bool = True
@@ -247,8 +250,8 @@ class CrossProtocolTransitionCaseIn(StrictModel):
     identity_consistent: bool = True
     tenant_consistent: bool = True
     session_bound: bool = True
-    source_evidence_ref: str = Field(default='', max_length=255)
-    target_evidence_ref: str = Field(default='', max_length=255)
+    source_observation_id: UUID
+    target_observation_id: UUID
 
 
 class CrossProtocolTransitionBatchIn(StrictModel):
