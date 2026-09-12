@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -12,10 +13,18 @@ app = FastAPI(title='Aegis Protocol Security Fixture')
 
 ALLOWED_ORIGIN = 'http://127.0.0.1:18085'
 TOKENS = {
-    'alice-token': {'ref': 'alice', 'tenant': 'tenant-a', 'role': 'viewer', 'state': 'active'},
-    'bob-token': {'ref': 'bob', 'tenant': 'tenant-b', 'role': 'viewer', 'state': 'active'},
-    'admin-token': {'ref': 'admin', 'tenant': 'tenant-a', 'role': 'admin', 'state': 'active'},
-    'expired-token': {'ref': 'alice', 'tenant': 'tenant-a', 'role': 'viewer', 'state': 'expired'},
+    os.environ.get('AEGIS_PROTOCOL_ALICE_TOKEN', 'alice-token'): {
+        'ref': 'alice', 'tenant': 'tenant-a', 'role': 'viewer', 'state': 'active',
+    },
+    os.environ.get('AEGIS_PROTOCOL_BOB_TOKEN', 'bob-token'): {
+        'ref': 'bob', 'tenant': 'tenant-b', 'role': 'viewer', 'state': 'active',
+    },
+    os.environ.get('AEGIS_PROTOCOL_ADMIN_TOKEN', 'admin-token'): {
+        'ref': 'admin', 'tenant': 'tenant-a', 'role': 'admin', 'state': 'active',
+    },
+    os.environ.get('AEGIS_PROTOCOL_EXPIRED_TOKEN', 'expired-token'): {
+        'ref': 'alice', 'tenant': 'tenant-a', 'role': 'viewer', 'state': 'expired',
+    },
 }
 RECORDS = {
     'a1': {'id': 'a1', 'tenant': 'tenant-a', 'owner': 'alice', 'value': 'alpha', 'secret': 'alpha-secret'},
