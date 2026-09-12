@@ -17,6 +17,7 @@ from ..services.decision_action_orchestration import create_action, get_action, 
 from ..services.workflow_intelligence import enrich_action, workflow_metrics
 from ..services.audit_writer import add_audit_entry
 from .assurance_graph import _load_validations
+from enterprise.models import RiskCorrelationSnapshot
 from enterprise.services import ensure_project_tenant
 from django_project.evidence.models import ValidationRun
 from django_project.projects.models import Project
@@ -72,8 +73,22 @@ def _resolve_action_scope(decision: dict[str, Any], user_id: str):
     )
     if str(validation_project_id) != str(project.id):
         raise PermissionError("Decision lineage does not match the validation project")
+    risk_correlation = None
+    risk_correlation_id = decision.get("riskCorrelationId")
+    if risk_correlation_id:
+        risk_correlation = (
+            RiskCorrelationSnapshot.objects
+            .filter(pk=risk_correlation_id, project=project)
+            .first()
+        )
+        if risk_correlation is None:
+            raise PermissionError("Risk-correlation snapshot is outside the authenticated scope")
+        if not validation.finding_id or str(risk_correlation.vulnerability_id) != str(validation.finding_id):
+            raise PermissionError("Risk-correlation lineage does not match the validation finding")
+        if str(decision.get("riskCorrelationSha256") or "") != str(risk_correlation.correlation_sha256):
+            raise ValueError("Decision risk-correlation SHA256 is stale or invalid")
     organization = ensure_project_tenant(project,user_id)
-    return organization,project,validation
+    return organization,project,validation,risk_correlation
 
 
 @router.get("/actions")
@@ -104,11 +119,17 @@ async def create_action_endpoint(body: ActionCreate, request: Request, user: dic
     decision = await _decision_by_id(body.decision_id, actor)
     if decision is None:
         raise HTTPException(status_code=404, detail="Decision not found")
+    if decision.get("actionable") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=str(decision.get("actionabilityReason") or "Decision is not actionable"),
+        )
     try:
-        organization,project,validation = await sync_to_async(_resolve_action_scope)(decision,actor)
+        organization,project,validation,risk_correlation = await sync_to_async(_resolve_action_scope)(decision,actor)
         item = await sync_to_async(create_action)(
             decision,body.owner,body.sla_hours,actor,
             organization=organization,project=project,validation=validation,
+            risk_correlation=risk_correlation,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -121,7 +142,12 @@ async def create_action_endpoint(body: ActionCreate, request: Request, user: dic
         project=str(project.id),
         result="success",
         resource_type="decision_action",
-        metadata={"organization_id":str(organization.id),"validation_id":str(validation.id)},
+        metadata={
+            "organization_id":str(organization.id),
+            "validation_id":str(validation.id),
+            "risk_correlation_id":str(risk_correlation.id) if risk_correlation else None,
+            "risk_correlation_sha256":risk_correlation.correlation_sha256 if risk_correlation else None,
+        },
         request=request,
     )
     return enrich_action(item)
