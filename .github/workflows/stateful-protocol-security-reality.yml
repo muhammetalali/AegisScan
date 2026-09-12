@@ -10,6 +10,7 @@ name: Stateful Protocol Security Reality
       - 'aegis-platform/backend/enterprise/migrations/0018_graphql_schema_graph_kinds.py'
       - 'aegis-platform/backend/fastapi_app/contracts/web_security_v2.py'
       - 'aegis-platform/backend/fastapi_app/services/stateful_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/web_security_foundation.py'
       - 'aegis-platform/backend/fastapi_app/services/test_stateful_protocol_security.py'
       - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
@@ -26,6 +27,7 @@ name: Stateful Protocol Security Reality
       - 'aegis-platform/backend/enterprise/migrations/0018_graphql_schema_graph_kinds.py'
       - 'aegis-platform/backend/fastapi_app/contracts/web_security_v2.py'
       - 'aegis-platform/backend/fastapi_app/services/stateful_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/web_security_foundation.py'
       - 'aegis-platform/backend/fastapi_app/services/test_stateful_protocol_security.py'
       - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
@@ -57,6 +59,8 @@ jobs:
       ALLOWED_HOSTS: localhost,127.0.0.1
       CORS_ALLOWED_ORIGINS: http://localhost:5173
       AEGIS_EVIDENCE_HMAC_KEY: ci-protocol-evidence-hmac-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-protocol-credential-fingerprint-key-0123456789
     services:
       postgres:
         image: postgres:16
@@ -93,6 +97,7 @@ jobs:
             aegis-platform/backend/enterprise/web_security_models.py \
             aegis-platform/backend/fastapi_app/contracts/web_security_v2.py \
             aegis-platform/backend/fastapi_app/services/stateful_protocol_security.py \
+            aegis-platform/backend/fastapi_app/services/credential_execution.py \
             aegis-platform/backend/fastapi_app/services/test_stateful_protocol_security.py \
             aegis-platform/backend/fastapi_app/routers/web_security.py \
             aegis-platform/backend/fastapi_app/routers/test_web_security_api.py \
