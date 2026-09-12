@@ -38,6 +38,19 @@ jobs:
                 .map((pr) => pr.head.ref)
             );
 
+            const mergedPulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'closed',
+              per_page: 100,
+            });
+            const mergedHeads = new Set(
+              mergedPulls
+                .filter((pr) => Boolean(pr.merged_at))
+                .filter((pr) => pr.head.repo?.full_name === `${owner}/${repo}`)
+                .map((pr) => pr.head.ref)
+            );
+
             const branches = await github.paginate(github.rest.repos.listBranches, {
               owner,
               repo,
@@ -62,7 +75,7 @@ jobs:
                   basehead: `${defaultBranch}...${branch}`,
                 });
 
-                if (comparison.ahead_by !== 0) {
+                if (comparison.ahead_by !== 0 && !mergedHeads.has(branch)) {
                   retained.push({ branch, ahead_by: comparison.ahead_by });
                   continue;
                 }
@@ -82,6 +95,7 @@ jobs:
               .addHeading('Branch Hygiene Reality')
               .addRaw(`Default branch: ${defaultBranch}\\n\\n`)
               .addRaw(`Open PR heads skipped: ${openHeads.size}\\n\\n`)
+              .addRaw(`Merged PR heads eligible for cleanup: ${mergedHeads.size}\\n\\n`)
               .addRaw(`Fully merged codex branches deleted: ${deleted.length}\\n\\n`)
               .addRaw(`Codex branches retained with unique commits: ${retained.length}\\n\\n`)
               .addRaw(`Delete/compare failures: ${failed.length}\\n\\n`)
@@ -89,6 +103,7 @@ jobs:
 
             core.info(JSON.stringify({
               default_branch: defaultBranch,
+              merged_pr_head_count: mergedHeads.size,
               deleted_count: deleted.length,
               retained_count: retained.length,
               failed_count: failed.length,
