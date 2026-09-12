@@ -12,7 +12,7 @@ from django_project.system.credential_models import CredentialAccess, Credential
 from django_project.system.credential_vault import CredentialVaultDenied, create_credential_secret
 from django_project.users.models import User, UserRole
 from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
-from fastapi_app.services.browser_spa_discovery import _canonical_url, _graphql_metadata, _load_session
+from fastapi_app.services.browser_spa_discovery import _canonical_url, _graphql_metadata, _load_session, _origin
 from fastapi_app.services.browser_surface_graph import project_browser_surface_graph
 from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution, resolve_credential_refs_for_worker
 from fastapi_app.services.native_output_normalizer import normalize_native_output
@@ -49,6 +49,8 @@ def project(actor):
 
 
 def test_browser_url_and_graphql_metadata_redact_values():
+    assert _origin('ws://app.example.test/socket') == 'http://app.example.test'
+    assert _origin('wss://app.example.test/socket') == 'https://app.example.test'
     canonical = _canonical_url(
         'https://app.example.test/api/items?token=secret-value&id=42&id=43#fragment'
     )
