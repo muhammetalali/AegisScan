@@ -254,6 +254,77 @@ def test_browser_identity_binding_falls_back_to_credential_reference(project, ac
     assert context['credential_refs'][0]['browser_identity_ref'] == f'credential:{credential.id}'
 
 
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_browser_capability_scheduler_uses_isolated_queue_and_vault_identity(
+    monkeypatch,
+    project,
+    actor,
+):
+    target = 'http://127.0.0.1:18083/'
+    asset = await sync_to_async(Asset.objects.create)(
+        project=project,
+        owner=actor,
+        name='Browser Runtime Target',
+        slug='browser-runtime-target',
+        type=Asset.Type.WEBSITE,
+        configuration={'url': target},
+    )
+    await sync_to_async(AssetAuthorization.objects.create)(
+        asset=asset,
+        actor=actor,
+        authorized=True,
+        target_snapshot=target,
+        reason='browser runtime test authorization',
+    )
+    credential = await sync_to_async(create_credential_secret)(
+        project=project,
+        actor=actor,
+        name='browser-runtime-session',
+        kind=CredentialSecret.Kind.GENERIC,
+        secret=json.dumps({'headers': {'Authorization': 'Bearer scheduler-value'}}),
+        scope={
+            'browser_origin': 'http://127.0.0.1:18083',
+            'browser_identity_ref': 'alice',
+        },
+    )
+
+    calls = []
+
+    class TaskResult:
+        id = 'browser-isolated-task-id'
+
+    def enqueue(*args, **kwargs):
+        calls.append((args, kwargs))
+        return TaskResult()
+
+    monkeypatch.setattr(capability_router.run_native_capability_scan, 'apply_async', enqueue)
+    monkeypatch.setattr(
+        capability_router.run_native_capability_scan,
+        'delay',
+        lambda *args, **kwargs: pytest.fail('browser capability must not use scanner default route'),
+    )
+
+    result = await capability_router.execute_capability(
+        'browser.spa-discovery',
+        CapabilityExecutionRequest(
+            project_id=str(project.id),
+            asset_id=str(asset.id),
+            options={'identity_ref': 'anonymous', 'wait_ms': 1000, 'max_events': 100},
+            credential_refs=[str(credential.id)],
+        ),
+        user={'user_id': str(actor.id)},
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1]['queue'] == 'browser'
+    assert calls[0][1]['routing_key'] == 'browser'
+    assert result['credential_context']['credential_refs'][0]['browser_identity_ref'] == 'alice'
+    scan = await sync_to_async(Scan.objects.get)(pk=result['scan']['id'])
+    assert scan.config['capability_options']['identity_ref'] == 'alice'
+    assert 'scheduler-value' not in json.dumps(scan.config, sort_keys=True)
+
+
 def test_browser_session_nested_secret_values_are_rejected_from_payloads():
     session_secret = json.dumps({
         'headers': {
