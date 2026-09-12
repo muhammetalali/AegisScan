@@ -20,11 +20,28 @@ The historical feature branch tip was preserved before retirement:
 - Read-only archive ref: `archive/feature-enterprise-platform-ui-v2-50698f5`
 - Archive purpose: provenance and forensic comparison only; never a development or release source.
 
+## Historical branch archives
+
+Repository history that previously lived behind hundreds of branch refs has been collapsed into explicit provenance-only archive refs:
+
+- `archive/feature-enterprise-platform-ui-v2-50698f5` -> `50698f5dbda1f7eb0a1e9a743e752278323a4c7d`
+- `archive/codex-history-2026-09-12` -> `bd00a9ecfb168590683f75f30f9ea0a503701f19`
+- `archive/legacy-working-branches-2026-09-12` -> `15364e35d00563629ff7890b43e371f09c51e5a6`
+
+Exact former branch-name-to-SHA mappings are preserved in:
+
+- `docs/archive/CODEX_BRANCH_ARCHIVE_2026-09-12.json`
+- `docs/archive/LEGACY_WORKING_BRANCH_ARCHIVE_2026-09-12.json`
+
+Archive refs are immutable provenance anchors. They are not development branches, merge bases for new work, release branches, or CI evidence.
+
 ## Enforcement
 
 `aegis-platform/backend/scripts/stale_regression_audit.py` fails CI if the retired `packages/` source tree appears on canonical `main`.
 
 No future feature, fix, migration, or test may target the retired tree. Any useful historical behavior must be reimplemented or ported into the canonical `aegis-platform/` architecture and proven through current CI.
+
+`.github/workflows/branch-hygiene.yml` deletes the exact internal PR head after a successful merge to `main`, but only when the live branch SHA still equals the merged PR head SHA. `archive/*` and the default branch are never eligible for this deletion path.
 
 ## Decision
 
