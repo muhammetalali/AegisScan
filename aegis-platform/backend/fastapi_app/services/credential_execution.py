@@ -128,6 +128,16 @@ def _canonical_web_origin(value: str) -> str:
     return urlunsplit((scheme, authority, '', '', ''))
 
 
+def _browser_identity_binding(credential: CredentialSecret) -> str:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    raw = str(scope.get('browser_identity_ref') or '').strip()
+    if raw:
+        if len(raw) > 255 or any(ch in raw for ch in '\r\n\x00'):
+            raise CredentialVaultDenied('Browser credential identity binding is invalid.')
+        return raw
+    return f'credential:{credential.id}'
+
+
 def _validate_browser_scope(*, credential: CredentialSecret, actor: Any, purpose: str, target: str) -> None:
     scope = credential.scope if isinstance(credential.scope, dict) else {}
     scoped_origin = str(scope.get('browser_origin') or '').strip()
@@ -260,7 +270,10 @@ def authorize_credential_refs_for_execution(
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
         _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
         authorized = authorize_credential_use(credential=credential, actor=actor, purpose=purpose_value)
-        metadata.append({'credential_ref': str(authorized.id), 'kind': authorized.kind, 'version': authorized.version})
+        item = {'credential_ref': str(authorized.id), 'kind': authorized.kind, 'version': authorized.version}
+        if capability_id == 'browser.spa-discovery':
+            item['browser_identity_ref'] = _browser_identity_binding(authorized)
+        metadata.append(item)
     return credential_execution_context(metadata, resolved=False)
 
 
@@ -296,8 +309,13 @@ def resolve_credential_refs_for_worker(
             'version': credential.version,
             'secret': secret,
         }
+        if capability_id == 'browser.spa-discovery':
+            material['browser_identity_ref'] = _browser_identity_binding(credential)
         materials.append(material)
-        metadata.append({key: material[key] for key in ('credential_ref', 'kind', 'version')})
+        item = {key: material[key] for key in ('credential_ref', 'kind', 'version')}
+        if capability_id == 'browser.spa-discovery':
+            item['browser_identity_ref'] = material['browser_identity_ref']
+        metadata.append(item)
     context = credential_execution_context(metadata, resolved=True)
     assert_no_credential_material_leaked(materials, context)
     return tuple(materials), context
