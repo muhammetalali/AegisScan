@@ -13,6 +13,7 @@ from django_project.scans.models import Scan
 from django_project.system.credential_vault import CredentialVaultDenied
 
 from ..core.dependencies import get_current_user
+from ..celery_app import BROWSER_QUEUE
 from ..services.authorization_guard import asset_target
 from ..services.capability_planner import planning_summary
 from ..services.capability_registry import RETIRED_CAPABILITIES, RetiredCapabilityError, get_capability, list_capabilities, validate_capability_options
@@ -206,6 +207,17 @@ async def execute_capability(
             status_code=409,
             detail=f'Capability {capability.id} requires exactly one credential reference',
         )
+    single_ref_modes = {
+        'curl-bearer-config',
+        'kubeconfig-file',
+        'cloud-credentials-file',
+        'browser-session-file',
+    }
+    if credential_refs and capability.credential_mode in single_ref_modes and len(credential_refs) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail=f'Capability {capability.id} accepts at most one credential reference',
+        )
     if credential_refs and capability.credential_mode == 'none':
         raise HTTPException(status_code=409, detail=f'Capability {capability.id} does not support credential-bound execution')
 
@@ -245,6 +257,35 @@ async def execute_capability(
     except CredentialVaultDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    if capability.id == 'browser.spa-discovery':
+        requested_identity = str(options.get('identity_ref') or 'anonymous').strip()
+        if credential_refs:
+            bindings = (
+                credential_context.get('credential_refs')
+                if isinstance(credential_context.get('credential_refs'), list)
+                else []
+            )
+            bound_identity = (
+                str(bindings[0].get('browser_identity_ref') or '').strip()
+                if bindings and isinstance(bindings[0], dict)
+                else ''
+            )
+            if not bound_identity:
+                raise HTTPException(status_code=409, detail='Browser credential has no durable identity binding')
+            if requested_identity not in {'anonymous', bound_identity}:
+                raise HTTPException(
+                    status_code=409,
+                    detail='Requested browser identity does not match the bound credential identity',
+                )
+            options = {**options, 'identity_ref': bound_identity}
+        else:
+            if requested_identity != 'anonymous':
+                raise HTTPException(
+                    status_code=409,
+                    detail='Non-anonymous browser identity requires a bound browser session credential',
+                )
+            options = {**options, 'identity_ref': 'anonymous'}
+
     config = {
         'target': target,
         'capability_options': options,
@@ -272,7 +313,14 @@ async def execute_capability(
             request.depth,
             config,
         )
-        task = run_native_capability_scan.delay(str(created.id))
+        if capability.id == 'browser.spa-discovery':
+            task = run_native_capability_scan.apply_async(
+                args=[str(created.id)],
+                queue=BROWSER_QUEUE,
+                routing_key=BROWSER_QUEUE,
+            )
+        else:
+            task = run_native_capability_scan.delay(str(created.id))
     else:
         scan_request = ScanCreate(
             project_id=request.project_id,

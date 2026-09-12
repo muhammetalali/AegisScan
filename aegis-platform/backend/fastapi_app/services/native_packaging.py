@@ -44,6 +44,7 @@ PACKAGED_NATIVE_CAPABILITIES = frozenset({
     'web.nikto',
     'web.waf-detection',
     'browser.dom-snapshot',
+    'browser.spa-discovery',
     'container.trivy-image',
     'code.checkov',
     'code.trivy-config',

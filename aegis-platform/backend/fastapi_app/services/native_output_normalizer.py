@@ -212,6 +212,142 @@ def _normalize_cloud_observations(data: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, Any]]:
+    observations = data.get('observations') if isinstance(data.get('observations'), list) else []
+    result: list[dict[str, Any]] = []
+    for item in observations[:3000]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get('kind') or '')[:100]
+        if kind == 'browser-spa-summary':
+            cookies = []
+            for cookie in item.get('cookies', []) if isinstance(item.get('cookies'), list) else []:
+                if not isinstance(cookie, dict):
+                    continue
+                cookies.append({
+                    'name': str(cookie.get('name') or '')[:256],
+                    'domain': str(cookie.get('domain') or '')[:255],
+                    'path': str(cookie.get('path') or '/')[:1024],
+                    'secure': bool(cookie.get('secure')),
+                    'http_only': bool(cookie.get('http_only')),
+                    'same_site': str(cookie.get('same_site') or '')[:20],
+                    'session': bool(cookie.get('session')),
+                })
+            safe = {
+                'kind': kind,
+                'identity_ref': str(item.get('identity_ref') or '')[:255],
+                'target_origin': str(item.get('target_origin') or '')[:2048],
+                'page_title': str(item.get('page_title') or '')[:500],
+                'local_storage_keys': [
+                    str(value)[:200]
+                    for value in (item.get('local_storage_keys') or [])[:200]
+                    if isinstance(value, str)
+                ],
+                'session_storage_keys': [
+                    str(value)[:200]
+                    for value in (item.get('session_storage_keys') or [])[:200]
+                    if isinstance(value, str)
+                ],
+                'cookies': cookies[:64],
+                'post_message_listener_count': _positive_int(item.get('post_message_listener_count'), 100000),
+                'post_message_send_count': _positive_int(item.get('post_message_send_count'), 100000),
+                'inner_html_write_count': _positive_int(item.get('inner_html_write_count'), 1000000),
+                'insert_adjacent_html_count': _positive_int(item.get('insert_adjacent_html_count'), 1000000),
+                'document_write_count': _positive_int(item.get('document_write_count'), 1000000),
+                'blocked_websocket_count': _positive_int(item.get('blocked_websocket_count'), 1000000),
+                'blocked_webtransport_count': _positive_int(item.get('blocked_webtransport_count'), 1000000),
+                'dom_clobbering_count': _positive_int(item.get('dom_clobbering_count'), 1000000),
+                'prototype_additions': [
+                    str(value)[:200]
+                    for value in (item.get('prototype_additions') or [])[:100]
+                    if isinstance(value, str)
+                ],
+                'redirect_chain': [
+                    str(value)[:2048]
+                    for value in (item.get('redirect_chain') or [])[:100]
+                    if isinstance(value, str)
+                ],
+                'profile_isolation': str(item.get('profile_isolation') or '')[:100],
+                'credential_transport': str(item.get('credential_transport') or '')[:100],
+                'network_isolation': str(item.get('network_isolation') or '')[:100],
+                'event_truncated': item.get('event_truncated') is True,
+                'blocked_out_of_scope_request_count': _positive_int(
+                    item.get('blocked_out_of_scope_request_count'),
+                    1000000,
+                ),
+                'proxy_blocked_connection_count': _positive_int(
+                    item.get('proxy_blocked_connection_count'),
+                    1000000,
+                ),
+                'proxy_allowed_connection_count': _positive_int(
+                    item.get('proxy_allowed_connection_count'),
+                    1000000,
+                ),
+            }
+            result.append(safe)
+            continue
+        if kind in {'browser-page-route', 'browser-websocket-channel'}:
+            url = str(item.get('url') or '')[:2048]
+            if url.startswith(('http://', 'https://', 'ws://', 'wss://')):
+                result.append({'kind': kind, 'url': url})
+            continue
+        if kind == 'browser-http-endpoint':
+            headers = item.get('response_headers') if isinstance(item.get('response_headers'), dict) else {}
+            safe_headers = {
+                str(name).lower()[:100]: str(value)[:2048]
+                for name, value in list(headers.items())[:32]
+                if str(name).lower() in {
+                    'access-control-allow-origin',
+                    'access-control-allow-credentials',
+                    'content-security-policy',
+                    'cross-origin-embedder-policy',
+                    'cross-origin-opener-policy',
+                    'cross-origin-resource-policy',
+                    'permissions-policy',
+                    'referrer-policy',
+                    'strict-transport-security',
+                    'x-content-type-options',
+                    'x-frame-options',
+                }
+            }
+            result.append({
+                'kind': kind,
+                'url': str(item.get('url') or '')[:2048],
+                'method': str(item.get('method') or 'GET').upper()[:16],
+                'resource_type': str(item.get('resource_type') or '')[:80],
+                'document_url': str(item.get('document_url') or '')[:2048],
+                'status': _positive_int(item.get('status'), 599),
+                'mime_type': str(item.get('mime_type') or '')[:200],
+                'response_headers': safe_headers,
+            })
+            continue
+        if kind == 'browser-graphql-operation':
+            result.append({
+                'kind': kind,
+                'endpoint': str(item.get('endpoint') or '')[:2048],
+                'method': str(item.get('method') or 'POST').upper()[:16],
+                'document_url': str(item.get('document_url') or '')[:2048],
+                'operation_type': str(item.get('operation_type') or '')[:32],
+                'operation_name': str(item.get('operation_name') or '')[:200],
+                'variable_keys': [
+                    str(value)[:200]
+                    for value in (item.get('variable_keys') or [])[:100]
+                    if isinstance(value, str)
+                ],
+            })
+            continue
+        if kind == 'browser-javascript-resource':
+            safe = {
+                'kind': kind,
+                'url': str(item.get('url') or '')[:2048],
+            }
+            source_map = str(item.get('source_map_url') or '')[:2048]
+            if source_map:
+                safe['source_map_url'] = source_map
+            result.append(safe)
+    return result
+
+
 def _json_lines(raw: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for line in raw.splitlines():
@@ -494,6 +630,16 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
                     observations.append(safe)
             if not observations and data.get('error'):
                 observations.append({'kind': 'browser-error', 'summary': str(data['error'])[:2000]})
+
+    elif capability_id == 'browser.spa-discovery':
+        data = _json(raw)
+        if isinstance(data, dict):
+            observations.extend(_normalize_browser_spa_observations(data))
+            if not observations and data.get('error'):
+                observations.append({
+                    'kind': 'browser-spa-error',
+                    'summary': str(data['error'])[:2000],
+                })
 
     elif capability_id == 'api.openapi-contract-security':
         data = _json(raw)

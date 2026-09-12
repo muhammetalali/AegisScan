@@ -35,6 +35,11 @@ services:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       ALLOW_SINGLE_LABEL_SCAN_TARGETS: "1"
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-/app/e2e/semgrep-ci.yml}
+  browser_worker:
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: "1"
+      DJANGO_SETTINGS_MODULE: django_project.settings
   celery_beat:
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}

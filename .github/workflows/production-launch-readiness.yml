@@ -23,6 +23,7 @@ on:
       - 'aegis-platform/docker/alertmanager/**'
       - 'aegis-platform/monitoring/**'
       - 'tests/test_production_preflight.py'
+      - 'tests/test_production_secret_init.py'
       - 'tests/test_production_host_deploy.py'
       - 'tests/test_production_remote_deploy.py'
       - 'tests/test_production_resilience_backup.py'
@@ -95,6 +96,7 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_production_preflight.py \
+            tests/test_production_secret_init.py \
             tests/test_production_host_deploy.py \
             tests/test_production_remote_deploy.py \
             tests/test_production_resilience_backup.py \
@@ -219,6 +221,8 @@ jobs:
           DEBUG: 'False'
           SECRET_KEY: ci-production-django-key-${{ github.sha }}-${{ github.run_id }}
           JWT_SECRET_KEY: ci-production-jwt-key-${{ github.sha }}-${{ github.run_id }}
+          CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+          CREDENTIAL_FINGERPRINT_KEY: ci-production-browser-fingerprint-${{ github.sha }}
           POSTGRES_PASSWORD: postgres-ci-launch-${{ github.sha }}
           DATABASE_URL: postgresql://aegis:secret@postgres:5432/aegisdb
           REDIS_URL: redis://redis:6379/0

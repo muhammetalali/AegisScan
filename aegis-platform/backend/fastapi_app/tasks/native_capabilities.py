@@ -9,11 +9,13 @@ from django.db import transaction
 from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.system.credential_vault import CredentialVaultDenied
+from fastapi_app.celery_app import BROWSER_QUEUE, SCANNER_QUEUE
 from fastapi_app.services.authorization_guard import (
     authorization_snapshot,
     require_bound_scan_authorization,
     revalidate_bound_authorization,
 )
+from fastapi_app.services.browser_surface_graph import project_browser_surface_graph
 from fastapi_app.services.capability_registry import get_capability
 from fastapi_app.services.credential_execution import (
     assert_no_credential_material_leaked,
@@ -134,6 +136,18 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
         engine = _engine('invalid-native-capability', ScanEngine.EngineCategory.ANALYSIS, 60)
         return _fail(persisted, _execution(persisted, engine), str(exc))
 
+    expected_queue = BROWSER_QUEUE if capability.id == 'browser.spa-discovery' else SCANNER_QUEUE
+    delivery_info = getattr(self.request, 'delivery_info', None) or {}
+    delivered_queue = str(delivery_info.get('routing_key') or '')
+    if not getattr(self.request, 'called_directly', False) and delivered_queue != expected_queue:
+        engine = _engine(capability.tool, ScanEngine.EngineCategory.ANALYSIS, spec.timeout)
+        return _fail(
+            persisted,
+            _execution(persisted, engine),
+            f'Execution blocked: capability requires queue {expected_queue!r}, delivered via {delivered_queue or "<unknown>"!r}.',
+            {'expected_queue': expected_queue, 'delivered_queue': delivered_queue or '<unknown>'},
+        )
+
     terminal = terminal_scan_delivery(scan_id, capability.tool)
     if terminal:
         return terminal
@@ -182,6 +196,29 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 purpose=f'native:{capability.id}:execute',
                 target=str(target),
             )
+
+        if capability.id == 'browser.spa-discovery':
+            requested_identity = str(options.get('identity_ref') or 'anonymous').strip()
+            if credential_materials:
+                bound_identity = str(credential_materials[0].get('browser_identity_ref') or '').strip()
+                if not bound_identity or requested_identity != bound_identity:
+                    return _fail(
+                        scan,
+                        execution,
+                        'Browser identity no longer matches the bound credential identity',
+                        credential_context,
+                    )
+                options = {**options, 'identity_ref': bound_identity}
+            else:
+                if requested_identity != 'anonymous':
+                    return _fail(
+                        scan,
+                        execution,
+                        'Non-anonymous browser identity requires a bound browser session credential',
+                        credential_context,
+                    )
+                options = {**options, 'identity_ref': 'anonymous'}
+
         result = run_native_tool(
             capability_id,
             str(target),
@@ -208,6 +245,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
         successful = result.exit_code == 0
         finding_ids: list[str] = []
         finding_evidence_ids: list[str] = []
+        graph_projection: dict[str, Any] = {}
         with transaction.atomic():
             evidence, _ = Evidence.objects.update_or_create(
                 id=evidence_id('scan', scan_id, capability.tool, 'scanner_output'),
@@ -233,6 +271,12 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 },
             )
             if successful:
+                if capability.id == 'browser.spa-discovery':
+                    graph_projection = project_browser_surface_graph(
+                        scan=scan,
+                        normalized=normalized,
+                        evidence_ref=str(evidence.id),
+                    )
                 finding_ids, finding_evidence_ids = project_native_findings(
                     scan=scan,
                     capability_id=capability.id,
@@ -262,6 +306,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 'observation_count': normalized['count'],
                 'finding_ids': finding_ids,
                 'credential_context': credential_context,
+                'graph_projection': graph_projection,
                 **snapshot,
             }
             execution.save(update_fields=[
@@ -289,6 +334,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             'finding_evidence_ids': finding_evidence_ids,
             'observation_count': normalized['count'],
             'credential_context': credential_context,
+            'graph_projection': graph_projection,
             **snapshot,
         }
     except NativeExecutionCancelled:

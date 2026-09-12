@@ -17,7 +17,7 @@ from .scanner_adapters import ScanResult, validate_authorized_target, validate_a
 from .scope_authorization import require_authorized_target
 
 TargetKind = Literal['host', 'network', 'url', 'path', 'image', 'cloud']
-CredentialMode = Literal['none', 'curl-bearer-config', 'kubeconfig-file', 'cloud-credentials-file']
+CredentialMode = Literal['none', 'curl-bearer-config', 'kubeconfig-file', 'cloud-credentials-file', 'browser-session-file']
 CaptureMode = Literal['stdout', 'nikto-json-file']
 
 
@@ -95,6 +95,19 @@ NATIVE_TOOL_SPECS: dict[str, NativeToolSpec] = {
         ),
         timeout=120,
     ),
+    'browser.spa-discovery': NativeToolSpec(
+        'browser.spa-discovery', 'aegis-browser-spa-discovery', 'browser-security',
+        'Stateful Chromium CDP discovery of SPA routes, runtime HTTP APIs, GraphQL operations, WebSocket channels, browser storage metadata and client-side security signals.',
+        'url', ('website',), 'active-low', 'url', None,
+        options=(
+            ('identity_ref', OptionSpec('--identity-ref', 'str', 'anonymous')),
+            ('wait_ms', OptionSpec('--wait-ms', 'int', 4000, 1000, 15000)),
+            ('max_events', OptionSpec('--max-events', 'int', 2000, 100, 5000)),
+        ),
+        timeout=180,
+        credential_mode='browser-session-file',
+        credential_kinds=('generic',),
+    ),
     'web.gobuster': NativeToolSpec('web.gobuster', 'gobuster', 'content-discovery', 'Directory and content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', prefix_args=('dir',), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50))), timeout=1200),
     'web.dirb': NativeToolSpec('web.dirb', 'dirb', 'content-discovery', 'Bounded dictionary-driven web content discovery.', 'url', ('website',), 'active-medium', 'url', None, options=(('wordlist', OptionSpec(None, 'str', '/opt/aegis-wordlists/web-common.txt')),), suffix_args=('-S',), timeout=1200),
     'web.feroxbuster': NativeToolSpec('web.feroxbuster', 'feroxbuster', 'content-discovery', 'Recursive content discovery against an authorized web asset.', 'url', ('website',), 'active-medium', 'url', '-u', suffix_args=('--json', '--silent', '--no-state'), options=(('wordlist', OptionSpec('-w', 'str', '/opt/aegis-wordlists/web-common.txt')), ('threads', OptionSpec('-t', 'int', 10, 1, 50)), ('depth', OptionSpec('-d', 'int', 2, 1, 4))), timeout=1200),
@@ -162,6 +175,9 @@ def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> di
                 ):
                     raise ValueError('ports must contain integers between 1 and 65535')
                 value = ','.join(str(int(part)) for part in parts)
+            if name == 'identity_ref':
+                if len(value) > 255:
+                    raise ValueError('identity_ref must be at most 255 characters')
             if name == 'wordlist':
                 path = Path(value).expanduser().resolve()
                 allowed_root = Path(os.getenv('AEGIS_WORDLIST_ROOT', '/opt/aegis-wordlists')).resolve()
@@ -260,6 +276,22 @@ def _cloud_material_secret(material: Mapping[str, Any]) -> str:
     return secret
 
 
+def _browser_session_material_secret(material: Mapping[str, Any]) -> str:
+    secret = str(material.get('secret') or '')
+    if not secret or '\x00' in secret or len(secret.encode('utf-8')) > 65536:
+        raise ValueError('Browser session credential must be UTF-8 JSON no larger than 64 KiB')
+    try:
+        data = json.loads(secret)
+    except json.JSONDecodeError as exc:
+        raise ValueError('Browser session credential must be valid JSON') from exc
+    if not isinstance(data, dict):
+        raise ValueError('Browser session credential must be a JSON object')
+    unknown = set(data) - {'headers', 'cookies', 'local_storage', 'session_storage'}
+    if unknown:
+        raise ValueError(f'Browser session credential contains unsupported fields: {sorted(unknown)}')
+    return secret
+
+
 def _curl_config_for_bearer(secret: str) -> str:
     escaped = secret.replace('\\', '\\\\').replace('"', '\\"')
     fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.curlrc')
@@ -279,6 +311,14 @@ def _kubeconfig_file(secret: str) -> str:
 
 def _cloud_credentials_file(secret: str) -> str:
     fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.cloud.json')
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
+        handle.write(secret)
+    return path
+
+
+def _browser_session_file(secret: str) -> str:
+    fd, path = tempfile.mkstemp(prefix='aegis-credential-', suffix='.browser-session.json')
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
         handle.write(secret)
@@ -316,6 +356,14 @@ def _credential_runtime_args(
             raise ValueError('cloud execution requires a cloud_access_key credential')
         path = _cloud_credentials_file(_cloud_material_secret(material))
         return ['--credentials-file', path], [path]
+    if spec.credential_mode == 'browser-session-file':
+        if len(credential_materials) != 1:
+            raise ValueError('browser session execution accepts exactly one credential reference')
+        material = credential_materials[0]
+        if str(material.get('kind') or '') != 'generic':
+            raise ValueError('browser session execution requires a generic credential containing the session JSON')
+        path = _browser_session_file(_browser_session_material_secret(material))
+        return ['--session-file', path], [path]
     raise ValueError(f'Unsupported credential execution mode: {spec.credential_mode}')
 
 

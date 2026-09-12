@@ -75,6 +75,32 @@ services:
       postgres: {condition: service_healthy}
       django: {condition: service_started}
 
+  browser_worker:
+    env_file: !reset []
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      REDIS_URL: ${REDIS_URL:-}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-}
+      CREDENTIAL_VAULT_KEYS: ${CREDENTIAL_VAULT_KEYS:-}
+      CREDENTIAL_FINGERPRINT_KEY: ${CREDENTIAL_FINGERPRINT_KEY:-}
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+      XDG_CONFIG_HOME: /tmp/.config
+    depends_on: !override
+      scanner_egress: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      django: {condition: service_started}
+
   celery_beat:
     env_file: !reset []
     volumes: !reset []

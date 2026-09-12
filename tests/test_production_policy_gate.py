@@ -42,6 +42,22 @@ def valid_model():
             network_mode='service:scanner_egress',
             cap_add=['NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'],
         ),
+        'browser_worker': hardened_service(
+            environment={
+                'AUTHORIZED_SCAN_TARGETS':'security.example',
+                'SECRET_KEY':'production-secret-key-value',
+                'JWT_SECRET_KEY':'production-jwt-key-value',
+                'DATABASE_URL':'postgresql://aegis:secret@postgres:5432/aegisdb',
+                'REDIS_URL':'redis://redis:6379/0',
+                'CELERY_BROKER_URL':'redis://redis:6379/0',
+                'CELERY_RESULT_BACKEND':'redis://redis:6379/0',
+                'CREDENTIAL_VAULT_KEYS':'valid-production-vault-key-placeholder',
+                'CREDENTIAL_FINGERPRINT_KEY':'valid-production-fingerprint-key-value',
+            },
+            command='celery -A fastapi_app.celery_app worker -Q browser',
+            user='10001:10001',
+            network_mode='service:scanner_egress',
+        ),
         'scanner_egress': hardened_service(
             cap_add=['NET_ADMIN'],
             environment={'SCANNER_EGRESS_PRIVATE_TARGETS':''},
@@ -102,6 +118,37 @@ def test_rejects_scanner_privilege_or_namespace_regressions():
     assert any('scanner_egress lacks NET_ADMIN' in item for item in failures)
     assert any('scanner_egress should not receive NET_RAW' in item for item in failures)
     assert any('CI scan target' in item for item in failures)
+
+
+def test_rejects_browser_worker_privilege_queue_or_namespace_regressions():
+    model = valid_model()
+    browser = model['services']['browser_worker']
+    browser['cap_add'] = ['NET_RAW']
+    browser['user'] = '0:0'
+    browser['network_mode'] = 'default'
+    browser['command'] = 'celery -A fastapi_app.celery_app worker -Q scanners'
+    browser['security_opt'] = []
+
+    failures = MODULE.validate(model)
+    assert any('browser_worker must not receive Linux capabilities' in item for item in failures)
+    assert any('browser_worker must run as a non-root' in item for item in failures)
+    assert any('browser_worker does not share the scanner_egress' in item for item in failures)
+    assert any('browser_worker is not pinned to the browser queue' in item for item in failures)
+    assert any('browser_worker does not enforce no-new-privileges' in item for item in failures)
+
+
+def test_rejects_browser_worker_missing_runtime_or_vault_environment():
+    model = valid_model()
+    browser = model['services']['browser_worker']
+    for key in (
+        'SECRET_KEY', 'JWT_SECRET_KEY', 'DATABASE_URL', 'REDIS_URL',
+        'CELERY_BROKER_URL', 'CELERY_RESULT_BACKEND', 'CREDENTIAL_VAULT_KEYS',
+        'CREDENTIAL_FINGERPRINT_KEY',
+    ):
+        broken = valid_model()
+        broken['services']['browser_worker']['environment'][key] = ''
+        failures = MODULE.validate(broken)
+        assert any(f'browser_worker is missing required production runtime variable {key}' in item for item in failures)
 
 
 def test_rejects_queue_or_handoff_regression():

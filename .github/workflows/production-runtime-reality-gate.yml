@@ -100,6 +100,8 @@ jobs:
         env:
           AUTHORIZED_SCAN_TARGETS: production-policy.example
           POSTGRES_PASSWORD: ci-production-policy-password
+          CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+          CREDENTIAL_FINGERPRINT_KEY: ci-production-runtime-browser-fingerprint-key
           AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
           AEGIS_BACKUP_S3_BUCKET: aegisscan-production-backups
           AEGIS_BACKUP_S3_CREDENTIALS_FILE: /run/aegis-policy/s3.json

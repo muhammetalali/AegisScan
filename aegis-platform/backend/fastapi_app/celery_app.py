@@ -18,6 +18,7 @@ celery_app = Celery(
 )
 
 SCANNER_QUEUE = "scanners"
+BROWSER_QUEUE = "browser"
 SCANNER_TASK_ROUTES = {
     "fastapi_app.tasks.security_scan.run_nmap_scan": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.security_scan.run_nuclei_scan": {"queue": SCANNER_QUEUE},

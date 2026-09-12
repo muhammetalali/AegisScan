@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -16,7 +17,7 @@ from django_project.system.credential_vault import (
 )
 from fastapi_app.services.cloud_target import parse_cloud_target
 
-_POLICY_VERSION = 'credential-execution.v3'
+_POLICY_VERSION = 'credential-execution.v4'
 _MAX_CREDENTIAL_REFS = 3
 
 
@@ -112,6 +113,57 @@ def _canonical_api_server(value: str) -> str:
     return urlunsplit(('https', authority, parsed.path.rstrip('/'), '', ''))
 
 
+def _canonical_web_origin(value: str) -> str:
+    parsed = urlsplit(str(value or '').strip())
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or '').lower().rstrip('.')
+    if scheme not in {'http', 'https'} or not host or parsed.username or parsed.password:
+        raise ValueError('Browser credential scope must be an absolute HTTP(S) origin')
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError('Browser credential scope contains an invalid port') from exc
+    default_port = 80 if scheme == 'http' else 443
+    authority = host if port in {None, default_port} else f'{host}:{port}'
+    return urlunsplit((scheme, authority, '', '', ''))
+
+
+def _browser_identity_binding(credential: CredentialSecret) -> str:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    raw = str(scope.get('browser_identity_ref') or '').strip()
+    if raw:
+        if len(raw) > 255 or any(ch in raw for ch in '\r\n\x00'):
+            raise CredentialVaultDenied('Browser credential identity binding is invalid.')
+        return raw
+    return f'credential:{credential.id}'
+
+
+def _validate_browser_scope(*, credential: CredentialSecret, actor: Any, purpose: str, target: str) -> None:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    scoped_origin = str(scope.get('browser_origin') or '').strip()
+    try:
+        expected = _canonical_web_origin(scoped_origin)
+        actual = _canonical_web_origin(target)
+    except ValueError:
+        expected = ''
+        actual = ''
+    if expected and actual and expected == actual:
+        return
+    _record_denied(
+        credential=credential,
+        actor=actor,
+        purpose=purpose,
+        reason='browser session credential scope does not match the authorized target origin',
+        metadata={
+            'credential_ref': str(credential.id),
+            'kind': credential.kind,
+            'scope_type': 'browser_origin',
+            'scope_matches_target': False,
+        },
+    )
+    raise CredentialVaultDenied('Browser session credential is not scoped to this authorized target origin.')
+
+
 def _validate_kube_scope(*, credential: CredentialSecret, actor: Any, purpose: str, target: str) -> None:
     scope = credential.scope if isinstance(credential.scope, dict) else {}
     scoped_target = str(scope.get('api_server') or '').strip()
@@ -174,9 +226,21 @@ def _validate_cloud_scope(*, credential: CredentialSecret, actor: Any, purpose: 
 
 
 def _validate_scope(
-    *, credential: CredentialSecret, actor: Any, purpose: str, target: str
+    *,
+    credential: CredentialSecret,
+    actor: Any,
+    purpose: str,
+    target: str,
+    capability_id: str,
 ) -> None:
-    if credential.kind == CredentialSecret.Kind.KUBECONFIG:
+    if capability_id == 'browser.spa-discovery':
+        _validate_browser_scope(
+            credential=credential,
+            actor=actor,
+            purpose=purpose,
+            target=target,
+        )
+    elif credential.kind == CredentialSecret.Kind.KUBECONFIG:
         _validate_kube_scope(credential=credential, actor=actor, purpose=purpose, target=target)
     elif credential.kind == CredentialSecret.Kind.CLOUD_ACCESS_KEY:
         _validate_cloud_scope(credential=credential, actor=actor, purpose=purpose, target=target)
@@ -204,9 +268,12 @@ def authorize_credential_refs_for_execution(
         if credential is None:
             raise CredentialVaultDenied('Credential reference is not available for this project.')
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
-        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target)
+        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
         authorized = authorize_credential_use(credential=credential, actor=actor, purpose=purpose_value)
-        metadata.append({'credential_ref': str(authorized.id), 'kind': authorized.kind, 'version': authorized.version})
+        item = {'credential_ref': str(authorized.id), 'kind': authorized.kind, 'version': authorized.version}
+        if capability_id == 'browser.spa-discovery':
+            item['browser_identity_ref'] = _browser_identity_binding(authorized)
+        metadata.append(item)
     return credential_execution_context(metadata, resolved=False)
 
 
@@ -233,7 +300,7 @@ def resolve_credential_refs_for_worker(
         if credential is None:
             raise CredentialVaultDenied('Credential reference is not available for this project.')
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
-        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target)
+        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
         secret = resolve_credential_secret(credential=credential, actor=actor, purpose=purpose_value)
         credential.refresh_from_db(fields=['kind', 'version'])
         material = {
@@ -242,13 +309,63 @@ def resolve_credential_refs_for_worker(
             'version': credential.version,
             'secret': secret,
         }
+        if capability_id == 'browser.spa-discovery':
+            material['browser_identity_ref'] = _browser_identity_binding(credential)
         materials.append(material)
-        metadata.append({key: material[key] for key in ('credential_ref', 'kind', 'version')})
+        item = {key: material[key] for key in ('credential_ref', 'kind', 'version')}
+        if capability_id == 'browser.spa-discovery':
+            item['browser_identity_ref'] = material['browser_identity_ref']
+        metadata.append(item)
     context = credential_execution_context(metadata, resolved=True)
     assert_no_credential_material_leaked(materials, context)
     return tuple(materials), context
 
 
+def _browser_session_sensitive_values(secret: str) -> tuple[str, ...]:
+    try:
+        data = json.loads(secret)
+    except (TypeError, json.JSONDecodeError):
+        return ()
+    if not isinstance(data, dict):
+        return ()
+    allowed = {'headers', 'cookies', 'local_storage', 'session_storage'}
+    if not data or set(data) - allowed:
+        return ()
+
+    values: list[str] = []
+    headers = data.get('headers')
+    if isinstance(headers, dict):
+        values.extend(str(value) for value in headers.values() if value not in {None, ''})
+        authorization = next(
+            (
+                str(value)
+                for name, value in headers.items()
+                if str(name).lower() == 'authorization' and value not in {None, ''}
+            ),
+            '',
+        )
+        if authorization:
+            parts = authorization.split(None, 1)
+            if len(parts) == 2 and parts[1]:
+                values.append(parts[1])
+
+    cookies = data.get('cookies')
+    if isinstance(cookies, list):
+        for cookie in cookies:
+            if isinstance(cookie, dict) and cookie.get('value') not in {None, ''}:
+                values.append(str(cookie['value']))
+
+    for key in ('local_storage', 'session_storage'):
+        storage = data.get(key)
+        if isinstance(storage, dict):
+            values.extend(str(value) for value in storage.values() if value not in {None, ''})
+
+    return tuple(dict.fromkeys(values))
+
+
 def assert_no_credential_material_leaked(materials: Iterable[Mapping[str, Any]], *payloads: Any) -> None:
     for material in materials:
-        assert_no_secret_material(str(material.get('secret') or ''), *payloads)
+        secret = str(material.get('secret') or '')
+        assert_no_secret_material(secret, *payloads)
+        for nested_secret in _browser_session_sensitive_values(secret):
+            assert_no_secret_material(nested_secret, *payloads)
