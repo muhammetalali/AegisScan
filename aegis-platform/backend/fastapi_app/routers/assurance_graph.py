@@ -78,7 +78,7 @@ def _load_validations(user_id: str) -> dict[str, dict[str, Any]]:
 
 @sync_to_async
 def _load_validation(validation_id: str, user_id: str):
-    item = ValidationRun.objects.filter(id=validation_id, user_id=user_id).select_related('finding__scan').first()
+    item = ValidationRun.objects.filter(id=validation_id, user_id=user_id).select_related('finding__scan', 'finding__project').first()
     return item
 
 
