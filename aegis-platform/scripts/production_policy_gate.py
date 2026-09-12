@@ -125,6 +125,7 @@ def validate(model: dict) -> list[str]:
     for required in (
         'SECRET_KEY', 'JWT_SECRET_KEY', 'DATABASE_URL', 'REDIS_URL',
         'CELERY_BROKER_URL', 'CELERY_RESULT_BACKEND', 'CREDENTIAL_VAULT_KEYS',
+        'CREDENTIAL_FINGERPRINT_KEY',
     ):
         if not str(browser_env.get(required, '')).strip():
             failures.append(f'browser_worker is missing required production runtime variable {required}')
