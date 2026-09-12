@@ -294,13 +294,21 @@ def expected_authorization(policy: AuthorizationPolicyManifest | None, case: dic
     identity_tenant = str(identity.get('tenant_ref') or '')
     resource_tenant = str(resource.get('tenant_ref') or '')
     if policy.tenant_rule in {'same_tenant', 'tenant_match', 'deny_cross_tenant'}:
-        if identity_tenant and resource_tenant and identity_tenant != resource_tenant:
+        if not identity_tenant or not resource_tenant:
+            return False, 'Tenant-bound policy requires both identity and resource tenant bindings'
+        if identity_tenant != resource_tenant:
             return False, 'Cross-tenant access is forbidden by tenant rule'
 
     owner_ref = str(resource.get('owner_ref') or '')
     identity_ref = str(identity.get('ref') or '')
-    if policy.ownership_rule in {'owner_only', 'same_owner'} and owner_ref and identity_ref != owner_ref:
-        return False, 'Cross-owner access is forbidden by ownership rule'
+    if policy.ownership_rule in {'owner_only', 'same_owner'}:
+        if not identity_ref or not owner_ref:
+            return False, 'Owner-bound policy requires both identity and resource owner bindings'
+        if identity_ref != owner_ref:
+            return False, 'Cross-owner access is forbidden by ownership rule'
+
+    if policy.conditions:
+        return False, 'Policy has conditions without a registered deterministic evaluator; fail-closed deny'
 
     return bool(policy.allowed), 'Matched authorization policy manifest'
 
@@ -405,10 +413,9 @@ def evaluate_execution_budget(profile: ExecutionBudgetProfile, requested: dict[s
 
     requested_capabilities = {str(x) for x in (requested.get('capabilities') or [])}
     allowed_capabilities = {str(x) for x in (profile.allowed_capabilities or [])}
-    if allowed_capabilities:
-        denied = sorted(requested_capabilities - allowed_capabilities)
-        if denied:
-            failures.append('capabilities not allowed: ' + ', '.join(denied))
+    denied = sorted(requested_capabilities - allowed_capabilities)
+    if denied:
+        failures.append('capabilities not allowed: ' + ', '.join(denied))
 
     if bool(requested.get('state_changes')) and (
         not profile.state_changes or profile.state_change_policy == 'deny'
