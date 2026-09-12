@@ -256,6 +256,35 @@ async def execute_capability(
     except CredentialVaultDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    if capability.id == 'browser.spa-discovery':
+        requested_identity = str(options.get('identity_ref') or 'anonymous').strip()
+        if credential_refs:
+            bindings = (
+                credential_context.get('credential_refs')
+                if isinstance(credential_context.get('credential_refs'), list)
+                else []
+            )
+            bound_identity = (
+                str(bindings[0].get('browser_identity_ref') or '').strip()
+                if bindings and isinstance(bindings[0], dict)
+                else ''
+            )
+            if not bound_identity:
+                raise HTTPException(status_code=409, detail='Browser credential has no durable identity binding')
+            if requested_identity not in {'anonymous', bound_identity}:
+                raise HTTPException(
+                    status_code=409,
+                    detail='Requested browser identity does not match the bound credential identity',
+                )
+            options = {**options, 'identity_ref': bound_identity}
+        else:
+            if requested_identity != 'anonymous':
+                raise HTTPException(
+                    status_code=409,
+                    detail='Non-anonymous browser identity requires a bound browser session credential',
+                )
+            options = {**options, 'identity_ref': 'anonymous'}
+
     config = {
         'target': target,
         'capability_options': options,
