@@ -378,3 +378,41 @@ def test_https_to_graphql_transition_uses_persisted_identity_tenant_and_session_
     assert observations[0].semantic['tenant_consistent'] is True
     assert observations[0].semantic['session_bound'] is True
 
+@pytest.mark.parametrize(
+    'document',
+    [
+        'query Record { record(id: "a1") { ...Loop } } fragment Loop on Record { ...Loop }',
+        'query Record { record(id: "a1") { ...Missing } }',
+    ],
+)
+def test_graphql_metrics_fail_closed_on_unsafe_fragment_graphs(document: str):
+    result = evaluate_graphql_case({
+        'ref': 'graphql-fragment-invalid',
+        'identity': _identity(),
+        'resource': _resource(),
+        'endpoint': '/graphql',
+        'session_ref': 'session-a',
+        'operation_type': 'query',
+        'operation_name': 'Record',
+        'document': document,
+        'field_path': 'record',
+        'expected_allowed': False,
+        'server_accepted': False,
+        'response_status': 400,
+        'errors_count': 1,
+        'field_authorized': False,
+        'mutation_authorized': True,
+        'sensitive_fields_requested': [],
+        'sensitive_fields_returned': [],
+        'introspection_requested': False,
+        'introspection_expected_allowed': False,
+        'batch_size': 1,
+        'max_batch_size': 10,
+        'depth': 1,
+        'max_depth': 8,
+        'complexity': 1,
+        'max_complexity': 100,
+    })
+    assert result['passed'] is False
+    assert 'could not be parsed deterministically' in result['reason']
+
