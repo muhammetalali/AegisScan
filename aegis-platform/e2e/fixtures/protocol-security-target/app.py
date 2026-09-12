@@ -30,6 +30,7 @@ SCHEMA = build_schema(
       owner: String!
       value: String!
       secret: String!
+      related: Record
     }
 
     type Query {
@@ -124,6 +125,7 @@ SCHEMA.get_type('Query').fields['record'].resolve = _query_record
 SCHEMA.get_type('Query').fields['records'].resolve = _query_records
 SCHEMA.get_type('Mutation').fields['updateRecord'].resolve = _mutate_record
 SCHEMA.get_type('Record').fields['secret'].resolve = _resolve_secret
+SCHEMA.get_type('Record').fields['related'].resolve = lambda record, info: record
 
 
 def _metrics(query: str) -> tuple[int, int]:
