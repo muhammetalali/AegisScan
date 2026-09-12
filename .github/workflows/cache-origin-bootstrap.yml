@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   bootstrap:
-    if: startsWith(github.event.head_commit.message, 'chore(cache): activate deterministic bootstrap')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
