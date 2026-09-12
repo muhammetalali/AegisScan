@@ -92,6 +92,7 @@ def evaluate_websocket_case(case: dict[str, Any]) -> dict[str, Any]:
 
     semantic = {
         'protocol': 'websocket',
+        'session_ref': str(case.get('session_ref') or ''),
         'origin': origin,
         'origin_allowed': not allowed_origins or origin in allowed_origins,
         'authenticated': bool(case.get('authenticated')),
@@ -313,6 +314,7 @@ def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
 
     semantic = {
         'protocol': 'graphql',
+        'session_ref': str(case.get('session_ref') or ''),
         'operation_type': operation_type,
         'operation_name': str(case.get('operation_name') or ''),
         'field_path': str(case.get('field_path') or ''),
@@ -371,6 +373,8 @@ def evaluate_cross_protocol_case(case: dict[str, Any]) -> dict[str, Any]:
         'identity_consistent': bool(case.get('identity_consistent', True)),
         'tenant_consistent': bool(case.get('tenant_consistent', True)),
         'session_bound': bool(case.get('session_bound', True)),
+        'source_observation_id': str(case.get('source_observation_id') or ''),
+        'target_observation_id': str(case.get('target_observation_id') or ''),
         'source_evidence_ref': str(case.get('source_evidence_ref') or ''),
         'target_evidence_ref': str(case.get('target_evidence_ref') or ''),
         'failures': failures,
@@ -383,6 +387,97 @@ def evaluate_cross_protocol_case(case: dict[str, Any]) -> dict[str, Any]:
         'evidence_fingerprint': canonical_digest(semantic),
         'reason': '; '.join(failures) if failures else 'cross-protocol invariants satisfied',
     }
+
+
+
+def _protocol_for_observation(observation: WebSecurityObservation) -> str:
+    kind = observation.run.kind
+    if kind == WebSecurityValidationRun.Kind.WEBSOCKET_SECURITY:
+        return 'websocket'
+    if kind == WebSecurityValidationRun.Kind.GRAPHQL_SECURITY:
+        return 'graphql'
+    if kind == WebSecurityValidationRun.Kind.AUTHORIZATION_MATRIX:
+        protocol = str((observation.semantic or {}).get('protocol') or '').strip().lower()
+        return protocol if protocol in {'http', 'https'} else ''
+    return ''
+
+
+def _hydrate_cross_protocol_case(project, case: dict[str, Any]) -> dict[str, Any]:
+    source_id = str(case.get('source_observation_id') or '').strip()
+    target_id = str(case.get('target_observation_id') or '').strip()
+    if not source_id or not target_id:
+        raise ValueError('cross-protocol validation requires source and target observation IDs')
+
+    observations = {
+        str(row.id): row
+        for row in WebSecurityObservation.objects.select_related('run').filter(
+            id__in=[source_id, target_id],
+            run__project=project,
+        )
+    }
+    source = observations.get(source_id)
+    target = observations.get(target_id)
+    if source is None or target is None:
+        raise ValueError('cross-protocol observations must exist in the same project')
+
+    from_protocol = str(case.get('from_protocol') or '').strip().lower()
+    to_protocol = str(case.get('to_protocol') or '').strip().lower()
+    if _protocol_for_observation(source) != from_protocol:
+        raise ValueError('source observation protocol does not match transition source')
+    if _protocol_for_observation(target) != to_protocol:
+        raise ValueError('target observation protocol does not match transition target')
+
+    identity = _identity(case)
+    resource = _resource(case)
+    identity_ref = str(identity.get('ref') or '')
+    identity_tenant = str(identity.get('tenant_ref') or '')
+    resource_ref = str(resource.get('ref') or '')
+    resource_tenant = str(resource.get('tenant_ref') or '')
+
+    identity_consistent = bool(
+        identity_ref
+        and source.identity_ref == identity_ref
+        and target.identity_ref == identity_ref
+        and source.identity_type == target.identity_type == str(identity.get('type') or '')
+    )
+    tenant_consistent = bool(
+        identity_tenant
+        and resource_tenant
+        and source.tenant_ref == target.tenant_ref == identity_tenant
+        and source.resource_tenant_ref == target.resource_tenant_ref == resource_tenant
+        and identity_tenant == resource_tenant
+    )
+    resource_consistent = bool(
+        resource_ref
+        and source.resource_ref == target.resource_ref == resource_ref
+    )
+
+    session_ref = str(case.get('session_ref') or '')
+    source_session = str((source.semantic or {}).get('session_ref') or '')
+    target_session = str((target.semantic or {}).get('session_ref') or '')
+    session_bound = bool(
+        session_ref
+        and source_session == session_ref
+        and target_session == session_ref
+    )
+
+    observed_allowed = (
+        source.observed_decision == WebSecurityObservation.Decision.ALLOWED
+        and target.observed_decision == WebSecurityObservation.Decision.ALLOWED
+    )
+    expected_allowed = bool(source.expected_allowed and target.expected_allowed)
+
+    hydrated = dict(case)
+    hydrated.update({
+        'expected_allowed': expected_allowed,
+        'observed_allowed': observed_allowed,
+        'identity_consistent': identity_consistent,
+        'tenant_consistent': tenant_consistent and resource_consistent,
+        'session_bound': session_bound,
+        'source_evidence_ref': source.evidence_fingerprint,
+        'target_evidence_ref': target.evidence_fingerprint,
+    })
+    return hydrated
 
 
 def _common_nodes(case: dict[str, Any], source: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -690,10 +785,11 @@ def run_graphql_security(project, actor_id: str, cases: list[dict[str, Any]]):
 
 
 def run_cross_protocol_security(project, actor_id: str, cases: list[dict[str, Any]]):
+    hydrated_cases = [_hydrate_cross_protocol_case(project, case) for case in cases]
     return _run_cases(
         project,
         actor_id,
-        cases,
+        hydrated_cases,
         kind=WebSecurityValidationRun.Kind.CROSS_PROTOCOL,
         evaluator=evaluate_cross_protocol_case,
         projector=_project_cross_protocol_graph,
