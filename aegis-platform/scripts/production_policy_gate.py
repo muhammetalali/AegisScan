@@ -121,6 +121,14 @@ def validate(model: dict) -> list[str]:
     if not _has_no_new_privileges(browser_worker):
         failures.append('browser_worker does not enforce no-new-privileges')
 
+    browser_env = browser_worker.get('environment') or {}
+    for required in (
+        'SECRET_KEY', 'JWT_SECRET_KEY', 'DATABASE_URL', 'REDIS_URL',
+        'CELERY_BROKER_URL', 'CELERY_RESULT_BACKEND', 'CREDENTIAL_VAULT_KEYS',
+    ):
+        if not str(browser_env.get(required, '')).strip():
+            failures.append(f'browser_worker is missing required production runtime variable {required}')
+
     scanner_worker = services.get('scanner_worker', {})
     scanner_caps = _tokens(scanner_worker.get('cap_add'))
     if scanner_caps != _SCANNER_BOOTSTRAP_CAPS:
