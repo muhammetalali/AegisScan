@@ -128,6 +128,77 @@ def _canonical_web_origin(value: str) -> str:
     return urlunsplit((scheme, authority, '', '', ''))
 
 
+_PROTOCOL_SECURITY_CAPABILITIES = {
+    'websocket.security-validation',
+    'graphql.security-validation',
+    'cross-protocol.security-validation',
+}
+
+
+def _canonical_protocol_origin(value: str) -> str:
+    parsed = urlsplit(str(value or '').strip())
+    scheme = parsed.scheme.lower()
+    if scheme == 'ws':
+        scheme = 'http'
+    elif scheme == 'wss':
+        scheme = 'https'
+    host = (parsed.hostname or '').lower().rstrip('.')
+    if scheme not in {'http', 'https'} or not host or parsed.username or parsed.password:
+        raise ValueError('Protocol credential scope must be an absolute HTTP(S)/WS(S) origin')
+    if parsed.path not in {'', '/'} or parsed.query or parsed.fragment:
+        raise ValueError('Protocol credential scope must contain origin only')
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError('Protocol credential scope contains an invalid port') from exc
+    default_port = 80 if scheme == 'http' else 443
+    authority = host if port in {None, default_port} else f'{host}:{port}'
+    return urlunsplit((scheme, authority, '', '', ''))
+
+
+def _protocol_identity_binding(credential: CredentialSecret) -> str:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    raw = str(scope.get('protocol_identity_ref') or '').strip()
+    if not raw or len(raw) > 255 or any(ch in raw for ch in '\r\n\x00'):
+        raise CredentialVaultDenied('Protocol credential identity binding is missing or invalid.')
+    return raw
+
+
+def _validate_protocol_scope(
+    *,
+    credential: CredentialSecret,
+    actor: Any,
+    purpose: str,
+    target: str,
+) -> None:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    scoped_origin = str(scope.get('protocol_origin') or '').strip()
+    try:
+        expected = _canonical_protocol_origin(scoped_origin)
+        actual = _canonical_protocol_origin(target)
+    except ValueError:
+        expected = ''
+        actual = ''
+    if expected and actual and expected == actual:
+        _protocol_identity_binding(credential)
+        return
+    _record_denied(
+        credential=credential,
+        actor=actor,
+        purpose=purpose,
+        reason='protocol credential scope does not match the authorized target origin',
+        metadata={
+            'credential_ref': str(credential.id),
+            'kind': credential.kind,
+            'scope_type': 'protocol_origin',
+            'scope_matches_target': False,
+        },
+    )
+    raise CredentialVaultDenied(
+        'Protocol credential is not scoped to this authorized target origin.'
+    )
+
+
 def _browser_identity_binding(credential: CredentialSecret) -> str:
     scope = credential.scope if isinstance(credential.scope, dict) else {}
     raw = str(scope.get('browser_identity_ref') or '').strip()
@@ -240,6 +311,13 @@ def _validate_scope(
             purpose=purpose,
             target=target,
         )
+    elif capability_id in _PROTOCOL_SECURITY_CAPABILITIES:
+        _validate_protocol_scope(
+            credential=credential,
+            actor=actor,
+            purpose=purpose,
+            target=target,
+        )
     elif credential.kind == CredentialSecret.Kind.KUBECONFIG:
         _validate_kube_scope(credential=credential, actor=actor, purpose=purpose, target=target)
     elif credential.kind == CredentialSecret.Kind.CLOUD_ACCESS_KEY:
@@ -273,6 +351,8 @@ def authorize_credential_refs_for_execution(
         item = {'credential_ref': str(authorized.id), 'kind': authorized.kind, 'version': authorized.version}
         if capability_id == 'browser.spa-discovery':
             item['browser_identity_ref'] = _browser_identity_binding(authorized)
+        elif capability_id in _PROTOCOL_SECURITY_CAPABILITIES:
+            item['protocol_identity_ref'] = _protocol_identity_binding(authorized)
         metadata.append(item)
     return credential_execution_context(metadata, resolved=False)
 
@@ -311,10 +391,14 @@ def resolve_credential_refs_for_worker(
         }
         if capability_id == 'browser.spa-discovery':
             material['browser_identity_ref'] = _browser_identity_binding(credential)
+        elif capability_id in _PROTOCOL_SECURITY_CAPABILITIES:
+            material['protocol_identity_ref'] = _protocol_identity_binding(credential)
         materials.append(material)
         item = {key: material[key] for key in ('credential_ref', 'kind', 'version')}
         if capability_id == 'browser.spa-discovery':
             item['browser_identity_ref'] = material['browser_identity_ref']
+        elif capability_id in _PROTOCOL_SECURITY_CAPABILITIES:
+            item['protocol_identity_ref'] = material['protocol_identity_ref']
         metadata.append(item)
     context = credential_execution_context(metadata, resolved=True)
     assert_no_credential_material_leaked(materials, context)
