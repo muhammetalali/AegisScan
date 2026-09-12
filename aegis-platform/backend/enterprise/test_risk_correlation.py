@@ -209,7 +209,7 @@ def test_project_correlation_enforces_tenant_access_and_reuses_snapshot(correlat
 def test_risk_correlation_routes_are_wired(correlation_context):
     from fastapi_app.main import app
 
-    paths = {route.path for route in app.routes}
+    paths = {path for route in app.routes if (path := getattr(route, 'path', None))}
     assert '/api/v1/risk-correlation/projects/{project_id}/correlate' in paths
     assert '/api/v1/risk-correlation/projects/{project_id}' in paths
     assert '/api/v1/risk-correlation/findings/{finding_id}/latest' in paths
