@@ -269,9 +269,18 @@ def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, 
                 ],
                 'profile_isolation': str(item.get('profile_isolation') or '')[:100],
                 'credential_transport': str(item.get('credential_transport') or '')[:100],
+                'network_isolation': str(item.get('network_isolation') or '')[:100],
                 'event_truncated': item.get('event_truncated') is True,
                 'blocked_out_of_scope_request_count': _positive_int(
                     item.get('blocked_out_of_scope_request_count'),
+                    1000000,
+                ),
+                'proxy_blocked_connection_count': _positive_int(
+                    item.get('proxy_blocked_connection_count'),
+                    1000000,
+                ),
+                'proxy_allowed_connection_count': _positive_int(
+                    item.get('proxy_allowed_connection_count'),
                     1000000,
                 ),
             }
