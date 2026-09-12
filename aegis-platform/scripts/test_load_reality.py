@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+from pathlib import Path
 
 import pytest
 
-from aegis_platform.scripts import load_reality
+_SPEC = importlib.util.spec_from_file_location('aegis_load_reality', Path(__file__).with_name('load_reality.py'))
+assert _SPEC and _SPEC.loader
+load_reality = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(load_reality)
 
 
 class _Response:
