@@ -134,6 +134,7 @@ _PROTOCOL_SECURITY_CAPABILITIES = {
     'cross-protocol.security-validation',
     'identity-protocol.security-validation',
     'http-protocol.security-validation',
+    'cache-origin.security-validation',
 }
 
 

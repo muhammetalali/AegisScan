@@ -32,11 +32,13 @@ from fastapi_app.contracts.web_security_v2 import (
 )
 from fastapi_app.contracts.identity_protocol_security import IdentityProtocolBatchIn
 from fastapi_app.contracts.http_protocol_security import HttpProtocolBatchIn
+from fastapi_app.contracts.cache_origin_security import CacheOriginBatchIn
 from fastapi_app.core.dependencies import get_current_user
 from django_project.system.credential_vault import CredentialVaultDenied
 from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution
 from fastapi_app.services.identity_protocol_security import run_identity_protocol_security
 from fastapi_app.services.http_protocol_security import run_http_protocol_security
+from fastapi_app.services.cache_origin_security import run_cache_origin_security
 from fastapi_app.services.stateful_protocol_security import (
     run_cross_protocol_security,
     run_graphql_security,
@@ -335,6 +337,8 @@ async def web_security_contract(user=Depends(get_current_user)):
             'graphql_security_validation': True,
             'cross_protocol_state_validation': True,
             'identity_protocol_security': True,
+            'http_protocol_security': True,
+            'cache_origin_security': True,
         },
         'policy_sources': [value for value, _label in AuthorizationPolicyManifest.Source.choices],
         'provider_states': [value for value, _label in ProviderApprovalRecord.Status.choices],
@@ -828,6 +832,34 @@ async def evaluate_http_protocol_security(
     )
     governance = {**governance, 'credential_bindings': credential_bindings}
     run, observations = await sync_to_async(run_http_protocol_security)(project, uid, cases, governance)
+    return {
+        'contract_version': CONTRACT_VERSION,
+        'run_id': str(run.id),
+        'kind': run.kind,
+        'input_sha256': run.input_sha256,
+        'summary': run.summary,
+        'observations': [_protocol_observation_dict(item) for item in observations],
+    }
+
+
+@router.post('/projects/{project_id}/cache-origin/evaluate')
+async def evaluate_cache_origin_security(
+    project_id: str,
+    payload: CacheOriginBatchIn,
+    user=Depends(get_current_user),
+):
+    uid = _uid(user)
+    project = await _project_security_operator_for_user(project_id, uid)
+    cases = [item.model_dump(mode='json') for item in payload.cases]
+    governance = await _protocol_budget_governance(
+        project, payload.budget_id, capability='cache_origin_security', cases=cases,
+    )
+    credential_bindings = await _protocol_credential_governance(
+        project, uid, capability_id='cache-origin.security-validation',
+        target_origin=payload.target_origin, cases=cases,
+    )
+    governance = {**governance, 'credential_bindings': credential_bindings}
+    run, observations = await sync_to_async(run_cache_origin_security)(project, uid, cases, governance)
     return {
         'contract_version': CONTRACT_VERSION,
         'run_id': str(run.id),
