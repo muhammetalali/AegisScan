@@ -133,6 +133,7 @@ _PROTOCOL_SECURITY_CAPABILITIES = {
     'graphql.security-validation',
     'cross-protocol.security-validation',
     'identity-protocol.security-validation',
+    'http-protocol.security-validation',
 }
 
 
