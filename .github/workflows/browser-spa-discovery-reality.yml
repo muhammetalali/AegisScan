@@ -1,0 +1,194 @@
+name: Browser SPA Discovery Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/browser_spa_discovery.py'
+      - 'aegis-platform/backend/fastapi_app/services/browser_surface_graph.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/e2e/fixtures/browser-spa-target/**'
+      - 'aegis-platform/e2e/browser_spa_discovery_e2e.py'
+      - '.github/workflows/browser-spa-discovery-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/browser_spa_discovery.py'
+      - 'aegis-platform/backend/fastapi_app/services/browser_surface_graph.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/e2e/fixtures/browser-spa-target/**'
+      - 'aegis-platform/e2e/browser_spa_discovery_e2e.py'
+      - '.github/workflows/browser-spa-discovery-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-spa-discovery-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-spa-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
+      DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
+      REDIS_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_BROKER_URL: 'redis://127.0.0.1:6379/0'
+      CELERY_RESULT_BACKEND: 'redis://127.0.0.1:6379/0'
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
+      ALLOWED_HOSTS: 'localhost,127.0.0.1'
+      CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
+      CREDENTIAL_VAULT_KEYS: 'Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM='
+      CREDENTIAL_FINGERPRINT_KEY: 'browser-ci-fingerprint-key'
+      AUTHORIZED_SCAN_TARGETS: '127.0.0.1'
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: '1'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile Browser SPA implementation and fixtures
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/browser_spa_discovery.py             aegis-platform/backend/fastapi_app/services/browser_surface_graph.py             aegis-platform/backend/fastapi_app/services/credential_execution.py             aegis-platform/backend/fastapi_app/services/native_tool_runtime.py             aegis-platform/backend/fastapi_app/services/native_output_normalizer.py             aegis-platform/backend/fastapi_app/tasks/native_capabilities.py             aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py             aegis-platform/e2e/fixtures/browser-spa-target/app.py             aegis-platform/e2e/browser_spa_discovery_e2e.py
+
+      - name: Django model and migration reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Browser SPA isolation and persistence acceptance suite
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_browser_spa_discovery.py             fastapi_app/services/test_native_output_normalizer.py             --junitxml=/tmp/browser-spa-junit.xml
+
+      - name: Build scanner image with Browser SPA capability
+        run: |
+          docker build             --file aegis-platform/backend/Dockerfile.django             --tag aegisscan-browser-spa-ci:${{ github.sha }}             aegis-platform/backend
+
+      - name: Prove packaged Browser SPA binary
+        run: |
+          docker run --rm             --entrypoint /bin/sh             aegisscan-browser-spa-ci:${{ github.sha }}             -lc 'command -v aegis-browser-spa-discovery && command -v chromium && python -c "import websockets; print(websockets.__version__)"'
+
+      - name: Start real SPA and cross-origin fixtures
+        run: |
+          set -euo pipefail
+          PYTHONPATH=aegis-platform/backend             python -m uvicorn app:app             --app-dir aegis-platform/e2e/fixtures/browser-spa-target             --host 127.0.0.1 --port 18083             >/tmp/browser-spa-primary.log 2>&1 &
+          echo $! >/tmp/browser-spa-primary.pid
+
+          PYTHONPATH=aegis-platform/backend             python -m uvicorn app:app             --app-dir aegis-platform/e2e/fixtures/browser-spa-target             --host 127.0.0.1 --port 18084             >/tmp/browser-spa-third-party.log 2>&1 &
+          echo $! >/tmp/browser-spa-third-party.pid
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18083/health >/dev/null               && curl --fail --silent http://127.0.0.1:18084/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/browser-spa-primary.log
+          cat /tmp/browser-spa-third-party.log
+          exit 1
+
+      - name: Create isolated browser identity material
+        run: |
+          cat >/tmp/browser-session.json <<'JSON'
+          {
+            "headers": {
+              "Authorization": "Bearer browser-fixture-token",
+              "X-Aegis-Identity": "alice"
+            },
+            "cookies": [
+              {
+                "name": "client_session",
+                "value": "client-cookie-secret-must-not-persist",
+                "path": "/",
+                "sameSite": "Lax"
+              }
+            ],
+            "local_storage": {
+              "access_token": "storage-secret-must-not-persist"
+            },
+            "session_storage": {
+              "bootstrap": "session-secret-must-not-persist"
+            }
+          }
+          JSON
+          sudo chown 10001:10001 /tmp/browser-session.json
+          sudo chmod 0600 /tmp/browser-session.json
+          test "$(stat -c '%a' /tmp/browser-session.json)" = "600"
+
+      - name: Run real Chromium SPA discovery E2E
+        run: |
+          docker run --rm             --network host             --volume /tmp/browser-session.json:/tmp/browser-session.json:ro             --env AUTHORIZED_SCAN_TARGETS=127.0.0.1             --env ALLOW_SINGLE_LABEL_SCAN_TARGETS=1             aegisscan-browser-spa-ci:${{ github.sha }}             aegis-browser-spa-discovery             --session-file /tmp/browser-session.json             http://127.0.0.1:18083/             --identity-ref alice             --wait-ms 4000             --max-events 2000             > browser-spa-discovery-evidence.json
+
+          python aegis-platform/e2e/browser_spa_discovery_e2e.py             browser-spa-discovery-evidence.json             | tee browser-spa-discovery-proof.json
+
+      - name: Retain Browser SPA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-spa-discovery-reality-${{ github.sha }}
+          path: |
+            browser-spa-discovery-evidence.json
+            browser-spa-discovery-proof.json
+            /tmp/browser-spa-junit.xml
+            /tmp/browser-spa-primary.log
+            /tmp/browser-spa-third-party.log
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Stop Browser SPA fixtures
+        if: always()
+        run: |
+          if [ -f /tmp/browser-spa-primary.pid ]; then kill "$(cat /tmp/browser-spa-primary.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/browser-spa-third-party.pid ]; then kill "$(cat /tmp/browser-spa-third-party.pid)" 2>/dev/null || true; fi
+          cat /tmp/browser-spa-primary.log 2>/dev/null || true
+          cat /tmp/browser-spa-third-party.log 2>/dev/null || true
