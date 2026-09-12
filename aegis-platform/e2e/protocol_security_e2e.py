@@ -91,6 +91,16 @@ def gql_errors(body: Any) -> int:
     return 0
 
 
+def body_has_key(value: Any, key: str) -> bool:
+    if isinstance(value, dict):
+        if key in value:
+            return True
+        return any(body_has_key(item, key) for item in value.values())
+    if isinstance(value, list):
+        return any(body_has_key(item, key) for item in value)
+    return False
+
+
 async def ws_connect(uri: str, *, origin: str, token: str | None, subprotocols=None):
     headers = {'Authorization': f'Bearer {token}'} if token else {}
     kwargs = {
@@ -636,6 +646,9 @@ def live_graphql_http_cases(base_http: str) -> list[dict[str, Any]]:
         sensitive_fields_requested=['secret'],
         sensitive_fields_returned=[],
     )
+    if body_has_key(fixed_secret_body, 'secret'):
+        fail('fixed GraphQL sensitive-field path returned secret data')
+    fixed_secret['sensitive_fields_returned'] = []
     cases.append(fixed_secret)
 
     _, vulnerable_secret_body, vulnerable_secret = execute(
@@ -645,8 +658,12 @@ def live_graphql_http_cases(base_http: str) -> list[dict[str, Any]]:
         field_path='record.secret',
         field_authorized=False,
         sensitive_fields_requested=['secret'],
-        sensitive_fields_returned=['secret'] if 'secret' in json.dumps(vulnerable_secret_body) else [],
+        sensitive_fields_returned=[],
     )
+    vulnerable_returned_secret = body_has_key(vulnerable_secret_body, 'secret')
+    if not vulnerable_returned_secret:
+        fail('vulnerable GraphQL sensitive-field fixture did not expose secret field')
+    vulnerable_secret['sensitive_fields_returned'] = ['secret']
     cases.append(vulnerable_secret)
 
     for path, case_ref, expected in [
