@@ -244,7 +244,11 @@ def test_web_security_http_api_persists_policy_validation_and_blocks_viewer_writ
 
 
 @pytest.mark.django_db(transaction=True)
-def test_protocol_validation_api_persists_websocket_graphql_and_transition_lineage():
+def test_protocol_validation_api_persists_websocket_graphql_and_transition_lineage(settings):
+    from cryptography.fernet import Fernet
+
+    settings.CREDENTIAL_VAULT_KEYS = Fernet.generate_key().decode('ascii')
+    settings.CREDENTIAL_FINGERPRINT_KEY = uuid.uuid4().hex + uuid.uuid4().hex
     owner = _user('protocol-http-owner')
     project = Project.objects.create(
         name='Protocol Security HTTP Integration',

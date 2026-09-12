@@ -125,6 +125,18 @@ jobs:
             fastapi_app/routers/test_web_security_api.py \
             --junitxml=/tmp/stateful-protocol-junit.xml
 
+      - name: Generate ephemeral protocol fixture credentials
+        run: |
+          python - <<'PY'
+          import os
+          import secrets
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              for identity in ('ALICE', 'BOB', 'ADMIN', 'EXPIRED'):
+                  token = secrets.token_urlsafe(32)
+                  print(f'::add-mask::{token}')
+                  env.write(f'AEGIS_PROTOCOL_{identity}_TOKEN={token}\n')
+          PY
+
       - name: Start real GraphQL and WebSocket fixture
         run: |
           set -euo pipefail
@@ -149,6 +161,7 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
+          set -euo pipefail
           python ../e2e/protocol_security_e2e.py \
             --http-origin http://127.0.0.1:18085 \
             --ws-origin ws://127.0.0.1:18085 \
