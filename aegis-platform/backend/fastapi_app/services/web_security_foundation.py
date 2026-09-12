@@ -536,20 +536,15 @@ def persist_budget(project, actor_id: str, payload: dict[str, Any]) -> tuple[Exe
 @transaction.atomic
 def persist_provider_approval(project, actor_id: str, payload: dict[str, Any]) -> tuple[ProviderApprovalRecord, bool]:
     manifest = payload.get('manifest') or {}
-    digest = canonical_digest({
-        'provider_name': payload.get('provider_name'),
-        'provider_version': payload.get('provider_version'),
-        'capability': payload.get('capability'),
-        'manifest': manifest,
-    })
+    digest = canonical_digest(manifest)
     row, created = ProviderApprovalRecord.objects.get_or_create(
         project=project,
         provider_name=payload['provider_name'],
         provider_version=payload['provider_version'],
+        capability=payload['capability'],
+        status=payload['status'],
         manifest_sha256=digest,
         defaults={
-            'status': payload['status'],
-            'capability': payload['capability'],
             'manifest': manifest,
             'rationale': payload.get('rationale', ''),
             'reviewed_by_id': actor_id,
