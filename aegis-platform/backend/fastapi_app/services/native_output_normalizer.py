@@ -254,6 +254,8 @@ def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, 
                 'inner_html_write_count': _positive_int(item.get('inner_html_write_count'), 1000000),
                 'insert_adjacent_html_count': _positive_int(item.get('insert_adjacent_html_count'), 1000000),
                 'document_write_count': _positive_int(item.get('document_write_count'), 1000000),
+                'blocked_websocket_count': _positive_int(item.get('blocked_websocket_count'), 1000000),
+                'blocked_webtransport_count': _positive_int(item.get('blocked_webtransport_count'), 1000000),
                 'dom_clobbering_count': _positive_int(item.get('dom_clobbering_count'), 1000000),
                 'prototype_additions': [
                     str(value)[:200]
