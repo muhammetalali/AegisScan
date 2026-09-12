@@ -21,6 +21,10 @@ on:
       - '.github/workflows/enterprise-domain-check.yml'
   workflow_dispatch:
 
+concurrency:
+  group: enterprise-domain-check-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -59,7 +63,7 @@ jobs:
         run: python manage.py makemigrations enterprise --check --dry-run
       - name: Enterprise tests
         working-directory: aegis-platform/backend
-        run: python -m pytest -q enterprise/test_models.py enterprise/test_intelligence_lineage.py
+        run: python -m pytest -q enterprise/test_models.py enterprise/test_intelligence_lineage.py enterprise/test_risk_correlation.py
       - name: Import FastAPI application
         working-directory: aegis-platform/backend
         run: python -c "from fastapi_app.main import app; print(len(app.routes)); print([r.path for r in app.routes if '/enterprise' in getattr(r, 'path', '')])"

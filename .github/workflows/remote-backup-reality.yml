@@ -5,6 +5,10 @@ name: Remote Encrypted Backup Reality
     branches: [main]
     paths:
       - '.github/workflows/remote-backup-reality.yml'
+      - 'tests/test_production_resilience_workflow.py'
+      - 'tests/test_production_resilience_backup.py'
+      - 'aegis-platform/scripts/production_resilience_backup.py'
+      - '.github/workflows/production-resilience-acceptance.yml'
       - '.github/workflows/production-launch-readiness.yml'
       - 'aegis-platform/scripts/backup_postgres.sh'
       - 'aegis-platform/scripts/verify_postgres_restore.sh'
@@ -21,6 +25,10 @@ name: Remote Encrypted Backup Reality
     branches: [main]
     paths:
       - '.github/workflows/remote-backup-reality.yml'
+      - 'tests/test_production_resilience_workflow.py'
+      - 'tests/test_production_resilience_backup.py'
+      - 'aegis-platform/scripts/production_resilience_backup.py'
+      - '.github/workflows/production-resilience-acceptance.yml'
       - '.github/workflows/production-launch-readiness.yml'
       - 'aegis-platform/scripts/backup_postgres.sh'
       - 'aegis-platform/scripts/verify_postgres_restore.sh'
@@ -34,6 +42,10 @@ name: Remote Encrypted Backup Reality
       - 'tests/test_remote_backup_service.py'
       - 'tests/test_production_preflight.py'
   workflow_dispatch:
+
+concurrency:
+  group: remote-backup-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: true
 
 permissions: {contents: read}
 

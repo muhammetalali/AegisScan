@@ -1,0 +1,201 @@
+name: Live Production Deploy and Acceptance
+
+'on':
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY to run the protected production rollout from main'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aegisscan-live-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-accept:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: production
+    env:
+      PROD_SSH_HOST: ${{ secrets.AEGIS_PRODUCTION_SSH_HOST }}
+      PROD_SSH_PORT: ${{ vars.AEGIS_PRODUCTION_SSH_PORT || '22' }}
+      PROD_SSH_USER: ${{ secrets.AEGIS_PRODUCTION_SSH_USER }}
+      PROD_SSH_PRIVATE_KEY: ${{ secrets.AEGIS_PRODUCTION_SSH_PRIVATE_KEY }}
+      PROD_SSH_KNOWN_HOSTS: ${{ secrets.AEGIS_PRODUCTION_SSH_KNOWN_HOSTS }}
+      PROD_ORIGIN: ${{ secrets.AEGIS_PRODUCTION_ORIGIN }}
+      PROD_E2E_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
+      PROD_E2E_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
+      PROD_E2E_TARGET: ${{ secrets.AEGIS_PRODUCTION_E2E_TARGET }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require explicit production dispatch and exact main release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "DEPLOY"
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          printf 'production_release_sha=%s\n' "$GITHUB_SHA"
+
+      - name: Validate required protected production material
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             PROD_ORIGIN             PROD_E2E_EMAIL             PROD_E2E_PASSWORD             PROD_E2E_TARGET; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "Required production secret/variable is missing: $name" >&2
+              exit 1
+            fi
+          done
+          case "$PROD_SSH_PORT" in
+            ''|*[!0-9]*) echo 'PROD_SSH_PORT must be numeric' >&2; exit 1 ;;
+          esac
+          test "$PROD_SSH_PORT" -ge 1
+          test "$PROD_SSH_PORT" -le 65535
+          case "$PROD_ORIGIN" in
+            https://*) ;;
+            *) echo 'PROD_ORIGIN must use HTTPS' >&2; exit 1 ;;
+          esac
+          LIVE_ORIGIN="${PROD_ORIGIN%/}"
+          test -n "$LIVE_ORIGIN"
+          printf 'AEGIS_LIVE_ORIGIN=%s\n' "$LIVE_ORIGIN" >> "$GITHUB_ENV"
+
+      - name: Materialize pinned SSH transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 /tmp/aegis-production
+          printf '%s' "$PROD_SSH_PRIVATE_KEY" > /tmp/aegis-production/id
+          printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > /tmp/aegis-production/known_hosts
+          chmod 0600 /tmp/aegis-production/id /tmp/aegis-production/known_hosts
+          test -s /tmp/aegis-production/id
+          test -s /tmp/aegis-production/known_hosts
+
+      - name: Install live acceptance client dependency
+        run: python -m pip install requests==2.32.5
+
+      - name: Deploy exact main SHA to production host
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/production_remote_deploy.py             --host "$PROD_SSH_HOST"             --port "$PROD_SSH_PORT"             --user "$PROD_SSH_USER"             --private-key /tmp/aegis-production/id             --known-hosts /tmp/aegis-production/known_hosts             --release-sha "$GITHUB_SHA"             --origin "$AEGIS_LIVE_ORIGIN"             | tee /tmp/aegis-production/deploy.json
+
+      - name: Verify public HTTPS, security headers and TLS evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/public_acceptance.py             --origin "$AEGIS_LIVE_ORIGIN"             | tee /tmp/aegis-production/public-acceptance.json
+
+      - name: Run real external black-box production E2E
+        shell: bash
+        env:
+          AEGIS_E2E_TARGET: ${{ secrets.AEGIS_PRODUCTION_E2E_TARGET }}
+          AEGIS_E2E_TIMEOUT: '900'
+          AEGIS_VERIFY_TLS: 'true'
+          AEGIS_E2E_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
+          AEGIS_E2E_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export AEGIS_BASE_URL="$AEGIS_LIVE_ORIGIN"
+          export AEGIS_DJANGO_URL="$AEGIS_LIVE_ORIGIN/api/v1"
+          export AEGIS_FASTAPI_URL="$AEGIS_LIVE_ORIGIN"
+          export AEGIS_API_URL="$AEGIS_LIVE_ORIGIN/api/v1"
+          python aegis-platform/e2e/external_black_box_e2e.py             2>&1 | tee /tmp/aegis-production/external-black-box.log
+
+      - name: Prove installed CLI against public production
+        shell: bash
+        env:
+          AEGIS_PLATFORM_URL: ${{ env.AEGIS_LIVE_ORIGIN }}
+          AEGIS_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
+          AEGIS_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
+        run: |
+          set -euo pipefail
+          python -m pip install -e .
+          aegis platform-status --json             | tee /tmp/aegis-production/cli-platform-status.json
+
+      - name: Build go-live evidence manifest
+        if: success()
+        shell: bash
+        env:
+          AEGIS_RELEASE_SHA: ${{ github.sha }}
+          AEGIS_RUN_ID: ${{ github.run_id }}
+          AEGIS_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AEGIS_PUBLIC_ORIGIN: ${{ env.AEGIS_LIVE_ORIGIN }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path('/tmp/aegis-production')
+          evidence_files = [
+              'deploy.json',
+              'public-acceptance.json',
+              'external-black-box.log',
+              'cli-platform-status.json',
+          ]
+          digests = {}
+          for name in evidence_files:
+              path = root / name
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f'missing required go-live evidence: {name}')
+              digests[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+          manifest = {
+              'schema': 'aegisscan.go-live-evidence.v1',
+              'status': 'success',
+              'release_sha': os.environ['AEGIS_RELEASE_SHA'],
+              'run_id': os.environ['AEGIS_RUN_ID'],
+              'run_attempt': os.environ['AEGIS_RUN_ATTEMPT'],
+              'public_origin': os.environ['AEGIS_PUBLIC_ORIGIN'],
+              'completed_at': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+              'sha256': digests,
+          }
+          (root / 'manifest.json').write_text(
+              json.dumps(manifest, sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(manifest, sort_keys=True))
+          PY
+
+      - name: Upload go-live evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-go-live-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            /tmp/aegis-production/deploy.json
+            /tmp/aegis-production/public-acceptance.json
+            /tmp/aegis-production/external-black-box.log
+            /tmp/aegis-production/cli-platform-status.json
+            /tmp/aegis-production/manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Destroy local SSH material
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -d /tmp/aegis-production ]; then
+            rm -f /tmp/aegis-production/id /tmp/aegis-production/known_hosts
+          fi
