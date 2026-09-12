@@ -170,6 +170,7 @@ def _validate_protocol_scope(
     actor: Any,
     purpose: str,
     target: str,
+    identity_ref: str,
 ) -> None:
     scope = credential.scope if isinstance(credential.scope, dict) else {}
     scoped_origin = str(scope.get('protocol_origin') or '').strip()
@@ -179,23 +180,29 @@ def _validate_protocol_scope(
     except ValueError:
         expected = ''
         actual = ''
-    if expected and actual and expected == actual:
-        _protocol_identity_binding(credential)
+    try:
+        bound_identity = _protocol_identity_binding(credential)
+    except CredentialVaultDenied:
+        bound_identity = ''
+    origin_matches = bool(expected and actual and expected == actual)
+    identity_matches = bool(identity_ref and bound_identity == identity_ref)
+    if origin_matches and identity_matches:
         return
     _record_denied(
         credential=credential,
         actor=actor,
         purpose=purpose,
-        reason='protocol credential scope does not match the authorized target origin',
+        reason='protocol credential scope or identity binding does not match the governed request',
         metadata={
             'credential_ref': str(credential.id),
             'kind': credential.kind,
-            'scope_type': 'protocol_origin',
-            'scope_matches_target': False,
+            'scope_type': 'protocol_origin+identity',
+            'scope_matches_target': origin_matches,
+            'identity_binding_matches': identity_matches,
         },
     )
     raise CredentialVaultDenied(
-        'Protocol credential is not scoped to this authorized target origin.'
+        'Protocol credential is not scoped to this target origin and identity.'
     )
 
 
@@ -303,6 +310,7 @@ def _validate_scope(
     purpose: str,
     target: str,
     capability_id: str,
+    identity_ref: str = '',
 ) -> None:
     if capability_id == 'browser.spa-discovery':
         _validate_browser_scope(
@@ -317,6 +325,7 @@ def _validate_scope(
             actor=actor,
             purpose=purpose,
             target=target,
+            identity_ref=identity_ref,
         )
     elif credential.kind == CredentialSecret.Kind.KUBECONFIG:
         _validate_kube_scope(credential=credential, actor=actor, purpose=purpose, target=target)
@@ -333,6 +342,7 @@ def authorize_credential_refs_for_execution(
     allowed_kinds: tuple[str, ...] = (),
     purpose: str | None = None,
     target: str = '',
+    identity_ref: str = '',
 ) -> dict[str, Any]:
     normalized_refs = normalize_credential_refs(refs)
     if not normalized_refs:
@@ -346,7 +356,14 @@ def authorize_credential_refs_for_execution(
         if credential is None:
             raise CredentialVaultDenied('Credential reference is not available for this project.')
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
-        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
+        _validate_scope(
+            credential=credential,
+            actor=actor,
+            purpose=purpose_value,
+            target=target,
+            capability_id=capability_id,
+            identity_ref=identity_ref,
+        )
         authorized = authorize_credential_use(credential=credential, actor=actor, purpose=purpose_value)
         item = {'credential_ref': str(authorized.id), 'kind': authorized.kind, 'version': authorized.version}
         if capability_id == 'browser.spa-discovery':
@@ -366,6 +383,7 @@ def resolve_credential_refs_for_worker(
     allowed_kinds: tuple[str, ...] = (),
     purpose: str | None = None,
     target: str = '',
+    identity_ref: str = '',
 ) -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
     normalized_refs = normalize_credential_refs(refs)
     if not normalized_refs:
@@ -380,7 +398,14 @@ def resolve_credential_refs_for_worker(
         if credential is None:
             raise CredentialVaultDenied('Credential reference is not available for this project.')
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
-        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
+        _validate_scope(
+            credential=credential,
+            actor=actor,
+            purpose=purpose_value,
+            target=target,
+            capability_id=capability_id,
+            identity_ref=identity_ref,
+        )
         secret = resolve_credential_secret(credential=credential, actor=actor, purpose=purpose_value)
         credential.refresh_from_db(fields=['kind', 'version'])
         material = {
