@@ -14,6 +14,7 @@ from enterprise.web_security_models import (
 from fastapi_app.services.web_security_foundation import (
     CONTRACT_VERSION,
     canonical_digest,
+    privacy_fingerprint,
     upsert_graph_snapshot,
 )
 
@@ -93,7 +94,11 @@ def evaluate_websocket_case(case: dict[str, Any]) -> dict[str, Any]:
 
     semantic = {
         'protocol': 'websocket',
-        'session_ref': str(case.get('session_ref') or ''),
+        'session_ref_hmac': (
+            privacy_fingerprint(str(case.get('session_ref') or ''))
+            if str(case.get('session_ref') or '')
+            else ''
+        ),
         'origin': origin,
         'origin_allowed': not allowed_origins or origin in allowed_origins,
         'authenticated': bool(case.get('authenticated')),
@@ -424,7 +429,11 @@ def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
 
     semantic = {
         'protocol': 'graphql',
-        'session_ref': str(case.get('session_ref') or ''),
+        'session_ref_hmac': (
+            privacy_fingerprint(str(case.get('session_ref') or ''))
+            if str(case.get('session_ref') or '')
+            else ''
+        ),
         'operation_type': operation_type,
         'operation_name': str(case.get('operation_name') or ''),
         'field_path': str(case.get('field_path') or ''),
@@ -489,7 +498,11 @@ def evaluate_cross_protocol_case(case: dict[str, Any]) -> dict[str, Any]:
     semantic = {
         'from_protocol': str(case.get('from_protocol') or ''),
         'to_protocol': str(case.get('to_protocol') or ''),
-        'session_ref': str(case.get('session_ref') or ''),
+        'session_ref_hmac': (
+            privacy_fingerprint(str(case.get('session_ref') or ''))
+            if str(case.get('session_ref') or '')
+            else ''
+        ),
         'identity_consistent': bool(case.get('identity_consistent', True)),
         'tenant_consistent': bool(case.get('tenant_consistent', True)),
         'session_bound': bool(case.get('session_bound', True)),
@@ -575,12 +588,13 @@ def _hydrate_cross_protocol_case(project, case: dict[str, Any]) -> dict[str, Any
     )
 
     session_ref = str(case.get('session_ref') or '')
-    source_session = str((source.semantic or {}).get('session_ref') or '')
-    target_session = str((target.semantic or {}).get('session_ref') or '')
+    session_ref_hmac = privacy_fingerprint(session_ref) if session_ref else ''
+    source_session = str((source.semantic or {}).get('session_ref_hmac') or '')
+    target_session = str((target.semantic or {}).get('session_ref_hmac') or '')
     session_bound = bool(
-        session_ref
-        and source_session == session_ref
-        and target_session == session_ref
+        session_ref_hmac
+        and source_session == session_ref_hmac
+        and target_session == session_ref_hmac
     )
 
     observed_allowed = target.observed_decision == WebSecurityObservation.Decision.ALLOWED
@@ -873,17 +887,18 @@ def _project_cross_protocol_graph(project, case: dict[str, Any], result: dict[st
     resource = _resource(case)
     nodes, edges = _common_nodes(case, 'cross_protocol')
     session_ref = str(case.get('session_ref') or '')
-    session_node = f'session:{session_ref}'
-    from_state = f'protocol-state:{canonical_digest([session_ref, case.get("from_protocol")])[:32]}'
-    to_state = f'protocol-state:{canonical_digest([session_ref, case.get("to_protocol")])[:32]}'
+    session_ref_hmac = privacy_fingerprint(session_ref) if session_ref else ''
+    session_node = f'session:{session_ref_hmac}'
+    from_state = f'protocol-state:{canonical_digest([session_ref_hmac, case.get("from_protocol")])[:32]}'
+    to_state = f'protocol-state:{canonical_digest([session_ref_hmac, case.get("to_protocol")])[:32]}'
     nodes.extend([
         {
             'plane': 'identity',
             'kind': 'session',
             'external_ref': session_node,
-            'label': session_ref,
+            'label': f'session:{session_ref_hmac[:16]}',
             'tenant_ref': str(identity.get('tenant_ref') or ''),
-            'properties': {},
+            'properties': {'session_ref_hmac': session_ref_hmac},
             'provenance': {'source': 'cross_protocol'},
         },
         {
@@ -892,7 +907,7 @@ def _project_cross_protocol_graph(project, case: dict[str, Any], result: dict[st
             'external_ref': from_state,
             'label': str(case.get('from_protocol') or ''),
             'protocol': str(case.get('from_protocol') or ''),
-            'properties': {'session_ref': session_ref},
+            'properties': {'session_ref_hmac': session_ref_hmac},
             'provenance': {'source': 'cross_protocol'},
         },
         {
@@ -902,7 +917,7 @@ def _project_cross_protocol_graph(project, case: dict[str, Any], result: dict[st
             'label': str(case.get('to_protocol') or ''),
             'protocol': str(case.get('to_protocol') or ''),
             'properties': {
-                'session_ref': session_ref,
+                'session_ref_hmac': session_ref_hmac,
                 'last_validation_passed': result['passed'],
             },
             'provenance': {'source': 'cross_protocol'},
