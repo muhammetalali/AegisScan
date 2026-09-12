@@ -61,6 +61,14 @@ def triage_graph(graph: dict[str, Any]) -> dict[str, Any]:
             "executiveImpact": "Board-level attention recommended" if priority >= 85 else "Management attention recommended" if priority >= 70 else "Operational follow-up",
             "validationId": node.get("validationId"),
             "projectId": node.get("projectId"),
+            "riskCorrelationId": node.get("riskCorrelationId"),
+            "riskCorrelationSha256": node.get("riskCorrelationSha256"),
+            "riskAnalysisVersion": node.get("riskAnalysisVersion"),
+            "riskCorrelationPriority": node.get("riskCorrelationPriority"),
+            "riskCorrelationScore": node.get("riskCorrelationScore"),
+            "supportingEvidenceCount": node.get("supportingEvidenceCount"),
+            "contradictingEvidenceCount": node.get("contradictingEvidenceCount"),
+            "neutralEvidenceCount": node.get("neutralEvidenceCount"),
         })
 
     priorities.sort(key=lambda item: item["priority"], reverse=True)
@@ -108,6 +116,14 @@ def build_triage(intelligence: dict[str, Any]) -> dict[str, Any]:
             "executiveImpact": priority.get("executiveImpact"),
             "validationId": priority.get("validationId"),
             "projectId": priority.get("projectId"),
+            "riskCorrelationId": priority.get("riskCorrelationId"),
+            "riskCorrelationSha256": priority.get("riskCorrelationSha256"),
+            "riskAnalysisVersion": priority.get("riskAnalysisVersion"),
+            "riskCorrelationPriority": priority.get("riskCorrelationPriority"),
+            "riskCorrelationScore": priority.get("riskCorrelationScore"),
+            "supportingEvidenceCount": priority.get("supportingEvidenceCount"),
+            "contradictingEvidenceCount": priority.get("contradictingEvidenceCount"),
+            "neutralEvidenceCount": priority.get("neutralEvidenceCount"),
         })
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat(),

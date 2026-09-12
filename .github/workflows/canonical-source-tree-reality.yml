@@ -1,0 +1,38 @@
+name: Canonical Source Tree Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canonical-source-tree-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canonical-source-tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Enforce canonical repository layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d aegis-platform/backend
+          test -d aegis-platform/frontend
+          test -d aegis
+          test -f ARCHITECTURE_SOURCE_OF_TRUTH.md
+          if [ -e packages ]; then
+            echo "::error::Retired legacy packages/ tree is forbidden on canonical main."
+            find packages -maxdepth 2 -print || true
+            exit 1
+          fi
+          grep -Fq 'aegis-platform/ = application' ARCHITECTURE_SOURCE_OF_TRUTH.md
+          grep -Fq 'packages/ = archived history only' ARCHITECTURE_SOURCE_OF_TRUTH.md
+          echo "Canonical source tree verified: aegis-platform application + aegis CLI; packages/ absent."

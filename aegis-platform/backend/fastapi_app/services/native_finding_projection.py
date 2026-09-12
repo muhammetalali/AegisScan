@@ -266,6 +266,66 @@ def cloud_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
     return findings
 
 
+def native_observation_finding_specs(
+    normalized: dict[str, Any],
+    *,
+    observation_kind: str,
+    category: str,
+) -> list[NativeFindingSpec]:
+    observations = normalized.get('observations') if isinstance(normalized, dict) else None
+    if not isinstance(observations, list):
+        return []
+    findings: list[NativeFindingSpec] = []
+    severities = {'critical', 'high', 'medium', 'low', 'info'}
+    confidences = {'high', 'medium', 'low'}
+    for observation in observations[:2000]:
+        if not isinstance(observation, dict) or observation.get('kind') != observation_kind:
+            continue
+        rule_id = str(observation.get('rule_id') or '').strip()[:200]
+        title = str(observation.get('title') or '').strip()[:500]
+        description = str(observation.get('description') or '').strip()[:5000]
+        if not rule_id or not title or not description:
+            continue
+        severity = str(observation.get('severity') or 'info').strip().lower()
+        confidence = str(observation.get('confidence') or 'medium').strip().lower()
+        if severity not in severities:
+            severity = 'info'
+        if confidence not in confidences:
+            confidence = 'medium'
+        location = str(observation.get('location') or '').strip()[:2048]
+        resource = str(observation.get('resource') or '').strip()[:1000]
+        method = str(observation.get('method') or '').strip().upper()[:16]
+        references = observation.get('references')
+        safe_references = (
+            [str(value)[:2048] for value in references[:20]]
+            if isinstance(references, list)
+            else []
+        )
+        primary_url = str(observation.get('primary_url') or '').strip()[:2048]
+        affected = [value for value in (location, primary_url) if value.startswith(('http://', 'https://'))]
+        findings.append(NativeFindingSpec(
+            rule_id=rule_id,
+            title=title,
+            description=description,
+            severity=severity,
+            confidence=confidence,
+            category=category,
+            remediation=str(observation.get('remediation') or '')[:5000],
+            affected_urls=tuple(sorted(set(affected))),
+            raw_data={
+                'location': location,
+                'resource': resource,
+                'method': method,
+                'references': safe_references,
+                'primary_url': primary_url,
+                'class': str(observation.get('class') or '')[:100],
+                'type': str(observation.get('type') or '')[:100],
+            },
+            identity_key='|'.join((rule_id, location, resource, method)),
+        ))
+    return findings
+
+
 def _finding_id(scan_id: str, capability_id: str, spec: NativeFindingSpec) -> UUID:
     identity = spec.identity_key or spec.rule_id
     key = ':'.join((str(scan_id).lower(), capability_id.strip().lower(), identity.strip().lower()))
@@ -318,6 +378,18 @@ def project_native_findings(
         specs = kubernetes_finding_specs(normalized)
     elif capability_id == 'cloud.read-only-posture':
         specs = cloud_finding_specs(normalized)
+    elif capability_id == 'web.nikto':
+        specs = native_observation_finding_specs(
+            normalized,
+            observation_kind='web-vulnerability',
+            category='web-vulnerability-assessment',
+        )
+    elif capability_id == 'code.trivy-config':
+        specs = native_observation_finding_specs(
+            normalized,
+            observation_kind='iac-security-finding',
+            category='iac-security',
+        )
     else:
         return [], []
 
