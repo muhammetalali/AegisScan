@@ -11,6 +11,7 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py'
       - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_policy_precision.py'
       - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
       - '.github/workflows/identity-protocol-security-reality.yml'
   push:
@@ -23,6 +24,7 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py'
       - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_policy_precision.py'
       - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
       - '.github/workflows/identity-protocol-security-reality.yml'
   workflow_dispatch:
@@ -91,6 +93,7 @@ jobs:
             aegis-platform/backend/fastapi_app/services/credential_execution.py \
             aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py \
             aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py \
+            aegis-platform/backend/fastapi_app/services/test_identity_protocol_policy_precision.py \
             aegis-platform/backend/fastapi_app/routers/web_security.py
 
       - name: Django model and migration reality
@@ -112,6 +115,7 @@ jobs:
           pytest -q \
             fastapi_app/services/test_identity_protocol_security.py \
             fastapi_app/services/test_identity_protocol_credential_scope.py \
+            fastapi_app/services/test_identity_protocol_policy_precision.py \
             --junitxml=/tmp/identity-protocol-junit.xml
 
       - name: Verify API registration and secret-safe contract
