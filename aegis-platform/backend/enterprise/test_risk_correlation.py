@@ -125,7 +125,7 @@ def test_correlation_is_deterministic_persisted_and_evidence_backed(correlation_
     assert row.source_snapshot_id == snapshot.id
     assert row.attack_path_id == path.id
     assert row.source_snapshot_sha256 == snapshot.snapshot_sha256
-    assert row.analysis_version == '1.0'
+    assert row.analysis_version == '1.1'
     assert row.score == 100.0
     assert row.priority == RiskCorrelationSnapshot.Priority.P0_CRITICAL
     assert row.evidence_count == 1
@@ -146,14 +146,54 @@ def test_correlation_is_deterministic_persisted_and_evidence_backed(correlation_
         source='validation',
         evidence_type='validation_output',
         raw_output='independent validation evidence',
+        metadata={'finding_present': True},
         collected_by=user,
     )
     changed, changed_created = correlate_finding(finding, actor_id=str(user.id))
     assert changed_created is True
     assert changed.id != row.id
     assert changed.evidence_count == 2
+    assert changed.components['supporting_evidence_count'] == 2
+    assert changed.components['contradicting_evidence_count'] == 0
+    assert changed.components['evidence_strength'] == 60.0
     assert changed.correlation_sha256 != row.correlation_sha256
     assert RiskCorrelationSnapshot.objects.filter(vulnerability=finding).count() == 2
+
+
+@pytest.mark.django_db
+def test_negative_validation_changes_lineage_without_increasing_risk(correlation_context):
+    user, _, _, _, finding, _, _, _ = correlation_context
+
+    baseline, baseline_created = correlate_finding(finding, actor_id=str(user.id))
+    assert baseline_created is True
+    assert baseline.evidence_count == 1
+    assert baseline.components['supporting_evidence_count'] == 1
+    assert baseline.components['contradicting_evidence_count'] == 0
+    assert baseline.components['evidence_strength'] == 55.0
+
+    Evidence.objects.create(
+        scan=finding.scan,
+        asset=finding.asset,
+        finding=finding,
+        source='nuclei',
+        evidence_type='validation_output',
+        raw_output='exact template did not reproduce the finding',
+        metadata={'finding_present': False},
+        collected_by=user,
+    )
+
+    changed, changed_created = correlate_finding(finding, actor_id=str(user.id))
+
+    assert changed_created is True
+    assert changed.id != baseline.id
+    assert changed.evidence_count == 2
+    assert changed.components['supporting_evidence_count'] == 1
+    assert changed.components['contradicting_evidence_count'] == 1
+    assert changed.components['neutral_evidence_count'] == 0
+    assert changed.components['evidence_strength'] == 55.0
+    assert changed.score == baseline.score
+    assert changed.priority == baseline.priority
+    assert changed.correlation_sha256 != baseline.correlation_sha256
 
 
 @pytest.mark.django_db
