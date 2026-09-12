@@ -1,0 +1,252 @@
+from __future__ import annotations
+
+import uuid
+
+import pytest
+
+from django_project.projects.models import Project
+from django_project.users.models import User
+from fastapi_app.services.stateful_protocol_security import (
+    evaluate_cross_protocol_case,
+    evaluate_graphql_case,
+    evaluate_websocket_case,
+    run_cross_protocol_security,
+    run_graphql_security,
+    run_websocket_security,
+)
+
+
+def _user_project(prefix: str):
+    suffix = uuid.uuid4().hex[:10]
+    user = User.objects.create_user(
+        email=f'{prefix}-{suffix}@example.com',
+        password='Protocol-Test-Only-Password!42',
+        first_name='Protocol',
+        last_name='Fixture',
+    )
+    project = Project.objects.create(
+        name=f'{prefix}-{suffix}',
+        slug=f'{prefix}-{suffix}',
+        owner=user,
+        environment=Project.Environment.STAGING,
+    )
+    return user, project
+
+
+def _identity():
+    return {
+        'ref': 'alice',
+        'type': 'user',
+        'role': 'viewer',
+        'tenant_ref': 'tenant-a',
+        'scopes': ['records:read'],
+    }
+
+
+def _resource(tenant='tenant-a', owner='alice', ref='record-a'):
+    return {
+        'ref': ref,
+        'type': 'record',
+        'tenant_ref': tenant,
+        'owner_ref': owner,
+    }
+
+
+def test_websocket_security_detects_csws_hijack_cross_tenant_and_session_reuse():
+    case = {
+        'ref': 'ws-vulnerable',
+        'identity': _identity(),
+        'resource': _resource('tenant-b', 'bob', 'record-b'),
+        'channel': 'ws://fixture/ws/tenant-b/record-b',
+        'origin': 'https://evil.example',
+        'allowed_origins': ['https://app.example'],
+        'authentication_required': True,
+        'authenticated': False,
+        'session_state': 'expired',
+        'requested_action': 'subscribe',
+        'expected_allowed': False,
+        'server_accepted': True,
+        'handshake_status': 101,
+        'subscription_owner_ref': 'bob',
+        'subscription_tenant_ref': 'tenant-b',
+        'reconnect': True,
+        'reconnect_reauthenticated': False,
+        'message_schema_valid': False,
+        'message_authorized': False,
+        'binary': True,
+        'binary_allowed': False,
+        'message_size_bytes': 4096,
+        'max_message_size_bytes': 1024,
+        'observed_messages': 101,
+        'rate_limit_threshold': 100,
+        'rate_limited': False,
+    }
+    result = evaluate_websocket_case(case)
+    assert result['passed'] is False
+    joined = ' | '.join(result['semantic']['failures'])
+    for marker in (
+        'cross-origin WebSocket handshake',
+        'unauthenticated WebSocket',
+        'expired WebSocket session',
+        'cross-tenant WebSocket subscription',
+        'ownership boundary',
+        'without reauthentication',
+        'schema-invalid',
+        'message-level authorization',
+        'binary WebSocket',
+        'oversized WebSocket',
+        'rate threshold',
+        'does not match expected policy',
+    ):
+        assert marker in joined
+    assert len(result['evidence_fingerprint']) == 64
+
+
+def test_graphql_security_detects_bola_bfla_sensitive_introspection_and_resource_limits():
+    case = {
+        'ref': 'graphql-vulnerable',
+        'identity': _identity(),
+        'resource': _resource('tenant-b', 'bob', 'record-b'),
+        'endpoint': '/graphql-vulnerable',
+        'operation_type': 'mutation',
+        'operation_name': 'UpdateRecord',
+        'field_path': 'updateRecord.secret',
+        'expected_allowed': False,
+        'server_accepted': True,
+        'response_status': 200,
+        'errors_count': 0,
+        'field_authorized': False,
+        'mutation_authorized': False,
+        'sensitive_fields_requested': ['secret'],
+        'sensitive_fields_returned': ['secret'],
+        'introspection_requested': True,
+        'introspection_expected_allowed': False,
+        'batch_size': 20,
+        'max_batch_size': 10,
+        'depth': 20,
+        'max_depth': 8,
+        'complexity': 5000,
+        'max_complexity': 1000,
+    }
+    result = evaluate_graphql_case(case)
+    assert result['passed'] is False
+    joined = ' | '.join(result['semantic']['failures'])
+    for marker in (
+        'authorization decision',
+        'cross-tenant GraphQL',
+        'field-level authorization',
+        'unauthorized GraphQL mutation',
+        'sensitive GraphQL fields',
+        'GraphQL introspection',
+        'batch size',
+        'depth limit',
+        'complexity limit',
+    ):
+        assert marker in joined
+
+
+def test_cross_protocol_security_detects_identity_tenant_and_session_drift():
+    result = evaluate_cross_protocol_case({
+        'ref': 'browser-to-ws-drift',
+        'identity': _identity(),
+        'resource': _resource(),
+        'session_ref': 'session-a',
+        'from_protocol': 'browser',
+        'to_protocol': 'websocket',
+        'operation': 'subscribe',
+        'expected_allowed': False,
+        'observed_allowed': True,
+        'identity_consistent': False,
+        'tenant_consistent': False,
+        'session_bound': False,
+    })
+    assert result['passed'] is False
+    assert len(result['semantic']['failures']) == 4
+
+
+@pytest.mark.django_db
+def test_protocol_runs_persist_immutable_observations_and_security_graph():
+    user, project = _user_project('protocol-persist')
+
+    ws_run, ws_obs = run_websocket_security(project, str(user.id), [{
+        'ref': 'ws-fixed-own',
+        'identity': _identity(),
+        'resource': _resource(),
+        'channel': 'ws://fixture/ws/tenant-a/record-a',
+        'origin': 'https://app.example',
+        'allowed_origins': ['https://app.example'],
+        'authentication_required': True,
+        'authenticated': True,
+        'session_state': 'active',
+        'requested_action': 'subscribe',
+        'expected_allowed': True,
+        'server_accepted': True,
+        'handshake_status': 101,
+        'subscription_owner_ref': 'alice',
+        'subscription_tenant_ref': 'tenant-a',
+        'reconnect': False,
+        'reconnect_reauthenticated': False,
+        'message_schema_valid': True,
+        'message_authorized': True,
+        'binary': False,
+        'binary_allowed': False,
+        'message_size_bytes': 32,
+        'max_message_size_bytes': 1024,
+        'observed_messages': 1,
+        'rate_limit_threshold': 100,
+        'rate_limited': False,
+    }])
+    assert ws_run.summary == {'total': 1, 'passed': 1, 'failed': 0}
+    assert ws_obs[0].passed is True
+
+    gql_run, gql_obs = run_graphql_security(project, str(user.id), [{
+        'ref': 'gql-fixed-own',
+        'identity': _identity(),
+        'resource': _resource(),
+        'endpoint': '/graphql',
+        'operation_type': 'query',
+        'operation_name': 'Record',
+        'field_path': 'record.id',
+        'expected_allowed': True,
+        'server_accepted': True,
+        'response_status': 200,
+        'errors_count': 0,
+        'field_authorized': True,
+        'mutation_authorized': True,
+        'sensitive_fields_requested': [],
+        'sensitive_fields_returned': [],
+        'introspection_requested': False,
+        'introspection_expected_allowed': False,
+        'batch_size': 1,
+        'max_batch_size': 10,
+        'depth': 2,
+        'max_depth': 8,
+        'complexity': 3,
+        'max_complexity': 100,
+    }])
+    assert gql_run.summary['passed'] == 1
+    assert gql_obs[0].passed is True
+
+    cross_run, cross_obs = run_cross_protocol_security(project, str(user.id), [{
+        'ref': 'gql-to-ws',
+        'identity': _identity(),
+        'resource': _resource(),
+        'session_ref': 'session-a',
+        'from_protocol': 'graphql',
+        'to_protocol': 'websocket',
+        'operation': 'subscribe',
+        'expected_allowed': True,
+        'observed_allowed': True,
+        'identity_consistent': True,
+        'tenant_consistent': True,
+        'session_bound': True,
+        'source_evidence_ref': gql_obs[0].evidence_fingerprint,
+        'target_evidence_ref': ws_obs[0].evidence_fingerprint,
+    }])
+    assert cross_run.summary['failed'] == 0
+    assert cross_obs[0].passed is True
+
+    kinds = set(project.security_graph_nodes.values_list('kind', flat=True))
+    assert {'identity', 'resource', 'websocket_channel', 'graphql_operation', 'session', 'channel'}.issubset(kinds)
+    relations = set(project.security_graph_edges.values_list('relation', flat=True))
+    assert {'subscribes_to', 'streams_resource', 'invokes', 'operates_on', 'transitions_to'}.issubset(relations)
