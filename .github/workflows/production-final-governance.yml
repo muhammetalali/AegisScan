@@ -1,0 +1,180 @@
+name: Final Production Governance
+
+'on':
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type APPROVE to evaluate the final production governance decision'
+        required: true
+        type: string
+      release_sha:
+        description: 'Exact 40-character main release SHA to approve'
+        required: true
+        type: string
+      live_deploy_run_id:
+        description: 'Successful Live Production Deploy and Acceptance run ID for this SHA'
+        required: true
+        type: string
+      resilience_run_id:
+        description: 'Successful Production Resilience Acceptance run ID for this SHA'
+        required: true
+        type: string
+      supply_chain_run_id:
+        description: 'Successful Supply Chain Release push run ID for this SHA'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: aegisscan-final-production-governance
+  cancel-in-progress: false
+
+jobs:
+  final-governance:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      LIVE_DEPLOY_RUN_ID: ${{ inputs.live_deploy_run_id }}
+      RESILIENCE_RUN_ID: ${{ inputs.resilience_run_id }}
+      SUPPLY_CHAIN_RUN_ID: ${{ inputs.supply_chain_run_id }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require explicit exact-main governance evaluation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "APPROVE"
+          case "$RELEASE_SHA" in
+            *[!0-9a-f]*|'') echo 'release_sha must be lowercase hexadecimal' >&2; exit 1 ;;
+          esac
+          test "${#RELEASE_SHA}" -eq 40
+          for value in "$LIVE_DEPLOY_RUN_ID" "$RESILIENCE_RUN_ID" "$SUPPLY_CHAIN_RUN_ID"; do
+            case "$value" in
+              ''|*[!0-9]*) echo 'all workflow run IDs must be positive integers' >&2; exit 1 ;;
+            esac
+            test "$value" -gt 0
+          done
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          test "$RELEASE_SHA" = "$GITHUB_SHA"
+
+      - name: Download independently captured workflow metadata and evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700             /tmp/aegis-governance/live             /tmp/aegis-governance/resilience             /tmp/aegis-governance/supply-chain             /tmp/aegis-governance/metadata
+
+          gh api             "/repos/$GITHUB_REPOSITORY/actions/runs/$LIVE_DEPLOY_RUN_ID"             > /tmp/aegis-governance/metadata/live-run.json
+          gh api             "/repos/$GITHUB_REPOSITORY/actions/runs/$RESILIENCE_RUN_ID"             > /tmp/aegis-governance/metadata/resilience-run.json
+          gh api             "/repos/$GITHUB_REPOSITORY/actions/runs/$SUPPLY_CHAIN_RUN_ID"             > /tmp/aegis-governance/metadata/supply-chain-run.json
+
+          gh run download "$LIVE_DEPLOY_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/aegis-governance/live
+          gh run download "$RESILIENCE_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/aegis-governance/resilience
+          gh run download "$SUPPLY_CHAIN_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/aegis-governance/supply-chain
+
+      - name: Resolve the approved public production origin from immutable go-live evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          candidates = []
+          for path in Path('/tmp/aegis-governance/live').rglob('manifest.json'):
+              try:
+                  payload = json.loads(path.read_text(encoding='utf-8'))
+              except Exception:
+                  continue
+              if payload.get('schema') == 'aegisscan.go-live-evidence.v1':
+                  candidates.append((path, payload))
+          if len(candidates) != 1:
+              raise SystemExit(f'expected exactly one go-live manifest, found {len(candidates)}')
+          payload = candidates[0][1]
+          origin = str(payload.get('public_origin', '')).strip()
+          if not origin.startswith('https://'):
+              raise SystemExit('go-live evidence does not contain a valid HTTPS public origin')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write(f'AEGIS_APPROVED_PUBLIC_ORIGIN={origin}\n')
+          print(origin)
+          PY
+
+      - name: Revalidate the public production surface at governance decision time
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/public_acceptance.py             --origin "$AEGIS_APPROVED_PUBLIC_ORIGIN"             | tee /tmp/aegis-governance/current-public-acceptance.json
+
+      - name: Evaluate evidence-driven production governance decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/production_governance_gate.py             --release-sha "$RELEASE_SHA"             --go-live-root /tmp/aegis-governance/live             --resilience-root /tmp/aegis-governance/resilience             --supply-chain-root /tmp/aegis-governance/supply-chain             --live-run-metadata /tmp/aegis-governance/metadata/live-run.json             --resilience-run-metadata /tmp/aegis-governance/metadata/resilience-run.json             --supply-chain-run-metadata /tmp/aegis-governance/metadata/supply-chain-run.json             --current-public-acceptance /tmp/aegis-governance/current-public-acceptance.json             --output /tmp/aegis-governance/decision.json             | tee /tmp/aegis-governance/decision-output.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          decision = json.loads(Path('/tmp/aegis-governance/decision.json').read_text())
+          assert decision['schema'] == 'aegisscan.production-governance-decision.v1'
+          assert decision['status'] == 'success'
+          assert decision['decision'] == 'APPROVED'
+          PY
+
+      - name: Hash final governance record
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum             /tmp/aegis-governance/decision.json             /tmp/aegis-governance/current-public-acceptance.json             /tmp/aegis-governance/metadata/live-run.json             /tmp/aegis-governance/metadata/resilience-run.json             /tmp/aegis-governance/metadata/supply-chain-run.json             | tee /tmp/aegis-governance/final-evidence.sha256
+          sha256sum -c /tmp/aegis-governance/final-evidence.sha256
+
+      - name: Publish governance decision summary
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          d = json.loads(Path('/tmp/aegis-governance/decision.json').read_text())
+          print('# AegisScan Final Production Governance')
+          print()
+          print(f"**Decision:** {d['decision']}")
+          print(f"**Release:** `{d['release_sha']}`")
+          print(f"**Public origin:** {d['public_origin']}")
+          print(f"**Decision time:** {d['decided_at']}")
+          print()
+          print('All required deployment, HTTPS, black-box, resilience, alert, SBOM and provenance controls passed.')
+          PY
+
+      - name: Upload final governance decision evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-final-governance-${{ inputs.release_sha }}-${{ github.run_id }}
+          path: |
+            /tmp/aegis-governance/decision.json
+            /tmp/aegis-governance/decision-output.json
+            /tmp/aegis-governance/current-public-acceptance.json
+            /tmp/aegis-governance/final-evidence.sha256
+            /tmp/aegis-governance/metadata/live-run.json
+            /tmp/aegis-governance/metadata/resilience-run.json
+            /tmp/aegis-governance/metadata/supply-chain-run.json
+          if-no-files-found: error
+          retention-days: 90
