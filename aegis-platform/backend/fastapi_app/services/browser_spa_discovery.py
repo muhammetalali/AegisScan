@@ -354,9 +354,47 @@ _INSTRUMENTATION_SCRIPT = r"""
     innerHTMLWrites: 0,
     insertAdjacentHTMLCalls: 0,
     documentWriteCalls: 0,
-    objectPrototypeBaseline: Object.getOwnPropertyNames(Object.prototype)
+    objectPrototypeBaseline: Object.getOwnPropertyNames(Object.prototype),
+    blockedWebSocketCount: 0,
+    blockedWebTransportCount: 0
   };
   Object.defineProperty(globalThis, '__aegisRuntimeSignals', {value: state, configurable: false});
+  try {
+    const targetOrigin = __AEGIS_TARGET_ORIGIN__;
+    const NativeWebSocket = window.WebSocket;
+    const websocketProxy = new Proxy(NativeWebSocket, {
+      construct(Target, args) {
+        const raw = String(args[0] || '');
+        const parsed = new URL(raw, location.href);
+        const comparable = (parsed.protocol === 'ws:' ? 'http:' : parsed.protocol === 'wss:' ? 'https:' : parsed.protocol) + '//' + parsed.host;
+        if (comparable !== targetOrigin) {
+          state.blockedWebSocketCount += 1;
+          throw new DOMException('Cross-origin WebSocket blocked by AegisScan browser isolation', 'SecurityError');
+        }
+        return Reflect.construct(Target, args, Target);
+      }
+    });
+    Object.defineProperty(websocketProxy, 'CONNECTING', {value: NativeWebSocket.CONNECTING});
+    Object.defineProperty(websocketProxy, 'OPEN', {value: NativeWebSocket.OPEN});
+    Object.defineProperty(websocketProxy, 'CLOSING', {value: NativeWebSocket.CLOSING});
+    Object.defineProperty(websocketProxy, 'CLOSED', {value: NativeWebSocket.CLOSED});
+    window.WebSocket = websocketProxy;
+  } catch (_) {}
+  try {
+    if (typeof window.WebTransport === 'function') {
+      const NativeWebTransport = window.WebTransport;
+      window.WebTransport = new Proxy(NativeWebTransport, {
+        construct(Target, args) {
+          const parsed = new URL(String(args[0] || ''), location.href);
+          if (parsed.origin !== __AEGIS_TARGET_ORIGIN__) {
+            state.blockedWebTransportCount += 1;
+            throw new DOMException('Cross-origin WebTransport blocked by AegisScan browser isolation', 'SecurityError');
+          }
+          return Reflect.construct(Target, args, Target);
+        }
+      });
+    }
+  } catch (_) {}
   try {
     const originalAdd = EventTarget.prototype.addEventListener;
     EventTarget.prototype.addEventListener = function(type, listener, options) {
@@ -401,6 +439,13 @@ _INSTRUMENTATION_SCRIPT = r"""
   } catch (_) {}
 })();
 """
+
+
+def _instrumentation_script(target_origin: str) -> str:
+    return _INSTRUMENTATION_SCRIPT.replace(
+        '__AEGIS_TARGET_ORIGIN__',
+        json.dumps(target_origin),
+    )
 
 
 def _storage_seed_script(target_origin: str, session: dict[str, Any]) -> str:
@@ -463,7 +508,9 @@ _RUNTIME_SUMMARY_EXPRESSION = r"""
       postMessagesSent: Number(signals.postMessagesSent || 0),
       innerHTMLWrites: Number(signals.innerHTMLWrites || 0),
       insertAdjacentHTMLCalls: Number(signals.insertAdjacentHTMLCalls || 0),
-      documentWriteCalls: Number(signals.documentWriteCalls || 0)
+      documentWriteCalls: Number(signals.documentWriteCalls || 0),
+      blockedWebSocketCount: Number(signals.blockedWebSocketCount || 0),
+      blockedWebTransportCount: Number(signals.blockedWebTransportCount || 0)
     }
   };
 })()
@@ -652,7 +699,7 @@ async def discover(
             )
             await cdp.call(
                 'Page.addScriptToEvaluateOnNewDocument',
-                {'source': _INSTRUMENTATION_SCRIPT},
+                {'source': _instrumentation_script(target_origin)},
             )
             await cdp.call(
                 'Page.addScriptToEvaluateOnNewDocument',
@@ -833,6 +880,8 @@ async def discover(
             'inner_html_write_count': int(signals.get('innerHTMLWrites') or 0),
             'insert_adjacent_html_count': int(signals.get('insertAdjacentHTMLCalls') or 0),
             'document_write_count': int(signals.get('documentWriteCalls') or 0),
+            'blocked_websocket_count': int(signals.get('blockedWebSocketCount') or 0),
+            'blocked_webtransport_count': int(signals.get('blockedWebTransportCount') or 0),
             'dom_clobbering_count': int(runtime_summary.get('domClobberingCount') or 0),
             'prototype_additions': [
                 str(value)[:200]
