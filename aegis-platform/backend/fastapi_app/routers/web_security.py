@@ -31,6 +31,8 @@ from fastapi_app.contracts.web_security_v2 import (
     WebSocketSecurityBatchIn,
 )
 from fastapi_app.core.dependencies import get_current_user
+from django_project.system.credential_vault import CredentialVaultDenied
+from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution
 from fastapi_app.services.stateful_protocol_security import (
     run_cross_protocol_security,
     run_graphql_security,
@@ -117,6 +119,74 @@ async def _project_security_operator_for_user(project_id: str, user_id: str) -> 
     if project is None:
         raise HTTPException(status_code=403, detail='Project security-operator authority required')
     return project
+
+
+async def _protocol_credential_governance(
+    project: Project,
+    actor_id: str,
+    *,
+    capability_id: str,
+    target_origin: str,
+    cases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    bindings: dict[str, str] = {}
+    for case in cases:
+        identity = case.get('identity') if isinstance(case.get('identity'), dict) else {}
+        identity_ref = str(identity.get('ref') or '').strip()
+        credential_ref = str(identity.get('credential_ref') or '').strip()
+        if identity_ref == 'anonymous':
+            if credential_ref:
+                raise HTTPException(
+                    status_code=409,
+                    detail='Anonymous protocol identity must not carry a credential reference',
+                )
+            continue
+        if not identity_ref or not credential_ref:
+            raise HTTPException(
+                status_code=409,
+                detail='Non-anonymous protocol identity requires a Vault credential reference',
+            )
+        existing = bindings.get(credential_ref)
+        if existing and existing != identity_ref:
+            raise HTTPException(
+                status_code=409,
+                detail='One protocol credential cannot bind multiple identity references',
+            )
+        bindings[credential_ref] = identity_ref
+
+    metadata: list[dict[str, Any]] = []
+    for credential_ref, identity_ref in sorted(bindings.items()):
+        try:
+            context = await sync_to_async(authorize_credential_refs_for_execution)(
+                project_id=project.id,
+                actor_id=actor_id,
+                refs=[credential_ref],
+                capability_id=capability_id,
+                allowed_kinds=('token', 'api_key', 'generic'),
+                purpose=f'protocol:{capability_id}:evaluate',
+                target=target_origin,
+            )
+        except (CredentialVaultDenied, ValueError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        items = (
+            context.get('credential_refs')
+            if isinstance(context.get('credential_refs'), list)
+            else []
+        )
+        item = items[0] if items and isinstance(items[0], dict) else {}
+        bound_identity = str(item.get('protocol_identity_ref') or '').strip()
+        if not bound_identity or bound_identity != identity_ref:
+            raise HTTPException(
+                status_code=409,
+                detail='Protocol identity does not match the Vault credential identity binding',
+            )
+        metadata.append({
+            'credential_ref': str(item.get('credential_ref') or credential_ref),
+            'kind': str(item.get('kind') or ''),
+            'version': int(item.get('version') or 0),
+            'protocol_identity_ref': bound_identity,
+        })
+    return metadata
 
 
 async def _protocol_budget_governance(
@@ -595,6 +665,14 @@ async def evaluate_websocket_protocol(
         capability='websocket_security',
         cases=cases,
     )
+    credential_bindings = await _protocol_credential_governance(
+        project,
+        uid,
+        capability_id='websocket.security-validation',
+        target_origin=payload.target_origin,
+        cases=cases,
+    )
+    governance = {**governance, 'credential_bindings': credential_bindings}
     run, observations = await sync_to_async(run_websocket_security)(
         project,
         uid,
@@ -626,6 +704,14 @@ async def evaluate_graphql_protocol(
         capability='graphql_security',
         cases=cases,
     )
+    credential_bindings = await _protocol_credential_governance(
+        project,
+        uid,
+        capability_id='graphql.security-validation',
+        target_origin=payload.target_origin,
+        cases=cases,
+    )
+    governance = {**governance, 'credential_bindings': credential_bindings}
     run, observations = await sync_to_async(run_graphql_security)(
         project,
         uid,
@@ -657,6 +743,14 @@ async def evaluate_cross_protocol(
         capability='cross_protocol_state',
         cases=cases,
     )
+    credential_bindings = await _protocol_credential_governance(
+        project,
+        uid,
+        capability_id='cross-protocol.security-validation',
+        target_origin=payload.target_origin,
+        cases=cases,
+    )
+    governance = {**governance, 'credential_bindings': credential_bindings}
     run, observations = await sync_to_async(run_cross_protocol_security)(
         project,
         uid,
