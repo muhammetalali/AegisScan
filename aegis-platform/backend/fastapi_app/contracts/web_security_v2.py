@@ -124,6 +124,7 @@ class CapturedResponseIn(StrictModel):
 class IdentityIn(StrictModel):
     ref: str = Field(min_length=1, max_length=255)
     type: str = Field(min_length=1, max_length=80)
+    credential_ref: UUID | None = None
     role: str = Field(default='', max_length=120)
     tenant_ref: str = Field(default='', max_length=255)
     scopes: list[str] = Field(default_factory=list, max_length=256)
@@ -203,6 +204,7 @@ class WebSocketSecurityCaseIn(StrictModel):
 
 class WebSocketSecurityBatchIn(StrictModel):
     budget_id: UUID
+    target_origin: str = Field(min_length=1, max_length=700)
     cases: list[WebSocketSecurityCaseIn] = Field(min_length=1, max_length=5000)
 
 
@@ -240,6 +242,7 @@ class GraphQLSecurityCaseIn(StrictModel):
 
 class GraphQLSecurityBatchIn(StrictModel):
     budget_id: UUID
+    target_origin: str = Field(min_length=1, max_length=700)
     cases: list[GraphQLSecurityCaseIn] = Field(min_length=1, max_length=5000)
 
 
@@ -262,4 +265,5 @@ class CrossProtocolTransitionCaseIn(StrictModel):
 
 class CrossProtocolTransitionBatchIn(StrictModel):
     budget_id: UUID
+    target_origin: str = Field(min_length=1, max_length=700)
     cases: list[CrossProtocolTransitionCaseIn] = Field(min_length=1, max_length=5000)
