@@ -9,6 +9,7 @@ from django_project.projects.models import Project
 from django_project.users.models import User
 from fastapi_app.services.web_security_foundation import (
     analyze_response_pair,
+    evaluate_authorization_case,
     evaluate_execution_budget,
     evaluate_negative_invariant,
     evaluate_provider_gate,
@@ -226,6 +227,75 @@ def test_authorization_matrix_proves_same_tenant_and_cross_tenant_semantics(sett
 
     kinds = set(project.security_graph_nodes.values_list('kind', flat=True))
     assert {'identity', 'tenant', 'resource', 'endpoint', 'policy'}.issubset(kinds)
+
+
+@pytest.mark.django_db
+def test_authorization_policy_fails_closed_when_required_binding_or_condition_evaluator_is_missing(settings):
+    settings.SECRET_KEY = 'authorization-binding-test-secret'
+    user, project = _user_project('authorization-binding')
+    tenant_policy, _ = persist_policy(project, str(user.id), {
+        'identity_type': 'user',
+        'role': 'viewer',
+        'tenant_ref': '*',
+        'endpoint': '/bound/*',
+        'method': 'GET',
+        'operation': 'read',
+        'resource_type': 'record',
+        'allowed': True,
+        'ownership_rule': 'owner_only',
+        'tenant_rule': 'same_tenant',
+        'sensitive_operation': False,
+        'required_scopes': [],
+        'conditions': {},
+        'policy_source': 'operator_declared',
+        'provenance': {'source_ref': 'fixture://binding'},
+        'confidence': 1.0,
+        'version': 1,
+    })
+    missing_tenant = evaluate_authorization_case([tenant_policy], {
+        'ref': 'missing-resource-tenant',
+        'identity': {'ref': 'alice', 'type': 'user', 'role': 'viewer', 'tenant_ref': 'tenant-a', 'scopes': []},
+        'resource': {'ref': 'record-1', 'type': 'record', 'tenant_ref': '', 'owner_ref': 'alice'},
+        'endpoint': '/bound/record-1',
+        'method': 'GET',
+        'operation': 'read',
+        'response': {'status_code': 403, 'headers': {}, 'body': {'detail': 'Forbidden'}},
+    })
+    assert missing_tenant['expected_allowed'] is False
+    assert missing_tenant['passed'] is True
+    assert 'requires both identity and resource tenant bindings' in missing_tenant['reason']
+
+    conditional_policy, _ = persist_policy(project, str(user.id), {
+        'identity_type': 'user',
+        'role': 'viewer',
+        'tenant_ref': '*',
+        'endpoint': '/conditional/*',
+        'method': 'GET',
+        'operation': 'read',
+        'resource_type': 'record',
+        'allowed': True,
+        'ownership_rule': '',
+        'tenant_rule': '',
+        'sensitive_operation': False,
+        'required_scopes': [],
+        'conditions': {'mfa': True},
+        'policy_source': 'operator_declared',
+        'provenance': {'source_ref': 'fixture://conditional'},
+        'confidence': 1.0,
+        'version': 1,
+    })
+    unsupported_condition = evaluate_authorization_case([conditional_policy], {
+        'ref': 'unsupported-condition',
+        'identity': {'ref': 'alice', 'type': 'user', 'role': 'viewer', 'tenant_ref': 'tenant-a', 'scopes': []},
+        'resource': {'ref': 'record-2', 'type': 'record', 'tenant_ref': 'tenant-a', 'owner_ref': 'alice'},
+        'endpoint': '/conditional/record-2',
+        'method': 'GET',
+        'operation': 'read',
+        'response': {'status_code': 403, 'headers': {}, 'body': {'detail': 'Forbidden'}},
+    })
+    assert unsupported_condition['expected_allowed'] is False
+    assert unsupported_condition['passed'] is True
+    assert 'fail-closed' in unsupported_condition['reason']
 
 
 @pytest.mark.django_db
