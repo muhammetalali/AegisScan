@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = BACKEND_ROOT.parents[1]
 ROUTERS_ROOT = BACKEND_ROOT / "fastapi_app" / "routers"
 FASTAPI_MAIN = BACKEND_ROOT / "fastapi_app" / "main.py"
 DIGITAL_TWIN = ROUTERS_ROOT / "digital_twin.py"
@@ -34,6 +35,10 @@ DIRECT_BEARER_MARKERS = (
     "HTTPAuthorizationCredentials",
 )
 
+FORBIDDEN_LEGACY_ROOTS = (
+    "packages",
+)
+
 
 def _relative_target_exists(path: Path, node: ast.ImportFrom) -> bool:
     if not node.module:
@@ -49,6 +54,14 @@ def main() -> int:
     failures: list[str] = []
     checked_router_files = 0
     checked_relative_imports = 0
+
+    for legacy_root in FORBIDDEN_LEGACY_ROOTS:
+        legacy_path = REPOSITORY_ROOT / legacy_root
+        if legacy_path.exists():
+            failures.append(
+                f"{legacy_root}/: retired legacy source tree must not exist on canonical main; "
+                "use aegis-platform/ for the application and aegis/ for the CLI"
+            )
 
     for path in sorted(ROUTERS_ROOT.glob("*.py")):
         checked_router_files += 1
