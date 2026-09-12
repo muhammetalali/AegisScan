@@ -116,6 +116,16 @@ async def app_js():
   const socket = new WebSocket('ws://' + location.host + '/ws');
   socket.addEventListener('open', () => socket.send('fixture-hello'));
   socket.addEventListener('message', () => socket.close());
+
+  try {
+    new WebSocket('ws://192.0.2.1/blocked-ws');
+  } catch (_) {}
+
+  try {
+    if (typeof WebTransport === 'function') {
+      new WebTransport('https://192.0.2.1/blocked-transport');
+    }
+  } catch (_) {}
 })();
 """
     return Response(
