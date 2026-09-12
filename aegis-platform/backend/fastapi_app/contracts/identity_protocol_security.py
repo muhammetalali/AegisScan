@@ -54,10 +54,11 @@ class IdentityProtocolCaseIn(StrictModel):
     authorization_code_reused: bool = False
     authorization_code_reuse_rejected: bool = True
 
-    # SAML observations. Raw assertions are intentionally excluded.
+    # SAML observations. Raw assertions are intentionally excluded. The signing
+    # policy is explicit to avoid false positives across valid SP/IdP profiles.
     saml_response_signature_valid: bool = True
     saml_assertion_signature_valid: bool = True
-    saml_signature_required: bool = True
+    saml_signature_policy: Literal['response', 'assertion', 'either', 'both', 'none'] = 'either'
     saml_expected_audience: str = Field(default='', max_length=700)
     saml_observed_audience: str = Field(default='', max_length=700)
     saml_expected_recipient: str = Field(default='', max_length=1000)
