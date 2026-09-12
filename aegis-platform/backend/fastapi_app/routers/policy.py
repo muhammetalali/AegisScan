@@ -1,20 +1,16 @@
 from asgiref.sync import sync_to_async
-from django.contrib.auth import get_user_model
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import Any
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, require_permission
 from ..services.policy_engine import evaluate_policy, list_policies, save_policy
 from ..services.policy_simulation import simulate_policy
 from ..services.decision_action_orchestration import get_action
+from django_project.users.models import Permission
 
 router = APIRouter()
 
-
-def _is_policy_administrator(user_id: str) -> bool:
-    User = get_user_model()
-    return User.objects.filter(pk=user_id, is_active=True, is_staff=True).exists()
 
 async def require_user(user=Depends(get_current_user)) -> dict[str, Any]:
     return user
@@ -36,19 +32,17 @@ async def policies(user: dict[str, Any] = Depends(require_user)):
     return {"items": await sync_to_async(list_policies)()}
 
 @router.post("/policies", status_code=201)
-async def create_policy(body: PolicyPayload, user: dict[str, Any] = Depends(require_user)):
+async def create_policy(body: PolicyPayload, user: dict[str, Any] = Depends(require_permission(Permission.SYSTEM_SETTINGS))):
     actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
     if not actor:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
-    if not await sync_to_async(_is_policy_administrator)(actor):
-        raise HTTPException(status_code=403, detail="Policy administration permission required")
     try:
         return await sync_to_async(save_policy)(body.model_dump(), actor, False)
     except FileExistsError:
         raise HTTPException(status_code=409, detail="Policy already exists; use PUT to create a new version")
 
 @router.put("/policies/{policy_id}")
-async def update_policy(policy_id: str, body: PolicyPayload, user: dict[str, Any] = Depends(require_user)):
+async def update_policy(policy_id: str, body: PolicyPayload, user: dict[str, Any] = Depends(require_permission(Permission.SYSTEM_SETTINGS))):
     actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
     if not actor:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
