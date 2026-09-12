@@ -30,9 +30,11 @@ from fastapi_app.contracts.web_security_v2 import (
     ResponseComparisonIn,
     WebSocketSecurityBatchIn,
 )
+from fastapi_app.contracts.identity_protocol_security import IdentityProtocolBatchIn
 from fastapi_app.core.dependencies import get_current_user
 from django_project.system.credential_vault import CredentialVaultDenied
 from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution
+from fastapi_app.services.identity_protocol_security import run_identity_protocol_security
 from fastapi_app.services.stateful_protocol_security import (
     run_cross_protocol_security,
     run_graphql_security,
@@ -330,6 +332,7 @@ async def web_security_contract(user=Depends(get_current_user)):
             'websocket_stateful_validation': True,
             'graphql_security_validation': True,
             'cross_protocol_state_validation': True,
+            'identity_protocol_security': True,
         },
         'policy_sources': [value for value, _label in AuthorizationPolicyManifest.Source.choices],
         'provider_states': [value for value, _label in ProviderApprovalRecord.Status.choices],
@@ -753,6 +756,44 @@ async def evaluate_cross_protocol(
     )
     governance = {**governance, 'credential_bindings': credential_bindings}
     run, observations = await sync_to_async(run_cross_protocol_security)(
+        project,
+        uid,
+        cases,
+        governance,
+    )
+    return {
+        'contract_version': CONTRACT_VERSION,
+        'run_id': str(run.id),
+        'kind': run.kind,
+        'input_sha256': run.input_sha256,
+        'summary': run.summary,
+        'observations': [_protocol_observation_dict(item) for item in observations],
+    }
+
+@router.post('/projects/{project_id}/identity-protocols/evaluate')
+async def evaluate_identity_protocol_security(
+    project_id: str,
+    payload: IdentityProtocolBatchIn,
+    user=Depends(get_current_user),
+):
+    uid = _uid(user)
+    project = await _project_security_operator_for_user(project_id, uid)
+    cases = [item.model_dump(mode='json') for item in payload.cases]
+    governance = await _protocol_budget_governance(
+        project,
+        payload.budget_id,
+        capability='identity_protocol_security',
+        cases=cases,
+    )
+    credential_bindings = await _protocol_credential_governance(
+        project,
+        uid,
+        capability_id='identity-protocol.security-validation',
+        target_origin=payload.target_origin,
+        cases=cases,
+    )
+    governance = {**governance, 'credential_bindings': credential_bindings}
+    run, observations = await sync_to_async(run_identity_protocol_security)(
         project,
         uid,
         cases,

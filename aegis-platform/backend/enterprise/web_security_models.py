@@ -276,6 +276,7 @@ class WebSecurityValidationRun(models.Model):
         WEBSOCKET_SECURITY = 'websocket_security', 'WebSocket Security'
         GRAPHQL_SECURITY = 'graphql_security', 'GraphQL Security'
         CROSS_PROTOCOL = 'cross_protocol', 'Cross-Protocol State'
+        IDENTITY_PROTOCOL_SECURITY = 'identity_protocol_security', 'Identity Protocol Security'
 
     class Status(models.TextChoices):
         COMPLETED = 'completed', 'Completed'
