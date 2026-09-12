@@ -564,11 +564,16 @@ def upsert_graph_snapshot(project, nodes: list[dict[str, Any]], edges: list[dict
     updated_nodes = 0
     for item in nodes:
         external_ref = str(item['external_ref'])
+        existing = SecurityGraphNode.objects.filter(project=project, external_ref=external_ref).first()
+        if existing is not None and existing.kind != item['kind']:
+            raise ValueError(
+                f'canonical graph ref {external_ref!r} already exists as kind {existing.kind!r}'
+            )
         row, created = SecurityGraphNode.objects.update_or_create(
             project=project,
-            kind=item['kind'],
             external_ref=external_ref,
             defaults={
+                'kind': item['kind'],
                 'plane': item.get('plane') or SecurityGraphNode.Plane.APPLICATION,
                 'label': item.get('label') or external_ref,
                 'protocol': item.get('protocol') or '',
