@@ -165,6 +165,7 @@ async def _protocol_credential_governance(
                 allowed_kinds=('token', 'api_key', 'generic'),
                 purpose=f'protocol:{capability_id}:evaluate',
                 target=target_origin,
+                identity_ref=identity_ref,
             )
         except (CredentialVaultDenied, ValueError) as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
