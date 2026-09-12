@@ -150,6 +150,20 @@ def test_security_graph_upsert_is_idempotent_and_project_scoped():
     endpoint = SecurityGraphNode.objects.get(project=project, kind='endpoint')
     assert endpoint.properties['sensitive'] is True
 
+    with pytest.raises(ValueError, match='already exists as kind'):
+        upsert_graph_snapshot(
+            project,
+            [{
+                'plane': 'application',
+                'kind': 'resource',
+                'external_ref': 'identity:alice',
+                'label': 'Ambiguous duplicate',
+                'properties': {},
+                'provenance': {'source': 'fixture'},
+            }],
+            [],
+        )
+
 
 @pytest.mark.django_db
 def test_validation_runs_and_observations_are_immutable_and_preserve_cross_tenant_lineage(settings):
