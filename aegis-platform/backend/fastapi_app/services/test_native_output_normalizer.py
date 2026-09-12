@@ -92,3 +92,105 @@ def test_exiftool_json_keeps_only_json_scalar_metadata():
     attrs = result['observations'][0]['attributes']
     assert attrs['FileSize'] == '12 kB'
     assert 'Nested' not in attrs
+
+def test_rustscan_open_ports_and_nmap_services_are_normalized():
+    raw = (
+        'Open 127.0.0.1:18080\n'
+        '18080/tcp open  http  Python http.server 3.12\n'
+    )
+    result = normalize_native_output('network.rustscan', raw)
+    assert result['count'] == 2
+    assert result['observations'][0] == {
+        'kind': 'network-open-port',
+        'host': '127.0.0.1',
+        'port': 18080,
+        'protocol': 'tcp',
+        'service': '',
+        'version': '',
+    }
+    assert result['observations'][1]['kind'] == 'network-service'
+    assert result['observations'][1]['port'] == 18080
+    assert result['observations'][1]['service'] == 'http'
+
+
+def test_amass_scope_output_is_normalized_without_banner_hosts():
+    raw = (
+        'The Amass Discord server can be found here: https://discord.com/example\n'
+        'Session Scope\n'
+        'FQDN:\n'
+        'api.example.test\n'
+        'www.example.test\n'
+    )
+    result = normalize_native_output('recon.amass', raw)
+    assert result['count'] == 2
+    assert result['observations'] == [
+        {'kind': 'discovered-hostname', 'hostname': 'api.example.test'},
+        {'kind': 'discovered-hostname', 'hostname': 'www.example.test'},
+    ]
+
+
+def test_feroxbuster_jsonl_responses_are_normalized():
+    raw = (
+        '{"type":"response","url":"http://127.0.0.1:18080/admin","path":"/admin",'
+        '"wildcard":false,"status":200,"method":"GET","content_length":12,'
+        '"line_count":1,"word_count":1}\n'
+        '{"type":"configuration","wordlist":["/opt/aegis-wordlists/web-common.txt"]}\n'
+    )
+    result = normalize_native_output('web.feroxbuster', raw)
+    assert result['count'] == 1
+    observation = result['observations'][0]
+    assert observation['kind'] == 'web-endpoint'
+    assert observation['url'].endswith('/admin')
+    assert observation['status'] == 200
+    assert observation['length'] == 12
+
+
+def test_nikto_260_embedded_json_is_normalized_to_security_findings():
+    raw = (
+        '- Nikto v2.6.0\n'
+        '[{"host":"example.test","ip":"192.0.2.10","port":443,'
+        '"vulnerabilities":[{"id":"999001","references":["CVE-2099-0001"],'
+        '"method":"GET","url":"/admin","msg":"Administrative endpoint is exposed"}]}]'
+    )
+    result = normalize_native_output('web.nikto', raw)
+    assert result['count'] == 1
+    observation = result['observations'][0]
+    assert observation['kind'] == 'web-vulnerability'
+    assert observation['rule_id'] == 'nikto.999001'
+    assert observation['title'] == 'Administrative endpoint is exposed'
+    assert observation['severity'] == 'medium'
+    assert observation['location'] == '/admin'
+
+
+def test_trivy_config_json_is_normalized_to_iac_findings():
+    raw = '''{
+      "SchemaVersion": 2,
+      "Results": [{
+        "Target": "main.tf",
+        "Class": "config",
+        "Type": "terraform",
+        "Misconfigurations": [{
+          "Type": "Terraform Security Check",
+          "ID": "AVD-AWS-0086",
+          "AVDID": "AVD-AWS-0086",
+          "Title": "Bucket has public ACL",
+          "Description": "Public ACLs expose data.",
+          "Message": "Bucket has public access",
+          "Resolution": "Use a private ACL.",
+          "Severity": "HIGH",
+          "Status": "FAIL",
+          "PrimaryURL": "https://avd.aquasec.com/misconfig/avd-aws-0086",
+          "References": ["https://example.test/reference"],
+          "CauseMetadata": {"StartLine": 4, "Resource": "aws_s3_bucket.bad"}
+        }]
+      }]
+    }'''
+    result = normalize_native_output('code.trivy-config', raw)
+    assert result['count'] == 1
+    observation = result['observations'][0]
+    assert observation['kind'] == 'iac-security-finding'
+    assert observation['rule_id'] == 'AVD-AWS-0086'
+    assert observation['severity'] == 'high'
+    assert observation['location'] == 'main.tf:4'
+    assert observation['resource'] == 'aws_s3_bucket.bad'
+

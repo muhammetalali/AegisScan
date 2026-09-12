@@ -149,6 +149,8 @@ def test_nmap_positive_validation_does_not_verify_finding(finding_fixture, monke
     assert evidence.evidence_type == "validation_output"
     assert evidence.sha256
     assert evidence.metadata["finding_present"] is True
+    assert evidence.metadata["validation_run_id"] == str(validation.id)
+    assert evidence.metadata["validation_id"] == str(validation.id)
 
     verified_finding, verification, error = async_to_sync(_verify_fix)(str(finding.id), str(user.id))
     assert verified_finding.id == finding.id

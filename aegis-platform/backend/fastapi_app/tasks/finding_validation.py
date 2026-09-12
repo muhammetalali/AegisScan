@@ -173,6 +173,7 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                         'stderr': stderr,
                         'target': result['target'],
                         'exit_code': result['exit_code'],
+                        'validation_run_id': validation_id,
                         'validation_id': validation_id,
                         'finding_present': result['finding_present'],
                         'template_id': result.get('template_id', ''),
