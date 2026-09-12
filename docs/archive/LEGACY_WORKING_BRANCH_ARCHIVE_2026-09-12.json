@@ -77,8 +77,8 @@
   "archive_ref": "archive/legacy-working-branches-2026-09-12",
   "archive_root_sha": "15364e35d00563629ff7890b43e371f09c51e5a6",
   "archive_verification": {
-    "method": "synthetic merge DAG; every unique historical head SHA is a direct parent of one of two batch archive commits, which are parents of the archive root",
+    "method": "synthetic merge DAG covering every unique historical working branch head SHA",
     "verified_on": "2026-09-12",
-    "branch_ref_deletion_policy": "delete only when current branch SHA still equals manifest SHA and branch is not an open PR head"
+    "branch_ref_deletion_policy": "delete only if current SHA still matches manifest SHA and branch is not an open PR head"
   }
 }
