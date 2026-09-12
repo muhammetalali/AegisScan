@@ -667,6 +667,8 @@ async def discover(
     profile = Path(tempfile.mkdtemp(prefix='aegis-browser-profile-'))
     os.chmod(profile, 0o700)
     process: subprocess.Popen[bytes] | None = None
+    scope_proxy = _ScopedSocksProxy()
+    await scope_proxy.start()
     events: list[dict[str, Any]] = []
     graphql: list[dict[str, Any]] = []
     web_sockets: list[str] = []
@@ -687,6 +689,10 @@ async def discover(
                 '--disable-default-apps',
                 '--disable-extensions',
                 '--disable-sync',
+                '--disable-quic',
+                '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+                f'--proxy-server=socks5://127.0.0.1:{scope_proxy.port}',
+                '--proxy-bypass-list=<-loopback>',
                 '--metrics-recording-only',
                 '--no-first-run',
                 '--no-default-browser-check',
@@ -1023,8 +1029,11 @@ async def discover(
             'redirect_chain': redirects[:100],
             'profile_isolation': 'dedicated-ephemeral-user-data-dir',
             'credential_transport': 'same-origin-request-interception',
+            'network_isolation': 'scope-validated-socks5-plus-cdp',
             'event_truncated': truncated,
             'blocked_out_of_scope_request_count': blocked_out_of_scope_requests,
+            'proxy_blocked_connection_count': scope_proxy.blocked_connections,
+            'proxy_allowed_connection_count': scope_proxy.allowed_connections,
         })
 
         return {
@@ -1037,6 +1046,7 @@ async def discover(
     finally:
         if process is not None:
             _terminate(process)
+        await scope_proxy.close()
         shutil.rmtree(profile, ignore_errors=True)
 
 
