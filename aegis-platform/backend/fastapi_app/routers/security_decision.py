@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing import Any
 
-from ..core.security import verify_token
+from ..core.dependencies import get_current_user
 from ..services.autonomous_triage import build_triage
 from ..services.assurance_graph_aggregator import build_assurance_graph
 from ..services.assurance_correlation import correlate_all
@@ -11,13 +10,9 @@ from ..services.security_decision import build_decision_pack
 from .assurance_graph import _load_validations
 
 router = APIRouter()
-security = HTTPBearer(auto_error=True)
 
 
-async def require_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict[str, Any]:
-    user = await verify_token(credentials.credentials)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid token")
+async def require_user(user=Depends(get_current_user)) -> dict[str, Any]:
     return user
 
 

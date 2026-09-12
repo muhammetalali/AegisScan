@@ -212,12 +212,241 @@ def _normalize_cloud_observations(data: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _json_lines(raw: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        value = _json(line.strip())
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def _embedded_json(raw: str) -> Any:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(raw):
+        if char not in '[{':
+            continue
+        try:
+            value, _ = decoder.raw_decode(raw[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            return value
+    return None
+
+
+def _positive_int(value: Any, maximum: int = 2_147_483_647) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if 0 <= parsed <= maximum else 0
+
+
+def _normalize_rustscan(raw: str) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    seen_open: set[tuple[str, int]] = set()
+    open_pattern = re.compile(r'^Open\s+(?P<host>\[[^\]]+\]|[^:\s]+):(?P<port>\d{1,5})\s*$', re.I)
+    nmap_pattern = re.compile(
+        r'^(?P<port>\d{1,5})/(?P<protocol>tcp|udp)\s+open\s+(?P<service>\S+)(?:\s+(?P<version>.*))?$',
+        re.I,
+    )
+    for line in raw.splitlines():
+        stripped = line.strip()
+        match = open_pattern.match(stripped)
+        if match:
+            port = _positive_int(match.group('port'), 65535)
+            if not 1 <= port <= 65535:
+                continue
+            host = match.group('host').strip('[]')[:253]
+            key = (host, port)
+            if key in seen_open:
+                continue
+            seen_open.add(key)
+            observations.append({
+                'kind': 'network-open-port',
+                'host': host,
+                'port': port,
+                'protocol': 'tcp',
+                'service': '',
+                'version': '',
+            })
+            continue
+        match = nmap_pattern.match(stripped)
+        if not match:
+            continue
+        port = _positive_int(match.group('port'), 65535)
+        if not 1 <= port <= 65535:
+            continue
+        observations.append({
+            'kind': 'network-service',
+            'port': port,
+            'protocol': (match.group('protocol') or 'tcp').lower(),
+            'service': (match.group('service') or '')[:100],
+            'version': (match.group('version') or '')[:1000],
+        })
+    return observations
+
+
+def _normalize_amass(raw: str) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    host_pattern = re.compile(r'\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\b')
+    ignored = {
+        'github.com', 'discord.com', 'owasp.org', 'golang.org',
+        'projectdiscovery.io', 'skerritt.blog',
+    }
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        lowered = line.lower()
+        if 'discord server' in lowered or 'usage:' in lowered:
+            continue
+        for match in host_pattern.findall(line):
+            hostname = match.rstrip('.').lower()
+            if hostname in ignored or hostname in seen:
+                continue
+            seen.add(hostname)
+            observations.append({'kind': 'discovered-hostname', 'hostname': hostname})
+    return observations
+
+
+def _normalize_feroxbuster(raw: str) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for item in _json_lines(raw):
+        if str(item.get('type') or '').lower() != 'response':
+            continue
+        url = str(item.get('url') or '')[:2048]
+        if not url.startswith(('http://', 'https://')):
+            continue
+        observations.append({
+            'kind': 'web-endpoint',
+            'url': url,
+            'path': str(item.get('path') or '')[:2048],
+            'status': _positive_int(item.get('status'), 599),
+            'length': _positive_int(item.get('content_length')),
+            'words': _positive_int(item.get('word_count')),
+            'lines': _positive_int(item.get('line_count')),
+            'method': str(item.get('method') or 'GET').upper()[:16],
+        })
+    return observations
+
+
+def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
+    data = _embedded_json(raw)
+    reports = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+    observations: list[dict[str, Any]] = []
+    for report in reports[:100]:
+        if not isinstance(report, dict):
+            continue
+        host = str(report.get('host') or '')[:253]
+        ip = str(report.get('ip') or '')[:64]
+        port = _positive_int(report.get('port'), 65535)
+        vulnerabilities = report.get('vulnerabilities')
+        if isinstance(vulnerabilities, list) and vulnerabilities:
+            for item in vulnerabilities[:2000]:
+                if not isinstance(item, dict):
+                    continue
+                message = str(item.get('msg') or '').strip()[:5000]
+                rule = str(item.get('id') or 'unknown').strip()[:100]
+                uri = str(item.get('url') or '').strip()[:2048]
+                refs = item.get('references')
+                observations.append({
+                    'kind': 'web-vulnerability',
+                    'rule_id': f'nikto.{rule}',
+                    'title': (message[:500] or f'Nikto finding {rule}'),
+                    'description': message or 'Nikto reported a web-server security observation.',
+                    'severity': 'medium',
+                    'confidence': 'medium',
+                    'category': 'web-vulnerability-assessment',
+                    'host': host,
+                    'ip': ip,
+                    'port': port,
+                    'location': uri,
+                    'method': str(item.get('method') or 'GET').upper()[:16],
+                    'references': [str(value)[:2048] for value in refs[:20]] if isinstance(refs, list) else [],
+                    'remediation': 'Review the affected web-server configuration or resource and remove the reported exposure.',
+                })
+        else:
+            observations.append({
+                'kind': 'web-scan-summary',
+                'host': host,
+                'ip': ip,
+                'port': port,
+                'finding_count': 0,
+            })
+    return observations
+
+
+def _normalize_trivy_config(raw: str) -> list[dict[str, Any]]:
+    data = _json(raw)
+    if not isinstance(data, dict):
+        data = _embedded_json(raw)
+    if not isinstance(data, dict):
+        return []
+    observations: list[dict[str, Any]] = []
+    results = data.get('Results')
+    for result in results[:500] if isinstance(results, list) else []:
+        if not isinstance(result, dict):
+            continue
+        target = str(result.get('Target') or '')[:2048]
+        klass = str(result.get('Class') or '')[:100]
+        result_type = str(result.get('Type') or '')[:100]
+        items = result.get('Misconfigurations')
+        for item in items[:2000] if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get('Status') or '').upper()
+            if status and status not in {'FAIL', 'FAILURE'}:
+                continue
+            rule_id = str(item.get('AVDID') or item.get('ID') or '').strip()[:200]
+            title = str(item.get('Title') or item.get('Message') or rule_id or 'IaC misconfiguration').strip()[:500]
+            description = str(item.get('Description') or item.get('Message') or title).strip()[:5000]
+            severity = str(item.get('Severity') or 'UNKNOWN').lower()
+            if severity not in {'critical', 'high', 'medium', 'low', 'unknown'}:
+                severity = 'unknown'
+            cause = item.get('CauseMetadata') if isinstance(item.get('CauseMetadata'), dict) else {}
+            start_line = _positive_int(cause.get('StartLine'))
+            location = target + (f':{start_line}' if start_line else '')
+            refs = item.get('References')
+            observations.append({
+                'kind': 'iac-security-finding',
+                'rule_id': rule_id or 'trivy.unknown',
+                'title': title,
+                'description': description,
+                'severity': 'info' if severity == 'unknown' else severity,
+                'confidence': 'high',
+                'category': 'iac-security',
+                'location': location[:2048],
+                'resource': str(cause.get('Resource') or '')[:1000],
+                'remediation': str(item.get('Resolution') or item.get('RecommendedActions') or '')[:5000],
+                'references': [str(value)[:2048] for value in refs[:20]] if isinstance(refs, list) else [],
+                'primary_url': str(item.get('PrimaryURL') or '')[:2048],
+                'class': klass,
+                'type': result_type,
+            })
+    return observations
+
+
 def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     """Convert stable tool output formats into bounded AegisScan observations."""
     raw = stdout or ''
     observations: list[dict[str, Any]] = []
 
-    if capability_id == 'web.ffuf':
+    if capability_id == 'network.rustscan':
+        observations.extend(_normalize_rustscan(raw))
+
+    elif capability_id == 'recon.amass':
+        observations.extend(_normalize_amass(raw))
+
+    elif capability_id == 'web.feroxbuster':
+        observations.extend(_normalize_feroxbuster(raw))
+
+    elif capability_id == 'web.nikto':
+        observations.extend(_normalize_nikto(raw))
+
+    elif capability_id == 'code.trivy-config':
+        observations.extend(_normalize_trivy_config(raw))
+
+    elif capability_id == 'web.ffuf':
         data = _json(raw)
         for item in data.get('results', []) if isinstance(data, dict) else []:
             if not isinstance(item, dict):

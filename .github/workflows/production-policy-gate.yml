@@ -27,6 +27,10 @@ on:
       - '.github/workflows/production-policy-gate.yml'
   workflow_dispatch:
 
+concurrency:
+  group: production-policy-gate-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: true
+
 permissions: {contents: read}
 
 jobs:
