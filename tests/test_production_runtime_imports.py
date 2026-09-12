@@ -179,18 +179,30 @@ def test_browser_native_cli_builds_bounded_argv_without_shell(monkeypatch: pytes
     assert "shell" not in " ".join(argv).lower()
 
 
-def test_capability_planner_prefers_ready_tools_and_exposes_packaging_gaps() -> None:
+def test_capability_planner_exposes_zero_native_packaging_gaps() -> None:
     _bootstrap_backend()
     from fastapi_app.services.capability_planner import planning_summary
 
+    for asset_type, depth in (
+        ("website", "standard"),
+        ("repository", "quick"),
+        ("file", "quick"),
+        ("domain", "standard"),
+        ("ip_address", "standard"),
+    ):
+        plan = planning_summary(asset_type, depth)
+        assert plan["pending_packaging"] == 0, plan
+        assert all(item["execution_ready"] for item in plan["plan"]), plan
+
     web = planning_summary("website", "standard")
     assert web["ready"] >= 8
-    assert web["pending_packaging"] >= 1
-    ready = [item for item in web["plan"] if item["execution_ready"]]
-    pending = [item for item in web["plan"] if not item["execution_ready"]]
-    assert ready and pending
-    assert any(item["capability_id"] == "browser.dom-snapshot" for item in ready)
-    assert max(item["order"] for item in ready) < min(item["order"] for item in pending)
+    assert any(item["capability_id"] == "browser.dom-snapshot" for item in web["plan"])
+    assert any(item["capability_id"] == "web.feroxbuster" for item in web["plan"])
+    assert any(item["capability_id"] == "web.nikto" for item in web["plan"])
+
+    repository = planning_summary("repository", "quick")
+    assert any(item["capability_id"] == "code.trivy-config" for item in repository["plan"])
+
     file_plan = planning_summary("file", "quick")
     assert file_plan["ready"] >= 6
 

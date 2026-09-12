@@ -3,21 +3,16 @@ from __future__ import annotations
 from typing import Any
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ..core.security import verify_token
+from ..core.dependencies import get_current_user
 from ..services.decision_action_orchestration import list_actions, get_action
 from ..services.workflow_intelligence import enrich_action
 from ..services.governance_engine import enrich_governance, governance_metrics
 from ..services.policy_engine import evaluate_policy, list_policies
 
 router = APIRouter()
-security = HTTPBearer(auto_error=True)
 
-async def require_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict[str, Any]:
-    user = await verify_token(credentials.credentials)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid token")
+async def require_user(user=Depends(get_current_user)) -> dict[str, Any]:
     return user
 
 
