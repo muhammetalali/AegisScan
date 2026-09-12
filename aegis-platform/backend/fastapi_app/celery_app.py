@@ -28,6 +28,7 @@ SCANNER_TASK_ROUTES = {
     "fastapi_app.tasks.finding_validation.validate_finding_e2e": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.offensive_validation_tasks.validate_offensive_finding": {"queue": SCANNER_QUEUE},
+    "fastapi_app.tasks.reliability_probe.scanner_worker_loss_probe": {"queue": SCANNER_QUEUE},
 }
 
 celery_app.conf.update(
@@ -42,12 +43,16 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_default_queue="default",
     task_routes=SCANNER_TASK_ROUTES,
+    broker_transport_options={"visibility_timeout": settings.CELERY_VISIBILITY_TIMEOUT_SECONDS},
+    result_backend_transport_options={"visibility_timeout": settings.CELERY_VISIBILITY_TIMEOUT_SECONDS},
+    visibility_timeout=settings.CELERY_VISIBILITY_TIMEOUT_SECONDS,
     imports=(
         "fastapi_app.tasks.advanced_scans",
         "fastapi_app.tasks.native_capabilities",
         "fastapi_app.tasks.finding_validation",
         "fastapi_app.tasks.nmap_finding_validation",
         "fastapi_app.tasks.offensive_validation_tasks",
+        "fastapi_app.tasks.reliability_probe",
         "fastapi_app.tasks.security_scan",
         "fastapi_app.tasks.workflow_tasks",
         "enterprise.tasks",
@@ -68,6 +73,10 @@ celery_app.conf.update(
         "dispatch-notification-delivery-outbox-every-minute": {
             "task": "enterprise.dispatch_notification_deliveries",
             "schedule": 60.0,
+        },
+        "dispatch-due-external-integration-syncs": {
+            "task": "enterprise.dispatch_due_integration_syncs",
+            "schedule": 300.0,
         },
         "expire-report-artifacts-hourly": {
             "task": "enterprise.expire_report_exports",
