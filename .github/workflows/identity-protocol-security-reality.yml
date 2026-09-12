@@ -8,7 +8,9 @@ on:
       - 'aegis-platform/backend/enterprise/migrations/0019_identity_protocol_security_validation_kind.py'
       - 'aegis-platform/backend/fastapi_app/contracts/identity_protocol_security.py'
       - 'aegis-platform/backend/fastapi_app/services/identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py'
       - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
       - '.github/workflows/identity-protocol-security-reality.yml'
   push:
@@ -18,7 +20,9 @@ on:
       - 'aegis-platform/backend/enterprise/migrations/0019_identity_protocol_security_validation_kind.py'
       - 'aegis-platform/backend/fastapi_app/contracts/identity_protocol_security.py'
       - 'aegis-platform/backend/fastapi_app/services/identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py'
       - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
       - '.github/workflows/identity-protocol-security-reality.yml'
   workflow_dispatch:
@@ -84,7 +88,9 @@ jobs:
             aegis-platform/backend/enterprise/web_security_models.py \
             aegis-platform/backend/fastapi_app/contracts/identity_protocol_security.py \
             aegis-platform/backend/fastapi_app/services/identity_protocol_security.py \
+            aegis-platform/backend/fastapi_app/services/credential_execution.py \
             aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py \
+            aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py \
             aegis-platform/backend/fastapi_app/routers/web_security.py
 
       - name: Django model and migration reality
@@ -97,13 +103,15 @@ jobs:
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
 
-      - name: Identity protocol invariant and persistence suite
+      - name: Identity protocol invariant, Vault scope, and persistence suite
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
-          pytest -q fastapi_app/services/test_identity_protocol_security.py \
+          pytest -q \
+            fastapi_app/services/test_identity_protocol_security.py \
+            fastapi_app/services/test_identity_protocol_credential_scope.py \
             --junitxml=/tmp/identity-protocol-junit.xml
 
       - name: Verify API registration and secret-safe contract
