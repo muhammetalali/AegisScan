@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from fastapi.testclient import TestClient
 
 from django_project.projects.models import Project, ProjectMembership
 from django_project.users.models import User
@@ -15,6 +16,7 @@ from fastapi_app.contracts.web_security_v2 import (
     ProviderApprovalIn,
     ResponseComparisonIn,
 )
+from fastapi_app.core.security import create_access_token
 from fastapi_app.main import app
 from fastapi_app.routers.web_security import (
     _project_admin_for_user_sync,
@@ -117,3 +119,114 @@ def test_web_security_project_admin_boundary_is_not_equivalent_to_project_read_a
     assert _project_security_operator_for_user_sync(str(project.id), str(analyst.id)) == project
     assert _project_security_operator_for_user_sync(str(project.id), str(viewer.id)) is None
     assert _project_security_operator_for_user_sync(str(project.id), str(outsider.id)) is None
+
+
+@pytest.mark.django_db
+def test_web_security_http_api_persists_policy_validation_and_blocks_viewer_writes():
+    owner = _user('web-http-owner')
+    viewer = _user('web-http-viewer')
+    project = Project.objects.create(
+        name='Web Security HTTP Integration',
+        slug=f'web-http-{uuid.uuid4().hex[:10]}',
+        owner=owner,
+    )
+    ProjectMembership.objects.create(
+        project=project,
+        user=viewer,
+        role=ProjectMembership.Role.VIEWER,
+    )
+    client = TestClient(app)
+    owner_headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(owner.id)})}'}
+    viewer_headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(viewer.id)})}'}
+
+    policy_response = client.post(
+        f'/api/v1/web-security/projects/{project.id}/authorization/policies',
+        headers=owner_headers,
+        json={
+            'identity_type': 'user',
+            'role': 'viewer',
+            'tenant_ref': '*',
+            'endpoint': '/orders/*',
+            'method': 'GET',
+            'operation': 'read',
+            'resource_type': 'order',
+            'allowed': True,
+            'ownership_rule': 'owner_only',
+            'tenant_rule': 'same_tenant',
+            'sensitive_operation': False,
+            'required_scopes': [],
+            'conditions': {},
+            'policy_source': 'operator_declared',
+            'provenance': {'source_ref': 'test://http-api'},
+            'confidence': 1.0,
+            'version': 1,
+        },
+    )
+    assert policy_response.status_code == 201, policy_response.text
+    assert policy_response.json()['created'] is True
+    assert len(policy_response.json()['canonical_sha256']) == 64
+
+    validation_response = client.post(
+        f'/api/v1/web-security/projects/{project.id}/authorization/evaluate',
+        headers=owner_headers,
+        json={
+            'cases': [{
+                'ref': 'http-owner-read',
+                'identity': {
+                    'ref': 'alice',
+                    'type': 'user',
+                    'role': 'viewer',
+                    'tenant_ref': 'tenant-a',
+                    'scopes': [],
+                },
+                'resource': {
+                    'ref': 'order-51',
+                    'type': 'order',
+                    'tenant_ref': 'tenant-a',
+                    'owner_ref': 'alice',
+                },
+                'endpoint': '/orders/51',
+                'method': 'GET',
+                'operation': 'read',
+                'protocol': 'https',
+                'response': {
+                    'status_code': 200,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': {'id': 51, 'tenant_id': 'tenant-a', 'owner_id': 'alice'},
+                    'timing_ms': 12.5,
+                },
+            }],
+        },
+    )
+    assert validation_response.status_code == 200, validation_response.text
+    payload = validation_response.json()
+    assert payload['summary'] == {'total': 1, 'passed': 1, 'failed': 0, 'cross_tenant_cases': 0}
+    assert payload['observations'][0]['passed'] is True
+    assert len(payload['observations'][0]['evidence_fingerprint']) == 64
+
+    graph_response = client.get(
+        f'/api/v1/web-security/projects/{project.id}/graph',
+        headers=owner_headers,
+    )
+    assert graph_response.status_code == 200
+    assert {'identity', 'tenant', 'resource', 'endpoint', 'policy'}.issubset(
+        {node['kind'] for node in graph_response.json()['nodes']}
+    )
+
+    viewer_write = client.post(
+        f'/api/v1/web-security/projects/{project.id}/graph/snapshot',
+        headers=viewer_headers,
+        json={
+            'nodes': [{
+                'plane': 'application',
+                'kind': 'endpoint',
+                'external_ref': 'endpoint:viewer-poison',
+                'label': 'viewer-poison',
+                'properties': {},
+                'provenance': {'source': 'untrusted-viewer'},
+            }],
+            'edges': [],
+        },
+    )
+    assert viewer_write.status_code == 403
+    assert viewer_write.json()['detail'] == 'Project security-operator authority required'
