@@ -7,8 +7,12 @@ import stat
 from types import SimpleNamespace
 
 import pytest
+from asgiref.sync import sync_to_async
+from fastapi import HTTPException
 
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
+from django_project.scans.models import Scan
 from django_project.system.credential_models import CredentialAccess, CredentialSecret
 from django_project.system.credential_vault import CredentialVaultDenied, create_credential_secret
 from django_project.users.models import User, UserRole
@@ -28,6 +32,8 @@ from fastapi_app.services.credential_execution import (
 )
 from fastapi_app.services.native_output_normalizer import normalize_native_output
 from fastapi_app.services.native_tool_runtime import _browser_session_file
+from fastapi_app.routers import capabilities as capability_router
+from fastapi_app.routers.capabilities import CapabilityExecutionRequest
 
 CI_FERNET_KEY = 'Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM='
 
