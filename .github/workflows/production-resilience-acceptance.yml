@@ -1,0 +1,377 @@
+name: Production Resilience Acceptance
+
+'on':
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DRILL to run the protected production resilience acceptance'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aegisscan-production-resilience
+  cancel-in-progress: false
+
+jobs:
+  resilience-acceptance:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    environment: production
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: resilience-restore-password
+          POSTGRES_DB: aegis_restore_control
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis_restore_control"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    env:
+      PROD_SSH_HOST: ${{ secrets.AEGIS_PRODUCTION_SSH_HOST }}
+      PROD_SSH_PORT: ${{ vars.AEGIS_PRODUCTION_SSH_PORT || '22' }}
+      PROD_SSH_USER: ${{ secrets.AEGIS_PRODUCTION_SSH_USER }}
+      PROD_SSH_PRIVATE_KEY: ${{ secrets.AEGIS_PRODUCTION_SSH_PRIVATE_KEY }}
+      PROD_SSH_KNOWN_HOSTS: ${{ secrets.AEGIS_PRODUCTION_SSH_KNOWN_HOSTS }}
+      BACKUP_ENDPOINT: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_ENDPOINT }}
+      BACKUP_REGION: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_REGION || 'us-east-1' }}
+      BACKUP_BUCKET: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_BUCKET }}
+      BACKUP_PREFIX: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_PREFIX || 'aegisscan/postgres' }}
+      BACKUP_ADDRESSING_STYLE: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_ADDRESSING_STYLE || 'path' }}
+      BACKUP_CREDENTIALS_JSON: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_CREDENTIALS_JSON }}
+      BACKUP_ENCRYPTION_KEY_B64: ${{ secrets.AEGIS_PRODUCTION_BACKUP_ENCRYPTION_KEY_B64 }}
+      ALERT_WEBHOOK_URL: ${{ secrets.AEGIS_PRODUCTION_ALERT_WEBHOOK_URL }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require explicit exact-main resilience drill
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "DRILL"
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Validate protected production material
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             BACKUP_ENDPOINT             BACKUP_REGION             BACKUP_BUCKET             BACKUP_PREFIX             BACKUP_ADDRESSING_STYLE             BACKUP_CREDENTIALS_JSON             BACKUP_ENCRYPTION_KEY_B64             ALERT_WEBHOOK_URL; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "Required protected production material is missing: $name" >&2
+              exit 1
+            fi
+          done
+          case "$PROD_SSH_PORT" in
+            ''|*[!0-9]*) echo 'PROD_SSH_PORT must be numeric' >&2; exit 1 ;;
+          esac
+          test "$PROD_SSH_PORT" -ge 1
+          test "$PROD_SSH_PORT" -le 65535
+          case "$BACKUP_ENDPOINT" in
+            https://*) ;;
+            *) echo 'Production backup endpoint must use HTTPS' >&2; exit 1 ;;
+          esac
+          case "$ALERT_WEBHOOK_URL" in
+            https://*) ;;
+            *) echo 'Production alert webhook must use HTTPS' >&2; exit 1 ;;
+          esac
+
+      - name: Install resilience dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+          python -m pip install 'boto3>=1.35,<2' 'cryptography>=42,<47'
+          psql --version
+          pg_restore --version
+
+      - name: Materialize ephemeral protected transport material
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 /tmp/aegis-resilience /tmp/aegis-resilience/recovery
+          printf '%s' "$PROD_SSH_PRIVATE_KEY" > /tmp/aegis-resilience/id
+          printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > /tmp/aegis-resilience/known_hosts
+          printf '%s' "$BACKUP_CREDENTIALS_JSON" > /tmp/aegis-resilience/s3.json
+          printf '%s' "$BACKUP_ENCRYPTION_KEY_B64" | base64 --decode > /tmp/aegis-resilience/backup.key
+          chmod 0600             /tmp/aegis-resilience/id             /tmp/aegis-resilience/known_hosts             /tmp/aegis-resilience/s3.json             /tmp/aegis-resilience/backup.key
+          test "$(stat -c '%s' /tmp/aegis-resilience/backup.key)" = 32
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/aegis-resilience/s3.json').read_text())
+          assert isinstance(payload, dict)
+          assert payload.get('access_key_id')
+          assert payload.get('secret_access_key')
+          PY
+
+      - name: Trigger fresh exact-release remote encrypted backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/production_resilience_backup.py             --host "$PROD_SSH_HOST"             --port "$PROD_SSH_PORT"             --user "$PROD_SSH_USER"             --private-key /tmp/aegis-resilience/id             --known-hosts /tmp/aegis-resilience/known_hosts             --release-sha "$GITHUB_SHA"             | tee /tmp/aegis-resilience/remote-backup.json
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/aegis-resilience/remote-backup.json').read_text().splitlines()[-1])
+          assert payload['schema'] == 'aegisscan.production-resilience-backup.v1'
+          assert payload['status'] == 'success'
+          backup = payload['backup']
+          for name in ('backup_id', 'manifest_key', 'manifest_version_id', 'object_version_id', 'source_sha256'):
+              assert backup.get(name), (name, backup)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write(f"AEGIS_DR_BACKUP_ID={backup['backup_id']}\n")
+              stream.write(f"AEGIS_DR_MANIFEST_KEY={backup['manifest_key']}\n")
+              stream.write(f"AEGIS_DR_MANIFEST_VERSION_ID={backup['manifest_version_id']}\n")
+              stream.write(f"AEGIS_DR_OBJECT_VERSION_ID={backup['object_version_id']}\n")
+              stream.write(f"AEGIS_DR_SOURCE_SHA256={backup['source_sha256']}\n")
+          PY
+
+      - name: Restore exact manifest version from external encrypted storage
+        shell: bash
+        env:
+          AEGIS_BACKUP_S3_ENDPOINT: ${{ env.BACKUP_ENDPOINT }}
+          AEGIS_BACKUP_S3_REGION: ${{ env.BACKUP_REGION }}
+          AEGIS_BACKUP_S3_BUCKET: ${{ env.BACKUP_BUCKET }}
+          AEGIS_BACKUP_S3_PREFIX: ${{ env.BACKUP_PREFIX }}
+          AEGIS_BACKUP_S3_ADDRESSING_STYLE: ${{ env.BACKUP_ADDRESSING_STYLE }}
+          AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
+          AEGIS_BACKUP_S3_CREDENTIALS_FILE: /tmp/aegis-resilience/s3.json
+          AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /tmp/aegis-resilience/backup.key
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/remote_backup.py restore             --manifest-key "$AEGIS_DR_MANIFEST_KEY"             --manifest-version-id "$AEGIS_DR_MANIFEST_VERSION_ID"             --output /tmp/aegis-resilience/recovery/production.dump             --work-dir /tmp/aegis-resilience             | tee /tmp/aegis-resilience/remote-restore.json
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/aegis-resilience/remote-restore.json').read_text().splitlines()[-1])
+          assert payload['status'] == 'restored-locally', payload
+          assert payload['backup_id'] == os.environ['AEGIS_DR_BACKUP_ID'], payload
+          assert payload['manifest_version_id'] == os.environ['AEGIS_DR_MANIFEST_VERSION_ID'], payload
+          assert payload['object_version_id'] == os.environ['AEGIS_DR_OBJECT_VERSION_ID'], payload
+          assert payload['source_sha256'] == os.environ['AEGIS_DR_SOURCE_SHA256'], payload
+          PY
+
+      - name: Destructive restore into disposable PostgreSQL and verify authoritative tables
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: resilience-restore-password
+          PGDATABASE: aegis_restore_control
+          AEGIS_RESTORE_REQUIRED_TABLES: django_migrations,users_user
+        run: |
+          set -euo pipefail
+          sh aegis-platform/scripts/verify_postgres_restore.sh             /tmp/aegis-resilience/recovery/production.dump             | tee /tmp/aegis-resilience/postgres-restore.txt
+          grep -q 'RESTORE_VERIFICATION=PASS' /tmp/aegis-resilience/postgres-restore.txt
+
+      - name: Build hardened Alertmanager runtime
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull             -f docker/alertmanager/Dockerfile             -t aegis-alertmanager:resilience             .
+
+      - name: Deliver synthetic critical alert through Alertmanager to external HTTPS receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true
+          docker run -d             --name aegis-resilience-alertmanager             --read-only             --cap-drop ALL             --security-opt no-new-privileges:true             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16777216,uid=10003,gid=10003,mode=0700             --tmpfs /alertmanager:rw,nosuid,nodev,noexec,size=16777216,uid=10003,gid=10003,mode=0700             -p 127.0.0.1:19093:9093             -e ALERT_WEBHOOK_URL="$ALERT_WEBHOOK_URL"             aegis-alertmanager:resilience
+
+          cleanup() { docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:19093/-/ready >/dev/null; then
+              ready=1
+              break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' aegis-resilience-alertmanager 2>/dev/null || true)" != true ]; then
+              docker logs aegis-resilience-alertmanager >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          baseline="$(curl -fsS http://127.0.0.1:19093/metrics | python -c '
+          import sys
+          total=0.0
+          for line in sys.stdin:
+              if line.startswith("alertmanager_notifications_total") and "webhook" in line:
+                  try: total += float(line.rsplit(" ",1)[1])
+                  except ValueError: pass
+          print(total)
+          ')"
+
+          starts_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ends_at="$(date -u -d '+10 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+          cat >/tmp/aegis-resilience/alert.json <<EOF
+          [{
+            "labels": {
+              "alertname": "AegisProductionResilienceAcceptance",
+              "service": "aegisscan",
+              "severity": "critical",
+              "release_sha": "$GITHUB_SHA"
+            },
+            "annotations": {
+              "summary": "AegisScan production external alert-route acceptance"
+            },
+            "startsAt": "$starts_at",
+            "endsAt": "$ends_at",
+            "generatorURL": "https://github.com/muhammetalali/AegisScan/actions/runs/$GITHUB_RUN_ID"
+          }]
+          EOF
+
+          curl -fsS             -H 'Content-Type: application/json'             --data-binary @/tmp/aegis-resilience/alert.json             http://127.0.0.1:19093/api/v2/alerts
+
+          delivered=0
+          for attempt in $(seq 1 36); do
+            metrics="$(curl -fsS http://127.0.0.1:19093/metrics)"
+            printf '%s\n' "$metrics" > /tmp/aegis-resilience/alertmanager-metrics.txt
+            current="$(printf '%s\n' "$metrics" | python -c '
+          import sys
+          total=0.0
+          for line in sys.stdin:
+              if line.startswith("alertmanager_notifications_total") and "webhook" in line:
+                  try: total += float(line.rsplit(" ",1)[1])
+                  except ValueError: pass
+          print(total)
+          ')"
+            failed="$(printf '%s\n' "$metrics" | python -c '
+          import sys
+          total=0.0
+          for line in sys.stdin:
+              if line.startswith("alertmanager_notifications_failed_total") and "webhook" in line:
+                  try: total += float(line.rsplit(" ",1)[1])
+                  except ValueError: pass
+          print(total)
+          ')"
+            if python - "$baseline" "$current" "$failed" <<'PY'
+          import sys
+          baseline, current, failed = map(float, sys.argv[1:])
+          raise SystemExit(0 if current > baseline and failed == 0 else 1)
+          PY
+            then
+              delivered=1
+              printf '{"status":"success","baseline":%s,"current":%s,"failed":%s}\n'                 "$baseline" "$current" "$failed"                 > /tmp/aegis-resilience/external-alert-delivery.json
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$delivered" -ne 1 ]; then
+            docker logs aegis-resilience-alertmanager >&2 || true
+            exit 1
+          fi
+
+      - name: Build production resilience evidence manifest
+        if: success()
+        shell: bash
+        env:
+          AEGIS_RELEASE_SHA: ${{ github.sha }}
+          AEGIS_RUN_ID: ${{ github.run_id }}
+          AEGIS_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path('/tmp/aegis-resilience')
+          required = [
+              'remote-backup.json',
+              'remote-restore.json',
+              'postgres-restore.txt',
+              'external-alert-delivery.json',
+              'alertmanager-metrics.txt',
+          ]
+          digests = {}
+          for name in required:
+              path = root / name
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f'missing required resilience evidence: {name}')
+              digests[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+          manifest = {
+              'schema': 'aegisscan.production-resilience-evidence.v1',
+              'status': 'success',
+              'release_sha': os.environ['AEGIS_RELEASE_SHA'],
+              'run_id': os.environ['AEGIS_RUN_ID'],
+              'run_attempt': os.environ['AEGIS_RUN_ATTEMPT'],
+              'completed_at': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z'),
+              'backup_id': os.environ['AEGIS_DR_BACKUP_ID'],
+              'manifest_version_id': os.environ['AEGIS_DR_MANIFEST_VERSION_ID'],
+              'object_version_id': os.environ['AEGIS_DR_OBJECT_VERSION_ID'],
+              'sha256': digests,
+          }
+          (root / 'manifest.json').write_text(
+              json.dumps(manifest, sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(manifest, sort_keys=True))
+          PY
+
+      - name: Prove evidence contains no protected secrets
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for secret in             "$BACKUP_CREDENTIALS_JSON"             "$BACKUP_ENCRYPTION_KEY_B64"             "$PROD_SSH_PRIVATE_KEY"; do
+            if [ -n "$secret" ] && grep -R -F -- "$secret" /tmp/aegis-resilience                 --exclude=id --exclude=known_hosts --exclude=s3.json --exclude=backup.key 2>/dev/null; then
+              echo 'protected production material leaked into resilience evidence' >&2
+              exit 1
+            fi
+          done
+
+      - name: Upload production resilience evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-production-resilience-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            /tmp/aegis-resilience/remote-backup.json
+            /tmp/aegis-resilience/remote-restore.json
+            /tmp/aegis-resilience/postgres-restore.txt
+            /tmp/aegis-resilience/external-alert-delivery.json
+            /tmp/aegis-resilience/alertmanager-metrics.txt
+            /tmp/aegis-resilience/manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Destroy ephemeral production secret material
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true
+          rm -f             /tmp/aegis-resilience/id             /tmp/aegis-resilience/known_hosts             /tmp/aegis-resilience/s3.json             /tmp/aegis-resilience/backup.key

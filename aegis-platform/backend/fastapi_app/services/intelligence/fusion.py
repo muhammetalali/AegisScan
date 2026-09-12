@@ -48,7 +48,8 @@ class IntelligenceFusion:
         except IntelligenceProviderError as exc: failures.append(f'osv:{exc}')
         try:
             result = self.kev.catalog(); source_urls['cisa_kev'] = result.url
-            present, item = self.kev.contains(cve); sources['cisa_kev'] = {'known_exploited': present, 'entry': item}
+            item = next((row for row in result.data.get('vulnerabilities', []) if isinstance(row, dict) and row.get('cveID') == cve), None)
+            sources['cisa_kev'] = {'known_exploited': item is not None, 'entry': item}
         except IntelligenceProviderError as exc: failures.append(f'cisa_kev:{exc}')
         try:
             result = self.epss.fetch(cve); sources['epss'] = result.data; source_urls['epss'] = result.url

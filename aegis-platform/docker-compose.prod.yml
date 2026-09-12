@@ -10,6 +10,7 @@ services:
       - media_data:/usr/share/nginx/html/media:ro
 
   django:
+    env_file: !reset []
     ports: !reset []
     volumes: !override
       - media_data:/app/media
@@ -23,6 +24,7 @@ services:
       AUTH_COOKIE_SECURE: "True"
 
   fastapi:
+    env_file: !reset []
     ports: !reset []
     volumes: !reset []
     read_only: true
@@ -46,6 +48,7 @@ services:
       django: {condition: service_started}
 
   celery_worker:
+    env_file: !reset []
     volumes: !reset []
     read_only: true
     tmpfs: [/tmp]
@@ -58,6 +61,7 @@ services:
       postgres: {condition: service_healthy}
 
   scanner_worker:
+    env_file: !reset []
     volumes: !reset []
     read_only: true
     tmpfs: [/tmp]
@@ -72,6 +76,7 @@ services:
       django: {condition: service_started}
 
   celery_beat:
+    env_file: !reset []
     volumes: !reset []
     read_only: true
     tmpfs: [/tmp]

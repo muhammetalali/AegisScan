@@ -9,8 +9,7 @@ django.setup()
 
 from asgiref.sync import sync_to_async
 from django.db.models import Avg, Count, Q
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from assets.models import Asset
@@ -19,11 +18,9 @@ from evidence.models import Evidence
 from projects.models import Project
 from scans.models import Scan
 from vulnerabilities.models import Vulnerability
-from ..core.config import settings
-from ..core.security import verify_token
+from ..core.dependencies import get_current_user
 
 router = APIRouter()
-security = HTTPBearer(auto_error=False)
 
 
 class DashboardSummary(BaseModel):
@@ -63,19 +60,6 @@ class TrendPoint(BaseModel):
     date: str
     score: Optional[int] = None
     validations: int
-
-
-async def get_current_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-):
-    token = credentials.credentials if credentials else request.cookies.get(settings.AUTH_ACCESS_COOKIE)
-    if not token:
-        raise HTTPException(status_code=401, detail='Not authenticated')
-    user = await verify_token(token)
-    if not user:
-        raise HTTPException(status_code=401, detail='Invalid token')
-    return user
 
 
 @sync_to_async
