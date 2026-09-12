@@ -19,7 +19,13 @@ import websockets
 from graphql import get_introspection_query
 
 from django_project.projects.models import Project
+from django_project.system.credential_models import CredentialSecret
+from django_project.system.credential_vault import create_credential_secret
 from django_project.users.models import User
+from fastapi_app.services.credential_execution import (
+    assert_no_credential_material_leaked,
+    resolve_credential_refs_for_worker,
+)
 from fastapi_app.services.stateful_protocol_security import (
     run_cross_protocol_security,
     run_graphql_security,
@@ -28,8 +34,8 @@ from fastapi_app.services.stateful_protocol_security import (
 
 ALLOWED_ORIGIN = 'http://127.0.0.1:18085'
 TOKENS = {
-    'alice': 'alice-token',
-    'expired': 'expired-token',
+    'alice': '',
+    'expired': '',
 }
 
 
@@ -56,7 +62,10 @@ def resource(ref: str, tenant: str, owner: str) -> dict[str, Any]:
     }
 
 
-def gql_post(base: str, path: str, payload: Any, token: str = 'alice-token') -> tuple[int, Any]:
+def gql_post(base: str, path: str, payload: Any, token: str | None = None) -> tuple[int, Any]:
+    token = token or TOKENS['alice']
+    if not token:
+        fail('Vault-backed GraphQL token was not initialized')
     response = requests.post(
         base + path,
         headers={
@@ -805,6 +814,80 @@ def main() -> int:
         environment=Project.Environment.STAGING,
     )
 
+    alice_seed = os.environ.get('AEGIS_PROTOCOL_ALICE_TOKEN', '')
+    expired_seed = os.environ.get('AEGIS_PROTOCOL_EXPIRED_TOKEN', '')
+    if not alice_seed or not expired_seed:
+        fail('protocol fixture credential seeds are required for Vault reality proof')
+    alice_credential = create_credential_secret(
+        project=project,
+        actor=user,
+        name=f'protocol-alice-{suffix}',
+        kind=CredentialSecret.Kind.TOKEN,
+        secret=alice_seed,
+        scope={
+            'protocol_origin': args.http_origin,
+            'protocol_identity_ref': 'alice',
+        },
+    )
+    expired_credential = create_credential_secret(
+        project=project,
+        actor=user,
+        name=f'protocol-expired-{suffix}',
+        kind=CredentialSecret.Kind.TOKEN,
+        secret=expired_seed,
+        scope={
+            'protocol_origin': args.http_origin,
+            'protocol_identity_ref': 'alice',
+        },
+    )
+    alice_materials, alice_context = resolve_credential_refs_for_worker(
+        project_id=project.id,
+        actor_id=user.id,
+        refs=[str(alice_credential.id)],
+        capability_id='graphql.security-validation',
+        allowed_kinds=(CredentialSecret.Kind.TOKEN,),
+        purpose='protocol-e2e:graphql-worker-resolve',
+        target=args.http_origin,
+        identity_ref='alice',
+    )
+    ws_materials, ws_context = resolve_credential_refs_for_worker(
+        project_id=project.id,
+        actor_id=user.id,
+        refs=[str(alice_credential.id)],
+        capability_id='websocket.security-validation',
+        allowed_kinds=(CredentialSecret.Kind.TOKEN,),
+        purpose='protocol-e2e:websocket-worker-resolve',
+        target=args.http_origin,
+        identity_ref='alice',
+    )
+    expired_materials, expired_context = resolve_credential_refs_for_worker(
+        project_id=project.id,
+        actor_id=user.id,
+        refs=[str(expired_credential.id)],
+        capability_id='websocket.security-validation',
+        allowed_kinds=(CredentialSecret.Kind.TOKEN,),
+        purpose='protocol-e2e:expired-worker-resolve',
+        target=args.http_origin,
+        identity_ref='alice',
+    )
+    if (
+        not alice_materials
+        or not ws_materials
+        or not expired_materials
+        or alice_materials[0]['secret'] != ws_materials[0]['secret']
+    ):
+        fail('Vault worker resolution did not return consistent protocol material')
+    TOKENS['alice'] = str(alice_materials[0]['secret'])
+    TOKENS['expired'] = str(expired_materials[0]['secret'])
+    os.environ.pop('AEGIS_PROTOCOL_ALICE_TOKEN', None)
+    os.environ.pop('AEGIS_PROTOCOL_EXPIRED_TOKEN', None)
+    assert_no_credential_material_leaked(
+        [*alice_materials, *ws_materials, *expired_materials],
+        alice_context,
+        ws_context,
+        expired_context,
+    )
+
     ws_cases, ws_live = asyncio.run(live_websocket_cases(args.ws_origin))
     gql_cases = live_graphql_http_cases(args.http_origin)
     gql_cases.extend(asyncio.run(live_graphql_subscription_cases(args.ws_origin)))
@@ -934,11 +1017,20 @@ def main() -> int:
         'graph_kinds': sorted(graph_kinds),
         'graph_relations': sorted(set(project.security_graph_edges.values_list('relation', flat=True))),
         'live_assertions': ws_live,
+        'vault_contexts': {
+            'graphql': alice_context,
+            'websocket': ws_context,
+            'expired_session': expired_context,
+        },
     }
     rendered = json.dumps(evidence, sort_keys=True, indent=2)
     for secret in TOKENS.values():
-        if secret in rendered:
+        if secret and secret in rendered:
             fail('credential material leaked into protocol evidence artifact')
+    assert_no_credential_material_leaked(
+        [*alice_materials, *ws_materials, *expired_materials],
+        evidence,
+    )
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     args.evidence.write_text(rendered + '\n', encoding='utf-8')
     print(rendered)
