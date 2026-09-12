@@ -6,3 +6,6 @@ class EvidenceConfig(AppConfig):
     name = 'django_project.evidence'
     label = 'evidence'
     verbose_name = 'Evidence'
+
+    def ready(self):
+        from . import signals  # noqa: F401

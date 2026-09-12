@@ -20,6 +20,7 @@ const LABELS: Record<string, string> = {
   users: 'Users & RBAC',
   audit: 'Audit Trail',
   notifications: 'Notifications',
+  'security-events': 'Security Events',
   settings: 'Settings',
   system: 'System Monitoring',
   scan: 'Scans',

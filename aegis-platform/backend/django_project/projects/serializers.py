@@ -13,18 +13,21 @@ class ProjectSerializer(serializers.ModelSerializer):
     findings = serializers.SerializerMethodField()
     security_score = serializers.SerializerMethodField()
     risk = serializers.SerializerMethodField()
+    average_risk_score = serializers.SerializerMethodField()
+    last_validation = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
         fields = [
             'id', 'name', 'slug', 'description', 'status', 'environment',
             'owner', 'assets', 'validations', 'findings', 'security_score',
-            'risk', 'tags', 'settings', 'default_scan_config',
-            'created_at', 'updated_at', 'archived_at',
+            'risk', 'average_risk_score', 'last_validation', 'tags', 'settings',
+            'default_scan_config', 'created_at', 'updated_at', 'archived_at',
         ]
         read_only_fields = [
             'id', 'slug', 'owner', 'assets', 'validations', 'findings',
-            'security_score', 'risk', 'created_at', 'updated_at', 'archived_at',
+            'security_score', 'risk', 'average_risk_score', 'last_validation',
+            'created_at', 'updated_at', 'archived_at',
         ]
 
     def get_owner(self, obj):
@@ -44,6 +47,11 @@ class ProjectSerializer(serializers.ModelSerializer):
         value = obj.scans.filter(status='completed').aggregate(value=Avg('security_score'))['value']
         return round(value) if value is not None else None
 
+    def get_average_risk_score(self, obj):
+        from django.db.models import Avg
+        value = obj.vulnerabilities.filter(status__in=['open', 'confirmed', 'in_progress']).aggregate(value=Avg('risk_score'))['value']
+        return round(float(value), 2) if value is not None else None
+
     def get_risk(self, obj):
         severities = set(
             obj.vulnerabilities.filter(status__in=['open', 'confirmed', 'in_progress']).values_list('severity', flat=True)
@@ -58,11 +66,29 @@ class ProjectSerializer(serializers.ModelSerializer):
             return 'low'
         return None
 
+    def get_last_validation(self, obj):
+        scan = obj.scans.order_by('-created_at').first()
+        if not scan:
+            return None
+        return {
+            'id': str(scan.id),
+            'name': scan.name,
+            'status': scan.status,
+            'created_at': scan.created_at.isoformat(),
+            'completed_at': scan.completed_at.isoformat() if scan.completed_at else None,
+            'security_score': round(scan.security_score) if scan.security_score is not None else None,
+            'risk_level': scan.risk_level or None,
+        }
+
 
 class ProjectCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
-        fields = ['name', 'description', 'status', 'environment', 'tags', 'settings', 'default_scan_config']
+        fields = [
+            'id', 'name', 'description', 'status', 'environment', 'tags',
+            'settings', 'default_scan_config',
+        ]
+        read_only_fields = ['id']
 
     def validate_name(self, value):
         value = value.strip()

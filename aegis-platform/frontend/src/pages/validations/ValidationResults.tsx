@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ShieldCheck, AlertTriangle, Layers, Bug, FileText, Network, Route, Shield, ClipboardCheck, Download, Search, Eye, ExternalLink, ChevronRight, Code2, Braces } from 'lucide-react'
+import { ShieldCheck, Layers, Bug, FileText, Network, Route, Shield, ClipboardCheck, Download, Search, Eye, ChevronRight, Braces } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
 import Editor from '@monaco-editor/react'
@@ -84,30 +84,26 @@ export const ValidationResults = () => {
   })
 
   const overview = results?.overview
-  const findings = findingsData?.items || results?.findings || []
-  const evidences = evidenceData?.items || results?.evidences || []
+  const findings = findingsData?.items || []
+  const evidences = evidenceData?.items || []
 
   const exportJson = () => {
+    if (!results) return
     const blob = new Blob([JSON.stringify(results, null, 2)], {type:'application/json'})
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href=url; a.download=`validation-${id}.json`; a.click(); URL.revokeObjectURL(url)
-    toast.success('تم تصدير JSON')
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `validation-${id}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('JSON export completed')
   }
 
   if (isLoading) return <div className="p-6 max-w-6xl mx-auto animate-pulse space-y-4"><div className="h-24 bg-muted rounded" /><div className="h-96 bg-muted rounded" /></div>
-  if (!results) return <div className="p-6 max-w-6xl mx-auto"><p className="text-muted-foreground">No results — validation may still be running.</p><Link to={`/validations/${id}/progress`} className="text-primary underline text-sm">View Progress</Link></div>
+  if (!results || !overview) return <div className="p-6 max-w-6xl mx-auto"><p className="text-muted-foreground">No validation results are available from the API yet.</p><Link to={`/validations/${id}/progress`} className="text-primary underline text-sm">View Progress</Link></div>
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-4">
-      {/* Simulation banner */}
-      {results.simulation && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 flex gap-2 items-start">
-          <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5" />
-          <p className="text-xs text-amber-800 dark:text-amber-200"><span className="font-semibold">Simulation / Demo Data</span> — {results.notice}</p>
-        </div>
-      )}
-
-      {/* Header */}
       <div className="rounded-xl border bg-card overflow-hidden">
         <div className="px-5 py-4 flex flex-wrap justify-between gap-3 border-b">
           <div>
@@ -116,7 +112,7 @@ export const ValidationResults = () => {
               <span className="font-mono text-sm font-semibold">Validation #{id}</span>
               <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs">COMPLETED ✓</span>
             </div>
-            <div className="text-xs text-muted-foreground mt-1 font-mono" dir="ltr">{validationMeta?.target_value || results.assets?.[0]?.name} • {validationMeta?.created_at ? new Date(validationMeta.created_at).toLocaleString() : ''}</div>
+            <div className="text-xs text-muted-foreground mt-1 font-mono" dir="ltr">{validationMeta?.target_value || results.assets?.[0]?.name || 'Target unavailable'} • {validationMeta?.created_at ? new Date(validationMeta.created_at).toLocaleString() : ''}</div>
           </div>
           <div className="flex gap-2">
             <button onClick={exportJson} className="px-3 py-1.5 rounded-lg border bg-card text-xs inline-flex items-center gap-1 hover:bg-muted"><Download className="h-3 w-3" /> JSON</button>
@@ -130,14 +126,13 @@ export const ValidationResults = () => {
           <div className="rounded-lg bg-muted/30 p-3 text-center"><div className="text-2xl font-bold">{overview.evidence_count}</div><div className="text-xs text-muted-foreground">Evidence</div></div>
         </div>
         <div className="px-5 pb-3 flex gap-2 flex-wrap">
-          {Object.entries(overview.severity_counts).map(([k,v])=> (
+          {Object.entries(overview.severity_counts || {}).map(([k,v])=> (
             <span key={k} className={cn('text-xs px-2 py-0.5 rounded-full font-medium capitalize', sevColor[k] || 'bg-muted')}>{k} {v as number}</span>
           ))}
           <span className="text-xs text-muted-foreground ml-2">Engines {overview.engines_executed} • {overview.validation_summary}</span>
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="flex gap-1 overflow-auto border-b pb-0">
         {TABS.map(t=> (
           <button key={t.id} onClick={()=>setTab(t.id)} className={cn('px-3 py-2 text-xs font-medium border-b-2 whitespace-nowrap inline-flex items-center gap-1', tab===t.id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
@@ -146,16 +141,15 @@ export const ValidationResults = () => {
         ))}
       </div>
 
-      {/* Tab contents */}
       {tab==='overview' && (
         <div className="grid md:grid-cols-2 gap-4">
           <div className="rounded-xl border bg-card p-4">
             <h3 className="text-sm font-semibold mb-3">Severity distribution</h3>
             <div className="space-y-2">
-              {Object.entries(overview.severity_counts).map(([sev,count])=> (
+              {Object.entries(overview.severity_counts || {}).map(([sev,count])=> (
                 <div key={sev} className="flex items-center gap-2 text-xs">
                   <span className={cn('px-2 py-0.5 rounded text-white text-[11px] capitalize w-24 text-center', sevColor[sev])}>{sev}</span>
-                  <div className="flex-1 h-2 rounded bg-muted overflow-hidden"><div className="h-full bg-primary" style={{width:`${(count as number)/overview.findings_count*100}%`}} /></div>
+                  <div className="flex-1 h-2 rounded bg-muted overflow-hidden"><div className="h-full bg-primary" style={{width:`${overview.findings_count ? (count as number)/overview.findings_count*100 : 0}%`}} /></div>
                   <span className="w-6 text-right">{count as number}</span>
                 </div>
               ))}
@@ -164,12 +158,13 @@ export const ValidationResults = () => {
           <div className="rounded-xl border bg-card p-4">
             <h3 className="text-sm font-semibold mb-3">Assets</h3>
             <div className="space-y-2">
-              {results.assets.map((a:any)=> (
+              {(results.assets || []).map((a:any)=> (
                 <div key={a.id} className="rounded-lg border p-2 text-xs">
                   <div className="font-mono font-medium">{a.name} <span className="text-muted-foreground">({a.type}) {a.ip}</span></div>
-                  <div className="flex gap-1 mt-1">{a.services.map((s:any)=> <span key={s.port} className="px-1.5 py-0.5 rounded bg-muted font-mono text-[11px]">{s.service}:{s.port}</span>)}</div>
+                  <div className="flex gap-1 mt-1">{(a.services || []).map((s:any)=> <span key={s.port} className="px-1.5 py-0.5 rounded bg-muted font-mono text-[11px]">{s.service}:{s.port}</span>)}</div>
                 </div>
               ))}
+              {results.assets?.length === 0 && <div className="text-xs text-muted-foreground">No assets returned by the API.</div>}
             </div>
           </div>
         </div>
@@ -195,17 +190,17 @@ export const ValidationResults = () => {
               <tbody>
                 {findings.map((f:any)=> (
                   <tr key={f.id} onClick={()=>setSelectedFinding(f)} className="border-b hover:bg-muted/30 cursor-pointer">
-                    <td className="px-3 py-2"><span className={cn('px-2 py-0.5 rounded text-[11px] font-medium', sevColor[f.severity])}>{f.severity}</span></td>
+                    <td className="px-3 py-2"><span className={cn('px-2 py-0.5 rounded text-[11px] font-medium', sevColor[f.severity] || 'bg-muted')}>{f.severity}</span></td>
                     <td className="px-3 py-2"><div className="font-medium">{f.title}</div><div className="text-muted-foreground text-[11px]">{f.category} • {f.cwe} • CVSS {f.cvss}</div></td>
-                    <td className="px-3 py-2 font-mono">{f.asset}</td>
-                    <td className="px-3 py-2">{f.confidence}%</td>
+                    <td className="px-3 py-2 font-mono">{f.asset || 'Asset unavailable'}</td>
+                    <td className="px-3 py-2">{f.confidence != null ? `${f.confidence}%` : 'Confidence unavailable'}</td>
                     <td className="px-3 py-2"><span className={cn('px-1.5 py-0.5 rounded text-[11px] border', f.status==='reviewed' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700')}>{f.status}</span></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {findings.length===0 && <div className="p-6 text-center text-sm text-muted-foreground">No findings</div>}
+          {findings.length===0 && <div className="p-6 text-center text-sm text-muted-foreground">No findings returned by the validation findings API.</div>}
         </div>
       )}
 
@@ -214,12 +209,11 @@ export const ValidationResults = () => {
           <div className="flex gap-2">
             <select value={evidenceFinding} onChange={e=>setEvidenceFinding(e.target.value)} className="px-2 py-1.5 rounded border bg-background text-xs">
               <option value="">All evidence</option>
-              {results.findings.map((f:any)=> <option key={f.id} value={f.id}>{f.title} ({f.id})</option>)}
+              {(results.findings || []).map((f:any)=> <option key={f.id} value={f.id}>{f.title} ({f.id})</option>)}
             </select>
             <button onClick={()=>setEvidenceFinding('')} className="px-2 py-1 rounded border text-xs">Clear</button>
             <span className="text-xs text-muted-foreground self-center ml-2">Finding → Evidence → Raw (Monaco) • {evidences.length} items</span>
           </div>
-          {/* Detail viewer for selected evidence */}
           <EvidenceMonacoViewer evidences={evidences} />
         </div>
       )}
@@ -227,7 +221,7 @@ export const ValidationResults = () => {
       {tab==='graph' && (
         <div className="rounded-xl border bg-card p-4">
           <h3 className="text-sm font-semibold mb-2">Evidence Graph — Target → Asset → Service → Finding → Evidence → Control</h3>
-          <p className="text-xs text-muted-foreground mb-3">Risk → Finding → Evidence → Asset → Control → Remediation بدون فقدان السياق</p>
+          <p className="text-xs text-muted-foreground mb-3">Risk → Finding → Evidence → Asset → Control → Remediation without losing context</p>
           <div className="rounded-lg border bg-muted/20 p-4 overflow-auto">
             <div className="flex flex-wrap gap-2 items-center text-xs">
               {graphData ? (
@@ -252,7 +246,7 @@ export const ValidationResults = () => {
 
       {tab==='paths' && (
         <div className="space-y-3">
-          {(pathsData?.items || results.attack_paths).map((ap:any)=> (
+          {(pathsData?.items || results.attack_paths || []).map((ap:any)=> (
             <div key={ap.id} className="rounded-xl border bg-card p-4">
               <div className="flex items-center justify-between"><span className="font-mono text-xs font-semibold">{ap.id}</span><span className={cn('text-xs px-2 py-0.5 rounded-full', ap.risk==='critical' ? 'bg-red-600 text-white' : 'bg-amber-500 text-white')}>{ap.risk}</span></div>
               <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
@@ -261,9 +255,10 @@ export const ValidationResults = () => {
                 <span className="px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30">{ap.weakness}</span><ChevronRight className="h-3 w-3" />
                 <span className="px-2 py-1 rounded bg-destructive/10">{ap.impact}</span>
               </div>
-              <div className="mt-2 text-[11px] font-mono text-muted-foreground">Chain: {ap.chain.join(' → ')}</div>
+              <div className="mt-2 text-[11px] font-mono text-muted-foreground">Chain: {(ap.chain || []).join(' → ')}</div>
             </div>
           ))}
+          {!(pathsData?.items || results.attack_paths || []).length && <div className="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">No attack paths returned by the validation API.</div>}
         </div>
       )}
 
@@ -272,7 +267,7 @@ export const ValidationResults = () => {
           <table className="w-full text-xs">
             <thead><tr className="border-b bg-muted/20 text-muted-foreground"><th className="text-start px-3 py-2">Control</th><th className="text-start px-3 py-2">Remediation</th><th className="text-start px-3 py-2">Priority</th><th className="text-start px-3 py-2">Verification</th></tr></thead>
             <tbody>
-              {(controlsData?.items || results.controls).map((c:any)=> (
+              {(controlsData?.items || results.controls || []).map((c:any)=> (
                 <tr key={c.id} className="border-b">
                   <td className="px-3 py-2 font-medium">{c.title}</td>
                   <td className="px-3 py-2 text-muted-foreground">{c.remediation}</td>
@@ -282,6 +277,7 @@ export const ValidationResults = () => {
               ))}
             </tbody>
           </table>
+          {!(controlsData?.items || results.controls || []).length && <div className="p-6 text-center text-sm text-muted-foreground">No controls returned by the validation API.</div>}
         </div>
       )}
 
@@ -290,7 +286,7 @@ export const ValidationResults = () => {
           <table className="w-full text-xs">
             <thead><tr className="border-b bg-muted/20 text-muted-foreground"><th className="text-start px-3 py-2">Framework</th><th className="text-start px-3 py-2">Control</th><th className="text-start px-3 py-2">Status</th></tr></thead>
             <tbody>
-              {(complianceData?.items || results.compliance).map((c:any,i:number)=> (
+              {(complianceData?.items || results.compliance || []).map((c:any,i:number)=> (
                 <tr key={i} className="border-b">
                   <td className="px-3 py-2 font-mono">{c.framework}</td>
                   <td className="px-3 py-2">{c.control}</td>
@@ -299,31 +295,27 @@ export const ValidationResults = () => {
               ))}
             </tbody>
           </table>
+          {!(complianceData?.items || results.compliance || []).length && <div className="p-6 text-center text-sm text-muted-foreground">No compliance mappings returned by the validation API.</div>}
         </div>
       )}
 
-      {/* Monaco Evidence Viewer Component */}
-      {/* Finding Details Drawer */}
       {selectedFinding && (
         <div className="fixed inset-0 z-50 flex">
           <div className="flex-1 bg-black/40" onClick={()=>setSelectedFinding(null)} />
           <div className="w-full max-w-xl bg-card border-l overflow-auto p-5 space-y-4">
             <div className="flex justify-between items-start">
-              <div><span className={cn('px-2 py-0.5 rounded text-white text-xs', sevColor[selectedFinding.severity])}>{selectedFinding.severity}</span><h2 className="font-semibold mt-2">{selectedFinding.title}</h2><div className="text-xs text-muted-foreground">{selectedFinding.category} • {selectedFinding.cwe} • CVSS {selectedFinding.cvss} • Confidence {selectedFinding.confidence}%</div></div>
-              <button onClick={()=>setSelectedFinding(null)} className="p-1 rounded hover:bg-muted">✕</button>
+              <div><span className={cn('px-2 py-0.5 rounded text-white text-xs', sevColor[selectedFinding.severity] || 'bg-muted')}>{selectedFinding.severity}</span><h2 className="font-semibold mt-2">{selectedFinding.title}</h2><div className="text-xs text-muted-foreground">{selectedFinding.category} • {selectedFinding.cwe} • CVSS {selectedFinding.cvss} • Confidence {selectedFinding.confidence}%</div></div>
+              <button onClick={()=>setSelectedFinding(null)} className="p-1 rounded hover:bg-muted">×</button>
             </div>
             <div className="text-xs space-y-2">
               <div><div className="font-medium">Description</div><div className="text-muted-foreground">{selectedFinding.description}</div></div>
               <div><div className="font-medium">Impact</div><div className="text-muted-foreground">{selectedFinding.impact}</div></div>
-              <div><div className="font-medium">Affected Asset</div><div className="font-mono">{selectedFinding.asset}</div></div>
-              <div><div className="font-medium">Evidence ({selectedFinding.evidence_ids.length})</div><div className="space-y-1 mt-1">{selectedFinding.evidence_ids.map((eid:string)=> <div key={eid} className="rounded border px-2 py-1 font-mono text-[11px] flex justify-between"><span>{eid}</span><button onClick={()=>{navigator.clipboard.writeText(eid); toast.success('Copied')}} className="text-primary">Copy</button></div>)}</div></div>
+              <div><div className="font-medium">Affected Asset</div><div className="font-mono">{selectedFinding.asset || 'Asset unavailable'}</div></div>
+              <div><div className="font-medium">Evidence ({selectedFinding.evidence_ids?.length || 0})</div><div className="space-y-1 mt-1">{(selectedFinding.evidence_ids || []).map((eid:string)=> <div key={eid} className="rounded border px-2 py-1 font-mono text-[11px] flex justify-between"><span>{eid}</span><button onClick={()=>{navigator.clipboard.writeText(eid); toast.success('Copied')}} className="text-primary">Copy</button></div>)}</div></div>
               <div><div className="font-medium">Attack Path</div><div className="font-mono text-[11px] text-muted-foreground">Target → Asset → Finding → Impact</div></div>
-              <div><div className="font-medium">Remediation</div><div className="text-muted-foreground">{results.controls.find((c:any)=>c.finding_ids.includes(selectedFinding.id))?.remediation || 'See Controls tab'}</div></div>
+              <div><div className="font-medium">Remediation</div><div className="text-muted-foreground">{(results.controls || []).find((c:any)=>c.finding_ids?.includes(selectedFinding.id))?.remediation || 'See Controls tab'}</div></div>
             </div>
-            <div className="flex gap-2">
-              <button onClick={()=>{toast.success('Marked reviewed (demo)'); setSelectedFinding(null)}} className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-xs">Mark Reviewed</button>
-              <button onClick={()=>{setEvidenceFinding(selectedFinding.id); setTab('evidence'); setSelectedFinding(null)}} className="px-3 py-1.5 rounded border text-xs inline-flex items-center gap-1"><Eye className="h-3 w-3" /> View Evidence</button>
-            </div>
+            <button onClick={()=>{setEvidenceFinding(selectedFinding.id); setTab('evidence'); setSelectedFinding(null)}} className="px-3 py-1.5 rounded border text-xs inline-flex items-center gap-1"><Eye className="h-3 w-3" /> View Evidence</button>
           </div>
         </div>
       )}
@@ -335,7 +327,7 @@ const EvidenceMonacoViewer = ({ evidences }: { evidences: any[] }) => {
   const [selected, setSelected] = useState(0)
   const ev = evidences[selected]
   const [viewMode, setViewMode] = useState<'pretty'|'raw'>('pretty')
-  if (!ev) return <div className="text-xs text-muted-foreground">No evidence</div>
+  if (!ev) return <div className="text-xs text-muted-foreground">No evidence returned by the validation API.</div>
   const content = viewMode==='raw' ? JSON.stringify(ev, null, 2) : JSON.stringify(ev.data, null, 2)
   const lang = ev.type==='request' || ev.type==='response' ? 'json' : 'json'
   return (

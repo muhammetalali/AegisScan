@@ -1,2 +1,0 @@
-import{j as e}from"./ui-s79f_TND.js";import"./vendor-DEJPD7yw.js";const r=()=>e.jsx("div",{className:"min-h-screen flex items-center justify-center p-6",children:e.jsxs("div",{className:"max-w-md w-full",children:[e.jsx("h1",{className:"text-2xl font-bold",children:"استعادة كلمة المرور"}),e.jsx("p",{className:"text-muted-foreground mt-2",children:"صفحة استعادة كلمة المرور - Placeholder يعمل على Windows"})]})});export{r as ForgotPassword};
-//# sourceMappingURL=ForgotPassword-BJMSf-Ls.js.map

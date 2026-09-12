@@ -1,0 +1,51 @@
+/* AegisScan global interaction language: tactile, premium and restrained. */
+button:not(:disabled), a { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled) { position: relative; transform: translateZ(0); transition: transform 180ms cubic-bezier(.2,.75,.25,1), filter 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease, color 180ms ease; }
+button:not(:disabled):hover { transform: translate3d(0,-2px,7px); filter: brightness(1.08) saturate(1.15); border-color: color-mix(in srgb, var(--primary) 52%, var(--border)); box-shadow: 0 14px 32px color-mix(in srgb, var(--primary) 18%, transparent), inset 0 1px 0 color-mix(in srgb, white 9%, transparent); }
+button:not(:disabled):active { transform: translate3d(0,0,0) scale(.985); filter: brightness(.98) saturate(1.05); box-shadow: 0 6px 16px color-mix(in srgb, var(--primary) 12%, transparent); }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid color-mix(in srgb, var(--ring) 78%, transparent); outline-offset: 2px; }
+.enterprise-icon-button:hover { color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--background)); }
+.enterprise-control:hover { color: var(--foreground); border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); background: color-mix(in srgb, var(--primary) 6%, var(--background)); }
+.enterprise-menu-item:hover { background: color-mix(in srgb, var(--primary) 10%, var(--background)); color: var(--foreground); }
+.enterprise-nav:hover { background: color-mix(in srgb, var(--primary) 10%, var(--sidebar-accent)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 15%, transparent), 0 10px 26px color-mix(in srgb, black 12%, transparent); }
+main { perspective: 1800px; }
+main section, main article { transform-style: preserve-3d; transition: transform 220ms cubic-bezier(.2,.75,.25,1), box-shadow 220ms ease, border-color 220ms ease, background-color 220ms ease; }
+main section:hover, main article:hover { transform: translate3d(0,-2px,7px); border-color: color-mix(in srgb, var(--primary) 24%, var(--border)); box-shadow: 0 20px 48px color-mix(in srgb, black 19%, transparent), 0 0 0 1px color-mix(in srgb, var(--primary) 7%, transparent); }
+
+/* Distinct login art direction: deep graphite + ultraviolet + warm signal, with real depth. */
+.auth-page { position: relative; display: grid; min-height: 100vh; place-items: center; overflow: hidden; padding: 28px 18px; background: radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--primary) 14%, transparent), transparent 30%), linear-gradient(135deg, oklch(.065 .02 275), oklch(.10 .03 305) 55%, oklch(.065 .02 25)); }
+.auth-background { position: absolute; inset: 0; pointer-events: none; overflow: hidden; perspective: 1100px; }
+.auth-background::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at 16% 20%, color-mix(in srgb, var(--chart-4) 16%, transparent), transparent 24%), radial-gradient(circle at 84% 82%, color-mix(in srgb, var(--chart-5) 11%, transparent), transparent 25%), linear-gradient(120deg, transparent 40%, color-mix(in srgb, white 3%, transparent) 50%, transparent 60%); }
+.auth-background::after { content: ''; position: absolute; inset: 12% 7%; border: 1px solid color-mix(in srgb, white 7%, transparent); border-radius: 42px; transform: rotateX(58deg) rotateZ(-9deg) translateZ(-20px); box-shadow: 0 0 0 24px color-mix(in srgb, var(--primary) 2%, transparent), 0 40px 120px color-mix(in srgb, black 42%, transparent); }
+.auth-orb { position: absolute; border-radius: 50%; filter: blur(2px); opacity: .72; box-shadow: inset -30px -35px 65px color-mix(in srgb, black 26%, transparent), 0 30px 90px color-mix(in srgb, black 25%, transparent); }
+.auth-orb--one { width: 420px; height: 420px; right: -150px; top: -170px; background: radial-gradient(circle at 35% 32%, color-mix(in srgb, var(--chart-4) 28%, transparent), color-mix(in srgb, var(--primary) 10%, transparent) 40%, transparent 72%); transform: translateZ(100px) rotateX(12deg); }
+.auth-orb--two { width: 340px; height: 340px; left: -150px; bottom: -150px; background: radial-gradient(circle at 65% 40%, color-mix(in srgb, var(--chart-5) 22%, transparent), color-mix(in srgb, var(--primary) 8%, transparent) 42%, transparent 72%); transform: translateZ(60px) rotateY(18deg); }
+.auth-line { position: absolute; height: 1px; background: linear-gradient(90deg, transparent, color-mix(in srgb, white 12%, transparent), color-mix(in srgb, var(--primary) 45%, transparent), transparent); box-shadow: 0 0 18px color-mix(in srgb, var(--primary) 16%, transparent); }
+.auth-line--one { width: 50vw; top: 25%; left: -7%; transform: rotate(-16deg) translateZ(70px); }
+.auth-line--two { width: 44vw; bottom: 22%; right: -8%; transform: rotate(-16deg) translateZ(55px); }
+.login-surface { position: relative; z-index: 2; width: min(100%, 470px); border: 1px solid color-mix(in srgb, white 10%, var(--border)); border-radius: 26px; background: linear-gradient(145deg, color-mix(in srgb, var(--card) 88%, var(--chart-4) 6%), color-mix(in srgb, var(--card) 92%, black 8%)); box-shadow: 0 45px 120px color-mix(in srgb, black 44%, transparent), 0 10px 35px color-mix(in srgb, var(--primary) 12%, transparent), inset 0 1px 0 color-mix(in srgb, white 11%, transparent); backdrop-filter: blur(26px) saturate(145%); overflow: hidden; transform-style: preserve-3d; transform: perspective(1400px) rotateX(2deg) rotateY(-1deg) translateZ(30px); }
+.login-surface::before { content: ''; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 25%, color-mix(in srgb, white 4%, transparent) 48%, transparent 62%); pointer-events: none; }
+.login-surface::after { content: ''; display: block; position: absolute; inset-inline: 8%; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--chart-4), var(--primary), var(--chart-5), transparent); box-shadow: 0 0 18px color-mix(in srgb, var(--primary) 35%, transparent); }
+.login-brand, .login-content, .login-footer { position: relative; transform: translateZ(18px); }
+.login-brand { display: flex; align-items: center; gap: 13px; padding: 25px 27px 7px; }
+.login-logo-frame { display: grid; place-items: center; width: 50px; height: 50px; flex: 0 0 50px; border: 1px solid color-mix(in srgb, white 10%, var(--border)); border-radius: 16px; background: linear-gradient(145deg, color-mix(in srgb, var(--background) 82%, var(--chart-4) 8%), color-mix(in srgb, var(--background) 75%, var(--chart-5) 8%)); box-shadow: 0 14px 35px color-mix(in srgb, black 25%, transparent), inset 0 1px 0 color-mix(in srgb, white 10%, transparent); transform: translateZ(25px) rotateX(2deg); }
+.login-logo { width: 34px; height: 34px; display: block; filter: drop-shadow(0 5px 14px color-mix(in srgb, var(--primary) 35%, transparent)); }
+.login-brand strong { display: block; font-size: 17px; letter-spacing: -.02em; }
+.login-brand span { display: block; margin-top: 2px; color: var(--muted-foreground); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.login-content { padding: 31px 27px 25px; }
+.login-kicker { margin: 0 0 10px; color: var(--chart-4); font-size: 10px; font-weight: 800; letter-spacing: .17em; }
+.login-content h1 { margin: 0; font-size: 31px; line-height: 1.08; letter-spacing: -.045em; }
+.login-subtitle { margin: 9px 0 25px; color: var(--muted-foreground); font-size: 13px; line-height: 1.7; }
+.login-form { display: grid; gap: 17px; }
+.login-field { display: grid; gap: 7px; }
+.login-field > span { color: var(--muted-foreground); font-size: 12px; font-weight: 700; }
+.login-field input { width: 100%; min-height: 50px; border: 1px solid color-mix(in srgb, var(--border) 86%, white 4%); border-radius: 13px; outline: none; padding: 0 14px; color: var(--foreground); background: color-mix(in srgb, var(--background) 76%, var(--chart-4) 4%); transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease, background-color .18s ease; box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent), 0 10px 24px color-mix(in srgb, black 12%, transparent); }
+.login-field input:focus { border-color: var(--chart-4); box-shadow: 0 0 0 4px color-mix(in srgb, var(--chart-4) 14%, transparent), 0 14px 30px color-mix(in srgb, black 15%, transparent); transform: translateY(-1px) translateZ(3px); background: color-mix(in srgb, var(--background) 70%, var(--chart-4) 7%); }
+.login-submit { min-height: 52px; border: 1px solid color-mix(in srgb, var(--primary) 50%, white 4%); border-radius: 14px; background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 90%, var(--chart-4) 10%), color-mix(in srgb, var(--chart-4) 76%, var(--primary) 24%)); color: var(--primary-foreground); box-shadow: 0 18px 38px color-mix(in srgb, var(--primary) 24%, transparent), inset 0 1px 0 color-mix(in srgb, white 12%, transparent); font-weight: 800; }
+.login-submit:hover { background: linear-gradient(135deg, color-mix(in srgb, var(--chart-4) 82%, var(--primary) 18%), color-mix(in srgb, var(--chart-5) 55%, var(--primary) 45%)); }
+.login-footer { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 0 27px 23px; color: var(--muted-foreground); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled), a, main section, main article, .login-surface { transition: none !important; transform: none !important; }
+  button:not(:disabled):hover { transform: none !important; }
+}

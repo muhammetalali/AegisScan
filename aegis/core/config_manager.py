@@ -47,8 +47,8 @@ def _defaults() -> Dict[str, Any]:
             "confidence_threshold": 0.60,
         },
         "integrations": {
-            "slack_webhook": "${AEGIS_SLACK_WEBHOOK}",
-            "teams_webhook": "${AEGIS_TEAMS_WEBHOOK}",
+            "slack_webhook": "${AEGIS_SLACK_WEBHOOK:-}",
+            "teams_webhook": "${AEGIS_TEAMS_WEBHOOK:-}",
         },
         "gui": {"host": "127.0.0.1", "port": 5000, "debug": False},
     }
@@ -70,6 +70,7 @@ class ConfigManager:
         if not self.config_path.exists():
             self._config = _defaults()
             self._save()
+            self._config = self._substitute_env_vars(self._config)
             return
 
         try:
@@ -103,8 +104,12 @@ class ConfigManager:
             and obj.startswith("${")
             and obj.endswith("}")
         ):
-            env_value = os.getenv(obj[2:-1])
+            expression = obj[2:-1]
+            variable, separator, fallback = expression.partition(":-")
+            env_value = os.getenv(variable)
             if env_value is None:
+                if separator:
+                    return fallback
                 logger.warning("متغير بيئة غير معرّف: %s", obj)
                 return obj
             return env_value

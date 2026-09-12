@@ -88,6 +88,8 @@ class Permission(models.TextChoices):
     SYSTEM_BACKUP = 'system.backup', _('System Backup')
     API_KEY_MANAGE = 'api_key.manage', _('Manage API Keys')
     AUDIT_READ = 'audit.read', _('Read Audit Logs')
+    SECURITY_EVENT_READ = 'security_event.read', _('Read Security Events')
+    SECURITY_EVENT_RESPOND = 'security_event.respond', _('Respond to Security Events')
 
 
 ROLE_PERMISSIONS = {
@@ -104,6 +106,7 @@ ROLE_PERMISSIONS = {
         Permission.TWIN_READ, Permission.TWIN_SIMULATE,
         Permission.USER_CREATE, Permission.USER_READ, Permission.USER_UPDATE, Permission.USER_MANAGE_ROLES,
         Permission.SYSTEM_SETTINGS, Permission.SYSTEM_MONITOR, Permission.API_KEY_MANAGE, Permission.AUDIT_READ,
+        Permission.SECURITY_EVENT_READ, Permission.SECURITY_EVENT_RESPOND,
     ],
     UserRole.SECURITY_MANAGER: [
         Permission.PROJECT_CREATE, Permission.PROJECT_READ, Permission.PROJECT_UPDATE, Permission.PROJECT_ARCHIVE, Permission.PROJECT_CLONE,
@@ -115,6 +118,7 @@ ROLE_PERMISSIONS = {
         Permission.KNOWLEDGE_CREATE, Permission.KNOWLEDGE_READ, Permission.KNOWLEDGE_UPDATE,
         Permission.TWIN_READ, Permission.TWIN_SIMULATE,
         Permission.USER_READ, Permission.API_KEY_MANAGE,
+        Permission.SECURITY_EVENT_READ, Permission.SECURITY_EVENT_RESPOND,
     ],
     UserRole.SECURITY_ANALYST: [
         Permission.PROJECT_READ, Permission.PROJECT_CLONE,
@@ -125,6 +129,7 @@ ROLE_PERMISSIONS = {
         Permission.COMPLIANCE_READ,
         Permission.KNOWLEDGE_READ,
         Permission.TWIN_READ,
+        Permission.SECURITY_EVENT_READ, Permission.SECURITY_EVENT_RESPOND,
     ],
     UserRole.DEVELOPER: [
         Permission.PROJECT_READ,
@@ -144,6 +149,7 @@ ROLE_PERMISSIONS = {
         Permission.KNOWLEDGE_READ,
         Permission.TWIN_READ,
         Permission.AUDIT_READ,
+        Permission.SECURITY_EVENT_READ,
     ],
     UserRole.VIEWER: [
         Permission.PROJECT_READ,

@@ -10,9 +10,95 @@ services:
       - media_data:/usr/share/nginx/html/media:ro
 
   django:
+    env_file: !reset []
+    ports: !reset []
+    volumes: !override
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     environment:
       DEBUG: "False"
       AUTH_COOKIE_SECURE: "True"
+
+  fastapi:
+    env_file: !reset []
+    ports: !reset []
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+    depends_on: !override
+      django: {condition: service_started}
+      redis: {condition: service_healthy}
+
+  scanner_egress:
+    environment:
+      SCANNER_EGRESS_INTERFACE: ${SCANNER_EGRESS_INTERFACE:-eth0}
+      SCANNER_CONTROL_ENDPOINTS: ${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}
+      SCANNER_EGRESS_PRIVATE_TARGETS: ${SCANNER_EGRESS_PRIVATE_TARGETS:-}
+    depends_on: !override
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      django: {condition: service_started}
+
+  celery_worker:
+    env_file: !reset []
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on: !override
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+
+  scanner_worker:
+    env_file: !reset []
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on: !override
+      scanner_egress: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      django: {condition: service_started}
+
+  celery_beat:
+    env_file: !reset []
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on: !override
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+
+  postgres:
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in production}
+
+  redis:
+    ports: !reset []
+
+  scan_target:
+    profiles: [ci-only]
 
 volumes:
   static_data:

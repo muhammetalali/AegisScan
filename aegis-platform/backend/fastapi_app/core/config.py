@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 1440
+    AUTH_ACCESS_COOKIE: str = "aegis_access"
+    AUTH_REFRESH_COOKIE: str = "aegis_refresh"
     DATABASE_URL: str = getenv(
         "DATABASE_URL", "postgresql://aegis:aegis@localhost:5432/aegisdb"
     )
@@ -36,6 +38,7 @@ class Settings(BaseSettings):
     DJANGO_API_URL: str = getenv("DJANGO_API_URL", "http://localhost:8000/api/v1")
     CELERY_BROKER_URL: str = getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
     CELERY_RESULT_BACKEND: str = getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+    CELERY_VISIBILITY_TIMEOUT_SECONDS: int = int(getenv("CELERY_VISIBILITY_TIMEOUT_SECONDS", "3600"))
     MAX_CONCURRENT_SCANS: int = 5
     DEFAULT_SCAN_TIMEOUT: int = 3600
     ENGINE_TIMEOUT: int = 300

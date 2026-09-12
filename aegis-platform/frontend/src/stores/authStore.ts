@@ -2,12 +2,21 @@ import { create } from 'zustand'
 import { api } from '@/services/api'
 import type { User } from '@/types'
 
+const SESSION_HINT_KEY = 'aegis-session-active'
+const hasSessionHint = () => typeof window !== 'undefined' && window.localStorage.getItem(SESSION_HINT_KEY) === '1'
+const setSessionHint = (active: boolean) => {
+  if (typeof window === 'undefined') return
+  if (active) window.localStorage.setItem(SESSION_HINT_KEY, '1')
+  else window.localStorage.removeItem(SESSION_HINT_KEY)
+}
+
 interface AuthState {
   user: User | null
   accessToken: null
   refreshToken: null
   isAuthenticated: boolean
   loading: boolean
+  initialized: boolean
   error: string | null
   login: (email: string, password: string, rememberMe?: boolean) => Promise<void>
   register: (data: RegisterData) => Promise<void>
@@ -35,12 +44,27 @@ interface RegisterData {
   phone?: string
 }
 
+const readError = (error: any, fallback: string) => {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (detail?.message) return detail.message
+  if (error?.response?.data?.error?.message) return error.response.data.error.message
+  return fallback
+}
+
+const ME_ENDPOINT = '/auth/users/me/'
+const CHANGE_PASSWORD_ENDPOINT = '/auth/users/me/change_password/'
+const TWO_FA_ENABLE_ENDPOINT = '/auth/users/me/2fa/enable/'
+const TWO_FA_VERIFY_ENDPOINT = '/auth/users/me/2fa/verify/'
+const TWO_FA_DISABLE_ENDPOINT = '/auth/users/me/2fa/disable/'
+
 export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   accessToken: null,
   refreshToken: null,
-  isAuthenticated: false,
-  loading: false,
+  isAuthenticated: hasSessionHint(),
+  loading: true,
+  initialized: false,
   error: null,
 
   setLoading: (loading) => set({ loading }),
@@ -49,10 +73,13 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   login: async (email, password) => {
     set({ loading: true, error: null })
     try {
+      await api.get('/auth/csrf/')
       const response = await api.post('/auth/login/', { email, password })
-      set({ user: response.data.user, isAuthenticated: true, loading: false })
+      setSessionHint(true)
+      set({ user: response.data.user, isAuthenticated: true, loading: false, initialized: true, error: null })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Login failed' })
+      const message = readError(error, 'تعذر تسجيل الدخول')
+      set({ loading: false, error: message, initialized: true })
       throw error
     }
   },
@@ -60,11 +87,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   register: async (data) => {
     set({ loading: true, error: null })
     try {
+      await api.get('/auth/csrf/')
       await api.post('/auth/register/', data)
       await get().login(data.email, data.password)
-      set({ loading: false })
+      set({ loading: false, initialized: true })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Registration failed' })
+      set({ loading: false, error: readError(error, 'تعذر إنشاء الحساب'), initialized: true })
       throw error
     }
   },
@@ -73,12 +101,14 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await api.post('/auth/logout/')
     } finally {
-      set({ user: null, isAuthenticated: false, loading: false, error: null })
+      setSessionHint(false)
+      set({ user: null, isAuthenticated: false, loading: false, initialized: true, error: null })
     }
   },
 
   refreshAccessToken: async () => {
     await api.post('/auth/refresh/')
+    setSessionHint(true)
   },
 
   forgotPassword: async (email) => {
@@ -87,7 +117,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await api.post('/auth/password/reset/', { email })
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to send reset email' })
+      set({ loading: false, error: readError(error, 'تعذر إرسال رسالة إعادة التعيين') })
       throw error
     }
   },
@@ -98,7 +128,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await api.post('/auth/password/reset/confirm/', { token, password })
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to reset password' })
+      set({ loading: false, error: readError(error, 'تعذر إعادة تعيين كلمة المرور') })
       throw error
     }
   },
@@ -109,7 +139,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       await api.post('/auth/verify-email/', { token })
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to verify email' })
+      set({ loading: false, error: readError(error, 'تعذر التحقق من البريد الإلكتروني') })
       throw error
     }
   },
@@ -117,10 +147,10 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   updateProfile: async (data) => {
     set({ loading: true, error: null })
     try {
-      const response = await api.patch('/users/me/', data)
+      const response = await api.patch(ME_ENDPOINT, data)
       set({ user: response.data, loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to update profile' })
+      set({ loading: false, error: readError(error, 'تعذر تحديث الملف الشخصي') })
       throw error
     }
   },
@@ -128,21 +158,22 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   changePassword: async (oldPassword, newPassword) => {
     set({ loading: true, error: null })
     try {
-      await api.post('/users/me/change_password/', { old_password: oldPassword, new_password: newPassword })
+      await api.post(CHANGE_PASSWORD_ENDPOINT, { old_password: oldPassword, new_password: newPassword })
       set({ loading: false })
     } catch (error: any) {
-      set({ loading: false, error: error.response?.data?.detail || 'Failed to change password' })
+      set({ loading: false, error: readError(error, 'تعذر تغيير كلمة المرور') })
       throw error
     }
   },
 
-  enable2FA: async () => (await api.post('/users/me/2fa/enable/')).data,
-  verify2FA: async (code) => { await api.post('/users/me/2fa/verify/', { code }) },
-  disable2FA: async () => { await api.post('/users/me/2fa/disable/') },
+  enable2FA: async () => (await api.post(TWO_FA_ENABLE_ENDPOINT)).data,
+  verify2FA: async (code) => { await api.post(TWO_FA_VERIFY_ENDPOINT, { code }) },
+  disable2FA: async () => { await api.post(TWO_FA_DISABLE_ENDPOINT) },
 
   fetchUser: async () => {
-    const response = await api.get('/users/me/')
-    set({ user: response.data, isAuthenticated: true })
+    const response = await api.get(ME_ENDPOINT)
+    setSessionHint(true)
+    set({ user: response.data, isAuthenticated: true, error: null })
   },
 }))
 
@@ -150,21 +181,42 @@ import React from 'react'
 export const useAuth = () => useAuthStore()
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => children as React.ReactElement
 
+let initializationPromise: Promise<void> | null = null
+
 export const initAuth = async () => {
-  const store = useAuthStore.getState()
-  store.setLoading(true)
-  store.setError(null)
-  try {
-    await api.get('/auth/csrf/')
-    await store.fetchUser()
-  } catch {
+  if (initializationPromise) return initializationPromise
+
+  initializationPromise = (async () => {
+    const store = useAuthStore.getState()
+    store.setLoading(true)
+    store.setError(null)
     try {
-      await store.refreshAccessToken()
+      await api.get('/auth/csrf/')
       await store.fetchUser()
-    } catch {
-      useAuthStore.setState({ user: null, isAuthenticated: false })
+    } catch (firstError: any) {
+      if (firstError?.response?.status === 401) {
+        try {
+          await store.refreshAccessToken()
+          await store.fetchUser()
+        } catch (refreshError: any) {
+          if (refreshError?.response?.status === 401) {
+            setSessionHint(false)
+            useAuthStore.setState({ user: null, isAuthenticated: false, error: null })
+          }
+        }
+      } else if (hasSessionHint()) {
+        // Preserve the session across a transient network/reverse-proxy failure.
+        // The next authenticated API request remains authoritative and can clear the hint on a real 401.
+        useAuthStore.setState({ isAuthenticated: true })
+      }
+    } finally {
+      useAuthStore.setState({ loading: false, initialized: true })
     }
+  })()
+
+  try {
+    await initializationPromise
   } finally {
-    useAuthStore.setState({ loading: false })
+    initializationPromise = null
   }
 }

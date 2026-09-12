@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+from urllib.parse import urlsplit
 from typing import Any, Dict, Optional, Tuple, Type
 
 from aegis.core.audit_logger import AuditLogger
@@ -39,8 +41,6 @@ class AePEX:
             twin.config.test_base_url,
         )
 
-    # ─── التسجيل ──────────────────────────────────────────────
-
     def register_module(self, vuln_type: str, module_class: Type[BaseTestModule]) -> None:
         """تسجيل وحدة اختبار لنوع ثغرة محدد."""
         self._modules[vuln_type.lower()] = module_class
@@ -50,15 +50,59 @@ class AePEX:
     def registered(self) -> Dict[str, str]:
         return {k: v.__name__ for k, v in self._modules.items()}
 
-    # ─── بوابة الأهداف ────────────────────────────────────────
+    @staticmethod
+    def _parse_target(value: str) -> tuple[str, str, int | None, str] | None:
+        """Return (scheme, host, port, path) without trusting raw string prefixes."""
+        raw = (value or "").strip()
+        if not raw:
+            return None
+        parsed = urlsplit(raw if "://" in raw else f"//{raw}")
+        host = parsed.hostname
+        if not host:
+            return None
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        return parsed.scheme.lower(), host.rstrip(".").lower(), port, parsed.path or "/"
+
+    @staticmethod
+    def _ip_or_host(value: str) -> str:
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            return value.rstrip(".").lower()
 
     def _target_allowed(self, target: str) -> bool:
-        t = (target or "").strip().lower()
-        if not t:
-            return False
-        return any(t.startswith(p.lower()) for p in self.allowed_target_prefixes)
+        """Allow only the exact configured host/origin and explicit path descendants.
 
-    # ─── التنفيذ ──────────────────────────────────────────────
+        Ambiguous legacy prefixes such as ``10.0.0.`` are intentionally not treated
+        as authorization. Network ranges must be expressed as CIDR by the outer scope gate.
+        """
+        candidate = self._parse_target(target)
+        if candidate is None:
+            return False
+        scheme, host, port, path = candidate
+        host = self._ip_or_host(host)
+        for configured in self.allowed_target_prefixes:
+            allowed = self._parse_target(str(configured))
+            if allowed is None:
+                continue
+            allowed_scheme, allowed_host, allowed_port, allowed_path = allowed
+            allowed_host = self._ip_or_host(allowed_host)
+            if host != allowed_host or port != allowed_port:
+                continue
+            if allowed_scheme and scheme and scheme != allowed_scheme:
+                continue
+            normalized_allowed_path = allowed_path.rstrip("/") or "/"
+            normalized_candidate_path = path or "/"
+            if normalized_allowed_path == "/":
+                return True
+            if normalized_candidate_path == normalized_allowed_path:
+                return True
+            if normalized_candidate_path.startswith(normalized_allowed_path + "/"):
+                return True
+        return False
 
     def execute_test(
         self,
@@ -81,18 +125,13 @@ class AePEX:
                 extra={"scan_id": scan_id, "vuln_type": vuln_type, **extra},
             )
 
-        # بوابة 1: الهدف ضمن قائمة السماح؟
         if not self._target_allowed(target):
             logger.error("هدف خارج قائمة السماح: %s", target)
             _audit("test.rejected", "target_not_allowed")
             return None
-
-        # بوابة 2: التوأم جاهز ومعزول؟
         if not self.twin.is_safe_to_test:
             _audit("test.rejected", "twin_not_ready")
             return None
-
-        # بوابة 3: وحدة مسجلة لهذا النوع؟
         module_class = self._modules.get(vuln_type)
         if module_class is None:
             logger.warning("لا وحدة مسجلة لنوع: %s", vuln_type)
@@ -108,10 +147,7 @@ class AePEX:
             },
         )
         _audit("test.started", "in_progress", module=module.name)
-
         result = module.execute()
-
-        # تأكيد إضافي عبر المحرك المستقل
         if result.success and not self.verifier.verify(module, result):
             result.success = False
             result.verified = False
@@ -124,7 +160,6 @@ class AePEX:
             verified=result.verified,
             risk=result.risk_level.value if isinstance(result.risk_level, Severity) else str(result.risk_level),
         )
-
         logger.info(
             "نتيجة %s على %s: success=%s verified=%s",
             module.name, target, result.success, result.verified,

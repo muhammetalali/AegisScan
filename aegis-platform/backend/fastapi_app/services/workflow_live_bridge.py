@@ -49,8 +49,8 @@ class WorkflowLiveBridge:
         finally:
             try:
                 await pubsub.unsubscribe(CHANNEL)
-                await pubsub.close()
-                await self._client.close()
+                await pubsub.aclose()
+                await self._client.aclose()
             except Exception:
                 pass
 

@@ -1,0 +1,117 @@
+name: Supply Chain Release
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/supply-chain-release.yml'
+      - 'aegis-platform/backend/**'
+      - 'aegis-platform/frontend/**'
+      - 'aegis-platform/scripts/create_slsa_provenance.py'
+      - 'aegis-platform/scripts/verify_image_supply_chain.sh'
+      - 'tests/test_supply_chain_provenance.py'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Supply-chain contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - run: python -m pip install pytest==9.1.1
+      - run: python -m pytest -q tests/test_supply_chain_provenance.py
+      - run: |
+          shellcheck aegis-platform/scripts/verify_image_supply_chain.sh
+          python -m py_compile aegis-platform/scripts/create_slsa_provenance.py
+
+  publish:
+    name: Build, SBOM, attest, sign, verify
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: django
+            dockerfile: aegis-platform/backend/Dockerfile.django
+            context: aegis-platform/backend
+          - component: fastapi
+            dockerfile: aegis-platform/backend/Dockerfile.fastapi
+            context: aegis-platform/backend
+          - component: frontend
+            dockerfile: aegis-platform/frontend/Dockerfile
+            context: aegis-platform/frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
+        with: {cosign-release: 'v2.6.1'}
+      - uses: anchore/sbom-action/download-syft@v0
+        with: {syft-version: 'v1.38.0'}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build immutable image with BuildKit attestations
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/aegisscan-${{ matrix.component }}:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+      - name: Generate release SBOM and provenance predicates
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/aegisscan-${{ matrix.component }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          syft "$IMAGE@$DIGEST" -o cyclonedx-json="${{ matrix.component }}.cdx.json"
+          python aegis-platform/scripts/create_slsa_provenance.py \
+            --image "$IMAGE" --digest "$DIGEST" --dockerfile "${{ matrix.dockerfile }}" \
+            --output "${{ matrix.component }}.provenance.json"
+      - name: Keyless-sign image and attest SBOM/provenance
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+          IMAGE: ghcr.io/${{ github.repository_owner }}/aegisscan-${{ matrix.component }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign attest --yes --type cyclonedx --predicate "${{ matrix.component }}.cdx.json" "$IMAGE@$DIGEST"
+          cosign attest --yes --type slsaprovenance --predicate "${{ matrix.component }}.provenance.json" "$IMAGE@$DIGEST"
+      - name: Verify release identity and attestations independently
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/aegisscan-${{ matrix.component }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          sh aegis-platform/scripts/verify_image_supply_chain.sh "$IMAGE@$DIGEST" \
+            '^https://github.com/${{ github.repository }}/.github/workflows/supply-chain-release.yml@refs/heads/main$' \
+            'https://token.actions.githubusercontent.com'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain-${{ matrix.component }}-${{ github.sha }}
+          path: |
+            ${{ matrix.component }}.cdx.json
+            ${{ matrix.component }}.provenance.json
+          if-no-files-found: error
+          retention-days: 90

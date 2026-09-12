@@ -1,0 +1,448 @@
+name: Raw L2 Worker Reality
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/**'
+      - 'aegis-platform/e2e/**'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.ci.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/docker/scanner-egress/**'
+      - 'tests/test_raw_l2_worker_reality.py'
+      - '.github/workflows/raw-l2-worker-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/**'
+      - 'aegis-platform/e2e/**'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.ci.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/docker/scanner-egress/**'
+      - 'tests/test_raw_l2_worker_reality.py'
+      - '.github/workflows/raw-l2-worker-reality.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: raw-l2-worker-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  raw-l2-worker-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      POSTGRES_DB: aegisdb
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis
+      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
+      DEBUG: 'False'
+      SECURE_SSL_REDIRECT: 'False'
+      ALLOWED_HOSTS: localhost,127.0.0.1,nginx
+      CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
+      CSRF_TRUSTED_ORIGINS: http://localhost,http://127.0.0.1,http://nginx
+      AUTH_COOKIE_SECURE: 'False'
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      SCANNER_EGRESS_PRIVATE_TARGETS: aegis-scan-target
+      SEMGREP_CONFIG: /app/e2e/semgrep-ci.yml
+      FRONTEND_URL: http://localhost
+      LOG_LEVEL: INFO
+      AEGIS_BASE_URL: http://nginx
+      AEGIS_DJANGO_URL: http://nginx/api/v1
+      AEGIS_FASTAPI_URL: http://nginx
+      AEGIS_API_URL: http://nginx/api/v1
+      AEGIS_E2E_TARGET: aegis-scan-target
+      AEGIS_E2E_TIMEOUT: '600'
+      AEGIS_E2E_EMAIL: raw-l2-operator@aegisscan.local
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Validate static Raw/L2 isolation contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir pytest PyYAML
+          pytest -q tests/test_raw_l2_worker_reality.py
+
+      - name: Prepare CI environment
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backend/.env <<EOF
+          DEBUG=${DEBUG}
+          SECRET_KEY=${SECRET_KEY}
+          JWT_SECRET_KEY=${JWT_SECRET_KEY}
+          SECURE_SSL_REDIRECT=${SECURE_SSL_REDIRECT}
+          ALLOWED_HOSTS=${ALLOWED_HOSTS}
+          CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+          CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+          DATABASE_URL=${DATABASE_URL}
+          REDIS_URL=${REDIS_URL}
+          CELERY_BROKER_URL=${CELERY_BROKER_URL}
+          CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+          AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
+          FRONTEND_URL=${FRONTEND_URL}
+          AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          SEMGREP_CONFIG=${SEMGREP_CONFIG}
+          LOG_LEVEL=${LOG_LEVEL}
+          POSTGRES_DB=${POSTGRES_DB}
+          POSTGRES_USER=${POSTGRES_USER}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          EOF
+
+      - name: Validate development and production compose boundaries
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml config > /tmp/aegis-ci-compose.yml
+          AUTHORIZED_SCAN_TARGETS=example.com POSTGRES_PASSWORD=production-proof-only \
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml config > /tmp/aegis-prod-compose.yml
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          def verify(path: str) -> None:
+              data = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
+              services = data['services']
+              scanner = services['scanner_worker']
+              general = services['celery_worker']
+              egress = services['scanner_egress']
+              assert set(scanner.get('cap_add') or []) == {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
+              assert scanner.get('cap_drop') == ['ALL']
+              assert 'NET_ADMIN' not in (scanner.get('cap_add') or [])
+              assert 'no-new-privileges:true' not in (scanner.get('security_opt') or [])
+              assert scanner.get('network_mode') == 'service:scanner_egress'
+              assert str(scanner.get('user')) == '0:0'
+              assert general.get('cap_drop') == ['ALL']
+              assert not (general.get('cap_add') or [])
+              assert 'no-new-privileges:true' in (general.get('security_opt') or [])
+              assert egress.get('cap_drop') == ['ALL']
+              assert egress.get('cap_add') == ['NET_ADMIN']
+              assert 'no-new-privileges:true' in (egress.get('security_opt') or [])
+              for name in ('scanner_worker', 'celery_worker', 'scanner_egress'):
+                  rendered = repr(services[name].get('volumes') or [])
+                  assert 'docker.sock' not in rendered
+          verify('/tmp/aegis-ci-compose.yml')
+          verify('/tmp/aegis-prod-compose.yml')
+          print('RAW_L2_COMPOSE_BOUNDARY=PASS')
+          PY
+
+      - name: Build real isolated scanner stack
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --pull; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              echo 'Docker Compose build failed after bounded retry.' >&2
+              exit 1
+            fi
+            sleep 15
+          done
+
+      - name: Start real isolated scanner stack
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build
+
+      - name: Wait for platform readiness
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then
+              exit 0
+            fi
+            sleep 3
+          done
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi celery_worker scanner_worker scanner_egress scan_target egress_forbidden_target nginx
+          exit 1
+
+      - name: Resolve authorized and forbidden Raw/L2 targets
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_IP="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-scan-target)"
+          FORBIDDEN_IP="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-egress-forbidden-target)"
+          test -n "$TARGET_IP"
+          test -n "$FORBIDDEN_IP"
+          test "$TARGET_IP" != "$FORBIDDEN_IP"
+          echo "AEGIS_MASSCAN_TARGET=$TARGET_IP" >> "$GITHUB_ENV"
+          echo "AEGIS_FORBIDDEN_TARGET_IP=$FORBIDDEN_IP" >> "$GITHUB_ENV"
+          echo "AUTHORIZED_SCAN_TARGETS=aegis-scan-target,$TARGET_IP" >> "$GITHUB_ENV"
+          AUTHORIZED_SCAN_TARGETS="aegis-scan-target,$TARGET_IP" \
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --force-recreate fastapi celery_worker scanner_worker celery_beat nginx
+
+      - name: Wait after scanner worker refresh
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps fastapi celery_worker scanner_worker scanner_egress celery_beat nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=200 fastapi celery_worker scanner_worker scanner_egress celery_beat nginx
+          exit 1
+
+      - name: Verify exact runtime identities capabilities and no-new-privileges
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker python - <<'PY'
+          from pathlib import Path
+
+          NET_RAW = 1 << 13
+          FIELDS = ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')
+
+          def status(pid: int) -> dict[str, str]:
+              out = {}
+              for line in Path(f'/proc/{pid}/status').read_text(encoding='utf-8').splitlines():
+                  if ':' in line:
+                      key, value = line.split(':', 1)
+                      out[key] = value.strip()
+              return out
+
+          workers = []
+          for proc in Path('/proc').iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  cmd = (proc / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='ignore')
+              except OSError:
+                  continue
+              if 'celery' in cmd and 'worker' in cmd:
+                  workers.append(int(proc.name))
+          if not workers:
+              raise SystemExit('scanner_worker has no live Celery process')
+          for pid in sorted(set(workers)):
+              s = status(pid)
+              uid = int(s['Uid'].split()[0]); gid = int(s['Gid'].split()[0])
+              assert uid == 10001, (pid, uid)
+              assert gid == 10001, (pid, gid)
+              assert s.get('NoNewPrivs') == '1', (pid, s.get('NoNewPrivs'))
+              for field in FIELDS:
+                  value = int(s[field], 16)
+                  assert value == NET_RAW, (pid, field, hex(value))
+              print(f'SCANNER_RUNTIME pid={pid} uid={uid} gid={gid} caps=NET_RAW_ONLY nnp=1')
+          PY
+
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T celery_worker python - <<'PY'
+          from pathlib import Path
+
+          FIELDS = ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')
+
+          def status(pid: int) -> dict[str, str]:
+              out = {}
+              for line in Path(f'/proc/{pid}/status').read_text(encoding='utf-8').splitlines():
+                  if ':' in line:
+                      key, value = line.split(':', 1)
+                      out[key] = value.strip()
+              return out
+
+          workers = []
+          for proc in Path('/proc').iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  cmd = (proc / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='ignore')
+              except OSError:
+                  continue
+              if 'celery' in cmd and 'worker' in cmd:
+                  workers.append(int(proc.name))
+          if not workers:
+              raise SystemExit('celery_worker has no live Celery process')
+          for pid in sorted(set(workers)):
+              s = status(pid)
+              uid = int(s['Uid'].split()[0]); gid = int(s['Gid'].split()[0])
+              assert uid == 10001, (pid, uid)
+              assert gid == 10001, (pid, gid)
+              assert s.get('NoNewPrivs') == '1', (pid, s.get('NoNewPrivs'))
+              for field in FIELDS:
+                  value = int(s[field], 16)
+                  assert value == 0, (pid, field, hex(value))
+              print(f'GENERAL_RUNTIME pid={pid} uid={uid} gid={gid} caps=NONE nnp=1')
+          PY
+
+      - name: Prove scanner namespace cannot gain NET_ADMIN
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker capsh --has-b=cap_net_raw
+          if docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker capsh --has-b=cap_net_admin; then
+            echo 'scanner_worker unexpectedly has CAP_NET_ADMIN in its container bounding set' >&2
+            exit 1
+          fi
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T --user 10001:10001 scanner_worker python - <<'PY'
+          import errno
+          import fcntl
+          import socket
+          import struct
+
+          SIOCGIFFLAGS = 0x8913
+          SIOCSIFFLAGS = 0x8914
+          sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          request = bytearray(40)
+          struct.pack_into('16s', request, 0, b'eth0')
+          fcntl.ioctl(sock.fileno(), SIOCGIFFLAGS, request, True)
+          try:
+              fcntl.ioctl(sock.fileno(), SIOCSIFFLAGS, request, True)
+          except OSError as exc:
+              if exc.errno not in {errno.EPERM, errno.EACCES}:
+                  raise
+              print(f'NET_ADMIN_MUTATION_BLOCKED errno={exc.errno}')
+          else:
+              raise SystemExit('unprivileged scanner identity unexpectedly changed interface flags')
+          PY
+
+      - name: Prove kernel egress policy covers raw packet scans
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress | tee /tmp/raw-l2-egress-rules.txt
+          grep -q 'hook egress' /tmp/raw-l2-egress-rules.txt
+
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker \
+            masscan "$AEGIS_MASSCAN_TARGET" -p 80 --rate 1000 --wait 1 --output-format json --output-filename - > /tmp/raw-l2-allowed.json
+          python - <<'PY'
+          import json, os
+          data = json.load(open('/tmp/raw-l2-allowed.json', encoding='utf-8'))
+          target = os.environ['AEGIS_MASSCAN_TARGET']
+          assert any(item.get('ip') == target and any(port.get('port') == 80 for port in item.get('ports', [])) for item in data), data
+          print('AUTHORIZED_RAW_PACKET_SCAN=PASS')
+          PY
+
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress > /tmp/raw-l2-egress-before.txt
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker \
+            masscan "$AEGIS_FORBIDDEN_TARGET_IP" -p 80 --rate 1000 --wait 1 --output-format json --output-filename - > /tmp/raw-l2-forbidden.json
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress > /tmp/raw-l2-egress-after.txt
+          python e2e/raw_l2_egress_proof.py /tmp/raw-l2-forbidden.json \
+            /tmp/raw-l2-egress-before.txt /tmp/raw-l2-egress-after.txt "$AEGIS_FORBIDDEN_TARGET_IP"
+
+      - name: Provision Raw/L2 E2E operator
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          E2E_PASSWORD="$(python - <<'PY'
+          import secrets
+          print('Aegis-Raw-L2-' + secrets.token_urlsafe(24))
+          PY
+          )"
+          printf 'AEGIS_E2E_PASSWORD=%s\n' "$E2E_PASSWORD" >> "$GITHUB_ENV"
+          echo "::add-mask::$E2E_PASSWORD"
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
+            -e E2E_EMAIL="$AEGIS_E2E_EMAIL" -e E2E_PASSWORD="$E2E_PASSWORD" django python manage.py shell <<'PY'
+          import os
+          from django.contrib.auth import get_user_model
+          from django_project.users.models import UserRole
+          User = get_user_model()
+          email = os.environ['E2E_EMAIL']; password = os.environ['E2E_PASSWORD']
+          user, _ = User.objects.get_or_create(email=email, defaults={
+              'first_name': 'Raw', 'last_name': 'L2', 'role': UserRole.SECURITY_MANAGER,
+              'is_active': True, 'is_verified': True,
+          })
+          user.role = UserRole.SECURITY_MANAGER
+          user.is_active = True
+          user.is_verified = True
+          user.set_password(password)
+          user.save()
+          assert user.has_permission('project.create') and user.has_permission('scan.create')
+          PY
+
+      - name: Run real authorized scanner engine E2E
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm --no-deps \
+            -v "$PWD/e2e:/e2e:ro" \
+            -e AEGIS_BASE_URL=http://nginx \
+            -e AEGIS_DJANGO_URL=http://nginx/api/v1 \
+            -e AEGIS_FASTAPI_URL=http://nginx \
+            -e AEGIS_API_URL=http://nginx/api/v1 \
+            -e AEGIS_E2E_TARGET=aegis-scan-target \
+            -e AEGIS_MASSCAN_TARGET="$AEGIS_MASSCAN_TARGET" \
+            -e AEGIS_E2E_TIMEOUT=600 \
+            -e AEGIS_VERIFY_TLS=false \
+            -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" \
+            -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" \
+            fastapi python /e2e/scanner_engines_e2e.py | tee /tmp/raw-l2-engine-e2e.txt
+          grep -q 'SCANNER_ENGINES_REAL_E2E=PASS' /tmp/raw-l2-engine-e2e.txt
+          grep -q "'nmap':" /tmp/raw-l2-engine-e2e.txt
+          grep -q "'masscan':" /tmp/raw-l2-engine-e2e.txt
+
+      - name: Verify scanner queue exclusivity
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color scanner_worker > /tmp/raw-l2-scanner-worker.log
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color celery_worker > /tmp/raw-l2-general-worker.log
+          for task in \
+            fastapi_app.tasks.security_scan.run_nmap_scan \
+            fastapi_app.tasks.advanced_scans.run_masscan_scan; do
+            grep -F "Task ${task}[" /tmp/raw-l2-scanner-worker.log | grep -q 'received'
+            if grep -F "Task ${task}[" /tmp/raw-l2-general-worker.log | grep -q 'received'; then
+              echo "default worker consumed Raw/L2 task: $task" >&2
+              exit 1
+            fi
+          done
+          echo 'RAW_L2_QUEUE_EXCLUSIVITY=PASS'
+
+      - name: Capture Raw/L2 failure diagnostics
+        if: failure()
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set +e
+          mkdir -p ci-artifacts
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps -a > ci-artifacts/compose-ps.txt 2>&1
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color --timestamps django fastapi celery_worker scanner_worker scanner_egress celery_beat scan_target egress_forbidden_target nginx > ci-artifacts/compose.log 2>&1
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_egress nft list table netdev aegis_egress > ci-artifacts/scanner-egress-rules.txt 2>&1 || true
+          cp /tmp/raw-l2-allowed.json ci-artifacts/allowed-masscan.json 2>/dev/null || true
+          cp /tmp/raw-l2-forbidden.json ci-artifacts/forbidden-masscan.json 2>/dev/null || true
+          cp /tmp/raw-l2-egress-before.txt /tmp/raw-l2-egress-after.txt ci-artifacts/ 2>/dev/null || true
+          tail -n 300 ci-artifacts/compose.log || true
+          exit 0
+
+      - name: Upload Raw/L2 failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-l2-worker-${{ github.run_id }}-${{ github.run_attempt }}
+          path: aegis-platform/ci-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop real isolated scanner stack
+        if: always()
+        working-directory: aegis-platform
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v

@@ -1,0 +1,374 @@
+name: Native Capability Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-capability-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scanner-native-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Reject arbitrary shell execution in native runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number --fixed-strings 'shell=True' aegis-platform/backend/fastapi_app/services/native_tool_runtime.py aegis-platform/backend/fastapi_app/tasks/native_capabilities.py
+          ! grep -R --line-number 'additional_args\|arbitrary_flags' aegis-platform/backend/fastapi_app/services/native_tool_runtime.py
+      - name: Build scanner image with native capabilities
+        run: docker build -f aegis-platform/backend/Dockerfile.django -t aegisscan-native-capability:ci aegis-platform/backend
+      - name: Prove packaged binaries and native argv runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh aegisscan-native-capability:ci -c '
+            set -eu
+            command -v strings
+            command -v objdump
+            command -v readelf
+            command -v checksec
+            command -v binwalk
+            command -v xxd
+            command -v gdb
+            command -v exiftool
+            command -v dnsenum
+            command -v fierce
+            command -v nbtscan
+            command -v gobuster
+            command -v dirb
+            command -v ffuf
+            command -v wafw00f
+            command -v curl
+            command -v chromium
+            command -v firefox-esr
+            command -v aegis-browser-security
+            command -v httpx
+            command -v rustscan
+            rustscan --version | grep -F "2.4.1"
+            command -v amass
+            amass -version 2>&1 | grep -F "v5.1.1"
+            command -v feroxbuster
+            feroxbuster --version | grep -F "2.13.1"
+            command -v nikto
+            nikto -Version 2>&1 | grep -F "2.6.0"
+            command -v subfinder
+            command -v katana
+            command -v trivy
+            trivy --version | grep -F "0.74.0"
+            test -s /opt/trivy-cache/policy/metadata.json
+            command -v trufflehog
+            command -v checkov
+            test -s /opt/aegis-wordlists/web-common.txt
+          '
+          docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+          result = run_native_tool("binary.strings", "/bin/sh", {})
+          assert result.exit_code == 0, result.stderr
+          assert result.stdout.strip()
+          xxd = run_native_tool("binary.xxd", "/bin/sh", {})
+          assert xxd.exit_code == 0, xxd.stderr
+          assert xxd.stdout.strip()
+          print("native-runtime-ok")
+          '
+      - name: Prove real web discovery, headers, and browser DOM security capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh aegisscan-native-capability:ci -c '
+            set -eu
+            mkdir -p /tmp/aegis-katana-fixture
+            printf "%s\n" "<html><head><title>Aegis Fixture</title><meta http-equiv=Content-Security-Policy content=\"default-src self\"><script src=\"https://cdn.example.invalid/app.js\"></script></head><body><a href=/admin>admin</a><a href=/api/v1/health>health</a><form action=\"http://127.0.0.1:18080/login\" method=post><input type=password name=password value=secret-browser-password-value></form><img src=\"http://127.0.0.1:18080/insecure.png\"><script>console.log(1)</script></body></html>" > /tmp/aegis-katana-fixture/index.html
+            printf "%s\n" "ok" > /tmp/aegis-katana-fixture/admin
+            mkdir -p /tmp/aegis-katana-fixture/api/v1
+            printf "%s\n" "{\"status\":\"ok\"}" > /tmp/aegis-katana-fixture/api/v1/health
+            python -m http.server 18080 --bind 127.0.0.1 --directory /tmp/aegis-katana-fixture >/tmp/aegis-katana-http.log 2>&1 &
+            server_pid=$!
+            trap "kill $server_pid >/dev/null 2>&1 || true" EXIT
+            ready=0
+            for attempt in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:18080/ >/dev/null; then ready=1; break; fi
+              sleep 0.25
+            done
+            test "$ready" -eq 1
+            katana -u http://127.0.0.1:18080 -d 1 -silent -jsonl > /tmp/aegis-katana.jsonl
+            test -s /tmp/aegis-katana.jsonl
+            grep -q "127.0.0.1:18080" /tmp/aegis-katana.jsonl
+            grep -q "/admin" /tmp/aegis-katana.jsonl
+            AUTHORIZED_SCAN_TARGETS=127.0.0.1/32 python - <<"PY"
+          import json
+          import threading
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          import subprocess
+
+          from fastapi_app.services.native_output_normalizer import normalize_native_output
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          def browser_run(payload, family):
+              matches = [item for item in payload.get("browser_runs", []) if item.get("browser_family") == family]
+              assert len(matches) == 1, payload
+              return matches[0]
+
+          def browser_observation(payload, family, kind="browser-dom-security-snapshot"):
+              matches = [
+                  item for item in payload.get("observations", [])
+                  if item.get("browser_family") == family and item.get("kind") == kind
+              ]
+              assert len(matches) == 1, payload
+              return matches[0]
+
+          result = run_native_tool("web.security-headers", "http://127.0.0.1:18080", {})
+          assert result.exit_code == 0, result.stderr
+          assert "HTTP/" in result.stdout, result.stdout
+          assert "Server:" in result.stdout, result.stdout
+          normalized = normalize_native_output("web.security-headers", result.stdout)
+          assert normalized["count"] >= 1, normalized
+          assert normalized["observations"][0]["status"] == 200, normalized
+
+          chromium = run_native_tool(
+              "browser.dom-snapshot",
+              "http://127.0.0.1:18080",
+              {"browser": "chromium", "virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
+          )
+          assert chromium.exit_code == 0, chromium.stderr
+          chromium_payload = json.loads(chromium.stdout)
+          assert chromium_payload["schema"] == "aegis.browser-security.v1", chromium_payload
+          assert chromium_payload["browser_engines"] == ["chromium"], chromium_payload
+          chromium_run = browser_run(chromium_payload, "chromium")
+          assert chromium_run["dom_sha256"], chromium_run
+          assert chromium_run["runtime"]["capture_method"] == "chromium-dump-dom", chromium_run
+          assert chromium_run["runtime"]["virtual_time_budget_ms"] == 2000, chromium_run
+          assert chromium_run["runtime"]["max_dom_bytes"] == 131072, chromium_run
+          chromium_observation = browser_observation(chromium_payload, "chromium")
+          assert chromium_observation["title"] == "Aegis Fixture", chromium_observation
+          assert chromium_observation["password_field_count"] == 1, chromium_observation
+          assert chromium_observation["meta_csp_present"] is True, chromium_observation
+          assert "cdn.example.invalid" in chromium_observation["third_party_resource_hosts"], chromium_observation
+          assert "secret-browser-password-value" not in chromium.stdout
+          assert "secret-browser-password-value" not in chromium.stderr
+          normalized_browser = normalize_native_output("browser.dom-snapshot", chromium.stdout)
+          assert normalized_browser["count"] == 1, normalized_browser
+          assert normalized_browser["observations"][0]["password_field_count"] == 1, normalized_browser
+
+          firefox = run_native_tool(
+              "browser.dom-snapshot",
+              "http://127.0.0.1:18080",
+              {"browser": "firefox", "virtual_time_budget_ms": 2000, "max_dom_bytes": 131072},
+          )
+          assert firefox.exit_code == 0, firefox.stderr
+          firefox_payload = json.loads(firefox.stdout)
+          assert firefox_payload["schema"] == "aegis.browser-security.v1", firefox_payload
+          assert firefox_payload["browser_engines"] == ["firefox"], firefox_payload
+          firefox_run = browser_run(firefox_payload, "firefox")
+          assert firefox_run["dom_sha256"], firefox_run
+          assert firefox_run["runtime"]["capture_method"] == "firefox-headless-render-plus-dom-fetch", firefox_run
+          assert firefox_run["runtime"]["virtual_time_budget_ms"] == 2000, firefox_run
+          firefox_snapshot = browser_observation(firefox_payload, "firefox")
+          assert firefox_snapshot["title"] == "Aegis Fixture", firefox_snapshot
+          firefox_render = browser_observation(firefox_payload, "firefox", "browser-render-verification")
+          assert firefox_render["rendered"] is True, firefox_render
+          assert firefox_render["screenshot_sha256"], firefox_render
+          assert firefox_render["screenshot_bytes"] > 0, firefox_render
+          assert "secret-browser-password-value" not in firefox.stdout
+          assert "secret-browser-password-value" not in firefox.stderr
+
+          secret = "native-vault-fixture-token-789"
+          seen = []
+          class Handler(BaseHTTPRequestHandler):
+              def do_HEAD(self):
+                  seen.append(self.headers.get("Authorization", ""))
+                  if seen[-1] == f"Bearer {secret}":
+                      self.send_response(200)
+                      self.send_header("X-Aegis-Auth", "accepted")
+                  else:
+                      self.send_response(401)
+                      self.send_header("X-Aegis-Auth", "missing")
+                  self.end_headers()
+              def log_message(self, format, *args):
+                  return
+
+          server = ThreadingHTTPServer(("127.0.0.1", 18081), Handler)
+          thread = threading.Thread(target=server.serve_forever, daemon=True)
+          thread.start()
+          try:
+              authenticated = run_native_tool(
+                  "web.security-headers",
+                  "http://127.0.0.1:18081",
+                  {},
+                  credential_materials=({
+                      "credential_ref": "ci-fixture",
+                      "kind": "token",
+                      "version": 1,
+                      "secret": secret,
+                  },),
+              )
+          finally:
+              server.shutdown()
+              thread.join(timeout=3)
+              server.server_close()
+          assert authenticated.exit_code == 0, authenticated.stderr
+          assert seen == [f"Bearer {secret}"]
+          assert "X-Aegis-Auth: accepted" in authenticated.stdout, authenticated.stdout
+          assert secret not in authenticated.stdout
+          assert secret not in authenticated.stderr
+          print("security-headers-real-curl-ok")
+          print("credential-bound-native-runtime-ok")
+          print("browser-dom-security-real-chromium-ok")
+          print("browser-dom-security-real-firefox-ok")
+          PY
+            echo web-discovery-headers-and-browser-ok
+          '
+      - name: Prove real parity capability execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            -e AUTHORIZED_SCAN_TARGETS=127.0.0.1/32,example.com \
+            -e AEGIS_WORDLIST_ROOT=/opt/aegis-wordlists \
+            --entrypoint sh aegisscan-native-capability:ci <<'SH'
+          set -eu
+          mkdir -p /tmp/aegis-parity-web /tmp/aegis-parity-iac
+          printf '%s\n' '<html><body>Aegis parity fixture</body></html>' > /tmp/aegis-parity-web/index.html
+          printf '%s\n' 'admin-ok' > /tmp/aegis-parity-web/admin
+          printf '%s\n' 'FROM alpine:3.20' 'USER root' > /tmp/aegis-parity-iac/Dockerfile
+          python -m http.server 18082 --bind 127.0.0.1 --directory /tmp/aegis-parity-web >/tmp/aegis-parity-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18082/ >/dev/null; then ready=1; break; fi
+            sleep 0.25
+          done
+          test "$ready" -eq 1
+
+          python - <<'PY'
+          import subprocess
+
+          from fastapi_app.services.native_output_normalizer import normalize_native_output
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          rustscan = run_native_tool('network.rustscan', '127.0.0.1', {'ports': '18082'})
+          assert rustscan.exit_code == 0, rustscan.stderr
+          rustscan_normalized = normalize_native_output('network.rustscan', rustscan.stdout)
+          assert any(
+              item.get('port') == 18082
+              for item in rustscan_normalized['observations']
+          ), rustscan_normalized
+          print('rustscan-real-local-target-ok')
+
+          ferox = run_native_tool(
+              'web.feroxbuster',
+              'http://127.0.0.1:18082',
+              {
+                  'wordlist': '/opt/aegis-wordlists/web-common.txt',
+                  'threads': 2,
+                  'depth': 1,
+              },
+          )
+          assert ferox.exit_code == 0, ferox.stderr
+          ferox_normalized = normalize_native_output('web.feroxbuster', ferox.stdout)
+          assert any(
+              item.get('kind') == 'web-endpoint' and item.get('url', '').endswith('/admin')
+              for item in ferox_normalized['observations']
+          ), ferox_normalized
+          print('feroxbuster-real-local-target-ok')
+
+          nikto = run_native_tool('web.nikto', 'http://127.0.0.1:18082', {})
+          assert nikto.exit_code == 0, nikto.stderr
+          nikto_normalized = normalize_native_output('web.nikto', nikto.stdout)
+          assert nikto_normalized['count'] >= 1, nikto.stdout[-4000:]
+          print('nikto-real-local-target-ok')
+
+          trivy = run_native_tool('code.trivy-config', '/tmp/aegis-parity-iac', {})
+          assert trivy.exit_code == 0, trivy.stderr
+          trivy_normalized = normalize_native_output('code.trivy-config', trivy.stdout)
+          assert any(
+              item.get('kind') == 'iac-security-finding'
+              for item in trivy_normalized['observations']
+          ), trivy_normalized
+          print('trivy-config-real-local-fixture-ok')
+
+          try:
+              amass = run_native_tool('recon.amass', 'example.com', {'timeout_minutes': 1})
+          except subprocess.TimeoutExpired as exc:
+              assert exc.timeout == 90, exc
+              assert exc.cmd and str(exc.cmd[0]).endswith('/amass'), exc
+              print('amass-real-passive-bounded-timeout-ok')
+          else:
+              assert amass.exit_code == 0, amass.stderr
+              amass_normalized = normalize_native_output('recon.amass', amass.stdout)
+              assert amass_normalized['schema'] == 'aegis.native-observations.v1'
+              print('amass-real-passive-enumeration-ok')
+          PY
+          SH
+      - name: Prove real pause resume cancel process control
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --entrypoint python aegisscan-native-capability:ci - <<'PY'
+          from fastapi_app.services.native_tool_runtime import (
+              NATIVE_TOOL_SPECS, NativeExecutionCancelled, NativeToolSpec, run_native_tool,
+          )
+          NATIVE_TOOL_SPECS['ci.sleep'] = NativeToolSpec(
+              'ci.sleep', 'sleep', 'ci', 'CI process control probe', 'file', ('file',),
+              'passive', 'image', timeout=10,
+          )
+          states = iter(['paused', 'paused', 'running', 'running', 'running'])
+          result = run_native_tool('ci.sleep', '1', {}, state_getter=lambda: next(states, 'running'), poll_interval=0.2)
+          assert result.exit_code == 0
+          calls = {'n': 0}
+          def cancel_state():
+              calls['n'] += 1
+              return 'cancelled' if calls['n'] >= 2 else 'running'
+          try:
+              run_native_tool('ci.sleep', '10', {}, state_getter=cancel_state, poll_interval=0.2)
+          except NativeExecutionCancelled:
+              print('native-process-control-ok')
+          else:
+              raise AssertionError('cancel did not terminate native process')
+          PY
+      - name: Prove packaging, planning and normalization contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e DEBUG=True \
+            -e SECRET_KEY=ci-only-native-capability-secret-key-0123456789abcdef \
+            --entrypoint python aegisscan-native-capability:ci -m pytest -q \
+            --confcutdir=fastapi_app/services \
+            fastapi_app/services/test_native_output_normalizer.py \
+            fastapi_app/services/test_native_parity_contract.py \
+            fastapi_app/services/test_native_parity_findings.py \
+            fastapi_app/services/test_browser_security_probe.py
+          docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
+          from fastapi_app.services.capability_planner import planning_summary
+          from fastapi_app.services.native_packaging import PACKAGED_NATIVE_CAPABILITIES
+          from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
+          assert PACKAGED_NATIVE_CAPABILITIES == set(NATIVE_TOOL_SPECS), sorted(set(NATIVE_TOOL_SPECS) - PACKAGED_NATIVE_CAPABILITIES)
+          assert "network.rustscan" in PACKAGED_NATIVE_CAPABILITIES
+          assert "recon.amass" in PACKAGED_NATIVE_CAPABILITIES
+          assert "web.feroxbuster" in PACKAGED_NATIVE_CAPABILITIES
+          assert "web.nikto" in PACKAGED_NATIVE_CAPABILITIES
+          assert "code.trivy-config" in PACKAGED_NATIVE_CAPABILITIES
+          assert "code.terrascan" not in NATIVE_TOOL_SPECS
+          assert "web.katana" in PACKAGED_NATIVE_CAPABILITIES
+          assert "web.security-headers" in PACKAGED_NATIVE_CAPABILITIES
+          assert "browser.dom-snapshot" in PACKAGED_NATIVE_CAPABILITIES
+          web = planning_summary("website", "standard")
+          assert web["ready"] >= 8
+          assert any(item["capability_id"] == "browser.dom-snapshot" and item["execution_ready"] for item in web["plan"])
+          code = planning_summary("repository", "quick")
+          assert code["ready"] >= 2
+          file_plan = planning_summary("file", "quick")
+          assert file_plan["ready"] >= 8
+          print(sorted(PACKAGED_NATIVE_CAPABILITIES))
+          '

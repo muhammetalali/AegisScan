@@ -1,2 +1,0 @@
-import{j as e}from"./ui-s79f_TND.js";import{c as d}from"./index-CasJt1CA.js";const n=({className:s,...a})=>e.jsx("div",{className:d("animate-pulse rounded-md bg-muted",s),...a}),o=()=>e.jsxs("div",{className:"rounded-xl border bg-card p-4 space-y-3",children:[e.jsx("div",{className:"h-4 w-1/3 bg-muted rounded animate-pulse"}),e.jsx("div",{className:"h-8 w-1/2 bg-muted rounded animate-pulse"}),e.jsx("div",{className:"h-3 w-full bg-muted rounded animate-pulse"})]});export{o as C,n as S};
-//# sourceMappingURL=skeleton-BKPuEjI8.js.map

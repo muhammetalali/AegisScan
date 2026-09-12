@@ -3,14 +3,18 @@ from django.middleware.csrf import get_token
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from django.utils.decorators import method_decorator
+from django.utils import timezone
 from django_ratelimit.decorators import ratelimit
 from rest_framework import status
+from rest_framework.exceptions import APIException, Throttled
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from django_project.audit.services import client_ip_from_request
+from .auth_audit import record_login_event
 from .serializers import UserSerializer, UserCreateSerializer
 
 
@@ -40,12 +44,29 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
 
     @method_decorator(csrf_protect)
-    @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=True))
+    @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=False))
     def post(self, request):
+        email = str(request.data.get('email') or '')
+        if getattr(request, 'limited', False):
+            record_login_event(request, email=email, success=False, failure_reason='rate_limited')
+            raise Throttled(detail='Too many login attempts.')
         serializer = TokenObtainPairSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except APIException as exc:
+            record_login_event(
+                request,
+                email=email,
+                success=False,
+                failure_reason=str(getattr(exc, 'default_code', 'authentication_failed')),
+            )
+            raise
         data = serializer.validated_data
         user = serializer.user
+        user.last_login_ip = client_ip_from_request(request)
+        user.last_activity = timezone.now()
+        user.save(update_fields=['last_login_ip', 'last_activity'])
+        record_login_event(request, email=email, success=True, user=user)
         response = Response({
             'user': UserSerializer(user, context={'request': request}).data,
             'authenticated': True,
