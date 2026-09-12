@@ -230,6 +230,7 @@ def project_browser_surface_graph(*, scan: Any, normalized: dict[str, Any], evid
                     'method': method,
                     'status': int(item.get('status') or 0),
                     'resource_type': str(item.get('resource_type') or '')[:80],
+                    'document_url': str(item.get('document_url') or '')[:2048],
                     'mime_type': str(item.get('mime_type') or '')[:200],
                     'response_headers': item.get('response_headers') if isinstance(item.get('response_headers'), dict) else {},
                 },
@@ -282,6 +283,18 @@ def project_browser_surface_graph(*, scan: Any, normalized: dict[str, Any], evid
                     'provenance': provenance,
                 },
             ])
+            document_url = str(item.get('document_url') or '')[:2048]
+            if document_url:
+                document_ref = _graph_ref('page', document_url)
+                if document_ref in page_refs:
+                    edges.append({
+                        'source_ref': document_ref,
+                        'target_ref': flow_ref,
+                        'relation': 'initiates_runtime_flow',
+                        'properties': {},
+                        'evidence_refs': evidence_refs,
+                        'provenance': provenance,
+                    })
             continue
 
         if kind == 'browser-graphql-operation':
@@ -302,6 +315,7 @@ def project_browser_surface_graph(*, scan: Any, normalized: dict[str, Any], evid
                 'properties': {
                     'endpoint': endpoint,
                     'method': method,
+                    'document_url': str(item.get('document_url') or '')[:2048],
                     'operation_type': operation_type,
                     'operation_name': operation_name,
                     'variable_keys': list(item.get('variable_keys') or [])[:100],
@@ -383,17 +397,6 @@ def project_browser_surface_graph(*, scan: Any, normalized: dict[str, Any], evid
                     'provenance': provenance,
                 })
             continue
-
-    for page_ref in page_refs[:500]:
-        for endpoint_ref in list(endpoint_ref_by_key.values())[:1000]:
-            edges.append({
-                'source_ref': page_ref,
-                'target_ref': endpoint_ref,
-                'relation': 'runtime_calls',
-                'properties': {},
-                'evidence_refs': evidence_refs,
-                'provenance': provenance,
-            })
 
     # Deduplicate by the graph's natural keys before hitting persistence.
     deduped_nodes: dict[str, dict[str, Any]] = {}
