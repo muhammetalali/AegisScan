@@ -9,6 +9,7 @@ from django.db import transaction
 from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.system.credential_vault import CredentialVaultDenied
+from fastapi_app.celery_app import BROWSER_QUEUE, SCANNER_QUEUE
 from fastapi_app.services.authorization_guard import (
     authorization_snapshot,
     require_bound_scan_authorization,
@@ -134,6 +135,18 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
     except ValueError as exc:
         engine = _engine('invalid-native-capability', ScanEngine.EngineCategory.ANALYSIS, 60)
         return _fail(persisted, _execution(persisted, engine), str(exc))
+
+    expected_queue = BROWSER_QUEUE if capability.id == 'browser.spa-discovery' else SCANNER_QUEUE
+    delivery_info = getattr(self.request, 'delivery_info', None) or {}
+    delivered_queue = str(delivery_info.get('routing_key') or '')
+    if not getattr(self.request, 'called_directly', False) and delivered_queue != expected_queue:
+        engine = _engine(capability.tool, ScanEngine.EngineCategory.ANALYSIS, spec.timeout)
+        return _fail(
+            persisted,
+            _execution(persisted, engine),
+            f'Execution blocked: capability requires queue {expected_queue!r}, delivered via {delivered_queue or "<unknown>"!r}.',
+            {'expected_queue': expected_queue, 'delivered_queue': delivered_queue or '<unknown>'},
+        )
 
     terminal = terminal_scan_delivery(scan_id, capability.tool)
     if terminal:
