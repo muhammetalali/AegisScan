@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -201,6 +202,9 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
     }])
     assert ws_run.summary == {'total': 1, 'passed': 1, 'failed': 0}
     assert ws_obs[0].passed is True
+    assert 'session_ref' not in ws_obs[0].semantic
+    assert ws_obs[0].semantic['session_ref_hmac']
+    assert ws_obs[0].semantic['session_ref_hmac'] != 'session-a'
 
     gql_run, gql_obs = run_graphql_security(project, str(user.id), [{
         'ref': 'gql-fixed-own',
@@ -234,6 +238,9 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
     }])
     assert gql_run.summary['passed'] == 1
     assert gql_obs[0].passed is True
+    assert 'session_ref' not in gql_obs[0].semantic
+    assert gql_obs[0].semantic['session_ref_hmac']
+    assert gql_obs[0].semantic['session_ref_hmac'] != 'session-a'
 
     cross_run, cross_obs = run_cross_protocol_security(project, str(user.id), [{
         'ref': 'gql-to-ws',
@@ -254,6 +261,12 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
     assert cross_run.summary['failed'] == 0
     assert cross_obs[0].passed is True
 
+    persisted_graph = json.dumps(
+        list(project.security_graph_nodes.values('external_ref', 'label', 'properties')),
+        sort_keys=True,
+        default=str,
+    )
+    assert 'session-a' not in persisted_graph
     kinds = set(project.security_graph_nodes.values_list('kind', flat=True))
     assert {
         'identity', 'resource', 'websocket_channel', 'graphql_operation',
