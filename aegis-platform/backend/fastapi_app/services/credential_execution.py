@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -302,6 +303,51 @@ def resolve_credential_refs_for_worker(
     return tuple(materials), context
 
 
+def _browser_session_sensitive_values(secret: str) -> tuple[str, ...]:
+    try:
+        data = json.loads(secret)
+    except (TypeError, json.JSONDecodeError):
+        return ()
+    if not isinstance(data, dict):
+        return ()
+    allowed = {'headers', 'cookies', 'local_storage', 'session_storage'}
+    if not data or set(data) - allowed:
+        return ()
+
+    values: list[str] = []
+    headers = data.get('headers')
+    if isinstance(headers, dict):
+        values.extend(str(value) for value in headers.values() if value not in {None, ''})
+        authorization = next(
+            (
+                str(value)
+                for name, value in headers.items()
+                if str(name).lower() == 'authorization' and value not in {None, ''}
+            ),
+            '',
+        )
+        if authorization:
+            parts = authorization.split(None, 1)
+            if len(parts) == 2 and parts[1]:
+                values.append(parts[1])
+
+    cookies = data.get('cookies')
+    if isinstance(cookies, list):
+        for cookie in cookies:
+            if isinstance(cookie, dict) and cookie.get('value') not in {None, ''}:
+                values.append(str(cookie['value']))
+
+    for key in ('local_storage', 'session_storage'):
+        storage = data.get(key)
+        if isinstance(storage, dict):
+            values.extend(str(value) for value in storage.values() if value not in {None, ''})
+
+    return tuple(dict.fromkeys(values))
+
+
 def assert_no_credential_material_leaked(materials: Iterable[Mapping[str, Any]], *payloads: Any) -> None:
     for material in materials:
-        assert_no_secret_material(str(material.get('secret') or ''), *payloads)
+        secret = str(material.get('secret') or '')
+        assert_no_secret_material(secret, *payloads)
+        for nested_secret in _browser_session_sensitive_values(secret):
+            assert_no_secret_material(nested_secret, *payloads)
