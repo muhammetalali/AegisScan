@@ -6,6 +6,7 @@ import pytest
 
 from django_project.projects.models import Project
 from django_project.users.models import User
+from fastapi_app.services.web_security_foundation import persist_policy, run_authorization_matrix
 from fastapi_app.services.stateful_protocol_security import (
     evaluate_cross_protocol_case,
     evaluate_graphql_case,
@@ -290,3 +291,90 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
             'source_observation_id': str(gql_obs[0].id),
             'target_observation_id': str(foreign_ws[0].id),
         }])
+
+@pytest.mark.django_db
+def test_https_to_graphql_transition_uses_persisted_identity_tenant_and_session_lineage():
+    user, project = _user_project('protocol-rest-lineage')
+    persist_policy(project, str(user.id), {
+        'identity_type': 'user',
+        'role': 'viewer',
+        'tenant_ref': 'tenant-a',
+        'endpoint': '/records/*',
+        'method': 'GET',
+        'operation': 'read',
+        'resource_type': 'record',
+        'allowed': True,
+        'ownership_rule': 'owner_only',
+        'tenant_rule': 'same_tenant',
+        'sensitive_operation': False,
+        'required_scopes': ['records:read'],
+        'conditions': {},
+        'policy_source': 'operator_declared',
+        'provenance': {'source_ref': 'test://protocol-rest-lineage'},
+        'confidence': 1.0,
+        'version': 1,
+    })
+    _http_run, http_obs = run_authorization_matrix(project, str(user.id), [{
+        'ref': 'rest-own',
+        'identity': _identity(),
+        'resource': _resource(),
+        'endpoint': '/records/record-a',
+        'method': 'GET',
+        'operation': 'read',
+        'protocol': 'https',
+        'session_ref': 'session-rest-a',
+        'response': {
+            'status_code': 200,
+            'headers': {'Content-Type': 'application/json'},
+            'body': {'id': 'record-a', 'tenant': 'tenant-a', 'owner': 'alice'},
+            'timing_ms': 5.0,
+        },
+    }])
+    _gql_run, gql_obs = run_graphql_security(project, str(user.id), [{
+        'ref': 'gql-own-rest-transition',
+        'identity': _identity(),
+        'resource': _resource(),
+        'endpoint': '/graphql',
+        'session_ref': 'session-rest-a',
+        'operation_type': 'query',
+        'operation_name': 'Record',
+        'field_path': 'record.id',
+        'expected_allowed': True,
+        'server_accepted': True,
+        'response_status': 200,
+        'errors_count': 0,
+        'field_authorized': True,
+        'mutation_authorized': True,
+        'sensitive_fields_requested': [],
+        'sensitive_fields_returned': [],
+        'introspection_requested': False,
+        'introspection_expected_allowed': False,
+        'batch_size': 1,
+        'max_batch_size': 10,
+        'depth': 2,
+        'max_depth': 8,
+        'complexity': 3,
+        'max_complexity': 100,
+    }])
+    run, observations = run_cross_protocol_security(project, str(user.id), [{
+        'ref': 'https-to-graphql',
+        'identity': _identity(),
+        'resource': _resource(),
+        'session_ref': 'session-rest-a',
+        'from_protocol': 'https',
+        'to_protocol': 'graphql',
+        'operation': 'read',
+        'expected_allowed': False,
+        'observed_allowed': False,
+        'identity_consistent': False,
+        'tenant_consistent': False,
+        'session_bound': False,
+        'source_observation_id': str(http_obs[0].id),
+        'target_observation_id': str(gql_obs[0].id),
+    }])
+    assert run.summary == {'total': 1, 'passed': 1, 'failed': 0}
+    assert observations[0].passed is True
+    assert observations[0].semantic['identity_consistent'] is True
+    assert observations[0].semantic['tenant_consistent'] is True
+    assert observations[0].semantic['session_bound'] is True
+
