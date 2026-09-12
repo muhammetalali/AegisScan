@@ -208,6 +208,7 @@ class GraphQLSecurityCaseIn(StrictModel):
     endpoint: str = Field(min_length=1, max_length=700)
     operation_type: Literal['query', 'mutation', 'subscription']
     operation_name: str = Field(min_length=1, max_length=160)
+    document: str = Field(default='', max_length=262144)
     field_path: str = Field(default='', max_length=500)
     expected_allowed: bool
     server_accepted: bool
