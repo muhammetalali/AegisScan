@@ -10,14 +10,15 @@ from fastapi_app.services.web_security_foundation import upsert_graph_snapshot
 def _origin(value: str) -> str:
     try:
         parsed = urlsplit(str(value or '').strip())
-        scheme = parsed.scheme.lower()
+        raw_scheme = parsed.scheme.lower()
         host = (parsed.hostname or '').lower().rstrip('.')
-        if scheme not in {'http', 'https', 'ws', 'wss'} or not host:
+        if raw_scheme not in {'http', 'https', 'ws', 'wss'} or not host:
             return ''
         port = parsed.port
     except ValueError:
         return ''
-    default = 80 if scheme in {'http', 'ws'} else 443
+    scheme = {'ws': 'http', 'wss': 'https'}.get(raw_scheme, raw_scheme)
+    default = 80 if scheme == 'http' else 443
     authority = host if port in {None, default} else f'{host}:{port}'
     return urlunsplit((scheme, authority, '', '', ''))
 
