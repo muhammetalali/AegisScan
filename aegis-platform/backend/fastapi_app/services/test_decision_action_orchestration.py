@@ -357,7 +357,18 @@ def test_action_rejects_stale_or_cross_finding_risk_snapshot(django_user_model) 
     suffix = uuid.uuid4().hex[:10]
     user = django_user_model.objects.create_user(email=f"risk-mismatch-{suffix}@example.test")
     organization_a,project_a,validation_a,_ = _lineage(user,f"a-{suffix}")
-    _,_,validation_b,_ = _lineage(user,f"b-{suffix}")
+    scan_b = Scan.objects.create(
+        project=project_a,name=f"Second scan {suffix}",scan_type=Scan.Type.IP,initiated_by=user,
+    )
+    finding_b = Vulnerability.objects.create(
+        scan=scan_b,project=project_a,title=f"Second finding {suffix}",
+        description="Different finding in the same project",
+        severity=Vulnerability.Severity.HIGH,source_engine="nmap",
+    )
+    validation_b = ValidationRun.objects.create(
+        user=user,finding=finding_b,target_type="ip",target_value="192.0.2.30",
+        scope="192.0.2.30",engines=["nmap"],authorized=True,
+    )
     snapshot = _risk_snapshot(user,project_a,validation_a,suffix,score=77.0)
 
     decision = {
