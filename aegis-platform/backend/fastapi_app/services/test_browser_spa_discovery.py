@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import stat
@@ -12,7 +13,13 @@ from django_project.system.credential_models import CredentialAccess, Credential
 from django_project.system.credential_vault import CredentialVaultDenied, create_credential_secret
 from django_project.users.models import User, UserRole
 from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
-from fastapi_app.services.browser_spa_discovery import _canonical_url, _graphql_metadata, _load_session, _origin
+from fastapi_app.services.browser_spa_discovery import (
+    _ScopedSocksProxy,
+    _canonical_url,
+    _graphql_metadata,
+    _load_session,
+    _origin,
+)
 from fastapi_app.services.browser_surface_graph import project_browser_surface_graph
 from fastapi_app.services.credential_execution import (
     assert_no_credential_material_leaked,
@@ -74,6 +81,66 @@ def test_browser_url_and_graphql_metadata_redact_values():
     }
     assert 'do-not-persist' not in str(metadata)
     assert 'acct-42' not in str(metadata)
+
+
+@pytest.mark.asyncio
+async def test_scoped_socks_proxy_relays_only_authorized_targets(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', '127.0.0.1')
+    monkeypatch.setenv('ALLOW_SINGLE_LABEL_SCAN_TARGETS', '0')
+
+    async def echo(reader, writer):
+        try:
+            payload = await reader.readexactly(4)
+            writer.write(payload)
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    upstream = await asyncio.start_server(echo, '127.0.0.1', 0)
+    upstream_port = int(upstream.sockets[0].getsockname()[1])
+    proxy = _ScopedSocksProxy()
+    await proxy.start()
+    try:
+        reader, writer = await asyncio.open_connection('127.0.0.1', proxy.port)
+        writer.write(b'\x05\x01\x00')
+        await writer.drain()
+        assert await reader.readexactly(2) == b'\x05\x00'
+        writer.write(
+            b'\x05\x01\x00\x01'
+            + bytes((127, 0, 0, 1))
+            + upstream_port.to_bytes(2, 'big')
+        )
+        await writer.drain()
+        allowed_reply = await reader.readexactly(10)
+        assert allowed_reply[1] == 0
+        writer.write(b'ping')
+        await writer.drain()
+        assert await reader.readexactly(4) == b'ping'
+        writer.close()
+        await writer.wait_closed()
+
+        blocked_reader, blocked_writer = await asyncio.open_connection('127.0.0.1', proxy.port)
+        blocked_writer.write(b'\x05\x01\x00')
+        await blocked_writer.drain()
+        assert await blocked_reader.readexactly(2) == b'\x05\x00'
+        blocked_writer.write(
+            b'\x05\x01\x00\x01'
+            + bytes((198, 51, 100, 1))
+            + (80).to_bytes(2, 'big')
+        )
+        await blocked_writer.drain()
+        blocked_reply = await blocked_reader.readexactly(10)
+        assert blocked_reply[1] == 2
+        blocked_writer.close()
+        await blocked_writer.wait_closed()
+
+        assert proxy.allowed_connections == 1
+        assert proxy.blocked_connections == 1
+    finally:
+        await proxy.close()
+        upstream.close()
+        await upstream.wait_closed()
 
 
 def test_browser_session_file_is_0600_and_contract_bounded(tmp_path):
