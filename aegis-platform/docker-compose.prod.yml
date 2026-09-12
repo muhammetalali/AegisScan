@@ -82,12 +82,12 @@ services:
     tmpfs: [/tmp]
     environment:
       DEBUG: "False"
-      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required in production}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required in production}
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required in production}
-      REDIS_URL: ${REDIS_URL:?REDIS_URL is required in production}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:?CELERY_BROKER_URL is required in production}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:?CELERY_RESULT_BACKEND is required in production}
+      SECRET_KEY: ${SECRET_KEY:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      REDIS_URL: ${REDIS_URL:-}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-}
       CREDENTIAL_VAULT_KEYS: ${CREDENTIAL_VAULT_KEYS:-}
       CREDENTIAL_FINGERPRINT_KEY: ${CREDENTIAL_FINGERPRINT_KEY:-}
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
