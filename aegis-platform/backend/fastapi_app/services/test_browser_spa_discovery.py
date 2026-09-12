@@ -12,10 +12,7 @@ from django_project.system.credential_models import CredentialAccess, Credential
 from django_project.system.credential_vault import CredentialVaultDenied, create_credential_secret
 from django_project.users.models import User, UserRole
 from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
-from fastapi_app.services.browser_spa_discovery import (
-    _browser_session_file if False else _canonical_url,
-)
-from fastapi_app.services.browser_spa_discovery import _graphql_metadata, _load_session
+from fastapi_app.services.browser_spa_discovery import _canonical_url, _graphql_metadata, _load_session
 from fastapi_app.services.browser_surface_graph import project_browser_surface_graph
 from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution
 from fastapi_app.services.native_output_normalizer import normalize_native_output
