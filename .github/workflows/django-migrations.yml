@@ -115,7 +115,7 @@ jobs:
           from django_project.intelligence.models import IntelligenceEnrichment
           from django_project.scans.models import Scan
           from django_project.vulnerabilities.models import Vulnerability
-          from enterprise.models import AttackPath, ContinuousAssuranceExecution, DecisionAction, DigitalTwin, FindingIntelligence, TwinScenario
+          from enterprise.models import AttackPath, ContinuousAssuranceExecution, DecisionAction, DigitalTwin, FindingIntelligence, RiskCorrelationSnapshot, TwinScenario
 
           critical_models = [
               get_user_model(),
@@ -129,6 +129,7 @@ jobs:
               TwinScenario,
               AttackPath,
               DecisionAction,
+              RiskCorrelationSnapshot,
               ContinuousAssuranceExecution,
           ]
           expected = [model._meta.db_table for model in critical_models]
@@ -143,7 +144,7 @@ jobs:
           with connection.cursor() as cursor:
               columns = {column.name for column in connection.introspection.get_table_description(cursor, action_table)}
               constraints = connection.introspection.get_constraints(cursor, action_table)
-          required_lineage = {'organization_id', 'project_id', 'validation_id'}
+          required_lineage = {'organization_id', 'project_id', 'validation_id', 'risk_correlation_id'}
           missing_lineage = sorted(required_lineage - columns)
           foreign_key_columns = {
               column
