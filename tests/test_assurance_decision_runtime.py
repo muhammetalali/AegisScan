@@ -26,3 +26,17 @@ def test_fastapi_audit_writer_is_used_without_silent_failure() -> None:
     assert "from ..services.audit_writer import add_audit_entry" in decision_actions
     assert "except Exception:\n        pass" not in decision_actions
     assert "await sync_to_async(add_audit_entry)" in decision_actions
+
+
+def test_assurance_routes_use_cookie_aware_auth_dependency() -> None:
+    decision_actions = (ROUTER_ROOT / "decision_actions.py").read_text(encoding="utf-8")
+    security_decision = (ROUTER_ROOT / "security_decision.py").read_text(encoding="utf-8")
+    policy = (ROUTER_ROOT / "policy.py").read_text(encoding="utf-8")
+
+    for source in (decision_actions, security_decision, policy):
+        assert "HTTPBearer(" not in source
+        assert "HTTPAuthorizationCredentials" not in source
+        assert "from ..core.dependencies import get_current_user" in source
+
+    assert "require_permission(Permission.SYSTEM_SETTINGS)" in policy
+    assert "_is_policy_administrator" not in policy
