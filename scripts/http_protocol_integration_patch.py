@@ -37,10 +37,38 @@ replace_once(
     'from fastapi_app.services.identity_protocol_security import run_identity_protocol_security\n',
     'from fastapi_app.services.identity_protocol_security import run_identity_protocol_security\nfrom fastapi_app.services.http_protocol_security import run_http_protocol_security\n',
 )
-route = '''\n\n@router.post('/projects/{project_id}/http-protocol/evaluate')\nasync def evaluate_http_protocol_security(\n    project_id: str,\n    payload: HttpProtocolBatchIn,\n    user=Depends(get_current_user),\n):\n    uid = _uid(user)\n    project = await _project_security_operator_for_user(project_id, uid)\n    cases = [item.model_dump(mode='json') for item in payload.cases]\n    governance = await _protocol_budget_governance(\n        project, payload.budget_id, capability='http_protocol_security', cases=cases,\n    )\n    credential_bindings = await _protocol_credential_governance(\n        project, uid, capability_id='http-protocol.security-validation',\n        target_origin=payload.target_origin, cases=cases,\n    )\n    governance = {**governance, 'credential_bindings': credential_bindings}\n    run, observations = await sync_to_async(run_http_protocol_security)(project, uid, cases, governance)\n    return {\n        'contract_version': CONTRACT_VERSION,\n        'run_id': str(run.id),\n        'kind': run.kind,\n        'input_sha256': run.input_sha256,\n        'summary': run.summary,\n        'observations': [_protocol_observation_dict(item) for item in observations],\n    }\n'''
+route = '''
+
+@router.post('/projects/{project_id}/http-protocol/evaluate')
+async def evaluate_http_protocol_security(
+    project_id: str,
+    payload: HttpProtocolBatchIn,
+    user=Depends(get_current_user),
+):
+    uid = _uid(user)
+    project = await _project_security_operator_for_user(project_id, uid)
+    cases = [item.model_dump(mode='json') for item in payload.cases]
+    governance = await _protocol_budget_governance(
+        project, payload.budget_id, capability='http_protocol_security', cases=cases,
+    )
+    credential_bindings = await _protocol_credential_governance(
+        project, uid, capability_id='http-protocol.security-validation',
+        target_origin=payload.target_origin, cases=cases,
+    )
+    governance = {**governance, 'credential_bindings': credential_bindings}
+    run, observations = await sync_to_async(run_http_protocol_security)(project, uid, cases, governance)
+    return {
+        'contract_version': CONTRACT_VERSION,
+        'run_id': str(run.id),
+        'kind': run.kind,
+        'input_sha256': run.input_sha256,
+        'summary': run.summary,
+        'observations': [_protocol_observation_dict(item) for item in observations],
+    }
+'''
 text = router.read_text()
 if "'/projects/{project_id}/http-protocol/evaluate'" not in text:
-    router.write_text(text.rstrip() + route + '\n')
+    router.write_text(text.rstrip() + route.rstrip() + '\n')
 
 # Bootstrap files are intentionally self-removing so they never remain in the product tree.
 (ROOT / '.github/workflows/http-protocol-bootstrap.yml').unlink(missing_ok=True)
