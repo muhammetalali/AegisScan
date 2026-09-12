@@ -264,11 +264,39 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
         'tenant_ref': 'tenant-a',
         'owner_ref': 'alice',
     }
+    budget = client.post(
+        f'/api/v1/web-security/projects/{project.id}/execution-budgets',
+        headers=headers,
+        json={
+            'name': 'protocol-security-test',
+            'environment': 'staging',
+            'allowed_capabilities': [
+                'websocket_security',
+                'graphql_security',
+                'cross_protocol_state',
+            ],
+            'max_requests': 10,
+            'network_io_bytes': 1048576,
+            'browser_sessions': 0,
+            'identities': 2,
+            'object_mutations': 0,
+            'parallelism': 1,
+            'cpu_seconds': 30,
+            'memory_mb': 128,
+            'duration_seconds': 60,
+            'state_changes': False,
+            'destructive_operations': False,
+            'state_change_policy': 'deny',
+            'version': 1,
+        },
+    )
+    assert budget.status_code == 201, budget.text
+    budget_id = budget.json()['id']
 
     ws = client.post(
         f'/api/v1/web-security/projects/{project.id}/protocols/websocket/evaluate',
         headers=headers,
-        json={'cases': [{
+        json={'budget_id': budget_id, 'cases': [{
             'ref': 'ws-own',
             'identity': identity,
             'resource': resource,
@@ -305,7 +333,7 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     gql = client.post(
         f'/api/v1/web-security/projects/{project.id}/protocols/graphql/evaluate',
         headers=headers,
-        json={'cases': [{
+        json={'budget_id': budget_id, 'cases': [{
             'ref': 'gql-own',
             'identity': identity,
             'resource': resource,
@@ -341,7 +369,7 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     transition = client.post(
         f'/api/v1/web-security/projects/{project.id}/protocols/cross-protocol/evaluate',
         headers=headers,
-        json={'cases': [{
+        json={'budget_id': budget_id, 'cases': [{
             'ref': 'gql-to-ws',
             'identity': identity,
             'resource': resource,
@@ -360,6 +388,54 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     )
     assert transition.status_code == 200, transition.text
     assert transition.json()['summary']['passed'] == 1
+
+    denied_budget = client.post(
+        f'/api/v1/web-security/projects/{project.id}/execution-budgets',
+        headers=headers,
+        json={
+            'name': 'protocol-security-denied',
+            'environment': 'staging',
+            'allowed_capabilities': ['graphql_security'],
+            'max_requests': 10,
+            'network_io_bytes': 1048576,
+            'browser_sessions': 0,
+            'identities': 2,
+            'object_mutations': 0,
+            'parallelism': 1,
+            'cpu_seconds': 30,
+            'memory_mb': 128,
+            'duration_seconds': 60,
+            'state_changes': False,
+            'destructive_operations': False,
+            'state_change_policy': 'deny',
+            'version': 1,
+        },
+    )
+    assert denied_budget.status_code == 201, denied_budget.text
+    denied = client.post(
+        f'/api/v1/web-security/projects/{project.id}/protocols/websocket/evaluate',
+        headers=headers,
+        json={
+            'budget_id': denied_budget.json()['id'],
+            'cases': [{
+                'ref': 'ws-budget-denied',
+                'identity': identity,
+                'resource': resource,
+                'channel': 'ws://fixture/ws/tenant-a/record-a',
+                'session_ref': 'session-a',
+                'origin': 'https://app.example',
+                'allowed_origins': ['https://app.example'],
+                'authentication_required': True,
+                'authenticated': True,
+                'session_state': 'active',
+                'requested_action': 'subscribe',
+                'expected_allowed': True,
+                'server_accepted': True,
+            }],
+        },
+    )
+    assert denied.status_code == 403
+    assert 'websocket_security' in ' '.join(denied.json()['detail']['failures'])
 
     graph = client.get(
         f'/api/v1/web-security/projects/{project.id}/graph',
