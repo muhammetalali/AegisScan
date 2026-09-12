@@ -116,7 +116,7 @@ jobs:
           from fastapi_app.main import app
           from fastapi_app.contracts.identity_protocol_security import IdentityProtocolCaseIn
 
-          paths = {route.path for route in app.routes}
+          paths = set(app.openapi().get('paths', {}))
           expected = '/api/v1/web-security/projects/{project_id}/identity-protocols/evaluate'
           assert expected in paths, sorted(path for path in paths if 'web-security' in path)
           fields = set(IdentityProtocolCaseIn.model_fields)
