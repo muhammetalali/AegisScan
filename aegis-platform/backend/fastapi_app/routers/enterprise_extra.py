@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field
 
 from ..core.dependencies import get_current_user
 from django_project.projects.models import Project
-from enterprise.models import ExternalIntegration, Notification, SBOMArtifact
+from enterprise.models import ExternalIntegration, IntegrationSyncRun, Notification, SBOMArtifact
 from enterprise.services import ensure_project_tenant
-from enterprise.tasks import dispatch_integration, ingest_sbom_task, send_notification
+from enterprise.tasks import dispatch_integration, ingest_sbom_task, send_notification, sync_external_integration_task
 
 router=APIRouter()
 
@@ -88,7 +88,7 @@ def _create_notification(org, body:NotificationCreate, requester_id:str) -> Noti
             Notification.Channel.WEBHOOK:{ExternalIntegration.Kind.GENERIC_WEBHOOK},
             Notification.Channel.SLACK:{ExternalIntegration.Kind.SLACK},
             Notification.Channel.TEAMS:{ExternalIntegration.Kind.TEAMS},
-            Notification.Channel.SIEM:{ExternalIntegration.Kind.SPLUNK,ExternalIntegration.Kind.ELASTIC},
+            Notification.Channel.SIEM:{ExternalIntegration.Kind.SPLUNK,ExternalIntegration.Kind.ELASTIC,ExternalIntegration.Kind.SENTINEL,ExternalIntegration.Kind.QRADAR},
         }
         if integration.kind not in allowed_kinds[channel]:
             raise HTTPException(status_code=422,detail='Integration kind does not match the notification channel')
@@ -143,3 +143,41 @@ async def list_sbom(project_id:UUID,user=Depends(get_current_user)):
     await _project(project_id,user)
     rows=await sync_to_async(lambda:list(SBOMArtifact.objects.filter(project_id=project_id).values('id','source','source_ref','format','sha256','component_count','created_at')))()
     return [{'id':str(x['id']),**{k:v for k,v in x.items() if k!='id'}} for x in rows]
+
+
+@router.post('/integrations/{integration_id}/sync',status_code=202)
+async def sync_integration(integration_id:UUID,project_id:UUID,user=Depends(get_current_user)):
+    project=await _project(project_id,user)
+    org=await sync_to_async(ensure_project_tenant)(project,str(user.get('user_id')))
+    integration=await sync_to_async(lambda:ExternalIntegration.objects.filter(
+        id=integration_id,organization=org,enabled=True,
+        kind__in=[
+            ExternalIntegration.Kind.GITHUB,ExternalIntegration.Kind.GITLAB,ExternalIntegration.Kind.BITBUCKET,
+            ExternalIntegration.Kind.ECR,ExternalIntegration.Kind.GCR,ExternalIntegration.Kind.ACR,
+            ExternalIntegration.Kind.HARBOR,ExternalIntegration.Kind.GHCR,
+        ],
+    ).first())()
+    if integration is None:
+        raise HTTPException(status_code=404,detail='Repository or registry integration not found')
+    task=sync_external_integration_task.delay(str(integration.id),str(project.id),str(user.get('user_id')))
+    return {'integration_id':str(integration.id),'project_id':str(project.id),'task_id':task.id,'status':'queued'}
+
+
+@router.get('/integrations/{integration_id}/sync-runs')
+async def integration_sync_runs(integration_id:UUID,project_id:UUID,limit:int=Query(50,ge=1,le=200),user=Depends(get_current_user)):
+    project=await _project(project_id,user)
+    rows=await sync_to_async(lambda:list(IntegrationSyncRun.objects.filter(
+        integration_id=integration_id,project=project,
+    ).order_by('-created_at').values(
+        'id','sync_type','status','records_count','summary','error_message','started_at','completed_at','created_at'
+    )[:limit]))()
+    return [
+        {
+            **row,
+            'id':str(row['id']),
+            'started_at':row['started_at'].isoformat() if row['started_at'] else None,
+            'completed_at':row['completed_at'].isoformat() if row['completed_at'] else None,
+            'created_at':row['created_at'].isoformat(),
+        }
+        for row in rows
+    ]

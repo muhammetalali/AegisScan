@@ -33,6 +33,23 @@ def send_integration(integration: ExternalIntegration, event: dict[str, Any]) ->
         url=url + f'/{index}/_doc'
         if secret: headers['Authorization']=f'ApiKey {secret}'
         body=event
+    elif integration.kind == ExternalIntegration.Kind.SENTINEL:
+        ingest_path=str(integration.config.get('ingest_path') or '').strip()
+        if not ingest_path: raise ValueError('Microsoft Sentinel integration requires config.ingest_path')
+        url=url + ('/' if not ingest_path.startswith('/') else '') + ingest_path
+        if secret: headers['Authorization']=f'Bearer {secret}'
+        body=[event]
+    elif integration.kind == ExternalIntegration.Kind.QRADAR:
+        ingest_path=str(integration.config.get('ingest_path') or '').strip()
+        if not ingest_path: raise ValueError('IBM QRadar integration requires config.ingest_path')
+        url=url + ('/' if not ingest_path.startswith('/') else '') + ingest_path
+        if secret: headers['SEC']=secret
+        body=event
+    elif integration.kind == ExternalIntegration.Kind.SOAR_WEBHOOK:
+        body=event
+        if secret: headers['Authorization']=f'Bearer {secret}'
+    elif integration.kind in {ExternalIntegration.Kind.GITHUB,ExternalIntegration.Kind.GITLAB,ExternalIntegration.Kind.BITBUCKET,ExternalIntegration.Kind.ECR,ExternalIntegration.Kind.GCR,ExternalIntegration.Kind.ACR,ExternalIntegration.Kind.HARBOR,ExternalIntegration.Kind.GHCR}:
+        raise ValueError('Repository and registry connectors use synchronization, not event delivery')
     elif integration.kind == ExternalIntegration.Kind.SLACK:
         body={'text': integration.config.get('text_prefix','AegisScan') + ': ' + event.get('type','event'), 'attachments':[{'text': event}]}
         if secret: headers['Authorization']=f'Bearer {secret}'

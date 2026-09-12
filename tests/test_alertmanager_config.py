@@ -20,9 +20,49 @@ def test_renderer_is_fail_closed_and_secret_file_is_private(tmp_path):
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
 
 
-@pytest.mark.parametrize("url", ["", "http://alerts.example.com/hook", "https://user:pass@alerts.example.com/hook", "file:///tmp/x"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "",
+        "http://alerts.example.com/hook",
+        "https://user:pass@alerts.example.com/hook",
+        "file:///tmp/x",
+        "https://127.0.0.1/hook",
+        "https://169.254.169.254/latest/meta-data",
+        "https://metadata.google.internal/hook",
+    ],
+)
 def test_renderer_rejects_unsafe_production_destinations(tmp_path, url):
     template = tmp_path / "template"
     template.write_text("__ALERT_WEBHOOK_URL__")
     with pytest.raises(ValueError):
         MODULE.render(template, tmp_path / "out", url)
+
+
+def test_renderer_allows_http_only_for_explicit_loopback_tests(tmp_path):
+    template = tmp_path / "template"
+    template.write_text("__ALERT_WEBHOOK_URL__")
+    output = tmp_path / "out"
+    MODULE.render(
+        template,
+        output,
+        "http://127.0.0.1:8080/aegis",
+        allow_http=True,
+    )
+    assert "http://127.0.0.1:8080/aegis" in output.read_text()
+
+    network_output = tmp_path / "network-out"
+    MODULE.render(
+        template,
+        network_output,
+        "http://alert-receiver:8080/aegis",
+        allow_http=True,
+    )
+    assert "http://alert-receiver:8080/aegis" in network_output.read_text()
+    with pytest.raises(ValueError):
+        MODULE.render(
+            template,
+            tmp_path / "bad",
+            "http://alerts.example.com/aegis",
+            allow_http=True,
+        )

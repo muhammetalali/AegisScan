@@ -63,7 +63,9 @@ def test_transient_failure_recovery_preserves_one_durable_operation(monkeypatch)
     class FlakyNmap:
         calls = 0
 
-        def run(self, request, timeout):
+        def run(self, request, timeout, state_getter=None):
+            assert callable(state_getter)
+            assert state_getter() == Scan.Status.RUNNING
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError('injected transient scanner failure')
