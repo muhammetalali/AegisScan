@@ -125,6 +125,7 @@ RUN groupadd --gid 10001 aegis \
     && chmod 0755 \
         /app/scanner-worker-entrypoint.sh \
         /app/fastapi_app/services/browser_security_probe.py \
+        /app/fastapi_app/services/browser_spa_discovery.py \
         /app/fastapi_app/services/api_schema_security.py \
         /app/fastapi_app/services/api_runtime_launcher.py \
         /app/fastapi_app/services/api_runtime_conformance.py \
@@ -133,6 +134,7 @@ RUN groupadd --gid 10001 aegis \
         /app/fastapi_app/services/cloud_launcher.py \
         /app/fastapi_app/services/cloud_security.py \
     && ln -sf /app/fastapi_app/services/browser_security_probe.py /usr/local/bin/aegis-browser-security \
+    && ln -sf /app/fastapi_app/services/browser_spa_discovery.py /usr/local/bin/aegis-browser-spa-discovery \
     && ln -sf /app/fastapi_app/services/api_schema_security.py /usr/local/bin/aegis-api-schema-security \
     && ln -sf /app/fastapi_app/services/api_runtime_launcher.py /usr/local/bin/aegis-api-runtime-conformance \
     && ln -sf /app/fastapi_app/services/kubernetes_launcher.py /usr/local/bin/aegis-kubernetes-security \
@@ -152,6 +154,7 @@ RUN command -v nmap >/dev/null \
     && command -v chromium >/dev/null \
     && command -v firefox-esr >/dev/null \
     && command -v aegis-browser-security >/dev/null \
+    && command -v aegis-browser-spa-discovery >/dev/null \
     && command -v aegis-api-schema-security >/dev/null \
     && command -v aegis-api-runtime-conformance >/dev/null \
     && command -v aegis-kubernetes-security >/dev/null \
