@@ -11,6 +11,7 @@ from fastapi_app.services.stateful_protocol_security import (
     evaluate_cross_protocol_case,
     evaluate_graphql_case,
     evaluate_websocket_case,
+    graphql_schema_inventory,
     run_cross_protocol_security,
     run_graphql_security,
     run_websocket_security,
@@ -209,6 +210,10 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
         'session_ref': 'session-a',
         'operation_type': 'query',
         'operation_name': 'Record',
+        'schema_sdl': '''
+            type Record { id: ID!, owner: String! }
+            type Query { record(id: ID!): Record }
+        ''',
         'field_path': 'record.id',
         'expected_allowed': True,
         'server_accepted': True,
@@ -250,7 +255,10 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
     assert cross_obs[0].passed is True
 
     kinds = set(project.security_graph_nodes.values_list('kind', flat=True))
-    assert {'identity', 'resource', 'websocket_channel', 'graphql_operation', 'session', 'channel'}.issubset(kinds)
+    assert {
+        'identity', 'resource', 'websocket_channel', 'graphql_operation',
+        'graphql_type', 'graphql_field', 'graphql_argument', 'session', 'channel',
+    }.issubset(kinds)
     relations = set(project.security_graph_edges.values_list('relation', flat=True))
     assert {'subscribes_to', 'streams_resource', 'invokes', 'operates_on', 'transitions_to'}.issubset(relations)
 
@@ -415,4 +423,20 @@ def test_graphql_metrics_fail_closed_on_unsafe_fragment_graphs(document: str):
     })
     assert result['passed'] is False
     assert 'could not be parsed deterministically' in result['reason']
+
+def test_graphql_schema_inventory_is_structural_bounded_and_value_free():
+    inventory = graphql_schema_inventory(schema_sdl='''
+        type Record { id: ID!, value: String!, related(limit: Int): Record }
+        type Query { record(id: ID!): Record }
+    ''')
+    assert inventory['source'] == 'sdl'
+    assert inventory['type_count'] >= 4
+    assert inventory['field_count'] >= 4
+    assert inventory['argument_count'] >= 2
+    assert len(inventory['sha256']) == 64
+    rendered = str(inventory)
+    assert 'record' in rendered
+    assert 'related' in rendered
+    assert 'limit' in rendered
+    assert 'alpha-secret' not in rendered
 
