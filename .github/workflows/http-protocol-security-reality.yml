@@ -1,0 +1,97 @@
+name: HTTP Protocol Security Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/**'
+      - 'aegis-platform/backend/fastapi_app/contracts/http_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/http_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_http_protocol_*.py'
+      - '.github/workflows/http-protocol-security-reality.yml'
+  push:
+    branches: [main, codex/http-protocol-consistency-2026-09-12]
+    paths:
+      - 'aegis-platform/backend/enterprise/**'
+      - 'aegis-platform/backend/fastapi_app/contracts/http_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/http_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_http_protocol_*.py'
+      - '.github/workflows/http-protocol-security-reality.yml'
+
+jobs:
+  http-protocol-security:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://aegis:aegis@localhost:5432/aegis
+      REDIS_URL: redis://localhost:6379/0
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      SECRET_KEY: http-protocol-reality-only
+      AEGIS_CREDENTIAL_VAULT_KEY: 0123456789abcdef0123456789abcdef
+      PYTHONPATH: aegis-platform/backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile HTTP protocol plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/contracts/http_protocol_security.py \
+            aegis-platform/backend/fastapi_app/services/http_protocol_security.py \
+            aegis-platform/backend/fastapi_app/routers/web_security.py
+      - name: Django model and migration reality
+        working-directory: aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+      - name: HTTP framing translation Vault and persistence suite
+        run: |
+          pytest -q \
+            aegis-platform/backend/fastapi_app/services/test_http_protocol_security.py \
+            aegis-platform/backend/fastapi_app/services/test_http_protocol_credential_scope.py \
+            --junitxml=http-protocol-security-junit.xml
+      - name: Verify API registration and secret-safe contract
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.contracts.http_protocol_security import HttpProtocolCaseIn, HttpHopObservationIn
+          paths = app.openapi()['paths']
+          route = '/api/v1/web-security/projects/{project_id}/http-protocol/evaluate'
+          assert route in paths, sorted(p for p in paths if 'protocol' in p)
+          forbidden = {'raw_body', 'raw_headers', 'authorization', 'cookie', 'request_bytes', 'response_bytes'}
+          assert forbidden.isdisjoint(HttpProtocolCaseIn.model_fields)
+          assert forbidden.isdisjoint(HttpHopObservationIn.model_fields)
+          print('HTTP protocol route and secret-safe contracts verified')
+          PY
+      - name: Retain HTTP protocol evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: http-protocol-security-junit
+          path: http-protocol-security-junit.xml
+          if-no-files-found: error
