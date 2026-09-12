@@ -1,0 +1,144 @@
+name: Legacy Working Branch Prune Once
+
+'on':
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/legacy-working-branch-prune-once.yml'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  archive-prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify archive and prune remaining historical working refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const archiveRef = 'heads/archive/legacy-working-branches-2026-09-12';
+            const archiveSha = '15364e35d00563629ff7890b43e371f09c51e5a6';
+
+            const { data: archive } = await github.rest.git.getRef({
+              owner, repo, ref: archiveRef,
+            });
+            if (archive.object.sha !== archiveSha) {
+              core.setFailed(`Archive ref mismatch: expected ${archiveSha}, got ${archive.object.sha}`);
+              return;
+            }
+
+            const { data: manifestFile } = await github.rest.repos.getContent({
+              owner,
+              repo,
+              path: 'docs/archive/LEGACY_WORKING_BRANCH_ARCHIVE_2026-09-12.json',
+              ref: context.sha,
+            });
+            if (Array.isArray(manifestFile) || !manifestFile.content) {
+              core.setFailed('Legacy working branch archive manifest missing');
+              return;
+            }
+            const manifest = JSON.parse(Buffer.from(manifestFile.content, 'base64').toString('utf8'));
+            if (manifest.archive_root_sha !== archiveSha) {
+              core.setFailed('Manifest archive root mismatch');
+              return;
+            }
+
+            const uniqueHeads = [...new Set(manifest.branches.map((entry) => entry.sha))];
+            for (const sha of uniqueHeads) {
+              const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
+                owner,
+                repo,
+                basehead: `${sha}...${archiveSha}`,
+              });
+              if (comparison.merge_base_commit?.sha !== sha) {
+                core.setFailed(`Archive reachability proof failed for ${sha}`);
+                return;
+              }
+            }
+
+            const openPulls = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const openHeads = new Set(
+              openPulls
+                .filter((pr) => pr.head.repo?.full_name === `${owner}/${repo}`)
+                .map((pr) => pr.head.ref)
+            );
+
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner, repo, per_page: 100,
+            });
+            const current = new Map(branches.map((branch) => [branch.name, branch.commit.sha]));
+
+            const changed = [];
+            const blockedOpen = [];
+            const targets = [];
+            const missing = [];
+
+            for (const entry of manifest.branches) {
+              if (openHeads.has(entry.name)) {
+                blockedOpen.push(entry.name);
+                continue;
+              }
+              const liveSha = current.get(entry.name);
+              if (!liveSha) {
+                missing.push(entry.name);
+                continue;
+              }
+              if (liveSha !== entry.sha) {
+                changed.push({ branch: entry.name, manifest_sha: entry.sha, live_sha: liveSha });
+                continue;
+              }
+              targets.push(entry.name);
+            }
+
+            if (changed.length || blockedOpen.length) {
+              core.info(JSON.stringify({ changed, blockedOpen }, null, 2));
+              core.setFailed('Historical refs changed or became active after archival; refusing deletion');
+              return;
+            }
+
+            const failures = [];
+            const deleted = [];
+            for (const branch of targets) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner, repo, ref: `heads/${branch}`,
+                });
+                deleted.push(branch);
+              } catch (error) {
+                failures.push({
+                  branch,
+                  status: error.status ?? null,
+                  message: error.message,
+                });
+              }
+            }
+
+            core.info(JSON.stringify({
+              archive_ref: archiveRef,
+              archive_sha: archiveSha,
+              manifest_entries: manifest.branches.length,
+              unique_heads_verified: uniqueHeads.length,
+              deleted_count: deleted.length,
+              missing_count: missing.length,
+              failures,
+            }, null, 2));
+
+            core.summary
+              .addHeading('Legacy Working Branch Archive & Prune')
+              .addRaw(`Manifest entries: ${manifest.branches.length}\\n\\n`)
+              .addRaw(`Unique heads verified: ${uniqueHeads.length}\\n\\n`)
+              .addRaw(`Deleted refs: ${deleted.length}\\n\\n`)
+              .addRaw(`Already missing: ${missing.length}\\n\\n`)
+              .addRaw(`Failures: ${failures.length}\\n\\n`)
+              .write();
+
+            if (failures.length) {
+              core.setFailed(`Historical branch pruning had ${failures.length} failures`);
+            }
