@@ -4,9 +4,11 @@ import json
 import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from django_project.projects.models import Project
 from django_project.users.models import User
+from fastapi_app.contracts.web_security_v2 import AuthorizationPolicyIn, GraphQLSecurityCaseIn
 from fastapi_app.services.web_security_foundation import persist_policy, run_authorization_matrix
 from fastapi_app.services.stateful_protocol_security import (
     evaluate_cross_protocol_case,
@@ -17,6 +19,46 @@ from fastapi_app.services.stateful_protocol_security import (
     run_graphql_security,
     run_websocket_security,
 )
+
+
+def test_session_lineage_contract_is_case_scoped_not_policy_scoped():
+    with pytest.raises(ValidationError, match='session_ref'):
+        AuthorizationPolicyIn.model_validate({
+            'identity_type': 'user',
+            'role': 'viewer',
+            'tenant_ref': '*',
+            'endpoint': '/records/*',
+            'session_ref': 'must-not-be-policy-state',
+            'method': 'GET',
+            'operation': 'read',
+            'resource_type': 'record',
+            'allowed': True,
+            'policy_source': 'operator_declared',
+        })
+
+    case = GraphQLSecurityCaseIn.model_validate({
+        'ref': 'gql-session-contract',
+        'identity': {
+            'ref': 'alice',
+            'type': 'user',
+            'role': 'viewer',
+            'tenant_ref': 'tenant-a',
+            'scopes': [],
+        },
+        'resource': {
+            'ref': 'record-a',
+            'type': 'record',
+            'tenant_ref': 'tenant-a',
+            'owner_ref': 'alice',
+        },
+        'endpoint': '/graphql',
+        'session_ref': 'session-a',
+        'operation_type': 'query',
+        'operation_name': 'Record',
+        'expected_allowed': True,
+        'server_accepted': True,
+    })
+    assert case.session_ref == 'session-a'
 
 
 def _user_project(prefix: str):
