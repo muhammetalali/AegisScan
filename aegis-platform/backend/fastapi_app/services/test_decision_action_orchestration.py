@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import timedelta
 
@@ -7,9 +8,16 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.utils import timezone
 
-from enterprise.models import DecisionAction, DecisionActionEvent, OrganizationMembership
+from enterprise.models import (
+    DecisionAction,
+    DecisionActionEvent,
+    FindingIntelligence,
+    OrganizationMembership,
+    RiskCorrelationSnapshot,
+)
 from enterprise.services import ensure_project_tenant
 from django_project.evidence.models import ValidationRun
+from django_project.intelligence.models import IntelligenceEnrichment
 from fastapi_app.services import decision_action_orchestration as store
 from fastapi_app.services import policy_engine
 from fastapi_app.services.assurance_graph_aggregator import build_assurance_graph
@@ -53,6 +61,67 @@ def _lineage(user, suffix: str):
         "validationId":str(validation.id), "projectId":str(project.id),
     }
     return organization, project, validation, decision
+
+
+def _risk_snapshot(
+    user,
+    project: Project,
+    validation: ValidationRun,
+    suffix: str,
+    *,
+    score: float = 88.0,
+    priority: str = RiskCorrelationSnapshot.Priority.P1_HIGH,
+    contradicting: int = 0,
+) -> RiskCorrelationSnapshot:
+    source = IntelligenceEnrichment.objects.create(
+        cve_id=f"CVE-2099-{int(hashlib.sha256(suffix.encode()).hexdigest()[:4], 16) % 9000 + 1000}",
+        sources={},
+        source_urls={},
+        provider_failures=[],
+        confidence=91.0,
+        conflicts=[],
+        recommendation="Prioritize evidence-backed remediation.",
+        explanation="Decision-lineage test intelligence.",
+        observed_at=timezone.now(),
+        observed_by=user,
+    )
+    intelligence = FindingIntelligence.objects.create(
+        vulnerability=validation.finding,
+        source_snapshot=source,
+        primary_cve=source.cve_id,
+        nvd={},
+        osv={},
+        cisa_kev={},
+        epss={},
+        confidence=91.0,
+        conflict=False,
+        explanation=source.explanation,
+        recommendation=source.recommendation,
+    )
+    supporting = 2
+    neutral = 1
+    digest = hashlib.sha256(f"{suffix}:{score}:{contradicting}".encode()).hexdigest()
+    return RiskCorrelationSnapshot.objects.create(
+        project=project,
+        vulnerability=validation.finding,
+        finding_intelligence=intelligence,
+        source_snapshot=source,
+        analysis_version="1.1",
+        score=score,
+        priority=priority,
+        components={
+            "intelligence_confidence": 91.0,
+            "intelligence_conflict": False,
+            "supporting_evidence_count": supporting,
+            "contradicting_evidence_count": contradicting,
+            "neutral_evidence_count": neutral,
+            "evidence_strength": 60.0,
+        },
+        evidence_count=supporting + contradicting + neutral,
+        source_snapshot_sha256=source.snapshot_sha256,
+        correlation_sha256=digest,
+        created_by=user,
+    )
 
 
 def test_validation_lineage_survives_graph_triage_and_decision() -> None:
@@ -152,10 +221,11 @@ def test_persisted_validation_to_decision_to_action_lineage(django_user_model) -
         item for item in pack["decisions"]
         if item["nodeId"] == f"validation:{validation.id}"
     )
-    resolved_org,resolved_project,resolved_validation = _resolve_action_scope(decision,str(user.id))
+    resolved_org,resolved_project,resolved_validation,resolved_risk = _resolve_action_scope(decision,str(user.id))
     action = store.create_action(
         decision,"Security Operations",24,str(user.id),
         organization=resolved_org,project=resolved_project,validation=resolved_validation,
+        risk_correlation=resolved_risk,
     )
     assert decision["actionable"] is True
     assert resolved_org.id == organization.id
@@ -163,6 +233,7 @@ def test_persisted_validation_to_decision_to_action_lineage(django_user_model) -
     assert action["validationId"] == str(validation.id)
     assert action["projectId"] == str(project.id)
     assert action["organizationId"] == str(organization.id)
+    assert resolved_risk is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -200,3 +271,125 @@ def test_sla_breach_is_durable_versioned_and_idempotent(django_user_model) -> No
     assert persisted["escalationLevel"] == 2
     assert persisted["version"] == 2
     assert [event["type"] for event in persisted["events"]] == ["action.created","action.sla_breached"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_persisted_risk_correlation_drives_decision_and_action_lineage(django_user_model) -> None:
+    suffix = uuid.uuid4().hex[:10]
+    user = django_user_model.objects.create_user(email=f"risk-chain-{suffix}@example.test")
+    organization,project,validation,_ = _lineage(user,suffix)
+    snapshot = _risk_snapshot(user,project,validation,suffix,score=88.0)
+
+    validations = async_to_sync(_load_validations)(str(user.id))
+    loaded = validations[str(validation.id)]["risk_correlation"]
+    assert loaded["id"] == str(snapshot.id)
+    assert loaded["sha256"] == snapshot.correlation_sha256
+    assert loaded["score"] == 88.0
+
+    pack = build_decision_pack(build_triage(analyze_graph(build_assurance_graph(validations))))
+    decision = next(
+        item for item in pack["decisions"]
+        if item["nodeId"] == f"validation:{validation.id}"
+    )
+
+    assert decision["decisionSource"] == "risk_correlation"
+    assert decision["risk"] == 88
+    assert decision["priority"] == 88
+    assert decision["urgency"] == "high"
+    assert decision["riskCorrelationId"] == str(snapshot.id)
+    assert decision["riskCorrelationSha256"] == snapshot.correlation_sha256
+    assert decision["riskAnalysisVersion"] == "1.1"
+    assert decision["actionable"] is True
+    assert pack["summary"]["correlated"] >= 1
+
+    resolved_org,resolved_project,resolved_validation,resolved_risk = _resolve_action_scope(
+        decision,str(user.id)
+    )
+    action = store.create_action(
+        decision,"Security Operations",24,str(user.id),
+        organization=resolved_org,project=resolved_project,validation=resolved_validation,
+        risk_correlation=resolved_risk,
+    )
+
+    assert resolved_org.id == organization.id
+    assert resolved_risk.id == snapshot.id
+    assert action["riskCorrelationId"] == str(snapshot.id)
+    assert action["riskCorrelationSha256"] == snapshot.correlation_sha256
+    assert action["riskAnalysisVersion"] == "1.1"
+    assert action["riskCorrelationScore"] == 88.0
+    assert DecisionAction.objects.get(pk=action["actionId"]).risk_correlation_id == snapshot.id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_contradicting_validation_blocks_risk_driven_action(django_user_model) -> None:
+    suffix = uuid.uuid4().hex[:10]
+    user = django_user_model.objects.create_user(email=f"risk-block-{suffix}@example.test")
+    organization,project,validation,_ = _lineage(user,suffix)
+    snapshot = _risk_snapshot(
+        user,project,validation,suffix,score=94.0,
+        priority=RiskCorrelationSnapshot.Priority.P0_CRITICAL,
+        contradicting=1,
+    )
+
+    validations = async_to_sync(_load_validations)(str(user.id))
+    pack = build_decision_pack(build_triage(analyze_graph(build_assurance_graph(validations))))
+    decision = next(
+        item for item in pack["decisions"]
+        if item["nodeId"] == f"validation:{validation.id}"
+    )
+
+    assert decision["risk"] == 94
+    assert decision["urgency"] == "critical"
+    assert decision["contradictingEvidenceCount"] == 1
+    assert decision["actionable"] is False
+    assert "Contradicting validation evidence" in decision["actionabilityReason"]
+    with pytest.raises(ValueError,match="Contradicting validation evidence"):
+        store.create_action(
+            decision,"Security Operations",8,str(user.id),
+            organization=organization,project=project,validation=validation,
+            risk_correlation=snapshot,
+        )
+    assert not DecisionAction.objects.filter(risk_correlation=snapshot).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_action_rejects_stale_or_cross_finding_risk_snapshot(django_user_model) -> None:
+    suffix = uuid.uuid4().hex[:10]
+    user = django_user_model.objects.create_user(email=f"risk-mismatch-{suffix}@example.test")
+    organization_a,project_a,validation_a,_ = _lineage(user,f"a-{suffix}")
+    _,_,validation_b,_ = _lineage(user,f"b-{suffix}")
+    snapshot = _risk_snapshot(user,project_a,validation_a,suffix,score=77.0)
+
+    decision = {
+        "decisionId":f"decision:risk:{snapshot.id}",
+        "nodeId":f"validation:{validation_a.id}",
+        "label":"Risk bound finding",
+        "risk":77,
+        "confidence":91,
+        "priority":77,
+        "recommendedAction":"Remediate",
+        "revalidationPlan":["validate"],
+        "validationId":str(validation_a.id),
+        "projectId":str(project_a.id),
+        "riskCorrelationId":str(snapshot.id),
+        "riskCorrelationSha256":snapshot.correlation_sha256,
+        "riskAnalysisVersion":snapshot.analysis_version,
+        "riskCorrelationPriority":snapshot.priority,
+        "riskCorrelationScore":snapshot.score,
+        "actionable":True,
+    }
+
+    stale = dict(decision, riskCorrelationSha256="0" * 64)
+    with pytest.raises(ValueError,match="SHA256"):
+        store.create_action(
+            stale,"owner",24,str(user.id),
+            organization=organization_a,project=project_a,validation=validation_a,
+            risk_correlation=snapshot,
+        )
+
+    with pytest.raises(ValueError,match="finding lineage"):
+        store.create_action(
+            decision,"owner",24,str(user.id),
+            organization=organization_a,project=project_a,validation=validation_b,
+            risk_correlation=snapshot,
+        )
