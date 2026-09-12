@@ -698,7 +698,15 @@ def run_authorization_matrix(project, actor_id: str, cases: list[dict[str, Any]]
             expected_allowed=result['expected_allowed'],
             observed_decision=result['observed_decision'],
             passed=result['passed'],
-            semantic=result['semantic'],
+            semantic={
+                **result['semantic'],
+                'protocol': str(case.get('protocol') or 'https').lower(),
+                'session_ref_hmac': (
+                    privacy_fingerprint(str(case.get('session_ref') or ''))
+                    if str(case.get('session_ref') or '')
+                    else ''
+                ),
+            },
             evidence_fingerprint=result['evidence_fingerprint'],
             reason=result['reason'],
         ))

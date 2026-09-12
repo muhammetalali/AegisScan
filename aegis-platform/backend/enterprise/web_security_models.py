@@ -35,6 +35,9 @@ class SecurityGraphNode(models.Model):
         ENDPOINT = 'endpoint', 'Endpoint'
         CHANNEL = 'channel', 'Channel'
         GRAPHQL_OPERATION = 'graphql_operation', 'GraphQL Operation'
+        GRAPHQL_TYPE = 'graphql_type', 'GraphQL Type'
+        GRAPHQL_FIELD = 'graphql_field', 'GraphQL Field'
+        GRAPHQL_ARGUMENT = 'graphql_argument', 'GraphQL Argument'
         WEBSOCKET_CHANNEL = 'websocket_channel', 'WebSocket Channel'
         IDENTITY = 'identity', 'Identity'
         SESSION = 'session', 'Session'
@@ -270,6 +273,9 @@ class WebSecurityValidationRun(models.Model):
         AUTHORIZATION_MATRIX = 'authorization_matrix', 'Authorization Matrix'
         NEGATIVE_PATH = 'negative_path', 'Negative Path'
         RESPONSE_COMPARISON = 'response_comparison', 'Response Comparison'
+        WEBSOCKET_SECURITY = 'websocket_security', 'WebSocket Security'
+        GRAPHQL_SECURITY = 'graphql_security', 'GraphQL Security'
+        CROSS_PROTOCOL = 'cross_protocol', 'Cross-Protocol State'
 
     class Status(models.TextChoices):
         COMPLETED = 'completed', 'Completed'

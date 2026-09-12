@@ -128,6 +128,84 @@ def _canonical_web_origin(value: str) -> str:
     return urlunsplit((scheme, authority, '', '', ''))
 
 
+_PROTOCOL_SECURITY_CAPABILITIES = {
+    'websocket.security-validation',
+    'graphql.security-validation',
+    'cross-protocol.security-validation',
+}
+
+
+def _canonical_protocol_origin(value: str) -> str:
+    parsed = urlsplit(str(value or '').strip())
+    scheme = parsed.scheme.lower()
+    if scheme == 'ws':
+        scheme = 'http'
+    elif scheme == 'wss':
+        scheme = 'https'
+    host = (parsed.hostname or '').lower().rstrip('.')
+    if scheme not in {'http', 'https'} or not host or parsed.username or parsed.password:
+        raise ValueError('Protocol credential scope must be an absolute HTTP(S)/WS(S) origin')
+    if parsed.path not in {'', '/'} or parsed.query or parsed.fragment:
+        raise ValueError('Protocol credential scope must contain origin only')
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError('Protocol credential scope contains an invalid port') from exc
+    default_port = 80 if scheme == 'http' else 443
+    authority = host if port in {None, default_port} else f'{host}:{port}'
+    return urlunsplit((scheme, authority, '', '', ''))
+
+
+def _protocol_identity_binding(credential: CredentialSecret) -> str:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    raw = str(scope.get('protocol_identity_ref') or '').strip()
+    if not raw or len(raw) > 255 or any(ch in raw for ch in '\r\n\x00'):
+        raise CredentialVaultDenied('Protocol credential identity binding is missing or invalid.')
+    return raw
+
+
+def _validate_protocol_scope(
+    *,
+    credential: CredentialSecret,
+    actor: Any,
+    purpose: str,
+    target: str,
+    identity_ref: str,
+) -> None:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    scoped_origin = str(scope.get('protocol_origin') or '').strip()
+    try:
+        expected = _canonical_protocol_origin(scoped_origin)
+        actual = _canonical_protocol_origin(target)
+    except ValueError:
+        expected = ''
+        actual = ''
+    try:
+        bound_identity = _protocol_identity_binding(credential)
+    except CredentialVaultDenied:
+        bound_identity = ''
+    origin_matches = bool(expected and actual and expected == actual)
+    identity_matches = bool(identity_ref and bound_identity == identity_ref)
+    if origin_matches and identity_matches:
+        return
+    _record_denied(
+        credential=credential,
+        actor=actor,
+        purpose=purpose,
+        reason='protocol credential scope or identity binding does not match the governed request',
+        metadata={
+            'credential_ref': str(credential.id),
+            'kind': credential.kind,
+            'scope_type': 'protocol_origin+identity',
+            'scope_matches_target': origin_matches,
+            'identity_binding_matches': identity_matches,
+        },
+    )
+    raise CredentialVaultDenied(
+        'Protocol credential is not scoped to this target origin and identity.'
+    )
+
+
 def _browser_identity_binding(credential: CredentialSecret) -> str:
     scope = credential.scope if isinstance(credential.scope, dict) else {}
     raw = str(scope.get('browser_identity_ref') or '').strip()
@@ -232,6 +310,7 @@ def _validate_scope(
     purpose: str,
     target: str,
     capability_id: str,
+    identity_ref: str = '',
 ) -> None:
     if capability_id == 'browser.spa-discovery':
         _validate_browser_scope(
@@ -239,6 +318,14 @@ def _validate_scope(
             actor=actor,
             purpose=purpose,
             target=target,
+        )
+    elif capability_id in _PROTOCOL_SECURITY_CAPABILITIES:
+        _validate_protocol_scope(
+            credential=credential,
+            actor=actor,
+            purpose=purpose,
+            target=target,
+            identity_ref=identity_ref,
         )
     elif credential.kind == CredentialSecret.Kind.KUBECONFIG:
         _validate_kube_scope(credential=credential, actor=actor, purpose=purpose, target=target)
@@ -255,6 +342,7 @@ def authorize_credential_refs_for_execution(
     allowed_kinds: tuple[str, ...] = (),
     purpose: str | None = None,
     target: str = '',
+    identity_ref: str = '',
 ) -> dict[str, Any]:
     normalized_refs = normalize_credential_refs(refs)
     if not normalized_refs:
@@ -268,11 +356,20 @@ def authorize_credential_refs_for_execution(
         if credential is None:
             raise CredentialVaultDenied('Credential reference is not available for this project.')
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
-        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
+        _validate_scope(
+            credential=credential,
+            actor=actor,
+            purpose=purpose_value,
+            target=target,
+            capability_id=capability_id,
+            identity_ref=identity_ref,
+        )
         authorized = authorize_credential_use(credential=credential, actor=actor, purpose=purpose_value)
         item = {'credential_ref': str(authorized.id), 'kind': authorized.kind, 'version': authorized.version}
         if capability_id == 'browser.spa-discovery':
             item['browser_identity_ref'] = _browser_identity_binding(authorized)
+        elif capability_id in _PROTOCOL_SECURITY_CAPABILITIES:
+            item['protocol_identity_ref'] = _protocol_identity_binding(authorized)
         metadata.append(item)
     return credential_execution_context(metadata, resolved=False)
 
@@ -286,6 +383,7 @@ def resolve_credential_refs_for_worker(
     allowed_kinds: tuple[str, ...] = (),
     purpose: str | None = None,
     target: str = '',
+    identity_ref: str = '',
 ) -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
     normalized_refs = normalize_credential_refs(refs)
     if not normalized_refs:
@@ -300,7 +398,14 @@ def resolve_credential_refs_for_worker(
         if credential is None:
             raise CredentialVaultDenied('Credential reference is not available for this project.')
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
-        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
+        _validate_scope(
+            credential=credential,
+            actor=actor,
+            purpose=purpose_value,
+            target=target,
+            capability_id=capability_id,
+            identity_ref=identity_ref,
+        )
         secret = resolve_credential_secret(credential=credential, actor=actor, purpose=purpose_value)
         credential.refresh_from_db(fields=['kind', 'version'])
         material = {
@@ -311,10 +416,14 @@ def resolve_credential_refs_for_worker(
         }
         if capability_id == 'browser.spa-discovery':
             material['browser_identity_ref'] = _browser_identity_binding(credential)
+        elif capability_id in _PROTOCOL_SECURITY_CAPABILITIES:
+            material['protocol_identity_ref'] = _protocol_identity_binding(credential)
         materials.append(material)
         item = {key: material[key] for key in ('credential_ref', 'kind', 'version')}
         if capability_id == 'browser.spa-discovery':
             item['browser_identity_ref'] = material['browser_identity_ref']
+        elif capability_id in _PROTOCOL_SECURITY_CAPABILITIES:
+            item['protocol_identity_ref'] = material['protocol_identity_ref']
         metadata.append(item)
     context = credential_execution_context(metadata, resolved=True)
     assert_no_credential_material_leaked(materials, context)
