@@ -254,7 +254,7 @@ def resolve_policy(
     method = str(case.get('method') or '').upper()
     operation = str(case.get('operation') or '')
     resource_type = str(resource.get('type') or '')
-    matches: list[tuple[int, int, AuthorizationPolicyManifest]] = []
+    matches: list[tuple[int, int, int, AuthorizationPolicyManifest]] = []
 
     for policy in policies:
         fields = (
@@ -272,12 +272,16 @@ def resolve_policy(
         specificity = sum(1 for left, _right in fields if str(left or '') not in {'', '*'})
         if str(policy.endpoint or '') not in {'', '*'}:
             specificity += 2
-        matches.append((specificity, int(policy.version), policy))
+        deny_priority = 1 if policy.allowed is False else 0
+        matches.append((specificity, int(policy.version), deny_priority, policy))
 
     if not matches:
         return None
-    matches.sort(key=lambda item: (item[0], item[1], item[2].created_at, str(item[2].id)), reverse=True)
-    return matches[0][2]
+    matches.sort(
+        key=lambda item: (item[0], item[1], item[2], item[3].created_at, str(item[3].id)),
+        reverse=True,
+    )
+    return matches[0][3]
 
 
 def expected_authorization(policy: AuthorizationPolicyManifest | None, case: dict[str, Any]) -> tuple[bool, str]:
