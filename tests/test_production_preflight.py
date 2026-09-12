@@ -28,6 +28,8 @@ def valid_environment(tmp_path: Path) -> dict[str, str]:
         "DEBUG": "False",
         "SECRET_KEY": "django-" + "a" * 40,
         "JWT_SECRET_KEY": "jwt-" + "b" * 40,
+        "CREDENTIAL_VAULT_KEYS": "Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=",
+        "CREDENTIAL_FINGERPRINT_KEY": "fingerprint-" + "f" * 40,
         "POSTGRES_PASSWORD": "postgres-" + "c" * 40,
         "DATABASE_URL": "postgresql://aegis:secret@postgres:5432/aegisdb",
         "REDIS_URL": "redis://redis:6379/0",
@@ -87,6 +89,22 @@ def test_rejects_webhook_credentials_fragment_and_link_local_destination(tmp_pat
         environment["ALERT_WEBHOOK_URL"] = webhook
         failures = preflight.validate(environment, tmp_path, check_tls=False)
         assert any("ALERT_WEBHOOK_URL" in failure for failure in failures), webhook
+
+
+def test_rejects_missing_malformed_or_reused_credential_vault_keys(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    environment["CREDENTIAL_VAULT_KEYS"] = "not-a-valid-fernet-key"
+    environment["CREDENTIAL_FINGERPRINT_KEY"] = environment["SECRET_KEY"]
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert any("CREDENTIAL_VAULT_KEYS" in failure for failure in failures)
+    assert any("CREDENTIAL_FINGERPRINT_KEY must be distinct" in failure for failure in failures)
+
+    environment = valid_environment(tmp_path)
+    environment["CREDENTIAL_VAULT_KEYS"] = ""
+    environment["CREDENTIAL_FINGERPRINT_KEY"] = "short"
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert any("CREDENTIAL_VAULT_KEYS" in failure for failure in failures)
+    assert any("CREDENTIAL_FINGERPRINT_KEY" in failure for failure in failures)
 
 
 def test_rejects_missing_tls_material(tmp_path: Path):
