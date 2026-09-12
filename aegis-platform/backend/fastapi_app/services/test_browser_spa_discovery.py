@@ -325,6 +325,62 @@ async def test_browser_capability_scheduler_uses_isolated_queue_and_vault_identi
     assert 'scheduler-value' not in json.dumps(scan.config, sort_keys=True)
 
 
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_browser_capability_rejects_identity_not_bound_to_credential(
+    monkeypatch,
+    project,
+    actor,
+):
+    target = 'http://127.0.0.1:18083/'
+    asset = await sync_to_async(Asset.objects.create)(
+        project=project,
+        owner=actor,
+        name='Browser Identity Target',
+        slug='browser-identity-target',
+        type=Asset.Type.WEBSITE,
+        configuration={'url': target},
+    )
+    await sync_to_async(AssetAuthorization.objects.create)(
+        asset=asset,
+        actor=actor,
+        authorized=True,
+        target_snapshot=target,
+        reason='browser identity test authorization',
+    )
+    credential = await sync_to_async(create_credential_secret)(
+        project=project,
+        actor=actor,
+        name='browser-identity-session',
+        kind=CredentialSecret.Kind.GENERIC,
+        secret=json.dumps({'headers': {'Authorization': 'Bearer identity-value'}}),
+        scope={
+            'browser_origin': 'http://127.0.0.1:18083',
+            'browser_identity_ref': 'alice',
+        },
+    )
+    monkeypatch.setattr(
+        capability_router.run_native_capability_scan,
+        'apply_async',
+        lambda *args, **kwargs: pytest.fail('mismatched identity must not enqueue'),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await capability_router.execute_capability(
+            'browser.spa-discovery',
+            CapabilityExecutionRequest(
+                project_id=str(project.id),
+                asset_id=str(asset.id),
+                options={'identity_ref': 'mallory', 'wait_ms': 1000, 'max_events': 100},
+                credential_refs=[str(credential.id)],
+            ),
+            user={'user_id': str(actor.id)},
+        )
+
+    assert exc.value.status_code == 409
+    assert 'does not match the bound credential identity' in str(exc.value.detail)
+
+
 def test_browser_session_nested_secret_values_are_rejected_from_payloads():
     session_secret = json.dumps({
         'headers': {
