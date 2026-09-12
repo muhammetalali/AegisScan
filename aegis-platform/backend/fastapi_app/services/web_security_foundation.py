@@ -466,9 +466,10 @@ def evaluate_provider_gate(record: ProviderApprovalRecord, requested_capability:
             failures.append(f'{field} is not proven')
 
     maintenance = manifest.get('maintenance')
-    if isinstance(maintenance, dict) and maintenance.get('status') not in {'active', 'maintained'}:
-        failures.append('provider is not actively maintained')
-    elif maintenance in {False, None, ''} and 'maintenance' in manifest:
+    if isinstance(maintenance, dict):
+        if maintenance.get('status') not in {'active', 'maintained'}:
+            failures.append('provider is not actively maintained')
+    elif 'maintenance' in manifest and (maintenance is False or maintenance is None or maintenance == ''):
         failures.append('provider maintenance is not proven')
 
     privileges = {str(x).lower() for x in (manifest.get('container_privileges') or [])}
