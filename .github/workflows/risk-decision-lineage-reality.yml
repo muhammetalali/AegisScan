@@ -100,12 +100,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           cache-dependency-path: aegis-platform/frontend/package-lock.json
       - name: Install frontend dependencies
         run: npm ci
-      - name: Typecheck decision UI
-        run: npm run typecheck
-      - name: Build decision UI
+      - name: Lint decision UI
+        run: npm run lint
+      - name: Typecheck and build decision UI
         run: npm run build
