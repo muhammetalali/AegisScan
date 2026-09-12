@@ -712,6 +712,145 @@ def _project_graphql_graph(project, case: dict[str, Any], result: dict[str, Any]
             'provenance': {'source': 'graphql_security'},
         },
     ])
+
+    inventory = result.get('schema_inventory') if isinstance(result.get('schema_inventory'), dict) else {}
+    schema_types = inventory.get('types') if isinstance(inventory.get('types'), list) else []
+    schema_source = str(inventory.get('source') or '')
+    schema_sha256 = str(inventory.get('sha256') or '')
+    endpoint = str(case.get('endpoint') or '')
+    type_refs: dict[str, str] = {}
+
+    for type_item in schema_types:
+        if not isinstance(type_item, dict):
+            continue
+        type_name = str(type_item.get('name') or '')
+        if not type_name:
+            continue
+        type_ref = f'graphql-type:{canonical_digest([endpoint, type_name])[:32]}'
+        type_refs[type_name] = type_ref
+        nodes.append({
+            'plane': 'application',
+            'kind': 'graphql_type',
+            'external_ref': type_ref,
+            'label': type_name,
+            'protocol': 'graphql',
+            'tenant_ref': '',
+            'properties': {
+                'schema_kind': str(type_item.get('kind') or ''),
+                'schema_sha256': schema_sha256,
+            },
+            'provenance': {
+                'source': 'graphql_schema',
+                'schema_source': schema_source,
+            },
+        })
+
+    root_type = {
+        'query': 'Query',
+        'mutation': 'Mutation',
+        'subscription': 'Subscription',
+    }.get(str(case.get('operation_type') or '').lower(), '')
+    if root_type and root_type in type_refs:
+        edges.append({
+            'source_ref': operation_ref,
+            'target_ref': type_refs[root_type],
+            'relation': 'defined_on',
+            'properties': {},
+            'evidence_refs': [result['evidence_fingerprint']],
+            'provenance': {'source': 'graphql_schema'},
+        })
+
+    for type_item in schema_types:
+        if not isinstance(type_item, dict):
+            continue
+        type_name = str(type_item.get('name') or '')
+        type_ref = type_refs.get(type_name)
+        if not type_ref:
+            continue
+        fields = type_item.get('fields') if isinstance(type_item.get('fields'), list) else []
+        for field_item in fields:
+            if not isinstance(field_item, dict):
+                continue
+            field_name = str(field_item.get('name') or '')
+            if not field_name:
+                continue
+            field_ref = f'graphql-field:{canonical_digest([endpoint, type_name, field_name])[:32]}'
+            nodes.append({
+                'plane': 'application',
+                'kind': 'graphql_field',
+                'external_ref': field_ref,
+                'label': f'{type_name}.{field_name}',
+                'protocol': 'graphql',
+                'tenant_ref': '',
+                'properties': {
+                    'return_type': str(field_item.get('type') or ''),
+                    'schema_sha256': schema_sha256,
+                },
+                'provenance': {'source': 'graphql_schema'},
+            })
+            edges.append({
+                'source_ref': type_ref,
+                'target_ref': field_ref,
+                'relation': 'has_field',
+                'properties': {},
+                'evidence_refs': [result['evidence_fingerprint']],
+                'provenance': {'source': 'graphql_schema'},
+            })
+            return_type_ref = type_refs.get(str(field_item.get('named_type') or ''))
+            if return_type_ref:
+                edges.append({
+                    'source_ref': field_ref,
+                    'target_ref': return_type_ref,
+                    'relation': 'returns_type',
+                    'properties': {},
+                    'evidence_refs': [result['evidence_fingerprint']],
+                    'provenance': {'source': 'graphql_schema'},
+                })
+
+            arguments = (
+                field_item.get('arguments')
+                if isinstance(field_item.get('arguments'), list)
+                else []
+            )
+            for arg_item in arguments:
+                if not isinstance(arg_item, dict):
+                    continue
+                arg_name = str(arg_item.get('name') or '')
+                if not arg_name:
+                    continue
+                arg_ref = f'graphql-argument:{canonical_digest([endpoint, type_name, field_name, arg_name])[:32]}'
+                nodes.append({
+                    'plane': 'application',
+                    'kind': 'graphql_argument',
+                    'external_ref': arg_ref,
+                    'label': f'{type_name}.{field_name}({arg_name})',
+                    'protocol': 'graphql',
+                    'tenant_ref': '',
+                    'properties': {
+                        'argument_type': str(arg_item.get('type') or ''),
+                        'schema_sha256': schema_sha256,
+                    },
+                    'provenance': {'source': 'graphql_schema'},
+                })
+                edges.append({
+                    'source_ref': field_ref,
+                    'target_ref': arg_ref,
+                    'relation': 'accepts_argument',
+                    'properties': {},
+                    'evidence_refs': [result['evidence_fingerprint']],
+                    'provenance': {'source': 'graphql_schema'},
+                })
+                argument_type_ref = type_refs.get(str(arg_item.get('named_type') or ''))
+                if argument_type_ref:
+                    edges.append({
+                        'source_ref': arg_ref,
+                        'target_ref': argument_type_ref,
+                        'relation': 'argument_type',
+                        'properties': {},
+                        'evidence_refs': [result['evidence_fingerprint']],
+                        'provenance': {'source': 'graphql_schema'},
+                    })
+
     upsert_graph_snapshot(project, nodes, edges)
 
 
