@@ -79,11 +79,11 @@ def _record_for(context: dict[str, Any], record_id: str) -> dict[str, Any] | Non
     return dict(record)
 
 
-def _query_record(info, id: str):
+def _query_record(_root, info, id: str):
     return _record_for(info.context, id)
 
 
-def _query_records(info):
+def _query_records(_root, info):
     if info.context['vulnerable']:
         return [dict(value) for value in RECORDS.values()]
     identity = info.context.get('identity')
@@ -97,7 +97,7 @@ def _query_records(info):
     ]
 
 
-def _mutate_record(info, id: str, value: str):
+def _mutate_record(_root, info, id: str, value: str):
     record = RECORDS.get(id)
     if record is None:
         return None
