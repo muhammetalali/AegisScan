@@ -106,7 +106,7 @@ def test_browser_session_credential_requires_exact_origin_scope(project, actor):
         name='browser-session',
         kind=CredentialSecret.Kind.GENERIC,
         secret=secret,
-        scope={'browser_origin': 'https://app.example.test'},
+        scope={'browser_origin': 'https://app.example.test', 'browser_identity_ref': 'alice'},
     )
 
     context = authorize_credential_refs_for_execution(
@@ -120,6 +120,7 @@ def test_browser_session_credential_requires_exact_origin_scope(project, actor):
     )
     assert context['credential_material_handling'] == 'reference-authorized-only'
     assert context['credential_refs'][0]['credential_ref'] == str(credential.id)
+    assert context['credential_refs'][0]['browser_identity_ref'] == 'alice'
     assert 'browser-session-secret' not in str(context)
 
     materials, worker_context = resolve_credential_refs_for_worker(
@@ -133,6 +134,8 @@ def test_browser_session_credential_requires_exact_origin_scope(project, actor):
     )
     assert materials[0]['secret'] == secret
     assert worker_context['credential_refs'][0]['credential_ref'] == str(credential.id)
+    assert worker_context['credential_refs'][0]['browser_identity_ref'] == 'alice'
+    assert materials[0]['browser_identity_ref'] == 'alice'
     assert 'browser-session-secret' not in str(worker_context)
 
     with pytest.raises(CredentialVaultDenied):
@@ -153,6 +156,29 @@ def test_browser_session_credential_requires_exact_origin_scope(project, actor):
     assert denied.metadata['scope_type'] == 'browser_origin'
     assert denied.metadata['scope_matches_target'] is False
     assert 'browser-session-secret' not in str(denied.metadata)
+
+
+@pytest.mark.django_db
+def test_browser_identity_binding_falls_back_to_credential_reference(project, actor):
+    credential = create_credential_secret(
+        project=project,
+        actor=actor,
+        name='browser-session-fallback',
+        kind=CredentialSecret.Kind.GENERIC,
+        secret=json.dumps({'headers': {'Authorization': 'Bearer fallback-token'}}),
+        scope={'browser_origin': 'https://app.example.test'},
+    )
+
+    context = authorize_credential_refs_for_execution(
+        project_id=project.id,
+        actor_id=actor.id,
+        refs=[str(credential.id)],
+        capability_id='browser.spa-discovery',
+        allowed_kinds=('generic',),
+        target='https://app.example.test/',
+    )
+
+    assert context['credential_refs'][0]['browser_identity_ref'] == f'credential:{credential.id}'
 
 
 def test_browser_session_nested_secret_values_are_rejected_from_payloads():
