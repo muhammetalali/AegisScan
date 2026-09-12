@@ -7,6 +7,7 @@ from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from django_project.projects.models import Project, ProjectMembership
+from django_project.users.models import Permission, User
 from enterprise.web_security_models import (
     AuthorizationPolicyManifest,
     ExecutionBudgetProfile,
@@ -74,6 +75,21 @@ def _project_admin_for_user_sync(project_id: str, user_id: str) -> Project | Non
     return project if allowed else None
 
 
+def _project_security_operator_for_user_sync(project_id: str, user_id: str) -> Project | None:
+    project = _project_for_user_sync(project_id, user_id)
+    if project is None:
+        return None
+    if str(project.owner_id) == str(user_id):
+        return project
+    membership = ProjectMembership.objects.filter(project=project, user_id=user_id).first()
+    if membership and membership.role in {ProjectMembership.Role.OWNER, ProjectMembership.Role.ADMIN}:
+        return project
+    actor = User.objects.filter(pk=user_id, is_active=True).first()
+    if membership and actor and actor.has_permission(Permission.SCAN_CREATE):
+        return project
+    return None
+
+
 async def _project_for_user(project_id: str, user_id: str) -> Project:
     project = await sync_to_async(_project_for_user_sync)(project_id, user_id)
     if project is None:
@@ -85,6 +101,13 @@ async def _project_admin_for_user(project_id: str, user_id: str) -> Project:
     project = await sync_to_async(_project_admin_for_user_sync)(project_id, user_id)
     if project is None:
         raise HTTPException(status_code=403, detail='Project owner or admin role required')
+    return project
+
+
+async def _project_security_operator_for_user(project_id: str, user_id: str) -> Project:
+    project = await sync_to_async(_project_security_operator_for_user_sync)(project_id, user_id)
+    if project is None:
+        raise HTTPException(status_code=403, detail='Project security-operator authority required')
     return project
 
 
@@ -192,7 +215,7 @@ async def persist_graph(
     user=Depends(get_current_user),
 ):
     uid = _uid(user)
-    project = await _project_for_user(project_id, uid)
+    project = await _project_security_operator_for_user(project_id, uid)
     try:
         result = await sync_to_async(upsert_graph_snapshot)(
             project,
@@ -303,7 +326,7 @@ async def evaluate_authorization(
     user=Depends(get_current_user),
 ):
     uid = _uid(user)
-    project = await _project_for_user(project_id, uid)
+    project = await _project_security_operator_for_user(project_id, uid)
     cases = [item.model_dump(mode='json') for item in payload.cases]
     run, observations = await sync_to_async(run_authorization_matrix)(project, uid, cases)
     return {
@@ -342,7 +365,7 @@ async def compare_responses(
     user=Depends(get_current_user),
 ):
     uid = _uid(user)
-    project = await _project_for_user(project_id, uid)
+    project = await _project_security_operator_for_user(project_id, uid)
     raw = payload.model_dump(mode='json')
     result = analyze_response_pair(raw['baseline'], raw['candidate'])
 
@@ -369,7 +392,7 @@ async def evaluate_negative_path(
     user=Depends(get_current_user),
 ):
     uid = _uid(user)
-    project = await _project_for_user(project_id, uid)
+    project = await _project_security_operator_for_user(project_id, uid)
     run, results = await sync_to_async(run_negative_paths)(
         project,
         uid,
