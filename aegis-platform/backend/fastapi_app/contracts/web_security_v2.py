@@ -165,3 +165,90 @@ class NegativePathBatchIn(StrictModel):
 class ResponseComparisonIn(StrictModel):
     baseline: CapturedResponseIn
     candidate: CapturedResponseIn
+
+
+class WebSocketSecurityCaseIn(StrictModel):
+    ref: str = Field(min_length=1, max_length=255)
+    identity: IdentityIn
+    resource: ResourceIn
+    channel: str = Field(min_length=1, max_length=700)
+    origin: str = Field(default='', max_length=700)
+    allowed_origins: list[str] = Field(default_factory=list, max_length=128)
+    authentication_required: bool = True
+    authenticated: bool = False
+    session_state: Literal['active', 'expired', 'revoked', 'unknown'] = 'unknown'
+    requested_action: str = Field(default='subscribe', max_length=160)
+    expected_allowed: bool
+    server_accepted: bool
+    handshake_status: int = Field(default=101, ge=100, le=599)
+    subscription_owner_ref: str = Field(default='', max_length=255)
+    subscription_tenant_ref: str = Field(default='', max_length=255)
+    reconnect: bool = False
+    reconnect_reauthenticated: bool = False
+    message_schema_valid: bool = True
+    message_authorized: bool = True
+    binary: bool = False
+    binary_allowed: bool = False
+    message_size_bytes: int = Field(default=0, ge=0, le=100_000_000)
+    max_message_size_bytes: int = Field(default=1_048_576, ge=1, le=100_000_000)
+    observed_messages: int = Field(default=0, ge=0, le=10_000_000)
+    rate_limit_threshold: int = Field(default=1000, ge=1, le=10_000_000)
+    rate_limited: bool = False
+    close_code: int | None = Field(default=None, ge=1000, le=4999)
+
+
+class WebSocketSecurityBatchIn(StrictModel):
+    cases: list[WebSocketSecurityCaseIn] = Field(min_length=1, max_length=5000)
+
+
+class GraphQLSecurityCaseIn(StrictModel):
+    ref: str = Field(min_length=1, max_length=255)
+    identity: IdentityIn
+    resource: ResourceIn
+    endpoint: str = Field(min_length=1, max_length=700)
+    operation_type: Literal['query', 'mutation', 'subscription']
+    operation_name: str = Field(min_length=1, max_length=160)
+    field_path: str = Field(default='', max_length=500)
+    expected_allowed: bool
+    server_accepted: bool
+    response_status: int = Field(default=200, ge=100, le=599)
+    errors_count: int = Field(default=0, ge=0, le=10000)
+    field_authorized: bool = True
+    mutation_authorized: bool = True
+    subscription_owner_ref: str = Field(default='', max_length=255)
+    subscription_tenant_ref: str = Field(default='', max_length=255)
+    sensitive_fields_requested: list[str] = Field(default_factory=list, max_length=256)
+    sensitive_fields_returned: list[str] = Field(default_factory=list, max_length=256)
+    introspection_requested: bool = False
+    introspection_expected_allowed: bool = False
+    batch_size: int = Field(default=1, ge=1, le=10000)
+    max_batch_size: int = Field(default=10, ge=1, le=10000)
+    depth: int = Field(default=1, ge=1, le=1000)
+    max_depth: int = Field(default=12, ge=1, le=1000)
+    complexity: int = Field(default=1, ge=1, le=1_000_000)
+    max_complexity: int = Field(default=1000, ge=1, le=1_000_000)
+
+
+class GraphQLSecurityBatchIn(StrictModel):
+    cases: list[GraphQLSecurityCaseIn] = Field(min_length=1, max_length=5000)
+
+
+class CrossProtocolTransitionCaseIn(StrictModel):
+    ref: str = Field(min_length=1, max_length=255)
+    identity: IdentityIn
+    resource: ResourceIn
+    session_ref: str = Field(min_length=1, max_length=255)
+    from_protocol: Literal['browser', 'http', 'https', 'graphql', 'websocket']
+    to_protocol: Literal['browser', 'http', 'https', 'graphql', 'websocket']
+    operation: str = Field(min_length=1, max_length=160)
+    expected_allowed: bool
+    observed_allowed: bool
+    identity_consistent: bool = True
+    tenant_consistent: bool = True
+    session_bound: bool = True
+    source_evidence_ref: str = Field(default='', max_length=255)
+    target_evidence_ref: str = Field(default='', max_length=255)
+
+
+class CrossProtocolTransitionBatchIn(StrictModel):
+    cases: list[CrossProtocolTransitionCaseIn] = Field(min_length=1, max_length=5000)
