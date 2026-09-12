@@ -1,7 +1,8 @@
 name: Branch Hygiene Reality
 
-on:
-  push:
+'on':
+  pull_request:
+    types: [closed]
     branches: [main]
   workflow_dispatch:
 
@@ -15,6 +16,7 @@ concurrency:
 
 jobs:
   prune-fully-merged-codex-branches:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - name: Delete only fully merged codex branches
@@ -57,11 +59,13 @@ jobs:
               per_page: 100,
             });
 
+            const eventHead = context.payload.pull_request?.head?.ref ?? null;
             const candidates = branches
               .map((branch) => branch.name)
               .filter((name) => name.startsWith('codex/'))
               .filter((name) => name !== defaultBranch)
-              .filter((name) => !openHeads.has(name));
+              .filter((name) => !openHeads.has(name))
+              .filter((name) => context.eventName === 'workflow_dispatch' || name === eventHead);
 
             const deleted = [];
             const retained = [];
@@ -96,6 +100,7 @@ jobs:
               .addRaw(`Default branch: ${defaultBranch}\\n\\n`)
               .addRaw(`Open PR heads skipped: ${openHeads.size}\\n\\n`)
               .addRaw(`Merged PR heads eligible for cleanup: ${mergedHeads.size}\\n\\n`)
+              .addRaw(`Event head: ${eventHead ?? 'workflow_dispatch'}\\n\\n`)
               .addRaw(`Fully merged codex branches deleted: ${deleted.length}\\n\\n`)
               .addRaw(`Codex branches retained with unique commits: ${retained.length}\\n\\n`)
               .addRaw(`Delete/compare failures: ${failed.length}\\n\\n`)
