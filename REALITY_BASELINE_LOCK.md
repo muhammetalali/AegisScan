@@ -4,6 +4,13 @@ This document is the execution baseline for enterprise completion. A capability 
 
 `Designed -> Implemented -> Integrated -> Real Data -> Tested -> E2E -> Evidence -> Independently Verified`
 
+## Canonical source boundary
+
+- `aegis-platform/` is the only active application implementation tree.
+- `aegis/` is the CLI/client package.
+- `packages/` is a retired historical layout and its presence on `main` is a CI failure.
+- Archive refs are provenance-only and cannot satisfy current implementation or release evidence.
+
 ## Non-negotiable gates
 
 - No UI page may display synthetic security KPIs, fake findings, fake risk scores, or placeholder success states.

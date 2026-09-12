@@ -8,6 +8,8 @@ import pytest
 from django.db import close_old_connections, connection
 from fastapi import HTTPException
 
+from django_project.users.models import Permission
+from fastapi_app.core import dependencies as auth_dependencies
 from fastapi_app.routers import policy as policy_router
 from fastapi_app.services.policy_engine import list_policies, save_policy
 
@@ -51,23 +53,31 @@ def test_concurrent_policy_versions_are_serialized() -> None:
 
 
 @pytest.mark.asyncio
-async def test_policy_mutation_requires_staff(monkeypatch) -> None:
-    called = False
+async def test_policy_mutation_requires_system_settings_permission(monkeypatch) -> None:
+    post_route = next(
+        route
+        for route in policy_router.router.routes
+        if route.path == "/policies" and "POST" in route.methods
+    )
+    user_dependency = next(
+        dependency.call
+        for dependency in post_route.dependant.dependencies
+        if dependency.name == "user"
+    )
+    observed: list[tuple[str, str]] = []
 
-    def unexpected_save(*args, **kwargs):
-        nonlocal called
-        called = True
-        return {}
+    async def denied(user_id: str, permission: str) -> bool:
+        observed.append((user_id, permission))
+        return False
 
-    monkeypatch.setattr(policy_router, "save_policy", unexpected_save)
-    monkeypatch.setattr(policy_router, "_is_policy_administrator", lambda user_id: False)
-    body = policy_router.PolicyPayload(id="blocked", name="Blocked")
+    monkeypatch.setattr(auth_dependencies, "_has_permission", denied)
 
     with pytest.raises(HTTPException) as exc_info:
-        await policy_router.create_policy(body, {"user_id": "user-1", "is_staff": False})
+        await user_dependency({"user_id": "user-1"})
 
     assert exc_info.value.status_code == 403
-    assert called is False
+    assert exc_info.value.detail == f"Permission required: {Permission.SYSTEM_SETTINGS}"
+    assert observed == [("user-1", Permission.SYSTEM_SETTINGS)]
 
 
 @pytest.mark.asyncio
