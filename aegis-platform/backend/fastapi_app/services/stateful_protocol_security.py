@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from django.db import transaction
+from graphql import parse
+from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode
 
 from enterprise.web_security_models import (
     WebSecurityObservation,
@@ -120,12 +122,104 @@ def evaluate_websocket_case(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def graphql_document_metrics(document: str) -> dict[str, Any]:
+    parsed = parse(document)
+    fragments = {
+        definition.name.value: definition
+        for definition in parsed.definitions
+        if getattr(definition, 'name', None)
+        and definition.__class__.__name__ == 'FragmentDefinitionNode'
+    }
+    fields: set[str] = set()
+
+    def walk(selection_set, depth: int, seen: set[str]) -> tuple[int, int]:
+        if selection_set is None:
+            return depth, 0
+        max_depth = depth
+        complexity = 0
+        for selection in selection_set.selections:
+            if isinstance(selection, FieldNode):
+                name = selection.name.value
+                fields.add(name)
+                complexity += 1
+                child_depth, child_complexity = walk(
+                    selection.selection_set,
+                    depth + 1,
+                    seen,
+                )
+                max_depth = max(max_depth, child_depth)
+                complexity += child_complexity
+            elif isinstance(selection, InlineFragmentNode):
+                child_depth, child_complexity = walk(
+                    selection.selection_set,
+                    depth,
+                    seen,
+                )
+                max_depth = max(max_depth, child_depth)
+                complexity += child_complexity
+            elif isinstance(selection, FragmentSpreadNode):
+                name = selection.name.value
+                if name in seen or name not in fragments:
+                    continue
+                child_depth, child_complexity = walk(
+                    fragments[name].selection_set,
+                    depth,
+                    seen | {name},
+                )
+                max_depth = max(max_depth, child_depth)
+                complexity += child_complexity
+        return max_depth, complexity
+
+    operations: list[dict[str, str]] = []
+    depth = 0
+    complexity = 0
+    for definition in parsed.definitions:
+        if definition.__class__.__name__ != 'OperationDefinitionNode':
+            continue
+        current_depth, current_complexity = walk(
+            definition.selection_set,
+            1,
+            set(),
+        )
+        depth = max(depth, current_depth)
+        complexity += current_complexity
+        operation_value = getattr(definition.operation, 'value', str(definition.operation))
+        operations.append({
+            'type': str(operation_value),
+            'name': definition.name.value if definition.name else 'anonymous',
+        })
+
+    return {
+        'depth': depth,
+        'complexity': complexity,
+        'fields': sorted(fields),
+        'introspection_requested': '__schema' in fields or '__type' in fields,
+        'operations': operations,
+    }
+
+
 def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
     identity = _identity(case)
     resource = _resource(case)
     expected = bool(case.get('expected_allowed'))
     accepted = bool(case.get('server_accepted'))
     failures: list[str] = []
+
+    document_metrics: dict[str, Any] | None = None
+    document = str(case.get('document') or '')
+    if document:
+        try:
+            document_metrics = graphql_document_metrics(document)
+        except Exception:
+            failures.append('GraphQL document could not be parsed deterministically')
+        else:
+            operations = document_metrics['operations']
+            declared = {
+                'type': str(case.get('operation_type') or ''),
+                'name': str(case.get('operation_name') or ''),
+            }
+            if declared not in operations:
+                failures.append('declared GraphQL operation metadata does not match document')
 
     if accepted != expected:
         failures.append('observed GraphQL authorization decision does not match expected policy')
@@ -182,8 +276,13 @@ def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
             + ', '.join(sorted(sensitive_returned))
         )
 
+    introspection_requested = (
+        bool(document_metrics.get('introspection_requested'))
+        if document_metrics is not None
+        else bool(case.get('introspection_requested'))
+    )
     if (
-        bool(case.get('introspection_requested'))
+        introspection_requested
         and accepted
         and not bool(case.get('introspection_expected_allowed'))
     ):
@@ -194,12 +293,20 @@ def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
     if accepted and batch_size > max_batch_size:
         failures.append('GraphQL batch size limit was bypassed')
 
-    depth = int(case.get('depth') or 1)
+    depth = (
+        int(document_metrics['depth'])
+        if document_metrics is not None
+        else int(case.get('depth') or 1)
+    )
     max_depth = int(case.get('max_depth') or 12)
     if accepted and depth > max_depth:
         failures.append('GraphQL depth limit was bypassed')
 
-    complexity = int(case.get('complexity') or 1)
+    complexity = (
+        int(document_metrics['complexity'])
+        if document_metrics is not None
+        else int(case.get('complexity') or 1)
+    )
     max_complexity = int(case.get('max_complexity') or 1000)
     if accepted and complexity > max_complexity:
         failures.append('GraphQL complexity limit was bypassed')
@@ -219,7 +326,10 @@ def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
         'subscription_owner_ref': owner,
         'sensitive_fields_requested': sorted(sensitive_requested),
         'sensitive_fields_returned': sorted(sensitive_returned),
-        'introspection_requested': bool(case.get('introspection_requested')),
+        'introspection_requested': introspection_requested,
+        'document_fields': (
+            document_metrics['fields'] if document_metrics is not None else []
+        ),
         'introspection_expected_allowed': bool(
             case.get('introspection_expected_allowed')
         ),
