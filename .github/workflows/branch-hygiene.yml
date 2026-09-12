@@ -4,118 +4,83 @@ name: Branch Hygiene Reality
   pull_request:
     types: [closed]
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: read
 
 concurrency:
-  group: branch-hygiene-${{ github.ref }}
-  cancel-in-progress: true
+  group: branch-hygiene-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
-  prune-fully-merged-codex-branches:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+  delete-merged-pr-head:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Delete only fully merged codex branches
+      - name: Delete exact merged internal PR head
         uses: actions/github-script@v7
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const pr = context.payload.pull_request;
+            const headRepo = pr.head.repo?.full_name ?? null;
+            const headRef = pr.head.ref;
+            const mergedHeadSha = pr.head.sha;
+
+            if (headRepo !== `${owner}/${repo}`) {
+              core.info(`External fork head ${headRepo ?? 'unknown'} is not owned by this repository; nothing to delete.`);
+              return;
+            }
+
             const { data: repository } = await github.rest.repos.get({ owner, repo });
             const defaultBranch = repository.default_branch;
-
-            const openPulls = await github.paginate(github.rest.pulls.list, {
-              owner,
-              repo,
-              state: 'open',
-              per_page: 100,
-            });
-            const openHeads = new Set(
-              openPulls
-                .filter((pr) => pr.head.repo?.full_name === `${owner}/${repo}`)
-                .map((pr) => pr.head.ref)
-            );
-
-            const mergedPulls = await github.paginate(github.rest.pulls.list, {
-              owner,
-              repo,
-              state: 'closed',
-              per_page: 100,
-            });
-            const mergedHeads = new Set(
-              mergedPulls
-                .filter((pr) => Boolean(pr.merged_at))
-                .filter((pr) => pr.head.repo?.full_name === `${owner}/${repo}`)
-                .map((pr) => pr.head.ref)
-            );
-
-            const branches = await github.paginate(github.rest.repos.listBranches, {
-              owner,
-              repo,
-              per_page: 100,
-            });
-
-            const eventHead = context.payload.pull_request?.head?.ref ?? null;
-            const candidates = branches
-              .map((branch) => branch.name)
-              .filter((name) => name.startsWith('codex/'))
-              .filter((name) => name !== defaultBranch)
-              .filter((name) => !openHeads.has(name))
-              .filter((name) => context.eventName === 'workflow_dispatch' || name === eventHead);
-
-            const deleted = [];
-            const retained = [];
-            const failed = [];
-
-            for (const branch of candidates) {
-              try {
-                const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
-                  owner,
-                  repo,
-                  basehead: `${defaultBranch}...${branch}`,
-                });
-
-                if (comparison.ahead_by !== 0 && !mergedHeads.has(branch)) {
-                  retained.push({ branch, ahead_by: comparison.ahead_by });
-                  continue;
-                }
-
-                await github.rest.git.deleteRef({
-                  owner,
-                  repo,
-                  ref: `heads/${branch}`,
-                });
-                deleted.push(branch);
-              } catch (error) {
-                failed.push({ branch, status: error.status ?? null, message: error.message });
-              }
+            if (headRef === defaultBranch || headRef.startsWith('archive/')) {
+              core.setFailed(`Refusing to delete protected historical/default branch: ${headRef}`);
+              return;
             }
+
+            let liveRef;
+            try {
+              ({ data: liveRef } = await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: `heads/${headRef}`,
+              }));
+            } catch (error) {
+              if (error.status === 404) {
+                core.info(`Merged branch ${headRef} is already absent.`);
+                return;
+              }
+              throw error;
+            }
+
+            const liveSha = liveRef.object.sha;
+            if (liveSha !== mergedHeadSha) {
+              core.setFailed(
+                `Merged branch ${headRef} advanced after merge: merged SHA ${mergedHeadSha}, live SHA ${liveSha}; retaining ref.`
+              );
+              return;
+            }
+
+            await github.rest.git.deleteRef({
+              owner,
+              repo,
+              ref: `heads/${headRef}`,
+            });
 
             core.summary
               .addHeading('Branch Hygiene Reality')
-              .addRaw(`Default branch: ${defaultBranch}\\n\\n`)
-              .addRaw(`Open PR heads skipped: ${openHeads.size}\\n\\n`)
-              .addRaw(`Merged PR heads eligible for cleanup: ${mergedHeads.size}\\n\\n`)
-              .addRaw(`Event head: ${eventHead ?? 'workflow_dispatch'}\\n\\n`)
-              .addRaw(`Fully merged codex branches deleted: ${deleted.length}\\n\\n`)
-              .addRaw(`Codex branches retained with unique commits: ${retained.length}\\n\\n`)
-              .addRaw(`Delete/compare failures: ${failed.length}\\n\\n`)
+              .addRaw(`Merged PR: #${pr.number}\\n\\n`)
+              .addRaw(`Deleted head: ${headRef}\\n\\n`)
+              .addRaw(`Verified SHA: ${mergedHeadSha}\\n\\n`)
               .write();
 
             core.info(JSON.stringify({
+              pull_request: pr.number,
+              deleted_head: headRef,
+              verified_sha: mergedHeadSha,
               default_branch: defaultBranch,
-              merged_pr_head_count: mergedHeads.size,
-              deleted_count: deleted.length,
-              retained_count: retained.length,
-              failed_count: failed.length,
-              retained: retained.slice(0, 100),
-              failed: failed.slice(0, 100),
             }, null, 2));
-
-            if (failed.length > 0) {
-              core.setFailed(`Branch hygiene encountered ${failed.length} GitHub API failures`);
-            }
