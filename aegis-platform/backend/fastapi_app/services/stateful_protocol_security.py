@@ -160,8 +160,10 @@ def graphql_document_metrics(document: str) -> dict[str, Any]:
                 complexity += child_complexity
             elif isinstance(selection, FragmentSpreadNode):
                 name = selection.name.value
-                if name in seen or name not in fragments:
-                    continue
+                if name in seen:
+                    raise ValueError('cyclic GraphQL fragment graph')
+                if name not in fragments:
+                    raise ValueError('unknown GraphQL fragment reference')
                 child_depth, child_complexity = walk(
                     fragments[name].selection_set,
                     depth,
