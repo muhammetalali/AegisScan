@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import ipaddress
 import json
 import os
@@ -178,6 +179,8 @@ def initialize(
 
     django_secret = secrets.token_urlsafe(64)
     jwt_secret = secrets.token_urlsafe(64)
+    credential_vault_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+    credential_fingerprint_key = secrets.token_urlsafe(48)
     postgres_password = secrets.token_urlsafe(48)
     postgres_password_url = quote(postgres_password, safe="")
 
@@ -185,6 +188,8 @@ def initialize(
         "DEBUG": "False",
         "SECRET_KEY": django_secret,
         "JWT_SECRET_KEY": jwt_secret,
+        "CREDENTIAL_VAULT_KEYS": credential_vault_key,
+        "CREDENTIAL_FINGERPRINT_KEY": credential_fingerprint_key,
         "POSTGRES_DB": "aegisdb",
         "POSTGRES_USER": "aegis",
         "POSTGRES_PASSWORD": postgres_password,
