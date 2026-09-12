@@ -398,7 +398,7 @@ def _protocol_for_observation(observation: WebSecurityObservation) -> str:
         return 'graphql'
     if kind == WebSecurityValidationRun.Kind.AUTHORIZATION_MATRIX:
         protocol = str((observation.semantic or {}).get('protocol') or '').strip().lower()
-        return protocol if protocol in {'http', 'https'} else ''
+        return protocol if protocol in {'browser', 'http', 'https', 'graphql', 'websocket'} else ''
     return ''
 
 
@@ -601,6 +601,15 @@ def _project_graphql_graph(project, case: dict[str, Any], result: dict[str, Any]
 
 def _project_cross_protocol_graph(project, case: dict[str, Any], result: dict[str, Any]) -> None:
     identity = _identity(case)
+    lineage_refs = [
+        ref
+        for ref in (
+            str(case.get('source_evidence_ref') or ''),
+            str(case.get('target_evidence_ref') or ''),
+            str(result.get('evidence_fingerprint') or ''),
+        )
+        if ref
+    ]
     resource = _resource(case)
     nodes, edges = _common_nodes(case, 'cross_protocol')
     session_ref = str(case.get('session_ref') or '')
@@ -661,7 +670,7 @@ def _project_cross_protocol_graph(project, case: dict[str, Any], result: dict[st
             'target_ref': to_state,
             'relation': 'transitions_to',
             'properties': {'operation': case.get('operation')},
-            'evidence_refs': [result['evidence_fingerprint']],
+            'evidence_refs': lineage_refs,
             'provenance': {'source': 'cross_protocol'},
         },
         {
@@ -669,7 +678,7 @@ def _project_cross_protocol_graph(project, case: dict[str, Any], result: dict[st
             'target_ref': f'resource:{resource.get("ref")}',
             'relation': 'targets',
             'properties': {},
-            'evidence_refs': [result['evidence_fingerprint']],
+            'evidence_refs': lineage_refs,
             'provenance': {'source': 'cross_protocol'},
         },
     ])
