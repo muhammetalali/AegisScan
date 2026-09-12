@@ -112,7 +112,7 @@ class Migration(migrations.Migration):
                 'ordering': ['-created_at', '-id'],
                 'indexes': [models.Index(fields=['project', 'status'], name='idx_provider_project_state')],
                 'constraints': [
-                    models.UniqueConstraint(fields=('project', 'provider_name', 'provider_version', 'capability', 'status', 'manifest_sha256'), name='uniq_provider_approval_decision'),
+                    models.UniqueConstraint(fields=('project', 'provider_name', 'provider_version', 'capability', 'status', 'manifest_sha256'), name='uniq_provider_approval_dec'),
                 ],
             },
         ),
