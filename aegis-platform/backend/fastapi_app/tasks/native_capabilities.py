@@ -183,6 +183,29 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 purpose=f'native:{capability.id}:execute',
                 target=str(target),
             )
+
+        if capability.id == 'browser.spa-discovery':
+            requested_identity = str(options.get('identity_ref') or 'anonymous').strip()
+            if credential_materials:
+                bound_identity = str(credential_materials[0].get('browser_identity_ref') or '').strip()
+                if not bound_identity or requested_identity != bound_identity:
+                    return _fail(
+                        scan,
+                        execution,
+                        'Browser identity no longer matches the bound credential identity',
+                        credential_context,
+                    )
+                options = {**options, 'identity_ref': bound_identity}
+            else:
+                if requested_identity != 'anonymous':
+                    return _fail(
+                        scan,
+                        execution,
+                        'Non-anonymous browser identity requires a bound browser session credential',
+                        credential_context,
+                    )
+                options = {**options, 'identity_ref': 'anonymous'}
+
         result = run_native_tool(
             capability_id,
             str(target),
