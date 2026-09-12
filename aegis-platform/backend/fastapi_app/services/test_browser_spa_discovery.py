@@ -14,7 +14,11 @@ from django_project.users.models import User, UserRole
 from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
 from fastapi_app.services.browser_spa_discovery import _canonical_url, _graphql_metadata, _load_session, _origin
 from fastapi_app.services.browser_surface_graph import project_browser_surface_graph
-from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution, resolve_credential_refs_for_worker
+from fastapi_app.services.credential_execution import (
+    assert_no_credential_material_leaked,
+    authorize_credential_refs_for_execution,
+    resolve_credential_refs_for_worker,
+)
 from fastapi_app.services.native_output_normalizer import normalize_native_output
 from fastapi_app.services.native_tool_runtime import _browser_session_file
 
@@ -149,6 +153,41 @@ def test_browser_session_credential_requires_exact_origin_scope(project, actor):
     assert denied.metadata['scope_type'] == 'browser_origin'
     assert denied.metadata['scope_matches_target'] is False
     assert 'browser-session-secret' not in str(denied.metadata)
+
+
+def test_browser_session_nested_secret_values_are_rejected_from_payloads():
+    session_secret = json.dumps({
+        'headers': {
+            'Authorization': 'Bearer nested-browser-token',
+            'X-Tenant': 'tenant-secret-value',
+        },
+        'cookies': [
+            {'name': 'session', 'value': 'nested-cookie-secret', 'path': '/'},
+        ],
+        'local_storage': {'access_token': 'nested-storage-secret'},
+        'session_storage': {'bootstrap': 'nested-session-secret'},
+    })
+    material = {'kind': 'generic', 'secret': session_secret}
+
+    assert_no_credential_material_leaked(
+        (material,),
+        {
+            'cookie_names': ['session'],
+            'storage_keys': ['access_token', 'bootstrap'],
+            'header_names': ['Authorization', 'X-Tenant'],
+        },
+    )
+
+    for leaked in (
+        'nested-browser-token',
+        'Bearer nested-browser-token',
+        'tenant-secret-value',
+        'nested-cookie-secret',
+        'nested-storage-secret',
+        'nested-session-secret',
+    ):
+        with pytest.raises(AssertionError):
+            assert_no_credential_material_leaked((material,), {'leaked': leaked})
 
 
 def test_spa_normalizer_whitelists_metadata_and_drops_secret_values():
