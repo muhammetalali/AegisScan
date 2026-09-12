@@ -139,7 +139,8 @@ class Migration(migrations.Migration):
                     ('remediation', 'Remediation'), ('revalidation', 'Revalidation'), ('service', 'Service'),
                     ('cache', 'Cache'), ('reverse_proxy', 'Reverse Proxy'), ('database', 'Database'),
                     ('external_service', 'External Service'), ('threat', 'Threat'), ('ttp', 'ATT&CK TTP'),
-                    ('asset', 'Asset'), ('capability', 'Capability'),
+                    ('asset', 'Asset'), ('capability', 'Capability'), ('trust_boundary', 'Trust Boundary'),
+                    ('data_flow', 'Data Flow'),
                 ], max_length=40)),
                 ('external_ref', models.CharField(max_length=500)),
                 ('label', models.CharField(max_length=300)),
@@ -157,7 +158,7 @@ class Migration(migrations.Migration):
                     models.Index(fields=['project', 'tenant_ref'], name='idx_secgraph_tenant'),
                 ],
                 'constraints': [
-                    models.UniqueConstraint(fields=('project', 'kind', 'external_ref'), name='uniq_secgraph_project_kind_ref'),
+                    models.UniqueConstraint(fields=('project', 'external_ref'), name='uniq_secgraph_project_ref'),
                 ],
             },
         ),
