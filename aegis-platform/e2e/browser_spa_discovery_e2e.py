@@ -54,6 +54,12 @@ def main() -> int:
         _fail('browser profile isolation was not proven')
     if summary.get('credential_transport') != 'same-origin-request-interception':
         _fail('same-origin credential transport was not proven')
+    if summary.get('network_isolation') != 'scope-validated-socks5-plus-cdp':
+        _fail('scope-validating browser network boundary was not proven')
+    if int(summary.get('proxy_blocked_connection_count') or 0) < 1:
+        _fail('worker-context out-of-scope egress did not reach the scope proxy block')
+    if int(summary.get('proxy_allowed_connection_count') or 0) < 1:
+        _fail('scope proxy did not prove any authorized browser connection')
     if int(summary.get('blocked_out_of_scope_request_count') or 0) < 1:
         _fail('out-of-scope browser egress was not blocked')
     if int(summary.get('blocked_websocket_count') or 0) < 1:
@@ -134,6 +140,8 @@ def main() -> int:
         'blocked_out_of_scope_requests': int(summary.get('blocked_out_of_scope_request_count') or 0),
         'blocked_cross_origin_websockets': int(summary.get('blocked_websocket_count') or 0),
         'blocked_cross_origin_webtransports': int(summary.get('blocked_webtransport_count') or 0),
+        'proxy_blocked_connections': int(summary.get('proxy_blocked_connection_count') or 0),
+        'proxy_allowed_connections': int(summary.get('proxy_allowed_connection_count') or 0),
         'secret_leakage': False,
     }, sort_keys=True))
     return 0
