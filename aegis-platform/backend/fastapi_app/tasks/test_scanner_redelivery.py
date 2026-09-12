@@ -35,7 +35,9 @@ def test_nmap_redelivery_does_not_rerun_or_duplicate_durable_state(monkeypatch):
 
     class StubNmap:
         calls = 0
-        def run(self, request, timeout):
+        def run(self, request, timeout, state_getter=None):
+            assert callable(state_getter)
+            assert state_getter() == Scan.Status.RUNNING
             self.calls += 1
             return ScanResult('nmap', request.target, 0, NMAP_XML, '')
 

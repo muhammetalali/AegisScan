@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -123,6 +124,7 @@ class DecisionAction(models.Model):
     organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='decision_actions',null=True,blank=True)
     project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='decision_actions',null=True,blank=True)
     validation=models.ForeignKey('evidence.ValidationRun',on_delete=models.PROTECT,related_name='decision_actions',null=True,blank=True)
+    risk_correlation=models.ForeignKey('enterprise.RiskCorrelationSnapshot',on_delete=models.PROTECT,related_name='decision_actions',null=True,blank=True)
     decision_id=models.TextField(); node_id=models.TextField(); title=models.TextField(); owner=models.TextField(); requested_by=models.TextField()
     sla_hours=models.PositiveIntegerField(); state=models.TextField(); risk_before=models.IntegerField(default=0); confidence_before=models.IntegerField(default=0)
     priority=models.IntegerField(default=0); recommended_action=models.TextField(); remediation_plan=models.JSONField(default=list)
@@ -130,7 +132,7 @@ class DecisionAction(models.Model):
     sla_status=models.TextField(default='on_track'); escalation_level=models.PositiveIntegerField(default=0)
     class Meta:
         db_table='security_decision_actions'
-        indexes=[models.Index(fields=['state','updated_at'],name='idx_actions_state_updated'),models.Index(fields=['owner','sla_status','created_at'],name='idx_actions_owner_sla'),models.Index(fields=['requested_by'],name='idx_actions_requested_by'),models.Index(fields=['organization','state'],name='idx_actions_org_state'),models.Index(fields=['project','state'],name='idx_actions_project_state')]
+        indexes=[models.Index(fields=['state','updated_at'],name='idx_actions_state_updated'),models.Index(fields=['owner','sla_status','created_at'],name='idx_actions_owner_sla'),models.Index(fields=['requested_by'],name='idx_actions_requested_by'),models.Index(fields=['organization','state'],name='idx_actions_org_state'),models.Index(fields=['project','state'],name='idx_actions_project_state'),models.Index(fields=['risk_correlation','state'],name='idx_actions_riskcorr_state')]
 
 
 class DecisionActionEvent(models.Model):
@@ -163,6 +165,48 @@ class AttackPath(models.Model):
     class Status(models.TextChoices): DISCOVERED='discovered','Discovered'; VALIDATED='validated','Validated'; CLOSED='closed','Closed'
     id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False); organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='attack_paths'); project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='attack_paths')
     source_node=models.JSONField(default=dict); target_node=models.JSONField(default=dict); steps=models.JSONField(default=list); risk_score=models.FloatField(default=0.0); evidence=models.JSONField(default=dict,blank=True); status=models.CharField(max_length=20,choices=Status.choices,default=Status.DISCOVERED); discovered_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
+
+
+class RiskCorrelationSnapshot(models.Model):
+    """Immutable evidence-backed finding priority snapshot."""
+
+    class Priority(models.TextChoices):
+        P0_CRITICAL='P0-CRITICAL','P0 Critical'
+        P1_HIGH='P1-HIGH','P1 High'
+        P2_MEDIUM='P2-MEDIUM','P2 Medium'
+        P3_LOW='P3-LOW','P3 Low'
+
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='risk_correlation_snapshots')
+    vulnerability=models.ForeignKey('vulnerabilities.Vulnerability',on_delete=models.CASCADE,related_name='risk_correlation_snapshots')
+    finding_intelligence=models.ForeignKey(FindingIntelligence,on_delete=models.PROTECT,related_name='risk_correlation_snapshots')
+    source_snapshot=models.ForeignKey('intelligence.IntelligenceEnrichment',on_delete=models.PROTECT,related_name='risk_correlation_snapshots')
+    attack_path=models.ForeignKey(AttackPath,on_delete=models.PROTECT,null=True,blank=True,related_name='risk_correlation_snapshots')
+    analysis_version=models.CharField(max_length=20,default='1.0')
+    score=models.FloatField()
+    priority=models.CharField(max_length=20,choices=Priority.choices)
+    components=models.JSONField(default=dict)
+    evidence_count=models.PositiveIntegerField(default=0)
+    source_snapshot_sha256=models.CharField(max_length=64)
+    correlation_sha256=models.CharField(max_length=64,unique=True,editable=False)
+    created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='risk_correlation_snapshots')
+    created_at=models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering=['-created_at','-id']
+        indexes=[
+            models.Index(fields=['project','priority','-created_at'],name='idx_riskcorr_project_prio'),
+            models.Index(fields=['vulnerability','-created_at'],name='idx_riskcorr_finding_time'),
+            models.Index(fields=['source_snapshot','-created_at'],name='idx_riskcorr_source_time'),
+        ]
+
+    def save(self,*args,**kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Risk correlation snapshots are immutable; create a new snapshot')
+        super().save(*args,**kwargs)
+
+    def delete(self,*args,**kwargs):
+        raise ValidationError('Risk correlation snapshots are immutable and cannot be deleted')
 
 
 class ComplianceMapping(models.Model):
@@ -229,7 +273,7 @@ class Notification(models.Model):
 
 
 class ExternalIntegration(models.Model):
-    class Kind(models.TextChoices): SPLUNK='splunk','Splunk'; ELASTIC='elastic','Elastic'; GENERIC_WEBHOOK='generic_webhook','Generic Webhook'; SLACK='slack','Slack'; TEAMS='teams','Microsoft Teams'
+    class Kind(models.TextChoices): SPLUNK='splunk','Splunk'; ELASTIC='elastic','Elastic'; SENTINEL='sentinel','Microsoft Sentinel'; QRADAR='qradar','IBM QRadar'; SOAR_WEBHOOK='soar_webhook','SOAR Webhook'; GITHUB='github','GitHub'; GITLAB='gitlab','GitLab'; BITBUCKET='bitbucket','Bitbucket'; ECR='ecr','AWS ECR'; GCR='gcr','Google Container/Artifact Registry'; ACR='acr','Azure Container Registry'; HARBOR='harbor','Harbor'; GHCR='ghcr','GitHub Container Registry'; GENERIC_WEBHOOK='generic_webhook','Generic Webhook'; SLACK='slack','Slack'; TEAMS='teams','Microsoft Teams'
     organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='integrations'); kind=models.CharField(max_length=30,choices=Kind.choices); name=models.CharField(max_length=120); base_url=models.URLField(); secret_ref=models.CharField(max_length=200,blank=True); config=models.JSONField(default=dict,blank=True); enabled=models.BooleanField(default=True); created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
 
 
@@ -246,3 +290,301 @@ class SBOMArtifact(models.Model):
 class SBOMComponent(models.Model):
     artifact=models.ForeignKey(SBOMArtifact,on_delete=models.CASCADE,related_name='components'); name=models.CharField(max_length=300); version=models.CharField(max_length=200,blank=True); ecosystem=models.CharField(max_length=100,blank=True); purl=models.CharField(max_length=500,blank=True); licenses=models.JSONField(default=list,blank=True); hashes=models.JSONField(default=list,blank=True); vulnerabilities=models.JSONField(default=list,blank=True)
     class Meta: indexes=[models.Index(fields=['name','version'])]
+
+
+# Enterprise gap-closure durable domain ----------------------------------------
+
+class _AppendOnlyQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise RuntimeError('append-only records cannot be updated')
+
+    def delete(self):
+        raise RuntimeError('append-only records cannot be deleted')
+
+
+class _AppendOnlyManager(models.Manager):
+    def get_queryset(self):
+        return _AppendOnlyQuerySet(self.model, using=self._db)
+
+
+class Team(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='teams')
+    name=models.CharField(max_length=160)
+    slug=models.SlugField(max_length=180)
+    parent=models.ForeignKey('self',on_delete=models.PROTECT,null=True,blank=True,related_name='children')
+    description=models.TextField(blank=True)
+    is_active=models.BooleanField(default=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['organization','slug'],name='uniq_team_org_slug')]
+        indexes=[models.Index(fields=['organization','is_active'],name='idx_team_org_active')]
+
+
+class TeamMembership(models.Model):
+    class Role(models.TextChoices):
+        LEAD='lead','Lead'; MEMBER='member','Member'; VIEWER='viewer','Viewer'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    team=models.ForeignKey(Team,on_delete=models.CASCADE,related_name='memberships')
+    user=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE,related_name='enterprise_team_memberships')
+    role=models.CharField(max_length=20,choices=Role.choices,default=Role.MEMBER)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['team','user'],name='uniq_team_user')]
+        indexes=[models.Index(fields=['user','role'],name='idx_team_user_role')]
+
+
+class FindingDecisionProvenance(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='finding_decisions')
+    project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='finding_decisions')
+    vulnerability=models.ForeignKey('vulnerabilities.Vulnerability',on_delete=models.PROTECT,related_name='decision_provenance')
+    validation=models.ForeignKey('evidence.ValidationRun',on_delete=models.PROTECT,null=True,blank=True,related_name='finding_decisions')
+    actor=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='finding_decisions')
+    decision=models.CharField(max_length=80)
+    old_status=models.CharField(max_length=20,blank=True)
+    new_status=models.CharField(max_length=20,blank=True)
+    policy_ref=models.CharField(max_length=240)
+    reason=models.TextField()
+    evidence_refs=models.JSONField(default=list)
+    previous_hash=models.CharField(max_length=64,blank=True)
+    entry_hash=models.CharField(max_length=64,unique=True)
+    created_at=models.DateTimeField()
+    objects=_AppendOnlyManager()
+    class Meta:
+        ordering=['created_at','id']
+        indexes=[
+            models.Index(fields=['vulnerability','created_at'],name='idx_find_decision_created'),
+            models.Index(fields=['project','decision'],name='idx_find_decision_project'),
+        ]
+    def save(self,*args,**kwargs):
+        if not self._state.adding:
+            raise RuntimeError('finding decision provenance is immutable')
+        return super().save(*args,**kwargs)
+    def delete(self,*args,**kwargs):
+        raise RuntimeError('finding decision provenance is immutable')
+
+
+class ScanControlCheckpoint(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    scan=models.ForeignKey('scans.Scan',on_delete=models.CASCADE,related_name='control_checkpoints')
+    sequence=models.PositiveIntegerField()
+    state=models.CharField(max_length=20)
+    phase=models.CharField(max_length=80,blank=True)
+    engine=models.CharField(max_length=100,blank=True)
+    progress=models.FloatField(default=0)
+    task_id=models.CharField(max_length=255,blank=True)
+    resume_token=models.UUIDField(default=uuid.uuid4,editable=False)
+    metadata=models.JSONField(default=dict,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['scan','sequence'],name='uniq_scan_checkpoint_sequence')]
+        indexes=[models.Index(fields=['scan','created_at'],name='idx_scan_checkpoint_created')]
+
+
+class InvestigationCase(models.Model):
+    class Status(models.TextChoices):
+        OPEN='open','Open'; INVESTIGATING='investigating','Investigating'; DECIDED='decided','Decided'; CLOSED='closed','Closed'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='investigation_cases')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='investigation_cases')
+    title=models.CharField(max_length=240)
+    description=models.TextField(blank=True)
+    status=models.CharField(max_length=20,choices=Status.choices,default=Status.OPEN)
+    owner=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='owned_investigation_cases')
+    findings=models.ManyToManyField('vulnerabilities.Vulnerability',blank=True,related_name='investigation_cases')
+    evidence=models.ManyToManyField('evidence.Evidence',blank=True,related_name='investigation_cases')
+    decision_summary=models.TextField(blank=True)
+    closed_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        indexes=[
+            models.Index(fields=['project','status'],name='idx_case_project_status'),
+            models.Index(fields=['owner','status'],name='idx_case_owner_status'),
+        ]
+
+
+class InvestigationCaseEvent(models.Model):
+    id=models.BigAutoField(primary_key=True)
+    case=models.ForeignKey(InvestigationCase,on_delete=models.CASCADE,related_name='events')
+    actor=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='investigation_case_events')
+    event_type=models.CharField(max_length=80)
+    payload=models.JSONField(default=dict)
+    created_at=models.DateTimeField(auto_now_add=True)
+    objects=_AppendOnlyManager()
+    class Meta:
+        ordering=['id']
+    def save(self,*args,**kwargs):
+        if not self._state.adding:
+            raise RuntimeError('investigation case events are immutable')
+        return super().save(*args,**kwargs)
+    def delete(self,*args,**kwargs):
+        raise RuntimeError('investigation case events are immutable')
+
+
+class EvidenceGraphNode(models.Model):
+    class Kind(models.TextChoices):
+        ASSET='asset','Asset'; FINDING='finding','Finding'; EVIDENCE='evidence','Evidence'; SCAN='scan','Scan'; VALIDATION='validation','Validation'; REMEDIATION='remediation','Remediation'; USER='user','User'; AUDIT='audit','Audit'; CONTROL='control','Control'; THREAT='threat','Threat'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='evidence_graph_nodes')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='evidence_graph_nodes')
+    kind=models.CharField(max_length=20,choices=Kind.choices)
+    external_ref=models.CharField(max_length=255)
+    label=models.CharField(max_length=300)
+    confidence=models.FloatField(default=1.0)
+    properties=models.JSONField(default=dict,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['project','kind','external_ref'],name='uniq_egraph_project_kind_ref')]
+        indexes=[models.Index(fields=['project','kind'],name='idx_egraph_project_kind')]
+
+
+class EvidenceGraphEdge(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='evidence_graph_edges')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='evidence_graph_edges')
+    source=models.ForeignKey(EvidenceGraphNode,on_delete=models.CASCADE,related_name='outgoing_edges')
+    target=models.ForeignKey(EvidenceGraphNode,on_delete=models.CASCADE,related_name='incoming_edges')
+    edge_type=models.CharField(max_length=60)
+    weight=models.FloatField(default=1.0)
+    evidence_refs=models.JSONField(default=list,blank=True)
+    properties=models.JSONField(default=dict,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['project','source','target','edge_type'],name='uniq_egraph_edge')]
+        indexes=[models.Index(fields=['project','edge_type'],name='idx_egraph_project_edge')]
+
+
+class BlastRadiusSnapshot(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='blast_radius_snapshots')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='blast_radius_snapshots')
+    attack_path=models.ForeignKey(AttackPath,on_delete=models.SET_NULL,null=True,blank=True,related_name='blast_radius_snapshots')
+    root_ref=models.CharField(max_length=255)
+    crown_jewel_refs=models.JSONField(default=list)
+    impacted_nodes=models.JSONField(default=list)
+    score=models.FloatField(default=0)
+    evidence_refs=models.JSONField(default=list)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        indexes=[models.Index(fields=['project','created_at'],name='idx_blast_project_created')]
+
+
+class ArtifactIntegrityRecord(models.Model):
+    class State(models.TextChoices):
+        TRUSTED='trusted','Trusted'; REVIEW='review','Review'; QUARANTINED='quarantined','Quarantined'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='artifact_integrity_records')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='artifact_integrity_records')
+    artifact_type=models.CharField(max_length=40)
+    name=models.CharField(max_length=300)
+    source_ref=models.CharField(max_length=700)
+    sha256=models.CharField(max_length=64)
+    signature_verified=models.BooleanField(default=False)
+    provenance_verified=models.BooleanField(default=False)
+    package_namespace=models.CharField(max_length=300,blank=True)
+    state=models.CharField(max_length=20,choices=State.choices,default=State.REVIEW)
+    quarantine_reason=models.TextField(blank=True)
+    metadata=models.JSONField(default=dict,blank=True)
+    created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='artifact_integrity_records')
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['project','sha256'],name='uniq_project_artifact_sha')]
+        indexes=[models.Index(fields=['project','state'],name='idx_artifact_project_state')]
+
+
+class AdaptiveWeightProfile(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='adaptive_weight_profiles')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='adaptive_weight_profiles')
+    version=models.PositiveIntegerField()
+    weights=models.JSONField(default=dict)
+    learned_from=models.PositiveIntegerField(default=0)
+    reward_mean=models.FloatField(default=0)
+    algorithm=models.CharField(max_length=80,default='bounded-contextual-feedback-v1')
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['project','version'],name='uniq_project_weight_version')]
+
+
+class FormalPolicyProof(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='formal_policy_proofs')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='formal_policy_proofs')
+    proof_type=models.CharField(max_length=80)
+    input_sha256=models.CharField(max_length=64)
+    satisfiable=models.BooleanField()
+    model=models.JSONField(default=dict,blank=True)
+    solver=models.CharField(max_length=80,default='z3')
+    solver_version=models.CharField(max_length=80,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        indexes=[models.Index(fields=['project','proof_type','created_at'],name='idx_formal_proof_project')]
+
+
+# External integration and plugin lifecycle ------------------------------------
+
+class IntegrationSyncRun(models.Model):
+    class Status(models.TextChoices):
+        PENDING='pending','Pending'; RUNNING='running','Running'; COMPLETED='completed','Completed'; FAILED='failed','Failed'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='integration_sync_runs')
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='integration_sync_runs')
+    integration=models.ForeignKey(ExternalIntegration,on_delete=models.CASCADE,related_name='sync_runs')
+    sync_type=models.CharField(max_length=40)
+    status=models.CharField(max_length=20,choices=Status.choices,default=Status.PENDING)
+    cursor=models.CharField(max_length=500,blank=True)
+    records_count=models.PositiveIntegerField(default=0)
+    summary=models.JSONField(default=dict,blank=True)
+    error_message=models.TextField(blank=True)
+    requested_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='integration_sync_runs')
+    started_at=models.DateTimeField(null=True,blank=True)
+    completed_at=models.DateTimeField(null=True,blank=True)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        indexes=[
+            models.Index(fields=['integration','status'],name='idx_integration_sync_state'),
+            models.Index(fields=['project','created_at'],name='idx_integration_sync_project'),
+        ]
+
+
+class ExternalIntelligenceSnapshot(models.Model):
+    class Provider(models.TextChoices):
+        SHODAN='shodan','Shodan'; CENSYS='censys','Censys'; GREYNOISE='greynoise','GreyNoise'
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    provider=models.CharField(max_length=20,choices=Provider.choices)
+    indicator=models.CharField(max_length=255)
+    data=models.JSONField(default=dict)
+    source_url=models.URLField(max_length=1000)
+    snapshot_sha256=models.CharField(max_length=64)
+    observed_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True,blank=True,related_name='external_intelligence_snapshots')
+    observed_at=models.DateTimeField()
+    class Meta:
+        ordering=['-observed_at','-id']
+        indexes=[
+            models.Index(fields=['provider','indicator','observed_at'],name='idx_extintel_prov_ind'),
+            models.Index(fields=['indicator','observed_at'],name='idx_extintel_ind_time'),
+        ]
+
+
+class PluginPackage(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    name=models.CharField(max_length=160)
+    version=models.CharField(max_length=80)
+    source=models.URLField(max_length=1000)
+    digest=models.CharField(max_length=64)
+    manifest=models.JSONField(default=dict)
+    dependencies=models.JSONField(default=list)
+    approved=models.BooleanField(default=False)
+    enabled=models.BooleanField(default=False)
+    installed_at=models.DateTimeField(auto_now_add=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['name','version'],name='uniq_plugin_package_version')]
+        indexes=[
+            models.Index(fields=['name','enabled'],name='idx_plugin_package_enabled'),
+            models.Index(fields=['approved','enabled'],name='idx_plugin_package_approved'),
+        ]

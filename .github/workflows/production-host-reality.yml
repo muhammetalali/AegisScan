@@ -1,0 +1,128 @@
+name: Production Host Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/scripts/production_host_bootstrap.sh'
+      - 'aegis-platform/scripts/production_host_reality.py'
+      - 'aegis-platform/scripts/production_secret_init.py'
+      - 'aegis-platform/scripts/production_tls_acme.sh'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/docker-compose.monitoring.yml'
+      - 'aegis-platform/docker-compose.backup.yml'
+      - 'tests/test_production_host_reality.py'
+      - '.github/workflows/production-host-reality.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+concurrency:
+  group: production-host-reality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-host-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: python -m pip install pytest==9.1.1
+
+      - name: Validate production shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n aegis-platform/scripts/production_host_bootstrap.sh
+          sh -n aegis-platform/scripts/production_tls_acme.sh
+
+      - name: Unit-test host, secret and safety contracts
+        run: python -m pytest -q tests/test_production_host_reality.py
+
+      - name: Generate private production secret material
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-input /tmp/aegis-runtime
+          umask 077
+          cat >/tmp/aegis-input/s3.json <<'JSON'
+          {"access_key_id":"ci-production-access","secret_access_key":"ci-production-secret-value"}
+          JSON
+          chmod 0600 /tmp/aegis-input/s3.json
+          python aegis-platform/scripts/production_secret_init.py \
+            --domain security.example.com \
+            --authorized-target 203.0.113.10 \
+            --authorized-target authorized.example.com \
+            --alert-webhook https://alerts.example.com/aegis \
+            --backup-endpoint https://backups.example.com \
+            --backup-bucket aegisscan-production-backups \
+            --backup-region eu-central-1 \
+            --s3-credentials-source /tmp/aegis-input/s3.json \
+            --output-env /tmp/aegis-runtime/production.env \
+            --secrets-dir /tmp/aegis-runtime/secrets
+          test "$(stat -c '%a' /tmp/aegis-runtime/production.env)" = 600
+          test "$(stat -c '%a' /tmp/aegis-runtime/secrets/s3-credentials.json)" = 600
+          test "$(stat -c '%a' /tmp/aegis-runtime/secrets/backup-encryption.key)" = 600
+          test "$(stat -c '%s' /tmp/aegis-runtime/secrets/backup-encryption.key)" = 32
+
+      - name: Prove generated secret material passes production preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          . /tmp/aegis-runtime/production.env
+          set +a
+          python aegis-platform/scripts/production_preflight.py --skip-tls
+
+      - name: Prove Docker NET_RAW, NET_ADMIN and shared network namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          path = Path("aegis-platform/scripts/production_host_reality.py")
+          spec = importlib.util.spec_from_file_location("host_reality", path)
+          assert spec and spec.loader
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          module._probe_capability(
+              "NET_RAW",
+              "ping -c 1 -W 1 127.0.0.1 >/dev/null",
+          )
+          module._probe_capability(
+              "NET_ADMIN",
+              "ip link set lo up && ip link show lo >/dev/null",
+          )
+          module._probe_shared_network_namespace()
+          print("aegisscan-host-capabilities-real=PASS")
+          PY
+
+      - name: Prove complete production Compose overlay resolves
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          path = Path("aegis-platform/scripts/production_host_reality.py")
+          spec = importlib.util.spec_from_file_location("host_reality", path)
+          assert spec and spec.loader
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._validate_compose(Path("/tmp/aegis-runtime/production.env"))
+          print("aegisscan-production-compose-real=PASS")
+          PY

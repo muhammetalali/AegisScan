@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .scanner_adapters import ScanResult, run_masscan, run_nmap, run_nuclei, run_semgrep, validate_authorized_target, validate_authorized_web_target, validate_code_target
 
@@ -19,7 +19,7 @@ class SecurityTool(ABC):
     name: str = 'generic'
 
     @abstractmethod
-    def run(self, request: ToolRequest, timeout: int = 300) -> ScanResult:
+    def run(self, request: ToolRequest, timeout: int = 300, state_getter: Callable[[], str] | None = None) -> ScanResult:
         raise NotImplementedError
 
     def validate(self, request: ToolRequest) -> str:
@@ -40,41 +40,41 @@ class ExploitationFramework(SecurityTool):
 
 class NmapNetworkScanner(NetworkScanner):
     name = 'nmap'
-    def run(self, request: ToolRequest, timeout: int = 300) -> ScanResult:
-        return run_nmap(self.validate(request), timeout=timeout)
+    def run(self, request: ToolRequest, timeout: int = 300, state_getter: Callable[[], str] | None = None) -> ScanResult:
+        return run_nmap(self.validate(request), timeout=timeout, state_getter=state_getter)
 
 
 class MasscanNetworkScanner(NetworkScanner):
     name = 'masscan'
-    def run(self, request: ToolRequest, timeout: int = 300) -> ScanResult:
+    def run(self, request: ToolRequest, timeout: int = 300, state_getter: Callable[[], str] | None = None) -> ScanResult:
         target = self.validate(request)
-        return run_masscan(target, ports=str(request.options.get('ports', '1-65535')), rate=int(request.options.get('rate', 1000)), timeout=timeout)
+        return run_masscan(target, ports=str(request.options.get('ports', '1-65535')), rate=int(request.options.get('rate', 1000)), timeout=timeout, state_getter=state_getter)
 
 
 class NucleiWebScanner(WebScanner):
     name = 'nuclei'
-    def run(self, request: ToolRequest, timeout: int = 600) -> ScanResult:
+    def run(self, request: ToolRequest, timeout: int = 600, state_getter: Callable[[], str] | None = None) -> ScanResult:
         if request.authorized is not True: raise PermissionError('Execution blocked: target is not explicitly authorized')
-        return run_nuclei(validate_authorized_web_target(request.target), timeout=timeout)
+        return run_nuclei(validate_authorized_web_target(request.target), timeout=timeout, state_getter=state_getter)
 
 
 class SemgrepCodeScanner(CodeScanner):
     name = 'semgrep'
-    def run(self, request: ToolRequest, timeout: int = 600) -> ScanResult:
+    def run(self, request: ToolRequest, timeout: int = 600, state_getter: Callable[[], str] | None = None) -> ScanResult:
         if request.authorized is not True: raise PermissionError('Execution blocked: target is not explicitly authorized')
-        return run_semgrep(validate_code_target(request.target), timeout=timeout)
+        return run_semgrep(validate_code_target(request.target), timeout=timeout, state_getter=state_getter)
 
 
 class UnsupportedADScanner(ADScanner):
     name = 'ad-provider-not-configured'
-    def run(self, request: ToolRequest, timeout: int = 300) -> ScanResult:
+    def run(self, request: ToolRequest, timeout: int = 300, state_getter: Callable[[], str] | None = None) -> ScanResult:
         self.validate(request)
         raise RuntimeError('No real Active Directory scanner provider is configured')
 
 
 class SafeExploitationAssessment(ExploitationFramework):
     name = 'safe-exploitation-assessment'
-    def run(self, request: ToolRequest, timeout: int = 300) -> ScanResult:
+    def run(self, request: ToolRequest, timeout: int = 300, state_getter: Callable[[], str] | None = None) -> ScanResult:
         self.validate(request)
         raise RuntimeError('Exploit execution is disabled; use a dedicated approved validation provider')
 

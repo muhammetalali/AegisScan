@@ -16,6 +16,22 @@ register_kubernetes_capability()
 register_cloud_capability()
 
 
+class RetiredCapabilityError(ValueError):
+    def __init__(self, capability_id: str, replacement: str, reason: str):
+        self.capability_id = capability_id
+        self.replacement = replacement
+        self.reason = reason
+        super().__init__(f'Capability {capability_id} is retired: {reason}. Use {replacement}.')
+
+
+RETIRED_CAPABILITIES: dict[str, dict[str, str]] = {
+    'code.terrascan': {
+        'replacement': 'code.trivy-config',
+        'reason': 'upstream Terrascan is archived and no longer maintained',
+    },
+}
+
+
 @dataclass(frozen=True)
 class Capability:
     id: str
@@ -91,6 +107,9 @@ def list_capabilities() -> list[Capability]:
 
 
 def get_capability(capability_id: str) -> Capability:
+    retired = RETIRED_CAPABILITIES.get(capability_id)
+    if retired is not None:
+        raise RetiredCapabilityError(capability_id, retired['replacement'], retired['reason'])
     try:
         return CAPABILITIES[capability_id]
     except KeyError as exc:

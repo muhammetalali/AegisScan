@@ -8,15 +8,31 @@ from fastapi.testclient import TestClient
 
 from django_project.projects.models import Project, ProjectMembership
 from django_project.assets.models import Asset, AssetAuthorization
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from enterprise.models import ContinuousAssuranceExecution, ContinuousAssuranceSchedule, Organization, OrganizationMembership, TenantProject
 from enterprise import tasks as enterprise_tasks
 from fastapi_app.tasks.security_scan import run_nmap_scan
 from fastapi_app.routers.enterprise import list_continuous_assurance
 
-from fastapi_app.main import app
+from fastapi_app.main import app, _has_system_monitor_permission
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+def test_system_monitor_permission_uses_shared_role_matrix():
+    admin = User.objects.create_user(
+        email='monitor-admin@example.invalid',
+        password='Strong-Test-Password-123!',
+        role=UserRole.ADMIN,
+    )
+    viewer = User.objects.create_user(
+        email='monitor-viewer@example.invalid',
+        password='Strong-Test-Password-123!',
+        role=UserRole.VIEWER,
+    )
+
+    assert async_to_sync(_has_system_monitor_permission)(str(admin.id)) is True
+    assert async_to_sync(_has_system_monitor_permission)(str(viewer.id)) is False
 
 
 def test_websocket_rejects_missing_authentication():

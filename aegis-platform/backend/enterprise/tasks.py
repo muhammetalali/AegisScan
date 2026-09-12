@@ -15,7 +15,7 @@ from django.utils import timezone
 from django_project.projects.models import Project
 from django_project.audit.models import DataExport
 from django_project.vulnerabilities.models import Vulnerability
-from .models import ContinuousAssuranceExecution, ContinuousAssuranceSchedule, Notification, OrganizationMembership, ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution, CloudDiscoveryRun, ExternalIntegration, TenantProject
+from .models import ContinuousAssuranceExecution, ContinuousAssuranceSchedule, Notification, OrganizationMembership, ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution, CloudDiscoveryRun, ExternalIntegration, IntegrationSyncRun, TenantProject
 from .services import build_twin, predict_scenario, generate_attack_paths, map_compliance, fetch_intel, fuse_finding
 from .integrations import send_integration, ingest_sbom
 
@@ -217,6 +217,46 @@ def dispatch_notification_deliveries(limit: int = 100):
 
 @shared_task(name='enterprise.dispatch_integration')
 def dispatch_integration(integration_id: str,event: dict): return send_integration(ExternalIntegration.objects.get(pk=integration_id),event)
+
+@shared_task(name='enterprise.sync_external_integration')
+def sync_external_integration_task(integration_id: str, project_id: str, user_id: str):
+    from fastapi_app.services.external_fabric import sync_external_integration
+    project=Project.objects.get(pk=project_id)
+    run=sync_external_integration(integration_id=integration_id,project=project,user_id=user_id)
+    return {'run_id':str(run.id),'status':run.status,'records_count':run.records_count,'sync_type':run.sync_type}
+
+
+@shared_task(name='enterprise.dispatch_due_integration_syncs')
+def dispatch_due_integration_syncs(limit: int = 100):
+    connector_kinds=[
+        ExternalIntegration.Kind.GITHUB,ExternalIntegration.Kind.GITLAB,ExternalIntegration.Kind.BITBUCKET,
+        ExternalIntegration.Kind.ECR,ExternalIntegration.Kind.GCR,ExternalIntegration.Kind.ACR,
+        ExternalIntegration.Kind.HARBOR,ExternalIntegration.Kind.GHCR,
+    ]
+    queued=[]
+    now=timezone.now()
+    integrations=ExternalIntegration.objects.filter(enabled=True,kind__in=connector_kinds).order_by('id')[:max(1,min(limit,500))]
+    for integration in integrations:
+        try:
+            interval=int((integration.config or {}).get('auto_sync_minutes') or 0)
+        except (TypeError,ValueError):
+            interval=0
+        if interval<5:
+            continue
+        due_before=now-timedelta(minutes=min(interval,10080))
+        project_links=TenantProject.objects.filter(organization_id=integration.organization_id).select_related('project')
+        for link in project_links:
+            running=IntegrationSyncRun.objects.filter(
+                integration=integration,project=link.project,status__in=[IntegrationSyncRun.Status.PENDING,IntegrationSyncRun.Status.RUNNING],
+            ).exists()
+            if running:
+                continue
+            latest=IntegrationSyncRun.objects.filter(integration=integration,project=link.project).order_by('-created_at').first()
+            if latest and latest.created_at>due_before:
+                continue
+            result=sync_external_integration_task.delay(str(integration.id),str(link.project_id),str(integration.created_by_id))
+            queued.append({'integration_id':str(integration.id),'project_id':str(link.project_id),'task_id':result.id})
+    return {'queued':len(queued),'deliveries':queued}
 
 @shared_task(name='enterprise.run_continuous_assurance')
 def run_continuous_assurance(execution_id: str):

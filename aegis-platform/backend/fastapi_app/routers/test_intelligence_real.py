@@ -28,6 +28,8 @@ def test_live_cve_enrichment_persists_provenance():
     assert payload['snapshot_sha256']
     assert payload['source_urls']['nvd'].startswith('https://services.nvd.nist.gov/')
     assert payload['source_urls']['epss'].startswith('https://api.first.org/')
+    assert payload['source_urls']['osv'].startswith('https://api.osv.dev/')
+    assert payload['source_urls']['cisa_kev'].startswith('https://www.cisa.gov/')
 
     snapshot = IntelligenceEnrichment.objects.get(pk=payload['id'])
     assert snapshot.cve_id == payload['cve_id']
@@ -35,6 +37,9 @@ def test_live_cve_enrichment_persists_provenance():
     assert snapshot.observed_by_id == user.id
     assert 'nvd' in snapshot.sources
     assert 'epss' in snapshot.sources
+    assert 'osv' in snapshot.sources
+    assert 'cisa_kev' in snapshot.sources
+    assert snapshot.sources['cisa_kev']['known_exploited'] is True
     assert snapshot.source_urls == payload['source_urls']
 
 
