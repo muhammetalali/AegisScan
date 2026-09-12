@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import os
 import re
@@ -299,6 +300,142 @@ class _CDP:
         finally:
             self._pending.pop(message_id, None)
         return result if isinstance(result, dict) else {}
+
+
+class _ScopedSocksProxy:
+    def __init__(self) -> None:
+        self.server: asyncio.AbstractServer | None = None
+        self.port = 0
+        self.blocked_connections = 0
+        self.allowed_connections = 0
+
+    async def start(self) -> None:
+        self.server = await asyncio.start_server(self._handle_client, '127.0.0.1', 0)
+        sockets = self.server.sockets or []
+        if not sockets:
+            raise RuntimeError('Browser scope proxy failed to bind')
+        self.port = int(sockets[0].getsockname()[1])
+
+    async def close(self) -> None:
+        if self.server is None:
+            return
+        self.server.close()
+        await self.server.wait_closed()
+        self.server = None
+
+    async def _read_exactly(self, reader: asyncio.StreamReader, count: int) -> bytes:
+        return await asyncio.wait_for(reader.readexactly(count), timeout=5)
+
+    async def _reply(self, writer: asyncio.StreamWriter, code: int) -> None:
+        writer.write(bytes((5, code, 0, 1, 0, 0, 0, 0, 0, 0)))
+        await writer.drain()
+
+    async def _relay(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        try:
+            while True:
+                chunk = await reader.read(65536)
+                if not chunk:
+                    break
+                writer.write(chunk)
+                await writer.drain()
+        except (ConnectionError, asyncio.CancelledError):
+            raise
+        finally:
+            try:
+                writer.write_eof()
+            except (AttributeError, OSError, RuntimeError):
+                pass
+
+    async def _handle_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        upstream_writer: asyncio.StreamWriter | None = None
+        try:
+            greeting = await self._read_exactly(reader, 2)
+            if greeting[0] != 5:
+                return
+            methods = await self._read_exactly(reader, greeting[1])
+            if 0 not in methods:
+                writer.write(b'\x05\xff')
+                await writer.drain()
+                return
+            writer.write(b'\x05\x00')
+            await writer.drain()
+
+            request = await self._read_exactly(reader, 4)
+            version, command, _reserved, address_type = request
+            if version != 5 or command != 1:
+                await self._reply(writer, 7)
+                return
+
+            if address_type == 1:
+                host = str(ipaddress.ip_address(await self._read_exactly(reader, 4)))
+            elif address_type == 3:
+                length = (await self._read_exactly(reader, 1))[0]
+                if not 1 <= length <= 253:
+                    await self._reply(writer, 8)
+                    return
+                host = (await self._read_exactly(reader, length)).decode('ascii')
+            elif address_type == 4:
+                host = str(ipaddress.ip_address(await self._read_exactly(reader, 16)))
+            else:
+                await self._reply(writer, 8)
+                return
+
+            port = int.from_bytes(await self._read_exactly(reader, 2), 'big')
+            if not 1 <= port <= 65535:
+                await self._reply(writer, 2)
+                return
+
+            try:
+                pinned = require_authorized_target(host, resolve_dns=True)
+            except ValueError:
+                self.blocked_connections += 1
+                await self._reply(writer, 2)
+                return
+
+            destination = pinned[0] if pinned else host
+            try:
+                upstream_reader, upstream_writer = await asyncio.wait_for(
+                    asyncio.open_connection(destination, port),
+                    timeout=10,
+                )
+            except (OSError, TimeoutError):
+                await self._reply(writer, 5)
+                return
+
+            self.allowed_connections += 1
+            await self._reply(writer, 0)
+
+            client_to_upstream = asyncio.create_task(self._relay(reader, upstream_writer))
+            upstream_to_client = asyncio.create_task(self._relay(upstream_reader, writer))
+            done, pending = await asyncio.wait(
+                {client_to_upstream, upstream_to_client},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*done, *pending, return_exceptions=True)
+        except (
+            asyncio.IncompleteReadError,
+            UnicodeDecodeError,
+            TimeoutError,
+            ValueError,
+            OSError,
+        ):
+            return
+        finally:
+            if upstream_writer is not None:
+                upstream_writer.close()
+                await asyncio.gather(upstream_writer.wait_closed(), return_exceptions=True)
+            writer.close()
+            await asyncio.gather(writer.wait_closed(), return_exceptions=True)
 
 
 def _chromium_binary() -> str:
