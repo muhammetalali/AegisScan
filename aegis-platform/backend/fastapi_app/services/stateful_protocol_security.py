@@ -1024,6 +1024,9 @@ def _run_cases(
             'environment': str(governance.get('environment') or ''),
             'allowed': bool(governance.get('allowed')),
         }
+        bindings = governance.get('credential_bindings')
+        if isinstance(bindings, list):
+            summary['credential_bindings'] = bindings
     run = WebSecurityValidationRun.objects.create(
         project=project,
         kind=kind,
