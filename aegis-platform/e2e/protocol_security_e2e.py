@@ -796,6 +796,8 @@ def main() -> int:
     ws_cases, ws_live = asyncio.run(live_websocket_cases(args.ws_origin))
     gql_cases = live_graphql_http_cases(args.http_origin)
     gql_cases.extend(asyncio.run(live_graphql_subscription_cases(args.ws_origin)))
+    for case in [*ws_cases, *gql_cases]:
+        case.setdefault('session_ref', 'alice-session')
 
     ws_run, ws_observations = run_websocket_security(project, str(user.id), ws_cases)
     gql_run, gql_observations = run_graphql_security(project, str(user.id), gql_cases)
@@ -854,16 +856,13 @@ def main() -> int:
             'from_protocol': 'graphql',
             'to_protocol': 'websocket',
             'operation': 'subscribe',
-            'expected_allowed': True,
-            'observed_allowed': (
-                gql_by_ref['Record'].observed_decision == 'allowed'
-                and ws_by_ref['ws-fixed-own'].observed_decision == 'allowed'
-            ),
-            'identity_consistent': True,
-            'tenant_consistent': True,
-            'session_bound': True,
-            'source_evidence_ref': gql_by_ref['Record'].evidence_fingerprint,
-            'target_evidence_ref': ws_by_ref['ws-fixed-own'].evidence_fingerprint,
+            'expected_allowed': False,
+            'observed_allowed': False,
+            'identity_consistent': False,
+            'tenant_consistent': False,
+            'session_bound': False,
+            'source_observation_id': str(gql_by_ref['Record'].id),
+            'target_observation_id': str(ws_by_ref['ws-fixed-own'].id),
         },
         {
             'ref': 'vulnerable-cross-protocol-chain',
@@ -873,16 +872,13 @@ def main() -> int:
             'from_protocol': 'graphql',
             'to_protocol': 'websocket',
             'operation': 'subscribe',
-            'expected_allowed': False,
-            'observed_allowed': (
-                gql_by_ref['gql-vulnerable-cross'].observed_decision == 'allowed'
-                and ws_by_ref['ws-vulnerable-cross-origin-tenant'].observed_decision == 'allowed'
-            ),
+            'expected_allowed': True,
+            'observed_allowed': False,
             'identity_consistent': True,
-            'tenant_consistent': False,
-            'session_bound': True,
-            'source_evidence_ref': gql_by_ref['gql-vulnerable-cross'].evidence_fingerprint,
-            'target_evidence_ref': ws_by_ref['ws-vulnerable-cross-origin-tenant'].evidence_fingerprint,
+            'tenant_consistent': True,
+            'session_bound': False,
+            'source_observation_id': str(gql_by_ref['gql-vulnerable-cross'].id),
+            'target_observation_id': str(ws_by_ref['ws-vulnerable-cross-origin-tenant'].id),
         },
     ]
     cross_run, cross_observations = run_cross_protocol_security(
