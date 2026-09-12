@@ -52,6 +52,7 @@ def valid_model():
                 'CELERY_BROKER_URL':'redis://redis:6379/0',
                 'CELERY_RESULT_BACKEND':'redis://redis:6379/0',
                 'CREDENTIAL_VAULT_KEYS':'valid-production-vault-key-placeholder',
+                'CREDENTIAL_FINGERPRINT_KEY':'valid-production-fingerprint-key-value',
             },
             command='celery -A fastapi_app.celery_app worker -Q browser',
             user='10001:10001',
@@ -142,6 +143,7 @@ def test_rejects_browser_worker_missing_runtime_or_vault_environment():
     for key in (
         'SECRET_KEY', 'JWT_SECRET_KEY', 'DATABASE_URL', 'REDIS_URL',
         'CELERY_BROKER_URL', 'CELERY_RESULT_BACKEND', 'CREDENTIAL_VAULT_KEYS',
+        'CREDENTIAL_FINGERPRINT_KEY',
     ):
         broken = valid_model()
         broken['services']['browser_worker']['environment'][key] = ''
