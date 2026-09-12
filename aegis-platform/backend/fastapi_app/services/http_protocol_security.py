@@ -192,7 +192,7 @@ def _project_graph(project, case: dict[str, Any], result: dict[str, Any]) -> Non
         nodes.append({'plane': 'application', 'kind': kind, 'external_ref': hop_ref, 'label': str(hop.get('ref') or role), 'protocol': str(hop.get('protocol') or ''), 'tenant_ref': str(identity.get('tenant_ref') or ''), 'properties': {'role': role, 'protocol': hop.get('protocol')}, 'provenance': {'source': 'http_protocol_security'}})
         edges.append({'source_ref': previous, 'target_ref': hop_ref, 'relation': 'forwards_to', 'properties': {'hop_index': index}, 'evidence_refs': [result['evidence_fingerprint']], 'provenance': {'source': 'http_protocol_security'}})
         previous = hop_ref
-    upsert_graph_snapshot(project, {'nodes': nodes, 'edges': edges})
+    upsert_graph_snapshot(project, nodes, edges)
 
 
 def run_http_protocol_security(project, actor_id: str, cases: list[dict[str, Any]], governance: dict[str, Any] | None = None):
