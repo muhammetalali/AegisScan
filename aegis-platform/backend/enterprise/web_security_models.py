@@ -270,6 +270,9 @@ class WebSecurityValidationRun(models.Model):
         AUTHORIZATION_MATRIX = 'authorization_matrix', 'Authorization Matrix'
         NEGATIVE_PATH = 'negative_path', 'Negative Path'
         RESPONSE_COMPARISON = 'response_comparison', 'Response Comparison'
+        WEBSOCKET_SECURITY = 'websocket_security', 'WebSocket Security'
+        GRAPHQL_SECURITY = 'graphql_security', 'GraphQL Security'
+        CROSS_PROTOCOL = 'cross_protocol', 'Cross-Protocol State'
 
     class Status(models.TextChoices):
         COMPLETED = 'completed', 'Completed'
