@@ -121,7 +121,7 @@ def test_web_security_project_admin_boundary_is_not_equivalent_to_project_read_a
     assert _project_security_operator_for_user_sync(str(project.id), str(outsider.id)) is None
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_web_security_http_api_persists_policy_validation_and_blocks_viewer_writes():
     owner = _user('web-http-owner')
     viewer = _user('web-http-viewer')
