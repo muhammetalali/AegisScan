@@ -534,7 +534,7 @@ async def discover(
                 parsed = urlsplit(raw_url)
                 if parsed.scheme in {'http', 'https'}:
                     try:
-                        require_authorized_target(raw_url, url=True, resolve_dns=True)
+                        require_authorized_target(_origin(raw_url), url=True, resolve_dns=True)
                     except ValueError:
                         blocked_out_of_scope_requests += 1
                         try:
