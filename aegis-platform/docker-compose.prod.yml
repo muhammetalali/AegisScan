@@ -84,8 +84,20 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     environment:
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required in production}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required in production}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required in production}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required in production}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:?CELERY_BROKER_URL is required in production}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:?CELERY_RESULT_BACKEND is required in production}
+      CREDENTIAL_VAULT_KEYS: ${CREDENTIAL_VAULT_KEYS:?CREDENTIAL_VAULT_KEYS is required in production}
+      CREDENTIAL_FINGERPRINT_KEY: ${CREDENTIAL_FINGERPRINT_KEY:-}
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
       DJANGO_SETTINGS_MODULE: django_project.settings
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+      XDG_CONFIG_HOME: /tmp/.config
     depends_on: !override
       scanner_egress: {condition: service_healthy}
       redis: {condition: service_healthy}
