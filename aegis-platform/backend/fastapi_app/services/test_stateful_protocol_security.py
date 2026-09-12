@@ -440,3 +440,78 @@ def test_graphql_schema_inventory_is_structural_bounded_and_value_free():
     assert 'limit' in rendered
     assert 'alpha-secret' not in rendered
 
+@pytest.mark.django_db
+def test_cross_protocol_target_escalation_is_not_hidden_by_denied_source():
+    user, project = _user_project('protocol-target-escalation')
+    _gql_run, gql_obs = run_graphql_security(project, str(user.id), [{
+        'ref': 'gql-source-denied',
+        'identity': _identity(),
+        'resource': _resource(),
+        'endpoint': '/graphql',
+        'session_ref': 'session-a',
+        'operation_type': 'query',
+        'operation_name': 'Record',
+        'field_path': 'record.id',
+        'expected_allowed': False,
+        'server_accepted': False,
+        'response_status': 403,
+        'errors_count': 1,
+        'field_authorized': False,
+        'mutation_authorized': True,
+        'sensitive_fields_requested': [],
+        'sensitive_fields_returned': [],
+        'introspection_requested': False,
+        'introspection_expected_allowed': False,
+        'batch_size': 1,
+        'max_batch_size': 10,
+        'depth': 2,
+        'max_depth': 8,
+        'complexity': 3,
+        'max_complexity': 100,
+    }])
+    assert gql_obs[0].passed is True
+
+    _ws_run, ws_obs = run_websocket_security(project, str(user.id), [{
+        'ref': 'ws-target-escalated',
+        'identity': _identity(),
+        'resource': _resource(),
+        'channel': 'ws://fixture/ws/tenant-a/record-a',
+        'session_ref': 'session-a',
+        'origin': 'https://app.example',
+        'allowed_origins': ['https://app.example'],
+        'authentication_required': True,
+        'authenticated': True,
+        'session_state': 'active',
+        'requested_action': 'subscribe',
+        'expected_allowed': False,
+        'server_accepted': True,
+        'handshake_status': 101,
+        'subscription_owner_ref': 'alice',
+        'subscription_tenant_ref': 'tenant-a',
+        'message_schema_valid': True,
+        'message_authorized': True,
+    }])
+    assert ws_obs[0].passed is False
+
+    _cross_run, cross_obs = run_cross_protocol_security(project, str(user.id), [{
+        'ref': 'denied-source-to-escalated-target',
+        'identity': _identity(),
+        'resource': _resource(),
+        'session_ref': 'session-a',
+        'from_protocol': 'graphql',
+        'to_protocol': 'websocket',
+        'operation': 'subscribe',
+        'expected_allowed': False,
+        'observed_allowed': False,
+        'identity_consistent': True,
+        'tenant_consistent': True,
+        'session_bound': True,
+        'source_observation_id': str(gql_obs[0].id),
+        'target_observation_id': str(ws_obs[0].id),
+    }])
+    assert cross_obs[0].passed is False
+    assert cross_obs[0].semantic['source_validation_passed'] is True
+    assert cross_obs[0].semantic['target_validation_passed'] is False
+    assert cross_obs[0].observed_decision == 'allowed'
+    assert 'target protocol observation failed' in cross_obs[0].reason
+
