@@ -46,6 +46,8 @@ _SAFE_RESPONSE_HEADERS = {
     'strict-transport-security',
     'x-content-type-options',
     'x-frame-options',
+    'sourcemap',
+    'x-sourcemap',
 }
 
 
