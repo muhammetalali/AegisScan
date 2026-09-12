@@ -1,0 +1,45 @@
+name: Identity Protocol Integration Patch
+
+on:
+  push:
+    branches:
+      - codex/identity-protocol-security-2026-09-12
+    paths:
+      - 'aegis-platform/scripts/patch_identity_protocol_integration.py'
+      - '.github/workflows/identity-protocol-integration-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: codex/identity-protocol-security-2026-09-12
+          fetch-depth: 0
+
+      - name: Apply deterministic integration patch
+        run: python aegis-platform/scripts/patch_identity_protocol_integration.py
+
+      - name: Verify patch anchors
+        run: |
+          grep -F "IDENTITY_PROTOCOL_SECURITY = 'identity_protocol_security'" aegis-platform/backend/enterprise/web_security_models.py
+          grep -F "identity-protocols/evaluate" aegis-platform/backend/fastapi_app/routers/web_security.py
+          grep -F "'identity_protocol_security': True" aegis-platform/backend/fastapi_app/routers/web_security.py
+
+      - name: Commit integrated files
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'Integration patch already applied.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add aegis-platform/backend/enterprise/web_security_models.py aegis-platform/backend/fastapi_app/routers/web_security.py
+          git commit -m 'feat(identity): integrate identity protocol security plane'
+          git push origin HEAD:codex/identity-protocol-security-2026-09-12
