@@ -364,6 +364,15 @@ def test_provider_gate_requires_complete_approval_and_rejects_privileged_runtime
         'evidence_quality': True,
         'ci_reproducibility': True,
     }
+    experimental, created = persist_provider_approval(project, str(user.id), {
+        'provider_name': 'fixture-provider',
+        'provider_version': '1.2.3',
+        'status': 'experimental',
+        'capability': 'websocket.discovery',
+        'manifest': complete_manifest,
+        'rationale': 'Initial CI evaluation',
+    })
+    assert created is True
     approved, created = persist_provider_approval(project, str(user.id), {
         'provider_name': 'fixture-provider',
         'provider_version': '1.2.3',
@@ -373,6 +382,9 @@ def test_provider_gate_requires_complete_approval_and_rejects_privileged_runtime
         'rationale': 'CI fixture proving provider gate semantics',
     })
     assert created is True
+    assert approved.id != experimental.id
+    assert approved.manifest_sha256 == experimental.manifest_sha256
+    assert evaluate_provider_gate(experimental, 'websocket.discovery')['allowed'] is False
     assert evaluate_provider_gate(approved, 'websocket.discovery')['allowed'] is True
 
     restricted, _ = persist_provider_approval(project, str(user.id), {
