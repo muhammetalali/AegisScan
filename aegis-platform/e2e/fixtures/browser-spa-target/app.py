@@ -29,7 +29,7 @@ async def index():
 </body>
 </html>'''
     response = HTMLResponse(html)
-    response.headers['Content-Security-Policy'] = "default-src 'self' http://127.0.0.1:18084 ws://127.0.0.1:18083; connect-src 'self' http://127.0.0.1:18084 http://192.0.2.1 ws://127.0.0.1:18083"
+    response.headers['Content-Security-Policy'] = "default-src 'self' http://127.0.0.1:18084 ws://127.0.0.1:18083; connect-src 'self' http://127.0.0.1:18084 http://192.0.2.1 http://198.51.100.1 ws://127.0.0.1:18083 ws://198.51.100.1; worker-src 'self' blob:"
     response.set_cookie(
         'server_session',
         'server-cookie-secret-must-not-persist',
@@ -125,6 +125,16 @@ async def app_js():
     if (typeof WebTransport === 'function') {
       new WebTransport('https://192.0.2.1/blocked-transport');
     }
+  } catch (_) {}
+
+
+  try {
+    const workerSource = `
+      fetch('http://198.51.100.1/worker-blocked-fetch').catch(() => null);
+      try { new WebSocket('ws://198.51.100.1/worker-blocked-ws'); } catch (_) {}
+    `;
+    const worker = new Worker(URL.createObjectURL(new Blob([workerSource], {type: 'text/javascript'})));
+    setTimeout(() => worker.terminate(), 1500);
   } catch (_) {}
 })();
 """
