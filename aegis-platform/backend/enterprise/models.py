@@ -588,3 +588,15 @@ class PluginPackage(models.Model):
             models.Index(fields=['name','enabled'],name='idx_plugin_package_enabled'),
             models.Index(fields=['approved','enabled'],name='idx_plugin_package_approved'),
         ]
+
+
+# Web Security Foundation durable domain ---------------------------------------
+from .web_security_models import (  # noqa: E402,F401
+    AuthorizationPolicyManifest,
+    ExecutionBudgetProfile,
+    ProviderApprovalRecord,
+    SecurityGraphEdge,
+    SecurityGraphNode,
+    WebSecurityObservation,
+    WebSecurityValidationRun,
+)
