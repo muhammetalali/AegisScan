@@ -1,7 +1,7 @@
 import pytest
 from asgiref.sync import async_to_sync
 
-from django_project.assets.models import Asset
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import User
@@ -45,7 +45,11 @@ CLOSED_NMAP_XML = '''<?xml version="1.0" encoding="UTF-8"?>
 
 
 @pytest.fixture
-def finding_fixture(db):
+def finding_fixture(db, monkeypatch):
+    # The worker enforces both the immutable database grant and the independent
+    # server-side target allow-list. Keep that boundary explicit in this test
+    # fixture instead of relying on a developer or CI environment variable.
+    monkeypatch.setenv("AUTHORIZED_SCAN_TARGETS", "aegis-scan-target")
     user = User.objects.create_user(
         email="validation-regression@example.invalid",
         password="Strong-Test-Password-123!",
@@ -66,6 +70,10 @@ def finding_fixture(db):
         criticality=Asset.Criticality.HIGH,
         configuration={"host": "aegis-scan-target", "authorized": True},
         owner=user,
+    )
+    AssetAuthorization.objects.create(
+        asset=asset, actor=user, authorized=True,
+        target_snapshot='aegis-scan-target', reason='Finding validation test grant',
     )
     scan = Scan.objects.create(
         project=project,
@@ -110,6 +118,7 @@ def _validation(user, finding):
         profile="quick",
         engines=["nmap"],
         authorized=True,
+        authorization_decision=finding.asset.authorization_records.first(),
     )
 
 
@@ -118,11 +127,6 @@ def _stub_nmap(monkeypatch, raw_xml):
         nmap_finding_validation,
         "_run_nmap_exact",
         lambda target, port, timeout: (0, raw_xml, ""),
-    )
-    monkeypatch.setattr(
-        nmap_finding_validation,
-        "is_target_authorized",
-        lambda target: True,
     )
 
 
@@ -145,6 +149,8 @@ def test_nmap_positive_validation_does_not_verify_finding(finding_fixture, monke
     assert evidence.evidence_type == "validation_output"
     assert evidence.sha256
     assert evidence.metadata["finding_present"] is True
+    assert evidence.metadata["validation_run_id"] == str(validation.id)
+    assert evidence.metadata["validation_id"] == str(validation.id)
 
     verified_finding, verification, error = async_to_sync(_verify_fix)(str(finding.id), str(user.id))
     assert verified_finding.id == finding.id
@@ -183,28 +189,43 @@ def test_nmap_negative_validation_verifies_finding_with_evidence(finding_fixture
 
 
 @pytest.mark.django_db
-def test_nmap_validation_blocks_unauthorized_asset_without_execution(finding_fixture, monkeypatch):
+def test_completed_validation_redelivery_is_idempotent(finding_fixture, monkeypatch):
+    user, finding = finding_fixture
+    validation = _validation(user, finding)
+    calls = 0
+
+    def run_once(target, port, timeout):
+        nonlocal calls
+        calls += 1
+        return 0, CLOSED_NMAP_XML, ''
+
+    monkeypatch.setattr(nmap_finding_validation, '_run_nmap_exact', run_once)
+
+    first = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
+    second = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
+
+    assert first['status'] == ValidationRun.Status.COMPLETED
+    assert second['status'] == ValidationRun.Status.COMPLETED
+    assert second['redelivered'] is True
+    assert second['evidence_id'] == first['evidence_id']
+    assert calls == 1
+    assert Evidence.objects.filter(finding=finding, evidence_type='validation_output').count() == 1
+
+
+@pytest.mark.django_db
+def test_nmap_validation_uses_immutable_grant_not_mutable_asset_flag(finding_fixture, monkeypatch):
     user, finding = finding_fixture
     finding.asset.configuration["authorized"] = False
     finding.asset.save(update_fields=["configuration"])
     validation = _validation(user, finding)
 
-    called = False
-
-    def fail_if_called(*args, **kwargs):
-        nonlocal called
-        called = True
-        raise AssertionError("Nmap execution must not run for an unauthorized asset")
-
-    monkeypatch.setattr(nmap_finding_validation, "_run_nmap_exact", fail_if_called)
+    monkeypatch.setattr(nmap_finding_validation, "_run_nmap_exact", lambda *args, **kwargs: (0, CLOSED_NMAP_XML, ''))
     result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
     validation.refresh_from_db()
 
-    assert called is False
-    assert result["status"] == "blocked"
-    assert validation.status == ValidationRun.Status.FAILED
-    assert "finding asset is not explicitly marked authorized" in validation.error_message
-    assert Evidence.objects.filter(finding=finding, evidence_type="validation_output").count() == 0
+    assert result["status"] == ValidationRun.Status.COMPLETED
+    assert validation.status == ValidationRun.Status.COMPLETED
+    assert Evidence.objects.filter(finding=finding, evidence_type="validation_output").count() == 1
 
 
 @pytest.mark.django_db
@@ -243,7 +264,11 @@ def test_nmap_validation_requires_exact_target(finding_fixture):
         profile="quick",
         engines=["nmap"],
         authorized=True,
+        authorization_decision=finding.asset.authorization_records.first(),
     )
 
-    with pytest.raises(ValueError, match="target must exactly match"):
-        nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
+    result = nmap_finding_validation.validate_nmap_finding_e2e.run(str(validation.id))
+    validation.refresh_from_db()
+    assert result['status'] == 'blocked'
+    assert validation.status == ValidationRun.Status.FAILED
+    assert 'requested target does not match' in validation.error_message

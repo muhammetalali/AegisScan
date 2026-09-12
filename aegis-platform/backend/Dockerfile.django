@@ -1,4 +1,62 @@
 FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
+FROM golang:1.26-bookworm AS pd_tools
+RUN set -eux; \
+    export CGO_ENABLED=0 GOOS=linux GOARCH=amd64; \
+    export GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org GODEBUG=http2client=0; \
+    go_install_with_retry() { \
+        module="$1"; \
+        attempt=1; \
+        until go install "$module"; do \
+            if [ "$attempt" -ge 5 ]; then \
+                echo "go install failed after $attempt attempts: $module" >&2; \
+                exit 1; \
+            fi; \
+            sleep_seconds=$((attempt * 15)); \
+            echo "retrying go install for $module in ${sleep_seconds}s" >&2; \
+            sleep "$sleep_seconds"; \
+            attempt=$((attempt + 1)); \
+        done; \
+    }; \
+    go_install_with_retry github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
+    go_install_with_retry github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
+    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
+    go_install_with_retry github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
+
+FROM rust:1.90-bookworm AS rustscan
+RUN cargo install --locked --version 2.4.1 rustscan --root /opt/rustscan \
+    && /opt/rustscan/bin/rustscan --version
+
+FROM debian:bookworm-slim AS feroxbuster
+ARG FEROXBUSTER_VERSION=2.13.1
+ARG FEROXBUSTER_SHA256=7985c00e6803b0f25d5e9139f7472279f3f4d891429627a5cedc629e53992d80
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL --retry 4 --retry-all-errors \
+      "https://github.com/epi052/feroxbuster/releases/download/v${FEROXBUSTER_VERSION}/x86_64-linux-feroxbuster.tar.gz" \
+      -o /tmp/feroxbuster.tar.gz \
+    && printf '%s  %s\n' "$FEROXBUSTER_SHA256" /tmp/feroxbuster.tar.gz | sha256sum -c - \
+    && tar -xzf /tmp/feroxbuster.tar.gz -C /usr/local/bin feroxbuster \
+    && chmod 0755 /usr/local/bin/feroxbuster \
+    && /usr/local/bin/feroxbuster --version
+
+FROM alpine/git:2.47.2 AS nikto_source
+ARG NIKTO_REF=2.6.0
+ARG NIKTO_COMMIT=69681e2e4213c15b85a90c53b2169ecb2a88fb01
+RUN git clone --depth 1 --branch "$NIKTO_REF" https://github.com/sullo/nikto.git /opt/nikto \
+    && test "$(git -C /opt/nikto rev-parse HEAD)" = "$NIKTO_COMMIT" \
+    && rm -rf /opt/nikto/.git
+
+FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy
+
+FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy_checks
+USER root
+RUN mkdir -p /opt/trivy-cache /tmp/trivy-seed \
+    && printf '%s\n' 'FROM scratch' 'USER root' > /tmp/trivy-seed/Dockerfile \
+    && trivy --cache-dir /opt/trivy-cache config --format json --quiet /tmp/trivy-seed >/tmp/trivy-seed.json \
+    && test -s /opt/trivy-cache/policy/metadata.json \
+    && grep -q 'Digest' /opt/trivy-cache/policy/metadata.json
+FROM trufflesecurity/trufflehog:3.97.1 AS trufflehog
 
 FROM alpine/git:2.47.2 AS nuclei_templates
 RUN git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git /opt/nuclei-templates \
@@ -9,32 +67,128 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app:/app/django_project \
-    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates
+    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates \
+    AEGIS_WORDLIST_ROOT=/opt/aegis-wordlists
 
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl nmap masscan ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        curl chromium firefox-esr nmap masscan libpcap0.8 ca-certificates libcap2-bin util-linux \
+        binutils checksec binwalk libimage-exiftool-perl xxd gdb \
+        gobuster ffuf dirb dnsenum fierce wafw00f nbtscan \
+        git openssh-client perl libjson-perl libxml-writer-perl libnet-ssleay-perl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
+COPY --from=pd_tools /go/bin/httpx /usr/local/bin/httpx
+COPY --from=pd_tools /go/bin/subfinder /usr/local/bin/subfinder
+COPY --from=pd_tools /go/bin/katana /usr/local/bin/katana
+COPY --from=pd_tools /go/bin/amass /usr/local/bin/amass
+COPY --from=rustscan /opt/rustscan/bin/rustscan /usr/local/bin/rustscan
+COPY --from=feroxbuster /usr/local/bin/feroxbuster /usr/local/bin/feroxbuster
+COPY --from=nikto_source /opt/nikto /opt/nikto
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=trivy_checks /opt/trivy-cache /opt/trivy-cache
+COPY --from=trufflehog /usr/bin/trufflehog /usr/local/bin/trufflehog
 COPY --from=nuclei_templates /opt/nuclei-templates /opt/nuclei-templates
-RUN chmod 0755 /usr/local/bin/nuclei \
+RUN ln -sf /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
+    && chmod 0755 /opt/nikto/program/nikto.pl /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/subfinder /usr/local/bin/katana /usr/local/bin/amass /usr/local/bin/rustscan /usr/local/bin/feroxbuster /usr/local/bin/trivy /usr/local/bin/trufflehog \
     && /usr/local/bin/nuclei -version \
+    && /usr/local/bin/httpx -version \
+    && /usr/local/bin/subfinder -version \
+    && /usr/local/bin/katana -version \
+    && /usr/local/bin/amass -version \
+    && /usr/local/bin/rustscan --version \
+    && /usr/local/bin/feroxbuster --version \
+    && /usr/local/bin/nikto -Version >/tmp/nikto-version.txt \
+    && grep -q 'Nikto' /tmp/nikto-version.txt \
+    && chromium --version \
+    && firefox-esr --version \
+    && /usr/local/bin/trivy --version \
+    && /usr/local/bin/trufflehog --version \
     && test -f /opt/nuclei-templates/http/misconfiguration/http-missing-security-headers.yaml
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m pip install --no-cache-dir semgrep
+    && python -m pip install --no-cache-dir semgrep checkov==3.3.16
 
 COPY . .
+RUN mkdir -p /opt/aegis-wordlists \
+    && cp /app/resources/wordlists/web-common.txt /opt/aegis-wordlists/web-common.txt \
+    && chmod 0444 /opt/aegis-wordlists/web-common.txt
 
-# Verify required scanner/analysis binaries are installed without relying on
-# non-zero CLI exit semantics (masscan prints its version but returns 1).
+RUN groupadd --gid 10001 aegis \
+    && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
+    && mkdir -p /app/staticfiles /app/media \
+    && chown -R aegis:aegis /app /opt/trivy-cache \
+    && chmod 0755 \
+        /app/scanner-worker-entrypoint.sh \
+        /app/fastapi_app/services/browser_security_probe.py \
+        /app/fastapi_app/services/api_schema_security.py \
+        /app/fastapi_app/services/api_runtime_launcher.py \
+        /app/fastapi_app/services/api_runtime_conformance.py \
+        /app/fastapi_app/services/kubernetes_launcher.py \
+        /app/fastapi_app/services/kubernetes_security.py \
+        /app/fastapi_app/services/cloud_launcher.py \
+        /app/fastapi_app/services/cloud_security.py \
+    && ln -sf /app/fastapi_app/services/browser_security_probe.py /usr/local/bin/aegis-browser-security \
+    && ln -sf /app/fastapi_app/services/api_schema_security.py /usr/local/bin/aegis-api-schema-security \
+    && ln -sf /app/fastapi_app/services/api_runtime_launcher.py /usr/local/bin/aegis-api-runtime-conformance \
+    && ln -sf /app/fastapi_app/services/kubernetes_launcher.py /usr/local/bin/aegis-kubernetes-security \
+    && ln -sf /app/fastapi_app/services/cloud_launcher.py /usr/local/bin/aegis-cloud-security \
+    && nmap_binary="$(readlink -f "$(command -v nmap)")" \
+    && masscan_binary="$(readlink -f "$(command -v masscan)")" \
+    && test -f "$nmap_binary" \
+    && test -f "$masscan_binary" \
+    && test -z "$(getcap "$nmap_binary")" \
+    && test -z "$(getcap "$masscan_binary")"
+
 RUN command -v nmap >/dev/null \
     && command -v masscan >/dev/null \
-    && command -v semgrep >/dev/null
+    && command -v semgrep >/dev/null \
+    && command -v nuclei >/dev/null \
+    && command -v curl >/dev/null \
+    && command -v chromium >/dev/null \
+    && command -v firefox-esr >/dev/null \
+    && command -v aegis-browser-security >/dev/null \
+    && command -v aegis-api-schema-security >/dev/null \
+    && command -v aegis-api-runtime-conformance >/dev/null \
+    && command -v aegis-kubernetes-security >/dev/null \
+    && command -v aegis-cloud-security >/dev/null \
+    && python -c 'import boto3; import azure.identity; import azure.mgmt.network; from azure.mgmt.resource.resources import ResourceManagementClient; from azure.mgmt.resource.subscriptions import SubscriptionClient; import google.cloud.asset_v1; assert ResourceManagementClient; assert SubscriptionClient' \
+    && command -v httpx >/dev/null \
+    && command -v rustscan >/dev/null \
+    && command -v amass >/dev/null \
+    && command -v feroxbuster >/dev/null \
+    && command -v nikto >/dev/null \
+    && command -v subfinder >/dev/null \
+    && command -v katana >/dev/null \
+    && command -v trivy >/dev/null \
+    && test -s /opt/trivy-cache/policy/metadata.json \
+    && command -v trufflehog >/dev/null \
+    && command -v checkov >/dev/null \
+    && command -v strings >/dev/null \
+    && command -v objdump >/dev/null \
+    && command -v readelf >/dev/null \
+    && command -v checksec >/dev/null \
+    && command -v binwalk >/dev/null \
+    && command -v xxd >/dev/null \
+    && command -v gdb >/dev/null \
+    && command -v exiftool >/dev/null \
+    && command -v gobuster >/dev/null \
+    && command -v ffuf >/dev/null \
+    && command -v dirb >/dev/null \
+    && command -v dnsenum >/dev/null \
+    && command -v fierce >/dev/null \
+    && command -v wafw00f >/dev/null \
+    && command -v nbtscan >/dev/null \
+    && test -s /opt/aegis-wordlists/web-common.txt \
+    && command -v capsh >/dev/null \
+    && command -v setpriv >/dev/null
 
 EXPOSE 8000
+
+USER 10001:10001
 
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]

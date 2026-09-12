@@ -22,8 +22,8 @@ twin:
 correlation:
   confidence_threshold: 0.6
 integrations:
-  slack_webhook: ${AEGIS_SLACK_WEBHOOK}
-  teams_webhook: ${AEGIS_TEAMS_WEBHOOK}
+  slack_webhook: ${AEGIS_SLACK_WEBHOOK:-}
+  teams_webhook: ${AEGIS_TEAMS_WEBHOOK:-}
 gui:
   host: 127.0.0.1
   port: 5000

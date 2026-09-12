@@ -3,10 +3,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ValidationCommandCenter } from './ValidationCommandCenter'
 import { apiHelpers } from '@/services/api'
+import { CATALOGS, useLanguageStore } from '@/stores/languageStore'
 
 vi.mock('@/services/api', () => ({
   apiHelpers: {
@@ -15,6 +16,10 @@ vi.mock('@/services/api', () => ({
 }))
 
 const mockedGet = vi.mocked(apiHelpers.get)
+
+beforeEach(() => {
+  useLanguageStore.setState({ language: 'en', translations: CATALOGS.en })
+})
 
 const renderPage = () => {
   const queryClient = new QueryClient({
@@ -115,7 +120,7 @@ describe('ValidationCommandCenter interaction contract', () => {
     expect(mockedGet).toHaveBeenCalledWith('/validations/validation-1/results')
     expect(mockedGet).toHaveBeenCalledWith('/validations/validation-1/findings')
 
-    fireEvent.click(screen.getByRole('button', { name: 'High' }))
+    fireEvent.click(screen.getByRole('button', { name: /^high$/i }))
 
     await waitFor(() => {
       expect(mockedGet).toHaveBeenCalledWith('/validations/validation-1/findings?severity=high')

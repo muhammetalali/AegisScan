@@ -2,7 +2,7 @@ name: Django Migrations
 
 on:
   push:
-    branches: [main, fix/finding-validation-loop]
+    branches: [main]
     paths:
       - 'aegis-platform/backend/django_project/**/models.py'
       - 'aegis-platform/backend/django_project/**/apps.py'
@@ -11,7 +11,22 @@ on:
       - 'aegis-platform/backend/manage.py'
       - 'aegis-platform/backend/requirements.txt'
       - '.github/workflows/django-migrations.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/django_project/**/models.py'
+      - 'aegis-platform/backend/django_project/**/apps.py'
+      - 'aegis-platform/backend/django_project/intelligence/**'
+      - 'aegis-platform/backend/enterprise/**'
+      - 'aegis-platform/backend/django_project/settings.py'
+      - 'aegis-platform/backend/manage.py'
+      - 'aegis-platform/backend/requirements.txt'
+      - '.github/workflows/django-migrations.yml'
   workflow_dispatch:
+
+concurrency:
+  group: django-migrations-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -43,7 +58,7 @@ jobs:
       CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
       SECRET_KEY: ci-only-secret-key-not-for-production
       JWT_SECRET_KEY: ci-only-jwt-secret-key-not-for-production
-      DEBUG: 'False'
+      DEBUG: 'True'
       ALLOWED_HOSTS: localhost,127.0.0.1
       CORS_ALLOWED_ORIGINS: http://localhost:5173
       AUTH_COOKIE_SECURE: 'False'
@@ -55,15 +70,18 @@ jobs:
         run: python -m pip install -r aegis-platform/backend/requirements.txt
       - name: Validate Django configuration
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py check
-      - name: Generate project and enterprise migrations
+      - name: Generate project, enterprise, and intelligence migrations
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: |
           set -e
-          python manage.py makemigrations users projects scans vulnerabilities assets compliance knowledge notifications audit system evidence core enterprise --noinput --verbosity 2
+          python manage.py makemigrations users projects scans vulnerabilities assets compliance knowledge notifications audit system evidence core enterprise intelligence --noinput --verbosity 2
           find django_project enterprise -path '*/migrations/*.py' -type f -print | sort
           test -f django_project/users/migrations/0001_initial.py
-      - name: Commit generated migrations to the current branch
+      - name: Commit generated migrations on main pushes only
+        if: github.event_name == 'push'
         run: |
           set -e
           files=$(git status --porcelain --untracked-files=all | awk '{print $2}' | grep '/migrations/.*\.py$' || true)
@@ -72,24 +90,105 @@ jobs:
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add -- $files
             git commit -m 'chore(django): generate model migrations [skip ci]'
-            git push origin HEAD:${GITHUB_REF_NAME}
+            git push origin HEAD:main
           else
             echo 'No migration changes.'
           fi
       - name: Apply migrations to clean PostgreSQL
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py migrate --noinput
-      - name: Verify enterprise tables
+      - name: Verify critical tables from Django model metadata
         working-directory: aegis-platform/backend
-        env: {PGPASSWORD: aegis}
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: |
-          set -e
-          for table in enterprise_organization enterprise_organizationmembership enterprise_digitaltwin enterprise_twinscenario enterprise_reportschedule enterprise_threatintelcache enterprise_findingintelligence enterprise_attackpath enterprise_compliancemapping enterprise_executivesnapshot enterprise_continuousassuranceschedule enterprise_notification enterprise_externalintegration enterprise_clouddiscoveryrun enterprise_sbomartifact enterprise_sbomcomponent; do
-            psql "postgresql://aegis:aegis@127.0.0.1:5432/aegisdb" -tAc "SELECT to_regclass('public.$table');" | grep -Fx "public.$table"
-          done
+          python - <<'PY'
+          import os
+          os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+          import django
+          django.setup()
+
+          from django.contrib.auth import get_user_model
+          from django.db import connection
+          from django_project.assets.models import AssetAuthorization
+          from django_project.evidence.models import Evidence
+          from django_project.intelligence.models import IntelligenceEnrichment
+          from django_project.scans.models import Scan
+          from django_project.vulnerabilities.models import Vulnerability
+          from enterprise.models import AttackPath, ContinuousAssuranceExecution, DecisionAction, DigitalTwin, FindingIntelligence, RiskCorrelationSnapshot, TwinScenario
+
+          critical_models = [
+              get_user_model(),
+              AssetAuthorization,
+              Scan,
+              Evidence,
+              Vulnerability,
+              IntelligenceEnrichment,
+              FindingIntelligence,
+              DigitalTwin,
+              TwinScenario,
+              AttackPath,
+              DecisionAction,
+              RiskCorrelationSnapshot,
+              ContinuousAssuranceExecution,
+          ]
+          expected = [model._meta.db_table for model in critical_models]
+          existing = set(connection.introspection.table_names())
+          missing = [table for table in expected if table not in existing]
+          print('critical_tables_expected=', expected)
+          print('critical_tables_missing=', missing)
+          if missing:
+              raise SystemExit(f'Missing critical migrated tables: {missing}')
+
+          action_table = DecisionAction._meta.db_table
+          with connection.cursor() as cursor:
+              columns = {column.name for column in connection.introspection.get_table_description(cursor, action_table)}
+              constraints = connection.introspection.get_constraints(cursor, action_table)
+          required_lineage = {'organization_id', 'project_id', 'validation_id', 'risk_correlation_id'}
+          missing_lineage = sorted(required_lineage - columns)
+          foreign_key_columns = {
+              column
+              for constraint in constraints.values()
+              if constraint.get('foreign_key')
+              for column in constraint.get('columns', [])
+          }
+          missing_foreign_keys = sorted(required_lineage - foreign_key_columns)
+          print('decision_action_lineage_columns=', sorted(required_lineage & columns))
+          print('decision_action_missing_lineage=', missing_lineage)
+          print('decision_action_missing_foreign_keys=', missing_foreign_keys)
+          if missing_lineage or missing_foreign_keys:
+              raise SystemExit(
+                  f'Decision action lineage migration is incomplete: '
+                  f'columns={missing_lineage}, foreign_keys={missing_foreign_keys}'
+              )
+
+          assurance_table = ContinuousAssuranceExecution._meta.db_table
+          with connection.cursor() as cursor:
+              assurance_columns = {column.name for column in connection.introspection.get_table_description(cursor, assurance_table)}
+              assurance_constraints = connection.introspection.get_constraints(cursor, assurance_table)
+          required_assurance_lineage = {'schedule_id', 'organization_id', 'project_id', 'asset_id', 'authorization_decision_id', 'scan_id'}
+          missing_assurance_lineage = sorted(required_assurance_lineage - assurance_columns)
+          assurance_foreign_key_columns = {
+              column
+              for constraint in assurance_constraints.values()
+              if constraint.get('foreign_key')
+              for column in constraint.get('columns', [])
+          }
+          missing_assurance_foreign_keys = sorted(required_assurance_lineage - assurance_foreign_key_columns)
+          print('assurance_execution_lineage_columns=', sorted(required_assurance_lineage & assurance_columns))
+          print('assurance_execution_missing_lineage=', missing_assurance_lineage)
+          print('assurance_execution_missing_foreign_keys=', missing_assurance_foreign_keys)
+          if missing_assurance_lineage or missing_assurance_foreign_keys:
+              raise SystemExit(
+                  f'Continuous assurance execution lineage migration is incomplete: '
+                  f'columns={missing_assurance_lineage}, foreign_keys={missing_assurance_foreign_keys}'
+              )
+          PY
       - name: Verify no pending model migrations
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py makemigrations --check --dry-run
       - name: Verify migration plan
         working-directory: aegis-platform/backend
+        env: {DJANGO_SETTINGS_MODULE: django_project.settings}
         run: python manage.py showmigrations --plan

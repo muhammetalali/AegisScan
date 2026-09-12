@@ -1,0 +1,1933 @@
+{
+  "schema": "aegisscan.branch-archive.v1",
+  "generated_on": "2026-09-12",
+  "purpose": "Preserve exact historical codex branch heads before branch-ref pruning. These refs are not release evidence.",
+  "canonical_main_before_archive": "7a83a81d92480e4554b264f2e1332ae8fa85f17b",
+  "retired_feature_archive": {
+    "branch": "archive/feature-enterprise-platform-ui-v2-50698f5",
+    "sha": "50698f5dbda1f7eb0a1e9a743e752278323a4c7d"
+  },
+  "codex_branch_count": 478,
+  "branches": [
+    {
+      "name": "codex/asset-authorization-control-2026-09-03-validated",
+      "sha": "103bb83dc77f418971c28a23d9c19aa34e569fde"
+    },
+    {
+      "name": "codex/audit-reality-2026-09-03",
+      "sha": "683249de47c54cb87db6057ca45405d306f3aef0"
+    },
+    {
+      "name": "codex/ci-concurrency-2026-09-11-final",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-accepted-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-actual-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-actual-final-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-actual-head-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-actual-pr-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-approved-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-approved-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-head-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-head-pr2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-head-pr6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-head-pr6c-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-head-pr7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-pr-head4-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-pr-head6b-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-pr-head6f-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-pr-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-prhead-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-final-submit-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-head-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-head-final-pr3-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-head-final-pr6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-head-pr-final2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-head-pr-final5-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-final-head3-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-final-head5-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-final-head6b-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-final-head7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-head-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-head-final6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-head-final7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-pr-submit-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-prhead-final2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-source-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authoritative-submit-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-authorized-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-branch-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-branch-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-candidate-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-canonical-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-canonical-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-close-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-closure-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-complete-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-consolidated-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-correct-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-create-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-create-pr-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-definitive-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-do-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-done-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-end-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-endgame-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-exec-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-actual-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-actual-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-head-pr2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-head-pr3-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-head-pr6b-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-head-pr6d-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-official-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-pr-head2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-pr-head6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-pr-head6e-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-pr-head6f-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-pr-head7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-prhead-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-source-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-authoritative-submit-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-branch-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-correct-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-create-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-endgame-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-authoritative-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-authoritative-pr3-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-authoritative-pr5-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-authoritative-pr6b-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-authoritative-pr7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-pr-authoritative2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-pr-authoritative6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-head-pr-authoritative6d-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-last-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-live-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-main-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-official-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-open-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-authoritative-head4-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-authoritative-head6c-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-authoritative-head6e-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-authoritative-head7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-authoritative-head8-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-authoritative-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-head-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-head-authoritative5-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-selected-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-source-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-source2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-pr-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-prhead-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-prhead-authoritative2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-prsource-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-prsource-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-ready-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-selected-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-source-authoritative-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-source-canonical-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-source-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-submit-authoritative-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-use-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-final-use-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-finalcandidate-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-finalofficial-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-finalproof-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-finalship-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-finish-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-for-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-gate-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-go-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-golive-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-hardening-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-hardening-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-authoritative-final-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-authoritative-final-pr2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-authoritative-final-pr6b-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-authoritative-pr-final2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-authoritative-pr-final5-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-authoritative-pr-final6d-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-final-authoritative-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-final-authoritative-pr6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-final-authoritative-pr7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-final-pr-authoritative2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-final-pr-authoritative6c-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-pr-authoritative-final3-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-pr-final-authoritative2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-head-pr-final-authoritative6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-intended-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-last-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-last-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-mainline-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-merge-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-merge-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-merge-ready-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-merge-source-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-mergecandidate-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-mergeproof-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-now-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-official-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-official-final-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-official-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-official-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-one-final-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-onepr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-only-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-open-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-open-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-open-pr-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-open-pr-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-open-pr-now-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-open-pr-selected-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-open-pr-selected-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-openpr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-openpr-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-phase-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-phase1-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-picked-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-actual-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-final-head2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-final-head6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-final-head6d-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-final-head6f-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-final-head7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-head-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-head-final3-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-head-final6b-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-official-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-official-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-source-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authoritative-submit-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authority-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-authority-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-canonical-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-canonical-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-create-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-definitive-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-done-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-end-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-endgame-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-actual-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head10-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head100-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head101-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head102-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head103-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head104-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head105-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head106-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head107-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head108-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head109-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head11-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head110-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head111-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head112-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head113-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head114-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head115-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head116-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head117-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head118-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head119-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head12-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head120-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head121-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head122-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head123-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head124-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head125-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head126-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head127-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head128-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head129-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head13-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head130-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head131-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head132-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head133-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head134-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head135-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head136-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head137-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head138-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head139-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head14-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head140-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head141-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head142-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head143-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head144-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head15-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head16-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head17-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head18-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head19-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head20-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head21-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head22-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head23-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head24-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head25-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head26-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head27-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head28-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head29-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head3-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head30-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head31-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head32-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head33-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head34-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head35-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head36-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head37-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head38-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head39-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head40-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head41-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head42-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head43-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head44-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head45-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head46-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head47-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head48-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head49-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head5-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head50-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head51-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head52-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head53-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head54-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head55-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head56-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head57-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head58-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head59-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head60-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head61-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head62-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head63-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head64-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head65-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head66-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head67-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head68-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head69-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head6f-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head70-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head71-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head72-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head73-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head74-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head75-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head76-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head77-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head78-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head79-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head80-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head81-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head82-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head83-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head84-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head85-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head86-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head87-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head88-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head89-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head9-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head90-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head91-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head92-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head93-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head94-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head95-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head96-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head97-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head98-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-authoritative-head99-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-head-authoritative2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-head-authoritative6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-head-authoritative6c-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-head2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-final-source-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-go-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-head-authoritative-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-head-authoritative-final3-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-head-authoritative-final6-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-head-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-head-final-authoritative2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-head-final-authoritative5-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-head-final-authoritative7-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-live-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-main-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-merge-ready-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-official-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-open-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-open-final2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-ready-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-real-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-ship-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-shipping-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-source-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-source-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-source-canonical-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-source-canonical-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-source-final-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-source-official-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-submit-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-submit-authoritative-source-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-submit-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-submit-final-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-submit-source-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-submit-source-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-target-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pr-use-this-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prcandidate-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prfinal-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prfinalhead-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prhead-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prhead-authoritative-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prhead-final-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-primary-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pristine-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prnow-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-production-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-proposal-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-proven-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prready-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prsource-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prsource-authoritative-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prsource-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prsource-official-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prsource-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-prsource-submit-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-publishsafe-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pull-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-pullrequest-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ready-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ready-final-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ready-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ready-to-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-real-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-realhead-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-release-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-release-safe-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-releasepolicy-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-review-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-reviewed-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-safe-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-selected-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-selected-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ship-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ship-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ship-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-authoritative-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-authoritative-pr-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-authoritative-submit-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-canonical-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-final-authoritative-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-pr-authoritative-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-pr-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-source-submit-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-stage-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-authoritative-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-authoritative-final-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-authoritative-pr-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-authoritative-source-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-final-authoritative-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-now-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-now-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-official-final-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-pr-authoritative-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-pr-head-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-prsource-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-ready-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-source-authoritative-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-source-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit-source-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submit2-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-submithead-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-target-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-to-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ultimate-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-ultimate-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-use-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-use-final-submit-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-use-pr-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-use-source-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-use-this-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-validated-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-verified-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-concurrency-work-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-hardening-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-orchestration-final-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/ci-orchestration-reality-2026-09-11",
+      "sha": "de25eade5f2caec52bdff244a2e098917c3bb453"
+    },
+    {
+      "name": "codex/digital-twin-realization-2026-09-03",
+      "sha": "2123f17622de65de6b61c1fb2c7a6edb93717e4b"
+    },
+    {
+      "name": "codex/fix-assets-migration-drift-2026-09-03",
+      "sha": "443f1019584efc174c8d0e4d6b786147904238c5"
+    },
+    {
+      "name": "codex/intelligence-realization-2026-09-03",
+      "sha": "f22bcd7853e2447b435c56afc504eb3385548e94"
+    },
+    {
+      "name": "codex/kubernetes-security-plane-2026-09-10",
+      "sha": "46f733c200375ea82202c00237f6daf6a9b01e53"
+    },
+    {
+      "name": "codex/performance-reality-2026-09-11",
+      "sha": "3a25ac4d6f61c5bfd8921ee189f458ac13ca2ce7"
+    },
+    {
+      "name": "codex/reality-gate-merge-2026-09-03",
+      "sha": "11606d41a2f72678727b04a2c4e8afd1d92f569e"
+    },
+    {
+      "name": "codex/remediation-validation-loop-2026-09-03",
+      "sha": "c3de1c92931910a9b45921465709b22dca41b6b1"
+    },
+    {
+      "name": "codex/reporting-realization-2026-09-03",
+      "sha": "270783655c441c33fa39bdf9257c9b95b5834811"
+    },
+    {
+      "name": "codex/ssrf-egress-production-policy-reviewed",
+      "sha": "54cbba322dfceb5c416ab7245c11662fd8ba6466"
+    }
+  ],
+  "codex_archive_ref": "archive/codex-history-2026-09-12",
+  "codex_archive_root_sha": "bd00a9ecfb168590683f75f30f9ea0a503701f19",
+  "unique_codex_head_sha_count": 12,
+  "archive_verification": {
+    "method": "synthetic merge DAG; every unique manifest head SHA is a direct parent of a batch archive commit, batch commits are parents of three aggregate commits, and aggregates are parents of the archive root",
+    "verified_on": "2026-09-12",
+    "branch_ref_deletion_policy": "delete only when current branch SHA still equals manifest SHA and branch is not an open PR head"
+  }
+}

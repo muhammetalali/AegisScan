@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
+from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from django.utils import timezone
@@ -12,11 +13,14 @@ from django.utils import timezone
 from enterprise.models import (
     AttackPath, CloudDiscoveryRun, ComplianceMapping, DigitalTwin, ExecutiveSnapshot,
     ExternalIntegration, FindingIntelligence, Notification, Organization, OrganizationMembership,
-    ReportSchedule, SBOMArtifact, SBOMComponent, TwinScenario, TenantProject,
+    SBOMArtifact, SBOMComponent, TwinScenario, TenantProject,
+    ContinuousAssuranceExecution, ContinuousAssuranceSchedule,
 )
-from enterprise.services import ensure_project_tenant, build_twin, predict_scenario, generate_attack_paths, map_compliance, executive_snapshot, schedule_task
-from enterprise.tasks import build_digital_twin_task, predict_digital_twin_scenario_task, generate_attack_paths_task, map_compliance_task, run_continuous_assurance
+from enterprise.services import ensure_project_tenant, build_twin, predict_scenario, generate_attack_paths, map_compliance, executive_snapshot
+from enterprise.tasks import build_digital_twin_task, predict_digital_twin_scenario_task, generate_attack_paths_task, map_compliance_task, claim_continuous_assurance_execution, run_continuous_assurance
 from django_project.projects.models import Project
+from django_project.users.models import Permission
+from fastapi_app.core.dependencies import require_permission
 
 router = APIRouter()
 
@@ -39,13 +43,28 @@ class ScheduleCreate(BaseModel):
     format: str = 'pdf'
     frequency: str
     recipients: list[str] = Field(default_factory=list)
-    next_run: Optional[str] = None
+    next_run: Optional[datetime] = None
+class ContinuousAssuranceCreate(BaseModel):
+    project_id: UUID
+    asset_id: UUID
+    scan_type: str
+    engine: str
+    interval_minutes: int = Field(default=60, ge=5, le=43200)
+    next_run: Optional[datetime] = None
 
 @sync_to_async
 def _project_for_user(project_id: str, user_id: str):
     project = Project.objects.filter(id=project_id).filter(owner_id=user_id).first() or Project.objects.filter(id=project_id, members__id=user_id).first()
     if not project: raise HTTPException(status_code=404, detail='Project not found or inaccessible')
     return project
+
+
+@sync_to_async
+def _tenant_for_user(project: Project, user_id: str):
+    try:
+        return ensure_project_tenant(project,user_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
 
 @router.get('/organizations')
 async def organizations(user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
@@ -116,22 +135,88 @@ async def compliance_mappings(project_id: UUID, user=Depends(__import__('fastapi
 async def executive(project_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
     project=await _project_for_user(str(project_id),str(user.get('user_id'))); org=await sync_to_async(ensure_project_tenant)(project,str(user.get('user_id'))); snap=await sync_to_async(executive_snapshot)(project,org); return {'id':str(snap.id),'score':snap.score,'risk':snap.risk,'critical_findings':snap.critical_findings,'high_findings':snap.high_findings,'open_findings':snap.open_findings,'validated_findings':snap.validated_findings,'fixed_findings':snap.fixed_findings,'compliance_score':snap.compliance_score,'coverage_score':snap.coverage_score,'trend':snap.trend,'deltas':snap.deltas,'source_scan_id':str(snap.source_scan_id) if snap.source_scan_id else None}
 
-@router.post('/report-schedules', status_code=201)
-async def create_report_schedule(body: ScheduleCreate, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
-    project=await _project_for_user(str(body.project_id),str(user.get('user_id'))); org=await sync_to_async(ensure_project_tenant)(project,str(user.get('user_id'))); next_run=timezone.now() if not body.next_run else timezone.datetime.fromisoformat(body.next_run.replace('Z','+00:00')); schedule=await sync_to_async(ReportSchedule.objects.create)(organization=org,project=project,title=body.title,report_type=body.report_type,format=body.format,frequency=body.frequency,recipients=body.recipients,next_run=next_run,created_by_id=str(user.get('user_id'))); await sync_to_async(schedule_task)(schedule); return {'id':str(schedule.id),'next_run':schedule.next_run.isoformat(),'enabled':schedule.enabled}
+@router.post('/report-schedules', status_code=201, deprecated=True)
+async def create_report_schedule(body: ScheduleCreate, user=Depends(require_permission(Permission.REPORT_CREATE))):
+    from fastapi_app.routers.reports import ReportScheduleCreate, _create_report_schedules, _serialize_schedule
+    await _project_for_user(str(body.project_id),str(user.get('user_id')))
+    rows=await _create_report_schedules(ReportScheduleCreate(
+        project_id=str(body.project_id),template_id=body.report_type,frequency=body.frequency,
+        recipients=body.recipients,formats=[body.format],title=body.title,next_run=body.next_run,
+    ),str(user.get('user_id')))
+    return _serialize_schedule(rows[0])
 
-@router.get('/report-schedules/{schedule_id}')
-async def get_report_schedule(schedule_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
-    schedule=await sync_to_async(lambda:ReportSchedule.objects.filter(pk=schedule_id,created_by_id=str(user.get('user_id'))).first())()
-    if not schedule: raise HTTPException(status_code=404,detail='Report schedule not found')
-    return {'id':str(schedule.id),'next_run':schedule.next_run.isoformat(),'last_run':schedule.last_run.isoformat() if schedule.last_run else None,'enabled':schedule.enabled}
+@router.get('/report-schedules/{schedule_id}', deprecated=True)
+async def get_report_schedule(schedule_id: UUID, user=Depends(require_permission(Permission.REPORT_READ))):
+    from fastapi_app.routers.reports import _get_report_schedule, _serialize_schedule
+    return _serialize_schedule(await _get_report_schedule(str(schedule_id),str(user.get('user_id'))))
 
 @router.post('/continuous-assurance/{schedule_id}/run')
 async def run_assurance(schedule_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
-    from enterprise.models import ContinuousAssuranceSchedule
-    schedule=await sync_to_async(lambda:ContinuousAssuranceSchedule.objects.filter(pk=schedule_id,created_by_id=str(user.get('user_id'))).first())()
+    schedule=await sync_to_async(lambda:ContinuousAssuranceSchedule.objects.select_related('project').filter(pk=schedule_id).first())()
     if not schedule: raise HTTPException(status_code=404,detail='Continuous assurance schedule not found')
-    task=run_continuous_assurance.delay(str(schedule.id)); return {'task_id':task.id,'status':'queued'}
+    project=await _project_for_user(str(schedule.project_id),str(user.get('user_id')))
+    org=await _tenant_for_user(project,str(user.get('user_id')))
+    if org.id != schedule.organization_id:
+        raise HTTPException(status_code=404,detail='Continuous assurance schedule not found')
+    execution,_=await sync_to_async(claim_continuous_assurance_execution)(str(schedule.id))
+    if execution is None:
+        raise HTTPException(status_code=409,detail='Continuous assurance schedule has no durable authorization binding')
+    task=run_continuous_assurance.delay(str(execution.id))
+    await sync_to_async(ContinuousAssuranceExecution.objects.filter(pk=execution.id).update)(celery_task_id=task.id)
+    return {'task_id':task.id,'execution_id':str(execution.id),'schedule_id':str(schedule.id),'status':'queued'}
+
+
+@router.get('/continuous-assurance')
+async def list_continuous_assurance(user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
+    user_id=str(user.get('user_id'))
+    def load():
+        schedules=(ContinuousAssuranceSchedule.objects.filter(
+            Q(project__owner_id=user_id)|Q(project__memberships__user_id=user_id),
+            organization__memberships__user_id=user_id,
+            organization__memberships__is_active=True,
+        ).select_related('organization','project','asset','authorization_decision').distinct().order_by('-created_at'))
+        rows=[]
+        for schedule in schedules:
+            execution=schedule.executions.select_related('scan').order_by('-scheduled_for','-created_at').first()
+            rows.append({
+                'id':str(schedule.id),'organization_id':str(schedule.organization_id),'project_id':str(schedule.project_id),
+                'project_name':schedule.project.name,'asset_id':str(schedule.asset_id) if schedule.asset_id else None,
+                'asset_name':schedule.asset.name if schedule.asset_id else None,'authorization_decision_id':str(schedule.authorization_decision_id) if schedule.authorization_decision_id else None,
+                'scan_type':schedule.scan_type,'engine':schedule.engine,'interval_minutes':schedule.interval_minutes,
+                'enabled':schedule.enabled,'next_run':schedule.next_run.isoformat(),'last_run':schedule.last_run.isoformat() if schedule.last_run else None,
+                'disabled_at':schedule.disabled_at.isoformat() if schedule.disabled_at else None,'disabled_reason':schedule.disabled_reason,
+                'latest_execution':None if execution is None else {
+                    'id':str(execution.id),'status':execution.status,'scheduled_for':execution.scheduled_for.isoformat(),
+                    'scan_id':str(execution.scan_id) if execution.scan_id else None,'reason':execution.reason,
+                    'attempts':execution.attempts,'completed_at':execution.completed_at.isoformat() if execution.completed_at else None,
+                },
+            })
+        return rows
+    return await sync_to_async(load)()
+
+@router.post('/continuous-assurance', status_code=201)
+async def create_continuous_assurance(body: ContinuousAssuranceCreate, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
+    from django_project.assets.models import Asset
+    from fastapi_app.services.authorization_guard import current_asset_authorization
+    if body.engine not in {'nmap','nuclei','masscan','semgrep'}:
+        raise HTTPException(status_code=400, detail='Unsupported continuous assurance engine')
+    project=await _project_for_user(str(body.project_id),str(user.get('user_id')))
+    org=await _tenant_for_user(project,str(user.get('user_id')))
+    asset=await sync_to_async(lambda:Asset.objects.filter(pk=body.asset_id,project=project,is_active=True).first())()
+    if not asset:
+        raise HTTPException(status_code=404,detail='Active project asset not found')
+    from fastapi_app.services.continuous_assurance import validate_assurance_engine_contract
+    engine_contract_error=validate_assurance_engine_contract(asset,body.scan_type,body.engine)
+    if engine_contract_error:
+        raise HTTPException(status_code=422,detail=engine_contract_error)
+    authorization,reason=await sync_to_async(current_asset_authorization)(asset)
+    if authorization is None:
+        raise HTTPException(status_code=403,detail=reason)
+    next_run=body.next_run or timezone.now()
+    if timezone.is_naive(next_run):
+        next_run=timezone.make_aware(next_run,timezone.get_current_timezone())
+    schedule=await sync_to_async(ContinuousAssuranceSchedule.objects.create)(organization=org,project=project,asset=asset,authorization_decision=authorization,scan_type=body.scan_type,engine=body.engine,interval_minutes=body.interval_minutes,next_run=next_run,created_by_id=str(user.get('user_id')))
+    return {'id':str(schedule.id),'project_id':str(project.id),'asset_id':str(asset.id),'authorization_decision_id':str(authorization.id),'next_run':schedule.next_run.isoformat(),'enabled':schedule.enabled}
 
 @router.post('/projects/{project_id}/cloud-discovery', status_code=202)
 async def cloud_discovery(project_id: UUID, provider: str, config: dict[str,Any], user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):

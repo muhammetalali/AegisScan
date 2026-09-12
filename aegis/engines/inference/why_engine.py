@@ -1,7 +1,7 @@
 """Why Engine — محرك التفسير.
 
 يولّد شروحاً واضحة ومبسّطة لكل قرار أمني:
-لماذا هذه الثغرة خطيرة؟ كيف تم اكتشافها؟ ما证据 الداعمة؟
+لماذا هذه الثغرة خطيرة؟ كيف تم اكتشافها؟ ما الأدلة الداعمة؟
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from aegis.models.finding import Finding, Severity
 
 logger = logging.getLogger("aegis.inference.why")
 
-# ترجمة التصنيفات إلى عربي واضح
 CATEGORY_LABELS = {
     EvidenceCategory.INJECTION: "حقن",
     EvidenceCategory.AUTHENTICATION: "مصادقة",
@@ -53,37 +52,13 @@ class WhyEngine:
         evidences: List[Evidence],
         risk_assessment: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """توليد شرح كامل لثغرة.
-
-        Returns:
-            {
-                "finding_id": str,
-                "title": str,
-                "severity_explanation": str,
-                "category_explanation": str,
-                "evidence_summary": str,
-                "risk_explanation": str,
-                "recommendation": str,
-                "full_explanation": str,
-            }
-        """
-        # شرح الخطورة
+        """توليد شرح كامل لثغرة."""
         sev_exp = self._explain_severity(finding.severity)
-
-        # شرح التصنيف
         cat_label = CATEGORY_LABELS.get(getattr(finding, 'category', None), "غير محدد")
         cat_exp = self._explain_category(cat_label, finding)
-
-        # ملخص الأدلة
         ev_exp = self._explain_evidence(evidences)
-
-        # شرح المخاطرة
         risk_exp = self._explain_risk(risk_assessment) if risk_assessment else "لم يتم تقييم المخاطرة بعد"
-
-        # التوصية
         recommendation = self._generate_recommendation(finding, evidences)
-
-        # الشرح الكامل
         full = self._build_full_explanation(
             finding, sev_exp, cat_exp, ev_exp, risk_exp, recommendation
         )
@@ -104,7 +79,6 @@ class WhyEngine:
             payload={"finding_id": finding.id, "explanation": full[:500]},
             source=self.name,
         )
-
         logger.info("شرح %s: %s", finding.id, full[:100])
         return result
 
@@ -168,9 +142,7 @@ class WhyEngine:
         }
         return explanations.get(severity, f"خطورة {label}")
 
-    def _explain_category(
-        self, cat_label: str, finding: Finding
-    ) -> str:
+    def _explain_category(self, cat_label: str, finding: Finding) -> str:
         """شرح التصنيف."""
         return (
             f"الثغرة تندرج تحت تصنيف '{cat_label}' — "
@@ -185,8 +157,8 @@ class WhyEngine:
         "أسرار": "كلمات المرور والمفاتيح السرية المكشوفة",
         "إعدادات": "تكوين النظام والبرامج",
         "تبعيات": "المكتبات والبرامج الخارجية المستخدمة",
-        "صلاحيات": "تصعيد الصلاحياتและการتحكم بالوصول",
-        "منطق الأعمال": "المنطق الم걱وم في التطبيق",
+        "صلاحيات": "تصعيد الصلاحيات والتحكم بالوصول",
+        "منطق الأعمال": "المنطق الحاكم في التطبيق",
         "تسريب معلومات": "معلومات حساسة مكشوفة",
     }
 
@@ -228,20 +200,37 @@ class WhyEngine:
     def _generate_recommendation(
         self, finding: Finding, evidences: List[Evidence]
     ) -> str:
-        """توليد توصية بناءً على الثغرة."""
+        """توليد توصية مرتبطة بالخطورة والتصنيف والأدلة."""
         sev = finding.severity
-        cat = getattr(finding, 'category', None)
+        cat_label = CATEGORY_LABELS.get(getattr(finding, "category", None), "غير محدد")
+        category_actions = {
+            "حقن": "راجع الاستعلامات والمدخلات، وطبّق parameterization وoutput encoding.",
+            "مصادقة": "شدّد التحقق من الهوية، إدارة الجلسات، وسياسات كلمات المرور.",
+            "تفويض": "راجع authorization boundaries وتحقق من صلاحيات الكائنات على الخادم.",
+            "تشفير": "استبدل الخوارزميات أو الإعدادات الضعيفة بمعايير تشفير مدعومة حالياً.",
+            "أسرار": "دوّر السر المكشوف فوراً وأزله من الشفرة والتاريخ وسجل الوصول.",
+            "إعدادات": "صحّح الإعدادات غير الآمنة وفعّل الإعداد الآمن الافتراضي.",
+            "تبعيات": "حدّث التبعية إلى إصدار مدعوم وثبّت الإصدار مع provenance موثوق.",
+            "صلاحيات": "خفّض الامتيازات وتحقق من مسارات privilege escalation.",
+            "منطق الأعمال": "راجع مسار العمل والقيود وطبّق تحققاً خادمياً على الحالات الحساسة.",
+            "تسريب معلومات": "قلّل البيانات المكشوفة وأضف redaction وaccess controls مناسبة.",
+        }
+        action = category_actions.get(cat_label, "راجع السبب الجذري للعثور وطبّق الضبط الوقائي المناسب.")
 
         if sev == Severity.CRITICAL:
-            return (
-                "توصية فورية: إصلاح الثغرة الآن. "
-                "يُنصح بعزل النظام المتأثر مؤقتاً."
-            )
-        if sev == Severity.HIGH:
-            return "توصية: إصلاح الثغرة في أقرب دورة صيانة."
-        if sev == Severity.MEDIUM:
-            return "توصية: جدولة الإصلاح مع مراجعة الإعدادات."
-        return "توصية: ملاحظة للمراجعة في التحديث القادم."
+            prefix = "توصية فورية: إصلاح الثغرة الآن، مع عزل النظام المتأثر عند الحاجة."
+        elif sev == Severity.HIGH:
+            prefix = "توصية عاجلة: إصلاح الثغرة في أقرب دورة صيانة مع تحقق لاحق."
+        elif sev == Severity.MEDIUM:
+            prefix = "توصية: جدولة الإصلاح وإجراء تحقق موجّه."
+        else:
+            prefix = "توصية: معالجة المشكلة ضمن دورة التحسين القادمة."
+
+        evidence_note = (
+            f" الأدلة المتاحة: {len(evidences)} من {len(set(e.source_tool for e in evidences))} مصادر."
+            if evidences else " لا توجد أدلة داعمة كافية؛ يجب جمع دليل أقوى قبل إغلاق الحالة."
+        )
+        return f"{prefix} {action}{evidence_note}"
 
     def _build_full_explanation(
         self,

@@ -11,7 +11,6 @@ const EXTRA: Record<Language, Catalog> = {
     'Search, sort, inspect evidence and launch finding-linked validation from real API data.': 'ابحث ورتّب وافحص الأدلة وابدأ التحقق المرتبط بالثغرة من بيانات API الحقيقية.',
     'Search, Sort, Tags, Status, Project, Asset, Engine': 'البحث والترتيب والوسوم والحالة والمشروع والأصل والمحرك',
     'All severity': 'كل مستويات الشدة', 'Any status': 'أي حالة', 'Sort: Severity': 'ترتيب: الشدة', 'Sort: Confidence': 'ترتيب: الثقة',
-    'Search, sort, inspect evidence and launch finding-linked validation from real API data.': 'البحث والترتيب وفحص الأدلة وإطلاق تحقق مرتبط بالثغرة من بيانات API حقيقية.',
     'No findings': 'لا توجد ثغرات', 'Run a real scan or validation to populate the findings registry.': 'شغّل فحصًا أو تحققًا حقيقيًا لملء سجل الثغرات.',
     'Results are unavailable': 'النتائج غير متاحة', 'View execution': 'عرض التنفيذ', 'Retry': 'إعادة المحاولة',
     'The validation result could not be loaded from the API. No demo or fallback data is shown.': 'تعذر تحميل نتيجة التحقق من API. لا يتم عرض بيانات تجريبية أو بديلة.',
@@ -23,7 +22,7 @@ const EXTRA: Record<Language, Catalog> = {
     'Supported findings returned': 'ثغرات مدعومة مُعادة', 'supported findings returned': 'ثغرات مدعومة مُعادة',
     'Authoritative for this Finding': 'المحرك المعتمد لهذه الثغرة', 'Available assessment capability': 'قدرة متاحة ضمن التقييم',
     'I confirm this target is authorized for security validation.': 'أؤكد أن هذا الهدف مصرح به للتحقق الأمني.',
-    'Include subdomains': 'تضمين النطاقات الفرعية', 'Profile': 'الملف', 'Title': 'العنوان', 'Severity': 'الشدة',
+    'Include subdomains': 'تضمين النطاقات الفرعية', 'Title': 'العنوان', 'Severity': 'الشدة',
     'Confirmed': 'مؤكد', 'Required': 'مطلوب', 'Target type': 'نوع الهدف', 'Target': 'الهدف', 'Engine': 'المحرك',
     'Search findings, assets…': 'ابحث في الثغرات والأصول…', 'Search title, asset, category, tags, engine...': 'ابحث في العنوان أو الأصل أو الفئة أو الوسوم أو المحرك…',
     'Validation': 'التحقق', 'Actions': 'الإجراءات', 'View Evidence': 'عرض الأدلة', 'Assign': 'تعيين', 'Validate': 'تحقق', 'More': 'المزيد',
@@ -55,7 +54,7 @@ const translateDocument = (language: Language) => {
     if (next !== raw) textNode.nodeValue = next
   }
   const selector = 'input[placeholder], textarea[placeholder], [aria-label], [title]'
-  document.querySelectorAll<HTMLElement>(selector).forEach(element => {
+  document.querySelectorAll<HTMLElement>(selector).forEach((element) => {
     for (const attr of ['placeholder', 'aria-label', 'title']) {
       const raw = element.getAttribute(attr)
       if (!raw) continue
@@ -67,13 +66,16 @@ const translateDocument = (language: Language) => {
 }
 
 export const RuntimeI18nBridge: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const language = useLanguageStore(s => s.language)
+  const language = useLanguageStore((s) => s.language)
   useEffect(() => {
     let scheduled = false
     const run = () => {
       if (scheduled) return
       scheduled = true
-      queueMicrotask(() => { scheduled = false; translateDocument(language) })
+      queueMicrotask(() => {
+        scheduled = false
+        translateDocument(language)
+      })
     }
     run()
     const observer = new MutationObserver(run)

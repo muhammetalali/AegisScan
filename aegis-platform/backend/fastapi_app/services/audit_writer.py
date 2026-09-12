@@ -4,6 +4,7 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit
 from django_project.users.models import User
 
 
@@ -47,7 +48,7 @@ def add_audit_entry(
     if user is not None and actor is None:
         entry_metadata.setdefault("actor_identifier", str(user))
 
-    return AuditLog.objects.create(
+    return append_audit(
         user=actor,
         action=action,
         result=result,

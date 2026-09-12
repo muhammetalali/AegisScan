@@ -27,5 +27,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('/node_modules/')) return undefined
+          if (id.includes('/react-router/')) return 'router'
+          if (id.includes('/react-dom/') || id.includes('/react/') || id.includes('/scheduler/')) return 'react-core'
+          if (id.includes('/framer-motion/')) return 'motion'
+          if (id.includes('/@tanstack/')) return 'query'
+          return undefined
+        },
+      },
+    },
   },
 })

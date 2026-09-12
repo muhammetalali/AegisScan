@@ -1,0 +1,535 @@
+name: Remote Encrypted Backup Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/remote-backup-reality.yml'
+      - 'tests/test_production_resilience_workflow.py'
+      - 'tests/test_production_resilience_backup.py'
+      - 'aegis-platform/scripts/production_resilience_backup.py'
+      - '.github/workflows/production-resilience-acceptance.yml'
+      - '.github/workflows/production-launch-readiness.yml'
+      - 'aegis-platform/scripts/backup_postgres.sh'
+      - 'aegis-platform/scripts/verify_postgres_restore.sh'
+      - 'aegis-platform/scripts/remote_backup.py'
+      - 'aegis-platform/scripts/remote_backup_service.py'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/docker/backup/**'
+      - 'aegis-platform/docker-compose.backup.yml'
+      - 'aegis-platform/backend/.env.example'
+      - 'tests/test_remote_backup.py'
+      - 'tests/test_remote_backup_service.py'
+      - 'tests/test_production_preflight.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/remote-backup-reality.yml'
+      - 'tests/test_production_resilience_workflow.py'
+      - 'tests/test_production_resilience_backup.py'
+      - 'aegis-platform/scripts/production_resilience_backup.py'
+      - '.github/workflows/production-resilience-acceptance.yml'
+      - '.github/workflows/production-launch-readiness.yml'
+      - 'aegis-platform/scripts/backup_postgres.sh'
+      - 'aegis-platform/scripts/verify_postgres_restore.sh'
+      - 'aegis-platform/scripts/remote_backup.py'
+      - 'aegis-platform/scripts/remote_backup_service.py'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/docker/backup/**'
+      - 'aegis-platform/docker-compose.backup.yml'
+      - 'aegis-platform/backend/.env.example'
+      - 'tests/test_remote_backup.py'
+      - 'tests/test_remote_backup_service.py'
+      - 'tests/test_production_preflight.py'
+  workflow_dispatch:
+
+concurrency:
+  group: remote-backup-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: true
+
+permissions: {contents: read}
+
+jobs:
+  remote-encrypted-backup-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: remote-backup-reality-password
+          POSTGRES_DB: aegisdb
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MINIO_ROOT_USER: aegisbackupci
+      MINIO_ROOT_PASSWORD: ci-minio-remote-backup-secret-0123456789
+      AEGIS_BACKUP_S3_ENDPOINT: http://127.0.0.1:9000
+      AEGIS_BACKUP_S3_REGION: us-east-1
+      AEGIS_BACKUP_S3_BUCKET: aegis-backups
+      AEGIS_BACKUP_S3_PREFIX: aegisscan/postgres
+      AEGIS_BACKUP_S3_ADDRESSING_STYLE: path
+      AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.8'
+          cache: false
+
+      - name: Install backup reality dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+          python -m pip install pytest==9.1.1 'boto3>=1.35,<2' 'cryptography>=42,<47'
+          psql --version
+
+      - name: Unit-test encryption and fail-closed backup contracts
+        run: |
+          python -m pytest -q tests/test_remote_backup.py tests/test_remote_backup_service.py tests/test_production_preflight.py
+
+      - name: Build hardened production backup runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull \
+            -f aegis-platform/docker/backup/Dockerfile \
+            -t aegis-remote-backup:reality \
+            aegis-platform
+          user="$(docker image inspect aegis-remote-backup:reality --format '{{.Config.User}}')"
+          test "$user" = "10001:10001"
+          test "$(docker run --rm --entrypoint id aegis-remote-backup:reality -u)" = "10001"
+          docker run --rm --entrypoint pg_dump aegis-remote-backup:reality --version | tee /tmp/aegis-pg-client-version.txt
+          test "$(docker run --rm --entrypoint pg_dump aegis-remote-backup:reality --version | awk '{print $3}' | cut -d. -f1)" = "16"
+          test "$(docker run --rm --entrypoint pg_restore aegis-remote-backup:reality --version | awk '{print $3}' | cut -d. -f1)" = "16"
+
+      - name: Build and start pinned upstream S3-compatible object store
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/aegis-minio-bin" /tmp/aegis-minio-data
+          GOBIN="$RUNNER_TEMP/aegis-minio-bin" \
+            go install github.com/minio/minio@RELEASE.2025-10-15T17-29-55Z
+          "$RUNNER_TEMP/aegis-minio-bin/minio" --version \
+            | tee /tmp/aegis-backup-proof-minio-version.txt
+          nohup "$RUNNER_TEMP/aegis-minio-bin/minio" \
+            server /tmp/aegis-minio-data \
+            --address 127.0.0.1:9000 \
+            --console-address 127.0.0.1:9001 \
+            > /tmp/aegis-minio.log 2>&1 &
+          echo "$!" > /tmp/aegis-minio.pid
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/aegis-minio.pid)" 2>/dev/null; then
+              cat /tmp/aegis-minio.log >&2 || true
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat /tmp/aegis-minio.log >&2 || true
+            exit 1
+          fi
+
+      - name: Prepare private backup key and explicit S3 credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-backup-proof /tmp/aegis-backup-host-secrets /tmp/aegis-backup-container-secrets
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          host = Path('/tmp/aegis-backup-host-secrets')
+          (host / 'encryption.key').write_bytes(os.urandom(32))
+          (host / 's3.json').write_text(json.dumps({
+              'access_key_id': os.environ['MINIO_ROOT_USER'],
+              'secret_access_key': os.environ['MINIO_ROOT_PASSWORD'],
+          }))
+          for path in host.iterdir():
+              path.chmod(0o600)
+          PY
+          sudo install -o 10001 -g 10001 -m 0600 \
+            /tmp/aegis-backup-host-secrets/encryption.key \
+            /tmp/aegis-backup-container-secrets/encryption.key
+          sudo install -o 10001 -g 10001 -m 0600 \
+            /tmp/aegis-backup-host-secrets/s3.json \
+            /tmp/aegis-backup-container-secrets/s3.json
+
+      - name: Initialize versioned remote backup bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import boto3
+          from botocore.config import Config
+
+          credentials = json.loads(Path('/tmp/aegis-backup-host-secrets/s3.json').read_text())
+          s3 = boto3.client(
+              's3',
+              endpoint_url=os.environ['AEGIS_BACKUP_S3_ENDPOINT'],
+              region_name=os.environ['AEGIS_BACKUP_S3_REGION'],
+              aws_access_key_id=credentials['access_key_id'],
+              aws_secret_access_key=credentials['secret_access_key'],
+              config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
+          )
+          bucket = os.environ['AEGIS_BACKUP_S3_BUCKET']
+          s3.create_bucket(Bucket=bucket)
+          s3.put_bucket_versioning(
+              Bucket=bucket,
+              VersioningConfiguration={'Status': 'Enabled'},
+          )
+          status = s3.get_bucket_versioning(Bucket=bucket).get('Status')
+          assert status == 'Enabled', status
+          Path('/tmp/aegis-backup-proof/bucket.json').write_text(
+              json.dumps({'bucket': bucket, 'versioning': status}, indent=2)
+          )
+          PY
+
+      - name: Seed authoritative PostgreSQL recovery fixture
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: remote-backup-reality-password
+          PGDATABASE: aegisdb
+        run: |
+          psql --set ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE django_migrations (
+            id bigint PRIMARY KEY,
+            app varchar(255),
+            name varchar(255),
+            applied timestamptz
+          );
+          CREATE TABLE users_user (
+            id uuid PRIMARY KEY,
+            email varchar(255) NOT NULL
+          );
+          INSERT INTO django_migrations
+            VALUES (1, 'remote_backup', '0001_reality', now());
+          INSERT INTO users_user
+            VALUES (
+              '00000000-0000-0000-0000-000000000064',
+              'remote-restore-proof@aegisscan.local'
+            );
+          SQL
+
+      - name: Create encrypt and commit backup from hardened runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network host \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=536870912,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /run/aegis-backup:rw,nosuid,nodev,noexec,size=16777216,uid=10001,gid=10001,mode=0700 \
+            -v /tmp/aegis-backup-container-secrets/s3.json:/run/secrets/s3.json:ro \
+            -v /tmp/aegis-backup-container-secrets/encryption.key:/run/secrets/encryption.key:ro \
+            -e PGHOST=127.0.0.1 \
+            -e PGPORT=5432 \
+            -e PGUSER=aegis \
+            -e PGDATABASE=aegisdb \
+            -e PGPASSWORD=remote-backup-reality-password \
+            -e AEGIS_BACKUP_DIR=/tmp/backups \
+            -e AEGIS_BACKUP_RETENTION_DAYS=1 \
+            -e AEGIS_BACKUP_S3_ENDPOINT="$AEGIS_BACKUP_S3_ENDPOINT" \
+            -e AEGIS_BACKUP_S3_REGION="$AEGIS_BACKUP_S3_REGION" \
+            -e AEGIS_BACKUP_S3_BUCKET="$AEGIS_BACKUP_S3_BUCKET" \
+            -e AEGIS_BACKUP_S3_PREFIX="$AEGIS_BACKUP_S3_PREFIX" \
+            -e AEGIS_BACKUP_S3_ADDRESSING_STYLE=path \
+            -e AEGIS_BACKUP_REQUIRE_VERSIONING=true \
+            -e AEGIS_BACKUP_S3_CREDENTIALS_FILE=/run/secrets/s3.json \
+            -e AEGIS_BACKUP_ENCRYPTION_KEY_FILE=/run/secrets/encryption.key \
+            -e AEGIS_BACKUP_ALLOW_HTTP_TEST_ONLY=true \
+            aegis-remote-backup:reality once \
+            | tee /tmp/aegis-backup-proof/container-backup.json
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          result = json.loads(Path('/tmp/aegis-backup-proof/container-backup.json').read_text().splitlines()[-1])
+          assert result['status'] == 'success', result
+          assert result.get('manifest_version_id'), result
+          assert result.get('object_version_id'), result
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f"AEGIS_REMOTE_MANIFEST_KEY={result['manifest_key']}\n")
+              env.write(f"AEGIS_REMOTE_MANIFEST_VERSION_ID={result['manifest_version_id']}\n")
+              env.write(f"AEGIS_REMOTE_OBJECT_VERSION_ID={result['object_version_id']}\n")
+          PY
+
+      - name: Prove only encrypted committed objects exist remotely
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import boto3
+          from botocore.config import Config
+
+          credentials = json.loads(Path('/tmp/aegis-backup-host-secrets/s3.json').read_text())
+          s3 = boto3.client(
+              's3',
+              endpoint_url=os.environ['AEGIS_BACKUP_S3_ENDPOINT'],
+              region_name=os.environ['AEGIS_BACKUP_S3_REGION'],
+              aws_access_key_id=credentials['access_key_id'],
+              aws_secret_access_key=credentials['secret_access_key'],
+              config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
+          )
+          bucket = os.environ['AEGIS_BACKUP_S3_BUCKET']
+          prefix = os.environ['AEGIS_BACKUP_S3_PREFIX'] + '/'
+          items = s3.list_objects_v2(Bucket=bucket, Prefix=prefix).get('Contents', [])
+          keys = sorted(item['Key'] for item in items)
+          assert len(keys) == 2, keys
+          manifest = [key for key in keys if key.endswith('/manifest.json')]
+          payload = [key for key in keys if key.endswith('.aegis.enc')]
+          assert len(manifest) == 1 and len(payload) == 1, keys
+          assert not any(key.endswith('.dump') or key.endswith('.sha256') for key in keys), keys
+          payload_response = s3.get_object(
+              Bucket=bucket,
+              Key=payload[0],
+              VersionId=os.environ['AEGIS_REMOTE_OBJECT_VERSION_ID'],
+          )
+          encrypted_body = payload_response['Body'].read()
+          assert encrypted_body[:8] == b'AEGISBK1', encrypted_body[:8]
+          assert b'remote-restore-proof@aegisscan.local' not in encrypted_body
+
+          versions = s3.list_object_versions(Bucket=bucket, Prefix=prefix)
+          version_rows = [
+              {'key': item['Key'], 'version_id': item['VersionId'], 'is_latest': item['IsLatest']}
+              for item in versions.get('Versions', [])
+          ]
+          assert any(
+              row['key'] == payload[0]
+              and row['version_id'] == os.environ['AEGIS_REMOTE_OBJECT_VERSION_ID']
+              for row in version_rows
+          ), version_rows
+          assert any(
+              row['key'] == manifest[0]
+              and row['version_id'] == os.environ['AEGIS_REMOTE_MANIFEST_VERSION_ID']
+              for row in version_rows
+          ), version_rows
+          Path('/tmp/aegis-backup-proof/remote-objects.json').write_text(
+              json.dumps({
+                  'keys': keys,
+                  'payload_magic': encrypted_body[:8].decode('ascii'),
+                  'versions': version_rows,
+              }, indent=2)
+          )
+          PY
+
+      - name: Recover exclusively from remote storage after local runtime loss
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-remote-recovery
+          sudo chown 10001:10001 /tmp/aegis-remote-recovery
+          sudo chmod 0700 /tmp/aegis-remote-recovery
+          docker run --rm --network host \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=536870912,uid=10001,gid=10001,mode=0700 \
+            -v /tmp/aegis-backup-container-secrets/s3.json:/run/secrets/s3.json:ro \
+            -v /tmp/aegis-backup-container-secrets/encryption.key:/run/secrets/encryption.key:ro \
+            -v /tmp/aegis-remote-recovery:/recovery \
+            --entrypoint python \
+            aegis-remote-backup:reality \
+            /app/scripts/remote_backup.py restore \
+            --endpoint "$AEGIS_BACKUP_S3_ENDPOINT" \
+            --region "$AEGIS_BACKUP_S3_REGION" \
+            --bucket "$AEGIS_BACKUP_S3_BUCKET" \
+            --prefix "$AEGIS_BACKUP_S3_PREFIX" \
+            --credentials-file /run/secrets/s3.json \
+            --encryption-key-file /run/secrets/encryption.key \
+            --manifest-key "$AEGIS_REMOTE_MANIFEST_KEY" \
+            --manifest-version-id "$AEGIS_REMOTE_MANIFEST_VERSION_ID" \
+            --output /recovery/recovered.dump \
+            --work-dir /tmp \
+            --allow-http \
+            > /tmp/aegis-backup-proof/remote-restore.json
+          # The hardened recovery container writes as uid 10001 into a
+          # host bind that is deliberately mode 0700. Prove that boundary
+          # first as root, then hand the recovered artifacts to the CI
+          # operator uid for the separate PostgreSQL restore verifier.
+          sudo test -s /tmp/aegis-remote-recovery/recovered.dump
+          sudo test -s /tmp/aegis-remote-recovery/recovered.dump.sha256
+          test "$(sudo stat -c '%u:%g' /tmp/aegis-remote-recovery/recovered.dump)" = "10001:10001"
+          test "$(sudo stat -c '%a' /tmp/aegis-remote-recovery/recovered.dump)" = "600"
+          test "$(sudo stat -c '%a' /tmp/aegis-remote-recovery/recovered.dump.sha256)" = "600"
+          sudo chown -R "$(id -u):$(id -g)" /tmp/aegis-remote-recovery
+          chmod 0700 /tmp/aegis-remote-recovery
+          chmod 0600 /tmp/aegis-remote-recovery/recovered.dump /tmp/aegis-remote-recovery/recovered.dump.sha256
+
+      - name: Restore PostgreSQL and prove authoritative record
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: remote-backup-reality-password
+          PGDATABASE: aegisdb
+          AEGIS_RESTORE_REQUIRED_TABLES: django_migrations,users_user
+          AEGIS_RESTORE_ASSERTION_SQL: "SELECT email FROM users_user WHERE id = '00000000-0000-0000-0000-000000000064'"
+          AEGIS_RESTORE_ASSERTION_EXPECTED: remote-restore-proof@aegisscan.local
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh aegis-platform/scripts/verify_postgres_restore.sh \
+            /tmp/aegis-remote-recovery/recovered.dump \
+            | tee /tmp/aegis-backup-proof/postgres-restore.txt
+          grep -q 'RESTORE_VERIFICATION=PASS' /tmp/aegis-backup-proof/postgres-restore.txt
+
+      - name: Prove authenticated manifest modification fails closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          AEGIS_MODIFIED_MANIFEST_KEY="$AEGIS_BACKUP_S3_PREFIX/modified-manifest.json"
+          export AEGIS_MODIFIED_MANIFEST_KEY
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import boto3
+          from botocore.config import Config
+
+          credentials = json.loads(Path('/tmp/aegis-backup-host-secrets/s3.json').read_text())
+          s3 = boto3.client(
+              's3',
+              endpoint_url=os.environ['AEGIS_BACKUP_S3_ENDPOINT'],
+              region_name=os.environ['AEGIS_BACKUP_S3_REGION'],
+              aws_access_key_id=credentials['access_key_id'],
+              aws_secret_access_key=credentials['secret_access_key'],
+              config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
+          )
+          bucket = os.environ['AEGIS_BACKUP_S3_BUCKET']
+          original = s3.get_object(Bucket=bucket, Key=os.environ['AEGIS_REMOTE_MANIFEST_KEY'])['Body'].read()
+          manifest = json.loads(original)
+          manifest['source_size'] = int(manifest['source_size']) + 1
+          s3.put_object(
+              Bucket=bucket,
+              Key=os.environ['AEGIS_MODIFIED_MANIFEST_KEY'],
+              Body=json.dumps(manifest).encode(),
+          )
+          PY
+
+          set +e
+          python aegis-platform/scripts/remote_backup.py restore \
+            --endpoint "$AEGIS_BACKUP_S3_ENDPOINT" \
+            --region "$AEGIS_BACKUP_S3_REGION" \
+            --bucket "$AEGIS_BACKUP_S3_BUCKET" \
+            --prefix "$AEGIS_BACKUP_S3_PREFIX" \
+            --credentials-file /tmp/aegis-backup-host-secrets/s3.json \
+            --encryption-key-file /tmp/aegis-backup-host-secrets/encryption.key \
+            --manifest-key "$AEGIS_MODIFIED_MANIFEST_KEY" \
+            --output /tmp/aegis-remote-recovery/modified.dump \
+            --allow-http \
+            > /tmp/aegis-backup-proof/modified-stdout.txt \
+            2> /tmp/aegis-backup-proof/modified-stderr.txt
+          status=$?
+          set -e
+          test "$status" -ne 0
+          test ! -e /tmp/aegis-remote-recovery/modified.dump
+          grep -q 'manifest authentication failed' /tmp/aegis-backup-proof/modified-stderr.txt
+
+      - name: Validate production backup compose isolation
+        working-directory: aegis-platform
+        shell: bash
+        env:
+          POSTGRES_PASSWORD: remote-backup-reality-password
+          AUTHORIZED_SCAN_TARGETS: 203.0.113.10
+          AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
+          AEGIS_BACKUP_S3_BUCKET: aegisscan-production-backups
+          AEGIS_BACKUP_S3_PREFIX: aegisscan/postgres
+          AEGIS_BACKUP_S3_CREDENTIALS_FILE: /tmp/aegis-backup-container-secrets/s3.json
+          AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /tmp/aegis-backup-container-secrets/encryption.key
+          AEGIS_BACKUP_RUNTIME_UID: '10001'
+          AEGIS_BACKUP_RUNTIME_GID: '10001'
+        run: |
+          set -euo pipefail
+          touch backend/.env
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.prod.yml \
+            -f docker-compose.backup.yml \
+            config --format json > /tmp/aegis-backup-compose.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path('/tmp/aegis-backup-compose.json').read_text())
+          service = cfg['services']['backup']
+          assert service['user'] == '10001:10001', service['user']
+          assert service.get('read_only') is True
+          assert 'ALL' in service.get('cap_drop', [])
+          assert 'no-new-privileges:true' in service.get('security_opt', [])
+          assert not service.get('ports')
+          assert service.get('healthcheck')
+          assert set(service.get('networks', {})) == {'backup_db', 'backup_egress'}, service.get('networks')
+          assert cfg['networks']['backup_db'].get('internal') is True
+          assert cfg['networks']['backup_egress'].get('internal') is not True
+          assert 'backup_db' in cfg['services']['postgres'].get('networks', {})
+          volumes = service.get('volumes', [])
+          assert volumes, service
+          for volume in volumes:
+              if isinstance(volume, dict):
+                  assert volume.get('read_only') is True, volume
+              else:
+                  assert str(volume).endswith(':ro'), volume
+          print('remote-backup-compose-isolation-ok')
+          PY
+
+      - name: Prove evidence contains no backup secrets
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -F "$MINIO_ROOT_PASSWORD" /tmp/aegis-backup-proof 2>/dev/null; then
+            echo 'backup credential leaked into proof artifact' >&2
+            exit 1
+          fi
+          test ! -e /tmp/aegis-backup-proof/encryption.key
+          test ! -e /tmp/aegis-backup-proof/s3.json
+
+      - name: Capture diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          tail -300 /tmp/aegis-minio.log 2>/dev/null || true
+          ls -la /tmp/aegis-backup-proof /tmp/aegis-remote-recovery 2>/dev/null || true
+
+      - name: Upload remote backup reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-encrypted-backup-proof-${{ github.sha }}
+          path: /tmp/aegis-backup-proof
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop disposable object store
+        if: always()
+        shell: bash
+        run: |
+          if [ -s /tmp/aegis-minio.pid ]; then
+            kill "$(cat /tmp/aegis-minio.pid)" >/dev/null 2>&1 || true
+          fi

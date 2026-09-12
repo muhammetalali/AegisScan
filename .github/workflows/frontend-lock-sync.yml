@@ -1,0 +1,41 @@
+name: Frontend Lock Sync
+
+'on':
+  push:
+    branches: [main, codex/full-contract-ui-audit-2026-09-03]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Superseded validation runs must not consume runners. Manual dispatches are
+# isolated by run id so an operator-triggered proof is never cancelled by a push.
+concurrency:
+  group: frontend-lock-sync-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aegis-platform/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+      - name: Verify manifest and lockfile agreement
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Fail on lockfile drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ../..
+          git diff --exit-code -- aegis-platform/frontend/package-lock.json
+      - name: Verify clean deterministic install
+        run: npm ci

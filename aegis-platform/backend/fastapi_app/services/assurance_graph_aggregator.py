@@ -26,7 +26,33 @@ def build_assurance_graph(validations: dict[str, dict[str, Any]], correlations: 
 
     for validation_id, validation in validations.items():
         v_id = f"validation:{validation_id}"
-        _node(nodes, v_id, "validation", validation_id, status=validation.get("status"), risk=min(100, int(validation.get("progress", 0))))
+        risk_correlation = validation.get("risk_correlation") if isinstance(validation.get("risk_correlation"), dict) else {}
+        correlation_score = float(risk_correlation.get("score") or 0.0)
+        correlation_confidence = float(risk_correlation.get("intelligence_confidence") or 0.0)
+        correlation_conflicts = int(bool(risk_correlation.get("intelligence_conflict"))) + int(risk_correlation.get("contradicting_evidence_count") or 0)
+        lineage = {
+            "validationId": validation.get("validation_id") or validation_id,
+            "projectId": validation.get("project_id"),
+            "riskCorrelationId": risk_correlation.get("id"),
+            "riskCorrelationSha256": risk_correlation.get("sha256"),
+            "riskAnalysisVersion": risk_correlation.get("analysis_version"),
+            "riskCorrelationPriority": risk_correlation.get("priority"),
+            "riskCorrelationScore": correlation_score if risk_correlation else None,
+            "supportingEvidenceCount": int(risk_correlation.get("supporting_evidence_count") or 0) if risk_correlation else None,
+            "contradictingEvidenceCount": int(risk_correlation.get("contradicting_evidence_count") or 0) if risk_correlation else None,
+            "neutralEvidenceCount": int(risk_correlation.get("neutral_evidence_count") or 0) if risk_correlation else None,
+        }
+        validation_risk = correlation_score if risk_correlation else min(100, int(validation.get("progress", 0)))
+        validation_confidence = correlation_confidence if risk_correlation else 0
+        _node(
+            nodes, v_id, "validation", validation_id,
+            status=validation.get("status"),
+            risk=validation_risk,
+            confidence=validation_confidence,
+            conflicts=correlation_conflicts,
+            evidenceBacked=bool(risk_correlation),
+            **lineage,
+        )
         selected_engines = validation.get("engines", []) or []
         for engine in selected_engines:
             e_id = f"engine:{engine}"
@@ -36,11 +62,20 @@ def build_assurance_graph(validations: dict[str, dict[str, Any]], correlations: 
             findings = int(state.get("findings", 0) or 0)
             if findings:
                 f_id = f"finding:{validation_id}:{engine}"
-                confidence = 60 + min(35, findings * 8)
-                _node(nodes, f_id, "finding", f"{engine} finding", risk=min(100, 35 + findings * 12), confidence=confidence, findings=findings)
+                confidence = int(correlation_confidence) if risk_correlation else 60 + min(35, findings * 8)
+                finding_risk = correlation_score if risk_correlation else min(100, 35 + findings * 12)
+                _node(
+                    nodes, f_id, "finding", f"{engine} finding",
+                    risk=finding_risk,
+                    confidence=confidence,
+                    conflicts=correlation_conflicts,
+                    findings=findings,
+                    evidenceBacked=bool(risk_correlation),
+                    **lineage,
+                )
                 _edge(edges, seen_edges, e_id, f_id, "detected")
                 ev_id = f"evidence:{validation_id}:{engine}"
-                _node(nodes, ev_id, "evidence", f"{engine} evidence", confidence=confidence, evidenceBacked=True)
+                _node(nodes, ev_id, "evidence", f"{engine} evidence", confidence=confidence, evidenceBacked=True, **lineage)
                 _edge(edges, seen_edges, f_id, ev_id, "supported-by")
                 _edge(edges, seen_edges, ev_id, v_id, "validated-by")
 

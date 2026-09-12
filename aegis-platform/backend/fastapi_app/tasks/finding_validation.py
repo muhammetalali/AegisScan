@@ -17,7 +17,8 @@ from celery import shared_task
 from django.db import transaction
 
 from django_project.evidence.models import Evidence, ValidationRun
-from fastapi_app.services.scope_authorization import is_target_authorized
+from fastapi_app.services.evidence_identity import evidence_id
+from fastapi_app.services.authorization_guard import authorization_snapshot, require_bound_validation_authorization
 
 
 _DEFAULT_NUCLEI_TEMPLATES = '/opt/nuclei-templates'
@@ -51,7 +52,7 @@ def _run_nuclei_template(target: str, template_path: str, timeout: int) -> tuple
     if not candidate.is_file():
         raise ValueError(f'Finding template file is missing: {candidate}')
     completed = subprocess.run(
-        [executable, '-u', target, '-t', str(candidate), '-jsonl', '-silent', '-no-color'],
+        [executable, '-u', target, '-t', str(candidate), '-jsonl', '-silent', '-no-color', '-dr'],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -81,6 +82,19 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
     finding = validation.finding
     if not finding:
         raise ValueError('Finding-specific validation requires validation.finding')
+    existing_result = validation.result if isinstance(validation.result, dict) else {}
+    existing_evidence_id = existing_result.get('evidence_id')
+    if validation.status == ValidationRun.Status.COMPLETED and existing_evidence_id and Evidence.objects.filter(pk=existing_evidence_id, finding=finding).exists():
+        return {
+            'status': validation.status,
+            'validation_id': validation_id,
+            'finding_id': str(finding.id),
+            'tool': existing_result.get('tool') or finding.source_engine,
+            'target': existing_result.get('target'),
+            'finding_present': existing_result.get('finding_present'),
+            'evidence_id': str(existing_evidence_id),
+            'redelivered': True,
+        }
 
     validation.status = ValidationRun.Status.RUNNING
     validation.progress = 10
@@ -89,29 +103,20 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
     validation.error_message = ''
     validation.save(update_fields=['status', 'progress', 'current_phase', 'started_at', 'error_message'])
 
-    if not validation.authorized:
+    asset, authorization_reason, authorization = require_bound_validation_authorization(validation)
+    if authorization is None:
         validation.status = ValidationRun.Status.FAILED
-        validation.error_message = 'Execution blocked: validation is not explicitly authorized.'
+        validation.error_message = authorization_reason
         validation.completed_at = datetime.now(timezone.utc)
         validation.save(update_fields=['status', 'error_message', 'completed_at'])
         return {'status': 'blocked', 'validation_id': validation_id}
-
-    asset_config = (finding.asset.configuration or {}) if finding.asset else {}
-    if asset_config.get('authorized') is not True:
-        validation.status = ValidationRun.Status.FAILED
-        validation.error_message = 'Execution blocked: finding asset is not explicitly marked authorized.'
-        validation.completed_at = datetime.now(timezone.utc)
-        validation.save(update_fields=['status', 'error_message', 'completed_at'])
-        return {'status': 'blocked', 'validation_id': validation_id}
+    asset_config = asset.configuration or {}
 
     engine = (validation.engines or [finding.source_engine])[0]
     if engine != finding.source_engine:
         raise ValueError(f'Validation engine must match finding source engine: {finding.source_engine}')
 
     try:
-        if not is_target_authorized(validation.scope or validation.target_value):
-            raise ValueError('Execution blocked: target is outside the server-side authorized scan scope.')
-
         result: dict[str, Any]
         evidence_raw: str
         stderr = ''
@@ -150,25 +155,33 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
             raise ValueError(f'Unsupported finding validation engine: {engine}')
 
         now = datetime.now(timezone.utc)
+        _, authorization_reason, current_authorization = require_bound_validation_authorization(validation)
+        if current_authorization is None:
+            raise ValueError(authorization_reason)
         with transaction.atomic():
-            evidence = Evidence.objects.create(
-                scan=finding.scan,
-                asset=finding.asset,
-                finding=finding,
-                source=engine,
-                evidence_type='validation_output',
-                raw_output=evidence_raw,
-                metadata={
-                    'format': 'jsonl',
-                    'stderr': stderr,
-                    'target': result['target'],
-                    'exit_code': result['exit_code'],
-                    'validation_id': validation_id,
-                    'finding_present': result['finding_present'],
-                    'template_id': result.get('template_id', ''),
-                    'matcher_name': result.get('matcher_name', ''),
+            evidence, _ = Evidence.objects.update_or_create(
+                id=evidence_id('validation', validation_id, engine, 'validation_output', str(finding.id)),
+                defaults={
+                    'scan': finding.scan,
+                    'asset': finding.asset,
+                    'finding': finding,
+                    'source': engine,
+                    'evidence_type': 'validation_output',
+                    'raw_output': evidence_raw,
+                    'metadata': {
+                        'format': 'jsonl',
+                        'stderr': stderr,
+                        'target': result['target'],
+                        'exit_code': result['exit_code'],
+                        'validation_run_id': validation_id,
+                        'validation_id': validation_id,
+                        'finding_present': result['finding_present'],
+                        'template_id': result.get('template_id', ''),
+                        'matcher_name': result.get('matcher_name', ''),
+                        **authorization_snapshot(authorization),
+                    },
+                    'collected_by': validation.user,
                 },
-                collected_by=validation.user,
             )
             result['evidence_id'] = str(evidence.id)
             existing_result = dict(validation.result) if isinstance(validation.result, dict) else {}

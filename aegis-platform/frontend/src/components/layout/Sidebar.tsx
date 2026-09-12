@@ -3,72 +3,13 @@ import { cn } from '@/utils/cn'
 import { useLanguageStore } from '@/stores/languageStore'
 import { useQuery } from '@tanstack/react-query'
 import { CheckCircle2, ChevronLeft, ChevronRight, CircleDot, ShieldAlert } from 'lucide-react'
-
-interface NavItem { name: string; href: string; icon: any }
-interface Group { label: string; items: NavItem[] }
-
-type HealthResponse = { status?: string }
-
-export const Sidebar = ({ open, onOpenChange, mobileOpen, onMobileOpenChange, groups }: {
-  open: boolean; onOpenChange: (v: boolean) => void; mobileOpen: boolean; onMobileOpenChange: (v: boolean) => void
-  groups: Group[]; flatNavigation: NavItem[]; currentPath: string
-}) => {
-  const location = useLocation()
-  const { t } = useLanguageStore()
-  const health = useQuery<HealthResponse>({
-    queryKey: ['platform-health'],
-    queryFn: async () => {
-      const response = await fetch('/health', { credentials: 'same-origin' })
-      if (!response.ok) throw new Error(`health status ${response.status}`)
-      return response.json() as Promise<HealthResponse>
-    },
-    staleTime: 15_000,
-    refetchInterval: 30_000,
-    retry: false,
-  })
-  const operational = health.data?.status === 'healthy'
-
-  const renderGroups = (isMobile = false) => (
-    <div className="flex-1 overflow-y-auto px-2.5 py-4 space-y-5">
-      {groups.map(group => (
-        <section key={group.label}>
-          {(open || isMobile) && <div className="px-2 mb-2 text-[9px] font-bold uppercase tracking-[0.2em] text-muted-foreground/80">{t(group.label)}</div>}
-          {!open && !isMobile && <div className="mx-2 mb-2 h-px bg-sidebar-border/70" />}
-          <ul className="space-y-1">
-            {group.items.map(item => {
-              const Icon = item.icon
-              const active = location.pathname === item.href || location.pathname.startsWith(item.href + '/')
-              return <li key={item.href}>
-                <NavLink to={item.href} onClick={() => isMobile && onMobileOpenChange(false)} title={!open && !isMobile ? t(item.name) : undefined}
-                  className={cn('enterprise-nav group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-[12px] font-medium transition-all duration-200', active ? 'bg-primary/10 text-primary shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_14%,transparent),0_10px_25px_color-mix(in_srgb,var(--primary)_7%,transparent)]' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground', !open && !isMobile && 'justify-center px-2')}>
-                  {active && <span className="absolute inset-y-2 start-0 w-0.5 rounded-full bg-primary shadow-[0_0_12px_var(--primary)]" />}
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border/40 bg-background/20 transition-all group-hover:bg-background/40"><Icon className="h-4 w-4" /></span>
-                  {(open || isMobile) && <span className="truncate">{t(item.name)}</span>}
-                  {(open || isMobile) && active && <CircleDot className="ms-auto h-3 w-3 fill-current opacity-60" />}
-                </NavLink>
-              </li>
-            })}
-          </ul>
-        </section>
-      ))}
-    </div>
-  )
-
-  const Brand = ({ mobile = false }) => (
-    <div className={cn('flex h-[72px] shrink-0 items-center border-b border-sidebar-border/70 px-3', mobile && 'px-4')}>
-      <NavLink to="/dashboard" className="flex min-w-0 flex-1 items-center gap-2.5">
-        <div className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border border-primary/20 bg-background/50 shadow-[0_8px_24px_color-mix(in_srgb,var(--primary)_10%,transparent)]"><img src="/aegis-logo.svg" alt="AegisScan" className="h-7 w-7 object-contain" /><span className="absolute inset-0 rounded-xl bg-primary/5" /></div>
-        {(open || mobile) && <div className="min-w-0"><div className="truncate text-sm font-bold tracking-tight">AegisScan</div><div className="truncate text-[8px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{t('Security Validation')}</div></div>}
-      </NavLink>
-      {!mobile ? <button onClick={() => onOpenChange(!open)} className="enterprise-icon-button rounded-lg p-1.5 text-muted-foreground transition" aria-label={t('Toggle sidebar')}>{open ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button> : <button onClick={() => onMobileOpenChange(false)} className="enterprise-icon-button rounded-lg p-1.5 text-muted-foreground transition" aria-label={t('Close navigation')}><ChevronLeft className="h-5 w-5" /></button>}
-    </div>
-  )
-
-  return <>
-    <aside className={cn('fixed inset-y-0 start-0 z-50 hidden flex-col border-e border-sidebar-border/70 bg-sidebar-background/92 text-sidebar-foreground shadow-[20px_0_70px_rgba(0,0,0,.18)] backdrop-blur-2xl transition-[width] duration-300 lg:flex', open ? 'w-64' : 'w-[76px]')}>
-      <Brand />{renderGroups()}
-      <div className="shrink-0 border-t border-sidebar-border/70 p-3">{open ? <div className="enterprise-card rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/30 p-3 shadow-inner"><div className="flex items-center gap-2"><span className={cn('grid h-6 w-6 place-items-center rounded-lg',operational?'bg-emerald-500/10 text-emerald-500':'bg-amber-500/10 text-amber-500')}>{operational?<CheckCircle2 className="h-3.5 w-3.5"/>:<ShieldAlert className="h-3.5 w-3.5"/>}</span><span className="text-[10px] font-semibold">{health.isError?t('Health unavailable'):operational?t('Platform operational'):t('Platform degraded')}</span></div><div className="mt-1 text-[9px] leading-4 text-muted-foreground">/health · {health.data?.status||t('Not reported')}</div></div> : <div className="text-center text-[9px] font-semibold text-muted-foreground">AS</div>}</div>
-    </aside>
-    {mobileOpen && <aside className="fixed inset-y-0 start-0 z-50 flex w-72 flex-col border-e border-sidebar-border bg-sidebar-background text-sidebar-foreground shadow-2xl backdrop-blur-2xl lg:hidden"><Brand mobile />{renderGroups(true)}</aside>}
-  </>
+import { apiHelpers } from '@/services/api'
+interface NavItem { name:string; href:string; icon:any }
+interface Group { label:string; items:NavItem[] }
+type HealthResponse={status?:string}
+export const Sidebar=({open,onOpenChange,mobileOpen,onMobileOpenChange,groups}:{open:boolean;onOpenChange:(v:boolean)=>void;mobileOpen:boolean;onMobileOpenChange:(v:boolean)=>void;groups:Group[];flatNavigation:NavItem[];currentPath:string})=>{
+ const location=useLocation(); const {t}=useLanguageStore(); const health=useQuery<HealthResponse>({queryKey:['platform-health'],queryFn:()=>apiHelpers.health<HealthResponse>(),staleTime:15_000,refetchInterval:30_000,retry:false}); const operational=health.data?.status==='healthy'
+ const renderGroups=(isMobile=false)=><div className="flex-1 overflow-y-auto px-2.5 py-4 space-y-5">{groups.map(group=><section key={group.label}>{(open||isMobile)&&<div className="px-2 mb-2 text-[9px] font-bold uppercase tracking-[0.2em] text-muted-foreground/80">{t(group.label)}</div>}{!open&&!isMobile&&<div className="mx-2 mb-2 h-px bg-sidebar-border/70"/>}<ul className="space-y-1">{group.items.map(item=>{const Icon=item.icon;const active=location.pathname===item.href||location.pathname.startsWith(item.href+'/');return <li key={item.href}><NavLink to={item.href} onClick={()=>isMobile&&onMobileOpenChange(false)} title={!open&&!isMobile?t(item.name):undefined} className={cn('enterprise-nav group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-[12px] font-medium transition-all duration-200',active?'bg-primary/10 text-primary shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_14%,transparent),0_10px_25px_color-mix(in_srgb,var(--primary)_7%,transparent)]':'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',!open&&!isMobile&&'justify-center px-2')}>{active&&<span className="absolute inset-y-2 start-0 w-0.5 rounded-full bg-primary shadow-[0_0_12px_var(--primary)]"/>}<span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border/40 bg-background/20"><Icon className="h-4 w-4"/></span>{(open||isMobile)&&<span className="truncate">{t(item.name)}</span>}{(open||isMobile)&&active&&<CircleDot className="ms-auto h-3 w-3 fill-current opacity-60"/>}</NavLink></li>})}</ul></section>)}</div>
+ const Brand=({mobile=false})=><div className={cn('flex h-[72px] shrink-0 items-center border-b border-sidebar-border/70 px-3',mobile&&'px-4')}><NavLink to="/dashboard" className="flex min-w-0 flex-1 items-center gap-2.5"><div className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-xl border border-primary/20 bg-background/50"><img src="/aegis-logo.svg" alt="AegisScan" className="h-7 w-7 object-contain"/><span className="absolute inset-0 rounded-xl bg-primary/5"/></div>{(open||mobile)&&<div className="min-w-0"><div className="truncate text-sm font-bold tracking-tight">AegisScan</div><div className="truncate text-[8px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{t('Security Validation')}</div></div>}</NavLink>{!mobile?<button onClick={()=>onOpenChange(!open)} className="enterprise-icon-button rounded-lg p-1.5 text-muted-foreground" aria-label={t('Toggle sidebar')}>{open?<ChevronLeft className="h-4 w-4"/>:<ChevronRight className="h-4 w-4"/>}</button>:<button onClick={()=>onMobileOpenChange(false)} className="enterprise-icon-button rounded-lg p-1.5 text-muted-foreground" aria-label={t('Close navigation')}><ChevronLeft className="h-5 w-5"/></button>}</div>
+ return <><aside className={cn('fixed inset-y-0 start-0 z-50 hidden flex-col border-e border-sidebar-border/70 bg-sidebar-background/92 text-sidebar-foreground shadow-[20px_0_70px_rgba(0,0,0,.18)] backdrop-blur-2xl transition-[width] duration-300 lg:flex',open?'w-64':'w-[76px]')}><Brand/>{renderGroups()}<div className="shrink-0 border-t border-sidebar-border/70 p-3">{open?<div className="enterprise-card rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/30 p-3"><div className="flex items-center gap-2"><span className={cn('grid h-6 w-6 place-items-center rounded-lg',operational?'bg-emerald-500/10 text-emerald-500':'bg-amber-500/10 text-amber-500')}>{operational?<CheckCircle2 className="h-3.5 w-3.5"/>:<ShieldAlert className="h-3.5 w-3.5"/>}</span><span className="text-[10px] font-semibold">{health.isError?t('Health unavailable'):operational?t('Platform operational'):t('Platform degraded')}</span></div><div className="mt-1 text-[9px] leading-4 text-muted-foreground">/health · {health.data?.status||t('Not reported')}</div></div>:<div className="text-center text-[9px] font-semibold text-muted-foreground">AS</div>}</div></aside>{mobileOpen&&<aside className="fixed inset-y-0 start-0 z-50 flex w-72 flex-col border-e border-sidebar-border bg-sidebar-background text-sidebar-foreground shadow-2xl backdrop-blur-2xl lg:hidden"><Brand mobile/>{renderGroups(true)}</aside>}</>
 }

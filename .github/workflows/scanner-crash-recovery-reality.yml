@@ -1,0 +1,296 @@
+name: Scanner Crash Recovery Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/**'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.ci.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - '.github/workflows/scanner-crash-recovery-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/**'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.ci.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - '.github/workflows/scanner-crash-recovery-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scanner-crash-recovery-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  forced-worker-loss:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      POSTGRES_DB: aegisdb
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: scanner-recovery-ci
+      DATABASE_URL: postgresql://aegis:scanner-recovery-ci@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
+      DEBUG: 'False'
+      SECURE_SSL_REDIRECT: 'False'
+      AUTH_COOKIE_SECURE: 'False'
+      ALLOWED_HOSTS: localhost,127.0.0.1,nginx
+      CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
+      CSRF_TRUSTED_ORIGINS: http://localhost,http://127.0.0.1,http://nginx
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: '1'
+      SCANNER_EGRESS_PRIVATE_TARGETS: aegis-scan-target
+      SEMGREP_CONFIG: /app/e2e/semgrep-ci.yml
+      AEGIS_RELIABILITY_PROBE_ENABLED: '1'
+      AEGIS_RELIABILITY_PROBE_HOLD_SECONDS: '90'
+      CELERY_VISIBILITY_TIMEOUT_SECONDS: '10'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare environment
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backend/.env <<EOF
+          DEBUG=${DEBUG}
+          SECRET_KEY=${SECRET_KEY}
+          JWT_SECRET_KEY=${JWT_SECRET_KEY}
+          SECURE_SSL_REDIRECT=${SECURE_SSL_REDIRECT}
+          AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
+          ALLOWED_HOSTS=${ALLOWED_HOSTS}
+          CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+          CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+          DATABASE_URL=${DATABASE_URL}
+          REDIS_URL=${REDIS_URL}
+          CELERY_BROKER_URL=${CELERY_BROKER_URL}
+          CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+          CELERY_VISIBILITY_TIMEOUT_SECONDS=${CELERY_VISIBILITY_TIMEOUT_SECONDS}
+          AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          ALLOW_SINGLE_LABEL_SCAN_TARGETS=${ALLOW_SINGLE_LABEL_SCAN_TARGETS}
+          SCANNER_EGRESS_PRIVATE_TARGETS=${SCANNER_EGRESS_PRIVATE_TARGETS}
+          SEMGREP_CONFIG=${SEMGREP_CONFIG}
+          AEGIS_RELIABILITY_PROBE_ENABLED=${AEGIS_RELIABILITY_PROBE_ENABLED}
+          AEGIS_RELIABILITY_PROBE_HOLD_SECONDS=${AEGIS_RELIABILITY_PROBE_HOLD_SECONDS}
+          POSTGRES_DB=${POSTGRES_DB}
+          POSTGRES_USER=${POSTGRES_USER}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          EOF
+
+      - name: Build production scanner runtime
+        working-directory: aegis-platform
+        run: docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml build django scanner_egress scanner_worker
+
+      - name: Start durable services and scanner worker
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml up -d --no-build postgres redis scan_target django scanner_egress scanner_worker
+          for _ in $(seq 1 90); do
+            if [ "$(docker inspect -f '{{.State.Health.Status}}' aegis-django 2>/dev/null || true)" = healthy ] && [ "$(docker inspect -f '{{.State.Running}}' aegis-scanner-worker 2>/dev/null || true)" = true ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml logs --tail=250 django scanner_worker postgres redis scanner_egress
+          exit 1
+
+      - name: Seed durable reliability scan
+        id: seed
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_id="$(
+            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<'PY' | tail -n 1
+          import os
+          os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+          import django
+          django.setup()
+          from django_project.projects.models import Project
+          from django_project.scans.models import Scan
+          from django_project.users.models import User
+          user = User.objects.create_user(email='scanner-recovery@aegisscan.local', password='CI-Scanner-Recovery-Only-123!')
+          project = Project.objects.create(name='Scanner Recovery Reality', slug='scanner-recovery-reality', owner=user)
+          scan = Scan.objects.create(project=project, name='Worker loss probe', scan_type=Scan.Type.IP, status=Scan.Status.QUEUED, engines=['scanner-reliability-probe'], initiated_by=user)
+          print(scan.id)
+          PY
+          )"
+          test -n "$scan_id"
+          echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
+
+      - name: Publish probe and observe first durable delivery
+        id: publish
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_id='${{ steps.seed.outputs.scan_id }}'
+          task_id="$(
+            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<PY | tail -n 1
+          from fastapi_app.tasks.reliability_probe import scanner_worker_loss_probe
+          result = scanner_worker_loss_probe.delay("$scan_id")
+          print(result.id)
+          PY
+          )"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          observed=0
+          for _ in $(seq 1 60); do
+            state="$(docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status || ':' || coalesce(result_data->>'probe_attempts','0') from scans_scanengineexecution where scan_id='$scan_id';" | tr -d '\r')"
+            if [ "$state" = "running:1" ]; then observed=1; break; fi
+            sleep 1
+          done
+          test "$observed" -eq 1
+          echo "FIRST_DELIVERY_DURABLE_RUNNING=PASS"
+
+      - name: Force zero-grace scanner restart
+        id: restart
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(docker inspect -f '{{.State.StartedAt}}' aegis-scanner-worker)"
+          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml restart -t 0 scanner_worker
+          after="$(docker inspect -f '{{.State.StartedAt}}' aegis-scanner-worker)"
+          test "$before" != "$after"
+          test "$(docker inspect -f '{{.State.Running}}' aegis-scanner-worker)" = true
+          echo "started_at=$after" >> "$GITHUB_OUTPUT"
+          echo "ZERO_GRACE_SCANNER_RESTART=PASS"
+
+      - name: Prove redelivery recovers same operation
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_id='${{ steps.seed.outputs.scan_id }}'
+          completed=0
+          for _ in $(seq 1 180); do
+            state="$(docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select s.status || ':' || e.status || ':' || coalesce(e.result_data->>'probe_attempts','0') from scans_scan s join scans_scanengineexecution e on e.scan_id=s.id where s.id='$scan_id';" | tr -d '\r')"
+            if [ "$state" = "completed:completed:2" ]; then completed=1; break; fi
+            sleep 1
+          done
+          test "$completed" -eq 1
+
+          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<PY
+          import os
+          os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+          import django
+          django.setup()
+          from celery.result import AsyncResult
+          from django_project.evidence.models import Evidence
+          from django_project.scans.models import Scan, ScanEngineExecution
+          from fastapi_app.celery_app import celery_app
+          scan = Scan.objects.get(pk='${{ steps.seed.outputs.scan_id }}')
+          execution = ScanEngineExecution.objects.get(scan=scan, engine__name='scanner-reliability-probe')
+          evidence = Evidence.objects.get(scan=scan, source='scanner-reliability')
+          result = AsyncResult('${{ steps.publish.outputs.task_id }}', app=celery_app)
+          assert scan.status == Scan.Status.COMPLETED
+          assert execution.status == ScanEngineExecution.ExecutionStatus.COMPLETED
+          assert execution.result_data['probe_attempts'] == 2
+          assert execution.result_data['completed_after_redelivery'] is True
+          assert ScanEngineExecution.objects.filter(scan=scan, engine=execution.engine).count() == 1
+          assert Evidence.objects.filter(scan=scan, source='scanner-reliability').count() == 1
+          assert len(evidence.sha256) == 64
+          assert result.state == 'SUCCESS', result.state
+          payload = result.get(timeout=5)
+          assert payload['redelivered'] is True
+          assert payload['attempts'] == 2
+          print('SCANNER_WORKER_REDELIVERY=PASS')
+          print('DURABLE_OPERATION_IDEMPOTENCY=PASS')
+          PY
+
+      - name: Restore normal visibility and prove real Nmap execution
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's/^CELERY_VISIBILITY_TIMEOUT_SECONDS=.*/CELERY_VISIBILITY_TIMEOUT_SECONDS=3600/' backend/.env
+          sed -i 's/^AEGIS_RELIABILITY_PROBE_ENABLED=.*/AEGIS_RELIABILITY_PROBE_ENABLED=0/' backend/.env
+          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml up -d --force-recreate django scanner_worker
+          for _ in $(seq 1 60); do
+            if [ "$(docker inspect -f '{{.State.Health.Status}}' aegis-django 2>/dev/null || true)" = healthy ] && [ "$(docker inspect -f '{{.State.Running}}' aegis-scanner-worker 2>/dev/null || true)" = true ]; then break; fi
+            sleep 2
+          done
+          scan_id="$(
+            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<'PY' | tail -n 1
+          import os
+          os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+          import django
+          django.setup()
+          from django_project.assets.models import Asset, AssetAuthorization
+          from django_project.projects.models import Project
+          from django_project.scans.models import Scan
+          from django_project.users.models import User
+          from fastapi_app.tasks.security_scan import run_nmap_scan
+          user = User.objects.get(email='scanner-recovery@aegisscan.local')
+          project = Project.objects.get(slug='scanner-recovery-reality')
+          asset = Asset.objects.create(project=project, owner=user, name='Nmap target', slug='recovered-worker-nmap', type=Asset.Type.IP_ADDRESS, configuration={'host':'aegis-scan-target'})
+          decision = AssetAuthorization.objects.create(asset=asset, actor=user, authorized=True, target_snapshot='aegis-scan-target', reason='recovery reality')
+          scan = Scan.objects.create(project=project, name='Recovered worker Nmap', scan_type=Scan.Type.IP, depth=Scan.Depth.QUICK, asset=asset, authorization_decision=decision, engines=['nmap'], config={'target':'aegis-scan-target'}, initiated_by=user, status=Scan.Status.QUEUED)
+          result = run_nmap_scan.delay(str(scan.id))
+          scan.celery_task_id = result.id
+          scan.save(update_fields=['celery_task_id','updated_at'])
+          print(scan.id)
+          PY
+          )"
+          completed=0
+          for _ in $(seq 1 180); do
+            status="$(docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status from scans_scan where id='$scan_id';" | tr -d '\r')"
+            if [ "$status" = completed ]; then completed=1; break; fi
+            if [ "$status" = failed ] || [ "$status" = partial ] || [ "$status" = cancelled ]; then exit 1; fi
+            sleep 2
+          done
+          test "$completed" -eq 1
+          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<PY
+          import os
+          os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+          import django
+          django.setup()
+          from django_project.evidence.models import Evidence
+          from django_project.scans.models import Scan, ScanEngineExecution
+          scan = Scan.objects.get(pk='$scan_id')
+          execution = ScanEngineExecution.objects.get(scan=scan, engine__name='nmap')
+          assert scan.status == Scan.Status.COMPLETED
+          assert execution.status == ScanEngineExecution.ExecutionStatus.COMPLETED
+          assert ScanEngineExecution.objects.filter(scan=scan, engine__name='nmap').count() == 1
+          assert Evidence.objects.filter(scan=scan, source='nmap', evidence_type='scanner_output').count() == 1
+          print('POST_RECOVERY_REAL_NMAP=PASS')
+          PY
+
+      - name: Capture diagnostics
+        if: always()
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set +e
+          {
+            echo "sha=${GITHUB_SHA}"
+            echo "probe_scan_id=${{ steps.seed.outputs.scan_id }}"
+            echo "probe_task_id=${{ steps.publish.outputs.task_id }}"
+            echo "scanner_started_at=${{ steps.restart.outputs.started_at }}"
+            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml ps
+            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml logs --tail=300 scanner_worker
+          } > /tmp/scanner-crash-recovery-evidence.txt 2>&1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scanner-crash-recovery-evidence-${{ github.run_id }}
+          path: /tmp/scanner-crash-recovery-evidence.txt
+          if-no-files-found: error
+
+      - name: Cleanup
+        if: always()
+        working-directory: aegis-platform
+        run: docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml down -v --remove-orphans

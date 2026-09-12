@@ -43,8 +43,6 @@ services:
     env_file: ./backend/.env
     environment:
       DJANGO_SETTINGS_MODULE: django_project.settings
-      # Compose-internal reverse-proxy hostname is a legitimate Django host.
-      # Keep deployment-specific public hosts configurable through .env.
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,nginx}
     depends_on:
       postgres: {condition: service_healthy}
@@ -59,14 +57,14 @@ services:
     build: {context: ./backend, dockerfile: Dockerfile.fastapi}
     container_name: aegis-fastapi
     restart: unless-stopped
-    command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers 2
+    command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers 4 --loop uvloop --http httptools --no-access-log
     volumes: [./backend:/app]
     ports: ["8001:8001"]
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
     depends_on:
-      django: {condition: service_started}
+      django: {condition: service_healthy}
       redis: {condition: service_healthy}
       scan_target: {condition: service_healthy}
     healthcheck:
@@ -75,34 +73,80 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+  scanner_egress:
+    build: {context: ./docker/scanner-egress, dockerfile: Dockerfile}
+    container_name: aegis-scanner-egress
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp, /run]
+    environment:
+      SCANNER_EGRESS_INTERFACE: ${SCANNER_EGRESS_INTERFACE:-eth0}
+      SCANNER_CONTROL_ENDPOINTS: ${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}
+      SCANNER_EGRESS_PRIVATE_TARGETS: ${SCANNER_EGRESS_PRIVATE_TARGETS:-aegis-scan-target}
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      scan_target: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "nft list table netdev aegis_egress >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
   celery_worker:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-worker
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app worker -l info -c 4
+    command: celery -A fastapi_app.celery_app worker -l info -c 4 -Q default
+    volumes: [./backend:/app]
+    env_file: ./backend/.env
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on:
+      django: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+  scanner_worker:
+    build: {context: ./backend, dockerfile: Dockerfile.django}
+    container_name: aegis-scanner-worker
+    restart: unless-stopped
+    user: "0:0"
+    command: sh /app/scanner-worker-entrypoint.sh
+    network_mode: "service:scanner_egress"
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, SETUID, SETGID, SETPCAP]
     volumes: [./backend:/app]
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
       DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
+      scanner_egress: {condition: service_healthy}
+      django: {condition: service_healthy}
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
-      scan_target: {condition: service_healthy}
   celery_beat:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-beat
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app beat -l info
+    command: celery -A fastapi_app.celery_app beat -l info --schedule /tmp/celerybeat-schedule
     volumes: [./backend:/app]
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
+      django: {condition: service_healthy}
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
-      scan_target: {condition: service_healthy}
   frontend:
     build: {context: ./frontend, dockerfile: Dockerfile}
     container_name: aegis-frontend

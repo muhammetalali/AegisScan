@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import socket
+from types import SimpleNamespace
+
+import pytest
+
+from fastapi_app.services import scanner_adapters
+from fastapi_app.services import scope_authorization as scope
+
+
+@pytest.mark.parametrize(
+    ('configured', 'target', 'expected'),
+    [
+        ('127.0.0.1', '127.0.0.1', True),
+        ('127.0.0.0/24', '127.0.0.42', True),
+        ('127.0.0.0/24', '127.0.1.42', False),
+        ('2001:db8::/32', '2001:db8::42', True),
+        ('2001:db8::/32', '2001:db9::42', False),
+        ('10.0.0.0/8', '10.20.0.0/16', True),
+        ('10.0.0.0/16', '10.0.0.0/8', False),
+        ('example.com', 'example.com', True),
+        ('example.com', 'api.example.com', False),
+        ('*.example.com', 'api.example.com', True),
+        ('*.example.com', 'example.com', False),
+        ('*.example.com', 'api.internal.example.com', True),
+        ('*', 'anything.example.com', False),
+        ('aegis-scan-target', 'aegis-scan-target', True),
+        ('example.com', 'https://example.com', True),
+        ('example.com', 'https://user:pass@example.com', False),
+        ('example.com', 'https://example.com/?redirect=https://evil.example', False),
+        ('example.com', 'example.com\n.evil.example', False),
+        ('xn--bcher-kva.example', 'bücher.example', True),
+        ('example.com', 'example.com:443', True),
+    ],
+)
+def test_target_scope_matrix(monkeypatch, configured: str, target: str, expected: bool):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', configured)
+    assert scope.is_target_authorized(target) is expected
+
+
+def test_empty_allowlist_fails_closed(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    assert scope.is_target_authorized('127.0.0.1') is False
+
+
+def test_invalid_configured_wildcard_fails_closed(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', '*.')
+    assert scope.is_target_authorized('api.example.com') is False
+
+
+def test_url_scope_requires_http(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'example.com')
+    with pytest.raises(scope.ScopeAuthorizationError):
+        scope.require_authorized_target('ftp://example.com', url=True)
+
+
+def _dns_answer(address: str):
+    family = socket.AF_INET6 if ':' in address else socket.AF_INET
+    sockaddr = (address, 0, 0, 0) if family == socket.AF_INET6 else (address, 0)
+    return (family, socket.SOCK_STREAM, 6, '', sockaddr)
+
+
+def test_worker_dns_policy_blocks_metadata_destination(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'approved.example')
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('169.254.169.254')],
+    )
+
+    assert scope.is_target_authorized('approved.example') is True
+    assert scope.is_target_authorized('approved.example', resolve_dns=True) is False
+    with pytest.raises(scope.ScopeAuthorizationError, match='non-global destination'):
+        scope.require_authorized_target('approved.example', resolve_dns=True)
+
+
+def test_worker_dns_policy_blocks_mixed_safe_and_unsafe_answers(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'approved.example')
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [
+            _dns_answer('93.184.216.34'),
+            _dns_answer('127.0.0.1'),
+        ],
+    )
+
+    assert scope.is_target_authorized('approved.example', resolve_dns=True) is False
+
+
+def test_worker_dns_policy_allows_private_destination_only_with_explicit_cidr(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'internal.example,10.0.0.0/8')
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('10.23.45.67')],
+    )
+
+    assert scope.is_target_authorized('internal.example', resolve_dns=True) is True
+    assert scope.require_authorized_target('internal.example', resolve_dns=True) == ('10.23.45.67',)
+
+
+def test_worker_dns_policy_fails_closed_on_resolution_error(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'approved.example')
+
+    def fail_dns(*_args, **_kwargs):
+        raise socket.gaierror('synthetic DNS failure')
+
+    monkeypatch.setattr(scope.socket, 'getaddrinfo', fail_dns)
+    assert scope.is_target_authorized('approved.example', resolve_dns=True) is False
+    with pytest.raises(scope.ScopeAuthorizationError, match='DNS resolution failed'):
+        scope.require_authorized_target('approved.example', resolve_dns=True)
+
+
+def test_single_label_service_identity_fails_closed_without_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'aegis-scan-target')
+    monkeypatch.delenv('ALLOW_SINGLE_LABEL_SCAN_TARGETS', raising=False)
+
+    assert scope.is_target_authorized('aegis-scan-target') is True
+    assert scope.is_target_authorized('aegis-scan-target', resolve_dns=True) is False
+
+
+def test_explicit_isolated_single_label_service_identity_skips_search_suffix_dns(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'aegis-scan-target')
+    monkeypatch.setenv('ALLOW_SINGLE_LABEL_SCAN_TARGETS', '1')
+
+    def must_not_resolve(*_args, **_kwargs):
+        raise AssertionError('single-label service identity was unexpectedly resolved')
+
+    monkeypatch.setattr(scope.socket, 'getaddrinfo', must_not_resolve)
+    assert scope.is_target_authorized('aegis-scan-target', resolve_dns=True) is True
+
+
+def test_localhost_alias_requires_explicit_ip_authorization(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'localhost')
+    monkeypatch.setenv('ALLOW_SINGLE_LABEL_SCAN_TARGETS', '1')
+    assert scope.is_target_authorized('localhost') is True
+    assert scope.is_target_authorized('localhost', resolve_dns=True) is False
+
+
+def _completed():
+    return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+
+def test_nuclei_worker_enforces_dns_egress_and_disables_redirects(monkeypatch, tmp_path):
+    calls = []
+    command = []
+
+    def authorized(target, **kwargs):
+        calls.append((target, kwargs))
+        return ()
+
+    def run(args, **kwargs):
+        command.extend(args)
+        return _completed()
+
+    monkeypatch.setattr(scanner_adapters, 'require_authorized_target', authorized)
+    monkeypatch.setattr(scanner_adapters.shutil, 'which', lambda name: f'/usr/local/bin/{name}')
+    monkeypatch.setattr(scanner_adapters.subprocess, 'run', run)
+    monkeypatch.setenv('NUCLEI_TEMPLATES_DIR', str(tmp_path))
+
+    result = scanner_adapters.run_nuclei('https://approved.example', timeout=15)
+
+    assert result.tool == 'nuclei'
+    assert calls == [('https://approved.example', {'url': True, 'resolve_dns': True})]
+    assert '-dr' in command
+    assert command[command.index('-u') + 1] == 'https://approved.example'
+
+
+def test_network_scanner_adapters_enforce_worker_dns_egress(monkeypatch):
+    calls = []
+
+    def authorized(target, **kwargs):
+        calls.append((target, kwargs))
+        return ()
+
+    monkeypatch.setattr(scanner_adapters, 'require_authorized_target', authorized)
+    monkeypatch.setattr(scanner_adapters.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr(scanner_adapters.subprocess, 'run', lambda *_args, **_kwargs: _completed())
+
+    scanner_adapters.run_nmap('approved.example', timeout=15)
+    scanner_adapters.run_masscan('10.20.0.0/16', ports='80', rate=10, timeout=15)
+
+    assert calls == [
+        ('approved.example', {'resolve_dns': True}),
+        ('10.20.0.0/16', {'resolve_dns': True}),
+    ]

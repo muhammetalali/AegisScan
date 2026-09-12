@@ -1,0 +1,281 @@
+name: Production Launch Readiness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'aegis-platform/scripts/production_remote_deploy.py'
+      - 'aegis-platform/scripts/production_resilience_backup.py'
+      - 'aegis-platform/scripts/production_governance_gate.py'
+      - 'aegis-platform/scripts/public_acceptance.py'
+      - 'aegis-platform/scripts/backup_postgres.sh'
+      - 'aegis-platform/scripts/verify_postgres_restore.sh'
+      - 'aegis-platform/scripts/remote_backup.py'
+      - 'aegis-platform/scripts/remote_backup_service.py'
+      - 'aegis-platform/docker-compose.backup.yml'
+      - 'aegis-platform/docker/backup/**'
+      - 'tests/test_remote_backup.py'
+      - 'aegis-platform/scripts/render_alertmanager_config.py'
+      - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'aegis-platform/docker-compose.monitoring.yml'
+      - 'aegis-platform/docker/alertmanager/**'
+      - 'aegis-platform/monitoring/**'
+      - 'tests/test_production_preflight.py'
+      - 'tests/test_production_host_deploy.py'
+      - 'tests/test_production_remote_deploy.py'
+      - 'tests/test_production_resilience_backup.py'
+      - 'tests/test_production_resilience_workflow.py'
+      - 'tests/test_production_governance_gate.py'
+      - 'tests/test_production_final_governance_workflow.py'
+      - 'tests/test_production_live_workflow.py'
+      - 'tests/test_public_acceptance.py'
+      - '.github/workflows/production-launch-readiness.yml'
+      - '.github/workflows/production-live-deploy.yml'
+      - '.github/workflows/production-resilience-acceptance.yml'
+      - '.github/workflows/production-final-governance.yml'
+      - '.github/workflows/production-governance-reality.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+jobs:
+  production-launch-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: launch-readiness-password
+          POSTGRES_DB: aegisdb
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - name: Install launch-gate dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /tmp/aegis-disabled-apt-sources
+          shopt -s nullglob
+          for source in /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*microsoft*; do
+            if [ -e "$source" ]; then
+              sudo mv "$source" "/tmp/aegis-disabled-apt-sources/$(basename "$source")"
+            fi
+          done
+          sudo rm -rf /var/lib/apt/lists/*
+          for attempt in 1 2 3; do
+            if sudo apt-get \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::No-Cache=True \
+              -o Acquire::https::No-Cache=True \
+              update; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sudo rm -rf /var/lib/apt/lists/*
+            sleep $((attempt * 5))
+          done
+          sudo apt-get install -y --no-install-recommends postgresql-client openssl
+          psql --version
+          openssl version
+          python -m pip install pytest==9.1.1 pyyaml==6.0.2
+      - name: Unit-test fail-closed production deployment contracts
+        run: |
+          python -m pytest -q \
+            tests/test_production_preflight.py \
+            tests/test_production_host_deploy.py \
+            tests/test_production_remote_deploy.py \
+            tests/test_production_resilience_backup.py \
+            tests/test_production_resilience_workflow.py \
+            tests/test_production_governance_gate.py \
+            tests/test_production_final_governance_workflow.py \
+            tests/test_production_live_workflow.py \
+            tests/test_public_acceptance.py
+      - name: Generate short-lived TLS proof material
+        run: |
+          mkdir -p /tmp/aegis-tls
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 30 \
+            -subj '/CN=security.example.com' \
+            -keyout /tmp/aegis-tls/privkey.pem -out /tmp/aegis-tls/fullchain.pem
+          chmod 0600 /tmp/aegis-tls/privkey.pem
+      - name: Generate private remote backup launch proof material
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-launch-backup
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('/tmp/aegis-launch-backup')
+          (root / 'encryption.key').write_bytes(os.urandom(32))
+          (root / 's3.json').write_text(json.dumps({
+              'access_key_id': 'launch-proof-access',
+              'secret_access_key': 'launch-proof-secret-value',
+          }))
+          for path in root.iterdir():
+              path.chmod(0o600)
+          PY
+          printf 'AEGIS_BACKUP_RUNTIME_UID=%s\n' "$(id -u)" >> "$GITHUB_ENV"
+          printf 'AEGIS_BACKUP_RUNTIME_GID=%s\n' "$(id -g)" >> "$GITHUB_ENV"
+
+      - name: Start production TLS gateway and prove response headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() {
+            docker rm -f aegis-launch-gateway aegis-launch-frontend aegis-launch-django aegis-launch-fastapi >/dev/null 2>&1 || true
+            docker network rm aegis-launch-proof >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create aegis-launch-proof
+          docker run -d --name aegis-launch-frontend --network aegis-launch-proof --network-alias frontend nginx:alpine
+          docker run -d --name aegis-launch-django --network aegis-launch-proof --network-alias django nginx:alpine
+          docker run -d --name aegis-launch-fastapi --network aegis-launch-proof --network-alias fastapi nginx:alpine
+          docker run -d --name aegis-launch-gateway --network aegis-launch-proof -p 8443:443 \
+            -v "$PWD/aegis-platform/docker/nginx-ssl.conf:/etc/nginx/nginx.conf:ro" \
+            -v /tmp/aegis-tls:/etc/nginx/ssl:ro nginx:alpine
+          for attempt in $(seq 1 20); do
+            curl -ksSf -D /tmp/aegis-headers -o /dev/null https://127.0.0.1:8443/ && break
+            sleep 1
+          done
+          grep -qi '^strict-transport-security:' /tmp/aegis-headers
+          grep -qi '^content-security-policy:' /tmp/aegis-headers
+          grep -qi '^permissions-policy:' /tmp/aegis-headers
+          grep -qi '^cross-origin-opener-policy:' /tmp/aegis-headers
+          grep -qi '^cross-origin-resource-policy:' /tmp/aegis-headers
+      - name: Prove verified HTTPS public acceptance transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aegis-public
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 2 \
+            -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost' \
+            -keyout /tmp/aegis-public/privkey.pem \
+            -out /tmp/aegis-public/fullchain.pem
+          chmod 0600 /tmp/aegis-public/privkey.pem
+          cat >/tmp/aegis-public/server.py <<'PY'
+          import json
+          import ssl
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path not in {"/", "/health", "/ready"}:
+                      self.send_response(404)
+                      self.end_headers()
+                      return
+                  self.send_response(200)
+                  self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+                  self.send_header("Content-Security-Policy", "default-src 'self'")
+                  self.send_header("Permissions-Policy", "camera=(), microphone=()")
+                  self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+                  self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                  self.send_header("X-Content-Type-Options", "nosniff")
+                  self.send_header("Content-Type", "application/json")
+                  self.end_headers()
+                  payload = {"status": "ok"} if self.path != "/" else {"app": "AegisScan"}
+                  self.wfile.write(json.dumps(payload).encode())
+
+              def log_message(self, *_):
+                  pass
+
+          server = HTTPServer(("127.0.0.1", 9443), Handler)
+          context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+          context.load_cert_chain("/tmp/aegis-public/fullchain.pem", "/tmp/aegis-public/privkey.pem")
+          server.socket = context.wrap_socket(server.socket, server_side=True)
+          server.serve_forever()
+          PY
+          python /tmp/aegis-public/server.py >/tmp/aegis-public/server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --cacert /tmp/aegis-public/fullchain.pem -fsS https://localhost:9443/health >/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          SSL_CERT_FILE=/tmp/aegis-public/fullchain.pem \
+            python aegis-platform/scripts/public_acceptance.py \
+              --origin https://localhost:9443 \
+              --allow-loopback-test
+
+      - name: Prove production preflight accepts only explicit secure configuration
+        env:
+          DEBUG: 'False'
+          SECRET_KEY: ci-production-django-key-${{ github.sha }}-${{ github.run_id }}
+          JWT_SECRET_KEY: ci-production-jwt-key-${{ github.sha }}-${{ github.run_id }}
+          POSTGRES_PASSWORD: postgres-ci-launch-${{ github.sha }}
+          DATABASE_URL: postgresql://aegis:secret@postgres:5432/aegisdb
+          REDIS_URL: redis://redis:6379/0
+          CELERY_BROKER_URL: redis://redis:6379/0
+          CELERY_RESULT_BACKEND: redis://redis:6379/1
+          ALLOWED_HOSTS: security.example.com
+          CORS_ALLOWED_ORIGINS: https://security.example.com
+          CSRF_TRUSTED_ORIGINS: https://security.example.com
+          AUTHORIZED_SCAN_TARGETS: authorized.example.com,203.0.113.10
+          ALERT_WEBHOOK_URL: https://alerts.example.com/aegis
+          AEGIS_REMOTE_BACKUP_ENABLED: 'true'
+          AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
+          AEGIS_BACKUP_S3_REGION: us-east-1
+          AEGIS_BACKUP_S3_BUCKET: aegisscan-production-backups
+          AEGIS_BACKUP_S3_PREFIX: aegisscan/postgres
+          AEGIS_BACKUP_S3_ADDRESSING_STYLE: path
+          AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
+          AEGIS_BACKUP_INTERVAL_SECONDS: '86400'
+          AEGIS_BACKUP_S3_CREDENTIALS_FILE: /tmp/aegis-launch-backup/s3.json
+          AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /tmp/aegis-launch-backup/encryption.key
+        run: python aegis-platform/scripts/production_preflight.py --tls-dir /tmp/aegis-tls
+      - name: Seed authoritative backup fixture
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: launch-readiness-password
+          PGDATABASE: aegisdb
+        run: |
+          psql --set ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE django_migrations (id bigint PRIMARY KEY, app varchar(255), name varchar(255), applied timestamptz);
+          CREATE TABLE users_user (id uuid PRIMARY KEY, email varchar(255) NOT NULL);
+          INSERT INTO django_migrations VALUES (1, 'launch', '0001_reality', now());
+          INSERT INTO users_user VALUES ('00000000-0000-0000-0000-000000000001', 'restore-proof@aegisscan.local');
+          SQL
+      - name: Create atomic PostgreSQL backup
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: launch-readiness-password
+          PGDATABASE: aegisdb
+          AEGIS_BACKUP_DIR: /tmp/aegis-backups
+          AEGIS_BACKUP_RETENTION_DAYS: '30'
+        run: |
+          backup="$(sh aegis-platform/scripts/backup_postgres.sh)"
+          test -s "$backup"
+          test -s "${backup}.sha256"
+          printf 'AEGIS_BACKUP=%s\n' "$backup" >> "$GITHUB_ENV"
+      - name: Restore into disposable database and verify authoritative records
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: aegis
+          PGPASSWORD: launch-readiness-password
+          PGDATABASE: aegisdb
+          AEGIS_RESTORE_REQUIRED_TABLES: django_migrations,users_user
+          AEGIS_RESTORE_ASSERTION_SQL: "SELECT email FROM users_user WHERE id = '00000000-0000-0000-0000-000000000001'"
+          AEGIS_RESTORE_ASSERTION_EXPECTED: restore-proof@aegisscan.local
+        run: sh aegis-platform/scripts/verify_postgres_restore.sh "$AEGIS_BACKUP"
