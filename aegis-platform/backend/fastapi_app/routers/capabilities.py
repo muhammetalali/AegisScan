@@ -13,6 +13,7 @@ from django_project.scans.models import Scan
 from django_project.system.credential_vault import CredentialVaultDenied
 
 from ..core.dependencies import get_current_user
+from ..celery_app import BROWSER_QUEUE
 from ..services.authorization_guard import asset_target
 from ..services.capability_planner import planning_summary
 from ..services.capability_registry import RETIRED_CAPABILITIES, RetiredCapabilityError, get_capability, list_capabilities, validate_capability_options
@@ -312,7 +313,14 @@ async def execute_capability(
             request.depth,
             config,
         )
-        task = run_native_capability_scan.delay(str(created.id))
+        if capability.id == 'browser.spa-discovery':
+            task = run_native_capability_scan.apply_async(
+                args=[str(created.id)],
+                queue=BROWSER_QUEUE,
+                routing_key=BROWSER_QUEUE,
+            )
+        else:
+            task = run_native_capability_scan.delay(str(created.id))
     else:
         scan_request = ScanCreate(
             project_id=request.project_id,
