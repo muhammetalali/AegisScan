@@ -299,6 +299,52 @@ def test_authorization_policy_fails_closed_when_required_binding_or_condition_ev
 
 
 @pytest.mark.django_db
+def test_equal_policy_conflicts_choose_the_restrictive_decision(settings):
+    settings.SECRET_KEY = 'restrictive-resolution-test-secret'
+    user, project = _user_project('restrictive-resolution')
+    common = {
+        'identity_type': 'user',
+        'role': 'viewer',
+        'tenant_ref': '*',
+        'endpoint': '/policy-conflict/*',
+        'method': 'GET',
+        'operation': 'read',
+        'resource_type': 'record',
+        'ownership_rule': '',
+        'tenant_rule': 'same_tenant',
+        'sensitive_operation': False,
+        'required_scopes': [],
+        'conditions': {},
+        'confidence': 1.0,
+        'version': 7,
+    }
+    allow_policy, _ = persist_policy(project, str(user.id), {
+        **common,
+        'allowed': True,
+        'policy_source': 'operator_declared',
+        'provenance': {'source_ref': 'fixture://allow'},
+    })
+    restrictive_policy, _ = persist_policy(project, str(user.id), {
+        **common,
+        'allowed': False,
+        'policy_source': 'application_rbac',
+        'provenance': {'source_ref': 'fixture://restrict'},
+    })
+    result = evaluate_authorization_case([allow_policy, restrictive_policy], {
+        'ref': 'policy-conflict',
+        'identity': {'ref': 'alice', 'type': 'user', 'role': 'viewer', 'tenant_ref': 'tenant-a', 'scopes': []},
+        'resource': {'ref': 'record-1', 'type': 'record', 'tenant_ref': 'tenant-a', 'owner_ref': 'alice'},
+        'endpoint': '/policy-conflict/record-1',
+        'method': 'GET',
+        'operation': 'read',
+        'response': {'status_code': 403, 'headers': {}, 'body': {'detail': 'Forbidden'}},
+    })
+    assert result['policy'].id == restrictive_policy.id
+    assert result['expected_allowed'] is False
+    assert result['passed'] is True
+
+
+@pytest.mark.django_db
 def test_production_execution_budget_fails_closed_for_destructive_and_over_budget_work():
     user, project = _user_project('execution-budget')
     project.environment = Project.Environment.PRODUCTION
