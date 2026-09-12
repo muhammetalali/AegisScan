@@ -4,10 +4,9 @@ from typing import Any
 from asgiref.sync import sync_to_async
 from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from ..core.security import verify_token
+from ..core.dependencies import get_current_user
 from ..services.assurance_correlation import correlate_all
 from ..services.assurance_graph_aggregator import build_assurance_graph
 from ..services.graph_intelligence import analyze_graph
@@ -23,13 +22,9 @@ from django_project.evidence.models import ValidationRun
 from django_project.projects.models import Project
 
 router = APIRouter()
-security = HTTPBearer(auto_error=True)
 
 
-async def require_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict[str, Any]:
-    user = await verify_token(credentials.credentials)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid token")
+async def require_user(user=Depends(get_current_user)) -> dict[str, Any]:
     return user
 
 
