@@ -1921,5 +1921,13 @@
       "name": "codex/ssrf-egress-production-policy-reviewed",
       "sha": "54cbba322dfceb5c416ab7245c11662fd8ba6466"
     }
-  ]
+  ],
+  "codex_archive_ref": "archive/codex-history-2026-09-12",
+  "codex_archive_root_sha": "bd00a9ecfb168590683f75f30f9ea0a503701f19",
+  "unique_codex_head_sha_count": 12,
+  "archive_verification": {
+    "method": "synthetic merge DAG; every unique manifest head SHA is a direct parent of a batch archive commit, batch commits are parents of three aggregate commits, and aggregates are parents of the archive root",
+    "verified_on": "2026-09-12",
+    "branch_ref_deletion_policy": "delete only when current branch SHA still equals manifest SHA and branch is not an open PR head"
+  }
 }
