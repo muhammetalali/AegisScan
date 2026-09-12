@@ -75,6 +75,23 @@ services:
       postgres: {condition: service_healthy}
       django: {condition: service_started}
 
+  browser_worker:
+    env_file: !reset []
+    volumes: !reset []
+    read_only: true
+    tmpfs: [/tmp]
+    user: "10001:10001"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on: !override
+      scanner_egress: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      django: {condition: service_started}
+
   celery_beat:
     env_file: !reset []
     volumes: !reset []
