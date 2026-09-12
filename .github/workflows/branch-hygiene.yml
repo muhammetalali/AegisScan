@@ -10,7 +10,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: branch-hygiene-\${{ github.ref }}
+  group: branch-hygiene-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,7 +34,7 @@ jobs:
             });
             const openHeads = new Set(
               openPulls
-                .filter((pr) => pr.head.repo?.full_name === \`\${owner}/\${repo}\`)
+                .filter((pr) => pr.head.repo?.full_name === `${owner}/${repo}`)
                 .map((pr) => pr.head.ref)
             );
 
@@ -59,7 +59,7 @@ jobs:
                 const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
                   owner,
                   repo,
-                  basehead: \`\${defaultBranch}...\${branch}\`,
+                  basehead: `${defaultBranch}...${branch}`,
                 });
 
                 if (comparison.ahead_by !== 0) {
@@ -70,7 +70,7 @@ jobs:
                 await github.rest.git.deleteRef({
                   owner,
                   repo,
-                  ref: \`heads/\${branch}\`,
+                  ref: `heads/${branch}`,
                 });
                 deleted.push(branch);
               } catch (error) {
@@ -80,11 +80,11 @@ jobs:
 
             core.summary
               .addHeading('Branch Hygiene Reality')
-              .addRaw(\`Default branch: \${defaultBranch}\\n\\n\`)
-              .addRaw(\`Open PR heads skipped: \${openHeads.size}\\n\\n\`)
-              .addRaw(\`Fully merged codex branches deleted: \${deleted.length}\\n\\n\`)
-              .addRaw(\`Codex branches retained with unique commits: \${retained.length}\\n\\n\`)
-              .addRaw(\`Delete/compare failures: \${failed.length}\\n\\n\`)
+              .addRaw(`Default branch: ${defaultBranch}\\n\\n`)
+              .addRaw(`Open PR heads skipped: ${openHeads.size}\\n\\n`)
+              .addRaw(`Fully merged codex branches deleted: ${deleted.length}\\n\\n`)
+              .addRaw(`Codex branches retained with unique commits: ${retained.length}\\n\\n`)
+              .addRaw(`Delete/compare failures: ${failed.length}\\n\\n`)
               .write();
 
             core.info(JSON.stringify({
@@ -97,5 +97,5 @@ jobs:
             }, null, 2));
 
             if (failed.length > 0) {
-              core.setFailed(\`Branch hygiene encountered \${failed.length} GitHub API failures\`);
+              core.setFailed(`Branch hygiene encountered ${failed.length} GitHub API failures`);
             }
