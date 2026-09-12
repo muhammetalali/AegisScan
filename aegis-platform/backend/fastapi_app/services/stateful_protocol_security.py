@@ -1,0 +1,595 @@
+from __future__ import annotations
+
+from typing import Any, Callable
+
+from django.db import transaction
+
+from enterprise.web_security_models import (
+    WebSecurityObservation,
+    WebSecurityValidationRun,
+)
+from fastapi_app.services.web_security_foundation import (
+    CONTRACT_VERSION,
+    canonical_digest,
+    upsert_graph_snapshot,
+)
+
+
+def _identity(case: dict[str, Any]) -> dict[str, Any]:
+    value = case.get('identity')
+    return value if isinstance(value, dict) else {}
+
+
+def _resource(case: dict[str, Any]) -> dict[str, Any]:
+    value = case.get('resource')
+    return value if isinstance(value, dict) else {}
+
+
+def _decision(allowed: bool) -> str:
+    return (
+        WebSecurityObservation.Decision.ALLOWED
+        if allowed
+        else WebSecurityObservation.Decision.DENIED
+    )
+
+
+def evaluate_websocket_case(case: dict[str, Any]) -> dict[str, Any]:
+    identity = _identity(case)
+    resource = _resource(case)
+    accepted = bool(case.get('server_accepted'))
+    expected = bool(case.get('expected_allowed'))
+    failures: list[str] = []
+
+    origin = str(case.get('origin') or '')
+    allowed_origins = {str(value) for value in (case.get('allowed_origins') or [])}
+    if origin and allowed_origins and origin not in allowed_origins and accepted:
+        failures.append('cross-origin WebSocket handshake was accepted')
+
+    if bool(case.get('authentication_required', True)) and not bool(case.get('authenticated')) and accepted:
+        failures.append('unauthenticated WebSocket session was accepted')
+
+    session_state = str(case.get('session_state') or 'unknown')
+    if session_state in {'expired', 'revoked'} and accepted:
+        failures.append(f'{session_state} WebSocket session remained usable')
+
+    identity_tenant = str(identity.get('tenant_ref') or '')
+    subscription_tenant = str(case.get('subscription_tenant_ref') or resource.get('tenant_ref') or '')
+    if identity_tenant and subscription_tenant and identity_tenant != subscription_tenant and accepted:
+        failures.append('cross-tenant WebSocket subscription was accepted')
+
+    owner = str(case.get('subscription_owner_ref') or resource.get('owner_ref') or '')
+    identity_ref = str(identity.get('ref') or '')
+    if owner and identity_ref and owner != identity_ref and not expected and accepted:
+        failures.append('subscription ownership boundary was bypassed')
+
+    if bool(case.get('reconnect')) and accepted and not bool(case.get('reconnect_reauthenticated')):
+        failures.append('WebSocket reconnect succeeded without reauthentication')
+
+    if accepted and not bool(case.get('message_schema_valid', True)):
+        failures.append('schema-invalid WebSocket message was accepted')
+    if accepted and not bool(case.get('message_authorized', True)):
+        failures.append('message-level authorization was bypassed')
+
+    if bool(case.get('binary')) and accepted and not bool(case.get('binary_allowed')):
+        failures.append('unauthorized binary WebSocket frame was accepted')
+
+    size = int(case.get('message_size_bytes') or 0)
+    max_size = int(case.get('max_message_size_bytes') or 1_048_576)
+    if size > max_size and accepted:
+        failures.append('oversized WebSocket message was accepted')
+
+    observed_messages = int(case.get('observed_messages') or 0)
+    threshold = int(case.get('rate_limit_threshold') or 1000)
+    if observed_messages > threshold and accepted and not bool(case.get('rate_limited')):
+        failures.append('WebSocket rate threshold exceeded without enforcement')
+
+    if accepted != expected:
+        failures.append(
+            'observed WebSocket authorization decision does not match expected policy'
+        )
+
+    semantic = {
+        'protocol': 'websocket',
+        'origin': origin,
+        'origin_allowed': not allowed_origins or origin in allowed_origins,
+        'authenticated': bool(case.get('authenticated')),
+        'session_state': session_state,
+        'subscription_tenant_ref': subscription_tenant,
+        'subscription_owner_ref': owner,
+        'reconnect': bool(case.get('reconnect')),
+        'reconnect_reauthenticated': bool(case.get('reconnect_reauthenticated')),
+        'message_schema_valid': bool(case.get('message_schema_valid', True)),
+        'message_authorized': bool(case.get('message_authorized', True)),
+        'binary': bool(case.get('binary')),
+        'message_size_bytes': size,
+        'max_message_size_bytes': max_size,
+        'observed_messages': observed_messages,
+        'rate_limit_threshold': threshold,
+        'rate_limited': bool(case.get('rate_limited')),
+        'handshake_status': int(case.get('handshake_status') or 0),
+        'close_code': case.get('close_code'),
+        'failures': failures,
+    }
+    return {
+        'passed': not failures,
+        'expected_allowed': expected,
+        'observed_decision': _decision(accepted),
+        'semantic': semantic,
+        'evidence_fingerprint': canonical_digest(semantic),
+        'reason': '; '.join(failures) if failures else 'WebSocket invariants satisfied',
+    }
+
+
+def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
+    identity = _identity(case)
+    resource = _resource(case)
+    expected = bool(case.get('expected_allowed'))
+    accepted = bool(case.get('server_accepted'))
+    failures: list[str] = []
+
+    if accepted != expected:
+        failures.append('observed GraphQL authorization decision does not match expected policy')
+
+    identity_tenant = str(identity.get('tenant_ref') or '')
+    resource_tenant = str(resource.get('tenant_ref') or '')
+    if identity_tenant and resource_tenant and identity_tenant != resource_tenant and accepted:
+        failures.append('cross-tenant GraphQL resource access was accepted')
+
+    if accepted and not bool(case.get('field_authorized', True)):
+        failures.append('GraphQL field-level authorization was bypassed')
+
+    operation_type = str(case.get('operation_type') or 'query')
+    if (
+        operation_type == 'mutation'
+        and accepted
+        and not bool(case.get('mutation_authorized', True))
+    ):
+        failures.append('unauthorized GraphQL mutation was accepted')
+
+    subscription_tenant = str(case.get('subscription_tenant_ref') or '')
+    if (
+        operation_type == 'subscription'
+        and accepted
+        and identity_tenant
+        and subscription_tenant
+        and identity_tenant != subscription_tenant
+    ):
+        failures.append('cross-tenant GraphQL subscription was accepted')
+
+    owner = str(case.get('subscription_owner_ref') or '')
+    identity_ref = str(identity.get('ref') or '')
+    if (
+        operation_type == 'subscription'
+        and accepted
+        and owner
+        and identity_ref
+        and owner != identity_ref
+        and not expected
+    ):
+        failures.append('GraphQL subscription ownership boundary was bypassed')
+
+    sensitive_requested = {
+        str(value) for value in (case.get('sensitive_fields_requested') or [])
+    }
+    sensitive_returned = {
+        str(value) for value in (case.get('sensitive_fields_returned') or [])
+    }
+    if sensitive_returned and (
+        not expected or not bool(case.get('field_authorized', True))
+    ):
+        failures.append(
+            'sensitive GraphQL fields were returned without field authorization: '
+            + ', '.join(sorted(sensitive_returned))
+        )
+
+    if (
+        bool(case.get('introspection_requested'))
+        and accepted
+        and not bool(case.get('introspection_expected_allowed'))
+    ):
+        failures.append('GraphQL introspection was exposed contrary to policy')
+
+    batch_size = int(case.get('batch_size') or 1)
+    max_batch_size = int(case.get('max_batch_size') or 10)
+    if accepted and batch_size > max_batch_size:
+        failures.append('GraphQL batch size limit was bypassed')
+
+    depth = int(case.get('depth') or 1)
+    max_depth = int(case.get('max_depth') or 12)
+    if accepted and depth > max_depth:
+        failures.append('GraphQL depth limit was bypassed')
+
+    complexity = int(case.get('complexity') or 1)
+    max_complexity = int(case.get('max_complexity') or 1000)
+    if accepted and complexity > max_complexity:
+        failures.append('GraphQL complexity limit was bypassed')
+
+    semantic = {
+        'protocol': 'graphql',
+        'operation_type': operation_type,
+        'operation_name': str(case.get('operation_name') or ''),
+        'field_path': str(case.get('field_path') or ''),
+        'response_status': int(case.get('response_status') or 0),
+        'errors_count': int(case.get('errors_count') or 0),
+        'field_authorized': bool(case.get('field_authorized', True)),
+        'mutation_authorized': bool(case.get('mutation_authorized', True)),
+        'identity_tenant_ref': identity_tenant,
+        'resource_tenant_ref': resource_tenant,
+        'subscription_tenant_ref': subscription_tenant,
+        'subscription_owner_ref': owner,
+        'sensitive_fields_requested': sorted(sensitive_requested),
+        'sensitive_fields_returned': sorted(sensitive_returned),
+        'introspection_requested': bool(case.get('introspection_requested')),
+        'introspection_expected_allowed': bool(
+            case.get('introspection_expected_allowed')
+        ),
+        'batch_size': batch_size,
+        'max_batch_size': max_batch_size,
+        'depth': depth,
+        'max_depth': max_depth,
+        'complexity': complexity,
+        'max_complexity': max_complexity,
+        'failures': failures,
+    }
+    return {
+        'passed': not failures,
+        'expected_allowed': expected,
+        'observed_decision': _decision(accepted),
+        'semantic': semantic,
+        'evidence_fingerprint': canonical_digest(semantic),
+        'reason': '; '.join(failures) if failures else 'GraphQL invariants satisfied',
+    }
+
+
+def evaluate_cross_protocol_case(case: dict[str, Any]) -> dict[str, Any]:
+    expected = bool(case.get('expected_allowed'))
+    observed = bool(case.get('observed_allowed'))
+    failures: list[str] = []
+    if expected != observed:
+        failures.append('cross-protocol authorization decision changed unexpectedly')
+    if not bool(case.get('identity_consistent', True)):
+        failures.append('identity changed across protocol transition')
+    if not bool(case.get('tenant_consistent', True)):
+        failures.append('tenant context changed across protocol transition')
+    if not bool(case.get('session_bound', True)):
+        failures.append('target protocol session is not bound to source session')
+
+    semantic = {
+        'from_protocol': str(case.get('from_protocol') or ''),
+        'to_protocol': str(case.get('to_protocol') or ''),
+        'session_ref': str(case.get('session_ref') or ''),
+        'identity_consistent': bool(case.get('identity_consistent', True)),
+        'tenant_consistent': bool(case.get('tenant_consistent', True)),
+        'session_bound': bool(case.get('session_bound', True)),
+        'source_evidence_ref': str(case.get('source_evidence_ref') or ''),
+        'target_evidence_ref': str(case.get('target_evidence_ref') or ''),
+        'failures': failures,
+    }
+    return {
+        'passed': not failures,
+        'expected_allowed': expected,
+        'observed_decision': _decision(observed),
+        'semantic': semantic,
+        'evidence_fingerprint': canonical_digest(semantic),
+        'reason': '; '.join(failures) if failures else 'cross-protocol invariants satisfied',
+    }
+
+
+def _common_nodes(case: dict[str, Any], source: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    identity = _identity(case)
+    resource = _resource(case)
+    identity_ref = str(identity.get('ref') or '')
+    resource_ref = str(resource.get('ref') or '')
+    identity_tenant = str(identity.get('tenant_ref') or '')
+    resource_tenant = str(resource.get('tenant_ref') or '')
+    nodes = [
+        {
+            'plane': 'identity',
+            'kind': 'identity',
+            'external_ref': f'identity:{identity_ref}',
+            'label': identity_ref,
+            'tenant_ref': identity_tenant,
+            'properties': {
+                'identity_type': identity.get('type'),
+                'role': identity.get('role'),
+            },
+            'provenance': {'source': source},
+        },
+        {
+            'plane': 'application',
+            'kind': 'resource',
+            'external_ref': f'resource:{resource_ref}',
+            'label': resource_ref,
+            'tenant_ref': resource_tenant,
+            'properties': {'resource_type': resource.get('type')},
+            'provenance': {'source': source},
+        },
+    ]
+    edges: list[dict[str, Any]] = []
+    return nodes, edges
+
+
+def _project_websocket_graph(project, case: dict[str, Any], result: dict[str, Any]) -> None:
+    identity = _identity(case)
+    resource = _resource(case)
+    nodes, edges = _common_nodes(case, 'websocket_security')
+    channel = str(case.get('channel') or '')
+    channel_ref = f'websocket:{canonical_digest(channel)[:32]}'
+    nodes.append({
+        'plane': 'application',
+        'kind': 'websocket_channel',
+        'external_ref': channel_ref,
+        'label': channel,
+        'protocol': 'websocket',
+        'tenant_ref': str(case.get('subscription_tenant_ref') or ''),
+        'properties': {
+            'requested_action': case.get('requested_action'),
+            'last_validation_passed': result['passed'],
+        },
+        'provenance': {'source': 'websocket_security'},
+    })
+    edges.extend([
+        {
+            'source_ref': f'identity:{identity.get("ref")}',
+            'target_ref': channel_ref,
+            'relation': 'subscribes_to',
+            'properties': {'case_ref': case.get('ref')},
+            'evidence_refs': [result['evidence_fingerprint']],
+            'provenance': {'source': 'websocket_security'},
+        },
+        {
+            'source_ref': channel_ref,
+            'target_ref': f'resource:{resource.get("ref")}',
+            'relation': 'streams_resource',
+            'properties': {},
+            'evidence_refs': [result['evidence_fingerprint']],
+            'provenance': {'source': 'websocket_security'},
+        },
+    ])
+    upsert_graph_snapshot(project, nodes, edges)
+
+
+def _project_graphql_graph(project, case: dict[str, Any], result: dict[str, Any]) -> None:
+    identity = _identity(case)
+    resource = _resource(case)
+    nodes, edges = _common_nodes(case, 'graphql_security')
+    operation_key = {
+        'endpoint': case.get('endpoint'),
+        'operation_type': case.get('operation_type'),
+        'operation_name': case.get('operation_name'),
+        'field_path': case.get('field_path'),
+    }
+    operation_ref = f'graphql:{canonical_digest(operation_key)[:32]}'
+    nodes.append({
+        'plane': 'application',
+        'kind': 'graphql_operation',
+        'external_ref': operation_ref,
+        'label': str(case.get('operation_name') or ''),
+        'protocol': 'graphql',
+        'tenant_ref': str(resource.get('tenant_ref') or ''),
+        'properties': {
+            **operation_key,
+            'last_validation_passed': result['passed'],
+        },
+        'provenance': {'source': 'graphql_security'},
+    })
+    edges.extend([
+        {
+            'source_ref': f'identity:{identity.get("ref")}',
+            'target_ref': operation_ref,
+            'relation': 'invokes',
+            'properties': {'case_ref': case.get('ref')},
+            'evidence_refs': [result['evidence_fingerprint']],
+            'provenance': {'source': 'graphql_security'},
+        },
+        {
+            'source_ref': operation_ref,
+            'target_ref': f'resource:{resource.get("ref")}',
+            'relation': 'operates_on',
+            'properties': {},
+            'evidence_refs': [result['evidence_fingerprint']],
+            'provenance': {'source': 'graphql_security'},
+        },
+    ])
+    upsert_graph_snapshot(project, nodes, edges)
+
+
+def _project_cross_protocol_graph(project, case: dict[str, Any], result: dict[str, Any]) -> None:
+    identity = _identity(case)
+    resource = _resource(case)
+    nodes, edges = _common_nodes(case, 'cross_protocol')
+    session_ref = str(case.get('session_ref') or '')
+    session_node = f'session:{session_ref}'
+    from_state = f'protocol-state:{canonical_digest([session_ref, case.get("from_protocol")])[:32]}'
+    to_state = f'protocol-state:{canonical_digest([session_ref, case.get("to_protocol")])[:32]}'
+    nodes.extend([
+        {
+            'plane': 'identity',
+            'kind': 'session',
+            'external_ref': session_node,
+            'label': session_ref,
+            'tenant_ref': str(identity.get('tenant_ref') or ''),
+            'properties': {},
+            'provenance': {'source': 'cross_protocol'},
+        },
+        {
+            'plane': 'application',
+            'kind': 'channel',
+            'external_ref': from_state,
+            'label': str(case.get('from_protocol') or ''),
+            'protocol': str(case.get('from_protocol') or ''),
+            'properties': {'session_ref': session_ref},
+            'provenance': {'source': 'cross_protocol'},
+        },
+        {
+            'plane': 'application',
+            'kind': 'channel',
+            'external_ref': to_state,
+            'label': str(case.get('to_protocol') or ''),
+            'protocol': str(case.get('to_protocol') or ''),
+            'properties': {
+                'session_ref': session_ref,
+                'last_validation_passed': result['passed'],
+            },
+            'provenance': {'source': 'cross_protocol'},
+        },
+    ])
+    edges.extend([
+        {
+            'source_ref': f'identity:{identity.get("ref")}',
+            'target_ref': session_node,
+            'relation': 'owns_session',
+            'properties': {},
+            'evidence_refs': [result['evidence_fingerprint']],
+            'provenance': {'source': 'cross_protocol'},
+        },
+        {
+            'source_ref': session_node,
+            'target_ref': from_state,
+            'relation': 'active_on',
+            'properties': {},
+            'evidence_refs': [],
+            'provenance': {'source': 'cross_protocol'},
+        },
+        {
+            'source_ref': from_state,
+            'target_ref': to_state,
+            'relation': 'transitions_to',
+            'properties': {'operation': case.get('operation')},
+            'evidence_refs': [result['evidence_fingerprint']],
+            'provenance': {'source': 'cross_protocol'},
+        },
+        {
+            'source_ref': to_state,
+            'target_ref': f'resource:{resource.get("ref")}',
+            'relation': 'targets',
+            'properties': {},
+            'evidence_refs': [result['evidence_fingerprint']],
+            'provenance': {'source': 'cross_protocol'},
+        },
+    ])
+    upsert_graph_snapshot(project, nodes, edges)
+
+
+def _observation_for(
+    run: WebSecurityValidationRun,
+    case: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    endpoint: str,
+    method: str,
+    operation: str,
+) -> WebSecurityObservation:
+    identity = _identity(case)
+    resource = _resource(case)
+    return WebSecurityObservation(
+        run=run,
+        case_ref=str(case.get('ref') or ''),
+        identity_ref=str(identity.get('ref') or ''),
+        identity_type=str(identity.get('type') or ''),
+        role=str(identity.get('role') or ''),
+        tenant_ref=str(identity.get('tenant_ref') or ''),
+        resource_ref=str(resource.get('ref') or ''),
+        resource_tenant_ref=str(resource.get('tenant_ref') or ''),
+        endpoint=endpoint,
+        method=method,
+        operation=operation,
+        expected_allowed=result['expected_allowed'],
+        observed_decision=result['observed_decision'],
+        passed=result['passed'],
+        semantic=result['semantic'],
+        evidence_fingerprint=result['evidence_fingerprint'],
+        reason=result['reason'],
+    )
+
+
+@transaction.atomic
+def _run_cases(
+    project,
+    actor_id: str,
+    cases: list[dict[str, Any]],
+    *,
+    kind: str,
+    evaluator: Callable[[dict[str, Any]], dict[str, Any]],
+    projector: Callable[[Any, dict[str, Any], dict[str, Any]], None],
+    endpoint_for: Callable[[dict[str, Any]], str],
+    method_for: Callable[[dict[str, Any]], str],
+    operation_for: Callable[[dict[str, Any]], str],
+) -> tuple[WebSecurityValidationRun, list[WebSecurityObservation]]:
+    evaluated: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for case in cases:
+        result = evaluator(case)
+        evaluated.append((case, result))
+        projector(project, case, result)
+
+    summary = {
+        'total': len(evaluated),
+        'passed': sum(1 for _case, result in evaluated if result['passed']),
+        'failed': sum(1 for _case, result in evaluated if not result['passed']),
+    }
+    run = WebSecurityValidationRun.objects.create(
+        project=project,
+        kind=kind,
+        status=WebSecurityValidationRun.Status.COMPLETED,
+        contract_version=CONTRACT_VERSION,
+        input_sha256=canonical_digest(cases),
+        summary=summary,
+        created_by_id=actor_id,
+    )
+    observations = [
+        _observation_for(
+            run,
+            case,
+            result,
+            endpoint=endpoint_for(case),
+            method=method_for(case),
+            operation=operation_for(case),
+        )
+        for case, result in evaluated
+    ]
+    WebSecurityObservation.objects.bulk_create(observations)
+    return run, observations
+
+
+def run_websocket_security(project, actor_id: str, cases: list[dict[str, Any]]):
+    return _run_cases(
+        project,
+        actor_id,
+        cases,
+        kind=WebSecurityValidationRun.Kind.WEBSOCKET_SECURITY,
+        evaluator=evaluate_websocket_case,
+        projector=_project_websocket_graph,
+        endpoint_for=lambda case: str(case.get('channel') or ''),
+        method_for=lambda _case: 'WEBSOCKET',
+        operation_for=lambda case: str(case.get('requested_action') or ''),
+    )
+
+
+def run_graphql_security(project, actor_id: str, cases: list[dict[str, Any]]):
+    return _run_cases(
+        project,
+        actor_id,
+        cases,
+        kind=WebSecurityValidationRun.Kind.GRAPHQL_SECURITY,
+        evaluator=evaluate_graphql_case,
+        projector=_project_graphql_graph,
+        endpoint_for=lambda case: str(case.get('endpoint') or ''),
+        method_for=lambda _case: 'POST',
+        operation_for=lambda case: str(case.get('operation_name') or ''),
+    )
+
+
+def run_cross_protocol_security(project, actor_id: str, cases: list[dict[str, Any]]):
+    return _run_cases(
+        project,
+        actor_id,
+        cases,
+        kind=WebSecurityValidationRun.Kind.CROSS_PROTOCOL,
+        evaluator=evaluate_cross_protocol_case,
+        projector=_project_cross_protocol_graph,
+        endpoint_for=lambda case: (
+            f'{case.get("from_protocol")}->{case.get("to_protocol")}'
+        ),
+        method_for=lambda _case: 'STATE',
+        operation_for=lambda case: str(case.get('operation') or ''),
+    )
