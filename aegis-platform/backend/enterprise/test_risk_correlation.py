@@ -197,6 +197,100 @@ def test_negative_validation_changes_lineage_without_increasing_risk(correlation
 
 
 @pytest.mark.django_db
+def test_neutral_exploitability_proof_changes_lineage_without_increasing_risk(correlation_context):
+    user, _, _, _, finding, _, _, _ = correlation_context
+
+    baseline, baseline_created = correlate_finding(finding, actor_id=str(user.id))
+    assert baseline_created is True
+    assert baseline.components['supporting_evidence_count'] == 1
+    assert baseline.components['neutral_evidence_count'] == 0
+    assert baseline.components['evidence_strength'] == 55.0
+
+    Evidence.objects.create(
+        scan=finding.scan,
+        asset=finding.asset,
+        finding=finding,
+        source='offensive_validation',
+        evidence_type='exploitability_proof',
+        raw_output='validation completed without exploitability proof',
+        metadata={'proven_count': 0},
+        collected_by=user,
+    )
+
+    changed, changed_created = correlate_finding(finding, actor_id=str(user.id))
+
+    assert changed_created is True
+    assert changed.id != baseline.id
+    assert changed.evidence_count == 2
+    assert changed.components['supporting_evidence_count'] == 1
+    assert changed.components['contradicting_evidence_count'] == 0
+    assert changed.components['neutral_evidence_count'] == 1
+    assert changed.components['evidence_strength'] == 55.0
+    assert changed.score == baseline.score
+    assert changed.priority == baseline.priority
+    assert changed.correlation_sha256 != baseline.correlation_sha256
+
+
+@pytest.mark.django_db
+def test_v11_score_is_fully_explainable_and_evidence_counters_reconcile(correlation_context):
+    user, _, _, _, finding, _, _, _ = correlation_context
+
+    Evidence.objects.create(
+        scan=finding.scan,
+        asset=finding.asset,
+        finding=finding,
+        source='validation',
+        evidence_type='validation_output',
+        raw_output='positive validation proof',
+        metadata={'finding_present': True},
+        collected_by=user,
+    )
+    Evidence.objects.create(
+        scan=finding.scan,
+        asset=finding.asset,
+        finding=finding,
+        source='validation',
+        evidence_type='validation_output',
+        raw_output='negative validation proof',
+        metadata={'finding_present': False},
+        collected_by=user,
+    )
+    Evidence.objects.create(
+        scan=finding.scan,
+        asset=finding.asset,
+        finding=finding,
+        source='offensive_validation',
+        evidence_type='exploitability_proof',
+        raw_output='no exploitability proof established',
+        metadata={'proven_count': 0},
+        collected_by=user,
+    )
+
+    row, created = correlate_finding(finding, actor_id=str(user.id))
+
+    assert created is True
+    components = row.components
+    assert row.analysis_version == '1.1'
+    assert components['evidence_count'] == row.evidence_count == 4
+    assert (
+        components['supporting_evidence_count']
+        + components['contradicting_evidence_count']
+        + components['neutral_evidence_count']
+    ) == row.evidence_count
+    assert components['supporting_evidence_count'] == 2
+    assert components['contradicting_evidence_count'] == 1
+    assert components['neutral_evidence_count'] == 1
+    assert components['evidence_strength'] == 60.0
+
+    contributions = components['contributions']
+    explained_score = round(min(100.0, max(0.0, sum(contributions.values()))), 2)
+    assert explained_score == row.score
+    assert contributions['evidence_strength'] == pytest.approx(
+        components['evidence_strength'] * components['weights']['evidence_strength']
+    )
+
+
+@pytest.mark.django_db
 def test_correlation_snapshot_is_immutable(correlation_context):
     user, _, _, _, finding, _, _, _ = correlation_context
     row, _ = correlate_finding(finding, actor_id=str(user.id))
