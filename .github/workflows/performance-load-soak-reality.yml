@@ -6,6 +6,7 @@ name: Performance Load Soak Reality
     paths:
       - 'aegis-platform/backend/**'
       - 'aegis-platform/scripts/load_reality.py'
+      - 'aegis-platform/scripts/test_load_reality.py'
       - '.github/workflows/performance-load-soak-reality.yml'
   push:
     branches: [main]
@@ -63,6 +64,8 @@ jobs:
           cache-dependency-path: aegis-platform/backend/requirements.txt
       - name: Install backend dependencies
         run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Prove load harness measurement semantics
+        run: python -m pytest -q aegis-platform/scripts/test_load_reality.py
       - name: Migrate clean database
         working-directory: aegis-platform/backend
         env:
@@ -92,10 +95,10 @@ jobs:
           exit 1
       - name: Warm-up
         run: |
-          python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 5:5             --max-p95-ms 1000 --max-error-rate 0.02 --min-rps 1 --min-requests 20             --output /tmp/warmup.json
+          python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 5:5             --stage-warmup-seconds 0             --max-p95-ms 1000 --max-error-rate 0.02 --min-rps 1 --min-requests 20             --output /tmp/warmup.json
       - name: Load capacity and soak reality
         run: |
-          python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 10:15 --stage 30:20 --stage 60:20 --stage 25:90             --max-p95-ms 500 --max-error-rate 0.01 --min-rps 5 --min-requests 500             --output performance-reality.json
+          python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 10:15 --stage 30:20 --stage 60:20 --stage 25:90             --stage-warmup-seconds 2             --max-p95-ms 500 --max-error-rate 0.01 --min-rps 5 --min-requests 500             --output performance-reality.json
       - name: Upload performance evidence
         if: always()
         uses: actions/upload-artifact@v4
