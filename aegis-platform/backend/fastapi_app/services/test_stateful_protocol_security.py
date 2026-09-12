@@ -173,6 +173,7 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
         'identity': _identity(),
         'resource': _resource(),
         'channel': 'ws://fixture/ws/tenant-a/record-a',
+        'session_ref': 'session-a',
         'origin': 'https://app.example',
         'allowed_origins': ['https://app.example'],
         'authentication_required': True,
@@ -204,6 +205,7 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
         'identity': _identity(),
         'resource': _resource(),
         'endpoint': '/graphql',
+        'session_ref': 'session-a',
         'operation_type': 'query',
         'operation_name': 'Record',
         'field_path': 'record.id',
@@ -235,13 +237,13 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
         'from_protocol': 'graphql',
         'to_protocol': 'websocket',
         'operation': 'subscribe',
-        'expected_allowed': True,
-        'observed_allowed': True,
-        'identity_consistent': True,
-        'tenant_consistent': True,
-        'session_bound': True,
-        'source_evidence_ref': gql_obs[0].evidence_fingerprint,
-        'target_evidence_ref': ws_obs[0].evidence_fingerprint,
+        'expected_allowed': False,
+        'observed_allowed': False,
+        'identity_consistent': False,
+        'tenant_consistent': False,
+        'session_bound': False,
+        'source_observation_id': str(gql_obs[0].id),
+        'target_observation_id': str(ws_obs[0].id),
     }])
     assert cross_run.summary['failed'] == 0
     assert cross_obs[0].passed is True
@@ -250,3 +252,41 @@ def test_protocol_runs_persist_immutable_observations_and_security_graph():
     assert {'identity', 'resource', 'websocket_channel', 'graphql_operation', 'session', 'channel'}.issubset(kinds)
     relations = set(project.security_graph_edges.values_list('relation', flat=True))
     assert {'subscribes_to', 'streams_resource', 'invokes', 'operates_on', 'transitions_to'}.issubset(relations)
+
+
+    _foreign_user, foreign_project = _user_project('protocol-foreign')
+    _foreign_run, foreign_ws = run_websocket_security(foreign_project, str(_foreign_user.id), [{
+        'ref': 'ws-foreign',
+        'identity': _identity(),
+        'resource': _resource(),
+        'channel': 'ws://fixture/ws/tenant-a/record-a',
+        'session_ref': 'session-a',
+        'origin': 'https://app.example',
+        'allowed_origins': ['https://app.example'],
+        'authentication_required': True,
+        'authenticated': True,
+        'session_state': 'active',
+        'requested_action': 'subscribe',
+        'expected_allowed': True,
+        'server_accepted': True,
+        'handshake_status': 101,
+        'subscription_owner_ref': 'alice',
+        'subscription_tenant_ref': 'tenant-a',
+    }])
+    with pytest.raises(ValueError, match='same project'):
+        run_cross_protocol_security(project, str(user.id), [{
+            'ref': 'forged-foreign-lineage',
+            'identity': _identity(),
+            'resource': _resource(),
+            'session_ref': 'session-a',
+            'from_protocol': 'graphql',
+            'to_protocol': 'websocket',
+            'operation': 'subscribe',
+            'expected_allowed': True,
+            'observed_allowed': True,
+            'identity_consistent': True,
+            'tenant_consistent': True,
+            'session_bound': True,
+            'source_observation_id': str(gql_obs[0].id),
+            'target_observation_id': str(foreign_ws[0].id),
+        }])
