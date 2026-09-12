@@ -14,6 +14,7 @@ from fastapi_app.services.authorization_guard import (
     require_bound_scan_authorization,
     revalidate_bound_authorization,
 )
+from fastapi_app.services.browser_surface_graph import project_browser_surface_graph
 from fastapi_app.services.capability_registry import get_capability
 from fastapi_app.services.credential_execution import (
     assert_no_credential_material_leaked,
@@ -208,6 +209,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
         successful = result.exit_code == 0
         finding_ids: list[str] = []
         finding_evidence_ids: list[str] = []
+        graph_projection: dict[str, Any] = {}
         with transaction.atomic():
             evidence, _ = Evidence.objects.update_or_create(
                 id=evidence_id('scan', scan_id, capability.tool, 'scanner_output'),
@@ -233,6 +235,12 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 },
             )
             if successful:
+                if capability.id == 'browser.spa-discovery':
+                    graph_projection = project_browser_surface_graph(
+                        scan=scan,
+                        normalized=normalized,
+                        evidence_ref=str(evidence.id),
+                    )
                 finding_ids, finding_evidence_ids = project_native_findings(
                     scan=scan,
                     capability_id=capability.id,
@@ -262,6 +270,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 'observation_count': normalized['count'],
                 'finding_ids': finding_ids,
                 'credential_context': credential_context,
+                'graph_projection': graph_projection,
                 **snapshot,
             }
             execution.save(update_fields=[
@@ -289,6 +298,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             'finding_evidence_ids': finding_evidence_ids,
             'observation_count': normalized['count'],
             'credential_context': credential_context,
+            'graph_projection': graph_projection,
             **snapshot,
         }
     except NativeExecutionCancelled:
