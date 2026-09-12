@@ -22,12 +22,20 @@ from fastapi_app.contracts.web_security_v2 import (
     ExecutionBudgetIn,
     ExecutionRequestIn,
     GraphSnapshotIn,
+    GraphQLSecurityBatchIn,
+    CrossProtocolTransitionBatchIn,
     NegativePathBatchIn,
     ProviderApprovalIn,
     ProviderGateCheckIn,
     ResponseComparisonIn,
+    WebSocketSecurityBatchIn,
 )
 from fastapi_app.core.dependencies import get_current_user
+from fastapi_app.services.stateful_protocol_security import (
+    run_cross_protocol_security,
+    run_graphql_security,
+    run_websocket_security,
+)
 from fastapi_app.services.web_security_foundation import (
     CONTRACT_VERSION,
     analyze_response_pair,
@@ -201,6 +209,9 @@ async def web_security_contract(user=Depends(get_current_user)):
             'negative_path_engine': True,
             'execution_budget': True,
             'provider_approval_gate': True,
+            'websocket_stateful_validation': True,
+            'graphql_security_validation': True,
+            'cross_protocol_state_validation': True,
         },
         'policy_sources': [value for value, _label in AuthorizationPolicyManifest.Source.choices],
         'provider_states': [value for value, _label in ProviderApprovalRecord.Status.choices],
@@ -498,3 +509,94 @@ async def evaluate_provider(
     if row is None:
         raise HTTPException(status_code=404, detail='Provider approval record not found')
     return evaluate_provider_gate(row, payload.requested_capability)
+
+
+def _protocol_observation_dict(item):
+    return {
+        'id': str(item.id),
+        'case_ref': item.case_ref,
+        'identity_ref': item.identity_ref,
+        'identity_type': item.identity_type,
+        'role': item.role,
+        'tenant_ref': item.tenant_ref,
+        'resource_ref': item.resource_ref,
+        'resource_tenant_ref': item.resource_tenant_ref,
+        'endpoint': item.endpoint,
+        'method': item.method,
+        'operation': item.operation,
+        'expected_allowed': item.expected_allowed,
+        'observed_decision': item.observed_decision,
+        'passed': item.passed,
+        'semantic': item.semantic,
+        'evidence_fingerprint': item.evidence_fingerprint,
+        'reason': item.reason,
+    }
+
+
+@router.post('/projects/{project_id}/protocols/websocket/evaluate')
+async def evaluate_websocket_protocol(
+    project_id: str,
+    payload: WebSocketSecurityBatchIn,
+    user=Depends(get_current_user),
+):
+    uid = _uid(user)
+    project = await _project_security_operator_for_user(project_id, uid)
+    run, observations = await sync_to_async(run_websocket_security)(
+        project,
+        uid,
+        [item.model_dump(mode='json') for item in payload.cases],
+    )
+    return {
+        'contract_version': CONTRACT_VERSION,
+        'run_id': str(run.id),
+        'kind': run.kind,
+        'input_sha256': run.input_sha256,
+        'summary': run.summary,
+        'observations': [_protocol_observation_dict(item) for item in observations],
+    }
+
+
+@router.post('/projects/{project_id}/protocols/graphql/evaluate')
+async def evaluate_graphql_protocol(
+    project_id: str,
+    payload: GraphQLSecurityBatchIn,
+    user=Depends(get_current_user),
+):
+    uid = _uid(user)
+    project = await _project_security_operator_for_user(project_id, uid)
+    run, observations = await sync_to_async(run_graphql_security)(
+        project,
+        uid,
+        [item.model_dump(mode='json') for item in payload.cases],
+    )
+    return {
+        'contract_version': CONTRACT_VERSION,
+        'run_id': str(run.id),
+        'kind': run.kind,
+        'input_sha256': run.input_sha256,
+        'summary': run.summary,
+        'observations': [_protocol_observation_dict(item) for item in observations],
+    }
+
+
+@router.post('/projects/{project_id}/protocols/cross-protocol/evaluate')
+async def evaluate_cross_protocol(
+    project_id: str,
+    payload: CrossProtocolTransitionBatchIn,
+    user=Depends(get_current_user),
+):
+    uid = _uid(user)
+    project = await _project_security_operator_for_user(project_id, uid)
+    run, observations = await sync_to_async(run_cross_protocol_security)(
+        project,
+        uid,
+        [item.model_dump(mode='json') for item in payload.cases],
+    )
+    return {
+        'contract_version': CONTRACT_VERSION,
+        'run_id': str(run.id),
+        'kind': run.kind,
+        'input_sha256': run.input_sha256,
+        'summary': run.summary,
+        'observations': [_protocol_observation_dict(item) for item in observations],
+    }
