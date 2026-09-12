@@ -80,9 +80,6 @@ services:
     volumes: !reset []
     read_only: true
     tmpfs: [/tmp]
-    user: "10001:10001"
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
     environment:
       DEBUG: "False"
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required in production}
