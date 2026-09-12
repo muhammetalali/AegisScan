@@ -7,6 +7,7 @@ from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 ROUTERS_ROOT = BACKEND_ROOT / "fastapi_app" / "routers"
+FASTAPI_MAIN = BACKEND_ROOT / "fastapi_app" / "main.py"
 DIGITAL_TWIN = ROUTERS_ROOT / "digital_twin.py"
 
 LEGACY_ROUTER_IMPORTS = (
@@ -80,6 +81,23 @@ def main() -> int:
                 failures.append(
                     f"{path.relative_to(BACKEND_ROOT)}: direct Bearer-only auth bypasses cookie-aware get_current_user: {marker}"
                 )
+
+    if not FASTAPI_MAIN.is_file():
+        failures.append("fastapi_app/main.py: missing FastAPI application entrypoint")
+    else:
+        main_text = FASTAPI_MAIN.read_text(encoding="utf-8")
+        if "HTTPBearer(" in main_text or "async def get_current_user(" in main_text:
+            failures.append(
+                "fastapi_app/main.py: HTTP authentication must use core.dependencies.get_current_user"
+            )
+        if "require_permission(Permission.SYSTEM_SETTINGS)" not in main_text:
+            failures.append(
+                "fastapi_app/main.py: engine administration must use shared SYSTEM_SETTINGS permission"
+            )
+        if "Permission.SYSTEM_MONITOR" not in main_text:
+            failures.append(
+                "fastapi_app/main.py: websocket system monitor must use shared SYSTEM_MONITOR permission"
+            )
 
     if not DIGITAL_TWIN.is_file():
         failures.append("fastapi_app/routers/digital_twin.py: missing canonical Digital Twin router")
