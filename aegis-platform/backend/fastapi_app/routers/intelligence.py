@@ -9,6 +9,7 @@ from django_project.intelligence.models import IntelligenceEnrichment
 
 from ..core.dependencies import get_current_user
 from ..services.intelligence.fusion import IntelligenceFusion, IntelligenceFusionError
+from ..services.external_fabric import ExternalFabricError, fetch_indicator_intelligence
 
 router = APIRouter()
 _fusion = IntelligenceFusion()
@@ -57,4 +58,18 @@ async def latest_cve_enrichment(cve_id: str, current_user=Depends(get_current_us
         'source_urls': snapshot.source_urls, 'provider_failures': snapshot.provider_failures,
         'live': False, 'persisted': True, 'observed_at': snapshot.observed_at.isoformat(),
         'snapshot_sha256': snapshot.snapshot_sha256,
+    }
+
+
+@router.get('/indicator/{provider}/{indicator}')
+async def enrich_indicator(provider:str,indicator:str,current_user=Depends(get_current_user)):
+    actor_id=str(current_user.get('user_id') or current_user.get('id'))
+    try:
+        snapshot=await sync_to_async(fetch_indicator_intelligence)(provider=provider,indicator=indicator,actor_id=actor_id)
+    except ExternalFabricError as exc:
+        raise HTTPException(status_code=503,detail=str(exc)) from exc
+    return {
+        'id':str(snapshot.id),'provider':snapshot.provider,'indicator':snapshot.indicator,
+        'data':snapshot.data,'source_url':snapshot.source_url,'snapshot_sha256':snapshot.snapshot_sha256,
+        'observed_at':snapshot.observed_at.isoformat(),'live':True,'persisted':True,
     }

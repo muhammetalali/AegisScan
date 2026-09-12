@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from types import SimpleNamespace
 
@@ -231,6 +231,40 @@ def test_validation_progress_api_rejects_malformed_uuid_without_orm_error(api_fi
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["type"] == "uuid_parsing"
+
+
+def test_validation_evidence_api_returns_legacy_validation_lineage(api_fixture):
+    client, user, finding = api_fixture
+    validation = _completed_validation(user, finding, finding_present=True)
+
+    response = client.get(f"/api/v1/validations/{validation.id}/evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["finding_id"] == str(finding.id)
+    assert payload[0]["source"] == "nmap"
+    assert payload[0]["evidence_type"] == "validation_output"
+    assert payload[0]["metadata"]["validation_id"] == str(validation.id)
+
+
+def test_validation_evidence_api_returns_canonical_validation_run_lineage(api_fixture):
+    client, user, finding = api_fixture
+    validation = _completed_validation(user, finding, finding_present=True)
+    evidence = Evidence.objects.get(id=validation.result["evidence_id"])
+    evidence.metadata = {
+        **evidence.metadata,
+        "validation_run_id": str(validation.id),
+    }
+    evidence.save(update_fields=["metadata"])
+
+    response = client.get(f"/api/v1/validations/{validation.id}/evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["id"] == str(evidence.id)
+    assert payload[0]["metadata"]["validation_run_id"] == str(validation.id)
 
 
 def test_verify_api_returns_409_when_latest_validation_still_detects_finding(api_fixture):
