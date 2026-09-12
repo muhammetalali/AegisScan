@@ -557,16 +557,19 @@ async def discover(
                 request_id = str(params.get('requestId') or '')
                 resource_type = str(params.get('type') or '')[:80]
                 http_method = str(request.get('method') or 'GET').upper()[:16]
+                document_url = _canonical_url(str(params.get('documentURL') or ''))
                 request_meta[request_id] = {
                     'url': canonical,
                     'method': http_method,
                     'resource_type': resource_type,
+                    'document_url': document_url,
                 }
                 meta = _graphql_metadata(request.get('postData'))
                 if meta is not None and len(graphql) < max_events:
                     graphql.append({
                         'endpoint': canonical,
                         'method': http_method,
+                        'document_url': document_url,
                         **meta,
                     })
                 if len(events) < max_events:
@@ -575,6 +578,7 @@ async def discover(
                         'url': canonical,
                         'method': http_method,
                         'resource_type': resource_type,
+                        'document_url': document_url,
                     })
                 else:
                     truncated = True
@@ -707,6 +711,7 @@ async def discover(
                 'url': url,
                 'method': method,
                 'resource_type': resource_type,
+                'document_url': str(event.get('document_url') or '')[:2048],
                 'status': int(response.get('status') or 0),
                 'mime_type': str(response.get('mime_type') or '')[:200],
                 'response_headers': (
