@@ -206,6 +206,17 @@ async def execute_capability(
             status_code=409,
             detail=f'Capability {capability.id} requires exactly one credential reference',
         )
+    single_ref_modes = {
+        'curl-bearer-config',
+        'kubeconfig-file',
+        'cloud-credentials-file',
+        'browser-session-file',
+    }
+    if credential_refs and capability.credential_mode in single_ref_modes and len(credential_refs) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail=f'Capability {capability.id} accepts at most one credential reference',
+        )
     if credential_refs and capability.credential_mode == 'none':
         raise HTTPException(status_code=409, detail=f'Capability {capability.id} does not support credential-bound execution')
 
