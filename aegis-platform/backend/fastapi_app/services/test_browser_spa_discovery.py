@@ -1,0 +1,281 @@
+from __future__ import annotations
+
+import json
+import os
+import stat
+from types import SimpleNamespace
+
+import pytest
+
+from django_project.projects.models import Project
+from django_project.system.credential_models import CredentialAccess, CredentialSecret
+from django_project.system.credential_vault import CredentialVaultDenied, create_credential_secret
+from django_project.users.models import User, UserRole
+from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
+from fastapi_app.services.browser_spa_discovery import (
+    _browser_session_file if False else _canonical_url,
+)
+from fastapi_app.services.browser_spa_discovery import _graphql_metadata, _load_session
+from fastapi_app.services.browser_surface_graph import project_browser_surface_graph
+from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution
+from fastapi_app.services.native_output_normalizer import normalize_native_output
+from fastapi_app.services.native_tool_runtime import _browser_session_file
+
+CI_FERNET_KEY = 'Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM='
+
+
+@pytest.fixture(autouse=True)
+def configured_vault(settings):
+    settings.CREDENTIAL_VAULT_KEYS = CI_FERNET_KEY
+    settings.CREDENTIAL_FINGERPRINT_KEY = 'browser-ci-fingerprint-key'
+
+
+@pytest.fixture
+def actor():
+    return User.objects.create_user(
+        email='browser-owner@example.invalid',
+        password='Strong-Test-Password-123!',
+        first_name='Browser',
+        last_name='Owner',
+        role=UserRole.ADMIN,
+    )
+
+
+@pytest.fixture
+def project(actor):
+    return Project.objects.create(
+        name='Browser Security',
+        slug='browser-security',
+        owner=actor,
+        environment=Project.Environment.STAGING,
+    )
+
+
+def test_browser_url_and_graphql_metadata_redact_values():
+    canonical = _canonical_url(
+        'https://app.example.test/api/items?token=secret-value&id=42&id=43#fragment'
+    )
+    assert canonical == 'https://app.example.test/api/items?id=*&token=*'
+    assert 'secret-value' not in canonical
+    assert '42' not in canonical
+
+    metadata = _graphql_metadata(json.dumps({
+        'operationName': 'AccountSummary',
+        'query': 'query AccountSummary($secretToken: String!, $accountId: ID!) { account(id: $accountId) { id } }',
+        'variables': {'secretToken': 'do-not-persist', 'accountId': 'acct-42'},
+    }))
+    assert metadata == {
+        'operation_type': 'query',
+        'operation_name': 'AccountSummary',
+        'variable_keys': ['accountId', 'secretToken'],
+    }
+    assert 'do-not-persist' not in str(metadata)
+    assert 'acct-42' not in str(metadata)
+
+
+def test_browser_session_file_is_0600_and_contract_bounded(tmp_path):
+    secret = json.dumps({
+        'headers': {'Authorization': 'Bearer super-secret-browser-token'},
+        'cookies': [{'name': 'session', 'value': 'super-secret-cookie', 'path': '/'}],
+        'local_storage': {'access_token': 'super-secret-storage'},
+        'session_storage': {'workspace': 'tenant-a'},
+    })
+    path = _browser_session_file(secret)
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        assert mode == 0o600
+        loaded = _load_session(path)
+        assert loaded['headers']['Authorization'].startswith('Bearer ')
+        assert loaded['cookies'][0]['name'] == 'session'
+    finally:
+        os.unlink(path)
+
+
+@pytest.mark.django_db
+def test_browser_session_credential_requires_exact_origin_scope(project, actor):
+    secret = json.dumps({
+        'headers': {'Authorization': 'Bearer browser-session-secret'},
+        'local_storage': {'access_token': 'browser-storage-secret'},
+    })
+    credential = create_credential_secret(
+        project=project,
+        actor=actor,
+        name='browser-session',
+        kind=CredentialSecret.Kind.GENERIC,
+        secret=secret,
+        scope={'browser_origin': 'https://app.example.test'},
+    )
+
+    context = authorize_credential_refs_for_execution(
+        project_id=project.id,
+        actor_id=actor.id,
+        refs=[str(credential.id)],
+        capability_id='browser.spa-discovery',
+        allowed_kinds=('generic',),
+        purpose='browser-test:authorize',
+        target='https://app.example.test/account/profile',
+    )
+    assert context['credential_material_handling'] == 'reference-authorized-only'
+    assert context['credential_refs'][0]['credential_ref'] == str(credential.id)
+    assert 'browser-session-secret' not in str(context)
+
+    with pytest.raises(CredentialVaultDenied):
+        authorize_credential_refs_for_execution(
+            project_id=project.id,
+            actor_id=actor.id,
+            refs=[str(credential.id)],
+            capability_id='browser.spa-discovery',
+            allowed_kinds=('generic',),
+            purpose='browser-test:cross-origin',
+            target='https://other.example.test/account/profile',
+        )
+
+    denied = CredentialAccess.objects.filter(
+        credential=credential,
+        result=CredentialAccess.Result.DENIED,
+    ).latest('created_at')
+    assert denied.metadata['scope_type'] == 'browser_origin'
+    assert denied.metadata['scope_matches_target'] is False
+    assert 'browser-session-secret' not in str(denied.metadata)
+
+
+def test_spa_normalizer_whitelists_metadata_and_drops_secret_values():
+    raw = json.dumps({
+        'schema': 'aegis.browser-spa-discovery.v1',
+        'identity_ref': 'alice',
+        'observations': [
+            {
+                'kind': 'browser-spa-summary',
+                'identity_ref': 'alice',
+                'target_origin': 'https://app.example.test',
+                'page_title': 'Dashboard',
+                'local_storage_keys': ['access_token', 'theme'],
+                'session_storage_keys': ['workspace'],
+                'cookies': [{
+                    'name': 'session',
+                    'value': 'must-never-survive-normalization',
+                    'domain': 'app.example.test',
+                    'path': '/',
+                    'secure': True,
+                    'http_only': True,
+                    'same_site': 'Lax',
+                    'session': True,
+                }],
+                'post_message_listener_count': 1,
+                'inner_html_write_count': 2,
+                'blocked_out_of_scope_request_count': 1,
+                'unknown_secret': 'drop-me',
+            },
+            {
+                'kind': 'browser-http-endpoint',
+                'url': 'https://app.example.test/api/profile?token=*',
+                'method': 'GET',
+                'resource_type': 'Fetch',
+                'document_url': 'https://app.example.test/dashboard',
+                'status': 200,
+                'mime_type': 'application/json',
+                'response_headers': {
+                    'Content-Security-Policy': "default-src 'self'",
+                    'Set-Cookie': 'session=must-not-persist',
+                    'X-Internal-Secret': 'drop-me',
+                },
+                'body': {'secret': 'drop-me'},
+            },
+            {
+                'kind': 'browser-graphql-operation',
+                'endpoint': 'https://app.example.test/graphql',
+                'method': 'POST',
+                'document_url': 'https://app.example.test/dashboard',
+                'operation_type': 'query',
+                'operation_name': 'Viewer',
+                'variable_keys': ['accountId'],
+                'variables': {'accountId': 'secret-object-id'},
+            },
+        ],
+    })
+
+    normalized = normalize_native_output('browser.spa-discovery', raw)
+    rendered = json.dumps(normalized, sort_keys=True)
+    assert normalized['count'] == 3
+    assert 'must-never-survive-normalization' not in rendered
+    assert 'session=must-not-persist' not in rendered
+    assert 'X-Internal-Secret' not in rendered
+    assert 'secret-object-id' not in rendered
+    assert 'drop-me' not in rendered
+    summary = normalized['observations'][0]
+    assert summary['local_storage_keys'] == ['access_token', 'theme']
+    assert summary['cookies'][0]['name'] == 'session'
+    assert 'value' not in summary['cookies'][0]
+    endpoint = normalized['observations'][1]
+    assert endpoint['response_headers'] == {'content-security-policy': "default-src 'self'"}
+
+
+@pytest.mark.django_db
+def test_browser_surface_graph_persists_proven_initiator_flow_without_secret_values(project):
+    scan = SimpleNamespace(
+        id='11111111-1111-1111-1111-111111111111',
+        project=project,
+        asset_id='22222222-2222-2222-2222-222222222222',
+        asset=SimpleNamespace(name='SPA Fixture'),
+    )
+    normalized = {
+        'schema': 'aegis.native-observations.v1',
+        'count': 5,
+        'observations': [
+            {
+                'kind': 'browser-spa-summary',
+                'identity_ref': 'alice',
+                'target_origin': 'https://app.example.test',
+                'profile_isolation': 'dedicated-ephemeral-user-data-dir',
+                'credential_transport': 'same-origin-request-interception',
+                'local_storage_keys': ['access_token'],
+                'session_storage_keys': ['workspace'],
+                'cookies': [{'name': 'session', 'secure': True, 'http_only': True}],
+            },
+            {'kind': 'browser-page-route', 'url': 'https://app.example.test/dashboard'},
+            {
+                'kind': 'browser-http-endpoint',
+                'url': 'https://app.example.test/api/profile',
+                'method': 'GET',
+                'resource_type': 'Fetch',
+                'document_url': 'https://app.example.test/dashboard',
+                'status': 200,
+                'mime_type': 'application/json',
+                'response_headers': {},
+            },
+            {
+                'kind': 'browser-graphql-operation',
+                'endpoint': 'https://app.example.test/graphql',
+                'method': 'POST',
+                'document_url': 'https://app.example.test/dashboard',
+                'operation_type': 'query',
+                'operation_name': 'Viewer',
+                'variable_keys': ['accountId'],
+            },
+            {'kind': 'browser-websocket-channel', 'url': 'wss://app.example.test/ws'},
+        ],
+    }
+
+    result = project_browser_surface_graph(
+        scan=scan,
+        normalized=normalized,
+        evidence_ref='33333333-3333-3333-3333-333333333333',
+    )
+    assert result['nodes_created'] >= 8
+
+    kinds = set(SecurityGraphNode.objects.filter(project=project).values_list('kind', flat=True))
+    assert {'asset', 'identity', 'session', 'page', 'endpoint', 'graphql_operation', 'websocket_channel', 'trust_boundary', 'data_flow'} <= kinds
+    relations = set(SecurityGraphEdge.objects.filter(project=project).values_list('relation', flat=True))
+    assert 'initiates_runtime_flow' in relations
+    assert 'opens_channel' in relations
+    assert 'bound_to_origin' in relations
+
+    rendered = json.dumps(
+        {
+            'nodes': list(SecurityGraphNode.objects.filter(project=project).values('properties', 'provenance')),
+            'edges': list(SecurityGraphEdge.objects.filter(project=project).values('properties', 'provenance', 'evidence_refs')),
+        },
+        default=str,
+        sort_keys=True,
+    )
+    assert 'super-secret' not in rendered
