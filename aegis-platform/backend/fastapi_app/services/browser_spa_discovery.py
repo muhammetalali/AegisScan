@@ -490,6 +490,7 @@ async def discover(
     redirects: list[str] = []
     request_meta: dict[str, dict[str, Any]] = {}
     truncated = False
+    blocked_out_of_scope_requests = 0
 
     try:
         process = subprocess.Popen(
@@ -520,14 +521,30 @@ async def discover(
         cdp_ref: dict[str, _CDP] = {}
 
         async def on_event(message: dict[str, Any]) -> None:
-            nonlocal truncated
+            nonlocal truncated, blocked_out_of_scope_requests
             method = str(message.get('method') or '')
             params = message.get('params') if isinstance(message.get('params'), dict) else {}
 
             if method == 'Fetch.requestPaused':
                 request = params.get('request') if isinstance(params.get('request'), dict) else {}
                 raw_url = str(request.get('url') or '')
-                payload: dict[str, Any] = {'requestId': params.get('requestId')}
+                request_id = params.get('requestId')
+                parsed = urlsplit(raw_url)
+                if parsed.scheme in {'http', 'https'}:
+                    try:
+                        require_authorized_target(raw_url, url=True, resolve_dns=True)
+                    except ValueError:
+                        blocked_out_of_scope_requests += 1
+                        try:
+                            await cdp_ref['client'].call(
+                                'Fetch.failRequest',
+                                {'requestId': request_id, 'errorReason': 'BlockedByClient'},
+                                timeout=5,
+                            )
+                        except Exception:
+                            pass
+                        return
+                payload: dict[str, Any] = {'requestId': request_id}
                 if _same_origin(raw_url, target_origin) and session['headers']:
                     existing = request.get('headers') if isinstance(request.get('headers'), dict) else {}
                     merged = {str(k): str(v) for k, v in existing.items()}
@@ -822,6 +839,7 @@ async def discover(
             'profile_isolation': 'dedicated-ephemeral-user-data-dir',
             'credential_transport': 'same-origin-request-interception',
             'event_truncated': truncated,
+            'blocked_out_of_scope_request_count': blocked_out_of_scope_requests,
         })
 
         return {
