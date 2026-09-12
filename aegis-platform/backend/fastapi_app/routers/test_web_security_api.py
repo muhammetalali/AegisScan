@@ -6,6 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from django_project.projects.models import Project, ProjectMembership
+from django_project.system.credential_models import CredentialSecret
+from django_project.system.credential_vault import create_credential_secret
 from django_project.users.models import User
 from fastapi_app.contracts.web_security_v2 import (
     AuthorizationMatrixIn,
@@ -251,9 +253,22 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     )
     client = TestClient(app)
     headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(owner.id)})}'}
+    protocol_secret = 'protocol-api-test-secret-only'
+    credential = create_credential_secret(
+        project=project,
+        actor=owner,
+        name=f'protocol-api-{uuid.uuid4().hex[:8]}',
+        kind=CredentialSecret.Kind.TOKEN,
+        secret=protocol_secret,
+        scope={
+            'protocol_origin': 'https://app.example',
+            'protocol_identity_ref': 'alice',
+        },
+    )
     identity = {
         'ref': 'alice',
         'type': 'user',
+        'credential_ref': str(credential.id),
         'role': 'viewer',
         'tenant_ref': 'tenant-a',
         'scopes': ['records:read'],
@@ -296,7 +311,7 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     ws = client.post(
         f'/api/v1/web-security/projects/{project.id}/protocols/websocket/evaluate',
         headers=headers,
-        json={'budget_id': budget_id, 'cases': [{
+        json={'budget_id': budget_id, 'target_origin': 'https://app.example', 'cases': [{
             'ref': 'ws-own',
             'identity': identity,
             'resource': resource,
@@ -338,7 +353,7 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     gql = client.post(
         f'/api/v1/web-security/projects/{project.id}/protocols/graphql/evaluate',
         headers=headers,
-        json={'budget_id': budget_id, 'cases': [{
+        json={'budget_id': budget_id, 'target_origin': 'https://app.example', 'cases': [{
             'ref': 'gql-own',
             'identity': identity,
             'resource': resource,
@@ -374,7 +389,7 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     transition = client.post(
         f'/api/v1/web-security/projects/{project.id}/protocols/cross-protocol/evaluate',
         headers=headers,
-        json={'budget_id': budget_id, 'cases': [{
+        json={'budget_id': budget_id, 'target_origin': 'https://app.example', 'cases': [{
             'ref': 'gql-to-ws',
             'identity': identity,
             'resource': resource,
@@ -423,6 +438,7 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
         headers=headers,
         json={
             'budget_id': denied_budget.json()['id'],
+            'target_origin': 'https://app.example',
             'cases': [{
                 'ref': 'ws-budget-denied',
                 'identity': identity,
@@ -450,3 +466,12 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     assert graph.status_code == 200
     kinds = {node['kind'] for node in graph.json()['nodes']}
     assert {'websocket_channel', 'graphql_operation', 'session', 'channel'}.issubset(kinds)
+    rendered = str({
+        'ws': ws.json(),
+        'gql': gql.json(),
+        'transition': transition.json(),
+        'graph': graph.json(),
+    })
+    assert protocol_secret not in rendered
+    assert ws.json()['summary']['credential_bindings'][0]['credential_ref'] == str(credential.id)
+    assert ws.json()['summary']['credential_bindings'][0]['protocol_identity_ref'] == 'alice'
