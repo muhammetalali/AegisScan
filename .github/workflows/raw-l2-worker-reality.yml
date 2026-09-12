@@ -121,6 +121,7 @@ jobs:
               data = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
               services = data['services']
               scanner = services['scanner_worker']
+              browser = services['browser_worker']
               general = services['celery_worker']
               egress = services['scanner_egress']
               assert set(scanner.get('cap_add') or []) == {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
@@ -132,10 +133,15 @@ jobs:
               assert general.get('cap_drop') == ['ALL']
               assert not (general.get('cap_add') or [])
               assert 'no-new-privileges:true' in (general.get('security_opt') or [])
+              assert str(browser.get('user')) == '10001:10001'
+              assert browser.get('network_mode') == 'service:scanner_egress'
+              assert browser.get('cap_drop') == ['ALL']
+              assert not (browser.get('cap_add') or [])
+              assert 'no-new-privileges:true' in (browser.get('security_opt') or [])
               assert egress.get('cap_drop') == ['ALL']
               assert egress.get('cap_add') == ['NET_ADMIN']
               assert 'no-new-privileges:true' in (egress.get('security_opt') or [])
-              for name in ('scanner_worker', 'celery_worker', 'scanner_egress'):
+              for name in ('scanner_worker', 'browser_worker', 'celery_worker', 'scanner_egress'):
                   rendered = repr(services[name].get('volumes') or [])
                   assert 'docker.sock' not in rendered
           verify('/tmp/aegis-ci-compose.yml')
@@ -175,7 +181,7 @@ jobs:
             sleep 3
           done
           docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi celery_worker scanner_worker scanner_egress scan_target egress_forbidden_target nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi celery_worker browser_worker scanner_worker scanner_egress scan_target egress_forbidden_target nginx
           exit 1
 
       - name: Resolve authorized and forbidden Raw/L2 targets
@@ -250,6 +256,43 @@ jobs:
                   value = int(s[field], 16)
                   assert value == NET_RAW, (pid, field, hex(value))
               print(f'SCANNER_RUNTIME pid={pid} uid={uid} gid={gid} caps=NET_RAW_ONLY nnp=1')
+          PY
+
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T browser_worker python - <<'PY'
+          from pathlib import Path
+
+          FIELDS = ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')
+
+          def status(pid: int) -> dict[str, str]:
+              out = {}
+              for line in Path(f'/proc/{pid}/status').read_text(encoding='utf-8').splitlines():
+                  if ':' in line:
+                      key, value = line.split(':', 1)
+                      out[key] = value.strip()
+              return out
+
+          workers = []
+          for proc in Path('/proc').iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  cmd = (proc / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='ignore')
+              except OSError:
+                  continue
+              if 'celery' in cmd and 'worker' in cmd:
+                  workers.append(int(proc.name))
+          if not workers:
+              raise SystemExit('browser_worker has no live Celery process')
+          for pid in sorted(set(workers)):
+              s = status(pid)
+              uid = int(s['Uid'].split()[0]); gid = int(s['Gid'].split()[0])
+              assert uid == 10001, (pid, uid)
+              assert gid == 10001, (pid, gid)
+              assert s.get('NoNewPrivs') == '1', (pid, s.get('NoNewPrivs'))
+              for field in FIELDS:
+                  value = int(s[field], 16)
+                  assert value == 0, (pid, field, hex(value))
+              print(f'BROWSER_RUNTIME pid={pid} uid={uid} gid={gid} caps=NONE nnp=1')
           PY
 
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T celery_worker python - <<'PY'
@@ -405,6 +448,7 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color scanner_worker > /tmp/raw-l2-scanner-worker.log
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color browser_worker > /tmp/raw-l2-browser-worker.log
           docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color celery_worker > /tmp/raw-l2-general-worker.log
           for task in \
             fastapi_app.tasks.security_scan.run_nmap_scan \
@@ -412,6 +456,10 @@ jobs:
             grep -F "Task ${task}[" /tmp/raw-l2-scanner-worker.log | grep -q 'received'
             if grep -F "Task ${task}[" /tmp/raw-l2-general-worker.log | grep -q 'received'; then
               echo "default worker consumed Raw/L2 task: $task" >&2
+              exit 1
+            fi
+            if grep -F "Task ${task}[" /tmp/raw-l2-browser-worker.log | grep -q 'received'; then
+              echo "browser worker consumed Raw/L2 task: $task" >&2
               exit 1
             fi
           done
