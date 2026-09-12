@@ -42,6 +42,7 @@ class ActionCreate(BaseModel):
 class ActionTransition(BaseModel):
     state: str
     note: str | None = Field(default=None, max_length=2000)
+    verification_validation_id: str | None = None
 
 
 async def _decision_by_id(decision_id: str, user_id: str) -> dict[str, Any] | None:
@@ -76,11 +77,7 @@ def _resolve_action_scope(decision: dict[str, Any], user_id: str):
     risk_correlation = None
     risk_correlation_id = decision.get("riskCorrelationId")
     if risk_correlation_id:
-        risk_correlation = (
-            RiskCorrelationSnapshot.objects
-            .filter(pk=risk_correlation_id, project=project)
-            .first()
-        )
+        risk_correlation = RiskCorrelationSnapshot.objects.filter(pk=risk_correlation_id, project=project).first()
         if risk_correlation is None:
             raise PermissionError("Risk-correlation snapshot is outside the authenticated scope")
         if not validation.finding_id or str(risk_correlation.vulnerability_id) != str(validation.finding_id):
@@ -120,35 +117,25 @@ async def create_action_endpoint(body: ActionCreate, request: Request, user: dic
     if decision is None:
         raise HTTPException(status_code=404, detail="Decision not found")
     if decision.get("actionable") is False:
-        raise HTTPException(
-            status_code=409,
-            detail=str(decision.get("actionabilityReason") or "Decision is not actionable"),
-        )
+        raise HTTPException(status_code=409, detail=str(decision.get("actionabilityReason") or "Decision is not actionable"))
     try:
         organization,project,validation,risk_correlation = await sync_to_async(_resolve_action_scope)(decision,actor)
         item = await sync_to_async(create_action)(
             decision,body.owner,body.sla_hours,actor,
-            organization=organization,project=project,validation=validation,
-            risk_correlation=risk_correlation,
+            organization=organization,project=project,validation=validation,risk_correlation=risk_correlation,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except PermissionError:
         raise HTTPException(status_code=404, detail="Decision scope not found")
     await sync_to_async(add_audit_entry)(
-        user=actor,
-        action="decision_action.create",
-        target=item["actionId"],
-        project=str(project.id),
-        result="success",
-        resource_type="decision_action",
+        user=actor, action="decision_action.create", target=item["actionId"], project=str(project.id),
+        result="success", resource_type="decision_action",
         metadata={
-            "organization_id":str(organization.id),
-            "validation_id":str(validation.id),
+            "organization_id":str(organization.id), "validation_id":str(validation.id),
             "risk_correlation_id":str(risk_correlation.id) if risk_correlation else None,
             "risk_correlation_sha256":risk_correlation.correlation_sha256 if risk_correlation else None,
-        },
-        request=request,
+        }, request=request,
     )
     return enrich_action(item)
 
@@ -170,19 +157,23 @@ async def action_transition(action_id: str, body: ActionTransition, request: Req
     if not actor:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
     try:
-        item = await sync_to_async(transition)(action_id, body.state, actor, body.note)
+        item = await sync_to_async(transition)(
+            action_id, body.state, actor, body.note, body.verification_validation_id,
+        )
         await sync_to_async(add_audit_entry)(
-            user=actor,
-            action=f"decision_action.{body.state}",
-            target=action_id,
-            project="—",
-            result="success",
-            resource_type="decision_action",
-            metadata={"note": body.note or ""},
-            request=request,
+            user=actor, action=f"decision_action.{body.state}", target=action_id,
+            project=str(item.get("projectId") or "—"), result="success", resource_type="decision_action",
+            metadata={
+                "note": body.note or "",
+                "verification_validation_id": body.verification_validation_id,
+                "verification_evidence_ids": item.get("verificationEvidenceIds", []),
+                "verification_evidence_sha256": item.get("verificationEvidenceSha256", []),
+                "risk_correlation_id": item.get("riskCorrelationId"),
+                "risk_correlation_sha256": item.get("riskCorrelationSha256"),
+            }, request=request,
         )
         return enrich_action(item)
     except KeyError:
         raise HTTPException(status_code=404, detail="Action not found")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid action state")
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if body.state == "verified" else 400, detail=str(exc))
