@@ -144,6 +144,7 @@ class AuthorizationCaseIn(StrictModel):
     method: str = Field(min_length=1, max_length=16)
     operation: str = Field(default='', max_length=160)
     protocol: Literal['http', 'https', 'graphql', 'websocket', 'browser'] = 'https'
+    session_ref: str = Field(default='', max_length=255)
     response: CapturedResponseIn
 
 
