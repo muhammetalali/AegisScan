@@ -731,6 +731,7 @@ def _run_cases(
     endpoint_for: Callable[[dict[str, Any]], str],
     method_for: Callable[[dict[str, Any]], str],
     operation_for: Callable[[dict[str, Any]], str],
+    governance: dict[str, Any] | None = None,
 ) -> tuple[WebSecurityValidationRun, list[WebSecurityObservation]]:
     evaluated: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for case in cases:
@@ -743,6 +744,13 @@ def _run_cases(
         'passed': sum(1 for _case, result in evaluated if result['passed']),
         'failed': sum(1 for _case, result in evaluated if not result['passed']),
     }
+    if governance is not None:
+        summary['execution_budget'] = {
+            'profile_id': str(governance.get('profile_id') or ''),
+            'profile_sha256': str(governance.get('profile_sha256') or ''),
+            'environment': str(governance.get('environment') or ''),
+            'allowed': bool(governance.get('allowed')),
+        }
     run = WebSecurityValidationRun.objects.create(
         project=project,
         kind=kind,
@@ -767,7 +775,7 @@ def _run_cases(
     return run, observations
 
 
-def run_websocket_security(project, actor_id: str, cases: list[dict[str, Any]]):
+def run_websocket_security(project, actor_id: str, cases: list[dict[str, Any]], governance: dict[str, Any] | None = None):
     return _run_cases(
         project,
         actor_id,
@@ -778,10 +786,11 @@ def run_websocket_security(project, actor_id: str, cases: list[dict[str, Any]]):
         endpoint_for=lambda case: str(case.get('channel') or ''),
         method_for=lambda _case: 'WEBSOCKET',
         operation_for=lambda case: str(case.get('requested_action') or ''),
+        governance=governance,
     )
 
 
-def run_graphql_security(project, actor_id: str, cases: list[dict[str, Any]]):
+def run_graphql_security(project, actor_id: str, cases: list[dict[str, Any]], governance: dict[str, Any] | None = None):
     return _run_cases(
         project,
         actor_id,
@@ -792,10 +801,11 @@ def run_graphql_security(project, actor_id: str, cases: list[dict[str, Any]]):
         endpoint_for=lambda case: str(case.get('endpoint') or ''),
         method_for=lambda _case: 'POST',
         operation_for=lambda case: str(case.get('operation_name') or ''),
+        governance=governance,
     )
 
 
-def run_cross_protocol_security(project, actor_id: str, cases: list[dict[str, Any]]):
+def run_cross_protocol_security(project, actor_id: str, cases: list[dict[str, Any]], governance: dict[str, Any] | None = None):
     hydrated_cases = [_hydrate_cross_protocol_case(project, case) for case in cases]
     return _run_cases(
         project,
@@ -809,4 +819,5 @@ def run_cross_protocol_security(project, actor_id: str, cases: list[dict[str, An
         ),
         method_for=lambda _case: 'STATE',
         operation_for=lambda case: str(case.get('operation') or ''),
+        governance=governance,
     )
