@@ -12,6 +12,10 @@ def test_celery_worker_loss_redelivery_contract():
     assert celery_app.conf.task_reject_on_worker_lost is True
     assert celery_app.conf.task_track_started is True
     assert celery_app.conf.worker_prefetch_multiplier == 1
+    timeout = celery_app.conf.broker_transport_options["visibility_timeout"]
+    assert timeout == celery_app.conf.result_backend_transport_options["visibility_timeout"]
+    assert timeout == celery_app.conf.visibility_timeout
+    assert int(timeout) > 0
 
 
 def test_scanner_tasks_are_routed_to_dedicated_queue():
@@ -25,6 +29,7 @@ def test_scanner_tasks_are_routed_to_dedicated_queue():
         'fastapi_app.tasks.nmap_finding_validation.validate_nmap_finding_e2e',
         'fastapi_app.tasks.native_capabilities.run_native_capability_scan',
         'fastapi_app.tasks.offensive_validation_tasks.validate_offensive_finding',
+        'fastapi_app.tasks.reliability_probe.scanner_worker_loss_probe',
     }
     assert set(SCANNER_TASK_ROUTES) == expected
     assert SCANNER_QUEUE == 'scanners'

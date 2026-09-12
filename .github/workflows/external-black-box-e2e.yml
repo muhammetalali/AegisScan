@@ -7,6 +7,10 @@ name: External Black-Box E2E
     branches: [main, codex/full-contract-ui-audit-2026-09-03]
     paths: ['aegis-platform/e2e/**','aegis-platform/backend/**','aegis-platform/frontend/**','aegis-platform/docker-compose.yml','aegis-platform/docker/**','aegis-platform/docker-compose.ci.yml','.github/workflows/external-black-box-e2e.yml','.github/workflows/domain-contract-reality.yml','.github/workflows/frontend-lock-sync.yml','.github/workflows/production-runtime-reality-gate.yml','CANONICAL_EXECUTION_BASELINE.md']
   workflow_dispatch:
+concurrency:
+  group: external-black-box-e2e-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: true
+
 permissions: {contents: read}
 jobs:
   external-black-box:

@@ -15,7 +15,7 @@ from django_project.system.credential_vault import CredentialVaultDenied
 from ..core.dependencies import get_current_user
 from ..services.authorization_guard import asset_target
 from ..services.capability_planner import planning_summary
-from ..services.capability_registry import get_capability, list_capabilities, validate_capability_options
+from ..services.capability_registry import RETIRED_CAPABILITIES, RetiredCapabilityError, get_capability, list_capabilities, validate_capability_options
 from ..services.credential_execution import (
     authorize_credential_refs_for_execution,
     empty_credential_context,
@@ -23,6 +23,7 @@ from ..services.credential_execution import (
 )
 from ..services.native_packaging import PACKAGED_NATIVE_CAPABILITIES, is_packaged_native_capability
 from ..services.native_tool_runtime import NATIVE_TOOL_SPECS
+from ..services.external_fabric import ExternalFabricError, dynamic_plugin_capabilities, resolve_dynamic_capability
 from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
 from ..tasks.native_capabilities import run_native_capability_scan
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
@@ -126,21 +127,32 @@ def _create_native_scan(
 
 @router.get('/')
 async def capabilities(user=Depends(get_current_user)):
+    try:
+        plugin_items=await sync_to_async(dynamic_plugin_capabilities)()
+    except ExternalFabricError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
     return {
         'policy_version': _POLICY_VERSION,
         'execution_model': 'authorized-asset -> isolated-celery -> evidence -> governance',
         'credential_model': 'credential_ref -> target-scope check -> worker resolve -> redacted adapter binding',
         'capabilities': [item.public_dict() for item in list_capabilities()],
+        'plugin_capabilities': plugin_items,
     }
 
 
 @router.get('/packaging')
 async def capability_packaging(user=Depends(get_current_user)):
+    try:
+        plugin_items=await sync_to_async(dynamic_plugin_capabilities)()
+    except ExternalFabricError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
     return {
         'policy_version': _POLICY_VERSION,
         'specialized': sorted(_TASKS),
         'native_packaged': sorted(PACKAGED_NATIVE_CAPABILITIES),
         'native_registered': sorted(NATIVE_TOOL_SPECS),
+        'plugin_delegated': plugin_items,
+        'retired': RETIRED_CAPABILITIES,
     }
 
 
@@ -166,10 +178,26 @@ async def execute_capability(
     request: CapabilityExecutionRequest,
     user=Depends(get_current_user),
 ):
+    requested_capability_id=capability_id
+    dynamic=None
     try:
-        capability = get_capability(capability_id)
+        try:
+            capability=get_capability(capability_id)
+            resolved_capability_id=capability_id
+        except RetiredCapabilityError:
+            raise
+        except ValueError:
+            dynamic=await sync_to_async(resolve_dynamic_capability)(capability_id)
+            if dynamic is None:
+                raise ValueError(f'Unknown capability: {capability_id}')
+            resolved_capability_id=dynamic['delegate']
+            capability=get_capability(resolved_capability_id)
         options = validate_capability_options(capability, request.options)
         credential_refs = normalize_credential_refs(request.credential_refs)
+    except ExternalFabricError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+    except RetiredCapabilityError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -223,7 +251,9 @@ async def execute_capability(
         **options,
         'credential_refs': credential_refs,
         'credential_context': credential_context,
-        'capability_id': capability.id,
+        'capability_id': requested_capability_id,
+        'delegate_capability_id': capability.id if dynamic else None,
+        'plugin_capability': dynamic if dynamic else None,
         'capability_category': capability.category,
         'capability_risk': capability.risk,
         'capability_policy_version': _POLICY_VERSION,
@@ -259,7 +289,9 @@ async def execute_capability(
     created = await _attach_celery_task(str(created.id), task.id)
     serialized = await _serialize_scan(created)
     return {
-        'capability_id': capability.id,
+        'capability_id': requested_capability_id,
+        'delegate_capability_id': capability.id if dynamic else None,
+        'plugin': dynamic if dynamic else None,
         'policy_version': _POLICY_VERSION,
         'authorization_required': capability.authorization_required,
         'evidence_required': capability.evidence_required,
