@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
 import asyncio,logging,time
 from datetime import datetime,timezone
-from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,plugin_registry,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities
+from .routers import scans,vulnerabilities,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,plugin_registry,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities,risk_correlation
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -195,6 +195,7 @@ app.include_router(knowledge.router,prefix='/knowledge',tags=['Knowledge']); app
 app.include_router(digital_twin.router,prefix='/digital-twin',tags=['Digital Twin']); app.include_router(digital_twin.router,prefix='/api/v1/digital-twin',tags=['Digital Twin'])
 app.include_router(attack_path.router,prefix='/api/v1/attack-path',tags=['Attack Path'])
 app.include_router(intelligence.router,prefix='/api/v1/intelligence',tags=['Threat Intelligence'])
+app.include_router(risk_correlation.router,prefix='/api/v1/risk-correlation',tags=['Risk Correlation'])
 app.include_router(posture.router,prefix='/posture',tags=['Security Posture']); app.include_router(posture.router,prefix='/api/v1/posture',tags=['Security Posture'])
 app.include_router(system.router,prefix='/system',tags=['System']); app.include_router(system.router,prefix='/api/v1/system',tags=['System'])
 app.include_router(assurance.router,prefix='/api/v1/assurance',tags=['Assurance Correlation']); app.include_router(assurance_graph.router,prefix='/api/v1/assurance',tags=['Assurance Graph']); app.include_router(security_decision.router,prefix='/api/v1/assurance',tags=['Security Decision']); app.include_router(decision_actions.router,prefix='/api/v1/assurance',tags=['Decision Actions']); app.include_router(governance.router,prefix='/api/v1/assurance',tags=['Governance']); app.include_router(policy.router,prefix='/api/v1/assurance',tags=['Policy-as-Code'])

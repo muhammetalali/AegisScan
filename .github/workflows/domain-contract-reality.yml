@@ -154,12 +154,12 @@ jobs:
           ALLOWED_HOSTS: 'localhost,127.0.0.1,nginx'
           CSRF_TRUSTED_ORIGINS: 'http://localhost,http://127.0.0.1,http://nginx'
         run: python -m pytest -q django_project/audit/test_hash_chain.py django_project/users/test_auth_security.py django_project/users/test_auth_detection.py enterprise/test_notification_response.py fastapi_app/routers/test_security_event_lifecycle.py ../../tests/test_audit_append_policy.py
-      - name: Bulk import atomicity and intelligence lineage reality
+      - name: Bulk import atomicity, intelligence lineage and risk correlation reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_bulk_import_atomicity.py enterprise/test_intelligence_lineage.py
+        run: python -m pytest -q fastapi_app/routers/test_bulk_import_atomicity.py enterprise/test_intelligence_lineage.py enterprise/test_risk_correlation.py
       - name: System telemetry and unsupported operations reality
         working-directory: aegis-platform/backend
         env:

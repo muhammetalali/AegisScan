@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -163,6 +164,48 @@ class AttackPath(models.Model):
     class Status(models.TextChoices): DISCOVERED='discovered','Discovered'; VALIDATED='validated','Validated'; CLOSED='closed','Closed'
     id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False); organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='attack_paths'); project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='attack_paths')
     source_node=models.JSONField(default=dict); target_node=models.JSONField(default=dict); steps=models.JSONField(default=list); risk_score=models.FloatField(default=0.0); evidence=models.JSONField(default=dict,blank=True); status=models.CharField(max_length=20,choices=Status.choices,default=Status.DISCOVERED); discovered_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
+
+
+class RiskCorrelationSnapshot(models.Model):
+    """Immutable evidence-backed finding priority snapshot."""
+
+    class Priority(models.TextChoices):
+        P0_CRITICAL='P0-CRITICAL','P0 Critical'
+        P1_HIGH='P1-HIGH','P1 High'
+        P2_MEDIUM='P2-MEDIUM','P2 Medium'
+        P3_LOW='P3-LOW','P3 Low'
+
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='risk_correlation_snapshots')
+    vulnerability=models.ForeignKey('vulnerabilities.Vulnerability',on_delete=models.CASCADE,related_name='risk_correlation_snapshots')
+    finding_intelligence=models.ForeignKey(FindingIntelligence,on_delete=models.PROTECT,related_name='risk_correlation_snapshots')
+    source_snapshot=models.ForeignKey('intelligence.IntelligenceEnrichment',on_delete=models.PROTECT,related_name='risk_correlation_snapshots')
+    attack_path=models.ForeignKey(AttackPath,on_delete=models.PROTECT,null=True,blank=True,related_name='risk_correlation_snapshots')
+    analysis_version=models.CharField(max_length=20,default='1.0')
+    score=models.FloatField()
+    priority=models.CharField(max_length=20,choices=Priority.choices)
+    components=models.JSONField(default=dict)
+    evidence_count=models.PositiveIntegerField(default=0)
+    source_snapshot_sha256=models.CharField(max_length=64)
+    correlation_sha256=models.CharField(max_length=64,unique=True,editable=False)
+    created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='risk_correlation_snapshots')
+    created_at=models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering=['-created_at','-id']
+        indexes=[
+            models.Index(fields=['project','priority','-created_at'],name='idx_riskcorr_project_prio'),
+            models.Index(fields=['vulnerability','-created_at'],name='idx_riskcorr_finding_time'),
+            models.Index(fields=['source_snapshot','-created_at'],name='idx_riskcorr_source_time'),
+        ]
+
+    def save(self,*args,**kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Risk correlation snapshots are immutable; create a new snapshot')
+        super().save(*args,**kwargs)
+
+    def delete(self,*args,**kwargs):
+        raise ValidationError('Risk correlation snapshots are immutable and cannot be deleted')
 
 
 class ComplianceMapping(models.Model):
