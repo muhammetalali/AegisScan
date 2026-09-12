@@ -9,9 +9,9 @@ from pathlib import Path
 
 INTERNAL_SERVICES = {
     'postgres', 'redis', 'django', 'fastapi', 'celery_worker', 'scanner_worker',
-    'scanner_egress', 'celery_beat', 'frontend', 'backup',
+    'browser_worker', 'scanner_egress', 'celery_beat', 'frontend', 'backup',
 }
-HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'scanner_worker', 'scanner_egress', 'celery_beat', 'backup'}
+HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'scanner_worker', 'browser_worker', 'scanner_egress', 'celery_beat', 'backup'}
 NO_NEW_PRIVILEGES_SERVICES = HARDENED_SERVICES - {'scanner_worker'}
 _TRUTHY = {'1', 'true', 'yes', 'on'}
 _SCANNER_BOOTSTRAP_CAPS = {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
@@ -92,7 +92,7 @@ def validate(model: dict) -> list[str]:
     if not password or password == 'change-me':
         failures.append('Production PostgreSQL password is missing or uses the development default')
 
-    for name in ('fastapi', 'celery_worker', 'scanner_worker', 'celery_beat'):
+    for name in ('fastapi', 'celery_worker', 'scanner_worker', 'browser_worker', 'celery_beat'):
         environment = services.get(name, {}).get('environment') or {}
         allowed = str(environment.get('AUTHORIZED_SCAN_TARGETS', '')).strip()
         if not allowed or allowed == 'aegis-scan-target':
@@ -107,6 +107,19 @@ def validate(model: dict) -> list[str]:
         failures.append('general celery_worker retains scanner network capabilities')
     if '-Q default' not in _command_text(general_worker):
         failures.append('general celery_worker is not pinned to the default queue')
+
+    browser_worker = services.get('browser_worker', {})
+    browser_caps = _tokens(browser_worker.get('cap_add'))
+    if browser_caps:
+        failures.append('browser_worker must not receive Linux capabilities')
+    if str(browser_worker.get('user', '')).strip() in {'', '0', '0:0', 'root'}:
+        failures.append('browser_worker must run as a non-root uid/gid')
+    if browser_worker.get('network_mode') != 'service:scanner_egress':
+        failures.append('browser_worker does not share the scanner_egress network namespace')
+    if '-Q browser' not in _command_text(browser_worker):
+        failures.append('browser_worker is not pinned to the browser queue')
+    if not _has_no_new_privileges(browser_worker):
+        failures.append('browser_worker does not enforce no-new-privileges')
 
     scanner_worker = services.get('scanner_worker', {})
     scanner_caps = _tokens(scanner_worker.get('cap_add'))
