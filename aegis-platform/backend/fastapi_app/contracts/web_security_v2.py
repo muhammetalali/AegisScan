@@ -202,6 +202,7 @@ class WebSocketSecurityCaseIn(StrictModel):
 
 
 class WebSocketSecurityBatchIn(StrictModel):
+    budget_id: UUID
     cases: list[WebSocketSecurityCaseIn] = Field(min_length=1, max_length=5000)
 
 
@@ -235,6 +236,7 @@ class GraphQLSecurityCaseIn(StrictModel):
 
 
 class GraphQLSecurityBatchIn(StrictModel):
+    budget_id: UUID
     cases: list[GraphQLSecurityCaseIn] = Field(min_length=1, max_length=5000)
 
 
@@ -256,4 +258,5 @@ class CrossProtocolTransitionCaseIn(StrictModel):
 
 
 class CrossProtocolTransitionBatchIn(StrictModel):
+    budget_id: UUID
     cases: list[CrossProtocolTransitionCaseIn] = Field(min_length=1, max_length=5000)
