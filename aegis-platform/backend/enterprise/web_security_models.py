@@ -60,6 +60,8 @@ class SecurityGraphNode(models.Model):
         TTP = 'ttp', 'ATT&CK TTP'
         ASSET = 'asset', 'Asset'
         CAPABILITY = 'capability', 'Capability'
+        TRUST_BOUNDARY = 'trust_boundary', 'Trust Boundary'
+        DATA_FLOW = 'data_flow', 'Data Flow'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, related_name='security_graph_nodes')
@@ -77,8 +79,8 @@ class SecurityGraphNode(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['project', 'kind', 'external_ref'],
-                name='uniq_secgraph_project_kind_ref',
+                fields=['project', 'external_ref'],
+                name='uniq_secgraph_project_ref',
             ),
         ]
         indexes = [
@@ -109,6 +111,16 @@ class SecurityGraphEdge(models.Model):
         indexes = [
             models.Index(fields=['project', 'relation'], name='idx_secedge_project_rel'),
         ]
+
+    def clean(self):
+        if self.source_id and self.source.project_id != self.project_id:
+            raise ValidationError('security graph edge source must belong to the same project')
+        if self.target_id and self.target.project_id != self.project_id:
+            raise ValidationError('security graph edge target must belong to the same project')
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
 
 class AuthorizationPolicyManifest(models.Model):
