@@ -106,6 +106,9 @@ jobs:
           python manage.py check
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
+      - name: Static stale-contract regression audit
+        working-directory: aegis-platform/backend
+        run: python scripts/stale_regression_audit.py
       - name: Full API OpenAPI contract audit
         working-directory: aegis-platform/backend
         env:
