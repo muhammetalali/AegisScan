@@ -53,14 +53,15 @@ _SAFE_RESPONSE_HEADERS = {
 
 def _origin(value: str) -> str:
     parsed = urlsplit(value)
-    scheme = parsed.scheme.lower()
+    raw_scheme = parsed.scheme.lower()
     host = (parsed.hostname or '').lower().rstrip('.')
-    if scheme not in {'http', 'https'} or not host:
-        raise ValueError('Browser target origin must be HTTP(S)')
+    if raw_scheme not in {'http', 'https', 'ws', 'wss'} or not host:
+        raise ValueError('Browser target origin must be HTTP(S) or WebSocket')
     try:
         port = parsed.port
     except ValueError as exc:
         raise ValueError('Browser target contains an invalid port') from exc
+    scheme = {'ws': 'http', 'wss': 'https'}.get(raw_scheme, raw_scheme)
     default = 80 if scheme == 'http' else 443
     authority = host if port in {None, default} else f'{host}:{port}'
     return urlunsplit((scheme, authority, '', '', ''))
@@ -532,7 +533,7 @@ async def discover(
                 raw_url = str(request.get('url') or '')
                 request_id = params.get('requestId')
                 parsed = urlsplit(raw_url)
-                if parsed.scheme in {'http', 'https'}:
+                if parsed.scheme in {'http', 'https', 'ws', 'wss'}:
                     try:
                         require_authorized_target(_origin(raw_url), url=True, resolve_dns=True)
                     except ValueError:
