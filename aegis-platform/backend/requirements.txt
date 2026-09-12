@@ -30,6 +30,8 @@ pydantic>=2.5
 pydantic-settings>=2.1
 python-multipart>=0.0.6
 uvicorn>=0.27
+uvloop>=0.21; platform_system == "Linux"
+httptools>=0.6
 fastapi>=0.109
 starlette>=0.35
 httpx>=0.26
@@ -53,3 +55,7 @@ pytest-django>=4.8
 pytest-asyncio>=0.23
 factory-boy>=3.3
 freezegun>=1.2
+
+z3-solver>=4.13,<5.0
+
+packaging>=24.1,<26.0
