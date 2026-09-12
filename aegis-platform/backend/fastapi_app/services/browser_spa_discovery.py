@@ -374,10 +374,6 @@ _INSTRUMENTATION_SCRIPT = r"""
         return Reflect.construct(Target, args, Target);
       }
     });
-    Object.defineProperty(websocketProxy, 'CONNECTING', {value: NativeWebSocket.CONNECTING});
-    Object.defineProperty(websocketProxy, 'OPEN', {value: NativeWebSocket.OPEN});
-    Object.defineProperty(websocketProxy, 'CLOSING', {value: NativeWebSocket.CLOSING});
-    Object.defineProperty(websocketProxy, 'CLOSED', {value: NativeWebSocket.CLOSED});
     window.WebSocket = websocketProxy;
   } catch (_) {}
   try {
