@@ -289,7 +289,8 @@ def _get_validation_evidence(vid: UUID, user_id: str, limit: int):
     rows = []
     for evidence in Evidence.objects.filter(finding_id=v.finding_id).order_by('-collected_at')[:200]:
         metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
-        if str(metadata.get('validation_run_id', '')) != str(v.id):
+        metadata_validation_id = metadata.get('validation_run_id') or metadata.get('validation_id')
+        if str(metadata_validation_id or '') != str(v.id):
             continue
         rows.append(ValidationEvidenceOut(
             id=str(evidence.id),

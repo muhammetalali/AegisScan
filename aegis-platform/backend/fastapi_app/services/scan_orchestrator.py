@@ -8,6 +8,8 @@ from asgiref.sync import sync_to_async
 from ..core.config import settings
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 from ..services.websocket_manager import WebSocketManager
+from ..services.enterprise_gap_closure import checkpoint_scan
+from ..services.scan_state_machine import prepare_restart, transition_scan
 
 ENGINES = [
     {'name': 'nmap', 'display_name': 'Nmap Service Discovery', 'category': 'network', 'order': 1, 'timeout': 300, 'execution': 'real'},
@@ -74,8 +76,8 @@ class ScanOrchestrator:
             return {'status': 'error', 'message': 'Scan not found'}
         if not scan.project.members.filter(pk=user_id).exists() and str(scan.project.owner_id) != str(user_id):
             return {'status': 'error', 'message': 'Scan access denied'}
-        if scan.status in [Scan.Status.RUNNING, Scan.Status.QUEUED]:
-            return {'status': 'error', 'message': 'Scan already running'}
+        if scan.status != Scan.Status.PENDING:
+            return {'status': 'error', 'message': 'Scan is not pending; use the restart endpoint for terminal scans'}
 
         requested_engines = [str(engine).strip().lower() for engine in (scan.engines or []) if str(engine).strip()]
         if not requested_engines:
@@ -105,6 +107,7 @@ class ScanOrchestrator:
         scan.completed_at = None
         scan.error_message = ''
         scan.save(update_fields=['status', 'progress', 'current_phase', 'current_engine', 'initiated_by', 'started_at', 'completed_at', 'error_message', 'updated_at'])
+        checkpoint_scan(scan, state=Scan.Status.QUEUED, metadata={'actor_id': str(user_id), 'engine': engine_name})
 
         queued_task = task.delay(str(scan.id))
         scan.celery_task_id = queued_task.id
@@ -140,39 +143,31 @@ class ScanOrchestrator:
         return await self.get_progress(scan_id, user)
 
     @sync_to_async
-    def _set_status(self, scan_id: str, user_id: str, status: str):
-        from scans.models import Scan
-        scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
-        if not scan:
-            return {'status': 'error', 'message': 'Scan not found'}
-        if not (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()):
-            return {'status': 'error', 'message': 'Scan access denied'}
-        if status == Scan.Status.CANCELLED and scan.status in [Scan.Status.QUEUED, Scan.Status.RUNNING, Scan.Status.PAUSED]:
-            scan.status = status
-            scan.completed_at = datetime.now(timezone.utc)
-            scan.save(update_fields=['status', 'completed_at', 'updated_at'])
-            if scan.celery_task_id:
-                from celery.result import AsyncResult
-                AsyncResult(scan.celery_task_id).revoke(terminate=False)
-            return {'status': 'cancelled'}
-        if status == Scan.Status.PAUSED and scan.status == Scan.Status.RUNNING:
-            scan.status = status
-            scan.save(update_fields=['status', 'updated_at'])
-            return {'status': 'paused'}
-        if status == Scan.Status.RUNNING and scan.status == Scan.Status.PAUSED:
-            scan.status = status
-            scan.save(update_fields=['status', 'updated_at'])
-            return {'status': 'resumed'}
-        return {'status': 'error', 'message': 'Invalid scan state transition'}
+    def _transition(self, scan_id: str, user_id: str, status: str):
+        return transition_scan(scan_id=scan_id, user_id=user_id, target_status=status)
 
     async def pause_scan(self, scan_id: str, user: Dict) -> Dict:
         user_id = user.get('user_id') or user.get('sub')
-        return await self._set_status(scan_id, str(user_id), 'paused') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
+        return await self._transition(scan_id, str(user_id), 'paused') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
 
     async def resume_scan(self, scan_id: str, user: Dict) -> Dict:
         user_id = user.get('user_id') or user.get('sub')
-        return await self._set_status(scan_id, str(user_id), 'running') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
+        return await self._transition(scan_id, str(user_id), 'running') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
 
     async def cancel_scan(self, scan_id: str, user: Dict) -> Dict:
         user_id = user.get('user_id') or user.get('sub')
-        return await self._set_status(scan_id, str(user_id), 'cancelled') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
+        return await self._transition(scan_id, str(user_id), 'cancelled') if user_id else {'status': 'error', 'message': 'Invalid authenticated user'}
+
+    @sync_to_async
+    def _prepare_restart(self, scan_id: str, user_id: str):
+        return prepare_restart(scan_id=scan_id, user_id=user_id)
+
+    async def restart_scan(self, scan_id: str, user: Dict) -> Dict:
+        user_id = user.get('user_id') or user.get('sub')
+        if not user_id:
+            return {'status': 'error', 'message': 'Invalid authenticated user'}
+        prepared = await self._prepare_restart(scan_id, str(user_id))
+        if prepared.get('status') != 'restart_ready':
+            return prepared
+        queued = await self._queue_scan(scan_id, str(user_id))
+        return {**prepared, **queued}
