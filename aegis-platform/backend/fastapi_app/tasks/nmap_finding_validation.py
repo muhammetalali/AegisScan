@@ -178,6 +178,7 @@ def validate_nmap_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                         'stderr': stderr,
                         'target': target,
                         'exit_code': exit_code,
+                        'validation_run_id': validation_id,
                         'validation_id': validation_id,
                         'finding_present': finding_present,
                         'port': port,
