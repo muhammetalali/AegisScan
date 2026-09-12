@@ -236,8 +236,8 @@ class ProviderApprovalRecord(models.Model):
         ordering = ['-created_at', '-id']
         constraints = [
             models.UniqueConstraint(
-                fields=['project', 'provider_name', 'provider_version', 'manifest_sha256'],
-                name='uniq_provider_approval_manifest',
+                fields=['project', 'provider_name', 'provider_version', 'capability', 'status', 'manifest_sha256'],
+                name='uniq_provider_approval_decision',
             ),
         ]
         indexes = [
