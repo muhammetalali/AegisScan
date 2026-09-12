@@ -16,7 +16,7 @@ from django_project.system.credential_vault import (
 )
 from fastapi_app.services.cloud_target import parse_cloud_target
 
-_POLICY_VERSION = 'credential-execution.v3'
+_POLICY_VERSION = 'credential-execution.v4'
 _MAX_CREDENTIAL_REFS = 3
 
 
@@ -112,6 +112,47 @@ def _canonical_api_server(value: str) -> str:
     return urlunsplit(('https', authority, parsed.path.rstrip('/'), '', ''))
 
 
+def _canonical_web_origin(value: str) -> str:
+    parsed = urlsplit(str(value or '').strip())
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or '').lower().rstrip('.')
+    if scheme not in {'http', 'https'} or not host or parsed.username or parsed.password:
+        raise ValueError('Browser credential scope must be an absolute HTTP(S) origin')
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError('Browser credential scope contains an invalid port') from exc
+    default_port = 80 if scheme == 'http' else 443
+    authority = host if port in {None, default_port} else f'{host}:{port}'
+    return urlunsplit((scheme, authority, '', '', ''))
+
+
+def _validate_browser_scope(*, credential: CredentialSecret, actor: Any, purpose: str, target: str) -> None:
+    scope = credential.scope if isinstance(credential.scope, dict) else {}
+    scoped_origin = str(scope.get('browser_origin') or '').strip()
+    try:
+        expected = _canonical_web_origin(scoped_origin)
+        actual = _canonical_web_origin(target)
+    except ValueError:
+        expected = ''
+        actual = ''
+    if expected and actual and expected == actual:
+        return
+    _record_denied(
+        credential=credential,
+        actor=actor,
+        purpose=purpose,
+        reason='browser session credential scope does not match the authorized target origin',
+        metadata={
+            'credential_ref': str(credential.id),
+            'kind': credential.kind,
+            'scope_type': 'browser_origin',
+            'scope_matches_target': False,
+        },
+    )
+    raise CredentialVaultDenied('Browser session credential is not scoped to this authorized target origin.')
+
+
 def _validate_kube_scope(*, credential: CredentialSecret, actor: Any, purpose: str, target: str) -> None:
     scope = credential.scope if isinstance(credential.scope, dict) else {}
     scoped_target = str(scope.get('api_server') or '').strip()
@@ -174,9 +215,21 @@ def _validate_cloud_scope(*, credential: CredentialSecret, actor: Any, purpose: 
 
 
 def _validate_scope(
-    *, credential: CredentialSecret, actor: Any, purpose: str, target: str
+    *,
+    credential: CredentialSecret,
+    actor: Any,
+    purpose: str,
+    target: str,
+    capability_id: str,
 ) -> None:
-    if credential.kind == CredentialSecret.Kind.KUBECONFIG:
+    if capability_id == 'browser.spa-discovery':
+        _validate_browser_scope(
+            credential=credential,
+            actor=actor,
+            purpose=purpose,
+            target=target,
+        )
+    elif credential.kind == CredentialSecret.Kind.KUBECONFIG:
         _validate_kube_scope(credential=credential, actor=actor, purpose=purpose, target=target)
     elif credential.kind == CredentialSecret.Kind.CLOUD_ACCESS_KEY:
         _validate_cloud_scope(credential=credential, actor=actor, purpose=purpose, target=target)
@@ -204,7 +257,7 @@ def authorize_credential_refs_for_execution(
         if credential is None:
             raise CredentialVaultDenied('Credential reference is not available for this project.')
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
-        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target)
+        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
         authorized = authorize_credential_use(credential=credential, actor=actor, purpose=purpose_value)
         metadata.append({'credential_ref': str(authorized.id), 'kind': authorized.kind, 'version': authorized.version})
     return credential_execution_context(metadata, resolved=False)
