@@ -22,6 +22,7 @@ def _compose() -> dict:
 def test_compose_separates_raw_worker_from_network_administration() -> None:
     services = _compose()["services"]
     scanner = services["scanner_worker"]
+    browser = services["browser_worker"]
     general = services["celery_worker"]
     egress = services["scanner_egress"]
 
@@ -40,12 +41,19 @@ def test_compose_separates_raw_worker_from_network_administration() -> None:
     assert general["security_opt"] == ["no-new-privileges:true"]
     assert "-Q default" in general["command"]
 
+    assert browser["user"] == "10001:10001"
+    assert browser["network_mode"] == "service:scanner_egress"
+    assert browser["cap_drop"] == ["ALL"]
+    assert not browser.get("cap_add")
+    assert browser["security_opt"] == ["no-new-privileges:true"]
+    assert "-Q browser" in browser["command"]
+
     assert egress["cap_drop"] == ["ALL"]
     assert egress["cap_add"] == ["NET_ADMIN"]
     assert egress["security_opt"] == ["no-new-privileges:true"]
     assert egress["read_only"] is True
 
-    for name in ("scanner_worker", "celery_worker", "scanner_egress"):
+    for name in ("scanner_worker", "browser_worker", "celery_worker", "scanner_egress"):
         for volume in services[name].get("volumes", []):
             assert "/var/run/docker.sock" not in str(volume)
             assert "/run/docker.sock" not in str(volume)
@@ -78,6 +86,7 @@ def test_scanner_image_guarantees_setpriv_runtime_dependency() -> None:
 def test_raw_scanner_tasks_are_routed_away_from_default_worker() -> None:
     text = CELERY_APP.read_text(encoding="utf-8")
     assert 'SCANNER_QUEUE = "scanners"' in text
+    assert 'BROWSER_QUEUE = "browser"' in text
     assert 'task_default_queue="default"' in text
     for task in (
         "fastapi_app.tasks.security_scan.run_nmap_scan",
