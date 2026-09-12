@@ -13,7 +13,8 @@ class StrictModel(BaseModel):
 class GraphNodeIn(StrictModel):
     plane: Literal['application', 'identity', 'attack_surface', 'adversary', 'detection', 'risk', 'governance'] = 'application'
     kind: Literal[
-        'page', 'endpoint', 'channel', 'graphql_operation', 'websocket_channel',
+        'page', 'endpoint', 'channel', 'graphql_operation', 'graphql_type',
+        'graphql_field', 'graphql_argument', 'websocket_channel',
         'identity', 'session', 'role', 'tenant', 'resource', 'policy',
         'observation', 'evidence', 'finding', 'attack_chain', 'detection',
         'risk', 'control', 'remediation', 'revalidation', 'service', 'cache',
@@ -214,6 +215,8 @@ class GraphQLSecurityCaseIn(StrictModel):
     operation_type: Literal['query', 'mutation', 'subscription']
     operation_name: str = Field(min_length=1, max_length=160)
     document: str = Field(default='', max_length=262144)
+    schema_sdl: str = Field(default='', max_length=1048576)
+    schema_introspection: dict[str, Any] | None = None
     field_path: str = Field(default='', max_length=500)
     expected_allowed: bool
     server_accepted: bool
