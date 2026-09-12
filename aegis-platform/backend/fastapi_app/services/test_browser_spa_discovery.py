@@ -14,7 +14,7 @@ from django_project.users.models import User, UserRole
 from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
 from fastapi_app.services.browser_spa_discovery import _canonical_url, _graphql_metadata, _load_session
 from fastapi_app.services.browser_surface_graph import project_browser_surface_graph
-from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution
+from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution, resolve_credential_refs_for_worker
 from fastapi_app.services.native_output_normalizer import normalize_native_output
 from fastapi_app.services.native_tool_runtime import _browser_session_file
 
@@ -115,6 +115,19 @@ def test_browser_session_credential_requires_exact_origin_scope(project, actor):
     assert context['credential_material_handling'] == 'reference-authorized-only'
     assert context['credential_refs'][0]['credential_ref'] == str(credential.id)
     assert 'browser-session-secret' not in str(context)
+
+    materials, worker_context = resolve_credential_refs_for_worker(
+        project_id=project.id,
+        actor_id=actor.id,
+        refs=[str(credential.id)],
+        capability_id='browser.spa-discovery',
+        allowed_kinds=('generic',),
+        purpose='browser-test:worker-resolve',
+        target='https://app.example.test/account/profile',
+    )
+    assert materials[0]['secret'] == secret
+    assert worker_context['credential_refs'][0]['credential_ref'] == str(credential.id)
+    assert 'browser-session-secret' not in str(worker_context)
 
     with pytest.raises(CredentialVaultDenied):
         authorize_credential_refs_for_execution(
