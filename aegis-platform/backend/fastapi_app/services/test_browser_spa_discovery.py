@@ -243,6 +243,9 @@ def test_spa_normalizer_whitelists_metadata_and_drops_secret_values():
                 'blocked_out_of_scope_request_count': 1,
                 'blocked_websocket_count': 2,
                 'blocked_webtransport_count': 3,
+                'network_isolation': 'scope-validated-socks5-plus-cdp',
+                'proxy_blocked_connection_count': 4,
+                'proxy_allowed_connection_count': 7,
                 'unknown_secret': 'drop-me',
             },
             {
@@ -286,6 +289,9 @@ def test_spa_normalizer_whitelists_metadata_and_drops_secret_values():
     assert summary['cookies'][0]['name'] == 'session'
     assert summary['blocked_websocket_count'] == 2
     assert summary['blocked_webtransport_count'] == 3
+    assert summary['network_isolation'] == 'scope-validated-socks5-plus-cdp'
+    assert summary['proxy_blocked_connection_count'] == 4
+    assert summary['proxy_allowed_connection_count'] == 7
     assert 'value' not in summary['cookies'][0]
     endpoint = normalized['observations'][1]
     assert endpoint['response_headers'] == {'content-security-policy': "default-src 'self'"}
