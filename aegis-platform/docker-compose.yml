@@ -133,6 +133,25 @@ services:
       django: {condition: service_healthy}
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
+  browser_worker:
+    build: {context: ./backend, dockerfile: Dockerfile.django}
+    container_name: aegis-browser-worker
+    restart: unless-stopped
+    user: "10001:10001"
+    command: celery -A fastapi_app.celery_app worker -l info -c 2 -Q browser
+    network_mode: "service:scanner_egress"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes: [./backend:/app]
+    env_file: ./backend/.env
+    environment:
+      AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      DJANGO_SETTINGS_MODULE: django_project.settings
+    depends_on:
+      scanner_egress: {condition: service_healthy}
+      django: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
   celery_beat:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-beat
