@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import ipaddress
 import json
 import os
@@ -13,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-REQUIRED_SECRETS = ("SECRET_KEY", "JWT_SECRET_KEY", "POSTGRES_PASSWORD")
+REQUIRED_SECRETS = ("SECRET_KEY", "JWT_SECRET_KEY", "POSTGRES_PASSWORD", "CREDENTIAL_VAULT_KEYS", "CREDENTIAL_FINGERPRINT_KEY")
 REQUIRED_URLS = ("DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND")
 FORBIDDEN_SECRET_VALUES = {
     "change-me", "aegis", "password", "secret", "django-insecure-change-me",
@@ -28,6 +30,34 @@ TRUTHY = {"1", "true", "yes", "on"}
 
 def _items(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _check_credential_vault(environment: dict[str, str], failures: list[str]) -> None:
+    raw_keys = [
+        item.strip()
+        for item in environment.get("CREDENTIAL_VAULT_KEYS", "").split(",")
+        if item.strip()
+    ]
+    if not raw_keys:
+        failures.append("CREDENTIAL_VAULT_KEYS must contain at least one Fernet-compatible key")
+        return
+    for raw in raw_keys:
+        try:
+            decoded = base64.urlsafe_b64decode(raw.encode("ascii"))
+        except (UnicodeEncodeError, ValueError, binascii.Error):
+            failures.append("CREDENTIAL_VAULT_KEYS contains invalid URL-safe base64")
+            continue
+        if len(decoded) != 32:
+            failures.append("CREDENTIAL_VAULT_KEYS entries must decode to exactly 32 bytes")
+
+    fingerprint = environment.get("CREDENTIAL_FINGERPRINT_KEY", "").strip()
+    if len(fingerprint) < 32:
+        failures.append("CREDENTIAL_FINGERPRINT_KEY must be at least 32 characters")
+    if fingerprint in {
+        environment.get("SECRET_KEY", ""),
+        environment.get("JWT_SECRET_KEY", ""),
+    }:
+        failures.append("CREDENTIAL_FINGERPRINT_KEY must be distinct from application signing secrets")
 
 
 def _is_forbidden_scan_target(value: str) -> bool:
@@ -216,6 +246,7 @@ def validate(environment: dict[str, str], tls_dir: Path, check_tls: bool = True)
             failures.append(f"{name} must be a non-default secret of at least 32 characters")
     if environment.get("SECRET_KEY") == environment.get("JWT_SECRET_KEY"):
         failures.append("SECRET_KEY and JWT_SECRET_KEY must be distinct")
+    _check_credential_vault(environment, failures)
     for name in REQUIRED_URLS:
         parsed = urlparse(environment.get(name, ""))
         if not parsed.scheme or not parsed.hostname:
