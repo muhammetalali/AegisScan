@@ -4,9 +4,8 @@ import django
 django.setup()
 from .django_compat import install_django_import_aliases
 install_django_import_aliases()
-from fastapi import FastAPI,WebSocket,WebSocketDisconnect,Depends,HTTPException,Request
+from fastapi import FastAPI,WebSocket,WebSocketDisconnect,Depends,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer
 from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
 import asyncio,logging,time
@@ -18,7 +17,9 @@ from .services.decision_action_orchestration import initialize_action_store
 from .services.workflow_live_bridge import WorkflowLiveBridge
 from .services.policy_engine import initialize_policy_store
 from .core.config import settings
+from .core.dependencies import get_current_user, require_permission
 from .core.security import verify_token
+from django_project.users.models import Permission, User
 logging.basicConfig(level=logging.INFO); logger=logging.getLogger(__name__)
 websocket_manager=WebSocketManager(); scan_orchestrator=ScanOrchestrator(websocket_manager); workflow_bridge=WorkflowLiveBridge(lambda event:websocket_manager.broadcast('workflow',event))
 @asynccontextmanager
@@ -36,16 +37,8 @@ async def lifespan(app:FastAPI):
         await workflow_bridge.stop()
         await scan_orchestrator.stop()
 app=FastAPI(title='AegisScan Platform API',description='Security Validation Platform - High Performance API Layer',version='1.0.0',lifespan=lifespan,docs_url='/docs',redoc_url='/redoc')
-app.add_middleware(CORSMiddleware,allow_origins=settings.CORS_ORIGINS,allow_credentials=True,allow_methods=['*'],allow_headers=['*']); security=HTTPBearer(auto_error=False)
-async def get_current_user(request:Request,credentials=Depends(security)):
-    token=credentials.credentials if credentials else request.cookies.get(settings.AUTH_ACCESS_COOKIE)
-    if not token: raise HTTPException(status_code=401,detail='Not authenticated')
-    user=await verify_token(token)
-    if not user: raise HTTPException(status_code=401,detail='Invalid token')
-    return user
-def require_staff(user:dict=Depends(get_current_user)):
-    if not user.get('is_staff'): raise HTTPException(status_code=403,detail='Staff privileges required')
-    return user
+app.add_middleware(CORSMiddleware,allow_origins=settings.CORS_ORIGINS,allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
+require_engine_admin=require_permission(Permission.SYSTEM_SETTINGS)
 @sync_to_async
 def _scan_access(scan_id:str,user_id:str)->bool:
     from django_project.scans.models import Scan
@@ -54,6 +47,10 @@ def _scan_access(scan_id:str,user_id:str)->bool:
 def _validation_access(validation_id:str,user_id:str)->bool:
     from django_project.evidence.models import ValidationRun
     return ValidationRun.objects.filter(pk=validation_id,user_id=user_id).exists()
+@sync_to_async
+def _has_system_monitor_permission(user_id:str)->bool:
+    user=User.objects.filter(pk=user_id,is_active=True).first()
+    return bool(user and user.has_permission(Permission.SYSTEM_MONITOR))
 async def _authenticate_socket(websocket:WebSocket):
     token=websocket.cookies.get(settings.AUTH_ACCESS_COOKIE)
     if not token: await websocket.close(code=4001); return None
@@ -100,7 +97,7 @@ async def websocket_notifications(websocket:WebSocket):
 @app.websocket('/ws/system/monitor')
 async def websocket_system_monitor(websocket:WebSocket):
     user=await _authenticate_socket(websocket)
-    if not user or not user.get('is_staff'):
+    if not user or not await _has_system_monitor_permission(str(user.get('user_id') or '')):
         if user: await websocket.close(code=4003)
         return
     await websocket_manager.connect('system_monitor',websocket)
@@ -223,19 +220,19 @@ async def restart_scan(scan_id:str,user=Depends(get_current_user)): return await
 @app.get('/api/v1/scans/{scan_id}/progress')
 async def get_scan_progress(scan_id:str,user=Depends(get_current_user)): return await scan_orchestrator.get_progress(scan_id,user)
 async def _list_engines(user=Depends(get_current_user)): return await scan_orchestrator.list_engines()
-async def _enable_engine(engine_name:str,user=Depends(require_staff)): return await scan_orchestrator.enable_engine(engine_name)
-async def _disable_engine(engine_name:str,user=Depends(require_staff)): return await scan_orchestrator.disable_engine(engine_name)
+async def _enable_engine(engine_name:str,user=Depends(require_engine_admin)): return await scan_orchestrator.enable_engine(engine_name)
+async def _disable_engine(engine_name:str,user=Depends(require_engine_admin)): return await scan_orchestrator.disable_engine(engine_name)
 @app.get('/engines')
 async def list_engines_legacy(user=Depends(get_current_user)): return await _list_engines(user)
 @app.get('/api/v1/engines')
 async def list_engines_api(user=Depends(get_current_user)): return await _list_engines(user)
 @app.post('/engines/{engine_name}/enable')
-async def enable_engine_legacy(engine_name:str,user=Depends(require_staff)): return await _enable_engine(engine_name,user)
+async def enable_engine_legacy(engine_name:str,user=Depends(require_engine_admin)): return await _enable_engine(engine_name,user)
 @app.post('/api/v1/engines/{engine_name}/enable')
-async def enable_engine_api(engine_name:str,user=Depends(require_staff)): return await _enable_engine(engine_name,user)
+async def enable_engine_api(engine_name:str,user=Depends(require_engine_admin)): return await _enable_engine(engine_name,user)
 @app.post('/engines/{engine_name}/disable')
-async def disable_engine_legacy(engine_name:str,user=Depends(require_staff)): return await _disable_engine(engine_name,user)
+async def disable_engine_legacy(engine_name:str,user=Depends(require_engine_admin)): return await _disable_engine(engine_name,user)
 @app.post('/api/v1/engines/{engine_name}/disable')
-async def disable_engine_api(engine_name:str,user=Depends(require_staff)): return await _disable_engine(engine_name,user)
+async def disable_engine_api(engine_name:str,user=Depends(require_engine_admin)): return await _disable_engine(engine_name,user)
 if __name__=='__main__':
     import uvicorn; uvicorn.run(app,host='0.0.0.0',port=8001)

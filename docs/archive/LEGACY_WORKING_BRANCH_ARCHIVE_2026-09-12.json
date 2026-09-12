@@ -1,0 +1,77 @@
+{
+  "schema": "aegisscan.branch-archive.v1",
+  "generated_on": "2026-09-12",
+  "purpose": "Preserve exact non-canonical working branch heads before final branch-ref pruning. These refs are historical provenance only.",
+  "branch_count": 17,
+  "unique_head_sha_count": 15,
+  "branches": [
+    {
+      "name": "enterprise/apex-completion-2026-09-03",
+      "sha": "a0e33384adc252cc5c69dd551304bb29f30e17e7"
+    },
+    {
+      "name": "feat/aegis-native-capability-platform",
+      "sha": "0242fdb0de521d0ec5496e311ac21f1282e85a10"
+    },
+    {
+      "name": "feat/capability-parity-network-web-2026-09-09",
+      "sha": "93260afef259c6dc549d586fcabe195d24b9cfaa"
+    },
+    {
+      "name": "feat/hexstrike-native-capability-layer",
+      "sha": "0bd6a91fd2a8e7893382c5f443026ab3db875fb4"
+    },
+    {
+      "name": "feat/production-launch-hardening",
+      "sha": "2961a0cbec3670b733db8923a809c2bf9c148dbf"
+    },
+    {
+      "name": "feature/auth-ui-foundation",
+      "sha": "c33cef2fe120ee4250b810c6b1c32f010d414fda"
+    },
+    {
+      "name": "feature/enterprise-platform-ui",
+      "sha": "7e0d765fab40f3e8b9b5046c0702377d46eaf55f"
+    },
+    {
+      "name": "fix/finding-validation-loop",
+      "sha": "a0e33384adc252cc5c69dd551304bb29f30e17e7"
+    },
+    {
+      "name": "fix/nuclei-jsonb-metrics-2026-09-12",
+      "sha": "ab8ec9b2d221ba4e62db911d209435e863442070"
+    },
+    {
+      "name": "fix/risk-correlation-validation-semantics-2026-09-12",
+      "sha": "65d11b7cd79fd4608cfca07e3194aaed48a427b3"
+    },
+    {
+      "name": "fix/validation-evidence-lineage-2026-09-12",
+      "sha": "a8549c52943c1bb632ad5a88a26ed1f2dd099228"
+    },
+    {
+      "name": "noop",
+      "sha": "0fb5a98e9df464114555eba6ad548500c87ecfc6"
+    },
+    {
+      "name": "stage-nuclei-e2e",
+      "sha": "c885ea52f4749836d2a41318f61eaca5b4199021"
+    },
+    {
+      "name": "tmp-clean-base",
+      "sha": "2c4978a785bc4d2e45fe8f5ce3d4e2d59bc17276"
+    },
+    {
+      "name": "tmp-clean-base2",
+      "sha": "34282a9ea2aa5c9cdc2ed95079dbaa2c6c4bbfda"
+    },
+    {
+      "name": "tmp-clean-base3",
+      "sha": "2c4978a785bc4d2e45fe8f5ce3d4e2d59bc17276"
+    },
+    {
+      "name": "tmp-final-clean",
+      "sha": "5548b2edbc44f6ab26a4ad56f470cf1a88b59001"
+    }
+  ]
+}
