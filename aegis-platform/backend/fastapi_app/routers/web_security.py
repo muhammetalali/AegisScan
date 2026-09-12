@@ -119,6 +119,53 @@ async def _project_security_operator_for_user(project_id: str, user_id: str) -> 
     return project
 
 
+async def _protocol_budget_governance(
+    project: Project,
+    budget_id: Any,
+    *,
+    capability: str,
+    cases: list[dict[str, Any]],
+) -> dict[str, Any]:
+    profile = await sync_to_async(
+        lambda: ExecutionBudgetProfile.objects.filter(
+            pk=budget_id,
+            project=project,
+        ).first()
+    )()
+    if profile is None:
+        raise HTTPException(status_code=404, detail='Execution budget not found')
+
+    identity_refs = {
+        str((case.get('identity') or {}).get('ref') or '')
+        for case in cases
+        if str((case.get('identity') or {}).get('ref') or '')
+    }
+    result = evaluate_execution_budget(profile, {
+        'capabilities': [capability],
+        'requests': len(cases),
+        'network_io_bytes': 0,
+        'browser_sessions': 0,
+        'identities': len(identity_refs),
+        'object_mutations': 0,
+        'parallelism': 1,
+        'cpu_seconds': 0,
+        'memory_mb': 64,
+        'duration_seconds': 1,
+        'state_changes': False,
+        'destructive_operations': False,
+    })
+    if not result['allowed']:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                'message': 'Execution budget denied protocol validation',
+                'failures': result['failures'],
+                'profile_id': result['profile_id'],
+            },
+        )
+    return result
+
+
 def _policy_dict(row: AuthorizationPolicyManifest) -> dict[str, Any]:
     return {
         'id': str(row.id),
@@ -541,10 +588,18 @@ async def evaluate_websocket_protocol(
 ):
     uid = _uid(user)
     project = await _project_security_operator_for_user(project_id, uid)
+    cases = [item.model_dump(mode='json') for item in payload.cases]
+    governance = await _protocol_budget_governance(
+        project,
+        payload.budget_id,
+        capability='websocket_security',
+        cases=cases,
+    )
     run, observations = await sync_to_async(run_websocket_security)(
         project,
         uid,
-        [item.model_dump(mode='json') for item in payload.cases],
+        cases,
+        governance,
     )
     return {
         'contract_version': CONTRACT_VERSION,
@@ -564,10 +619,18 @@ async def evaluate_graphql_protocol(
 ):
     uid = _uid(user)
     project = await _project_security_operator_for_user(project_id, uid)
+    cases = [item.model_dump(mode='json') for item in payload.cases]
+    governance = await _protocol_budget_governance(
+        project,
+        payload.budget_id,
+        capability='graphql_security',
+        cases=cases,
+    )
     run, observations = await sync_to_async(run_graphql_security)(
         project,
         uid,
-        [item.model_dump(mode='json') for item in payload.cases],
+        cases,
+        governance,
     )
     return {
         'contract_version': CONTRACT_VERSION,
@@ -587,10 +650,18 @@ async def evaluate_cross_protocol(
 ):
     uid = _uid(user)
     project = await _project_security_operator_for_user(project_id, uid)
+    cases = [item.model_dump(mode='json') for item in payload.cases]
+    governance = await _protocol_budget_governance(
+        project,
+        payload.budget_id,
+        capability='cross_protocol_state',
+        cases=cases,
+    )
     run, observations = await sync_to_async(run_cross_protocol_security)(
         project,
         uid,
-        [item.model_dump(mode='json') for item in payload.cases],
+        cases,
+        governance,
     )
     return {
         'contract_version': CONTRACT_VERSION,
