@@ -1,0 +1,148 @@
+name: Identity Protocol Security Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/web_security_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0019_identity_protocol_security_validation_kind.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_policy_precision.py'
+      - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
+      - '.github/workflows/identity-protocol-security-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/web_security_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0019_identity_protocol_security_validation_kind.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_identity_protocol_policy_precision.py'
+      - 'aegis-platform/backend/fastapi_app/routers/web_security.py'
+      - '.github/workflows/identity-protocol-security-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: identity-protocol-security-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  identity-protocol-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-identity-protocol-django-secret-key-0123456789abcdef0123456789
+      JWT_SECRET_KEY: ci-identity-protocol-jwt-secret-key-0123456789abcdef0123456789
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegisdb
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-identity-protocol-evidence-hmac-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-identity-protocol-credential-fingerprint-key-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegisdb
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegisdb"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile identity protocol plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/web_security_models.py \
+            aegis-platform/backend/fastapi_app/contracts/identity_protocol_security.py \
+            aegis-platform/backend/fastapi_app/services/identity_protocol_security.py \
+            aegis-platform/backend/fastapi_app/services/credential_execution.py \
+            aegis-platform/backend/fastapi_app/services/test_identity_protocol_security.py \
+            aegis-platform/backend/fastapi_app/services/test_identity_protocol_credential_scope.py \
+            aegis-platform/backend/fastapi_app/services/test_identity_protocol_policy_precision.py \
+            aegis-platform/backend/fastapi_app/routers/web_security.py
+
+      - name: Django model and migration reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Identity protocol invariant, Vault scope, and persistence suite
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_identity_protocol_security.py \
+            fastapi_app/services/test_identity_protocol_credential_scope.py \
+            fastapi_app/services/test_identity_protocol_policy_precision.py \
+            --junitxml=/tmp/identity-protocol-junit.xml
+
+      - name: Verify API registration and secret-safe contract
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.contracts.identity_protocol_security import IdentityProtocolCaseIn
+
+          paths = set(app.openapi().get('paths', {}))
+          expected = '/api/v1/web-security/projects/{project_id}/identity-protocols/evaluate'
+          assert expected in paths, sorted(path for path in paths if 'web-security' in path)
+          fields = set(IdentityProtocolCaseIn.model_fields)
+          forbidden = {'raw_token', 'access_token', 'id_token', 'refresh_token', 'raw_assertion'}
+          assert not fields.intersection(forbidden)
+          print('IDENTITY_PROTOCOL_API_REGISTRATION=PASS')
+          print('IDENTITY_PROTOCOL_SECRET_SAFE_CONTRACT=PASS')
+          PY
+
+      - name: Retain identity protocol evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: identity-protocol-security-reality-${{ github.sha }}
+          path: /tmp/identity-protocol-junit.xml
+          retention-days: 30
+          if-no-files-found: warn

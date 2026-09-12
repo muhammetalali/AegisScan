@@ -132,6 +132,7 @@ _PROTOCOL_SECURITY_CAPABILITIES = {
     'websocket.security-validation',
     'graphql.security-validation',
     'cross-protocol.security-validation',
+    'identity-protocol.security-validation',
 }
 
 
