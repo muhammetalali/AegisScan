@@ -219,6 +219,8 @@ jobs:
           DEBUG: 'False'
           SECRET_KEY: ci-production-django-key-${{ github.sha }}-${{ github.run_id }}
           JWT_SECRET_KEY: ci-production-jwt-key-${{ github.sha }}-${{ github.run_id }}
+          CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+          CREDENTIAL_FINGERPRINT_KEY: ci-production-browser-fingerprint-${{ github.sha }}
           POSTGRES_PASSWORD: postgres-ci-launch-${{ github.sha }}
           DATABASE_URL: postgresql://aegis:secret@postgres:5432/aegisdb
           REDIS_URL: redis://redis:6379/0
