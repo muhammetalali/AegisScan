@@ -7,7 +7,7 @@ from typing import Any
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.models import AttackPath, FindingIntelligence, RiskCorrelationSnapshot
 
-ANALYSIS_VERSION = '1.0'
+ANALYSIS_VERSION = '1.1'
 WEIGHTS = {
     'base_risk': 0.40,
     'epss_percent': 0.25,
@@ -44,6 +44,50 @@ def _priority(score: float) -> str:
     if score >= 55:
         return RiskCorrelationSnapshot.Priority.P2_MEDIUM
     return RiskCorrelationSnapshot.Priority.P3_LOW
+
+
+def _evidence_signal(finding: Vulnerability) -> dict[str, int]:
+    total = 0
+    supporting = 0
+    contradicting = 0
+    neutral = 0
+
+    for evidence in finding.evidence_records.all():
+        total += 1
+        metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
+
+        if evidence.evidence_type == 'validation_output':
+            finding_present = metadata.get('finding_present')
+            if finding_present is True:
+                supporting += 1
+            elif finding_present is False:
+                contradicting += 1
+            else:
+                neutral += 1
+            continue
+
+        if evidence.evidence_type == 'exploitability_proof':
+            try:
+                proven_count = int(metadata.get('proven_count') or 0)
+            except (TypeError, ValueError):
+                proven_count = 0
+            if proven_count > 0:
+                supporting += 1
+            else:
+                neutral += 1
+            continue
+
+        # Scanner findings and other direct finding evidence continue to support
+        # the detection unless a dedicated validation outcome explicitly
+        # contradicts it.
+        supporting += 1
+
+    return {
+        'total': total,
+        'supporting': supporting,
+        'contradicting': contradicting,
+        'neutral': neutral,
+    }
 
 
 def _attack_path_for_finding(finding: Vulnerability) -> AttackPath | None:
@@ -92,8 +136,12 @@ def correlate_finding(
     epss_percent = _clamp(epss * 100.0)
     confidence = _clamp(float(intel.confidence or 0.0))
     attack_path_risk = _clamp(float(attack_path.risk_score or 0.0)) if attack_path else 0.0
-    evidence_count = finding.evidence_records.count()
-    evidence_strength = _clamp(50.0 + min(10, evidence_count) * 5.0)
+    evidence_signal = _evidence_signal(finding)
+    evidence_count = evidence_signal['total']
+    supporting_evidence_count = evidence_signal['supporting']
+    contradicting_evidence_count = evidence_signal['contradicting']
+    neutral_evidence_count = evidence_signal['neutral']
+    evidence_strength = _clamp(50.0 + min(10, supporting_evidence_count) * 5.0)
     known_exploited = _known_exploited(intel.cisa_kev or {})
 
     contributions = {
@@ -115,6 +163,10 @@ def correlate_finding(
         'intelligence_conflict': bool(intel.conflict),
         'attack_path_risk': attack_path_risk,
         'evidence_strength': evidence_strength,
+        'evidence_count': evidence_count,
+        'supporting_evidence_count': supporting_evidence_count,
+        'contradicting_evidence_count': contradicting_evidence_count,
+        'neutral_evidence_count': neutral_evidence_count,
         'weights': WEIGHTS,
         'contributions': contributions,
         'kev_boost': KEV_BOOST,
