@@ -7,6 +7,7 @@ name: Stateful Protocol Security Reality
       - 'aegis-platform/backend/requirements.txt'
       - 'aegis-platform/backend/enterprise/web_security_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0017_protocol_security_validation_kinds.py'
+      - 'aegis-platform/backend/enterprise/migrations/0018_graphql_schema_graph_kinds.py'
       - 'aegis-platform/backend/fastapi_app/contracts/web_security_v2.py'
       - 'aegis-platform/backend/fastapi_app/services/stateful_protocol_security.py'
       - 'aegis-platform/backend/fastapi_app/services/test_stateful_protocol_security.py'
@@ -21,6 +22,7 @@ name: Stateful Protocol Security Reality
       - 'aegis-platform/backend/requirements.txt'
       - 'aegis-platform/backend/enterprise/web_security_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0017_protocol_security_validation_kinds.py'
+      - 'aegis-platform/backend/enterprise/migrations/0018_graphql_schema_graph_kinds.py'
       - 'aegis-platform/backend/fastapi_app/contracts/web_security_v2.py'
       - 'aegis-platform/backend/fastapi_app/services/stateful_protocol_security.py'
       - 'aegis-platform/backend/fastapi_app/services/test_stateful_protocol_security.py'
@@ -156,6 +158,9 @@ jobs:
           assert payload['runs']['cross_protocol']['summary']['failed'] == 1
           assert 'websocket_channel' in payload['graph_kinds']
           assert 'graphql_operation' in payload['graph_kinds']
+          assert 'graphql_type' in payload['graph_kinds']
+          assert 'graphql_field' in payload['graph_kinds']
+          assert 'graphql_argument' in payload['graph_kinds']
           rendered = json.dumps(payload, sort_keys=True)
           for secret in ('alice-token', 'expired-token', 'alpha-secret', 'bravo-secret'):
               assert secret not in rendered
