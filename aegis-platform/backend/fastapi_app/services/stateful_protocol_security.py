@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from django.db import transaction
-from graphql import parse
+from graphql import build_client_schema, build_schema, get_named_type, parse
 from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode
 
 from enterprise.web_security_models import (
@@ -201,12 +202,119 @@ def graphql_document_metrics(document: str) -> dict[str, Any]:
     }
 
 
+
+_MAX_SCHEMA_BYTES = 1_048_576
+_MAX_SCHEMA_TYPES = 512
+_MAX_SCHEMA_FIELDS = 4_000
+_MAX_SCHEMA_ARGUMENTS = 4_000
+
+
+def graphql_schema_inventory(
+    *,
+    schema_sdl: str = '',
+    schema_introspection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source = ''
+    if schema_sdl:
+        encoded = schema_sdl.encode('utf-8')
+        if len(encoded) > _MAX_SCHEMA_BYTES:
+            raise ValueError('GraphQL SDL exceeds bounded schema analysis size')
+        schema = build_schema(schema_sdl)
+        source = 'sdl'
+    elif schema_introspection:
+        rendered = json.dumps(
+            schema_introspection,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode('utf-8')
+        if len(rendered) > _MAX_SCHEMA_BYTES:
+            raise ValueError('GraphQL introspection exceeds bounded schema analysis size')
+        payload: Any = schema_introspection
+        if isinstance(payload, dict) and isinstance(payload.get('data'), dict):
+            payload = payload['data']
+        if not isinstance(payload, dict) or not isinstance(payload.get('__schema'), dict):
+            raise ValueError('GraphQL introspection payload does not contain __schema')
+        schema = build_client_schema(payload)
+        source = 'introspection'
+    else:
+        return {}
+
+    types: list[dict[str, Any]] = []
+    field_count = 0
+    argument_count = 0
+    for type_name, type_obj in sorted(schema.type_map.items()):
+        if type_name.startswith('__'):
+            continue
+        if len(types) >= _MAX_SCHEMA_TYPES:
+            raise ValueError('GraphQL schema type count exceeds bounded analysis limit')
+        fields_out: list[dict[str, Any]] = []
+        fields = getattr(type_obj, 'fields', None)
+        if isinstance(fields, dict):
+            for field_name, field_obj in sorted(fields.items()):
+                field_count += 1
+                if field_count > _MAX_SCHEMA_FIELDS:
+                    raise ValueError('GraphQL schema field count exceeds bounded analysis limit')
+                args_out: list[dict[str, str]] = []
+                args = getattr(field_obj, 'args', None)
+                if isinstance(args, dict):
+                    for arg_name, arg_obj in sorted(args.items()):
+                        argument_count += 1
+                        if argument_count > _MAX_SCHEMA_ARGUMENTS:
+                            raise ValueError('GraphQL schema argument count exceeds bounded analysis limit')
+                        arg_type = getattr(arg_obj, 'type', None)
+                        args_out.append({
+                            'name': str(arg_name),
+                            'type': str(arg_type),
+                            'named_type': str(getattr(get_named_type(arg_type), 'name', '')),
+                        })
+                field_type = getattr(field_obj, 'type', None)
+                fields_out.append({
+                    'name': str(field_name),
+                    'type': str(field_type),
+                    'named_type': str(getattr(get_named_type(field_type), 'name', '')),
+                    'arguments': args_out,
+                })
+        types.append({
+            'name': str(type_name),
+            'kind': type_obj.__class__.__name__,
+            'fields': fields_out,
+        })
+
+    canonical = {
+        'source': source,
+        'types': types,
+    }
+    return {
+        'source': source,
+        'sha256': canonical_digest(canonical),
+        'type_count': len(types),
+        'field_count': field_count,
+        'argument_count': argument_count,
+        'types': types,
+    }
+
+
 def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
     identity = _identity(case)
     resource = _resource(case)
     expected = bool(case.get('expected_allowed'))
     accepted = bool(case.get('server_accepted'))
     failures: list[str] = []
+
+    schema_inventory: dict[str, Any] = {}
+    if case.get('schema_sdl') or case.get('schema_introspection'):
+        try:
+            schema_inventory = graphql_schema_inventory(
+                schema_sdl=str(case.get('schema_sdl') or ''),
+                schema_introspection=(
+                    case.get('schema_introspection')
+                    if isinstance(case.get('schema_introspection'), dict)
+                    else None
+                ),
+            )
+        except Exception:
+            failures.append('GraphQL schema could not be analyzed deterministically')
 
     document_metrics: dict[str, Any] | None = None
     document = str(case.get('document') or '')
@@ -334,6 +442,11 @@ def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
         'document_fields': (
             document_metrics['fields'] if document_metrics is not None else []
         ),
+        'schema_source': str(schema_inventory.get('source') or ''),
+        'schema_sha256': str(schema_inventory.get('sha256') or ''),
+        'schema_type_count': int(schema_inventory.get('type_count') or 0),
+        'schema_field_count': int(schema_inventory.get('field_count') or 0),
+        'schema_argument_count': int(schema_inventory.get('argument_count') or 0),
         'introspection_expected_allowed': bool(
             case.get('introspection_expected_allowed')
         ),
@@ -352,6 +465,7 @@ def evaluate_graphql_case(case: dict[str, Any]) -> dict[str, Any]:
         'semantic': semantic,
         'evidence_fingerprint': canonical_digest(semantic),
         'reason': '; '.join(failures) if failures else 'GraphQL invariants satisfied',
+        'schema_inventory': schema_inventory,
     }
 
 
