@@ -17,7 +17,7 @@ class GraphNodeIn(StrictModel):
         'observation', 'evidence', 'finding', 'attack_chain', 'detection',
         'risk', 'control', 'remediation', 'revalidation', 'service', 'cache',
         'reverse_proxy', 'database', 'external_service', 'threat', 'ttp',
-        'asset', 'capability',
+        'asset', 'capability', 'trust_boundary', 'data_flow',
     ]
     external_ref: str = Field(min_length=1, max_length=500)
     label: str = Field(min_length=1, max_length=300)
