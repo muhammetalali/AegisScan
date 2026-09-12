@@ -327,7 +327,12 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
         }]},
     )
     assert ws.status_code == 200, ws.text
-    assert ws.json()['summary'] == {'total': 1, 'passed': 1, 'failed': 0}
+    ws_summary = ws.json()['summary']
+    assert {key: ws_summary[key] for key in ('total', 'passed', 'failed')} == {
+        'total': 1, 'passed': 1, 'failed': 0,
+    }
+    assert ws_summary['execution_budget']['profile_id'] == budget_id
+    assert ws_summary['execution_budget']['allowed'] is True
     ws_fingerprint = ws.json()['observations'][0]['evidence_fingerprint']
 
     gql = client.post(
@@ -388,6 +393,7 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     )
     assert transition.status_code == 200, transition.text
     assert transition.json()['summary']['passed'] == 1
+    assert transition.json()['summary']['execution_budget']['profile_id'] == budget_id
 
     denied_budget = client.post(
         f'/api/v1/web-security/projects/{project.id}/execution-budgets',
