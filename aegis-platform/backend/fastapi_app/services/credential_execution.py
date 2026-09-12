@@ -286,7 +286,7 @@ def resolve_credential_refs_for_worker(
         if credential is None:
             raise CredentialVaultDenied('Credential reference is not available for this project.')
         _validate_kind(credential=credential, actor=actor, purpose=purpose_value, allowed_kinds=allowed_kinds)
-        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target)
+        _validate_scope(credential=credential, actor=actor, purpose=purpose_value, target=target, capability_id=capability_id)
         secret = resolve_credential_secret(credential=credential, actor=actor, purpose=purpose_value)
         credential.refresh_from_db(fields=['kind', 'version'])
         material = {
