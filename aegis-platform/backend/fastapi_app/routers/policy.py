@@ -1,27 +1,22 @@
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from typing import Any
 
-from ..core.security import verify_token
+from ..core.dependencies import get_current_user
 from ..services.policy_engine import evaluate_policy, list_policies, save_policy
 from ..services.policy_simulation import simulate_policy
 from ..services.decision_action_orchestration import get_action
 
 router = APIRouter()
-security = HTTPBearer(auto_error=True)
 
 
 def _is_policy_administrator(user_id: str) -> bool:
     User = get_user_model()
     return User.objects.filter(pk=user_id, is_active=True, is_staff=True).exists()
 
-async def require_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict[str, Any]:
-    user = await verify_token(credentials.credentials)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid token")
+async def require_user(user=Depends(get_current_user)) -> dict[str, Any]:
     return user
 
 class PolicyPayload(BaseModel):
