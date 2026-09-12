@@ -11,8 +11,7 @@ permissions:
   contents: read
 
 # Superseded validation runs must not consume runners. Manual dispatches are
-# intentionally isolated by run id so an operator-triggered proof is never
-# cancelled by an unrelated push.
+# isolated by run id so an operator-triggered proof is never cancelled by a push.
 concurrency:
   group: frontend-lock-sync-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.ref }}
   cancel-in-progress: true
