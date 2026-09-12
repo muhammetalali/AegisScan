@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from django_project.projects.models import Project, ProjectMembership
-from django_project.system.credential_models import CredentialSecret
+from django_project.system.credential_models import CredentialAccess, CredentialSecret
 from django_project.system.credential_vault import create_credential_secret
 from django_project.users.models import User
 from fastapi_app.contracts.web_security_v2 import (
@@ -409,6 +409,48 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
     assert transition.status_code == 200, transition.text
     assert transition.json()['summary']['passed'] == 1
     assert transition.json()['summary']['execution_budget']['profile_id'] == budget_id
+
+    mismatched_credential = create_credential_secret(
+        project=project,
+        actor=owner,
+        name=f'protocol-mismatch-{uuid.uuid4().hex[:8]}',
+        kind=CredentialSecret.Kind.TOKEN,
+        secret='protocol-mismatch-secret-only',
+        scope={
+            'protocol_origin': 'https://app.example',
+            'protocol_identity_ref': 'bob',
+        },
+    )
+    mismatched_identity = {**identity, 'credential_ref': str(mismatched_credential.id)}
+    mismatch = client.post(
+        f'/api/v1/web-security/projects/{project.id}/protocols/websocket/evaluate',
+        headers=headers,
+        json={
+            'budget_id': budget_id,
+            'target_origin': 'https://app.example',
+            'cases': [{
+                'ref': 'ws-vault-identity-mismatch',
+                'identity': mismatched_identity,
+                'resource': resource,
+                'channel': 'ws://fixture/ws/tenant-a/record-a',
+                'session_ref': 'session-a',
+                'origin': 'https://app.example',
+                'allowed_origins': ['https://app.example'],
+                'authentication_required': True,
+                'authenticated': True,
+                'session_state': 'active',
+                'requested_action': 'subscribe',
+                'expected_allowed': True,
+                'server_accepted': True,
+            }],
+        },
+    )
+    assert mismatch.status_code == 403, mismatch.text
+    assert CredentialAccess.objects.filter(
+        credential=mismatched_credential,
+        operation=CredentialAccess.Operation.AUTHORIZE_USE,
+        result=CredentialAccess.Result.DENIED,
+    ).exists()
 
     denied_budget = client.post(
         f'/api/v1/web-security/projects/{project.id}/execution-budgets',
