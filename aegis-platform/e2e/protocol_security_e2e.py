@@ -16,6 +16,7 @@ django.setup()
 
 import requests
 import websockets
+from graphql import get_introspection_query
 
 from django_project.projects.models import Project
 from django_project.users.models import User
@@ -583,7 +584,7 @@ async def live_graphql_subscription_cases(base_ws: str) -> list[dict[str, Any]]:
 def live_graphql_http_cases(base_http: str) -> list[dict[str, Any]]:
     own_query = 'query Record($id: ID!) { record(id: $id) { id tenant owner value } }'
     secret_query = 'query Secret($id: ID!) { record(id: $id) { id secret } }'
-    introspection = 'query Introspection { __schema { queryType { name } } }'
+    introspection = get_introspection_query(descriptions=False)
     mutation = 'mutation UpdateRecord($id: ID!, $value: String!) { updateRecord(id: $id, value: $value) { id value } }'
     deep = 'query Deep($id: ID!) { record(id: $id) { related { related { related { related { related { id } } } } } } }'
     aliases = ' '.join(f'f{i}: id' for i in range(30))
@@ -670,15 +671,26 @@ def live_graphql_http_cases(base_http: str) -> list[dict[str, Any]]:
         ('/graphql', 'gql-fixed-introspection', False),
         ('/graphql-vulnerable', 'gql-vulnerable-introspection', False),
     ]:
-        status, body = gql_post(base_http, path, {'query': introspection, 'operationName': 'Introspection'})
+        status, body = gql_post(base_http, path, {
+            'query': introspection,
+            'operationName': 'IntrospectionQuery',
+        })
+        schema_introspection = (
+            body
+            if isinstance(body, dict)
+            and isinstance(body.get('data'), dict)
+            and isinstance(body['data'].get('__schema'), dict)
+            else None
+        )
         cases.append({
             'ref': case_ref,
             'identity': identity(),
             'resource': resource('schema', 'tenant-a', 'alice'),
             'endpoint': path,
             'operation_type': 'query',
-            'operation_name': 'Introspection',
+            'operation_name': 'IntrospectionQuery',
             'document': introspection,
+            'schema_introspection': schema_introspection,
             'field_path': '__schema',
             'expected_allowed': expected,
             'server_accepted': gql_accepted(status, body),
@@ -893,7 +905,11 @@ def main() -> int:
         fail('vulnerable cross-protocol chain was not detected')
 
     graph_kinds = set(project.security_graph_nodes.values_list('kind', flat=True))
-    if not {'identity', 'resource', 'websocket_channel', 'graphql_operation', 'session', 'channel'}.issubset(graph_kinds):
+    required_graph_kinds = {
+        'identity', 'resource', 'websocket_channel', 'graphql_operation',
+        'graphql_type', 'graphql_field', 'graphql_argument', 'session', 'channel',
+    }
+    if not required_graph_kinds.issubset(graph_kinds):
         fail(f'protocol graph kinds missing: {sorted(graph_kinds)}')
 
     evidence = {
