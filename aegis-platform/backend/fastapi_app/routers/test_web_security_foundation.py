@@ -19,6 +19,7 @@ from fastapi_app.main import app
 from fastapi_app.routers.web_security import (
     _project_admin_for_user_sync,
     _project_for_user_sync,
+    _project_security_operator_for_user_sync,
 )
 
 
@@ -75,6 +76,9 @@ def test_web_security_project_admin_boundary_is_not_equivalent_to_project_read_a
     owner = _user('web-owner')
     admin = _user('web-admin')
     viewer = _user('web-viewer')
+    analyst = _user('web-analyst')
+    analyst.role = 'security_analyst'
+    analyst.save(update_fields=['role'])
     outsider = _user('web-outsider')
     project = Project.objects.create(
         name='Web Security Router Boundary',
@@ -91,13 +95,25 @@ def test_web_security_project_admin_boundary_is_not_equivalent_to_project_read_a
         user=viewer,
         role=ProjectMembership.Role.VIEWER,
     )
+    ProjectMembership.objects.create(
+        project=project,
+        user=analyst,
+        role=ProjectMembership.Role.MEMBER,
+    )
 
     assert _project_for_user_sync(str(project.id), str(owner.id)) == project
     assert _project_for_user_sync(str(project.id), str(admin.id)) == project
     assert _project_for_user_sync(str(project.id), str(viewer.id)) == project
+    assert _project_for_user_sync(str(project.id), str(analyst.id)) == project
     assert _project_for_user_sync(str(project.id), str(outsider.id)) is None
 
     assert _project_admin_for_user_sync(str(project.id), str(owner.id)) == project
     assert _project_admin_for_user_sync(str(project.id), str(admin.id)) == project
     assert _project_admin_for_user_sync(str(project.id), str(viewer.id)) is None
     assert _project_admin_for_user_sync(str(project.id), str(outsider.id)) is None
+
+    assert _project_security_operator_for_user_sync(str(project.id), str(owner.id)) == project
+    assert _project_security_operator_for_user_sync(str(project.id), str(admin.id)) == project
+    assert _project_security_operator_for_user_sync(str(project.id), str(analyst.id)) == project
+    assert _project_security_operator_for_user_sync(str(project.id), str(viewer.id)) is None
+    assert _project_security_operator_for_user_sync(str(project.id), str(outsider.id)) is None
