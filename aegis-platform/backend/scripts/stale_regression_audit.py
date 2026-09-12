@@ -28,6 +28,11 @@ REQUIRED_DIGITAL_TWIN_MARKERS = (
     "source='postgresql'",
 )
 
+DIRECT_BEARER_MARKERS = (
+    "HTTPBearer(",
+    "HTTPAuthorizationCredentials",
+)
+
 
 def _relative_target_exists(path: Path, node: ast.ImportFrom) -> bool:
     if not node.module:
@@ -68,6 +73,12 @@ def main() -> int:
             if forbidden in text:
                 failures.append(
                     f"{path.relative_to(BACKEND_ROOT)}: forbidden stale router import: {forbidden}"
+                )
+
+        for marker in DIRECT_BEARER_MARKERS:
+            if marker in text:
+                failures.append(
+                    f"{path.relative_to(BACKEND_ROOT)}: direct Bearer-only auth bypasses cookie-aware get_current_user: {marker}"
                 )
 
     if not DIGITAL_TWIN.is_file():
