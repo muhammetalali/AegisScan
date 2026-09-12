@@ -32,19 +32,32 @@ def percentile(values: list[float], q: float) -> float:
     return ordered[low]*(high-rank)+ordered[high]*(rank-low)
 
 
-async def run_stage(base_url: str, paths: list[str], concurrency: int, duration: float, request_timeout: float) -> dict:
+async def run_stage(
+    base_url: str,
+    paths: list[str],
+    concurrency: int,
+    duration: float,
+    request_timeout: float,
+    warmup_seconds: float = 2.0,
+) -> dict:
     samples: list[Sample]=[]
+    warmup_requests=0
     lock=asyncio.Lock()
-    stop_at=time.monotonic()+duration
+    stage_started=time.monotonic()
+    measure_at=stage_started+warmup_seconds
+    stop_at=measure_at+duration
 
     async with httpx.AsyncClient(base_url=base_url,timeout=request_timeout,limits=httpx.Limits(max_connections=concurrency,max_keepalive_connections=concurrency)) as client:
         async def worker(worker_id: int):
+            nonlocal warmup_requests
             local: list[Sample]=[]
+            local_warmup=0
             index=worker_id
             while time.monotonic()<stop_at:
                 path=paths[index%len(paths)]
                 index+=1
-                started=time.perf_counter()
+                request_started=time.monotonic()
+                perf_started=time.perf_counter()
                 status=0; ok=False
                 try:
                     response=await client.get(path)
@@ -52,13 +65,17 @@ async def run_stage(base_url: str, paths: list[str], concurrency: int, duration:
                     ok=200 <= status < 300
                 except httpx.HTTPError:
                     pass
-                local.append(Sample(path,status,(time.perf_counter()-started)*1000.0,ok))
+                latency_ms=(time.perf_counter()-perf_started)*1000.0
+                if request_started >= measure_at:
+                    local.append(Sample(path,status,latency_ms,ok))
+                else:
+                    local_warmup+=1
             async with lock:
                 samples.extend(local)
+                warmup_requests+=local_warmup
 
-        started=time.monotonic()
         await asyncio.gather(*(worker(i) for i in range(concurrency)))
-        elapsed=max(0.001,time.monotonic()-started)
+        elapsed=max(0.001,time.monotonic()-measure_at)
 
     latencies=[sample.latency_ms for sample in samples]
     failures=sum(1 for sample in samples if not sample.ok)
@@ -88,6 +105,8 @@ async def run_stage(base_url: str, paths: list[str], concurrency: int, duration:
         }
     return {
         'concurrency':concurrency,
+        'warmup_seconds':round(warmup_seconds,3),
+        'warmup_requests':warmup_requests,
         'duration_seconds':round(elapsed,3),
         'requests':len(samples),
         'failures':failures,
@@ -113,7 +132,14 @@ async def main_async(args) -> int:
         concurrency=int(concurrency_text); duration=float(duration_text)
         if not 1<=concurrency<=1000 or not 1<=duration<=3600:
             raise ValueError('stage must be CONCURRENCY:DURATION with safe positive bounds')
-        stages.append(await run_stage(args.base_url,args.path,concurrency,duration,args.request_timeout))
+        stages.append(await run_stage(
+            args.base_url,
+            args.path,
+            concurrency,
+            duration,
+            args.request_timeout,
+            args.stage_warmup_seconds,
+        ))
 
     requests=sum(stage['requests'] for stage in stages)
     failures=sum(stage['failures'] for stage in stages)
@@ -133,6 +159,7 @@ async def main_async(args) -> int:
         'thresholds':{
             'min_requests':args.min_requests,'max_error_rate':args.max_error_rate,
             'max_p95_ms':args.max_p95_ms,'min_rps':args.min_rps,
+            'stage_warmup_seconds':args.stage_warmup_seconds,
         },
         'passed':passed,
     }
@@ -148,6 +175,7 @@ def parse_args():
     parser.add_argument('--path',action='append',default=[])
     parser.add_argument('--stage',action='append',default=[])
     parser.add_argument('--request-timeout',type=float,default=5.0)
+    parser.add_argument('--stage-warmup-seconds',type=float,default=2.0)
     parser.add_argument('--max-p95-ms',type=float,default=500.0)
     parser.add_argument('--max-error-rate',type=float,default=0.01)
     parser.add_argument('--min-rps',type=float,default=5.0)
@@ -158,6 +186,8 @@ def parse_args():
         args.path=['/health','/ready']
     if not args.stage:
         args.stage=['10:15','30:20','60:20','25:90']
+    if not 0 <= args.stage_warmup_seconds <= 60:
+        parser.error('--stage-warmup-seconds must be between 0 and 60')
     return args
 
 
