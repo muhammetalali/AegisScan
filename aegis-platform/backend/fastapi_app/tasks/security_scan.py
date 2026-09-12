@@ -74,12 +74,40 @@ def _risk_score(severity: str) -> float:
     return {Vulnerability.Severity.CRITICAL:95.0,Vulnerability.Severity.HIGH:80.0,Vulnerability.Severity.MEDIUM:60.0,Vulnerability.Severity.LOW:35.0,Vulnerability.Severity.INFO:10.0}[severity]
 
 
+def _unique_findings_by_id(findings: list[Any]) -> list[Any]:
+    """Return persisted findings once each while preserving first-seen order."""
+    unique: dict[str, Any] = {}
+    for finding in findings:
+        unique.setdefault(str(finding.id), finding)
+    return list(unique.values())
+
+
+def _sanitize_json_for_postgres(value: Any) -> Any:
+    """Make scanner JSON safe for PostgreSQL JSONB without discarding evidence.
+
+    PostgreSQL text/JSONB cannot represent U+0000. Scanner records may contain
+    binary HTTP response data encoded as ``\u0000``; ``json.loads`` converts
+    that escape into a real NUL character. Preserve the semantic marker as the
+    literal six-character ``\u0000`` sequence before durable persistence.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", r"\u0000")
+    if isinstance(value, list):
+        return [_sanitize_json_for_postgres(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key).replace("\x00", r"\u0000"): _sanitize_json_for_postgres(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 def _parse_nuclei_findings(raw_output: str) -> list[dict[str, Any]]:
     findings=[]
     for line in raw_output.splitlines():
         line=line.strip()
         if not line: continue
-        try: record=json.loads(line)
+        try: record=_sanitize_json_for_postgres(json.loads(line))
         except json.JSONDecodeError: continue
         if not isinstance(record,dict): continue
         info=record.get('info') if isinstance(record.get('info'),dict) else {}; classification=info.get('classification') if isinstance(info.get('classification'),dict) else {}
@@ -171,8 +199,8 @@ def run_nuclei_scan(self,scan_id:str)->dict[str,Any]:
         if not ok: return _block_scan(scan_id,reason)
         completed_at=datetime.now(timezone.utc); duration=max(0,(completed_at-started).total_seconds()) if started else 0
         with transaction.atomic():
-            evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source=result.tool,evidence_type='scanner_output',raw_output=result.stdout,metadata={'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'jsonl',**authorization_snapshot(authorization)},collected_by=scan.initiated_by); findings=_ingest_nuclei_findings(scan,evidence,result.stdout); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.duration=duration; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'result_count':len(findings),'finding_ids':[str(v.id) for v in findings],'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','duration','findings_found','evidences_collected','result_data','logs','updated_at']); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.INFO,message='nuclei execution completed',context={'target':result.target,'exit_code':result.exit_code,'result_count':len(findings),'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.engine_results={**(scan.engine_results or {}),'nuclei':execution.result_data}; scan.findings_count=Vulnerability.objects.filter(scan=scan).count(); scan.save(update_fields=['status','progress','completed_at','engine_results','findings_count','updated_at'])
-        return {'status':scan.status,'scan_id':scan_id,'tool':'nuclei','target':result.target,'finding_count':len(findings),'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
+            evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source=result.tool,evidence_type='scanner_output',raw_output=result.stdout,metadata={'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'jsonl',**authorization_snapshot(authorization)},collected_by=scan.initiated_by); findings=_ingest_nuclei_findings(scan,evidence,result.stdout); raw_result_count=len(findings); unique_findings=_unique_findings_by_id(findings); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.duration=duration; execution.findings_found=len(unique_findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'raw_result_count':raw_result_count,'result_count':len(unique_findings),'finding_ids':[str(v.id) for v in unique_findings],'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','duration','findings_found','evidences_collected','result_data','logs','updated_at']); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.INFO,message='nuclei execution completed',context={'target':result.target,'exit_code':result.exit_code,'result_count':len(findings),'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.engine_results={**(scan.engine_results or {}),'nuclei':execution.result_data}; scan.findings_count=Vulnerability.objects.filter(scan=scan).count(); scan.save(update_fields=['status','progress','completed_at','engine_results','findings_count','updated_at'])
+        return {'status':scan.status,'scan_id':scan_id,'tool':'nuclei','target':result.target,'raw_result_count':raw_result_count,'finding_count':len(unique_findings),'finding_ids':[str(v.id) for v in unique_findings],**authorization_snapshot(authorization)}
     except ScannerExecutionCancelled as exc:
         return _cancelled_scan(scan,execution,str(exc))
     except Exception as exc:
