@@ -84,14 +84,17 @@ def _validation_project_id(validation: ValidationRun) -> str | None:
     return None
 
 
-def _scoped_actions(requested_by: str):
+def _scoped_actions(requested_by: str, *, include_risk_correlation: bool = True):
     projects = Project.objects.filter(Q(owner_id=requested_by) | Q(members__id=requested_by)).values('id')
     organizations = OrganizationMembership.objects.filter(user_id=requested_by, is_active=True).values('organization_id')
-    return DecisionAction.objects.select_related('risk_correlation').filter(
+    queryset = DecisionAction.objects.filter(
         requested_by=requested_by,
         project_id__in=projects,
         organization_id__in=organizations,
     )
+    if include_risk_correlation:
+        queryset = queryset.select_related('risk_correlation')
+    return queryset
 
 
 def _validate_risk_correlation_lineage(
@@ -183,7 +186,13 @@ def transition(action_id: str, state: str, actor: str, note: str | None = None) 
     if state not in STATES:
         raise ValueError(f"Invalid state: {state}")
     with transaction.atomic():
-        action = _scoped_actions(actor).select_for_update().filter(pk=action_id).first()
+        # Lock only the DecisionAction row. Joining the nullable correlation FK
+        # under SELECT ... FOR UPDATE creates an outer join that PostgreSQL
+        # correctly refuses to lock.
+        action = _scoped_actions(
+            actor,
+            include_risk_correlation=False,
+        ).select_for_update().filter(pk=action_id).first()
         if action is None:
             raise KeyError(action_id)
         if state not in TRANSITIONS.get(action.state, set()):
