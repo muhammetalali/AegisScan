@@ -320,7 +320,7 @@ async def test_browser_capability_scheduler_uses_isolated_queue_and_vault_identi
     assert calls[0][1]['queue'] == 'browser'
     assert calls[0][1]['routing_key'] == 'browser'
     assert result['credential_context']['credential_refs'][0]['browser_identity_ref'] == 'alice'
-    scan = await sync_to_async(Scan.objects.get)(pk=result['scan']['id'])
+    scan = await sync_to_async(Scan.objects.get)(pk=result['scan'].id)
     assert scan.config['capability_options']['identity_ref'] == 'alice'
     assert 'scheduler-value' not in json.dumps(scan.config, sort_keys=True)
 
