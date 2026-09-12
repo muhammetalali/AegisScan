@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -21,16 +22,24 @@ class _HttpProvider:
     timeout = httpx.Timeout(10.0, connect=5.0)
 
     def _get(self, url: str, *, headers: Optional[dict[str, str]] = None, params: Optional[dict[str, str]] = None) -> dict[str, Any]:
-        try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-                response = client.get(url, headers=headers, params=params)
-                response.raise_for_status()
-                payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise IntelligenceProviderError(f'Provider request failed: {url}') from exc
-        if not isinstance(payload, dict):
-            raise IntelligenceProviderError(f'Provider returned non-object JSON: {url}')
-        return payload
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+                    response = client.get(url, headers=headers, params=params)
+                    response.raise_for_status()
+                    payload = response.json()
+                if not isinstance(payload, dict):
+                    raise IntelligenceProviderError(f'Provider returned non-object JSON: {url}')
+                return payload
+            except (httpx.HTTPError, ValueError, IntelligenceProviderError) as exc:
+                last_error = exc
+                retryable = not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code in {408, 425, 429, 500, 502, 503, 504}
+                if attempt == 0 and retryable:
+                    time.sleep(0.5)
+                    continue
+                break
+        raise IntelligenceProviderError(f'Provider request failed: {url}') from last_error
 
 
 class NVDProvider(_HttpProvider):

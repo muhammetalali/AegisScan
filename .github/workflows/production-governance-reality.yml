@@ -1,0 +1,65 @@
+name: Production Governance Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-final-governance.yml'
+      - '.github/workflows/production-governance-reality.yml'
+      - 'aegis-platform/scripts/production_governance_gate.py'
+      - 'aegis-platform/scripts/public_acceptance.py'
+      - 'tests/test_production_governance_gate.py'
+      - 'tests/test_production_final_governance_workflow.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-final-governance.yml'
+      - '.github/workflows/production-governance-reality.yml'
+      - 'aegis-platform/scripts/production_governance_gate.py'
+      - 'aegis-platform/scripts/public_acceptance.py'
+      - 'tests/test_production_governance_gate.py'
+      - 'tests/test_production_final_governance_workflow.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-governance-reality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install governance test dependencies
+        run: python -m pip install pytest==9.1.1 pyyaml==6.0.2
+
+      - name: Compile final governance implementation
+        run: |
+          python -m py_compile             aegis-platform/scripts/production_governance_gate.py             aegis-platform/scripts/public_acceptance.py
+
+      - name: Prove fail-closed evidence and workflow governance contracts
+        run: |
+          python -m pytest -q             tests/test_production_governance_gate.py             tests/test_production_final_governance_workflow.py
+
+      - name: Prove final governance workflow remains manual and read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/production-final-governance.yml
+          grep -q "workflow_dispatch:" "$workflow"
+          grep -q "environment: production" "$workflow"
+          grep -q "actions: read" "$workflow"
+          ! grep -q "contents: write" "$workflow"
+          ! grep -qE '^  (push|pull_request):' "$workflow"
+          ! grep -q "StrictHostKeyChecking=no" "$workflow"
+          ! grep -q "curl --insecure" "$workflow"
+          echo "final-governance-policy=PASS"

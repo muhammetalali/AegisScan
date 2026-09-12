@@ -57,7 +57,7 @@ services:
     build: {context: ./backend, dockerfile: Dockerfile.fastapi}
     container_name: aegis-fastapi
     restart: unless-stopped
-    command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers 2
+    command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers 4 --loop uvloop --http httptools --no-access-log
     volumes: [./backend:/app]
     ports: ["8001:8001"]
     env_file: ./backend/.env

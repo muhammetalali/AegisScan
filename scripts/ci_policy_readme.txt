@@ -1,1 +1,0 @@
-CI concurrency hardening is enforced by executable tests and dedicated workflow gates. Release/publish remains non-cancellable.
