@@ -48,7 +48,6 @@ class AuthorizationPolicyIn(StrictModel):
     role: str = Field(default='*', max_length=120)
     tenant_ref: str = Field(default='*', max_length=255)
     endpoint: str = Field(min_length=1, max_length=700)
-    session_ref: str = Field(default='', max_length=255)
     method: str = Field(default='*', min_length=1, max_length=16)
     operation: str = Field(default='*', max_length=160)
     resource_type: str = Field(default='*', max_length=160)
@@ -212,6 +211,7 @@ class GraphQLSecurityCaseIn(StrictModel):
     identity: IdentityIn
     resource: ResourceIn
     endpoint: str = Field(min_length=1, max_length=700)
+    session_ref: str = Field(default='', max_length=255)
     operation_type: Literal['query', 'mutation', 'subscription']
     operation_name: str = Field(min_length=1, max_length=160)
     document: str = Field(default='', max_length=262144)
