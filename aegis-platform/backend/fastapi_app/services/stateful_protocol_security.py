@@ -481,6 +481,10 @@ def evaluate_cross_protocol_case(case: dict[str, Any]) -> dict[str, Any]:
         failures.append('tenant context changed across protocol transition')
     if not bool(case.get('session_bound', True)):
         failures.append('target protocol session is not bound to source session')
+    if not bool(case.get('source_validation_passed', True)):
+        failures.append('source protocol observation failed its own validation')
+    if not bool(case.get('target_validation_passed', True)):
+        failures.append('target protocol observation failed its own validation')
 
     semantic = {
         'from_protocol': str(case.get('from_protocol') or ''),
@@ -489,6 +493,8 @@ def evaluate_cross_protocol_case(case: dict[str, Any]) -> dict[str, Any]:
         'identity_consistent': bool(case.get('identity_consistent', True)),
         'tenant_consistent': bool(case.get('tenant_consistent', True)),
         'session_bound': bool(case.get('session_bound', True)),
+        'source_validation_passed': bool(case.get('source_validation_passed', True)),
+        'target_validation_passed': bool(case.get('target_validation_passed', True)),
         'source_observation_id': str(case.get('source_observation_id') or ''),
         'target_observation_id': str(case.get('target_observation_id') or ''),
         'source_evidence_ref': str(case.get('source_evidence_ref') or ''),
@@ -555,13 +561,13 @@ def _hydrate_cross_protocol_case(project, case: dict[str, Any]) -> dict[str, Any
         and source.identity_ref == identity_ref
         and target.identity_ref == identity_ref
         and source.identity_type == target.identity_type == str(identity.get('type') or '')
+        and source.role == target.role == str(identity.get('role') or '')
     )
     tenant_consistent = bool(
         identity_tenant
         and resource_tenant
         and source.tenant_ref == target.tenant_ref == identity_tenant
         and source.resource_tenant_ref == target.resource_tenant_ref == resource_tenant
-        and identity_tenant == resource_tenant
     )
     resource_consistent = bool(
         resource_ref
@@ -577,16 +583,15 @@ def _hydrate_cross_protocol_case(project, case: dict[str, Any]) -> dict[str, Any
         and target_session == session_ref
     )
 
-    observed_allowed = (
-        source.observed_decision == WebSecurityObservation.Decision.ALLOWED
-        and target.observed_decision == WebSecurityObservation.Decision.ALLOWED
-    )
-    expected_allowed = bool(source.expected_allowed and target.expected_allowed)
+    observed_allowed = target.observed_decision == WebSecurityObservation.Decision.ALLOWED
+    expected_allowed = bool(target.expected_allowed)
 
     hydrated = dict(case)
     hydrated.update({
         'expected_allowed': expected_allowed,
         'observed_allowed': observed_allowed,
+        'source_validation_passed': bool(source.passed),
+        'target_validation_passed': bool(target.passed),
         'identity_consistent': identity_consistent,
         'tenant_consistent': tenant_consistent and resource_consistent,
         'session_bound': session_bound,
