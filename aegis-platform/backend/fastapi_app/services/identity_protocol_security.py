@@ -48,6 +48,8 @@ def _common_failures(case: dict[str, Any], accepted: bool, expected: bool) -> li
 def _validate_token(case: dict[str, Any], accepted: bool, failures: list[str]) -> None:
     algorithm = str(case.get('token_algorithm') or '')
     allowed = {str(value) for value in (case.get('allowed_algorithms') or [])}
+    if accepted and algorithm.lower() == 'none':
+        failures.append('unsigned JWT alg=none token was accepted')
     if accepted and algorithm and allowed and algorithm not in allowed:
         failures.append('token algorithm was accepted outside configured allowlist')
     if accepted and not bool(case.get('signature_valid', True)):
@@ -97,11 +99,23 @@ def _validate_oauth_oidc(case: dict[str, Any], accepted: bool, failures: list[st
 def _validate_saml(case: dict[str, Any], accepted: bool, failures: list[str]) -> None:
     if not accepted:
         return
-    signature_required = bool(case.get('saml_signature_required', True))
-    if signature_required and not bool(case.get('saml_response_signature_valid', True)):
-        failures.append('SAML response with invalid signature was accepted')
-    if signature_required and not bool(case.get('saml_assertion_signature_valid', True)):
-        failures.append('SAML assertion with invalid signature was accepted')
+    response_valid = bool(case.get('saml_response_signature_valid', True))
+    assertion_valid = bool(case.get('saml_assertion_signature_valid', True))
+    signature_policy = str(case.get('saml_signature_policy') or 'either')
+    signature_ok = {
+        'response': response_valid,
+        'assertion': assertion_valid,
+        'either': response_valid or assertion_valid,
+        'both': response_valid and assertion_valid,
+        'none': True,
+    }.get(signature_policy, False)
+    if not signature_ok:
+        if not response_valid:
+            failures.append('SAML response with invalid signature was accepted')
+        if not assertion_valid:
+            failures.append('SAML assertion with invalid signature was accepted')
+        if response_valid and assertion_valid:
+            failures.append('invalid SAML signature policy was evaluated')
     expected_audience = str(case.get('saml_expected_audience') or '')
     observed_audience = str(case.get('saml_observed_audience') or '')
     if expected_audience and observed_audience != expected_audience:
@@ -197,6 +211,7 @@ def evaluate_identity_protocol_case(case: dict[str, Any]) -> dict[str, Any]:
         'authorization_code_reused': bool(case.get('authorization_code_reused')),
         'saml_response_signature_valid': bool(case.get('saml_response_signature_valid', True)),
         'saml_assertion_signature_valid': bool(case.get('saml_assertion_signature_valid', True)),
+        'saml_signature_policy': str(case.get('saml_signature_policy') or 'either'),
         'saml_destination_valid': bool(case.get('saml_destination_valid', True)),
         'saml_in_response_to_valid': bool(case.get('saml_in_response_to_valid', True)),
         'saml_conditions_valid': bool(case.get('saml_conditions_valid', True)),
