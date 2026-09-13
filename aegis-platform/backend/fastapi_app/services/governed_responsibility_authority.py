@@ -79,7 +79,7 @@ def _normalize_idempotency_key(value: str) -> str:
 
 
 def _organization_locked(organization_id: str) -> Organization:
-    organization = Organization.objects.select_for_update().filter(pk=organization_id, is_active=True).first()
+    organization = Organization.objects.select_for_update(of=('self',)).filter(pk=organization_id, is_active=True).first()
     if organization is None:
         raise GovernedResponsibilityError('Active organization not found.')
     return organization
@@ -87,7 +87,7 @@ def _organization_locked(organization_id: str) -> Organization:
 
 def _issuer_locked(organization: Organization, actor_id: str) -> OrganizationMembership:
     membership = (
-        OrganizationMembership.objects.select_for_update()
+        OrganizationMembership.objects.select_for_update(of=('self',))
         .filter(
             organization=organization,
             user_id=actor_id,
@@ -104,7 +104,7 @@ def _issuer_locked(organization: Organization, actor_id: str) -> OrganizationMem
 
 def _target_membership_locked(organization: Organization, membership_id: str) -> OrganizationMembership:
     membership = (
-        OrganizationMembership.objects.select_for_update()
+        OrganizationMembership.objects.select_for_update(of=('self',))
         .select_related('user')
         .filter(pk=membership_id, organization=organization, is_active=True, user__is_active=True)
         .first()
@@ -118,7 +118,7 @@ def _project_locked(organization: Organization, project_id: str | None):
     if not project_id:
         return None
     link = (
-        TenantProject.objects.select_for_update()
+        TenantProject.objects.select_for_update(of=('self',))
         .select_related('project')
         .filter(organization=organization, project_id=project_id)
         .first()
@@ -300,10 +300,14 @@ def grant_responsibility(
         organization = _organization_locked(organization_id)
         _issuer_locked(organization, actor_id)
 
-        replay = GovernedResponsibilityAssignment.objects.select_for_update().filter(idempotency_key=key).first()
+        replay = (
+            GovernedResponsibilityAssignment.objects.select_for_update(of=('self',))
+            .filter(organization=organization, idempotency_key=key)
+            .first()
+        )
         if replay is not None:
-            if str(replay.organization_id) != str(organization.id) or replay.request_fingerprint != request_fingerprint:
-                raise GovernedResponsibilityConflict('Idempotency key was already used for a different responsibility grant request.')
+            if replay.request_fingerprint != request_fingerprint:
+                raise GovernedResponsibilityConflict('Idempotency key was already used for a different responsibility grant request in this organization.')
             return GrantResult(replay, True)
 
         membership = _target_membership_locked(organization, membership_id)
@@ -315,7 +319,7 @@ def grant_responsibility(
         supersedes = None
         if supersedes_assignment_id:
             supersedes = (
-                GovernedResponsibilityAssignment.objects.select_for_update()
+                GovernedResponsibilityAssignment.objects.select_for_update(of=('self',))
                 .filter(
                     pk=supersedes_assignment_id,
                     organization=organization,
@@ -425,20 +429,28 @@ def revoke_responsibility(*, assignment_id: str, actor_id: str, reason: str, ide
         organization = _organization_locked(str(organization_id))
         _issuer_locked(organization, actor_id)
         assignment = (
-            GovernedResponsibilityAssignment.objects.select_for_update()
+            GovernedResponsibilityAssignment.objects.select_for_update(of=('self',))
             .filter(pk=assignment_id, organization=organization)
             .first()
         )
         if assignment is None:
             raise GovernedResponsibilityError('Governed responsibility assignment not found.')
 
-        replay = GovernedResponsibilityRevocation.objects.select_for_update().filter(idempotency_key=key).first()
+        replay = (
+            GovernedResponsibilityRevocation.objects.select_for_update(of=('self',))
+            .filter(organization=organization, idempotency_key=key)
+            .first()
+        )
         if replay is not None:
             if str(replay.assignment_id) != str(assignment.id) or replay.request_fingerprint != request_fingerprint:
-                raise GovernedResponsibilityConflict('Idempotency key was already used for a different responsibility revocation request.')
+                raise GovernedResponsibilityConflict('Idempotency key was already used for a different responsibility revocation request in this organization.')
             return RevocationResult(replay, True)
 
-        existing = GovernedResponsibilityRevocation.objects.select_for_update().filter(assignment=assignment).first()
+        existing = (
+            GovernedResponsibilityRevocation.objects.select_for_update(of=('self',))
+            .filter(organization=organization, assignment=assignment)
+            .first()
+        )
         if existing is not None:
             raise GovernedResponsibilityConflict('Responsibility assignment has already been revoked; replay requires the original idempotency key.')
         if hasattr(assignment, 'superseded_by'):
@@ -449,6 +461,7 @@ def revoke_responsibility(*, assignment_id: str, actor_id: str, reason: str, ide
             'assignment_grant_fingerprint': assignment.grant_fingerprint,
         })
         revocation = GovernedResponsibilityRevocation.objects.create(
+            organization=organization,
             assignment=assignment,
             reason=normalized_reason,
             policy_version=_POLICY_VERSION,
