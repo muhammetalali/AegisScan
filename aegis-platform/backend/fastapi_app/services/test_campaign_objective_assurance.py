@@ -4,10 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
-from django.db import close_old_connections, connection
 from django.core.exceptions import ValidationError
+from django.db import close_old_connections, connection
 
-from django_project.evidence.models import Evidence
+from django_project.assets.models import Asset, AssetAuthorization
+from django_project.evidence.models import Evidence, ValidationRun
+from django_project.vulnerabilities.models import Vulnerability
 from enterprise.campaign_models import AdversaryCampaign, CampaignAuditEvent, CampaignObjectiveAssessment
 from enterprise.models import AttackPath, BlastRadiusSnapshot
 from fastapi_app.services.campaign_objective_assurance import (
@@ -100,6 +102,165 @@ def test_blocked_outcome_accepts_discovered_path_and_preserves_reason(dispositio
     )
     assert result.assessment.outcome == 'blocked'
     assert result.assessment.reason_code == 'control_prevented_progression'
+
+
+def test_assessment_rejects_evidence_from_project_asset_outside_attack_path(disposition_fixture):
+    user, project, asset, campaign, objective, path, evidence, _blast = _setup(disposition_fixture)
+    off_path_asset = Asset.objects.create(
+        project=project,
+        name='Off-path evidence asset',
+        slug='off-path-evidence-asset',
+        type=Asset.Type.IP_ADDRESS,
+        environment=asset.environment,
+        criticality=asset.criticality,
+        configuration={'host': 'off-path-campaign-evidence'},
+        owner=user,
+    )
+    off_path_evidence = Evidence.objects.create(
+        finding=evidence.finding,
+        asset=off_path_asset,
+        scan=evidence.scan,
+        source='campaign-off-path-reality',
+        evidence_type='validation',
+        raw_output='project-scoped but attack-path-unrelated evidence',
+        collected_by=user,
+    )
+    with pytest.raises(CampaignAssuranceError, match='not part of the assessed AttackPath lineage'):
+        assess_objective(
+            objective_id=str(objective.id), campaign_id=str(campaign.id), project_id=str(project.id), user_id=str(user.id),
+            expected_objective_version=1, attack_path_id=str(path.id), evidence_id=str(off_path_evidence.id),
+            outcome='blocked', reason_code='invalid_lineage',
+        )
+    assert CampaignObjectiveAssessment.objects.count() == 0
+
+
+def test_assessment_rechecks_current_source_authorization(disposition_fixture):
+    user, project, asset, campaign, objective, path, evidence, _blast = _setup(disposition_fixture)
+    current = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+    AssetAuthorization.objects.create(
+        asset=asset,
+        actor=user,
+        authorized=False,
+        target_snapshot=current.target_snapshot,
+        reason='Campaign hardening reality revocation',
+        supersedes=current,
+    )
+    with pytest.raises(CampaignAssuranceError, match='not currently valid'):
+        assess_objective(
+            objective_id=str(objective.id), campaign_id=str(campaign.id), project_id=str(project.id), user_id=str(user.id),
+            expected_objective_version=1, attack_path_id=str(path.id), evidence_id=str(evidence.id),
+            outcome='blocked', reason_code='revoked_scope',
+        )
+    assert CampaignObjectiveAssessment.objects.count() == 0
+
+
+def test_validation_run_must_match_evidence_finding_and_current_authorization(disposition_fixture):
+    user, project, asset, campaign, objective, path, evidence, _blast = _setup(disposition_fixture)
+    current = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+    other_finding = Vulnerability.objects.create(
+        scan=evidence.scan,
+        project=project,
+        asset=asset,
+        title='Other validation finding',
+        description='Same project and asset but distinct finding lineage.',
+        severity=Vulnerability.Severity.MEDIUM,
+        status=Vulnerability.Status.OPEN,
+        confidence=Vulnerability.Confidence.HIGH,
+        source_engine='nmap',
+    )
+    validation = ValidationRun.objects.create(
+        user=user,
+        finding=other_finding,
+        authorization_decision=current,
+        target_type='ip',
+        target_value=current.target_snapshot,
+        scope=current.target_snapshot,
+        profile='full',
+        engines=['nmap'],
+        authorized=True,
+        status=ValidationRun.Status.COMPLETED,
+        progress=100,
+        current_phase='completed',
+    )
+    with pytest.raises(CampaignAssuranceError, match='finding does not match the evidence finding lineage'):
+        assess_objective(
+            objective_id=str(objective.id), campaign_id=str(campaign.id), project_id=str(project.id), user_id=str(user.id),
+            expected_objective_version=1, attack_path_id=str(path.id), evidence_id=str(evidence.id),
+            validation_id=str(validation.id), outcome='blocked', reason_code='validation_mismatch',
+        )
+    assert CampaignObjectiveAssessment.objects.count() == 0
+
+
+def test_matching_validation_run_is_bound_into_assessment_proof(disposition_fixture):
+    user, project, asset, campaign, objective, path, evidence, _blast = _setup(disposition_fixture)
+    current = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+    validation = ValidationRun.objects.create(
+        user=user,
+        finding=evidence.finding,
+        authorization_decision=current,
+        target_type='ip',
+        target_value=current.target_snapshot,
+        scope=current.target_snapshot,
+        profile='full',
+        engines=['nmap'],
+        authorized=True,
+        status=ValidationRun.Status.COMPLETED,
+        progress=100,
+        current_phase='completed',
+    )
+    result = assess_objective(
+        objective_id=str(objective.id), campaign_id=str(campaign.id), project_id=str(project.id), user_id=str(user.id),
+        expected_objective_version=1, attack_path_id=str(path.id), evidence_id=str(evidence.id),
+        validation_id=str(validation.id), outcome='blocked', reason_code='validated_control_block',
+    )
+    assert result.assessment.validation_run_id == validation.id
+    assert len(result.assessment.proof_sha256) == 64
+
+
+def test_blast_radius_evidence_refs_must_include_assessment_evidence(disposition_fixture):
+    user, project, _asset, campaign, objective, path, evidence, blast = _setup(disposition_fixture)
+    alternate_evidence = Evidence.objects.create(
+        finding=evidence.finding,
+        asset=evidence.asset,
+        scan=evidence.scan,
+        source='campaign-alternate-reality',
+        evidence_type='validation',
+        raw_output='alternate valid evidence not referenced by the blast snapshot',
+        collected_by=user,
+    )
+    with pytest.raises(CampaignAssuranceError, match='evidence refs do not include the assessment evidence'):
+        assess_objective(
+            objective_id=str(objective.id), campaign_id=str(campaign.id), project_id=str(project.id), user_id=str(user.id),
+            expected_objective_version=1, attack_path_id=str(path.id), evidence_id=str(alternate_evidence.id),
+            blast_radius_snapshot_id=str(blast.id), outcome='reached', reason_code='blast_evidence_mismatch',
+        )
+    assert CampaignObjectiveAssessment.objects.count() == 0
+
+
+def test_campaign_completion_revalidates_authorized_scope(disposition_fixture):
+    user, project, asset, campaign, objective, path, evidence, _blast = _setup(disposition_fixture)
+    assess_objective(
+        objective_id=str(objective.id), campaign_id=str(campaign.id), project_id=str(project.id), user_id=str(user.id),
+        expected_objective_version=1, attack_path_id=str(path.id), evidence_id=str(evidence.id),
+        outcome='blocked', reason_code='control_prevented_progression',
+    )
+    current = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+    AssetAuthorization.objects.create(
+        asset=asset,
+        actor=user,
+        authorized=False,
+        target_snapshot=current.target_snapshot,
+        reason='Campaign completion scope revoked',
+        supersedes=current,
+    )
+    campaign.refresh_from_db()
+    with pytest.raises(CampaignAssuranceError, match='not currently valid'):
+        complete_campaign(
+            campaign_id=str(campaign.id), project_id=str(project.id), user_id=str(user.id),
+            expected_campaign_version=campaign.version,
+        )
+    campaign.refresh_from_db()
+    assert campaign.status == AdversaryCampaign.Status.ACTIVE
 
 
 def test_assessment_and_audit_evidence_are_immutable(disposition_fixture):
