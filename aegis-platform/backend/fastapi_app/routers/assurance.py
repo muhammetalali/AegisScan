@@ -13,6 +13,7 @@ from ..core.dependencies import get_current_user
 from ..services.intelligence import IntelligenceFusion, IntelligenceFusionError
 from evidence.models import Evidence, ValidationRun
 from .assurance_drift import router as assurance_drift_router
+from .assurance_obligations import router as assurance_obligations_router
 
 router = APIRouter()
 _fusion = IntelligenceFusion()
@@ -101,3 +102,4 @@ async def enrich_cve(cve_id: str, current_user=Depends(get_current_user)):
 
 
 router.include_router(assurance_drift_router, prefix='/drift')
+router.include_router(assurance_obligations_router, prefix='/governance')
