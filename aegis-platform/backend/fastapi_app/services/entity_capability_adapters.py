@@ -195,7 +195,7 @@ def _objective_context(*, entity_id: str, link: TenantProject, actor_id: str) ->
             project_id=link.project_id,
         ).order_by('-updated_at', '-discovered_at')
     )
-    candidates: list[tuple[AttackPath, Evidence]] = []
+    candidates: list[tuple[AttackPath, Evidence, str]] = []
     for path in paths:
         if _path_asset_id(path.source_node) != str(campaign.source_asset_id):
             continue
@@ -209,30 +209,37 @@ def _objective_context(*, entity_id: str, link: TenantProject, actor_id: str) ->
             .order_by('-collected_at')[:50]
         )
         for evidence in evidences:
-            if evidence.asset_id is None:
+            if evidence.asset_id is None or evidence.asset is None:
                 continue
             if evidence.finding_id and evidence.finding.asset_id and str(evidence.finding.asset_id) != str(evidence.asset_id):
                 continue
             expected_sha = hashlib.sha256(evidence.raw_output.encode('utf-8', errors='replace')).hexdigest()
             if expected_sha != evidence.sha256:
                 continue
-            candidates.append((path, evidence))
+            evidence_authorization, _reason = current_asset_authorization(
+                evidence.asset,
+                asset_target(evidence.asset),
+            )
+            if evidence_authorization is None:
+                continue
+            candidates.append((path, evidence, str(evidence_authorization.id)))
             break
 
-    evidence_refs = [str(evidence.id) for _path, evidence in candidates]
-    path_refs = [str(path.id) for path, _evidence in candidates]
+    evidence_refs = [str(evidence.id) for _path, evidence, _authorization_id in candidates]
+    path_refs = [str(path.id) for path, _evidence, _authorization_id in candidates]
+    evidence_authorization_refs = [_authorization_id for _path, _evidence, _authorization_id in candidates]
     evidence_ready = bool(candidates)
     assessable_paths = [
-        path for path, _evidence in candidates
+        path for path, _evidence, _authorization_id in candidates
         if path.status in {AttackPath.Status.DISCOVERED, AttackPath.Status.VALIDATED}
     ]
     evidence_gate = _gate(
         GateType.EVIDENCE,
         GateState.PASS if evidence_ready else GateState.BLOCKED,
         'OBJECTIVE_EVIDENCE_CANDIDATE_READY' if evidence_ready else 'OBJECTIVE_EVIDENCE_REQUIRED',
-        'At least one tenant-scoped AttackPath has lineage-consistent, hash-valid objective evidence.' if evidence_ready else 'No lineage-consistent AttackPath/evidence candidate is available for objective assessment.',
-        missing=[] if evidence_ready else ['attack_path', 'objective_evidence'],
-        evidence_refs=path_refs + evidence_refs,
+        'At least one tenant-scoped AttackPath has lineage-consistent, hash-valid evidence on a currently authorized asset.' if evidence_ready else 'No lineage-consistent, hash-valid, currently authorized AttackPath evidence candidate is available for objective assessment.',
+        missing=[] if evidence_ready else ['attack_path', 'objective_evidence', 'evidence_asset_authorization'],
+        evidence_refs=path_refs + evidence_refs + evidence_authorization_refs,
     )
     validation_gate = _gate(
         GateType.VALIDATION,
@@ -532,13 +539,15 @@ def _investigation_proof(case: InvestigationCase, state: InvestigationCaseState 
     if state is not None and state.decision_action_id:
         refs.append(str(state.decision_action_id))
     for finding in case.findings.all():
+        if str(finding.project_id) != str(case.project_id):
+            continue
         if state is not None and state.decision_action_id:
             verified = _verified_remediation(finding)
             if verified:
                 refs.extend([str(verified[0].id), str(verified[1].id)])
                 return True, refs
         disposition = FindingDisposition.objects.filter(finding=finding).order_by('-created_at', '-id').first()
-        if disposition is None:
+        if disposition is None or str(disposition.organization_id) != str(case.organization_id):
             continue
         if disposition.disposition in {FindingDisposition.Disposition.ACCEPTED_RISK, FindingDisposition.Disposition.WONT_FIX}:
             if disposition.review_at is None or disposition.review_at <= django_timezone.now():
@@ -577,8 +586,8 @@ def _investigation_context(*, entity_id: str, link: TenantProject, actor_id: str
         GateType.EVIDENCE,
         GateState.PASS if proof_ready else GateState.BLOCKED,
         'CLOSURE_PROOF_CANDIDATE_READY' if proof_ready else 'CLOSURE_PROOF_REQUIRED',
-        'At least one governed remediation or disposition closure proof is available.' if proof_ready else 'Investigation closure requires qualifying remediation or disposition proof.',
-        missing=[] if proof_ready else ['response_evidence', 'closure_proof'],
+        'At least one same-project governed remediation or same-tenant disposition closure proof is available.' if proof_ready else 'Investigation closure requires qualifying proof bound to the same project and tenant.',
+        missing=[] if proof_ready else ['same_project_response_evidence', 'same_tenant_closure_proof'],
         evidence_refs=refs,
     )
     return EntityCapabilityContext(
