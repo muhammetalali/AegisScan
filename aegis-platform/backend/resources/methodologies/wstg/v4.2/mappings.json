@@ -1,0 +1,584 @@
+[
+  {
+    "wstg_id": "WSTG-v42-INFO-01",
+    "required_capability_ids": [
+      "web.info.conduct-search-engine-discovery-reconnaissance-for-information-leakage"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-02",
+    "required_capability_ids": [
+      "web.info.fingerprint-web-server"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-03",
+    "required_capability_ids": [
+      "web.info.review-webserver-metafiles-for-information-leakage"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-04",
+    "required_capability_ids": [
+      "web.info.enumerate-applications-on-webserver"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-05",
+    "required_capability_ids": [
+      "web.info.review-webpage-content-for-information-leakage"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-06",
+    "required_capability_ids": [
+      "web.info.identify-application-entry-points"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-07",
+    "required_capability_ids": [
+      "web.info.map-execution-paths-through-application"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-08",
+    "required_capability_ids": [
+      "web.info.fingerprint-web-application-framework"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-09",
+    "required_capability_ids": [
+      "web.info.fingerprint-web-application"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INFO-10",
+    "required_capability_ids": [
+      "web.info.map-application-architecture"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-01",
+    "required_capability_ids": [
+      "web.conf.network-infrastructure-configuration"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-02",
+    "required_capability_ids": [
+      "web.conf.application-platform-configuration"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-03",
+    "required_capability_ids": [
+      "web.conf.file-extensions-handling-for-sensitive-information"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-04",
+    "required_capability_ids": [
+      "web.conf.review-old-backup-and-unreferenced-files-for-sensitive-information"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-05",
+    "required_capability_ids": [
+      "web.conf.enumerate-infrastructure-and-application-admin-interfaces"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-06",
+    "required_capability_ids": [
+      "web.conf.http-methods"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-07",
+    "required_capability_ids": [
+      "web.conf.http-strict-transport-security"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-08",
+    "required_capability_ids": [
+      "web.conf.ria-cross-domain-policy"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-09",
+    "required_capability_ids": [
+      "web.conf.file-permission"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-10",
+    "required_capability_ids": [
+      "web.conf.subdomain-takeover"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CONF-11",
+    "required_capability_ids": [
+      "web.conf.cloud-storage"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-IDNT-01",
+    "required_capability_ids": [
+      "web.idnt.role-definitions"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-IDNT-02",
+    "required_capability_ids": [
+      "web.idnt.user-registration-process"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-IDNT-03",
+    "required_capability_ids": [
+      "web.idnt.account-provisioning-process"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-IDNT-04",
+    "required_capability_ids": [
+      "web.idnt.account-enumeration-and-guessable-user-account"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-IDNT-05",
+    "required_capability_ids": [
+      "web.idnt.weak-or-unenforced-username-policy"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-01",
+    "required_capability_ids": [
+      "web.athn.credentials-transported-over-an-encrypted-channel"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-02",
+    "required_capability_ids": [
+      "web.athn.default-credentials"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-03",
+    "required_capability_ids": [
+      "web.athn.weak-lock-out-mechanism"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-04",
+    "required_capability_ids": [
+      "web.athn.bypassing-authentication-schema"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-05",
+    "required_capability_ids": [
+      "web.athn.vulnerable-remember-password"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-06",
+    "required_capability_ids": [
+      "web.athn.browser-cache-weaknesses"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-07",
+    "required_capability_ids": [
+      "web.athn.weak-password-policy"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-08",
+    "required_capability_ids": [
+      "web.athn.weak-security-question-answer"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-09",
+    "required_capability_ids": [
+      "web.athn.weak-password-change-or-reset-functionalities"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHN-10",
+    "required_capability_ids": [
+      "web.athn.weaker-authentication-in-alternative-channel"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHZ-01",
+    "required_capability_ids": [
+      "web.athz.directory-traversal-file-include"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHZ-02",
+    "required_capability_ids": [
+      "web.athz.bypassing-authorization-schema"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHZ-03",
+    "required_capability_ids": [
+      "web.athz.privilege-escalation"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ATHZ-04",
+    "required_capability_ids": [
+      "web.athz.insecure-direct-object-references"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-01",
+    "required_capability_ids": [
+      "web.sess.session-management-schema"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-02",
+    "required_capability_ids": [
+      "web.sess.cookies-attributes"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-03",
+    "required_capability_ids": [
+      "web.sess.session-fixation"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-04",
+    "required_capability_ids": [
+      "web.sess.exposed-session-variables"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-05",
+    "required_capability_ids": [
+      "web.sess.cross-site-request-forgery"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-06",
+    "required_capability_ids": [
+      "web.sess.logout-functionality"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-07",
+    "required_capability_ids": [
+      "web.sess.session-timeout"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-08",
+    "required_capability_ids": [
+      "web.sess.session-puzzling"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-SESS-09",
+    "required_capability_ids": [
+      "web.sess.session-hijacking"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-01",
+    "required_capability_ids": [
+      "web.inpv.reflected-cross-site-scripting"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-02",
+    "required_capability_ids": [
+      "web.inpv.stored-cross-site-scripting"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-03",
+    "required_capability_ids": [
+      "web.inpv.http-verb-tampering"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-04",
+    "required_capability_ids": [
+      "web.inpv.http-parameter-pollution"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-05",
+    "required_capability_ids": [
+      "web.inpv.sql-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-06",
+    "required_capability_ids": [
+      "web.inpv.ldap-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-07",
+    "required_capability_ids": [
+      "web.inpv.xml-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-08",
+    "required_capability_ids": [
+      "web.inpv.ssi-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-09",
+    "required_capability_ids": [
+      "web.inpv.xpath-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-10",
+    "required_capability_ids": [
+      "web.inpv.imap-smtp-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-11",
+    "required_capability_ids": [
+      "web.inpv.code-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-12",
+    "required_capability_ids": [
+      "web.inpv.command-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-13",
+    "required_capability_ids": [
+      "web.inpv.format-string-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-14",
+    "required_capability_ids": [
+      "web.inpv.incubated-vulnerability"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-15",
+    "required_capability_ids": [
+      "web.inpv.http-splitting-smuggling"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-16",
+    "required_capability_ids": [
+      "web.inpv.http-incoming-requests"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-17",
+    "required_capability_ids": [
+      "web.inpv.host-header-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-18",
+    "required_capability_ids": [
+      "web.inpv.server-side-template-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-INPV-19",
+    "required_capability_ids": [
+      "web.inpv.server-side-request-forgery"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ERRH-01",
+    "required_capability_ids": [
+      "web.errh.improper-error-handling"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-ERRH-02",
+    "required_capability_ids": [
+      "web.errh.stack-traces"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CRYP-01",
+    "required_capability_ids": [
+      "web.cryp.weak-transport-layer-security"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CRYP-02",
+    "required_capability_ids": [
+      "web.cryp.padding-oracle"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CRYP-03",
+    "required_capability_ids": [
+      "web.cryp.sensitive-information-sent-via-unencrypted-channels"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CRYP-04",
+    "required_capability_ids": [
+      "web.cryp.weak-encryption"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-01",
+    "required_capability_ids": [
+      "web.busl.business-logic-data-validation"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-02",
+    "required_capability_ids": [
+      "web.busl.ability-to-forge-requests"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-03",
+    "required_capability_ids": [
+      "web.busl.integrity-checks"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-04",
+    "required_capability_ids": [
+      "web.busl.process-timing"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-05",
+    "required_capability_ids": [
+      "web.busl.number-of-times-a-function-can-be-used-limits"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-06",
+    "required_capability_ids": [
+      "web.busl.the-circumvention-of-work-flows"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-07",
+    "required_capability_ids": [
+      "web.busl.defenses-against-application-mis-use"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-08",
+    "required_capability_ids": [
+      "web.busl.upload-of-unexpected-file-types"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-BUSL-09",
+    "required_capability_ids": [
+      "web.busl.upload-of-malicious-files"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-01",
+    "required_capability_ids": [
+      "web.clnt.dom-based-cross-site-scripting"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-02",
+    "required_capability_ids": [
+      "web.clnt.javascript-execution"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-03",
+    "required_capability_ids": [
+      "web.clnt.html-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-04",
+    "required_capability_ids": [
+      "web.clnt.client-side-url-redirect"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-05",
+    "required_capability_ids": [
+      "web.clnt.css-injection"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-06",
+    "required_capability_ids": [
+      "web.clnt.client-side-resource-manipulation"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-07",
+    "required_capability_ids": [
+      "web.clnt.cross-origin-resource-sharing"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-08",
+    "required_capability_ids": [
+      "web.clnt.cross-site-flashing"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-09",
+    "required_capability_ids": [
+      "web.clnt.clickjacking"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-10",
+    "required_capability_ids": [
+      "web.clnt.websockets"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-11",
+    "required_capability_ids": [
+      "web.clnt.web-messaging"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-12",
+    "required_capability_ids": [
+      "web.clnt.browser-storage"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-CLNT-13",
+    "required_capability_ids": [
+      "web.clnt.cross-site-script-inclusion"
+    ]
+  },
+  {
+    "wstg_id": "WSTG-v42-APIT-01",
+    "required_capability_ids": [
+      "api.apit.graphql"
+    ]
+  }
+]
