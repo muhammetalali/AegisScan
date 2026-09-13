@@ -2,6 +2,7 @@ import uuid
 import hashlib
 from django.conf import settings
 from django.db import models
+from django.core.exceptions import ValidationError
 
 
 class Evidence(models.Model):
@@ -65,3 +66,60 @@ class ValidationRun(models.Model):
             models.Index(fields=['finding', 'status']),
             models.Index(fields=['authorization_decision'], name='evidence_v_authori_5f0c72_idx'),
         ]
+
+
+class FindingConfirmation(models.Model):
+    class Verdict(models.TextChoices):
+        CONFIRMED = 'confirmed', 'Confirmed'
+        FALSE_POSITIVE = 'false_positive', 'False Positive'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    finding = models.ForeignKey(
+        'vulnerabilities.Vulnerability', on_delete=models.PROTECT,
+        related_name='confirmation_records',
+    )
+    validation_run = models.OneToOneField(
+        ValidationRun, on_delete=models.PROTECT,
+        related_name='finding_confirmation',
+    )
+    evidence = models.ForeignKey(
+        Evidence, on_delete=models.PROTECT,
+        related_name='finding_confirmations',
+    )
+    authorization_decision = models.ForeignKey(
+        'assets.AssetAuthorization', on_delete=models.PROTECT,
+        related_name='finding_confirmations',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name='finding_confirmations',
+    )
+    verdict = models.CharField(max_length=20, choices=Verdict.choices)
+    finding_present = models.BooleanField()
+    policy_version = models.CharField(max_length=64, default='finding-confirmation.v1')
+    evidence_sha256 = models.CharField(max_length=64)
+    result_sha256 = models.CharField(max_length=64)
+    request_fingerprint = models.CharField(max_length=64)
+    rationale = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(verdict='confirmed', finding_present=True)
+                    | models.Q(verdict='false_positive', finding_present=False)
+                ),
+                name='evidence_confirmation_verdict_presence',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('Finding confirmation records are immutable and cannot be updated.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Finding confirmation records are immutable and cannot be deleted.')
