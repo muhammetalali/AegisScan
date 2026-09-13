@@ -21,7 +21,7 @@ class SecuritySignal(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey('enterprise.Organization', on_delete=models.PROTECT, related_name='security_signals')
     project = models.ForeignKey('projects.Project', on_delete=models.PROTECT, related_name='security_signals')
-    validation = models.OneToOneField('enterprise.DetectionValidation', on_delete=models.PROTECT, related_name='security_signal')
+    validation = models.ForeignKey('enterprise.DetectionValidation', on_delete=models.PROTECT, related_name='security_signals')
     revision = models.ForeignKey('enterprise.DetectionRevision', on_delete=models.PROTECT, related_name='security_signals')
     finding = models.ForeignKey('vulnerabilities.Vulnerability', on_delete=models.PROTECT, related_name='security_signals')
     fingerprint = models.CharField(max_length=64, unique=True)
@@ -53,14 +53,19 @@ class SecuritySignal(models.Model):
 
 class InvestigationCaseState(models.Model):
     case = models.OneToOneField('enterprise.InvestigationCase', on_delete=models.CASCADE, primary_key=True, related_name='soc_state')
-    correlation_key = models.CharField(max_length=64, unique=True)
+    base_correlation_key = models.CharField(max_length=64)
+    generation = models.PositiveIntegerField(default=1)
     version = models.PositiveIntegerField(default=1)
     decision_action = models.ForeignKey('enterprise.DecisionAction', on_delete=models.PROTECT, null=True, blank=True, related_name='investigation_cases')
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         app_label = 'enterprise'
-        indexes = [models.Index(fields=['decision_action'], name='idx_soc_case_decision_action')]
+        constraints = [models.UniqueConstraint(fields=['base_correlation_key', 'generation'], name='uniq_soc_case_generation')]
+        indexes = [
+            models.Index(fields=['base_correlation_key', '-generation'], name='idx_soc_case_correlation'),
+            models.Index(fields=['decision_action'], name='idx_soc_case_decision_action'),
+        ]
 
 
 class InvestigationSignalLink(models.Model):
