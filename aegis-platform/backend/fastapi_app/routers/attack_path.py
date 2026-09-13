@@ -8,6 +8,7 @@ from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from . import campaign_objectives
 from ..contracts import AttackPathEdge, AttackPathGraph, AttackPathNode, AttackPathPath
 from ..core.dependencies import get_current_user
 from assets.models import Asset, AssetRelationship
@@ -143,3 +144,6 @@ async def get_attack_path_graph(project_id: str, user=Depends(get_current_user))
 @router.post('/projects/{project_id}/analyze', response_model=AttackPathAnalysisResponse)
 async def analyze_attack_paths(project_id: str, request: AttackPathAnalysisRequest, user=Depends(get_current_user)):
     return await _analyze(request, project_id, str(user.get('user_id')))
+
+
+router.include_router(campaign_objectives.router, prefix='/campaigns')
