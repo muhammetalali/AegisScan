@@ -1,0 +1,1489 @@
+[
+  {
+    "id": "web.info.conduct-search-engine-discovery-reconnaissance-for-information-leakage",
+    "description": "Conduct Search Engine Discovery Reconnaissance for Information Leakage",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "recon.subfinder"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "recon.amass"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.external_fabric"
+      }
+    ]
+  },
+  {
+    "id": "web.info.fingerprint-web-server",
+    "description": "Fingerprint Web Server",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.httpx"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "network.nmap"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.security-headers"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.waf-detection"
+      }
+    ]
+  },
+  {
+    "id": "web.info.review-webserver-metafiles-for-information-leakage",
+    "description": "Review Webserver Metafiles for Information Leakage",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.katana"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.ffuf"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.feroxbuster"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      }
+    ]
+  },
+  {
+    "id": "web.info.enumerate-applications-on-webserver",
+    "description": "Enumerate Applications on Webserver",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.httpx"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "network.nmap"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.katana"
+      }
+    ]
+  },
+  {
+    "id": "web.info.review-webpage-content-for-information-leakage",
+    "description": "Review Webpage Content for Information Leakage",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.katana"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.info.identify-application-entry-points",
+    "description": "Identify application entry points",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.katana"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "api.openapi-contract-security"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "api.openapi-runtime-conformance"
+      }
+    ]
+  },
+  {
+    "id": "web.info.map-execution-paths-through-application",
+    "description": "Map execution paths through application",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.graph_intelligence"
+      }
+    ]
+  },
+  {
+    "id": "web.info.fingerprint-web-application-framework",
+    "description": "Fingerprint Web Application Framework",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.httpx"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.waf-detection"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      }
+    ]
+  },
+  {
+    "id": "web.info.fingerprint-web-application",
+    "description": "Fingerprint Web Application",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.httpx"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      }
+    ]
+  },
+  {
+    "id": "web.info.map-application-architecture",
+    "description": "Map Application Architecture",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "network.nmap"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "api.openapi-contract-security"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.graph_intelligence"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.network-infrastructure-configuration",
+    "description": "Test Network Infrastructure Configuration",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "network.nmap"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "network.masscan"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "network.rustscan"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.application-platform-configuration",
+    "description": "Test Application Platform Configuration",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.security-headers"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.waf-detection"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nikto"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.file-extensions-handling-for-sensitive-information",
+    "description": "Test File Extensions Handling for Sensitive Information",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.ffuf"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.feroxbuster"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.review-old-backup-and-unreferenced-files-for-sensitive-information",
+    "description": "Review Old Backup and Unreferenced Files for Sensitive Information",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.ffuf"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.feroxbuster"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.external_fabric"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.enumerate-infrastructure-and-application-admin-interfaces",
+    "description": "Enumerate Infrastructure and Application Admin Interfaces",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "network.nmap"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.ffuf"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.feroxbuster"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.http-methods",
+    "description": "Test HTTP Methods",
+    "availability": "planned_native",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.http_protocol_security"
+      },
+      {
+        "kind": "planned_native",
+        "ref": "web.http-method-policy"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.http-strict-transport-security",
+    "description": "Test HTTP Strict Transport Security",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.security-headers"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.ria-cross-domain-policy",
+    "description": "Test RIA cross domain policy",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.katana"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.ffuf"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.http_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.file-permission",
+    "description": "Test File Permission",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.ffuf"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.feroxbuster"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.subdomain-takeover",
+    "description": "Test for Subdomain Takeover",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.scope_authorization"
+      }
+    ]
+  },
+  {
+    "id": "web.conf.cloud-storage",
+    "description": "Test Cloud Storage",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "cloud.read-only-posture"
+      }
+    ]
+  },
+  {
+    "id": "web.idnt.role-definitions",
+    "description": "Test Role Definitions",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.authorization_guard"
+      }
+    ]
+  },
+  {
+    "id": "web.idnt.user-registration-process",
+    "description": "Test User Registration Process",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.idnt.account-provisioning-process",
+    "description": "Test Account Provisioning Process",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.idnt.account-enumeration-and-guessable-user-account",
+    "description": "Testing for Account Enumeration and Guessable User Account",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.idnt.weak-or-unenforced-username-policy",
+    "description": "Testing for Weak or unenforced username policy",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.credentials-transported-over-an-encrypted-channel",
+    "description": "Testing for Credentials Transported over an Encrypted Channel",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.security-headers"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.default-credentials",
+    "description": "Testing for Default Credentials",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.credential_execution"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.weak-lock-out-mechanism",
+    "description": "Testing for Weak Lock Out Mechanism",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.bypassing-authentication-schema",
+    "description": "Testing for Bypassing Authentication Schema",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.vulnerable-remember-password",
+    "description": "Testing for Vulnerable Remember Password",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.browser-cache-weaknesses",
+    "description": "Testing for Browser Cache Weaknesses",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.security-headers"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.cache_origin_security"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.weak-password-policy",
+    "description": "Testing for Weak Password Policy",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.weak-security-question-answer",
+    "description": "Testing for Weak Security Question Answer",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.weak-password-change-or-reset-functionalities",
+    "description": "Testing for Weak Password Change or Reset Functionalities",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.athn.weaker-authentication-in-alternative-channel",
+    "description": "Testing for Weaker Authentication in Alternative Channel",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.athz.directory-traversal-file-include",
+    "description": "Testing Directory Traversal File Include",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.ffuf"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.feroxbuster"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      }
+    ]
+  },
+  {
+    "id": "web.athz.bypassing-authorization-schema",
+    "description": "Testing for Bypassing Authorization Schema",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.authorization_guard"
+      }
+    ]
+  },
+  {
+    "id": "web.athz.privilege-escalation",
+    "description": "Testing for Privilege Escalation",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.graph_intelligence"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.athz.insecure-direct-object-references",
+    "description": "Testing for Insecure Direct Object References",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.authorization_guard"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.session-management-schema",
+    "description": "Testing for Session Management Schema",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.cookies-attributes",
+    "description": "Testing for Cookies Attributes",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.session-fixation",
+    "description": "Testing for Session Fixation",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.exposed-session-variables",
+    "description": "Testing for Exposed Session Variables",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.cross-site-request-forgery",
+    "description": "Testing for Cross Site Request Forgery",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.logout-functionality",
+    "description": "Testing for Logout Functionality",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.session-timeout",
+    "description": "Testing Session Timeout",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.session-puzzling",
+    "description": "Testing for Session Puzzling",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.sess.session-hijacking",
+    "description": "Testing for Session Hijacking",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.identity_protocol_security"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.reflected-cross-site-scripting",
+    "description": "Testing for Reflected Cross Site Scripting",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.stored-cross-site-scripting",
+    "description": "Testing for Stored Cross Site Scripting",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.http-verb-tampering",
+    "description": "Testing for HTTP Verb Tampering",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.http_protocol_security"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.authorization_guard"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.http-parameter-pollution",
+    "description": "Testing for HTTP Parameter Pollution",
+    "availability": "planned_native",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "api.openapi-runtime-conformance"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.http_protocol_security"
+      },
+      {
+        "kind": "planned_native",
+        "ref": "web.duplicate-parameter-semantics"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.sql-injection",
+    "description": "Testing for SQL Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.ldap-injection",
+    "description": "Testing for LDAP Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.xml-injection",
+    "description": "Testing for XML Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "api.openapi-runtime-conformance"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.ssi-injection",
+    "description": "Testing for SSI Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.xpath-injection",
+    "description": "Testing for XPath Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.imap-smtp-injection",
+    "description": "Testing for IMAP SMTP Injection",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.code-injection",
+    "description": "Testing for Code Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.command-injection",
+    "description": "Testing for Command Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.format-string-injection",
+    "description": "Testing for Format String Injection",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.incubated-vulnerability",
+    "description": "Testing for Incubated Vulnerability",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.http-splitting-smuggling",
+    "description": "Testing for HTTP Splitting Smuggling",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.http_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.http-incoming-requests",
+    "description": "Testing for HTTP Incoming Requests",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.http_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.host-header-injection",
+    "description": "Testing for Host Header Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.http_protocol_security"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.cache_origin_security"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.server-side-template-injection",
+    "description": "Testing for Server-side Template Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.inpv.server-side-request-forgery",
+    "description": "Testing for Server-Side Request Forgery",
+    "availability": "planned_native",
+    "provider_bindings": [
+      {
+        "kind": "planned_native",
+        "ref": "web.ssrf-canary-validation"
+      }
+    ]
+  },
+  {
+    "id": "web.errh.improper-error-handling",
+    "description": "Testing for Improper Error Handling",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "api.openapi-runtime-conformance"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.errh.stack-traces",
+    "description": "Testing for Stack Traces",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.cryp.weak-transport-layer-security",
+    "description": "Testing for Weak Transport Layer Security",
+    "availability": "planned_native",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.nuclei"
+      },
+      {
+        "kind": "planned_native",
+        "ref": "tls.posture"
+      }
+    ]
+  },
+  {
+    "id": "web.cryp.padding-oracle",
+    "description": "Testing for Padding Oracle",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.cryp.sensitive-information-sent-via-unencrypted-channels",
+    "description": "Testing for Sensitive Information Sent via Unencrypted Channels",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.security-headers"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      }
+    ]
+  },
+  {
+    "id": "web.cryp.weak-encryption",
+    "description": "Testing for Weak Encryption",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.business-logic-data-validation",
+    "description": "Test Business Logic Data Validation",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.ability-to-forge-requests",
+    "description": "Test Ability to Forge Requests",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.integrity-checks",
+    "description": "Test Integrity Checks",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.process-timing",
+    "description": "Test for Process Timing",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.number-of-times-a-function-can-be-used-limits",
+    "description": "Test Number of Times a Function Can be Used Limits",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.the-circumvention-of-work-flows",
+    "description": "Testing for the Circumvention of Work Flows",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.defenses-against-application-mis-use",
+    "description": "Test Defenses Against Application Mis-use",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.upload-of-unexpected-file-types",
+    "description": "Test Upload of Unexpected File Types",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.busl.upload-of-malicious-files",
+    "description": "Test Upload of Malicious Files",
+    "availability": "governed_manual",
+    "provider_bindings": [
+      {
+        "kind": "governed_service",
+        "ref": "fastapi_app.services.governed_operations"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.dom-based-cross-site-scripting",
+    "description": "Testing for DOM-Based Cross Site Scripting",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.javascript-execution",
+    "description": "Testing for JavaScript Execution",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.html-injection",
+    "description": "Testing for HTML Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.client-side-url-redirect",
+    "description": "Testing for Client Side URL Redirect",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.css-injection",
+    "description": "Testing for CSS Injection",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "code.semgrep"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.client-side-resource-manipulation",
+    "description": "Testing for Client Side Resource Manipulation",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.cross-origin-resource-sharing",
+    "description": "Test Cross Origin Resource Sharing",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_security_foundation"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.cross-site-flashing",
+    "description": "Testing for Cross Site Flashing",
+    "availability": "conditional",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.clickjacking",
+    "description": "Testing for Clickjacking",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "web.security-headers"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.websockets",
+    "description": "Testing WebSockets",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.stateful_protocol_security"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.web-messaging",
+    "description": "Test Web Messaging",
+    "availability": "planned_native",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "planned_native",
+        "ref": "browser.postmessage-instrumentation"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.browser-storage",
+    "description": "Testing Browser Storage",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "web.clnt.cross-site-script-inclusion",
+    "description": "Testing for Cross Site Script Inclusion",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.dom-snapshot"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      }
+    ]
+  },
+  {
+    "id": "api.apit.graphql",
+    "description": "Testing GraphQL",
+    "availability": "existing",
+    "provider_bindings": [
+      {
+        "kind": "registry_capability",
+        "ref": "browser.spa-discovery"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "api.openapi-contract-security"
+      },
+      {
+        "kind": "registry_capability",
+        "ref": "api.openapi-runtime-conformance"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.graph_intelligence"
+      },
+      {
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.stateful_protocol_security"
+      }
+    ]
+  }
+]

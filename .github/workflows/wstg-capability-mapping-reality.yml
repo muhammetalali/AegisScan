@@ -1,0 +1,47 @@
+name: WSTG Capability Mapping Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wstg-capability-mapping-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mapping-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install backend contract dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Prove semantic mapping boundaries
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: python -m unittest fastapi_app.services.test_wstg_capability_mapping -v
+      - name: Capture exact-head mapping evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          PYTHONPATH=aegis-platform/backend \
+            python aegis-platform/backend/scripts/wstg_capability_mapping_reality.py \
+            | tee artifacts/wstg-capability-mapping-reality.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wstg-capability-mapping-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/
+          if-no-files-found: error
