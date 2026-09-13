@@ -202,3 +202,7 @@ async def artifact_integrity(project_id:UUID,payload:ArtifactIn,user=Depends(get
     trusted=values.pop('trusted_namespaces')
     row=await sync_to_async(record_artifact_integrity)(project=project,user_id=uid,trusted_namespaces=trusted,**values)
     return {'id':str(row.id),'state':row.state,'quarantine_reason':row.quarantine_reason,'sha256':row.sha256}
+
+
+from . import detection_engineering as _detection_engineering
+router.include_router(_detection_engineering.router, prefix='/detections', tags=['Detection Engineering'])
