@@ -87,20 +87,21 @@ def test_case_transition_uses_compare_and_swap_version(detection_fixture):
     assert state.version == 3
 
 
-def test_closed_case_creates_new_generation(detection_fixture):
+def test_direct_close_requires_governed_closure(detection_fixture):
     _client, user, project, finding, evidence, _organization, _membership = detection_fixture
     revision = _validated_revision(user, project, finding, evidence)
     first = _ingest(user, project, revision)
-    transition_case(case_id=str(first.case.id), project_id=str(project.id), user_id=str(user.id), expected_version=1, status=InvestigationCase.Status.INVESTIGATING)
-    transition_case(case_id=str(first.case.id), project_id=str(project.id), user_id=str(user.id), expected_version=2, status=InvestigationCase.Status.CLOSED)
-    second = _ingest(
-        user, project, revision,
-        observed_at=datetime(2026, 9, 13, 9, 31, tzinfo=dt_timezone.utc),
+    state = transition_case(
+        case_id=str(first.case.id), project_id=str(project.id), user_id=str(user.id),
+        expected_version=1, status=InvestigationCase.Status.INVESTIGATING,
     )
-    assert second.case_created is True
-    assert second.case.id != first.case.id
-    assert second.state.generation == 2
-    assert InvestigationCaseState.objects.filter(base_correlation_key=first.state.base_correlation_key).count() == 2
+    with pytest.raises(SecurityOperationsError, match='governed closure'):
+        transition_case(
+            case_id=str(first.case.id), project_id=str(project.id), user_id=str(user.id),
+            expected_version=state.version, status=InvestigationCase.Status.CLOSED,
+        )
+    first.case.refresh_from_db()
+    assert first.case.status == InvestigationCase.Status.INVESTIGATING
 
 
 def test_audit_and_signal_evidence_are_immutable(detection_fixture):
