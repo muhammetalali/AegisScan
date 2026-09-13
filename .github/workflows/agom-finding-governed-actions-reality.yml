@@ -57,6 +57,8 @@ jobs:
       AEGIS_EVIDENCE_HMAC_KEY: ci-agom-finding-evidence-key-0123456789
       CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
       CREDENTIAL_FINGERPRINT_KEY: ci-agom-finding-fingerprint-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
 
     services:
       postgres:
