@@ -175,7 +175,7 @@ def materialize_recurrence_obligation(
     link, _ = _membership(project_id, user_id, _GOVERNANCE_ROLES)
     with transaction.atomic():
         TenantProject.objects.select_for_update().get(pk=link.pk)
-        observation = AssuranceObservation.objects.select_for_update().select_related('finding', 'observed_by', 'prior_disposition').filter(
+        observation = AssuranceObservation.objects.select_for_update(of=('self',)).select_related('finding', 'observed_by', 'prior_disposition').filter(
             pk=observation_id,
             project_id=project_id,
             organization=link.organization,
