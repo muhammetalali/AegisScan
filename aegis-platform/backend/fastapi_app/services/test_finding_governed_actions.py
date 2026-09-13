@@ -163,7 +163,7 @@ def test_finding_manifest_exposes_durable_projection_version(disposition_fixture
 
 
 def test_finding_confirmation_creates_single_governed_envelope(disposition_fixture):
-    *_prefix, finding, _organization, _owner_membership, _confirmer, validation, evidence, kwargs = _confirmation_request(disposition_fixture)
+    _owner, _project, _authorization, finding, _organization, _owner_membership, _confirmer, validation, evidence, kwargs = _confirmation_request(disposition_fixture)
     result = execute_governed_action(**kwargs)
     assert result.replayed is False
     assert result.execution.action_id == 'finding.confirm'
@@ -182,7 +182,7 @@ def test_finding_confirmation_creates_single_governed_envelope(disposition_fixtu
 
 
 def test_finding_confirmation_exact_replay_has_no_second_domain_or_audit_write(disposition_fixture):
-    *_prefix, finding, _organization, _owner_membership, _confirmer, validation, _evidence, kwargs = _confirmation_request(disposition_fixture)
+    _owner, _project, _authorization, finding, _organization, _owner_membership, _confirmer, validation, _evidence, kwargs = _confirmation_request(disposition_fixture)
     first = execute_governed_action(**kwargs)
     second = execute_governed_action(**kwargs)
     assert first.replayed is False
@@ -196,7 +196,7 @@ def test_finding_confirmation_exact_replay_has_no_second_domain_or_audit_write(d
 
 
 def test_finding_confirmation_stale_version_fails_before_mutation(disposition_fixture):
-    *_prefix, finding, _organization, _owner_membership, _confirmer, _validation, _evidence, kwargs = _confirmation_request(disposition_fixture)
+    _owner, _project, _authorization, finding, _organization, _owner_membership, _confirmer, _validation_row, _evidence, kwargs = _confirmation_request(disposition_fixture)
     kwargs['expected_version'] = finding.version + 1
     with pytest.raises(GovernedActionConflict, match='Expected entity version'):
         execute_governed_action(**kwargs)
@@ -208,7 +208,7 @@ def test_finding_confirmation_stale_version_fails_before_mutation(disposition_fi
 
 
 def test_finding_confirmation_rejects_non_latest_validation_and_rolls_back(disposition_fixture):
-    owner, project, authorization, finding, organization, owner_membership, confirmer, older, _evidence, kwargs = _confirmation_request(disposition_fixture)
+    _owner, _project, authorization, finding, _organization, _owner_membership, confirmer, older, _evidence, kwargs = _confirmation_request(disposition_fixture)
     _validation(
         user=confirmer,
         finding=finding,
@@ -229,7 +229,7 @@ def test_finding_confirmation_rejects_non_latest_validation_and_rolls_back(dispo
 
 
 def test_finding_confirmation_audit_failure_rolls_back_domain_and_envelope(disposition_fixture, monkeypatch):
-    *_prefix, finding, _organization, _owner_membership, _confirmer, _validation, _evidence, kwargs = _confirmation_request(disposition_fixture)
+    _owner, _project, _authorization, finding, _organization, _owner_membership, _confirmer, _validation_row, _evidence, kwargs = _confirmation_request(disposition_fixture)
 
     def fail_audit(**_values):
         raise RuntimeError('forced finding audit append failure')
@@ -245,7 +245,7 @@ def test_finding_confirmation_audit_failure_rolls_back_domain_and_envelope(dispo
 
 
 def test_finding_close_requires_independent_closer_and_creates_single_envelope(disposition_fixture):
-    owner, project, authorization, finding, organization, owner_membership, confirmer, _validation_row, _evidence, confirm_kwargs = _confirmation_request(disposition_fixture)
+    owner, project, authorization, finding, organization, _owner_membership, _confirmer, _validation_row, _evidence, confirm_kwargs = _confirmation_request(disposition_fixture)
     execute_governed_action(**confirm_kwargs)
     finding.refresh_from_db()
 
@@ -327,7 +327,7 @@ def test_finding_close_blocks_verifier_as_closer(disposition_fixture):
 
 def test_postgresql_concurrent_exact_confirmation_is_single_execution(disposition_fixture):
     assert connection.vendor == 'postgresql'
-    *_prefix, finding, _organization, _owner_membership, _confirmer, validation, _evidence, kwargs = _confirmation_request(disposition_fixture)
+    _owner, _project, _authorization, finding, _organization, _owner_membership, _confirmer, validation, _evidence, kwargs = _confirmation_request(disposition_fixture)
     barrier = Barrier(2)
 
     def worker():
