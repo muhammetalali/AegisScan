@@ -68,6 +68,20 @@ class ValidationRun(models.Model):
         ]
 
 
+class ImmutableFindingConfirmationQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Finding confirmation records are append-only and cannot be updated.')
+
+    def delete(self):
+        raise ValidationError('Finding confirmation records are append-only and cannot be deleted.')
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('Finding confirmation records must be created through the governed confirmation service.')
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise ValidationError('Finding confirmation records are append-only and cannot be updated.')
+
+
 class FindingConfirmation(models.Model):
     class Verdict(models.TextChoices):
         CONFIRMED = 'confirmed', 'Confirmed'
@@ -103,6 +117,8 @@ class FindingConfirmation(models.Model):
     rationale = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableFindingConfirmationQuerySet.as_manager()
 
     class Meta:
         ordering = ['-created_at']
