@@ -118,15 +118,15 @@ _ACTIONS = (
         resulting_projection={'lifecycle': 'published'}, audit_event='detection.published',
     ),
     _contract(
-        'investigation.close', 'investigation_case', 'Close a contained investigation',
-        ['contained'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
+        'investigation.close', 'investigation_case', 'Close an investigation with governed closure proof',
+        ['investigating', 'decided'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
         responsibilities=['soc_closure_approver'],
         gates=[GateType.CLOSURE, GateType.EVIDENCE], evidence=['response_evidence', 'closure_proof'],
         resulting_projection={'lifecycle': 'closed'}, audit_event='investigation.closed',
     ),
     _contract(
         'assurance.obligation.satisfy', 'assurance_obligation', 'Satisfy an active assurance obligation',
-        ['active'], [ActorLayer.GOVERN, ActorLayer.ASSURE], ['manager', 'admin', 'owner'],
+        ['open', 'due', 'overdue'], [ActorLayer.GOVERN, ActorLayer.ASSURE], ['manager', 'admin', 'owner'],
         responsibilities=['assurance_owner'],
         gates=[GateType.EVIDENCE], evidence=['satisfaction_proof'], time_aware=True,
         resulting_projection={'lifecycle': 'satisfied'}, audit_event='assurance.obligation.satisfied',

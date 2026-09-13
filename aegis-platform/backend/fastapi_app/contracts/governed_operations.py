@@ -109,6 +109,7 @@ class CapabilityItem(BaseModel):
     action_id: str
     mode: ActionMode
     intent: str
+    evaluated_actor_layer: ActorLayer | None = None
     reason_code: str = ''
     reason: str = ''
     missing_requirements: list[str] = Field(default_factory=list)
@@ -122,6 +123,27 @@ class CapabilityManifest(BaseModel):
     entity: EntityRef
     projection: ProjectionSnapshot
     actor_layer: ActorLayer
+    actor_role: str
+    actor_responsibilities: list[str] = Field(default_factory=list)
+    capabilities: list[CapabilityItem]
+    generated_at: datetime
+
+
+class AuthoritativeCapabilityManifest(BaseModel):
+    """Server-derived entity capability projection.
+
+    Unlike the legacy generic manifest builder, this contract deliberately has
+    no caller-selectable actor layer. Each action is evaluated in one of the
+    action layers declared by its canonical ActionContract and the chosen layer
+    is exposed on the CapabilityItem for auditability.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    contract_version: Literal['agom.v1'] = AGOM_CONTRACT_VERSION
+    evaluation_policy_version: str
+    entity: EntityRef
+    projection: ProjectionSnapshot
     actor_role: str
     actor_responsibilities: list[str] = Field(default_factory=list)
     capabilities: list[CapabilityItem]
