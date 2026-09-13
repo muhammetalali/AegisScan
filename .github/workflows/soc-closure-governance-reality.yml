@@ -8,6 +8,7 @@ on:
       - 'aegis-platform/backend/enterprise/migrations/0024_soc_closure_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/security_operations.py'
       - 'aegis-platform/backend/fastapi_app/services/soc_closure_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_security_operations.py'
       - 'aegis-platform/backend/fastapi_app/services/test_soc_closure_governance.py'
       - 'aegis-platform/backend/fastapi_app/routers/security_operations.py'
       - '.github/workflows/soc-closure-governance-reality.yml'
@@ -17,6 +18,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: soc-closure-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   closure-governance:
@@ -62,7 +67,7 @@ jobs:
       - run: python -m pip install -r aegis-platform/backend/requirements.txt
       - name: Compile closure plane
         run: |
-          python -m py_compile aegis-platform/backend/enterprise/soc_models.py aegis-platform/backend/enterprise/migrations/0024_soc_closure_governance.py aegis-platform/backend/fastapi_app/services/security_operations.py aegis-platform/backend/fastapi_app/services/soc_closure_governance.py aegis-platform/backend/fastapi_app/routers/security_operations.py aegis-platform/backend/fastapi_app/services/test_soc_closure_governance.py
+          python -m py_compile aegis-platform/backend/enterprise/soc_models.py aegis-platform/backend/enterprise/migrations/0024_soc_closure_governance.py aegis-platform/backend/fastapi_app/services/security_operations.py aegis-platform/backend/fastapi_app/services/soc_closure_governance.py aegis-platform/backend/fastapi_app/routers/security_operations.py aegis-platform/backend/fastapi_app/services/test_security_operations.py aegis-platform/backend/fastapi_app/services/test_soc_closure_governance.py
       - name: Schema and migration reality
         working-directory: aegis-platform/backend
         env:
