@@ -8,8 +8,8 @@ from typing import Any
 from django.db import transaction
 from django.utils import timezone
 
-from assets.models import Asset
-from evidence.models import Evidence, ValidationRun
+from django_project.assets.models import Asset
+from django_project.evidence.models import Evidence, ValidationRun
 from enterprise.campaign_models import AdversaryCampaign, CampaignAuditEvent, CampaignObjective, CampaignObjectiveAssessment
 from enterprise.models import AttackPath, BlastRadiusSnapshot, OrganizationMembership, TenantProject
 from fastapi_app.services.authorization_guard import current_asset_authorization
