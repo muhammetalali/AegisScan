@@ -42,7 +42,7 @@ class DetectionRule(models.Model):
         app_label = 'enterprise'
         constraints = [models.UniqueConstraint(fields=['organization', 'project', 'slug'], name='uniq_detection_rule_scope_slug')]
         indexes = [
-            models.Index(fields=['project', 'state'], name='idx_detection_rule_project_state'),
+            models.Index(fields=['project', 'state'], name='idx_det_rule_proj_state'),
             models.Index(fields=['organization', 'state'], name='idx_detection_rule_org_state'),
         ]
 
@@ -135,7 +135,7 @@ class DetectionPublication(models.Model):
         app_label = 'enterprise'
         ordering = ['-created_at']
         constraints = [models.UniqueConstraint(fields=['revision', 'integration', 'package_sha256'], name='uniq_detection_publication_package')]
-        indexes = [models.Index(fields=['integration', '-created_at'], name='idx_detection_publication_integration')]
+        indexes = [models.Index(fields=['integration', '-created_at'], name='idx_det_pub_integration')]
 
     def save(self, *args, **kwargs):
         if not self._state.adding:
