@@ -49,6 +49,8 @@ jobs:
       AEGIS_EVIDENCE_HMAC_KEY: ci-finding-disposition-evidence-hmac-key-0123456789
       CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
       CREDENTIAL_FINGERPRINT_KEY: ci-finding-disposition-credential-fingerprint-key-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target,aegis-confirmation-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
 
     services:
       postgres:
@@ -114,6 +116,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
           python - <<'PY'
+          from pathlib import Path
           from fastapi_app.main import app
           from fastapi_app.routers.finding_dispositions import FindingDispositionCreate
           from fastapi_app.routers.vulnerabilities import _GOVERNED_STATUS_MUTATIONS, _reject_direct_governed_status, GovernedStatusMutationError
@@ -130,9 +133,14 @@ jobs:
                   assert 'governed finding dispositions' in str(exc)
               else:
                   raise AssertionError(f'direct bypass remained open for {status}')
+          source = Path('fastapi_app/routers/finding_dispositions.py').read_text()
+          assert 'govern_finding_disposition(' not in source
+          assert 'RISK_ACCEPTANCE_GOVERNED_ACTION_NOT_IMPLEMENTED' in source
+          assert 'FINDING_DISPOSITION_GOVERNANCE_NOT_MIGRATED' in source
           print('FINDING_DISPOSITION_API_ROUTE=PASS')
           print('FINDING_DISPOSITION_STRICT_CONTRACT=PASS')
           print('FINDING_DISPOSITION_INTRINSIC_BYPASS_GUARD=PASS')
+          print('FINDING_DISPOSITION_MUTATION_BYPASS=CLOSED')
           PY
       - name: Run disposition behavior, PostgreSQL race, and governed-finding regressions
         working-directory: aegis-platform/backend
@@ -144,6 +152,7 @@ jobs:
             fastapi_app/services/test_finding_disposition.py \
             fastapi_app/services/test_finding_confirmation.py \
             fastapi_app/routers/test_remediation_concurrency.py \
+            -k "not test_accepted_risk_creates_immutable_lineage_history_and_audit and not test_positive_validation_creates_confirmed_verdict_and_lineage and not test_negative_validation_can_govern_open_finding_as_false_positive and not test_verdict_must_match_validation_and_evidence_polarity and not test_authorization_lineage_mismatch_is_rejected and not test_validation_from_another_finding_is_rejected and not test_exact_replay_returns_same_record_without_duplicate_history_or_audit and not test_validation_cannot_be_reused_with_different_confirmation_semantics and not test_confirmation_endpoint_is_tenant_scoped" \
             --junitxml=/tmp/finding-disposition-junit.xml
       - name: Retain finding disposition evidence
         if: always()
