@@ -231,7 +231,7 @@ def test_nmap_validation_uses_immutable_grant_not_mutable_asset_flag(finding_fix
 @pytest.mark.django_db
 def test_verify_requires_completed_authorized_finding_validation(finding_fixture):
     user, finding = finding_fixture
-    ValidationRun.objects.create(
+    running = ValidationRun.objects.create(
         user=user,
         finding=finding,
         target_type="ip",
@@ -246,8 +246,8 @@ def test_verify_requires_completed_authorized_finding_validation(finding_fixture
     verified_finding, validation, error = async_to_sync(_verify_fix)(str(finding.id), str(user.id))
 
     assert verified_finding.id == finding.id
-    assert validation is None
-    assert error == "Fix verification requires a completed authorized finding-linked validation run."
+    assert validation.id == running.id
+    assert error == "Fix verification requires the latest validation to be completed and authorized."
     finding.refresh_from_db()
     assert finding.validation_status == ""
 
