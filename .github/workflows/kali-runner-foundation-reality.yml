@@ -65,25 +65,73 @@ jobs:
           import hashlib, json, tarfile, tempfile
           from pathlib import Path
 
+          def sha(data: bytes) -> str:
+              return hashlib.sha256(data).hexdigest()
+
+          def layer_semantics(path: Path):
+              rows = []
+              order = []
+              with tarfile.open(path) as tf:
+                  for member in tf.getmembers():
+                      order.append(member.name)
+                      payload = b''
+                      if member.isfile():
+                          stream = tf.extractfile(member)
+                          payload = stream.read() if stream else b''
+                      rows.append((
+                          member.name,
+                          member.type.decode('latin1') if isinstance(member.type, bytes) else str(member.type),
+                          member.mode,
+                          member.uid,
+                          member.gid,
+                          member.uname,
+                          member.gname,
+                          member.linkname,
+                          member.size,
+                          member.devmajor,
+                          member.devminor,
+                          tuple(sorted((k, v) for k, v in member.pax_headers.items() if k not in {'atime', 'ctime', 'mtime'})),
+                          sha(payload) if member.isfile() else '',
+                      ))
+              canonical = sorted(rows)
+              return canonical, order, sha(json.dumps(canonical, separators=(',', ':'), ensure_ascii=False).encode())
+
           archives = [Path('/tmp/aegis-kali-base-a.tar'), Path('/tmp/aegis-kali-base-b.tar')]
           snapshots = []
           for archive in archives:
               root = Path(tempfile.mkdtemp(prefix='aegis-repro-'))
               with tarfile.open(archive) as tf:
-                  tf.extractall(root)
+                  tf.extractall(root, filter='data')
               manifest = json.loads((root / 'manifest.json').read_text())[0]
               config = json.loads((root / manifest['Config']).read_text())
               layers = []
               for layer in manifest['Layers']:
-                  payload = (root / layer).read_bytes()
-                  layers.append(hashlib.sha256(payload).hexdigest())
+                  layer_path = root / layer
+                  layers.append((layer_path, sha(layer_path.read_bytes())))
               snapshots.append((manifest, config, layers))
 
           left, right = snapshots
-          print('CONFIG_A', json.dumps(left[1], sort_keys=True, separators=(',', ':')))
-          print('CONFIG_B', json.dumps(right[1], sort_keys=True, separators=(',', ':')))
-          for index, (a, b) in enumerate(zip(left[2], right[2])):
-              print(f'LAYER_{index}: {a} {b} equal={a == b}')
+          print('CONFIG_EQUAL', left[1] == right[1])
+          for index, ((path_a, digest_a), (path_b, digest_b)) in enumerate(zip(left[2], right[2])):
+              equal = digest_a == digest_b
+              print(f'LAYER_{index}: {digest_a} {digest_b} byte_equal={equal}')
+              if not equal:
+                  sem_a, order_a, sem_digest_a = layer_semantics(path_a)
+                  sem_b, order_b, sem_digest_b = layer_semantics(path_b)
+                  print(f'LAYER_{index}_SEMANTIC: {sem_digest_a} {sem_digest_b} equal={sem_a == sem_b}')
+                  print(f'LAYER_{index}_ORDER_EQUAL: {order_a == order_b}')
+                  if sem_a != sem_b:
+                      only_a = sorted(set(sem_a) - set(sem_b))
+                      only_b = sorted(set(sem_b) - set(sem_a))
+                      for row in only_a[:40]:
+                          print('ONLY_A', repr(row))
+                      for row in only_b[:40]:
+                          print('ONLY_B', repr(row))
+                  elif order_a != order_b:
+                      for pos, (name_a, name_b) in enumerate(zip(order_a, order_b)):
+                          if name_a != name_b:
+                              print(f'FIRST_ORDER_DRIFT pos={pos} a={name_a!r} b={name_b!r}')
+                              break
           if len(left[2]) != len(right[2]):
               print(f'LAYER_COUNT: {len(left[2])} {len(right[2])}')
           PY
