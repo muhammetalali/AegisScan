@@ -16,7 +16,9 @@ from fastapi_app.services.finding_disposition import govern_finding_disposition
 from fastapi_app.services.remediation_lifecycle import RemediationState, get_state
 from fastapi_app.services.security_operations import SecurityOperationsError, attach_decision_action, transition_case, verify_case_chain
 from fastapi_app.services.soc_closure_governance import ClosureGovernanceError, close_investigation_case
+from fastapi_app.services.test_detection_engineering import detection_fixture
 from fastapi_app.services.test_finding_disposition import disposition_fixture, _risk_snapshot
+from fastapi_app.services.test_security_operations import _ingest, _validated_revision
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -130,6 +132,36 @@ def test_accepted_risk_closure_uses_latest_governed_disposition(disposition_fixt
     case.refresh_from_db()
     assert case.status == InvestigationCase.Status.CLOSED
     assert verify_case_chain(case_id=str(case.id), project_id=str(project.id), user_id=str(user.id))['valid'] is True
+
+
+def test_governed_closed_detection_case_creates_new_generation(detection_fixture):
+    _client, user, project, finding, evidence, organization, _membership = detection_fixture
+    revision = _validated_revision(user, project, finding, evidence)
+    first = _ingest(user, project, revision)
+    state = transition_case(
+        case_id=str(first.case.id), project_id=str(project.id), user_id=str(user.id),
+        expected_version=1, status=InvestigationCase.Status.INVESTIGATING,
+    )
+    risk = _risk_snapshot(user=user, project=project, finding=finding, marker='closure-generation')
+    disposition = govern_finding_disposition(
+        finding_id=finding.id, disposition='accepted_risk', rationale='Generation rollover governed closure.',
+        actor_id=user.id, risk_correlation_id=risk.id,
+        review_at=datetime.now(dt_timezone.utc) + timedelta(days=30),
+    ).disposition
+    closed = close_investigation_case(
+        case_id=str(first.case.id), project_id=str(project.id), user_id=str(user.id),
+        expected_version=state.version, finding_id=str(finding.id), closure_type='accepted_risk',
+        disposition_id=str(disposition.id), rationale='Generation rollover closure.',
+    )
+    assert closed.replayed is False
+    second = _ingest(
+        user, project, revision,
+        observed_at=datetime(2026, 9, 13, 9, 31, tzinfo=dt_timezone.utc),
+    )
+    assert second.case_created is True
+    assert second.case.id != first.case.id
+    assert second.state.generation == 2
+    assert InvestigationCaseState.objects.filter(base_correlation_key=first.state.base_correlation_key).count() == 2
 
 
 def test_unverified_remediation_cannot_close(disposition_fixture):
