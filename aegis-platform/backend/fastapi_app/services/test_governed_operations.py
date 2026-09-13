@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from enterprise.models import OrganizationMembership
 from fastapi_app.contracts.governed_operations import (
     ActionMode,
     ActorLayer,
@@ -28,6 +29,10 @@ def _pass(gate: GateType) -> GateResult:
     return GateResult(gate=gate, state=GateState.PASS, policy_version='test-policy.v1')
 
 
+def _responsibilities(action_id: str) -> set[str]:
+    return set(get_action_contract(action_id).required_responsibilities)
+
+
 def test_action_ids_are_unique_and_contracts_are_auditable():
     contracts = list_action_contracts()
     assert contracts
@@ -40,6 +45,14 @@ def test_action_ids_are_unique_and_contracts_are_auditable():
         assert item.allowed_states
         assert item.allowed_roles
         assert item.actor_layers
+        assert item.required_responsibilities
+
+
+def test_contract_roles_are_real_organization_membership_roles():
+    canonical_roles = set(OrganizationMembership.Role.values)
+    assert canonical_roles == {'owner', 'admin', 'manager', 'analyst', 'auditor', 'viewer'}
+    for item in list_action_contracts():
+        assert set(item.allowed_roles) <= canonical_roles, item.action_id
 
 
 def test_wrong_role_is_hidden():
@@ -49,6 +62,7 @@ def test_wrong_role_is_hidden():
         current_state='verified',
         actor_role='analyst',
         actor_layer=ActorLayer.GOVERN,
+        actor_responsibilities=_responsibilities('finding.close'),
         evidence_ready=True,
         sod_eligible=True,
         gate_results=[_pass(GateType.CLOSURE), _pass(GateType.INDEPENDENT_VERIFICATION)],
@@ -64,12 +78,30 @@ def test_wrong_operating_layer_is_hidden():
         current_state='verified',
         actor_role='owner',
         actor_layer=ActorLayer.OPERATE,
+        actor_responsibilities=_responsibilities('finding.close'),
         evidence_ready=True,
         sod_eligible=True,
         gate_results=[_pass(GateType.CLOSURE), _pass(GateType.INDEPENDENT_VERIFICATION)],
     )
     assert item.mode is ActionMode.HIDDEN
     assert item.reason_code == 'ACTOR_NOT_ELIGIBLE'
+
+
+def test_missing_governed_responsibility_is_hidden():
+    contract = get_action_contract('finding.close')
+    item = evaluate_action(
+        contract,
+        current_state='verified',
+        actor_role='owner',
+        actor_layer=ActorLayer.GOVERN,
+        actor_responsibilities=set(),
+        evidence_ready=True,
+        sod_eligible=True,
+        gate_results=[_pass(GateType.CLOSURE), _pass(GateType.INDEPENDENT_VERIFICATION)],
+    )
+    assert item.mode is ActionMode.HIDDEN
+    assert item.reason_code == 'RESPONSIBILITY_NOT_ASSIGNED'
+    assert item.missing_requirements == ['closure_approver']
 
 
 def test_wrong_state_is_blocked_with_actionable_reason():
@@ -79,6 +111,7 @@ def test_wrong_state_is_blocked_with_actionable_reason():
         current_state='confirmed',
         actor_role='owner',
         actor_layer=ActorLayer.GOVERN,
+        actor_responsibilities=_responsibilities('finding.close'),
         evidence_ready=True,
         sod_eligible=True,
         gate_results=[_pass(GateType.CLOSURE), _pass(GateType.INDEPENDENT_VERIFICATION)],
@@ -95,6 +128,7 @@ def test_sod_violation_is_blocked():
         current_state='verified',
         actor_role='owner',
         actor_layer=ActorLayer.GOVERN,
+        actor_responsibilities=_responsibilities('finding.close'),
         evidence_ready=True,
         sod_eligible=False,
         gate_results=[_pass(GateType.CLOSURE), _pass(GateType.INDEPENDENT_VERIFICATION)],
@@ -111,6 +145,7 @@ def test_missing_evidence_is_blocked_before_gate_execution():
         current_state='pending_confirmation',
         actor_role='analyst',
         actor_layer=ActorLayer.ASSURE,
+        actor_responsibilities=_responsibilities('finding.confirm'),
         evidence_ready=False,
         sod_eligible=True,
         gate_results=[_pass(GateType.EVIDENCE)],
@@ -127,6 +162,7 @@ def test_missing_required_gate_is_blocked():
         current_state='active',
         actor_role='manager',
         actor_layer=ActorLayer.GOVERN,
+        actor_responsibilities=_responsibilities('campaign.complete'),
         evidence_ready=True,
         sod_eligible=True,
         gate_results=[_pass(GateType.AUTHORIZATION), _pass(GateType.CLOSURE)],
@@ -151,6 +187,7 @@ def test_explicit_failing_gate_is_blocked_and_explained():
         current_state='tested',
         actor_role='admin',
         actor_layer=ActorLayer.GOVERN,
+        actor_responsibilities=_responsibilities('integration.live_accept'),
         evidence_ready=True,
         sod_eligible=True,
         gate_results=[failed, _pass(GateType.EVIDENCE)],
@@ -168,6 +205,7 @@ def test_all_required_gates_pass_enables_action():
         current_state='verified',
         actor_role='owner',
         actor_layer=ActorLayer.GOVERN,
+        actor_responsibilities=_responsibilities('finding.close'),
         evidence_ready=True,
         sod_eligible=True,
         gate_results=[_pass(GateType.CLOSURE), _pass(GateType.INDEPENDENT_VERIFICATION)],
@@ -183,6 +221,7 @@ def test_manifest_only_projects_actions_for_matching_entity_type():
         projection=ProjectionSnapshot(lifecycle='verified', governance='review_required', version=7),
         actor_role='owner',
         actor_layer=ActorLayer.GOVERN,
+        actor_responsibilities=_responsibilities('finding.close'),
         evidence_ready_actions={'finding.close'},
         sod_eligible_actions={'finding.close'},
         gate_results_by_action={
@@ -190,6 +229,7 @@ def test_manifest_only_projects_actions_for_matching_entity_type():
         },
     )
     assert isinstance(manifest, CapabilityManifest)
+    assert manifest.actor_responsibilities == ['closure_approver']
     action_ids = {item.action_id for item in manifest.capabilities}
     assert action_ids
     assert all(get_action_contract(action_id).entity_type == 'finding' for action_id in action_ids)
