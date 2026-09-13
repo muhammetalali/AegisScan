@@ -1,0 +1,40 @@
+name: Business Logic Bootstrap
+
+on:
+  push:
+    branches:
+      - codex/business-logic-concurrency-2026-09-13
+    paths:
+      - scripts/patch_business_logic_replay.py
+      - .github/workflows/business-logic-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Apply replay scope correction
+        run: |
+          if [ -f scripts/patch_business_logic_replay.py ]; then
+            python scripts/patch_business_logic_replay.py
+          else
+            echo "Bootstrap helper already consumed"
+          fi
+      - name: Validate patch
+        run: git diff --check
+      - name: Commit product correction
+        run: |
+          if git diff --quiet; then
+            echo "No patch required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add aegis-platform/backend/fastapi_app/services/decision_action_orchestration.py scripts/patch_business_logic_replay.py
+          git commit -m "fix(workflow): scope idempotency across action transitions"
+          git push origin HEAD:${GITHUB_REF_NAME}
