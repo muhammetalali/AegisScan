@@ -1,0 +1,129 @@
+name: AGOM Governed Operations Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governance.py'
+      - '.github/workflows/agom-governed-operations-reality.yml'
+  push:
+    branches: [main, codex/agom-governed-operations-foundation-2026-09-13]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governance.py'
+      - '.github/workflows/agom-governed-operations-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-governed-operations-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governed-operations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-agom-django-secret-key-0123456789abcdef
+      JWT_SECRET_KEY: ci-agom-jwt-secret-key-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-agom-evidence-hmac-key-0123456789abcdef
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-agom-credential-fingerprint-key-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile AGOM governed operations plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/contracts/governed_operations.py \
+            aegis-platform/backend/fastapi_app/services/governed_operations.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_operations.py \
+            aegis-platform/backend/fastapi_app/routers/governance.py
+      - name: Django application sanity
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py migrate --noinput
+      - name: AGOM deterministic action-contract tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q --junitxml=agom-governed-operations-junit.xml fastapi_app/services/test_governed_operations.py
+      - name: Verify AGOM API and OpenAPI wiring
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.services.governed_operations import registry_summary
+
+          schema = app.openapi()
+          paths = schema['paths']
+          catalog = '/api/v1/assurance/governance/contracts'
+          detail = '/api/v1/assurance/governance/contracts/{action_id}'
+          assert catalog in paths, catalog
+          assert detail in paths, detail
+          assert 'get' in paths[catalog]
+          assert 'get' in paths[detail]
+          summary = registry_summary()
+          assert summary['contract_version'] == 'agom.v1'
+          assert summary['policy_version'] == 'agom-governance.v1'
+          assert summary['action_count'] >= 10
+          assert 'authorization' in summary['gate_types']
+          assert 'independent_verification' in summary['gate_types']
+          print('AGOM_CONTRACTS_API=WIRED')
+          print(f"AGOM_ACTION_COUNT={summary['action_count']}")
+          PY
+      - name: Retain AGOM reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-governed-operations-${{ github.sha }}
+          path: aegis-platform/backend/agom-governed-operations-junit.xml
+          if-no-files-found: warn

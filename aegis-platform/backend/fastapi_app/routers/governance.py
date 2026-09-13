@@ -8,9 +8,11 @@ from ..core.dependencies import get_current_user
 from ..services.decision_action_orchestration import list_actions, get_action
 from ..services.workflow_intelligence import enrich_action
 from ..services.governance_engine import enrich_governance, governance_metrics
+from ..services.governed_operations import get_action_contract, registry_summary
 from ..services.policy_engine import evaluate_policy, list_policies
 
 router = APIRouter()
+
 
 async def require_user(user=Depends(get_current_user)) -> dict[str, Any]:
     return user
@@ -18,6 +20,7 @@ async def require_user(user=Depends(get_current_user)) -> dict[str, Any]:
 
 def enrich_policy_governance(action: dict[str, Any], policies: list[dict[str, Any]]) -> dict[str, Any]:
     return {**action, "policy": evaluate_policy(action, policies)}
+
 
 @router.get("/governance")
 async def governance(user: dict[str, Any] = Depends(require_user)):
@@ -32,6 +35,7 @@ async def governance(user: dict[str, Any] = Depends(require_user)):
     metrics["policyControlled"] = len(items)
     return {"items": items, "metrics": metrics}
 
+
 @router.get("/governance/actions/{action_id}")
 async def governance_action(action_id: str, user: dict[str, Any] = Depends(require_user)):
     actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
@@ -43,3 +47,28 @@ async def governance_action(action_id: str, user: dict[str, Any] = Depends(requi
     action = enrich_action(item)
     policies = await sync_to_async(list_policies)()
     return {"actionId": action_id, "governance": {**action.get("governance", {}), "policy": evaluate_policy(action, policies)}}
+
+
+@router.get("/governance/contracts")
+async def governed_action_contracts(user: dict[str, Any] = Depends(require_user)):
+    """Expose the canonical AGOM action-contract catalog to authenticated clients.
+
+    This endpoint is metadata only. It never grants authority and never accepts
+    a client-supplied role. Entity capability endpoints must derive actor scope,
+    role, SoD and evidence readiness from authoritative server-side state.
+    """
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    return registry_summary()
+
+
+@router.get("/governance/contracts/{action_id}")
+async def governed_action_contract(action_id: str, user: dict[str, Any] = Depends(require_user)):
+    actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    contract = get_action_contract(action_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Governed action contract not found")
+    return contract.model_dump(mode="json")
