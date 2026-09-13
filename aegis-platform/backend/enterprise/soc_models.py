@@ -34,16 +34,12 @@ class SecuritySignal(models.Model):
     observed_at = models.DateTimeField()
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_security_signals')
     created_at = models.DateTimeField(auto_now_add=True)
-
     objects = SOCAppendOnlyQuerySet.as_manager()
 
     class Meta:
         app_label = 'enterprise'
         ordering = ['-observed_at', '-created_at']
-        indexes = [
-            models.Index(fields=['project', '-observed_at'], name='idx_soc_signal_project_time'),
-            models.Index(fields=['finding', '-observed_at'], name='idx_soc_signal_finding_time'),
-        ]
+        indexes = [models.Index(fields=['project', '-observed_at'], name='idx_soc_signal_project_time'), models.Index(fields=['finding', '-observed_at'], name='idx_soc_signal_finding_time')]
 
     def save(self, *args, **kwargs):
         if not self._state.adding:
@@ -65,10 +61,7 @@ class InvestigationCaseState(models.Model):
     class Meta:
         app_label = 'enterprise'
         constraints = [models.UniqueConstraint(fields=['base_correlation_key', 'generation'], name='uniq_soc_case_generation')]
-        indexes = [
-            models.Index(fields=['base_correlation_key', '-generation'], name='idx_soc_case_correlation'),
-            models.Index(fields=['decision_action'], name='idx_soc_case_decision_action'),
-        ]
+        indexes = [models.Index(fields=['base_correlation_key', '-generation'], name='idx_soc_case_correlation'), models.Index(fields=['decision_action'], name='idx_soc_case_decision_action')]
 
 
 class InvestigationSignalLink(models.Model):
@@ -77,7 +70,6 @@ class InvestigationSignalLink(models.Model):
     signal = models.OneToOneField(SecuritySignal, on_delete=models.PROTECT, related_name='case_link')
     linked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='investigation_signal_links')
     linked_at = models.DateTimeField(auto_now_add=True)
-
     objects = SOCAppendOnlyQuerySet.as_manager()
 
     class Meta:
@@ -103,7 +95,6 @@ class InvestigationAuditEvent(models.Model):
     previous_hash = models.CharField(max_length=64, blank=True)
     entry_hash = models.CharField(max_length=64, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
     objects = SOCAppendOnlyQuerySet.as_manager()
 
     class Meta:
@@ -118,3 +109,40 @@ class InvestigationAuditEvent(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError('Investigation audit events are immutable.')
+
+
+class InvestigationClosure(models.Model):
+    class ClosureType(models.TextChoices):
+        REMEDIATED = 'remediated', 'Remediated'
+        ACCEPTED_RISK = 'accepted_risk', 'Accepted Risk'
+        WONT_FIX = 'wont_fix', "Won't Fix"
+        DUPLICATE = 'duplicate', 'Duplicate'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    case = models.OneToOneField('enterprise.InvestigationCase', on_delete=models.PROTECT, related_name='governed_closure')
+    finding = models.ForeignKey('vulnerabilities.Vulnerability', on_delete=models.PROTECT, related_name='investigation_closures')
+    closure_type = models.CharField(max_length=20, choices=ClosureType.choices)
+    validation_run = models.ForeignKey('evidence.ValidationRun', on_delete=models.PROTECT, null=True, blank=True, related_name='investigation_closures')
+    disposition = models.ForeignKey('evidence.FindingDisposition', on_delete=models.PROTECT, null=True, blank=True, related_name='investigation_closures')
+    evidence = models.ForeignKey('evidence.Evidence', on_delete=models.PROTECT, null=True, blank=True, related_name='investigation_closures')
+    decision_action = models.ForeignKey('enterprise.DecisionAction', on_delete=models.PROTECT, null=True, blank=True, related_name='closure_records')
+    policy_version = models.CharField(max_length=64, default='soc-closure.v1')
+    source_sha256 = models.CharField(max_length=64)
+    closure_fingerprint = models.CharField(max_length=64, unique=True)
+    rationale = models.TextField(blank=True)
+    closed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='investigation_closures')
+    closed_at = models.DateTimeField(auto_now_add=True)
+    objects = SOCAppendOnlyQuerySet.as_manager()
+
+    class Meta:
+        app_label = 'enterprise'
+        indexes = [models.Index(fields=['finding', '-closed_at'], name='idx_soc_closure_finding'), models.Index(fields=['closure_type', '-closed_at'], name='idx_soc_closure_type')]
+        constraints = [models.CheckConstraint(condition=(models.Q(closure_type='remediated', validation_run__isnull=False, disposition__isnull=True, evidence__isnull=False) | models.Q(closure_type__in=['accepted_risk', 'wont_fix', 'duplicate'], validation_run__isnull=True, disposition__isnull=False)), name='soc_closure_lineage_shape')]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('Investigation closure records are immutable.')
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Investigation closure records are immutable.')
