@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.evidence.models import FindingDisposition
-from django_project.vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
 from ..services.finding_disposition import (
     FindingDispositionError,
@@ -18,32 +17,6 @@ from ..services.finding_disposition import (
 )
 from . import vulnerabilities as vulnerability_routes
 
-
-# The generic vulnerability PATCH and bulk-update paths already centralize status
-# governance in this shared set. Extend that same guard instead of duplicating it.
-vulnerability_routes._GOVERNED_STATUS_MUTATIONS.update({
-    Vulnerability.Status.ACCEPTED_RISK,
-    Vulnerability.Status.WONT_FIX,
-    Vulnerability.Status.DUPLICATE,
-})
-
-_original_reject = vulnerability_routes._reject_direct_governed_status
-
-
-def _reject_all_governed_statuses(status: Optional[str]) -> None:
-    if status in {
-        Vulnerability.Status.ACCEPTED_RISK,
-        Vulnerability.Status.WONT_FIX,
-        Vulnerability.Status.DUPLICATE,
-    }:
-        raise vulnerability_routes.GovernedStatusMutationError(
-            'accepted_risk/wont_fix/duplicate are governed finding dispositions; '
-            'use POST /{vuln_id}/dispositions with immutable tenant/risk lineage.'
-        )
-    _original_reject(status)
-
-
-vulnerability_routes._reject_direct_governed_status = _reject_all_governed_statuses
 
 router = APIRouter()
 
