@@ -57,6 +57,15 @@ def _sha(value: Any) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
+def _normalize_idempotency_key(value: str) -> str:
+    key = str(value or '').strip()
+    if not key:
+        raise GovernedResponsibilityError('A non-empty idempotency_key is required.')
+    if len(key) > 128:
+        raise GovernedResponsibilityError('idempotency_key exceeds 128 characters.')
+    return key
+
+
 def _organization_locked(organization_id: str) -> Organization:
     organization = Organization.objects.select_for_update().filter(pk=organization_id, is_active=True).first()
     if organization is None:
@@ -130,6 +139,8 @@ def _normalize_scope(*, scope_kind: str, project_id: str | None, entity_type: st
 
 
 def _append_event_locked(*, organization: Organization, assignment: GovernedResponsibilityAssignment, actor_id: str, event_type: str, payload: dict[str, Any]) -> GovernedResponsibilityEvent:
+    # Every caller must hold the Organization row lock. That lock serializes this
+    # per-organization chain so two governance writes cannot fork the audit head.
     previous = GovernedResponsibilityEvent.objects.filter(organization=organization).order_by('-id').first()
     previous_hash = previous.entry_hash if previous else ''
     envelope = {
@@ -151,6 +162,73 @@ def _append_event_locked(*, organization: Organization, assignment: GovernedResp
     )
 
 
+def _grant_request_material(
+    *,
+    organization_id: str,
+    actor_id: str,
+    membership_id: str,
+    responsibility: str,
+    scope_kind: str,
+    reason: str,
+    project_id: str | None,
+    entity_type: str,
+    entity_id: str,
+    requested_valid_from: datetime | None,
+    valid_until: datetime | None,
+    supersedes_assignment_id: str | None,
+) -> dict[str, Any]:
+    return {
+        'policy_version': _POLICY_VERSION,
+        'operation': 'grant',
+        'organization_id': str(organization_id),
+        'actor_id': str(actor_id),
+        'membership_id': str(membership_id),
+        'responsibility': responsibility,
+        'scope_kind': scope_kind,
+        'project_id': str(project_id or ''),
+        'entity_type': entity_type,
+        'entity_id': entity_id,
+        # Omitted valid_from is request intent, not the generated effective timestamp.
+        'valid_from': requested_valid_from.isoformat() if requested_valid_from else '<automatic>',
+        'valid_until': valid_until.isoformat() if valid_until else '',
+        'reason': reason,
+        'supersedes_assignment_id': str(supersedes_assignment_id or ''),
+    }
+
+
+def _overlapping_assignment_exists(
+    *,
+    organization: Organization,
+    membership: OrganizationMembership,
+    responsibility: str,
+    scope_kind: str,
+    project,
+    entity_type: str,
+    entity_id: str,
+    starts_at: datetime,
+    valid_until: datetime | None,
+    excluded_assignment_id: str | None,
+) -> bool:
+    queryset = GovernedResponsibilityAssignment.objects.select_for_update().filter(
+        organization=organization,
+        membership=membership,
+        responsibility=responsibility,
+        scope_kind=scope_kind,
+        project=project,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        revocation__isnull=True,
+        superseded_by__isnull=True,
+    )
+    if excluded_assignment_id:
+        queryset = queryset.exclude(pk=excluded_assignment_id)
+    # Existing interval intersects [starts_at, valid_until). Null end means infinity.
+    queryset = queryset.filter(Q(valid_until__isnull=True) | Q(valid_until__gt=starts_at))
+    if valid_until is not None:
+        queryset = queryset.filter(valid_from__lt=valid_until)
+    return queryset.exists()
+
+
 def grant_responsibility(
     *,
     organization_id: str,
@@ -159,6 +237,7 @@ def grant_responsibility(
     responsibility: str,
     scope_kind: str,
     reason: str,
+    idempotency_key: str,
     project_id: str | None = None,
     entity_type: str = '',
     entity_id: str = '',
@@ -169,29 +248,58 @@ def grant_responsibility(
     responsibility = str(responsibility or '').strip()
     if responsibility not in _RESPONSIBILITIES:
         raise GovernedResponsibilityError('Unknown governed responsibility.')
+    key = _normalize_idempotency_key(idempotency_key)
     normalized_reason = ' '.join(str(reason or '').split())
     if not normalized_reason:
         raise GovernedResponsibilityError('A governed responsibility grant requires a reason.')
-    scope, project_id, entity_type, entity_id = _normalize_scope(
+    scope, normalized_project_id, entity_type, entity_id = _normalize_scope(
         scope_kind=scope_kind,
         project_id=project_id,
         entity_type=entity_type,
         entity_id=entity_id,
     )
-    starts_at = valid_from or timezone.now()
-    if timezone.is_naive(starts_at):
+    requested_valid_from = valid_from
+    if requested_valid_from is not None and timezone.is_naive(requested_valid_from):
         raise GovernedResponsibilityError('valid_from must be timezone-aware.')
     if valid_until is not None:
         if timezone.is_naive(valid_until):
             raise GovernedResponsibilityError('valid_until must be timezone-aware.')
-        if valid_until <= starts_at:
+        if requested_valid_from is not None and valid_until <= requested_valid_from:
             raise GovernedResponsibilityError('valid_until must be later than valid_from.')
+
+    request_material = _grant_request_material(
+        organization_id=organization_id,
+        actor_id=actor_id,
+        membership_id=membership_id,
+        responsibility=responsibility,
+        scope_kind=scope,
+        reason=normalized_reason,
+        project_id=normalized_project_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        requested_valid_from=requested_valid_from,
+        valid_until=valid_until,
+        supersedes_assignment_id=supersedes_assignment_id,
+    )
+    request_fingerprint = _sha(request_material)
 
     with transaction.atomic():
         organization = _organization_locked(organization_id)
         _issuer_locked(organization, actor_id)
+
+        # Replay is resolved before target/supersession state checks so a retry of a
+        # committed request still succeeds after that request changed current state.
+        replay = GovernedResponsibilityAssignment.objects.select_for_update().filter(idempotency_key=key).first()
+        if replay is not None:
+            if str(replay.organization_id) != str(organization.id) or replay.request_fingerprint != request_fingerprint:
+                raise GovernedResponsibilityError('Idempotency key was already used for a different responsibility grant request.')
+            return GrantResult(replay, True)
+
         membership = _target_membership_locked(organization, membership_id)
-        project = _project_locked(organization, project_id)
+        project = _project_locked(organization, normalized_project_id)
+        starts_at = requested_valid_from or timezone.now()
+        if valid_until is not None and valid_until <= starts_at:
+            raise GovernedResponsibilityError('valid_until must be later than the effective valid_from.')
 
         supersedes = None
         if supersedes_assignment_id:
@@ -212,26 +320,27 @@ def grant_responsibility(
             if hasattr(supersedes, 'revocation'):
                 raise GovernedResponsibilityError('Revoked responsibility assignment cannot be superseded.')
 
-        fingerprint_material = {
-            'policy_version': _POLICY_VERSION,
-            'organization_id': str(organization.id),
-            'membership_id': str(membership.id),
-            'responsibility': responsibility,
-            'scope_kind': scope,
-            'project_id': str(project.id) if project else '',
-            'entity_type': entity_type,
-            'entity_id': entity_id,
-            'valid_from': starts_at.isoformat(),
-            'valid_until': valid_until.isoformat() if valid_until else '',
-            'reason': normalized_reason,
-            'issued_by': str(actor_id),
-            'supersedes_assignment_id': str(supersedes.id) if supersedes else '',
-        }
-        fingerprint = _sha(fingerprint_material)
-        existing = GovernedResponsibilityAssignment.objects.filter(grant_fingerprint=fingerprint).first()
-        if existing is not None:
-            return GrantResult(existing, True)
+        if _overlapping_assignment_exists(
+            organization=organization,
+            membership=membership,
+            responsibility=responsibility,
+            scope_kind=scope,
+            project=project,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            starts_at=starts_at,
+            valid_until=valid_until,
+            excluded_assignment_id=str(supersedes.id) if supersedes else None,
+        ):
+            raise GovernedResponsibilityError(
+                'An overlapping current assignment already exists for this member, responsibility and exact scope; supersede it explicitly.'
+            )
 
+        grant_fingerprint = _sha({
+            'request_fingerprint': request_fingerprint,
+            'effective_valid_from': starts_at.isoformat(),
+            'effective_project_id': str(project.id) if project else '',
+        })
         assignment = GovernedResponsibilityAssignment.objects.create(
             organization=organization,
             project=project,
@@ -244,7 +353,9 @@ def grant_responsibility(
             valid_until=valid_until,
             reason=normalized_reason,
             policy_version=_POLICY_VERSION,
-            grant_fingerprint=fingerprint,
+            idempotency_key=key,
+            request_fingerprint=request_fingerprint,
+            grant_fingerprint=grant_fingerprint,
             issued_by_id=actor_id,
             supersedes=supersedes,
         )
@@ -254,22 +365,42 @@ def grant_responsibility(
                 assignment=supersedes,
                 actor_id=actor_id,
                 event_type=GovernedResponsibilityEvent.EventType.SUPERSEDED,
-                payload={'superseded_by_assignment_id': str(assignment.id), 'policy_version': _POLICY_VERSION},
+                payload={
+                    'superseded_by_assignment_id': str(assignment.id),
+                    'policy_version': _POLICY_VERSION,
+                    'request_fingerprint': request_fingerprint,
+                },
             )
         _append_event_locked(
             organization=organization,
             assignment=assignment,
             actor_id=actor_id,
             event_type=GovernedResponsibilityEvent.EventType.GRANTED,
-            payload={**fingerprint_material, 'grant_fingerprint': fingerprint},
+            payload={
+                **request_material,
+                'effective_valid_from': starts_at.isoformat(),
+                'request_fingerprint': request_fingerprint,
+                'grant_fingerprint': grant_fingerprint,
+                'idempotency_key': key,
+            },
         )
         return GrantResult(assignment, False)
 
 
-def revoke_responsibility(*, assignment_id: str, actor_id: str, reason: str) -> RevocationResult:
+def revoke_responsibility(*, assignment_id: str, actor_id: str, reason: str, idempotency_key: str) -> RevocationResult:
+    key = _normalize_idempotency_key(idempotency_key)
     normalized_reason = ' '.join(str(reason or '').split())
     if not normalized_reason:
         raise GovernedResponsibilityError('A responsibility revocation requires a reason.')
+    request_material = {
+        'policy_version': _POLICY_VERSION,
+        'operation': 'revoke',
+        'assignment_id': str(assignment_id),
+        'actor_id': str(actor_id),
+        'reason': normalized_reason,
+    }
+    request_fingerprint = _sha(request_material)
+
     with transaction.atomic():
         assignment = (
             GovernedResponsibilityAssignment.objects.select_for_update()
@@ -281,22 +412,30 @@ def revoke_responsibility(*, assignment_id: str, actor_id: str, reason: str) -> 
             raise GovernedResponsibilityError('Governed responsibility assignment not found.')
         organization = _organization_locked(str(assignment.organization_id))
         _issuer_locked(organization, actor_id)
-        fingerprint = _sha({
-            'policy_version': _POLICY_VERSION,
-            'assignment_id': str(assignment.id),
-            'reason': normalized_reason,
-            'revoked_by': str(actor_id),
-        })
-        existing = GovernedResponsibilityRevocation.objects.filter(assignment=assignment).first()
+
+        replay = GovernedResponsibilityRevocation.objects.select_for_update().filter(idempotency_key=key).first()
+        if replay is not None:
+            if str(replay.assignment_id) != str(assignment.id) or replay.request_fingerprint != request_fingerprint:
+                raise GovernedResponsibilityError('Idempotency key was already used for a different responsibility revocation request.')
+            return RevocationResult(replay, True)
+
+        existing = GovernedResponsibilityRevocation.objects.select_for_update().filter(assignment=assignment).first()
         if existing is not None:
-            if existing.revocation_fingerprint == fingerprint:
-                return RevocationResult(existing, True)
-            raise GovernedResponsibilityError('Responsibility assignment has already been revoked with different governance evidence.')
+            raise GovernedResponsibilityError('Responsibility assignment has already been revoked; replay requires the original idempotency key.')
+        if hasattr(assignment, 'superseded_by'):
+            raise GovernedResponsibilityError('A superseded responsibility assignment cannot be revoked as current authority.')
+
+        revocation_fingerprint = _sha({
+            'request_fingerprint': request_fingerprint,
+            'assignment_grant_fingerprint': assignment.grant_fingerprint,
+        })
         revocation = GovernedResponsibilityRevocation.objects.create(
             assignment=assignment,
             reason=normalized_reason,
             policy_version=_POLICY_VERSION,
-            revocation_fingerprint=fingerprint,
+            idempotency_key=key,
+            request_fingerprint=request_fingerprint,
+            revocation_fingerprint=revocation_fingerprint,
             revoked_by_id=actor_id,
         )
         _append_event_locked(
@@ -305,10 +444,11 @@ def revoke_responsibility(*, assignment_id: str, actor_id: str, reason: str) -> 
             actor_id=actor_id,
             event_type=GovernedResponsibilityEvent.EventType.REVOKED,
             payload={
+                **request_material,
                 'revocation_id': str(revocation.id),
-                'reason': normalized_reason,
-                'policy_version': _POLICY_VERSION,
-                'revocation_fingerprint': fingerprint,
+                'request_fingerprint': request_fingerprint,
+                'revocation_fingerprint': revocation_fingerprint,
+                'idempotency_key': key,
             },
         )
         return RevocationResult(revocation, False)
