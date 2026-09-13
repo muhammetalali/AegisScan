@@ -117,8 +117,8 @@ jobs:
           from fastapi_app.routers.decision_actions import ActionCreate, ActionTransition
 
           paths = app.openapi()['paths']
-          assert '/api/v1/decision/actions' in paths
-          assert '/api/v1/decision/actions/{action_id}/transition' in paths
+          assert '/api/v1/assurance/actions' in paths
+          assert '/api/v1/assurance/actions/{action_id}/transition' in paths
           assert ActionCreate.model_fields['idempotency_key'].is_required()
           assert ActionTransition.model_fields['expected_version'].is_required()
           assert ActionTransition.model_fields['idempotency_key'].is_required()
