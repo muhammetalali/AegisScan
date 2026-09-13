@@ -22,7 +22,9 @@ RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown" \
 
 # Foundation packages are pinned to the exact versions proven by Reality CI.
 # Normalize filesystem mtimes touched by apt so two builds from the same exact
-# source commit and package set produce identical filesystem layers.
+# source commit and package set produce identical filesystem layers. Docker's
+# build-time bind-mounted host files are excluded explicitly rather than hiding
+# timestamp-normalization failures.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates=20260601 \
@@ -53,13 +55,21 @@ RUN apt-get update \
     && test "$(dpkg-query -W -f='${Version}' python3)" = "3.14.6-1" \
     && test "$(dpkg-query -W -f='${Version}' tini)" = "0.19.0-6+b2" \
     && test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1" \
-    && find /etc /usr /var -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+    && find /etc /usr /var -xdev \
+        ! -path /etc/hosts \
+        ! -path /etc/hostname \
+        ! -path /etc/resolv.conf \
+        -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
     && mkdir -p /opt/aegis-runner /workspace /artifacts \
     && chown -R aegis:aegis /opt/aegis-runner /workspace /artifacts \
-    && find /etc /home /opt /workspace /artifacts -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+    && find /etc /home /opt /workspace /artifacts -xdev \
+        ! -path /etc/hosts \
+        ! -path /etc/hostname \
+        ! -path /etc/resolv.conf \
+        -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 COPY runner /opt/aegis-runner
 RUN chmod 0755 /opt/aegis-runner/runner.py /opt/aegis-runner/entrypoint.sh \
