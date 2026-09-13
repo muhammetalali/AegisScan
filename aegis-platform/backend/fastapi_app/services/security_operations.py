@@ -15,16 +15,11 @@ from enterprise.soc_models import InvestigationAuditEvent, InvestigationCaseStat
 from fastapi_app.services.detection_engineering import _matches
 
 
-_AUTHOR_ROLES = {
-    OrganizationMembership.Role.OWNER,
-    OrganizationMembership.Role.ADMIN,
-    OrganizationMembership.Role.MANAGER,
-    OrganizationMembership.Role.ANALYST,
-}
+_AUTHOR_ROLES = {OrganizationMembership.Role.OWNER, OrganizationMembership.Role.ADMIN, OrganizationMembership.Role.MANAGER, OrganizationMembership.Role.ANALYST}
 _TRANSITIONS = {
     InvestigationCase.Status.OPEN: {InvestigationCase.Status.INVESTIGATING},
-    InvestigationCase.Status.INVESTIGATING: {InvestigationCase.Status.DECIDED, InvestigationCase.Status.CLOSED},
-    InvestigationCase.Status.DECIDED: {InvestigationCase.Status.INVESTIGATING, InvestigationCase.Status.CLOSED},
+    InvestigationCase.Status.INVESTIGATING: {InvestigationCase.Status.DECIDED},
+    InvestigationCase.Status.DECIDED: {InvestigationCase.Status.INVESTIGATING},
     InvestigationCase.Status.CLOSED: set(),
 }
 
@@ -58,9 +53,7 @@ def _membership(project_id: str, user_id: str, roles: set[str] = _AUTHOR_ROLES):
     link = TenantProject.objects.select_related('organization', 'project').filter(project_id=project_id).first()
     if link is None:
         raise SecurityOperationsError('Project is not bound to an enterprise tenant.')
-    membership = OrganizationMembership.objects.filter(
-        organization=link.organization, user_id=user_id, is_active=True, user__is_active=True, role__in=roles,
-    ).first()
+    membership = OrganizationMembership.objects.filter(organization=link.organization, user_id=user_id, is_active=True, user__is_active=True, role__in=roles).first()
     if membership is None:
         raise PermissionError('Active tenant role does not permit this security operations mutation.')
     return link, membership
@@ -69,28 +62,12 @@ def _membership(project_id: str, user_id: str, roles: set[str] = _AUTHOR_ROLES):
 def _append_event_locked(case: InvestigationCase, actor_id: str, event_type: str, payload: dict[str, Any]):
     previous = InvestigationAuditEvent.objects.filter(case=case).order_by('-id').first()
     previous_hash = previous.entry_hash if previous else ''
-    envelope = {
-        'case_id': str(case.id),
-        'actor_id': str(actor_id),
-        'event_type': event_type,
-        'payload': payload,
-        'previous_hash': previous_hash,
-    }
-    return InvestigationAuditEvent.objects.create(
-        case=case, actor_id=actor_id, event_type=event_type, payload=payload,
-        previous_hash=previous_hash, entry_hash=_sha(envelope),
-    )
+    envelope = {'case_id': str(case.id), 'actor_id': str(actor_id), 'event_type': event_type, 'payload': payload, 'previous_hash': previous_hash}
+    return InvestigationAuditEvent.objects.create(case=case, actor_id=actor_id, event_type=event_type, payload=payload, previous_hash=previous_hash, entry_hash=_sha(envelope))
 
 
 def _serialize_state(state: InvestigationCaseState) -> dict[str, Any]:
-    return {
-        'case_id': str(state.case_id),
-        'status': state.case.status,
-        'version': state.version,
-        'generation': state.generation,
-        'base_correlation_key': state.base_correlation_key,
-        'decision_action_id': state.decision_action_id,
-    }
+    return {'case_id': str(state.case_id), 'status': state.case.status, 'version': state.version, 'generation': state.generation, 'base_correlation_key': state.base_correlation_key, 'decision_action_id': state.decision_action_id}
 
 
 def ingest_detection_signal(*, revision_id: str, project_id: str, user_id: str, event: dict[str, Any], observed_at: datetime, source: str = 'siem') -> SignalResult:
@@ -102,15 +79,8 @@ def ingest_detection_signal(*, revision_id: str, project_id: str, user_id: str, 
         raise SecurityOperationsError('observed_at must be timezone-aware.')
     link, _ = _membership(project_id, user_id)
     with transaction.atomic():
-        # Project lock serializes first-case correlation and generation allocation.
         TenantProject.objects.select_for_update().get(pk=link.pk)
-        # Lock only the revision row. source_evidence is nullable and therefore
-        # select_related() uses an OUTER JOIN; PostgreSQL rejects FOR UPDATE on
-        # the nullable side unless the locked relation is scoped explicitly.
-        revision = (
-            DetectionRevision.objects.select_for_update(of=('self',)).select_related('rule', 'source_finding', 'source_evidence')
-            .filter(pk=revision_id, rule__project_id=project_id).first()
-        )
+        revision = (DetectionRevision.objects.select_for_update(of=('self',)).select_related('rule', 'source_finding', 'source_evidence').filter(pk=revision_id, rule__project_id=project_id).first())
         if revision is None:
             raise SecurityOperationsError('Detection revision not found in project.')
         latest = revision.rule.revisions.order_by('-version').first()
@@ -121,76 +91,44 @@ def ingest_detection_signal(*, revision_id: str, project_id: str, user_id: str, 
             raise SecurityOperationsError('A passed detection validation is required before signal ingestion.')
         if not _matches(event, revision.spec):
             raise SecurityOperationsError('Telemetry event does not satisfy the governed detection revision.')
-
         payload_sha = _sha(event)
-        fingerprint = _sha({
-            'revision_id': str(revision.id), 'validation_id': str(validation.id), 'source': source,
-            'observed_at': observed_at.astimezone(dt_timezone.utc).isoformat(), 'payload_sha256': payload_sha,
-        })
+        fingerprint = _sha({'revision_id': str(revision.id), 'validation_id': str(validation.id), 'source': source, 'observed_at': observed_at.astimezone(dt_timezone.utc).isoformat(), 'payload_sha256': payload_sha})
         existing = SecuritySignal.objects.filter(fingerprint=fingerprint).first()
         if existing:
             case_link = InvestigationSignalLink.objects.select_related('case__soc_state').get(signal=existing)
             return SignalResult(existing, case_link.case, case_link.case.soc_state, True, False)
-
-        signal = SecuritySignal.objects.create(
-            organization=link.organization, project_id=project_id, validation=validation, revision=revision,
-            finding=revision.source_finding, fingerprint=fingerprint, severity=revision.spec['severity'],
-            attack_techniques=revision.attack_techniques, payload_sha256=payload_sha,
-            observed_at=observed_at, created_by_id=user_id,
-        )
-        base_key = _sha({
-            'project_id': str(project_id), 'rule_id': str(revision.rule_id),
-            'finding_id': str(revision.source_finding_id), 'attack_techniques': sorted(revision.attack_techniques),
-        })
-        latest_state = (
-            InvestigationCaseState.objects.select_for_update().select_related('case')
-            .filter(base_correlation_key=base_key).order_by('-generation').first()
-        )
+        signal = SecuritySignal.objects.create(organization=link.organization, project_id=project_id, validation=validation, revision=revision, finding=revision.source_finding, fingerprint=fingerprint, severity=revision.spec['severity'], attack_techniques=revision.attack_techniques, payload_sha256=payload_sha, observed_at=observed_at, created_by_id=user_id)
+        base_key = _sha({'project_id': str(project_id), 'rule_id': str(revision.rule_id), 'finding_id': str(revision.source_finding_id), 'attack_techniques': sorted(revision.attack_techniques)})
+        latest_state = InvestigationCaseState.objects.select_for_update().select_related('case').filter(base_correlation_key=base_key).order_by('-generation').first()
         case_created = latest_state is None or latest_state.case.status == InvestigationCase.Status.CLOSED
         if case_created:
             generation = 1 if latest_state is None else latest_state.generation + 1
-            case = InvestigationCase.objects.create(
-                organization=link.organization, project_id=project_id, owner_id=user_id,
-                title=f'Detection: {revision.rule.title}',
-                description=f'Correlated operational signals for governed detection rule {revision.rule.slug}.',
-            )
+            case = InvestigationCase.objects.create(organization=link.organization, project_id=project_id, owner_id=user_id, title=f'Detection: {revision.rule.title}', description=f'Correlated operational signals for governed detection rule {revision.rule.slug}.')
             case.findings.add(revision.source_finding)
             if revision.source_evidence_id:
                 case.evidence.add(revision.source_evidence)
-            state = InvestigationCaseState.objects.create(
-                case=case, base_correlation_key=base_key, generation=generation, version=1,
-            )
-            _append_event_locked(case, user_id, 'case.created', {
-                'generation': generation, 'base_correlation_key': base_key,
-                'detection_rule_id': str(revision.rule_id), 'detection_revision_id': str(revision.id),
-                'source_finding_id': str(revision.source_finding_id),
-            })
+            state = InvestigationCaseState.objects.create(case=case, base_correlation_key=base_key, generation=generation, version=1)
+            _append_event_locked(case, user_id, 'case.created', {'generation': generation, 'base_correlation_key': base_key, 'detection_rule_id': str(revision.rule_id), 'detection_revision_id': str(revision.id), 'source_finding_id': str(revision.source_finding_id)})
         else:
             state = latest_state
             case = state.case
             case.findings.add(revision.source_finding)
             if revision.source_evidence_id:
                 case.evidence.add(revision.source_evidence)
-
         InvestigationSignalLink.objects.create(case=case, signal=signal, linked_by_id=user_id)
-        _append_event_locked(case, user_id, 'signal.correlated', {
-            'signal_id': str(signal.id), 'fingerprint': signal.fingerprint, 'payload_sha256': payload_sha,
-            'source': source, 'severity': signal.severity, 'attack_techniques': signal.attack_techniques,
-            'validation_id': str(validation.id), 'revision_id': str(revision.id),
-        })
+        _append_event_locked(case, user_id, 'signal.correlated', {'signal_id': str(signal.id), 'fingerprint': signal.fingerprint, 'payload_sha256': payload_sha, 'source': source, 'severity': signal.severity, 'attack_techniques': signal.attack_techniques, 'validation_id': str(validation.id), 'revision_id': str(revision.id)})
         return SignalResult(signal, case, state, False, case_created)
 
 
 def transition_case(*, case_id: str, project_id: str, user_id: str, expected_version: int, status: str, decision_summary: str = '') -> InvestigationCaseState:
     _membership(project_id, user_id)
+    if status == InvestigationCase.Status.CLOSED:
+        raise SecurityOperationsError('Direct case closure is forbidden; use governed closure with immutable remediation or disposition proof.')
     valid_statuses = {value for value, _ in InvestigationCase.Status.choices}
     if status not in valid_statuses:
         raise SecurityOperationsError('Invalid investigation case status.')
     with transaction.atomic():
-        state = (
-            InvestigationCaseState.objects.select_for_update().select_related('case')
-            .filter(case_id=case_id, case__project_id=project_id).first()
-        )
+        state = InvestigationCaseState.objects.select_for_update().select_related('case').filter(case_id=case_id, case__project_id=project_id).first()
         if state is None:
             raise SecurityOperationsError('SOC-managed investigation case not found in project.')
         if state.version != expected_version:
@@ -202,24 +140,18 @@ def transition_case(*, case_id: str, project_id: str, user_id: str, expected_ver
         case.status = status
         if decision_summary:
             case.decision_summary = decision_summary
-        case.closed_at = timezone.now() if status == InvestigationCase.Status.CLOSED else None
+        case.closed_at = None
         case.save(update_fields=['status', 'decision_summary', 'closed_at', 'updated_at'])
         state.version += 1
         state.save(update_fields=['version', 'updated_at'])
-        _append_event_locked(case, user_id, 'case.transitioned', {
-            'old_status': old_status, 'new_status': status, 'version': state.version,
-            'decision_summary_sha256': _sha(decision_summary) if decision_summary else '',
-        })
+        _append_event_locked(case, user_id, 'case.transitioned', {'old_status': old_status, 'new_status': status, 'version': state.version, 'decision_summary_sha256': _sha(decision_summary) if decision_summary else ''})
         return state
 
 
 def attach_decision_action(*, case_id: str, action_id: str, project_id: str, user_id: str, expected_version: int) -> tuple[InvestigationCaseState, bool]:
     link, _ = _membership(project_id, user_id, {OrganizationMembership.Role.OWNER, OrganizationMembership.Role.ADMIN, OrganizationMembership.Role.MANAGER})
     with transaction.atomic():
-        state = (
-            InvestigationCaseState.objects.select_for_update().select_related('case')
-            .filter(case_id=case_id, case__project_id=project_id).first()
-        )
+        state = InvestigationCaseState.objects.select_for_update().select_related('case').filter(case_id=case_id, case__project_id=project_id).first()
         if state is None:
             raise SecurityOperationsError('SOC-managed investigation case not found in project.')
         if state.version != expected_version:
@@ -234,9 +166,7 @@ def attach_decision_action(*, case_id: str, action_id: str, project_id: str, use
         state.decision_action = action
         state.version += 1
         state.save(update_fields=['decision_action', 'version', 'updated_at'])
-        _append_event_locked(state.case, user_id, 'response.handoff', {
-            'decision_action_id': action.action_id, 'action_state': action.state, 'version': state.version,
-        })
+        _append_event_locked(state.case, user_id, 'response.handoff', {'decision_action_id': action.action_id, 'action_state': action.state, 'version': state.version})
         return state, False
 
 
@@ -250,10 +180,7 @@ def verify_case_chain(*, case_id: str, project_id: str, user_id: str) -> dict[st
     for row in rows:
         if row.previous_hash != previous:
             return {'valid': False, 'entries': len(rows), 'broken_at': row.id, 'reason': 'previous_hash'}
-        envelope = {
-            'case_id': str(case.id), 'actor_id': str(row.actor_id), 'event_type': row.event_type,
-            'payload': row.payload, 'previous_hash': row.previous_hash,
-        }
+        envelope = {'case_id': str(case.id), 'actor_id': str(row.actor_id), 'event_type': row.event_type, 'payload': row.payload, 'previous_hash': row.previous_hash}
         expected = _sha(envelope)
         if row.entry_hash != expected:
             return {'valid': False, 'entries': len(rows), 'broken_at': row.id, 'reason': 'entry_hash'}
