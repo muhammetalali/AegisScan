@@ -444,7 +444,8 @@ def test_disposition_compatibility_route_is_fail_closed(disposition_fixture):
 
 
 def test_close_compatibility_route_uses_independent_governed_closure(disposition_fixture):
-    client, owner, project, authorization, finding, organization, _owner_membership, _confirmer, _validation_row, _evidence, confirm_kwargs = _confirmation_request(disposition_fixture)
+    client = disposition_fixture[0]
+    owner, project, authorization, finding, organization, _owner_membership, _confirmer, _validation_row, _evidence, confirm_kwargs = _confirmation_request(disposition_fixture)
     execute_governed_action(**confirm_kwargs)
     finding.refresh_from_db()
     verified, _evidence = _validation(
