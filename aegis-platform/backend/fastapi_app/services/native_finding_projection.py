@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID, uuid5
 
 from .evidence_identity import evidence_id
+from .wstg_observation_lineage import attach_wstg_evidence_metadata, attach_wstg_finding_lineage
 
 
 FINDING_NAMESPACE = UUID('3ed142e9-1b4f-4e96-bf4f-6d14b3421f50')
@@ -351,12 +352,12 @@ def _technical_defaults(scan: Any, capability_id: str, source_engine: str, targe
         'remediation': spec.remediation,
         'fix_available': True,
         'source_engine': source_engine,
-        'raw_data': {
+        'raw_data': attach_wstg_finding_lineage({
             'schema': 'aegis.native-finding.v1',
             'capability_id': capability_id,
             'rule_id': spec.rule_id,
             **(spec.raw_data or {}),
-        },
+        }, capability_id),
     }
 
 
@@ -423,12 +424,12 @@ def project_native_findings(
                 'source': source_engine,
                 'evidence_type': 'finding_observation',
                 'raw_output': json.dumps(evidence_payload, sort_keys=True, separators=(',', ':')),
-                'metadata': {
+                'metadata': attach_wstg_evidence_metadata({
                     'capability_id': capability_id,
                     'rule_id': spec.rule_id,
                     'target': str(target),
                     'semantic_projection': True,
-                },
+                }, capability_id),
                 'collected_by': scan.initiated_by,
             },
         )
