@@ -132,8 +132,8 @@ jobs:
               assert model.model_config.get('extra') == 'forbid'
           compiled=compile_spec({'logsource':'endpoint.process','condition':'all','match':[{'field':'process.name','operator':'equals','value':'powershell.exe'},{'field':'process.command_line','operator':'contains','value':'-enc'}],'severity':'high','attack_techniques':['T1059.001'],'description':''})
           assert set(compiled)=={'splunk','elastic_kql','sentinel_kql','qradar_aql'}
-          assert 'process.name == "powershell.exe"' in compiled['sentinel_kql']
-          assert 'process.command_line contains "-enc"' in compiled['sentinel_kql']
+          assert '[\'process.name\'] == "powershell.exe"' in compiled['sentinel_kql']
+          assert '[\'process.command_line\'] contains "-enc"' in compiled['sentinel_kql']
           assert 'process.name:"powershell.exe"' not in compiled['sentinel_kql']
           print('DETECTION_ENGINEERING_API=PASS')
           print('DETECTION_ENGINEERING_COMPILERS=PASS')

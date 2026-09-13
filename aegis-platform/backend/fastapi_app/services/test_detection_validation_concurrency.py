@@ -8,7 +8,7 @@ from django.db import close_old_connections
 
 from enterprise.detection_models import DetectionEvent, DetectionValidation
 from fastapi_app.services.detection_engineering import validate_revision
-from fastapi_app.services.test_detection_engineering import _revision, _telemetry
+from fastapi_app.services.test_detection_engineering import detection_fixture, _revision, _telemetry
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
