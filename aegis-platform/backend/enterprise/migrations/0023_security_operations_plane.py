@@ -28,7 +28,7 @@ class Migration(migrations.Migration):
                 ('organization', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='security_signals', to='enterprise.organization')),
                 ('project', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='security_signals', to='projects.project')),
                 ('revision', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='security_signals', to='enterprise.detectionrevision')),
-                ('validation', models.OneToOneField(on_delete=django.db.models.deletion.PROTECT, related_name='security_signal', to='enterprise.detectionvalidation')),
+                ('validation', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='security_signals', to='enterprise.detectionvalidation')),
             ],
             options={
                 'ordering': ['-observed_at', '-created_at'],
@@ -39,12 +39,16 @@ class Migration(migrations.Migration):
             name='InvestigationCaseState',
             fields=[
                 ('case', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, primary_key=True, related_name='soc_state', serialize=False, to='enterprise.investigationcase')),
-                ('correlation_key', models.CharField(max_length=64, unique=True)),
+                ('base_correlation_key', models.CharField(max_length=64)),
+                ('generation', models.PositiveIntegerField(default=1)),
                 ('version', models.PositiveIntegerField(default=1)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('decision_action', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='investigation_cases', to='enterprise.decisionaction')),
             ],
-            options={'indexes': [models.Index(fields=['decision_action'], name='idx_soc_case_decision_action')]},
+            options={
+                'indexes': [models.Index(fields=['base_correlation_key', '-generation'], name='idx_soc_case_correlation'), models.Index(fields=['decision_action'], name='idx_soc_case_decision_action')],
+                'constraints': [models.UniqueConstraint(fields=('base_correlation_key', 'generation'), name='uniq_soc_case_generation')],
+            },
         ),
         migrations.CreateModel(
             name='InvestigationSignalLink',
