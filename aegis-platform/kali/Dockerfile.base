@@ -2,20 +2,21 @@ FROM kalilinux/kali-rolling@sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd32
 
 ARG AEGIS_RUNNER_VERSION=0.1.0
 ARG BUILD_COMMIT=unknown
-ARG KALI_BASE_DIGEST=sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd328c076224a552e7332a3
 
 ENV DEBIAN_FRONTEND=noninteractive \
     AEGIS_RUNNER_VERSION=${AEGIS_RUNNER_VERSION} \
     AEGIS_BUILD_COMMIT=${BUILD_COMMIT} \
-    AEGIS_BASE_IMAGE_DIGEST=${KALI_BASE_DIGEST} \
+    AEGIS_BASE_IMAGE_DIGEST=sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd328c076224a552e7332a3 \
     AEGIS_RUNNER_PROFILE=base \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 LABEL org.opencontainers.image.revision=${BUILD_COMMIT} \
-      org.opencontainers.image.base.digest=${KALI_BASE_DIGEST} \
+      org.opencontainers.image.base.digest=sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd328c076224a552e7332a3 \
       io.aegisscan.runner.version=${AEGIS_RUNNER_VERSION} \
       io.aegisscan.runner.profile=base
+
+RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown"
 
 # Foundation packages are pinned to the exact versions proven by Reality CI.
 # The base image itself is digest-pinned; dependencies already present in that
