@@ -5,6 +5,7 @@ from typing import Any
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException
 
+from . import governed_action_execution
 from ..contracts.governed_operations import AuthoritativeCapabilityManifest
 from ..contracts.governed_responsibilities import (
     ActorAuthorityView,
@@ -258,3 +259,6 @@ async def governed_responsibility_chain(
     except (GovernedResponsibilityError, PermissionError) as exc:
         _raise_governed_error(exc)
     return ResponsibilityChainView(**result)
+
+
+router.include_router(governed_action_execution.router, prefix='/governance')
