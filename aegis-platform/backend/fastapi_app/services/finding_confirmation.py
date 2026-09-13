@@ -25,6 +25,10 @@ class FindingConfirmationError(ValueError):
     pass
 
 
+class StaleFindingConfirmationVersion(FindingConfirmationError):
+    pass
+
+
 @dataclass(frozen=True)
 class ConfirmationResult:
     confirmation: FindingConfirmation
@@ -188,7 +192,7 @@ def confirm_finding(
             )
 
         if expected_version is not None and int(finding.version) != int(expected_version):
-            raise FindingConfirmationError(
+            raise StaleFindingConfirmationVersion(
                 f'Expected finding version {expected_version}, current version is {finding.version}.'
             )
         if validation.status != ValidationRun.Status.COMPLETED or validation.authorized is not True:
