@@ -118,6 +118,11 @@ def test_browser_finding_projection_is_idempotent_links_evidence_and_preserves_g
 
     governed.refresh_from_db()
     assert governed.status == Vulnerability.Status.ACCEPTED_RISK
+    finding_lineage = governed.raw_data['_aegisscan_wstg']
+    assert finding_lineage['capability_id'] == 'browser.dom-snapshot'
+    assert finding_lineage['claim_policy'] == 'observation-only'
+    assert finding_lineage['completion_claim_allowed'] is False
+    assert all(item['completion_claim_allowed'] is False for item in finding_lineage['tests'])
 
     scan.refresh_from_db()
     assert scan.findings_count == 2
@@ -129,3 +134,7 @@ def test_browser_finding_projection_is_idempotent_links_evidence_and_preserves_g
         assert evidence.sha256
         assert evidence.metadata['semantic_projection'] is True
         assert evidence.metadata['capability_id'] == 'browser.dom-snapshot'
+        lineage = evidence.metadata['wstg_lineage']
+        assert lineage['capability_id'] == 'browser.dom-snapshot'
+        assert lineage['lineage_fingerprint'] == finding_lineage['lineage_fingerprint']
+        assert lineage['completion_claim_allowed'] is False
