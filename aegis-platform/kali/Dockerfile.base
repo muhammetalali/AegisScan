@@ -20,11 +20,9 @@ LABEL org.opencontainers.image.revision=${BUILD_COMMIT} \
 RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown" \
     && test "$SOURCE_DATE_EPOCH" -gt 0
 
-# Foundation packages are pinned to the exact versions proven by Reality CI.
-# Normalize filesystem mtimes touched by apt so two builds from the same exact
-# source commit and package set produce identical filesystem layers. Docker's
-# build-time bind-mounted host files are excluded explicitly rather than hiding
-# timestamp-normalization failures.
+# Foundation packages are pinned to exact versions. Package-manager logs,
+# caches, and user login accounting are removed/disabled because they contain
+# execution-time state that must not influence the immutable runner image.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates=20260601 \
@@ -51,10 +49,18 @@ RUN apt-get update \
         python3.14-minimal=3.14.6-1 \
         readline-common=8.3-4 \
         tini=0.19.0-6+b2 \
-    && rm -rf /var/lib/apt/lists/* \
     && test "$(dpkg-query -W -f='${Version}' python3)" = "3.14.6-1" \
     && test "$(dpkg-query -W -f='${Version}' tini)" = "0.19.0-6+b2" \
     && test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1" \
+    && rm -rf \
+        /var/lib/apt/lists/* \
+        /var/cache/apt/archives/* \
+        /var/cache/debconf/*-old \
+        /var/log/apt/* \
+        /var/log/dpkg.log \
+        /var/log/alternatives.log \
+        /var/log/faillog \
+        /var/log/lastlog \
     && find /etc /usr /var -xdev \
         ! -path /etc/hosts \
         ! -path /etc/hostname \
@@ -62,10 +68,11 @@ RUN apt-get update \
         -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 RUN groupadd --gid 10001 aegis \
-    && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
+    && useradd --no-log-init --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
     && mkdir -p /opt/aegis-runner /workspace /artifacts \
     && chown -R aegis:aegis /opt/aegis-runner /workspace /artifacts \
-    && find /etc /home /opt /workspace /artifacts -xdev \
+    && rm -f /var/log/faillog /var/log/lastlog \
+    && find /etc /home /opt /workspace /artifacts /var -xdev \
         ! -path /etc/hosts \
         ! -path /etc/hostname \
         ! -path /etc/resolv.conf \
