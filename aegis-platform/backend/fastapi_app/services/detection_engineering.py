@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from django.db import IntegrityError, transaction
+from django.db import transaction
 from django.db.models import Max
 
 from django_project.evidence.models import Evidence
@@ -24,6 +24,7 @@ from enterprise.models import ExternalIntegration, OrganizationMembership, Tenan
 
 _TECHNIQUE_RE = re.compile(r'^T\d{4}(?:\.\d{3})?$')
 _FIELD_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_.-]{0,127}$')
+_SIMPLE_KUSTO_FIELD_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 _ALLOWED_OPERATORS = {'equals', 'contains', 'in', 'exists'}
 _ALLOWED_CONDITIONS = {'all', 'any'}
 _AUTHOR_ROLES = {
@@ -151,33 +152,50 @@ def _escape_string(value: Any) -> str:
     return str(value).replace('\\', '\\\\').replace('"', '\\"')
 
 
+def _sentinel_field(field: str) -> str:
+    if _SIMPLE_KUSTO_FIELD_RE.fullmatch(field):
+        return field
+    return "['" + field.replace("'", "''") + "']"
+
+
 def _compile_predicate(predicate: dict[str, Any], target: str) -> str:
     field, operator, value = predicate['field'], predicate['operator'], predicate['value']
+    if target == 'sentinel_kql':
+        kfield = _sentinel_field(field)
+        if operator == 'exists':
+            return f'isnotnull({kfield})' if bool(value) else f'isnull({kfield})'
+        if operator == 'in':
+            values = ','.join(f'"{_escape_string(x)}"' for x in value)
+            return f'{kfield} in ({values})'
+        escaped = _escape_string(value)
+        if operator == 'equals':
+            return f'{kfield} == "{escaped}"'
+        return f'{kfield} contains "{escaped}"'
     if operator == 'exists':
         expected = bool(value)
         if target == 'splunk': return f'{field}=*' if expected else f'NOT {field}=*'
-        if target in {'elastic_kql', 'sentinel_kql'}: return f'{field}:*' if expected else f'NOT {field}:*'
+        if target == 'elastic_kql': return f'{field}:*' if expected else f'NOT {field}:*'
         return f'{field} IS NOT NULL' if expected else f'{field} IS NULL'
     if operator == 'in':
         values = [_escape_string(x) for x in value]
         if target == 'splunk': return f'{field} IN (' + ','.join(f'"{x}"' for x in values) + ')'
-        if target in {'elastic_kql', 'sentinel_kql'}: return '(' + ' OR '.join(f'{field}:"{x}"' for x in values) + ')'
+        if target == 'elastic_kql': return '(' + ' OR '.join(f'{field}:"{x}"' for x in values) + ')'
         return f'{field} IN (' + ','.join("'" + x.replace("'", "''") + "'" for x in values) + ')'
     escaped = _escape_string(value)
     if operator == 'equals':
         if target == 'splunk': return f'{field}="{escaped}"'
-        if target in {'elastic_kql', 'sentinel_kql'}: return f'{field}:"{escaped}"'
+        if target == 'elastic_kql': return f'{field}:"{escaped}"'
         return f"{field}='" + escaped.replace("'", "''") + "'"
     if target == 'splunk': return f'{field}="*{escaped}*"'
-    if target in {'elastic_kql', 'sentinel_kql'}: return f'{field}:*"{escaped}"*'
+    if target == 'elastic_kql': return f'{field}:*"{escaped}"*'
     return f"{field} ILIKE '%" + escaped.replace("'", "''") + "%'"
 
 
 def compile_spec(spec: dict[str, Any]) -> dict[str, str]:
     normalized = _normalized_spec(spec)
-    joiner = ' AND ' if normalized['condition'] == 'all' else ' OR '
     result = {}
     for target in ('splunk', 'elastic_kql', 'sentinel_kql', 'qradar_aql'):
+        joiner = (' and ' if normalized['condition'] == 'all' else ' or ') if target == 'sentinel_kql' else (' AND ' if normalized['condition'] == 'all' else ' OR ')
         predicates = [_compile_predicate(p, target) for p in normalized['match']]
         expression = joiner.join(f'({p})' for p in predicates)
         if target == 'splunk': result[target] = f'search {expression}'
@@ -276,7 +294,7 @@ def validate_revision(*, revision_id: str, project_id: str, user_id: str, teleme
     canonical_events = sorted((_canonical(x).decode('utf-8') for x in telemetry))
     telemetry_sha = hashlib.sha256(('[' + ','.join(canonical_events) + ']').encode('utf-8')).hexdigest()
     with transaction.atomic():
-        revision = DetectionRevision.objects.select_related('rule').filter(pk=revision_id, rule__project_id=project_id).first()
+        revision = DetectionRevision.objects.select_for_update().select_related('rule').filter(pk=revision_id, rule__project_id=project_id).first()
         if revision is None:
             raise DetectionEngineeringError('Detection revision not found in project.')
         existing = DetectionValidation.objects.filter(revision=revision, telemetry_sha256=telemetry_sha, minimum_matches=minimum_matches).first()
