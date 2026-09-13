@@ -25,6 +25,10 @@ class FindingClosureError(ValueError):
     pass
 
 
+class StaleFindingClosureVersion(FindingClosureError):
+    pass
+
+
 @dataclass(frozen=True)
 class FindingClosureResult:
     finding: Vulnerability
@@ -108,7 +112,7 @@ def close_finding(
     with transaction.atomic():
         finding = Vulnerability.objects.select_for_update(of=('self',)).get(pk=finding_id)
         if int(finding.version) != int(expected_version):
-            raise FindingClosureError(
+            raise StaleFindingClosureVersion(
                 f'Expected finding version {expected_version}, current version is {finding.version}.'
             )
         if finding.status not in {Vulnerability.Status.CONFIRMED, Vulnerability.Status.IN_PROGRESS}:
