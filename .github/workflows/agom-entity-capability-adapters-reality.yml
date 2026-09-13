@@ -1,0 +1,185 @@
+name: AGOM Entity Capability Adapters Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py'
+      - 'aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_freshness.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_scope_guards.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_entity_capability_api.py'
+      - 'aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/finding_confirmation.py'
+      - 'aegis-platform/backend/fastapi_app/services/finding_disposition.py'
+      - 'aegis-platform/backend/fastapi_app/services/remediation_lifecycle.py'
+      - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/soc_closure_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py'
+      - 'aegis-platform/backend/enterprise/campaign_models.py'
+      - 'aegis-platform/backend/enterprise/detection_models.py'
+      - 'aegis-platform/backend/enterprise/soc_models.py'
+      - 'aegis-platform/backend/enterprise/assurance_obligation_models.py'
+      - '.github/workflows/agom-entity-capability-adapters-reality.yml'
+  push:
+    branches: [main, codex/agom-entity-capability-adapters-2026-09-13]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py'
+      - 'aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_freshness.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_scope_guards.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_entity_capability_api.py'
+      - '.github/workflows/agom-entity-capability-adapters-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-entity-capabilities-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  entity-capability-adapters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-agom-entity-capability-django-secret-0123456789abcdef
+      JWT_SECRET_KEY: ci-agom-entity-capability-jwt-secret-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-agom-entity-capability-evidence-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-agom-entity-capability-fingerprint-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile authoritative entity capability plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/contracts/governed_operations.py \
+            aegis-platform/backend/fastapi_app/services/governed_operations.py \
+            aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py \
+            aegis-platform/backend/fastapi_app/services/test_entity_capability_adapters.py \
+            aegis-platform/backend/fastapi_app/services/test_entity_capability_freshness.py \
+            aegis-platform/backend/fastapi_app/services/test_entity_capability_scope_guards.py \
+            aegis-platform/backend/fastapi_app/routers/governance.py \
+            aegis-platform/backend/fastapi_app/routers/test_entity_capability_api.py
+      - name: Verify Django schema reality and migration drift
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+      - name: Run entity capability Reality tests on PostgreSQL
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q --junitxml=agom-entity-capability-junit.xml \
+            fastapi_app/services/test_entity_capability_adapters.py \
+            fastapi_app/services/test_entity_capability_freshness.py \
+            fastapi_app/services/test_entity_capability_scope_guards.py \
+            fastapi_app/routers/test_entity_capability_api.py
+      - name: Run AGOM authority regressions
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_governed_operations.py \
+            fastapi_app/services/test_governed_responsibility_authority.py \
+            fastapi_app/services/test_governed_responsibility_lock_order.py \
+            fastapi_app/routers/test_governed_responsibility_api.py
+      - name: Run domain adapter regressions
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_finding_confirmation.py \
+            fastapi_app/services/test_finding_disposition.py \
+            fastapi_app/services/test_campaign_objective_assurance.py \
+            fastapi_app/services/test_detection_engineering.py \
+            fastapi_app/services/test_soc_closure_governance.py \
+            fastapi_app/services/test_assurance_obligation_governance.py
+      - name: Verify authoritative capability API and no client authority surface
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.services.entity_capability_adapters import supported_entity_types
+          from fastapi_app.services.governed_operations import get_action_contract
+
+          schema = app.openapi()
+          path = '/api/v1/assurance/governance/capabilities/{entity_type}/{entity_id}'
+          assert path in schema['paths'], path
+          operation = schema['paths'][path]['get']
+          params = {item['name'] for item in operation.get('parameters', [])}
+          assert params == {'entity_type', 'entity_id', 'project_id'}, params
+          forbidden = {'actor_layer', 'actor_role', 'actor_responsibilities', 'state', 'evidence_ready', 'sod_eligible'}
+          assert params.isdisjoint(forbidden)
+          assert 'requestBody' not in operation
+          assert get_action_contract('investigation.close').allowed_states == ['investigating', 'decided']
+          assert get_action_contract('assurance.obligation.satisfy').allowed_states == ['open', 'due', 'overdue']
+          assert set(supported_entity_types()) == {
+              'asset_authorization', 'finding', 'crown_jewel_objective', 'campaign',
+              'detection_revision', 'investigation_case', 'assurance_obligation', 'integration',
+          }
+          print('AGOM_ENTITY_CAPABILITY_API=WIRED')
+          print('AGOM_ENTITY_CAPABILITY_AUTHORITY=SERVER_DERIVED')
+          PY
+      - name: Retain AGOM entity capability reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-entity-capability-${{ github.sha }}
+          path: aegis-platform/backend/agom-entity-capability-junit.xml
+          if-no-files-found: warn

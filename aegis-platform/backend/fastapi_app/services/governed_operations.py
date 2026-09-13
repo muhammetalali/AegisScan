@@ -118,15 +118,15 @@ _ACTIONS = (
         resulting_projection={'lifecycle': 'published'}, audit_event='detection.published',
     ),
     _contract(
-        'investigation.close', 'investigation_case', 'Close a contained investigation',
-        ['contained'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
+        'investigation.close', 'investigation_case', 'Close an investigation with governed closure proof',
+        ['investigating', 'decided'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
         responsibilities=['soc_closure_approver'],
         gates=[GateType.CLOSURE, GateType.EVIDENCE], evidence=['response_evidence', 'closure_proof'],
         resulting_projection={'lifecycle': 'closed'}, audit_event='investigation.closed',
     ),
     _contract(
         'assurance.obligation.satisfy', 'assurance_obligation', 'Satisfy an active assurance obligation',
-        ['active'], [ActorLayer.GOVERN, ActorLayer.ASSURE], ['manager', 'admin', 'owner'],
+        ['open', 'due', 'overdue'], [ActorLayer.GOVERN, ActorLayer.ASSURE], ['manager', 'admin', 'owner'],
         responsibilities=['assurance_owner'],
         gates=[GateType.EVIDENCE], evidence=['satisfaction_proof'], time_aware=True,
         resulting_projection={'lifecycle': 'satisfied'}, audit_event='assurance.obligation.satisfied',
@@ -210,17 +210,28 @@ def evaluate_action(
             missing_requirements=list(contract.sod_rules),
         )
 
+    supplied = _gate_map(gate_results)
     if contract.evidence_requirements and not evidence_ready:
+        diagnostic_results: list[GateResult] = []
+        diagnostic_missing = list(contract.evidence_requirements)
+        evidence_gate = supplied.get(GateType.EVIDENCE)
+        if evidence_gate is not None and evidence_gate.state is not GateState.PASS:
+            diagnostic_results.append(evidence_gate)
+            diagnostic_missing.extend(evidence_gate.missing_requirements)
+        # Keep the canonical evidence requirements while preserving more precise
+        # adapter-derived blockers. This remains fail-closed and gives the UI an
+        # actionable reason without allowing a supplied PASS gate to override
+        # the authoritative evidence_ready boolean.
         return CapabilityItem(
             action_id=contract.action_id,
             mode=ActionMode.BLOCKED,
             intent=contract.intent,
             reason_code='EVIDENCE_NOT_READY',
             reason='Required governed evidence is incomplete or not qualified.',
-            missing_requirements=list(contract.evidence_requirements),
+            missing_requirements=list(dict.fromkeys(diagnostic_missing)),
+            gate_results=diagnostic_results,
         )
 
-    supplied = _gate_map(gate_results)
     required_results: list[GateResult] = []
     missing_gates: list[str] = []
     for gate in contract.required_gates:

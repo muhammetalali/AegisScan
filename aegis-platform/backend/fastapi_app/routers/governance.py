@@ -5,6 +5,7 @@ from typing import Any
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException
 
+from ..contracts.governed_operations import AuthoritativeCapabilityManifest
 from ..contracts.governed_responsibilities import (
     ActorAuthorityView,
     ResponsibilityAssignmentView,
@@ -15,6 +16,11 @@ from ..contracts.governed_responsibilities import (
 )
 from ..core.dependencies import get_current_user
 from ..services.decision_action_orchestration import get_action, list_actions
+from ..services.entity_capability_adapters import (
+    EntityCapabilityError,
+    EntityCapabilityNotFound,
+    build_entity_capability_manifest,
+)
 from ..services.governance_engine import enrich_governance, governance_metrics
 from ..services.governed_operations import get_action_contract, registry_summary
 from ..services.governed_responsibility_authority import (
@@ -130,6 +136,39 @@ async def governed_action_contract(action_id: str, user: dict[str, Any] = Depend
     if contract is None:
         raise HTTPException(status_code=404, detail='Governed action contract not found')
     return contract.model_dump(mode='json')
+
+
+@router.get(
+    '/governance/capabilities/{entity_type}/{entity_id}',
+    response_model=AuthoritativeCapabilityManifest,
+)
+async def governed_entity_capabilities(
+    entity_type: str,
+    entity_id: str,
+    project_id: str,
+    user: dict[str, Any] = Depends(require_user),
+):
+    """Return server-authoritative actions for one tenant/project entity.
+
+    The caller supplies only identity of the target entity and project. Role,
+    responsibility, lifecycle state, evidence readiness, SoD and gate results
+    are resolved from authoritative server state. Inaccessible tenant/project
+    scope is returned as not-found to prevent cross-tenant enumeration.
+    """
+    actor = _actor_id(user)
+    try:
+        return await sync_to_async(build_entity_capability_manifest)(
+            project_id=project_id,
+            user_id=actor,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    except EntityCapabilityNotFound as exc:
+        raise HTTPException(status_code=404, detail='Entity capability target not found') from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail='Entity capability target not found') from exc
+    except EntityCapabilityError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post('/governance/responsibilities/grants', response_model=ResponsibilityAssignmentView)
