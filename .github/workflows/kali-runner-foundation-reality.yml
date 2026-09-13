@@ -29,7 +29,7 @@ jobs:
       - name: Run fail-closed contract tests
         run: |
           python -m pip install --disable-pip-version-check pytest==9.1.1
-          python -m pytest -q -c /dev/null aegis-platform/kali/tests/test_runner_contract.py
+          python -m pytest -q -c /dev/null -p no:cacheprovider aegis-platform/kali/tests/test_runner_contract.py
       - name: Reject unpinned Kali base or foundation packages
         run: |
           grep -Eq '^FROM kalilinux/kali-rolling@sha256:[0-9a-f]{64}$' aegis-platform/kali/Dockerfile.base
@@ -50,12 +50,14 @@ jobs:
             docker build --no-cache \
               --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
               --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+              --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
               -f aegis-platform/kali/Dockerfile.base \
               -t "aegis-kali:${tag}" \
               aegis-platform/kali
           done
           digest_a="$(docker image inspect --format='{{.Id}}' aegis-kali:base-a)"
           digest_b="$(docker image inspect --format='{{.Id}}' aegis-kali:base-b)"
+          printf 'first=%s\nsecond=%s\n' "${digest_a}" "${digest_b}"
           test "${digest_a}" = "${digest_b}"
           printf '%s\n' "${digest_a}" > /tmp/aegis-image-digest.txt
           docker tag aegis-kali:base-a aegis-kali:base
