@@ -9,6 +9,7 @@ on:
       - 'aegis-platform/backend/enterprise/migrations/0022_detection_as_code_plane.py'
       - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/services/test_detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_detection_validation_concurrency.py'
       - 'aegis-platform/backend/fastapi_app/routers/detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/routers/enterprise_gap.py'
       - '.github/workflows/detection-engineering-reality.yml'
@@ -20,6 +21,7 @@ on:
       - 'aegis-platform/backend/enterprise/migrations/0022_detection_as_code_plane.py'
       - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/services/test_detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_detection_validation_concurrency.py'
       - 'aegis-platform/backend/fastapi_app/routers/detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/routers/enterprise_gap.py'
       - '.github/workflows/detection-engineering-reality.yml'
@@ -86,7 +88,8 @@ jobs:
             aegis-platform/backend/fastapi_app/services/detection_engineering.py \
             aegis-platform/backend/fastapi_app/routers/detection_engineering.py \
             aegis-platform/backend/fastapi_app/routers/enterprise_gap.py \
-            aegis-platform/backend/fastapi_app/services/test_detection_engineering.py
+            aegis-platform/backend/fastapi_app/services/test_detection_engineering.py \
+            aegis-platform/backend/fastapi_app/services/test_detection_validation_concurrency.py
       - name: Django model and migration reality
         working-directory: aegis-platform/backend
         env:
@@ -127,18 +130,22 @@ jobs:
           assert base + '/revisions/{revision_id}/publish' in paths
           for model in (DetectionRevisionCreate, DetectionValidationCreate, DetectionPublicationCreate):
               assert model.model_config.get('extra') == 'forbid'
-          compiled=compile_spec({'logsource':'endpoint.process','condition':'all','match':[{'field':'process.name','operator':'equals','value':'powershell.exe'}],'severity':'high','attack_techniques':['T1059.001'],'description':''})
+          compiled=compile_spec({'logsource':'endpoint.process','condition':'all','match':[{'field':'process.name','operator':'equals','value':'powershell.exe'},{'field':'process.command_line','operator':'contains','value':'-enc'}],'severity':'high','attack_techniques':['T1059.001'],'description':''})
           assert set(compiled)=={'splunk','elastic_kql','sentinel_kql','qradar_aql'}
+          assert 'process.name == "powershell.exe"' in compiled['sentinel_kql']
+          assert 'process.command_line contains "-enc"' in compiled['sentinel_kql']
+          assert 'process.name:"powershell.exe"' not in compiled['sentinel_kql']
           print('DETECTION_ENGINEERING_API=PASS')
           print('DETECTION_ENGINEERING_COMPILERS=PASS')
+          print('DETECTION_ENGINEERING_SENTINEL_NATIVE_KQL=PASS')
           PY
-      - name: Run detection behavior and transport reality
+      - name: Run detection behavior, concurrency, and transport reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
-          pytest -q fastapi_app/services/test_detection_engineering.py --junitxml=/tmp/detection-engineering-junit.xml
+          pytest -q fastapi_app/services/test_detection_engineering.py fastapi_app/services/test_detection_validation_concurrency.py --junitxml=/tmp/detection-engineering-junit.xml
       - name: Run governed finding regressions
         working-directory: aegis-platform/backend
         env:
