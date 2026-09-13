@@ -10,7 +10,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('evidence', '0006_findingconfirmation'),
         ('enterprise', '0021_cache_origin_security_validation_kind'),
-        ('vulnerabilities', '0005_vulnerability_security_graph_lineage'),
+        ('vulnerabilities', '0002_delete_vulnerabilityevidence'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
