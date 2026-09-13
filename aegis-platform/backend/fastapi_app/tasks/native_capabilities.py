@@ -31,6 +31,7 @@ from fastapi_app.services.native_tool_runtime import (
     run_native_tool,
 )
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
+from fastapi_app.services.wstg_observation_lineage import attach_wstg_evidence_metadata
 
 
 def _engine(name: str, category: str, timeout: int) -> ScanEngine:
@@ -255,7 +256,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                     'source': capability.tool,
                     'evidence_type': 'scanner_output',
                     'raw_output': result.stdout,
-                    'metadata': {
+                    'metadata': attach_wstg_evidence_metadata({
                         'stderr': result.stderr,
                         'exit_code': result.exit_code,
                         'target': result.target,
@@ -266,7 +267,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                         'normalized': normalized,
                         'credential_context': credential_context,
                         **snapshot,
-                    },
+                    }, capability.id),
                     'collected_by': scan.initiated_by,
                 },
             )
