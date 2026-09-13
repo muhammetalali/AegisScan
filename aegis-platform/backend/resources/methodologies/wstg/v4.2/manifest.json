@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "methodology": "WSTG",
+  "version": "4.2",
+  "official_count": 97,
+  "category_counts": {
+    "INFO": 10,
+    "CONF": 11,
+    "IDNT": 5,
+    "ATHN": 10,
+    "ATHZ": 4,
+    "SESS": 9,
+    "INPV": 19,
+    "ERRH": 2,
+    "CRYP": 4,
+    "BUSL": 9,
+    "CLNT": 13,
+    "APIT": 1
+  },
+  "classification_counts": {
+    "ASSISTED_EXISTING": 45,
+    "AUTO_EXISTING": 25,
+    "GAP_NATIVE_SMALL": 5,
+    "MANUAL_GOVERNED": 21,
+    "CONDITIONAL_NA": 1
+  },
+  "upstream_repository": "https://github.com/OWASP/wstg",
+  "upstream_ref": "v4.2",
+  "upstream_commit": "dd33419e10edb22b78d89325a6c2aad9f184e3a2",
+  "license": "CC-BY-SA-4.0",
+  "design_inputs": [
+    {
+      "filename": "AegisScan_Unified_Kali_WSTG_Recon_Integration_Report_2026-09-14.md",
+      "sha256": "e0b5349c63180a5dc8e64d6643e44eb63228758ef5b50c0b5b698bc16df13a9e"
+    },
+    {
+      "filename": "AegisScan_WSTG_v42_97_Kali_Execution_Matrix_2026-09-14.xlsx",
+      "sha256": "7c532bbd7bc18b9c5af7308f35308285b2dbe603ed6a488cbfaf0e28c8a1b17b"
+    }
+  ],
+  "files": {
+    "tests.json": "277dafdbbab0e791a54e4ccbc88b271498da81bb800373fbab94feb7da8d10fc",
+    "extensions.json": "11bdfc85efc14cc503a2033fac7983d8166d8b938d31d207ee685e29a5083999"
+  }
+}

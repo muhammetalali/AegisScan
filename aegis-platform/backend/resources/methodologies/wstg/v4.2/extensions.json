@@ -1,0 +1,50 @@
+[
+  {
+    "id": "AEGIS-EXT-CSP",
+    "version": "1.0",
+    "title": "Content Security Policy",
+    "canonical": false
+  },
+  {
+    "id": "AEGIS-EXT-PATH-CONFUSION",
+    "version": "1.0",
+    "title": "Path Confusion",
+    "canonical": false
+  },
+  {
+    "id": "AEGIS-EXT-MFA",
+    "version": "1.0",
+    "title": "Multi-Factor Authentication",
+    "canonical": false
+  },
+  {
+    "id": "AEGIS-EXT-OAUTH",
+    "version": "1.0",
+    "title": "OAuth",
+    "canonical": false
+  },
+  {
+    "id": "AEGIS-EXT-JWT",
+    "version": "1.0",
+    "title": "JSON Web Tokens",
+    "canonical": false
+  },
+  {
+    "id": "AEGIS-EXT-MASS-ASSIGNMENT",
+    "version": "1.0",
+    "title": "Mass Assignment",
+    "canonical": false
+  },
+  {
+    "id": "AEGIS-EXT-PAYMENT",
+    "version": "1.0",
+    "title": "Payment Functionality",
+    "canonical": false
+  },
+  {
+    "id": "AEGIS-EXT-REVERSE-TABNABBING",
+    "version": "1.0",
+    "title": "Reverse Tabnabbing",
+    "canonical": false
+  }
+]
