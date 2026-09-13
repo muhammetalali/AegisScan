@@ -13,6 +13,7 @@ from django_project.evidence.models import Evidence
 from django_project.projects.models import Project
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.models import AttackPath, FindingIntelligence
+from . import security_operations
 router=APIRouter()
 class InvestigationFinding(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -50,3 +51,5 @@ def _workspace(project_id:str,user_id:str,finding_id:str|None,limit:int)->Invest
 @router.get('/projects/{project_id}',response_model=InvestigationWorkspace)
 async def investigation_workspace(project_id:str,finding_id:str|None=Query(default=None),limit:int=Query(default=50,ge=1,le=200),user=Depends(get_current_user)):
     return await _workspace(project_id,str(user.get('user_id')),finding_id,limit)
+
+router.include_router(security_operations.router,prefix='/soc')
