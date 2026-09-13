@@ -114,8 +114,9 @@ def _validate_manifest(payload: dict[str, Any]) -> None:
         raise ValueError("runner profile binding mismatch")
 
 
-def _load_runtime_manifest(path: Path = RUNTIME_MANIFEST_PATH) -> tuple[dict[str, Any], bytes]:
-    raw = _read_regular_file_bounded(path, MAX_RUNTIME_MANIFEST_BYTES, "runtime manifest")
+def _load_runtime_manifest(path: Path | None = None) -> tuple[dict[str, Any], bytes]:
+    runtime_path = RUNTIME_MANIFEST_PATH if path is None else path
+    raw = _read_regular_file_bounded(runtime_path, MAX_RUNTIME_MANIFEST_BYTES, "runtime manifest")
     payload = _decode_json_object(raw, "runtime manifest")
 
     expected = {
