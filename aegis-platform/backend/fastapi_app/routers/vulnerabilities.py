@@ -10,19 +10,16 @@ import django
 django.setup()
 
 from asgiref.sync import sync_to_async
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from django.db import transaction
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.evidence.models import Evidence, FindingConfirmation, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityNote
-from django_project.audit.models import AuditLog
 from ..core.dependencies import get_current_user
-from ..services.audit_writer import add_audit_entry
-from ..services.finding_confirmation import (
-    FindingConfirmationError,
-    confirm_finding,
-    list_confirmations,
-)
+from .governed_action_execution import translate_governed_action_error
+from ..services.finding_confirmation import list_confirmations
+from ..services.governed_action_executor import execute_governed_action
 from ..services.remediation_lifecycle import RemediationState, get_state, verify_validation
 
 router = APIRouter()
@@ -49,6 +46,7 @@ class VulnerabilityResponse(BaseModel):
     code_snippet: Optional[str] = None
     remediation: str
     assigned_to: Optional[str] = None
+    version: int
     created_at: str
     updated_at: str
 
@@ -65,6 +63,15 @@ class FindingConfirmationCreate(BaseModel):
     validation_id: UUID
     verdict: Literal['confirmed', 'false_positive']
     rationale: str = Field(min_length=3, max_length=2000)
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class FindingCloseRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=128)
 
 
 class FindingConfirmationResponse(BaseModel):
@@ -103,7 +110,7 @@ def _reject_direct_governed_status(status: Optional[str]) -> None:
         return
     if status in {Vulnerability.Status.CONFIRMED, Vulnerability.Status.FALSE_POSITIVE}:
         raise GovernedStatusMutationError(
-            'confirmed/false_positive are governed finding verdicts; use POST /{vuln_id}/confirmations with completed authorized validation evidence.'
+            'confirmed/false_positive are governed finding verdicts; use a governed finding action.'
         )
     if status in {
         Vulnerability.Status.ACCEPTED_RISK,
@@ -112,11 +119,16 @@ def _reject_direct_governed_status(status: Optional[str]) -> None:
     }:
         raise GovernedStatusMutationError(
             'accepted_risk/wont_fix/duplicate are governed finding dispositions; '
-            'use POST /{vuln_id}/dispositions with immutable tenant/risk lineage.'
+            'use the governed disposition workflow with immutable tenant/risk lineage.'
         )
     raise GovernedStatusMutationError(
-        'fixed is governed by remediation verification; use POST /{vuln_id}/verify followed by POST /{vuln_id}/close.'
+        'fixed is governed by remediation verification followed by governed independent closure.'
     )
+
+
+def _request_ip(request: Request) -> str:
+    value = str(request.client.host if request.client else '').strip()
+    return value if value.count('.') == 3 else '127.0.0.1'
 
 
 def _serialize_confirmation(
@@ -163,6 +175,7 @@ def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
         file_path=vulnerability.file_path or None, line_start=vulnerability.line_start, line_end=vulnerability.line_end,
         code_snippet=vulnerability.code_snippet or None, remediation=vulnerability.remediation,
         assigned_to=str(vulnerability.assigned_to_id) if vulnerability.assigned_to_id else None,
+        version=int(vulnerability.version),
         created_at=vulnerability.created_at.astimezone(timezone.utc).isoformat(),
         updated_at=vulnerability.updated_at.astimezone(timezone.utc).isoformat(),
     )
@@ -260,6 +273,7 @@ async def get_evidences(vuln_id: UUID, user=Depends(get_current_user)):
 async def create_finding_confirmation(
     vuln_id: UUID,
     body: FindingConfirmationCreate,
+    request: Request,
     response: Response,
     user=Depends(get_current_user),
 ):
@@ -267,19 +281,38 @@ async def create_finding_confirmation(
     vulnerability = await _get_vulnerability(vuln_id, user_id)
     if not vulnerability:
         raise HTTPException(status_code=404, detail='Vulnerability not found')
-    try:
-        result = await sync_to_async(confirm_finding, thread_sensitive=True)(
-            finding_id=vuln_id,
-            validation_id=body.validation_id,
-            verdict=body.verdict,
-            rationale=body.rationale,
-            actor_id=user_id,
+    if body.verdict != 'confirmed':
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'FALSE_POSITIVE_GOVERNED_ACTION_NOT_IMPLEMENTED',
+                'reason': 'False-positive classification remains fail-closed until its own governed ActionContract and SoD policy are implemented.',
+            },
         )
-    except FindingConfirmationError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        result = await sync_to_async(execute_governed_action, thread_sensitive=True)(
+            action_id='finding.confirm',
+            project_id=str(vulnerability.project_id),
+            actor_id=user_id,
+            entity_type='finding',
+            entity_id=str(vuln_id),
+            expected_version=body.expected_version,
+            idempotency_key=body.idempotency_key,
+            parameters={'validation_id': str(body.validation_id), 'rationale': body.rationale},
+            ip_address=_request_ip(request),
+            user_agent=request.headers.get('user-agent', ''),
+            session_id=request.cookies.get('sessionid', ''),
+        )
+    except Exception as exc:  # noqa: BLE001
+        translate_governed_action_error(exc)
 
+    confirmation_id = str(result.execution.result_payload.get('confirmation_id') or '')
+    confirmation = await sync_to_async(
+        FindingConfirmation.objects.select_related('validation_run', 'evidence', 'authorization_decision', 'created_by').get,
+        thread_sensitive=True,
+    )(pk=confirmation_id)
     response.status_code = 200 if result.replayed else 201
-    return _serialize_confirmation(result.confirmation, replayed=result.replayed)
+    return _serialize_confirmation(confirmation, replayed=result.replayed)
 
 
 @router.get('/{vuln_id}/confirmations', response_model=List[FindingConfirmationResponse])
@@ -293,19 +326,65 @@ async def get_finding_confirmations(vuln_id: UUID, user=Depends(get_current_user
 
 @sync_to_async
 def _verify_fix(vuln_id: UUID, user_id: str):
-    vulnerability = Vulnerability.objects.filter(id=vuln_id, project__owner_id=user_id).first() or Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
-    if not vulnerability: return None, None, 'Vulnerability not found'
-    validation = ValidationRun.objects.filter(finding=vulnerability, user_id=user_id, status=ValidationRun.Status.COMPLETED, authorized=True).order_by('-completed_at').first()
-    if not validation: return vulnerability, None, 'Fix verification requires a completed authorized finding-linked validation run.'
-    result = validation.result if isinstance(validation.result, dict) else {}
-    if result.get('finding_present') is not False: return vulnerability, validation, 'The latest authorized validation still detects the finding; fix cannot be verified.'
-    evidence = Evidence.objects.filter(finding=vulnerability, evidence_type='validation_output', metadata__validation_id=str(validation.id)).order_by('-collected_at').first()
-    if not evidence: return vulnerability, validation, 'Completed validation has no linked validation evidence; verification is not trusted.'
-    try: validation = verify_validation(validation.id)
-    except ValueError as exc: return vulnerability, validation, str(exc)
-    vulnerability.refresh_from_db(); vulnerability.validation_status='verified'; vulnerability.validated_at=validation.completed_at or datetime.now(timezone.utc); vulnerability.validated_by_id=user_id
-    vulnerability.verified_evidence_count=vulnerability.evidence_records.filter(evidence_type='validation_output',metadata__finding_present=False).count(); vulnerability.save(update_fields=['validation_status','validated_at','validated_by','verified_evidence_count','updated_at'])
-    return vulnerability, validation, None
+    visible = Vulnerability.objects.filter(id=vuln_id, project__owner_id=user_id).first() or Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
+    if not visible:
+        return None, None, 'Vulnerability not found'
+    candidate = ValidationRun.objects.filter(finding=visible).order_by('-created_at', '-id').first()
+    if candidate is None:
+        return visible, None, 'Fix verification requires the latest finding-linked validation run.'
+
+    with transaction.atomic():
+        validation = ValidationRun.objects.select_for_update(of=('self',)).get(pk=candidate.id)
+        vulnerability = Vulnerability.objects.select_for_update(of=('self',)).get(pk=visible.id)
+        if str(validation.user_id) != str(user_id):
+            return vulnerability, validation, 'Only the actor who performed the latest validation may mark its remediation proof verified.'
+        if validation.status != ValidationRun.Status.COMPLETED or validation.authorized is not True:
+            return vulnerability, validation, 'Fix verification requires the latest validation to be completed and authorized.'
+        result = validation.result if isinstance(validation.result, dict) else {}
+        if result.get('finding_present') is not False:
+            return vulnerability, validation, 'The latest authorized validation still detects the finding; fix cannot be verified.'
+        evidence_id = result.get('evidence_id')
+        evidence = Evidence.objects.select_for_update(of=('self',)).filter(
+            pk=evidence_id,
+            finding=vulnerability,
+            evidence_type='validation_output',
+        ).first() if evidence_id else None
+        if evidence is None:
+            return vulnerability, validation, 'Completed validation has no linked validation evidence; verification is not trusted.'
+
+        before_state = get_state(validation)
+        before_validation_status = vulnerability.validation_status
+        before_validated_at = vulnerability.validated_at
+        before_validated_by = str(vulnerability.validated_by_id or '')
+        before_count = int(vulnerability.verified_evidence_count or 0)
+        try:
+            validation = verify_validation(validation.id)
+        except ValueError as exc:
+            return vulnerability, validation, str(exc)
+
+        vulnerability.refresh_from_db()
+        target_validated_at = validation.completed_at or datetime.now(timezone.utc)
+        target_count = vulnerability.evidence_records.filter(
+            evidence_type='validation_output',
+            metadata__finding_present=False,
+        ).count()
+        changed = (
+            before_state != get_state(validation)
+            or before_validation_status != 'verified'
+            or before_validated_at != target_validated_at
+            or before_validated_by != str(user_id)
+            or before_count != target_count
+        )
+        vulnerability.validation_status = 'verified'
+        vulnerability.validated_at = target_validated_at
+        vulnerability.validated_by_id = user_id
+        vulnerability.verified_evidence_count = target_count
+        update_fields = ['validation_status', 'validated_at', 'validated_by', 'verified_evidence_count', 'updated_at']
+        if changed:
+            vulnerability.version = int(vulnerability.version) + 1
+            update_fields.append('version')
+        vulnerability.save(update_fields=update_fields)
+        return vulnerability, validation, None
 
 
 @router.post('/{vuln_id}/verify')
@@ -313,27 +392,55 @@ async def verify_fix(vuln_id: UUID, user=Depends(get_current_user)):
     vulnerability, validation, error = await _verify_fix(vuln_id, str(user.get('user_id')))
     if not vulnerability: raise HTTPException(status_code=404, detail=error or 'Vulnerability not found')
     if error: raise HTTPException(status_code=409, detail=error)
-    return {'status':'verified','remediation_state':RemediationState.VERIFIED,'vulnerability_id':str(vulnerability.id),'validation_id':str(validation.id),'verified_evidence_count':vulnerability.verified_evidence_count,'validated_at':vulnerability.validated_at.astimezone(timezone.utc).isoformat() if vulnerability.validated_at else None}
-
-
-@sync_to_async
-def _close_after_verification(vuln_id: UUID, user_id: str):
-    vulnerability = Vulnerability.objects.filter(id=vuln_id, project__owner_id=user_id).first() or Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
-    if not vulnerability: return None, None, 'Vulnerability not found'
-    validation = ValidationRun.objects.filter(finding=vulnerability, user_id=user_id, status=ValidationRun.Status.COMPLETED, authorized=True).order_by('-completed_at').first()
-    if not validation: return vulnerability, None, 'A completed authorized validation run is required before closing a finding.'
-    if get_state(validation) != RemediationState.VERIFIED or vulnerability.validation_status != 'verified': return vulnerability, validation, 'The finding must pass authorized verification before it can be closed.'
-    vulnerability.status=Vulnerability.Status.FIXED; vulnerability.fixed_at=datetime.now(timezone.utc); vulnerability.fixed_by_id=user_id; vulnerability.save(update_fields=['status','fixed_at','fixed_by','updated_at'])
-    return vulnerability, validation, None
+    return {
+        'status': 'verified',
+        'remediation_state': RemediationState.VERIFIED,
+        'vulnerability_id': str(vulnerability.id),
+        'validation_id': str(validation.id),
+        'verified_evidence_count': vulnerability.verified_evidence_count,
+        'validated_at': vulnerability.validated_at.astimezone(timezone.utc).isoformat() if vulnerability.validated_at else None,
+        'version': vulnerability.version,
+    }
 
 
 @router.post('/{vuln_id}/close')
-async def close_vulnerability(vuln_id: UUID, user=Depends(get_current_user)):
-    vulnerability, validation, error = await _close_after_verification(vuln_id, str(user.get('user_id')))
-    if not vulnerability: raise HTTPException(status_code=404, detail=error or 'Vulnerability not found')
-    if error: raise HTTPException(status_code=409, detail=error)
-    await sync_to_async(add_audit_entry)(user=str(user.get('user_id')), action=AuditLog.Action.VULN_FIX_VERIFY, target=str(vulnerability.id), project=str(vulnerability.project_id), resource_type='vulnerability', resource_repr=f'Finding closed after verified remediation {validation.id}', metadata={'operation':'close','validation_id':str(validation.id),'status':'fixed','authorized':True})
-    return {'status':'fixed','vulnerability_id':str(vulnerability.id),'validation_id':str(validation.id),'closed':True}
+async def close_vulnerability(
+    vuln_id: UUID,
+    body: FindingCloseRequest,
+    request: Request,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.get('user_id'))
+    vulnerability = await _get_vulnerability(vuln_id, user_id)
+    if not vulnerability:
+        raise HTTPException(status_code=404, detail='Vulnerability not found')
+    try:
+        result = await sync_to_async(execute_governed_action, thread_sensitive=True)(
+            action_id='finding.close',
+            project_id=str(vulnerability.project_id),
+            actor_id=user_id,
+            entity_type='finding',
+            entity_id=str(vuln_id),
+            expected_version=body.expected_version,
+            idempotency_key=body.idempotency_key,
+            parameters={},
+            ip_address=_request_ip(request),
+            user_agent=request.headers.get('user-agent', ''),
+            session_id=request.cookies.get('sessionid', ''),
+        )
+    except Exception as exc:  # noqa: BLE001
+        translate_governed_action_error(exc)
+
+    payload = result.execution.result_payload
+    return {
+        'status': payload.get('status'),
+        'vulnerability_id': str(vuln_id),
+        'validation_id': payload.get('validation_id'),
+        'closed': payload.get('status') == Vulnerability.Status.FIXED,
+        'version': payload.get('version'),
+        'execution_id': str(result.execution.id),
+        'replayed': result.replayed,
+    }
 
 
 @sync_to_async
