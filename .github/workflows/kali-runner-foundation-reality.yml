@@ -30,23 +30,41 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check pytest==9.1.1
           python -m pytest -q -c /dev/null aegis-platform/kali/tests/test_runner_contract.py
-      - name: Reject unpinned Kali base or packages
+      - name: Reject unpinned Kali base or foundation packages
         run: |
           grep -Eq '^FROM kalilinux/kali-rolling@sha256:[0-9a-f]{64}$' aegis-platform/kali/Dockerfile.base
           ! grep -R 'REPLACE_WITH_VERIFIED_DIGEST' aegis-platform/kali
-          ! grep -Eq 'apt-get install[^\n]*[[:space:]](ca-certificates|tini|python3|jq|procps)([[:space:]\\]|$)' aegis-platform/kali/Dockerfile.base
-      - name: Build pinned non-root base
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('aegis-platform/kali/Dockerfile.base').read_text()
+          for package in ('ca-certificates','coreutils','jq','procps','python3','tini'):
+              if f'{package}=' not in text:
+                  raise SystemExit(f'unpinned foundation package: {package}')
+          PY
+      - name: Build reproducible pinned non-root base twice
         run: |
-          docker build \
-            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
-            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
-            -f aegis-platform/kali/Dockerfile.base \
-            -t aegis-kali:base \
-            aegis-platform/kali
-          docker image inspect --format='{{.Id}}' aegis-kali:base > /tmp/aegis-image-digest.txt
-      - name: Verify runtime identity and fail-closed manifest
+          export DOCKER_BUILDKIT=1
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          for tag in base-a base-b; do
+            docker build --no-cache \
+              --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+              --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+              --build-arg KALI_BASE_DIGEST="${AEGIS_BASE_DIGEST}" \
+              -f aegis-platform/kali/Dockerfile.base \
+              -t "aegis-kali:${tag}" \
+              aegis-platform/kali
+          done
+          digest_a="$(docker image inspect --format='{{.Id}}' aegis-kali:base-a)"
+          digest_b="$(docker image inspect --format='{{.Id}}' aegis-kali:base-b)"
+          test "${digest_a}" = "${digest_b}"
+          printf '%s\n' "${digest_a}" > /tmp/aegis-image-digest.txt
+          docker tag aegis-kali:base-a aegis-kali:base
+      - name: Verify runtime identity manifest and isolation contract
         run: |
           test "$(docker run --rm --entrypoint id aegis-kali:base -u)" = "10001"
+          docker run --rm --entrypoint cat aegis-kali:base /opt/aegis-runner/runtime-manifest.json | tee /tmp/runtime-manifest.json
+          grep -q "\"build_commit\":\"${AEGIS_EXACT_HEAD}\"" /tmp/runtime-manifest.json
+          grep -q "\"base_image_digest\":\"${AEGIS_BASE_DIGEST}\"" /tmp/runtime-manifest.json
           mkdir -p /tmp/aegis-kali-reality
           printf '%s\n' '{"execution_id":"exec-reality","capability_id":"foundation.contract","asset_id":"asset-reality","authorization_id":"auth-reality","authorization_decision":"authorized","risk_level":"passive","profile":"base","options":{}}' > /tmp/aegis-kali-reality/job.json
           docker run --rm \
@@ -61,6 +79,7 @@ jobs:
             aegis-kali:base | tee /tmp/aegis-kali-reality/result.json
           grep -q '"status": "accepted-no-dispatch"' /tmp/aegis-kali-reality/result.json
           grep -q "\"build_commit\": \"${AEGIS_EXACT_HEAD}\"" /tmp/aegis-kali-reality/result.json
+          grep -q '"runtime_manifest_digest": "sha256:' /tmp/aegis-kali-reality/result.json
       - name: Verify denied authorization fails closed
         run: |
           printf '%s\n' '{"execution_id":"exec-denied","capability_id":"foundation.contract","asset_id":"asset-reality","authorization_id":"auth-denied","authorization_decision":"denied","risk_level":"passive","profile":"base","options":{}}' > /tmp/aegis-kali-reality/denied.json
@@ -78,13 +97,11 @@ jobs:
           upload-release-assets: false
       - name: Generate build provenance
         run: |
-          image_digest="$(cat /tmp/aegis-image-digest.txt)"
-          sbom_digest="sha256:$(sha256sum aegis-kali-base.spdx.json | awk '{print $1}')"
           python - <<'PY'
-          import json, os
+          import hashlib, json, os
           from pathlib import Path
           image_digest = Path('/tmp/aegis-image-digest.txt').read_text().strip()
-          import hashlib
+          runtime_manifest = Path('/tmp/runtime-manifest.json').read_bytes()
           sbom = Path('aegis-kali-base.spdx.json').read_bytes()
           payload = {
               'runtime': 'aegis-kali',
@@ -92,11 +109,10 @@ jobs:
               'profile': 'base',
               'base_image_digest': os.environ['AEGIS_BASE_DIGEST'],
               'image_digest': image_digest,
+              'runtime_manifest_digest': 'sha256:' + hashlib.sha256(runtime_manifest).hexdigest(),
               'sbom_digest': 'sha256:' + hashlib.sha256(sbom).hexdigest(),
               'build_commit': os.environ['AEGIS_EXACT_HEAD'],
           }
-          encoded = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
-          payload['runtime_manifest_digest'] = 'sha256:' + hashlib.sha256(encoded).hexdigest()
           Path('aegis-kali-base-provenance.json').write_text(json.dumps(payload, sort_keys=True, indent=2) + '\n')
           PY
           cat aegis-kali-base-provenance.json
