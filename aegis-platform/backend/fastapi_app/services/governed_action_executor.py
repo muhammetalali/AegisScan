@@ -1,0 +1,419 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from django.db import transaction
+
+from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit
+from enterprise.governed_action_models import GovernedActionExecution
+from enterprise.models import Organization, TenantProject
+from fastapi_app.contracts.governed_operations import AGOM_CONTRACT_VERSION, ActionMode
+from fastapi_app.services.campaign_objective_assurance import assess_objective, complete_campaign
+from fastapi_app.services.entity_capability_adapters import build_entity_capability_manifest
+from fastapi_app.services.governed_operations import get_action_contract
+
+
+_IMPLEMENTED_ACTIONS = {
+    'campaign.objective.assess',
+    'campaign.complete',
+}
+
+
+class GovernedActionError(ValueError):
+    pass
+
+
+class GovernedActionConflict(GovernedActionError):
+    pass
+
+
+class GovernedActionBlocked(GovernedActionError):
+    def __init__(self, reason_code: str, reason: str, missing_requirements: list[str] | None = None):
+        super().__init__(reason)
+        self.reason_code = str(reason_code or 'ACTION_BLOCKED')
+        self.reason = str(reason or 'Governed action is blocked.')
+        self.missing_requirements = list(missing_requirements or [])
+
+
+@dataclass(frozen=True)
+class GovernedActionResult:
+    execution: GovernedActionExecution
+    replayed: bool
+
+
+def _canonical(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode('utf-8')
+
+
+def _sha(value: Any) -> str:
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _normalize_idempotency_key(value: str) -> str:
+    key = str(value or '').strip()
+    if not key:
+        raise GovernedActionError('A non-empty idempotency_key is required.')
+    if len(key) > 128:
+        raise GovernedActionError('idempotency_key exceeds 128 characters.')
+    return key
+
+
+def _project_scope(project_id: str) -> tuple[str, Any]:
+    row = (
+        TenantProject.objects.select_related('project')
+        .filter(project_id=project_id, organization__is_active=True)
+        .first()
+    )
+    if row is None:
+        raise GovernedActionError('Governed action project scope was not found.')
+    return str(row.organization_id), row.project
+
+
+def _projection_dict(manifest) -> dict[str, Any]:
+    return manifest.projection.model_dump(mode='json')
+
+
+def _capability_for(manifest, action_id: str):
+    matches = [item for item in manifest.capabilities if item.action_id == action_id]
+    if len(matches) != 1:
+        raise GovernedActionError('Authoritative capability manifest does not contain exactly one requested action capability.')
+    return matches[0]
+
+
+def _require_parameters(parameters: dict[str, Any], *, required: set[str], allowed: set[str]) -> None:
+    extras = sorted(set(parameters) - allowed)
+    missing = sorted(key for key in required if key not in parameters or parameters[key] in (None, ''))
+    if extras:
+        raise GovernedActionError(f'Unsupported governed action parameters: {extras}.')
+    if missing:
+        raise GovernedActionError(f'Missing governed action parameters: {missing}.')
+
+
+def _execute_objective_assessment(
+    *,
+    project_id: str,
+    actor_id: str,
+    entity_id: str,
+    expected_version: int,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    allowed = {
+        'campaign_id',
+        'attack_path_id',
+        'evidence_id',
+        'outcome',
+        'reason_code',
+        'explanation',
+        'blast_radius_snapshot_id',
+        'validation_id',
+    }
+    required = {'campaign_id', 'attack_path_id', 'evidence_id', 'outcome', 'reason_code'}
+    _require_parameters(parameters, required=required, allowed=allowed)
+    result = assess_objective(
+        objective_id=entity_id,
+        campaign_id=str(parameters['campaign_id']),
+        project_id=project_id,
+        user_id=actor_id,
+        expected_objective_version=expected_version,
+        attack_path_id=str(parameters['attack_path_id']),
+        evidence_id=str(parameters['evidence_id']),
+        outcome=str(parameters['outcome']),
+        reason_code=str(parameters['reason_code']),
+        explanation=str(parameters.get('explanation') or ''),
+        blast_radius_snapshot_id=(
+            str(parameters['blast_radius_snapshot_id'])
+            if parameters.get('blast_radius_snapshot_id')
+            else None
+        ),
+        validation_id=str(parameters['validation_id']) if parameters.get('validation_id') else None,
+    )
+    return {
+        'id': str(result.assessment.id),
+        'assessment_id': str(result.assessment.id),
+        'outcome': result.assessment.outcome,
+        'proof_sha256': result.assessment.proof_sha256,
+        'objective_version': result.objective.version,
+        'objective_generation': result.objective.generation,
+        'domain_replayed': result.replayed,
+    }
+
+
+def _execute_campaign_completion(
+    *,
+    project_id: str,
+    actor_id: str,
+    entity_id: str,
+    expected_version: int,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    _require_parameters(parameters, required=set(), allowed=set())
+    campaign = complete_campaign(
+        campaign_id=entity_id,
+        project_id=project_id,
+        user_id=actor_id,
+        expected_campaign_version=expected_version,
+    )
+    return {
+        'id': str(campaign.id),
+        'status': campaign.status,
+        'version': campaign.version,
+        'completion_sha256': campaign.completion_sha256,
+        'domain_replayed': False,
+    }
+
+
+_DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
+    'campaign.objective.assess': _execute_objective_assessment,
+    'campaign.complete': _execute_campaign_completion,
+}
+
+
+def execute_governed_action(
+    *,
+    action_id: str,
+    project_id: str,
+    actor_id: str,
+    entity_type: str,
+    entity_id: str,
+    expected_version: int,
+    idempotency_key: str,
+    parameters: dict[str, Any] | None = None,
+    correlation_id: uuid.UUID | str | None = None,
+    ip_address: str = '127.0.0.1',
+    user_agent: str = '',
+    session_id: str = '',
+) -> GovernedActionResult:
+    normalized_action = str(action_id or '').strip()
+    normalized_entity_type = str(entity_type or '').strip().lower()
+    normalized_entity_id = str(entity_id or '').strip()
+    normalized_project_id = str(project_id or '').strip()
+    normalized_actor_id = str(actor_id or '').strip()
+    key = _normalize_idempotency_key(idempotency_key)
+    payload = dict(parameters or {})
+    requested_correlation = str(correlation_id or '').strip()
+
+    if not normalized_actor_id:
+        raise GovernedActionError('Authenticated actor id is required.')
+    if not normalized_project_id or not normalized_entity_type or not normalized_entity_id:
+        raise GovernedActionError('project_id, entity_type and entity_id are required.')
+    if int(expected_version) < 1:
+        raise GovernedActionError('expected_version must be at least 1.')
+
+    contract = get_action_contract(normalized_action)
+    if contract is None:
+        raise GovernedActionError('Unknown governed action contract.')
+    if contract.entity_type != normalized_entity_type:
+        raise GovernedActionError('Governed action entity_type does not match its canonical ActionContract.')
+    if normalized_action not in _IMPLEMENTED_ACTIONS or normalized_action not in _DISPATCH:
+        raise GovernedActionError('Governed action execution is not implemented for this ActionContract and remains fail-closed.')
+
+    request_material = {
+        'contract_version': AGOM_CONTRACT_VERSION,
+        'action_id': normalized_action,
+        'project_id': normalized_project_id,
+        'actor_id': normalized_actor_id,
+        'entity_type': normalized_entity_type,
+        'entity_id': normalized_entity_id,
+        'expected_version': int(expected_version),
+        'idempotency_key': key,
+        'requested_correlation_id': requested_correlation,
+        'parameters': payload,
+    }
+    request_fingerprint = _sha(request_material)
+
+    with transaction.atomic():
+        # Resolve the immutable tenant link only to discover the serialization
+        # root, then lock Organization first. Responsibility grant/revoke uses
+        # the same lock order, preventing authority TOCTOU during execution.
+        organization_id, project = _project_scope(normalized_project_id)
+        organization = (
+            Organization.objects.select_for_update(of=('self',))
+            .filter(pk=organization_id, is_active=True)
+            .first()
+        )
+        if organization is None:
+            raise GovernedActionError('Governed action organization is not active.')
+        link = (
+            TenantProject.objects.select_for_update(of=('self',))
+            .filter(project_id=normalized_project_id, organization=organization)
+            .first()
+        )
+        if link is None:
+            raise GovernedActionError('Governed action project scope changed during execution.')
+
+        replay = (
+            GovernedActionExecution.objects.select_for_update(of=('self',))
+            .select_related('audit_log')
+            .filter(organization=organization, idempotency_key=key)
+            .first()
+        )
+        if replay is not None:
+            if replay.request_fingerprint != request_fingerprint:
+                raise GovernedActionConflict(
+                    'Idempotency key was already used for a different governed action request in this organization.'
+                )
+            return GovernedActionResult(execution=replay, replayed=True)
+
+        manifest = build_entity_capability_manifest(
+            project_id=normalized_project_id,
+            user_id=normalized_actor_id,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+        )
+        if str(manifest.entity.tenant_id or '') != str(organization.id):
+            raise GovernedActionError('Capability tenant lineage does not match the locked organization.')
+        if str(manifest.entity.project_id or '') != normalized_project_id:
+            raise GovernedActionError('Capability project lineage does not match the governed request.')
+
+        capability = _capability_for(manifest, normalized_action)
+        if capability.mode is ActionMode.HIDDEN:
+            raise PermissionError('Governed action is not available to this actor.')
+        if capability.mode is not ActionMode.ENABLED:
+            raise GovernedActionBlocked(
+                capability.reason_code,
+                capability.reason,
+                capability.missing_requirements,
+            )
+
+        current_version = manifest.projection.version
+        if current_version is None:
+            raise GovernedActionError('Governed action target does not expose a version for CAS enforcement.')
+        if int(current_version) != int(expected_version):
+            raise GovernedActionConflict(
+                f'Expected entity version {expected_version}, current version is {current_version}.'
+            )
+
+        gate_snapshot = [item.model_dump(mode='json') for item in capability.gate_results]
+        gate_policy_versions = sorted({str(item.policy_version or '') for item in capability.gate_results})
+        policy_material = {
+            'contract_version': AGOM_CONTRACT_VERSION,
+            'action_contract': contract.model_dump(mode='json'),
+            'evaluation_policy_version': manifest.evaluation_policy_version,
+            'gate_policy_versions': gate_policy_versions,
+        }
+        policy_fingerprint = _sha(policy_material)
+        before_projection = _projection_dict(manifest)
+
+        dispatcher = _DISPATCH[normalized_action]
+        result_payload = dispatcher(
+            project_id=normalized_project_id,
+            actor_id=normalized_actor_id,
+            entity_id=normalized_entity_id,
+            expected_version=int(expected_version),
+            parameters=payload,
+        )
+
+        after_manifest = build_entity_capability_manifest(
+            project_id=normalized_project_id,
+            user_id=normalized_actor_id,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+        )
+        after_projection = _projection_dict(after_manifest)
+        correlation_uuid = uuid.UUID(requested_correlation) if requested_correlation else uuid.uuid4()
+
+        audit = append_audit(
+            user_id=normalized_actor_id,
+            action=AuditLog.Action.API_REQUEST,
+            result=AuditLog.Result.SUCCESS,
+            resource_type=normalized_entity_type,
+            resource_id=normalized_entity_id,
+            resource_repr=normalized_action,
+            changes={
+                'before_projection': before_projection,
+                'after_projection': after_projection,
+            },
+            metadata={
+                'agom_contract_version': AGOM_CONTRACT_VERSION,
+                'governed_action_id': normalized_action,
+                'contract_policy_version': contract.policy_version,
+                'evaluation_policy_version': manifest.evaluation_policy_version,
+                'policy_fingerprint': policy_fingerprint,
+                'idempotency_key': key,
+                'request_fingerprint': request_fingerprint,
+                'correlation_id': str(correlation_uuid),
+                'gate_snapshot': gate_snapshot,
+                'result_payload': result_payload,
+            },
+            ip_address=ip_address,
+            user_agent=str(user_agent or ''),
+            session_id=str(session_id or ''),
+            request_id=correlation_uuid,
+        )
+
+        execution_material = {
+            'request_fingerprint': request_fingerprint,
+            'policy_fingerprint': policy_fingerprint,
+            'before_projection': before_projection,
+            'gate_snapshot': gate_snapshot,
+            'result_payload': result_payload,
+            'after_projection': after_projection,
+            'audit_id': str(audit.id),
+            'audit_chain_index': audit.chain_index,
+            'audit_entry_hash': audit.entry_hash,
+            'correlation_id': str(correlation_uuid),
+        }
+        execution_fingerprint = _sha(execution_material)
+        execution = GovernedActionExecution.objects.create(
+            organization=organization,
+            project=project,
+            actor_id=normalized_actor_id,
+            action_id=normalized_action,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+            expected_version=int(expected_version),
+            idempotency_key=key,
+            request_fingerprint=request_fingerprint,
+            contract_version=AGOM_CONTRACT_VERSION,
+            contract_policy_version=contract.policy_version,
+            evaluation_policy_version=manifest.evaluation_policy_version,
+            policy_fingerprint=policy_fingerprint,
+            correlation_id=correlation_uuid,
+            request_payload=request_material,
+            before_projection=before_projection,
+            gate_snapshot=gate_snapshot,
+            result_payload=result_payload,
+            after_projection=after_projection,
+            audit_log=audit,
+            execution_fingerprint=execution_fingerprint,
+        )
+        return GovernedActionResult(execution=execution, replayed=False)
+
+
+def governed_action_view(result: GovernedActionResult) -> dict[str, Any]:
+    item = result.execution
+    audit = item.audit_log
+    return {
+        'execution_id': str(item.id),
+        'action_id': item.action_id,
+        'organization_id': str(item.organization_id),
+        'project_id': str(item.project_id),
+        'actor_id': str(item.actor_id),
+        'entity_type': item.entity_type,
+        'entity_id': item.entity_id,
+        'expected_version': item.expected_version,
+        'idempotency_key': item.idempotency_key,
+        'request_fingerprint': item.request_fingerprint,
+        'contract_version': item.contract_version,
+        'contract_policy_version': item.contract_policy_version,
+        'evaluation_policy_version': item.evaluation_policy_version,
+        'policy_fingerprint': item.policy_fingerprint,
+        'correlation_id': item.correlation_id,
+        'before_projection': item.before_projection,
+        'gate_results': item.gate_snapshot,
+        'result': item.result_payload,
+        'after_projection': item.after_projection,
+        'audit': {
+            'audit_id': str(audit.id),
+            'chain_index': audit.chain_index,
+            'entry_hash': audit.entry_hash,
+        },
+        'execution_fingerprint': item.execution_fingerprint,
+        'replayed': result.replayed,
+        'created_at': item.created_at,
+    }
