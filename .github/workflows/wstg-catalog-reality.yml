@@ -1,0 +1,50 @@
+name: WSTG Catalog Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wstg-catalog-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  catalog-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install catalog contract dependency
+        run: python -m pip install 'pydantic==2.13.5'
+      - uses: actions/checkout@v5
+        with:
+          repository: OWASP/wstg
+          ref: dd33419e10edb22b78d89325a6c2aad9f184e3a2
+          path: upstream-wstg
+      - name: Catalog boundaries and immutable identifiers
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: python -m unittest fastapi_app.services.test_wstg_catalog -v
+      - name: Verify all records against pinned upstream and capture evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python aegis-platform/backend/scripts/wstg_catalog_reality.py --upstream upstream-wstg | tee artifacts/wstg-catalog-reality.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wstg-catalog-reality-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/
+          if-no-files-found: error
