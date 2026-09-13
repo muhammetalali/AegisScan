@@ -12,7 +12,7 @@ from .models import Organization, OrganizationMembership
 
 
 class GovernedResponsibilityAssignment(models.Model):
-    """Immutable grant of an AGOM responsibility to an organization member."""
+    """Immutable, idempotent grant of an AGOM responsibility to an organization member."""
 
     class Responsibility(models.TextChoices):
         AUTHORIZATION_APPROVER = 'authorization_approver', 'Authorization Approver'
@@ -58,6 +58,8 @@ class GovernedResponsibilityAssignment(models.Model):
     valid_until = models.DateTimeField(null=True, blank=True)
     reason = models.TextField()
     policy_version = models.CharField(max_length=64, default='agom-responsibility.v1')
+    idempotency_key = models.CharField(max_length=128, unique=True, editable=False)
+    request_fingerprint = models.CharField(max_length=64, editable=False, db_index=True)
     grant_fingerprint = models.CharField(max_length=64, unique=True, editable=False)
     issued_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -119,7 +121,7 @@ class GovernedResponsibilityAssignment(models.Model):
 
 
 class GovernedResponsibilityRevocation(models.Model):
-    """Immutable revocation record; assignments themselves are never edited."""
+    """Immutable, idempotent revocation record; assignments themselves are never edited."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     assignment = models.OneToOneField(
@@ -129,6 +131,8 @@ class GovernedResponsibilityRevocation(models.Model):
     )
     reason = models.TextField()
     policy_version = models.CharField(max_length=64, default='agom-responsibility.v1')
+    idempotency_key = models.CharField(max_length=128, unique=True, editable=False)
+    request_fingerprint = models.CharField(max_length=64, editable=False, db_index=True)
     revocation_fingerprint = models.CharField(max_length=64, unique=True, editable=False)
     revoked_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
