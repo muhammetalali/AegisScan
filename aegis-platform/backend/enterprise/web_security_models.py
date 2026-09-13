@@ -278,6 +278,7 @@ class WebSecurityValidationRun(models.Model):
         CROSS_PROTOCOL = 'cross_protocol', 'Cross-Protocol State'
         IDENTITY_PROTOCOL_SECURITY = 'identity_protocol_security', 'Identity Protocol Security'
         HTTP_PROTOCOL_SECURITY = 'http_protocol_security', 'HTTP Protocol Security'
+        CACHE_ORIGIN_SECURITY = 'cache_origin_security', 'Cache Origin Security'
 
     class Status(models.TextChoices):
         COMPLETED = 'completed', 'Completed'
