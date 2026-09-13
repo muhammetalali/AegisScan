@@ -2,6 +2,7 @@ FROM kalilinux/kali-rolling@sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd32
 
 ARG AEGIS_RUNNER_VERSION=0.1.0
 ARG BUILD_COMMIT=unknown
+ARG SOURCE_DATE_EPOCH=0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     AEGIS_RUNNER_VERSION=${AEGIS_RUNNER_VERSION} \
@@ -16,11 +17,12 @@ LABEL org.opencontainers.image.revision=${BUILD_COMMIT} \
       io.aegisscan.runner.version=${AEGIS_RUNNER_VERSION} \
       io.aegisscan.runner.profile=base
 
-RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown"
+RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown" \
+    && test "$SOURCE_DATE_EPOCH" -gt 0
 
 # Foundation packages are pinned to the exact versions proven by Reality CI.
-# The base image itself is digest-pinned; dependencies already present in that
-# immutable base layer are inherited from the recorded base digest.
+# Normalize filesystem mtimes touched by apt so two builds from the same exact
+# source commit and package set produce identical filesystem layers.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates=20260601 \
@@ -50,17 +52,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && test "$(dpkg-query -W -f='${Version}' python3)" = "3.14.6-1" \
     && test "$(dpkg-query -W -f='${Version}' tini)" = "0.19.0-6+b2" \
-    && test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1"
+    && test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1" \
+    && find /etc /usr /var -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
     && mkdir -p /opt/aegis-runner /workspace /artifacts \
-    && chown -R aegis:aegis /opt/aegis-runner /workspace /artifacts
+    && chown -R aegis:aegis /opt/aegis-runner /workspace /artifacts \
+    && find /etc /home /opt /workspace /artifacts -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 COPY runner /opt/aegis-runner
 RUN chmod 0755 /opt/aegis-runner/runner.py /opt/aegis-runner/entrypoint.sh \
     && python3 -c 'import json,os,pathlib,subprocess; p=["ca-certificates","coreutils","jq","procps","python3","tini"]; v={x:subprocess.check_output(["dpkg-query","-W","-f=${Version}",x],text=True).strip() for x in p}; d={"runtime":"aegis-kali","runner_version":os.environ["AEGIS_RUNNER_VERSION"],"profile":os.environ["AEGIS_RUNNER_PROFILE"],"base_image_digest":os.environ["AEGIS_BASE_IMAGE_DIGEST"],"build_commit":os.environ["AEGIS_BUILD_COMMIT"],"foundation_packages":v}; pathlib.Path("/opt/aegis-runner/runtime-manifest.json").write_text(json.dumps(d,sort_keys=True,separators=(",",":"))+"\n")' \
-    && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+    && chmod 0444 /opt/aegis-runner/runtime-manifest.json \
+    && find /opt/aegis-runner -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 USER 10001:10001
 WORKDIR /workspace
