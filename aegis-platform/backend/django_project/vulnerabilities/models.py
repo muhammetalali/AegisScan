@@ -95,8 +95,8 @@ class Vulnerability(models.Model):
     # Metadata
     source_engine = models.CharField(_('source engine'), max_length=100, blank=True)
     raw_data = models.JSONField(_('raw data'), default=dict, blank=True)
-    first_seen = models.DateTimeField(auto_now_add=True)
-    last_seen = models.DateTimeField(auto_now=True)
+    first_seen = models.DateTimeField(_('first seen'), auto_now_add=True)
+    last_seen = models.DateTimeField(_('last seen'), auto_now=True)
     fixed_at = models.DateTimeField(_('fixed at'), blank=True, null=True)
     fixed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='fixed_vulnerabilities')
 
