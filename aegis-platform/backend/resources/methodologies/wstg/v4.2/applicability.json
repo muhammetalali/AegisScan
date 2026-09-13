@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "methodology": "WSTG",
+  "version": "4.2",
+  "methodology_asset_types": [
+    "website",
+    "api_endpoint"
+  ],
+  "conditional_tests": {
+    "WSTG-v42-CLNT-08": {
+      "positive_fact": "technology.flash.present",
+      "negative_fact": "technology.flash.absence_attested",
+      "applicable_reason": "Authoritative technology evidence indicates Flash or SWF content is present.",
+      "not_applicable_reason": "Authoritative evidence attests that Flash or SWF technology is absent from the assessed surface.",
+      "inconclusive_reason": "No authoritative evidence proves whether Flash or SWF technology is present; applicability remains inconclusive."
+    }
+  }
+}
