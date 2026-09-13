@@ -1,0 +1,151 @@
+name: Assurance Obligation Expiry Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/assurance_obligation_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0026_assurance_obligation_expiry_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/assurance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/assurance_obligations.py'
+      - '.github/workflows/assurance-obligation-expiry-reality.yml'
+  push:
+    branches: [main, codex/assurance-obligation-expiry-governance-2026-09-13]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/assurance_obligation_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0026_assurance_obligation_expiry_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/assurance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/assurance_obligations.py'
+      - '.github/workflows/assurance-obligation-expiry-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assurance-obligation-expiry-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assurance-obligation-expiry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-assurance-obligation-secret-key-0123456789abcdef
+      JWT_SECRET_KEY: ci-assurance-obligation-jwt-secret-key-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-assurance-obligation-evidence-hmac-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-assurance-obligation-credential-fingerprint-key-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile assurance obligation plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/apps.py \
+            aegis-platform/backend/enterprise/assurance_obligation_models.py \
+            aegis-platform/backend/enterprise/migrations/0026_assurance_obligation_expiry_governance.py \
+            aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py \
+            aegis-platform/backend/fastapi_app/routers/assurance.py \
+            aegis-platform/backend/fastapi_app/routers/assurance_obligations.py \
+            aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py
+      - name: Django schema reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from enterprise.assurance_obligation_models import AssuranceObligation, AssuranceObligationEvent
+          assert connection.vendor == 'postgresql', connection.vendor
+          assert AssuranceObligation._meta.get_field('disposition').one_to_one is True
+          assert AssuranceObligationEvent._meta.get_field('replay_fingerprint').unique is True
+          assert any(c.name == 'uniq_aobl_event_sequence' for c in AssuranceObligationEvent._meta.constraints)
+          assert any(c.name == 'assurance_obligation_terminal_shape' for c in AssuranceObligation._meta.constraints)
+          print('ASSURANCE_OBLIGATION_DATABASE=POSTGRESQL')
+          print('ASSURANCE_OBLIGATION_DB_INVARIANTS=PASS')
+          PY
+      - name: Verify API contracts
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.routers.assurance_obligations import AssuranceObligationRequest
+          paths = app.openapi()['paths']
+          base = '/api/v1/assurance/drift/projects/{project_id}'
+          assert base + '/findings/{finding_id}/obligations' in paths
+          assert base + '/obligations/reconcile' in paths
+          assert base + '/obligations/{obligation_id}/refresh' in paths
+          assert base + '/obligations' in paths
+          assert AssuranceObligationRequest.model_config.get('extra') == 'forbid'
+          print('ASSURANCE_OBLIGATION_API=PASS')
+          PY
+      - name: Run obligation expiry behavior and PostgreSQL concurrency reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: pytest -q fastapi_app/services/test_assurance_obligation_governance.py --junitxml=/tmp/assurance-obligation-junit.xml
+      - name: Run assurance governance regressions
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: pytest -q fastapi_app/services/test_assurance_drift_governance.py fastapi_app/services/test_finding_disposition.py fastapi_app/services/test_soc_closure_governance.py fastapi_app/services/test_remediation_lifecycle.py --junitxml=/tmp/assurance-obligation-regression-junit.xml
+      - name: Retain assurance obligation governance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assurance-obligation-expiry-reality-${{ github.sha }}
+          path: |
+            /tmp/assurance-obligation-junit.xml
+            /tmp/assurance-obligation-regression-junit.xml
+          retention-days: 30
+          if-no-files-found: warn

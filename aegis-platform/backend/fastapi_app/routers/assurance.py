@@ -13,6 +13,7 @@ from ..core.dependencies import get_current_user
 from ..services.intelligence import IntelligenceFusion, IntelligenceFusionError
 from evidence.models import Evidence, ValidationRun
 from .assurance_drift import router as assurance_drift_router
+from .assurance_obligations import router as assurance_obligations_router
 
 router = APIRouter()
 _fusion = IntelligenceFusion()
@@ -86,18 +87,39 @@ async def correlation_summary(current_user=Depends(get_current_user)):
 @router.get('/correlations/validations/{validation_id}')
 async def validation_correlation(validation_id: UUID, current_user=Depends(get_current_user)):
     run = await sync_to_async(lambda: ValidationRun.objects.filter(id=validation_id, user_id=str(current_user.get('user_id'))).first())()
-    if not run: raise HTTPException(status_code=404, detail='Validation not found')
+    if not run:
+        raise HTTPException(status_code=404, detail='Validation not found')
     result = run.result if isinstance(run.result, dict) else {}
     evidence_id = result.get('evidence_id')
     evidence = await sync_to_async(lambda: Evidence.objects.filter(pk=evidence_id, finding=run.finding).first())() if evidence_id else None
-    return {'validation_id':str(run.id),'finding_id':str(run.finding_id) if run.finding_id else None,'status':run.status,'engine':(run.engines or [None])[0],'finding_present':result.get('finding_present'),'evidence_id':str(evidence.id) if evidence else None,'evidence_valid':evidence is not None,'source':'postgresql'}
+    return {
+        'validation_id': str(run.id),
+        'finding_id': str(run.finding_id) if run.finding_id else None,
+        'status': run.status,
+        'engine': (run.engines or [None])[0],
+        'finding_present': result.get('finding_present'),
+        'evidence_id': str(evidence.id) if evidence else None,
+        'evidence_valid': evidence is not None,
+        'source': 'postgresql',
+    }
 
 
 @router.get('/intelligence/cve/{cve_id}')
 async def enrich_cve(cve_id: str, current_user=Depends(get_current_user)):
-    try: result = _fusion.enrich_cve(cve_id, nvd_api_key=os.getenv('NVD_API_KEY'))
-    except IntelligenceFusionError as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {'cve_id':result.cve_id,'confidence':result.confidence,'conflicts':result.conflicts,'recommendation':result.recommendation,'explanation':result.explanation,'sources':result.sources,'live':True}
+    try:
+        result = _fusion.enrich_cve(cve_id, nvd_api_key=os.getenv('NVD_API_KEY'))
+    except IntelligenceFusionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        'cve_id': result.cve_id,
+        'confidence': result.confidence,
+        'conflicts': result.conflicts,
+        'recommendation': result.recommendation,
+        'explanation': result.explanation,
+        'sources': result.sources,
+        'live': True,
+    }
 
 
 router.include_router(assurance_drift_router, prefix='/drift')
+router.include_router(assurance_obligations_router, prefix='/drift')
