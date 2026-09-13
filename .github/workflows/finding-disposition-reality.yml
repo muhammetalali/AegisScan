@@ -8,7 +8,7 @@ on:
       - 'aegis-platform/backend/django_project/evidence/migrations/0007_findingdisposition.py'
       - 'aegis-platform/backend/fastapi_app/services/finding_disposition.py'
       - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
-      - 'aegis-platform/backend/fastapi_app/routers/__init__.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
       - 'aegis-platform/backend/fastapi_app/services/test_finding_disposition.py'
       - '.github/workflows/finding-disposition-reality.yml'
   push:
@@ -18,7 +18,7 @@ on:
       - 'aegis-platform/backend/django_project/evidence/migrations/0007_findingdisposition.py'
       - 'aegis-platform/backend/fastapi_app/services/finding_disposition.py'
       - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
-      - 'aegis-platform/backend/fastapi_app/routers/__init__.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
       - 'aegis-platform/backend/fastapi_app/services/test_finding_disposition.py'
       - '.github/workflows/finding-disposition-reality.yml'
   workflow_dispatch:
@@ -82,7 +82,7 @@ jobs:
             aegis-platform/backend/django_project/evidence/migrations/0007_findingdisposition.py \
             aegis-platform/backend/fastapi_app/services/finding_disposition.py \
             aegis-platform/backend/fastapi_app/routers/finding_dispositions.py \
-            aegis-platform/backend/fastapi_app/routers/__init__.py
+            aegis-platform/backend/fastapi_app/main.py
       - name: Django model and migration reality
         working-directory: aegis-platform/backend
         env:
