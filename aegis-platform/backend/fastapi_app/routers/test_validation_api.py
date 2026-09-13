@@ -317,4 +317,4 @@ def test_verify_api_requires_finding_linked_completed_authorized_validation(api_
     response = client.post(f"/vulnerabilities/{finding.id}/verify")
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Fix verification requires a completed authorized finding-linked validation run."
+    assert response.json()["detail"] == "Fix verification requires the latest validation to be completed and authorized."

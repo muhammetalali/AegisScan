@@ -25,6 +25,10 @@ class FindingConfirmationError(ValueError):
     pass
 
 
+class StaleFindingConfirmationVersion(FindingConfirmationError):
+    pass
+
+
 @dataclass(frozen=True)
 class ConfirmationResult:
     confirmation: FindingConfirmation
@@ -96,10 +100,10 @@ def _locked_authorization_is_still_current(
 ) -> AssetAuthorization:
     if not finding.asset_id:
         raise FindingConfirmationError('Finding confirmation requires a persisted asset.')
-    asset = Asset.objects.select_for_update().get(pk=finding.asset_id)
-    decision = AssetAuthorization.objects.select_for_update().get(pk=validation.authorization_decision_id)
+    asset = Asset.objects.select_for_update(of=('self',)).get(pk=finding.asset_id)
+    decision = AssetAuthorization.objects.select_for_update(of=('self',)).get(pk=validation.authorization_decision_id)
     latest = (
-        AssetAuthorization.objects.select_for_update()
+        AssetAuthorization.objects.select_for_update(of=('self',))
         .filter(asset=asset)
         .order_by('-created_at', '-id')
         .first()
@@ -124,7 +128,7 @@ def _resolve_evidence(validation: ValidationRun, finding: Vulnerability) -> Evid
     evidence_id = result.get('evidence_id')
     if not evidence_id:
         raise FindingConfirmationError('Completed validation result has no evidence_id.')
-    evidence = Evidence.objects.select_for_update().filter(pk=evidence_id, finding=finding).first()
+    evidence = Evidence.objects.select_for_update(of=('self',)).filter(pk=evidence_id, finding=finding).first()
     if evidence is None:
         raise FindingConfirmationError('Validation evidence is missing or belongs to a different finding.')
     if evidence.evidence_type != 'validation_output':
@@ -141,6 +145,15 @@ def _resolve_evidence(validation: ValidationRun, finding: Vulnerability) -> Evid
     return evidence
 
 
+def _latest_validation_locked(finding: Vulnerability) -> ValidationRun | None:
+    return (
+        ValidationRun.objects.select_for_update(of=('self',))
+        .filter(finding=finding)
+        .order_by('-created_at', '-id')
+        .first()
+    )
+
+
 def confirm_finding(
     *,
     finding_id: UUID | str,
@@ -148,6 +161,8 @@ def confirm_finding(
     verdict: str,
     rationale: str,
     actor_id: UUID | str,
+    expected_version: int | None = None,
+    emit_audit: bool = True,
 ) -> ConfirmationResult:
     normalized_rationale = _normalize_rationale(rationale)
     fingerprint = _request_fingerprint(validation_id, verdict, normalized_rationale)
@@ -166,13 +181,10 @@ def confirm_finding(
     preflight_decision = _validate_preflight_authorization(validation)
 
     with transaction.atomic():
-        # Lock only base rows here. Joining nullable foreign keys under SELECT ... FOR UPDATE
-        # produces outer joins that PostgreSQL correctly refuses to lock. Related asset and
-        # authorization rows are locked explicitly below inside this same transaction.
-        finding = Vulnerability.objects.select_for_update().get(pk=finding_id)
-        validation = ValidationRun.objects.select_for_update().get(pk=validation_id, finding=finding)
+        finding = Vulnerability.objects.select_for_update(of=('self',)).get(pk=finding_id)
+        validation = ValidationRun.objects.select_for_update(of=('self',)).get(pk=validation_id, finding=finding)
 
-        existing = FindingConfirmation.objects.select_for_update().filter(validation_run=validation).first()
+        existing = FindingConfirmation.objects.select_for_update(of=('self',)).filter(validation_run=validation).first()
         if existing is not None:
             if existing.request_fingerprint != fingerprint or existing.verdict != verdict:
                 raise FindingConfirmationError(
@@ -185,6 +197,15 @@ def confirm_finding(
                 previous_status=finding.status,
             )
 
+        latest_validation = _latest_validation_locked(finding)
+        if latest_validation is None or latest_validation.id != validation.id:
+            raise FindingConfirmationError(
+                'Finding confirmation must use the latest validation run evaluated by governance.'
+            )
+        if expected_version is not None and int(finding.version) != int(expected_version):
+            raise StaleFindingConfirmationVersion(
+                f'Expected finding version {expected_version}, current version is {finding.version}.'
+            )
         if validation.status != ValidationRun.Status.COMPLETED or validation.authorized is not True:
             raise FindingConfirmationError('Validation state changed before confirmation commit.')
         if not validation.authorization_decision_id:
@@ -242,9 +263,10 @@ def confirm_finding(
         finding.validated_at = validation.completed_at or now
         finding.validated_by_id = actor_id
         finding.evidence_count = finding.evidence_records.count()
+        finding.version = int(finding.version) + 1
         finding.save(update_fields=[
             'status', 'confidence', 'validation_status', 'validated_at', 'validated_by',
-            'evidence_count', 'updated_at',
+            'evidence_count', 'version', 'updated_at',
         ])
 
         status_changed = previous_status != finding.status
@@ -260,30 +282,32 @@ def confirm_finding(
                 ),
             )
 
-        add_audit_entry(
-            user=str(actor_id),
-            action=AuditLog.Action.VULN_STATUS_CHANGE,
-            target=str(finding.id),
-            project=str(finding.project_id),
-            resource_type='vulnerability',
-            resource_repr=f'Governed finding confirmation {confirmation.id}',
-            changes={
-                'status': {'from': previous_status, 'to': finding.status},
-                'validation_status': finding.validation_status,
-            },
-            metadata={
-                'operation': 'finding_confirmation',
-                'confirmation_id': str(confirmation.id),
-                'validation_id': str(validation.id),
-                'evidence_id': str(evidence.id),
-                'authorization_decision_id': str(decision.id),
-                'evidence_sha256': evidence.sha256,
-                'result_sha256': result_sha256,
-                'verdict': verdict,
-                'finding_present': finding_present,
-                'policy_version': POLICY_VERSION,
-            },
-        )
+        if emit_audit:
+            add_audit_entry(
+                user=str(actor_id),
+                action=AuditLog.Action.VULN_STATUS_CHANGE,
+                target=str(finding.id),
+                project=str(finding.project_id),
+                resource_type='vulnerability',
+                resource_repr=f'Governed finding confirmation {confirmation.id}',
+                changes={
+                    'status': {'from': previous_status, 'to': finding.status},
+                    'validation_status': finding.validation_status,
+                    'version': {'from': finding.version - 1, 'to': finding.version},
+                },
+                metadata={
+                    'operation': 'finding_confirmation',
+                    'confirmation_id': str(confirmation.id),
+                    'validation_id': str(validation.id),
+                    'evidence_id': str(evidence.id),
+                    'authorization_decision_id': str(decision.id),
+                    'evidence_sha256': evidence.sha256,
+                    'result_sha256': result_sha256,
+                    'verdict': verdict,
+                    'finding_present': finding_present,
+                    'policy_version': POLICY_VERSION,
+                },
+            )
 
         return ConfirmationResult(
             confirmation=confirmation,

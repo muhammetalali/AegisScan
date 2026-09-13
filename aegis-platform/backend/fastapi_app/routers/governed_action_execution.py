@@ -7,6 +7,8 @@ from ..contracts.governed_actions import GovernedActionExecuteRequest, GovernedA
 from ..core.dependencies import get_current_user
 from ..services.campaign_objective_assurance import CampaignAssuranceError, StaleCampaignVersion, StaleObjectiveVersion
 from ..services.entity_capability_adapters import EntityCapabilityError, EntityCapabilityNotFound
+from ..services.finding_closure import FindingClosureError, StaleFindingClosureVersion
+from ..services.finding_confirmation import FindingConfirmationError, StaleFindingConfirmationVersion
 from ..services.governed_action_executor import GovernedActionBlocked, GovernedActionConflict, GovernedActionError, execute_governed_action, governed_action_view
 
 router = APIRouter()
@@ -31,9 +33,21 @@ def translate_governed_action_error(exc: Exception) -> None:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, GovernedActionBlocked):
         raise HTTPException(status_code=409, detail={'code': exc.reason_code, 'reason': exc.reason, 'missing_requirements': exc.missing_requirements}) from exc
-    if isinstance(exc, (GovernedActionConflict, StaleCampaignVersion, StaleObjectiveVersion)):
+    if isinstance(exc, (
+        GovernedActionConflict,
+        StaleCampaignVersion,
+        StaleObjectiveVersion,
+        StaleFindingConfirmationVersion,
+        StaleFindingClosureVersion,
+    )):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if isinstance(exc, (GovernedActionError, EntityCapabilityError, CampaignAssuranceError)):
+    if isinstance(exc, (
+        GovernedActionError,
+        EntityCapabilityError,
+        CampaignAssuranceError,
+        FindingConfirmationError,
+        FindingClosureError,
+    )):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise exc
 

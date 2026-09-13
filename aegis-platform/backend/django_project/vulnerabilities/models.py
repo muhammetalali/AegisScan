@@ -40,6 +40,7 @@ class Vulnerability(models.Model):
     severity = models.CharField(_('severity'), max_length=15, choices=Severity.choices)
     status = models.CharField(_('status'), max_length=20, choices=Status.choices, default=Status.OPEN)
     confidence = models.CharField(_('confidence'), max_length=15, choices=Confidence.choices, default=Confidence.UNVERIFIED)
+    version = models.PositiveIntegerField(_('governed version'), default=1)
 
     # Classification
     category = models.CharField(_('category'), max_length=50, blank=True)
