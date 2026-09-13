@@ -10,17 +10,22 @@ from django.db import transaction
 
 from django_project.audit.models import AuditLog
 from django_project.audit.services import append_audit
+from django_project.vulnerabilities.models import Vulnerability
 from enterprise.governed_action_models import GovernedActionExecution
 from enterprise.models import Organization, TenantProject
 from fastapi_app.contracts.governed_operations import AGOM_CONTRACT_VERSION, ActionMode
 from fastapi_app.services.campaign_objective_assurance import assess_objective, complete_campaign
-from fastapi_app.services.entity_capability_adapters import build_entity_capability_manifest
+from fastapi_app.services.finding_closure import close_finding
+from fastapi_app.services.finding_confirmation import confirm_finding
+from fastapi_app.services.governed_capability_manifest import build_governed_capability_manifest
 from fastapi_app.services.governed_operations import get_action_contract
 
 
 _IMPLEMENTED_ACTIONS = {
     'campaign.objective.assess',
     'campaign.complete',
+    'finding.confirm',
+    'finding.close',
 }
 
 
@@ -167,9 +172,72 @@ def _execute_campaign_completion(
     }
 
 
+def _execute_finding_confirmation(
+    *,
+    project_id: str,
+    actor_id: str,
+    entity_id: str,
+    expected_version: int,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    _require_parameters(
+        parameters,
+        required={'validation_id'},
+        allowed={'validation_id', 'rationale'},
+    )
+    result = confirm_finding(
+        finding_id=entity_id,
+        validation_id=str(parameters['validation_id']),
+        verdict='confirmed',
+        rationale=str(parameters.get('rationale') or ''),
+        actor_id=actor_id,
+        expected_version=expected_version,
+        emit_audit=False,
+    )
+    finding = Vulnerability.objects.only('id', 'status', 'validation_status', 'version').get(pk=entity_id)
+    return {
+        'id': str(result.confirmation.id),
+        'confirmation_id': str(result.confirmation.id),
+        'validation_id': str(result.confirmation.validation_run_id),
+        'evidence_id': str(result.confirmation.evidence_id),
+        'status': finding.status,
+        'validation_status': finding.validation_status,
+        'version': finding.version,
+        'domain_replayed': result.replayed,
+    }
+
+
+def _execute_finding_closure(
+    *,
+    project_id: str,
+    actor_id: str,
+    entity_id: str,
+    expected_version: int,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    _require_parameters(parameters, required=set(), allowed=set())
+    result = close_finding(
+        finding_id=entity_id,
+        actor_id=actor_id,
+        expected_version=expected_version,
+        emit_audit=False,
+    )
+    return {
+        'id': str(result.finding.id),
+        'status': result.finding.status,
+        'validation_status': result.finding.validation_status,
+        'version': result.finding.version,
+        'validation_id': str(result.validation.id),
+        'evidence_id': str(result.evidence.id),
+        'domain_replayed': False,
+    }
+
+
 _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     'campaign.objective.assess': _execute_objective_assessment,
     'campaign.complete': _execute_campaign_completion,
+    'finding.confirm': _execute_finding_confirmation,
+    'finding.close': _execute_finding_closure,
 }
 
 
@@ -259,7 +327,7 @@ def execute_governed_action(
                 )
             return GovernedActionResult(execution=replay, replayed=True)
 
-        manifest = build_entity_capability_manifest(
+        manifest = build_governed_capability_manifest(
             project_id=normalized_project_id,
             user_id=normalized_actor_id,
             entity_type=normalized_entity_type,
@@ -308,7 +376,7 @@ def execute_governed_action(
             parameters=payload,
         )
 
-        after_manifest = build_entity_capability_manifest(
+        after_manifest = build_governed_capability_manifest(
             project_id=normalized_project_id,
             user_id=normalized_actor_id,
             entity_type=normalized_entity_type,
