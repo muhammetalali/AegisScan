@@ -2,17 +2,24 @@ FROM kalilinux/kali-rolling@sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd32
 
 ARG AEGIS_RUNNER_VERSION=0.1.0
 ARG BUILD_COMMIT=unknown
+ARG KALI_BASE_DIGEST=sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd328c076224a552e7332a3
 
 ENV DEBIAN_FRONTEND=noninteractive \
     AEGIS_RUNNER_VERSION=${AEGIS_RUNNER_VERSION} \
     AEGIS_BUILD_COMMIT=${BUILD_COMMIT} \
+    AEGIS_BASE_IMAGE_DIGEST=${KALI_BASE_DIGEST} \
     AEGIS_RUNNER_PROFILE=base \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+LABEL org.opencontainers.image.revision=${BUILD_COMMIT} \
+      org.opencontainers.image.base.digest=${KALI_BASE_DIGEST} \
+      io.aegisscan.runner.version=${AEGIS_RUNNER_VERSION} \
+      io.aegisscan.runner.profile=base
+
 # Foundation packages are pinned to the exact versions proven by Reality CI.
-# The base image itself is digest-pinned; transitive dependencies not listed
-# here are already part of that immutable base layer.
+# The base image itself is digest-pinned; dependencies already present in that
+# immutable base layer are inherited from the recorded base digest.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates=20260601 \
@@ -50,7 +57,9 @@ RUN groupadd --gid 10001 aegis \
     && chown -R aegis:aegis /opt/aegis-runner /workspace /artifacts
 
 COPY runner /opt/aegis-runner
-RUN chmod 0755 /opt/aegis-runner/runner.py /opt/aegis-runner/entrypoint.sh
+RUN chmod 0755 /opt/aegis-runner/runner.py /opt/aegis-runner/entrypoint.sh \
+    && python3 -c 'import json,os,pathlib,subprocess; p=["ca-certificates","coreutils","jq","procps","python3","tini"]; v={x:subprocess.check_output(["dpkg-query","-W","-f=${Version}",x],text=True).strip() for x in p}; d={"runtime":"aegis-kali","runner_version":os.environ["AEGIS_RUNNER_VERSION"],"profile":os.environ["AEGIS_RUNNER_PROFILE"],"base_image_digest":os.environ["AEGIS_BASE_IMAGE_DIGEST"],"build_commit":os.environ["AEGIS_BUILD_COMMIT"],"foundation_packages":v}; pathlib.Path("/opt/aegis-runner/runtime-manifest.json").write_text(json.dumps(d,sort_keys=True,separators=(",",":"))+"\n")' \
+    && chmod 0444 /opt/aegis-runner/runtime-manifest.json
 
 USER 10001:10001
 WORKDIR /workspace
