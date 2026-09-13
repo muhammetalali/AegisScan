@@ -1,0 +1,67 @@
+name: WSTG Applicability Planner Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/capability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_execution_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_applicability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_applicability_persistence.py'
+      - 'aegis-platform/backend/resources/methodologies/wstg/v4.2/**'
+      - 'aegis-platform/backend/scripts/wstg_applicability_planner_reality.py'
+      - 'docs/WSTG_APPLICABILITY_PLANNER.md'
+      - '.github/workflows/wstg-applicability-planner-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/capability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_execution_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_applicability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_applicability_persistence.py'
+      - 'aegis-platform/backend/resources/methodologies/wstg/v4.2/**'
+      - 'aegis-platform/backend/scripts/wstg_applicability_planner_reality.py'
+      - 'docs/WSTG_APPLICABILITY_PLANNER.md'
+      - '.github/workflows/wstg-applicability-planner-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wstg-applicability-planner-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  planner-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove checkout is exact head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Install backend contract dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Run applicability and planner boundary tests
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: python -m unittest fastapi_app.services.test_wstg_applicability_planner -v
+      - name: Capture exact-head planner evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          PYTHONPATH=aegis-platform/backend \
+            python aegis-platform/backend/scripts/wstg_applicability_planner_reality.py \
+            | tee artifacts/wstg-applicability-planner-reality.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wstg-applicability-planner-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/
+          if-no-files-found: error
