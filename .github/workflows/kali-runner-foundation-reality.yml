@@ -33,6 +33,7 @@ jobs:
       - name: Reject unpinned Kali base or foundation packages
         run: |
           grep -Eq '^FROM kalilinux/kali-rolling@sha256:[0-9a-f]{64}$' aegis-platform/kali/Dockerfile.base
+          grep -q "AEGIS_BASE_IMAGE_DIGEST=${AEGIS_BASE_DIGEST}" aegis-platform/kali/Dockerfile.base
           ! grep -R 'REPLACE_WITH_VERIFIED_DIGEST' aegis-platform/kali
           python - <<'PY'
           from pathlib import Path
@@ -49,7 +50,6 @@ jobs:
             docker build --no-cache \
               --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
               --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
-              --build-arg KALI_BASE_DIGEST="${AEGIS_BASE_DIGEST}" \
               -f aegis-platform/kali/Dockerfile.base \
               -t "aegis-kali:${tag}" \
               aegis-platform/kali
