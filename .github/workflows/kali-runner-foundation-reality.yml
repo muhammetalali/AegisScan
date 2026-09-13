@@ -42,25 +42,25 @@ jobs:
               if f'{package}=' not in text:
                   raise SystemExit(f'unpinned foundation package: {package}')
           PY
-      - name: Build reproducible pinned non-root base twice
+      - name: Build byte-reproducible pinned non-root base twice
         run: |
-          export DOCKER_BUILDKIT=1
           export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
-          for tag in base-a base-b; do
-            docker build --no-cache \
+          for suffix in a b; do
+            docker buildx build --no-cache --provenance=false \
               --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
               --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
               --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+              --tag aegis-kali:base \
+              --output "type=docker,dest=/tmp/aegis-kali-base-${suffix}.tar,rewrite-timestamp=true" \
               -f aegis-platform/kali/Dockerfile.base \
-              -t "aegis-kali:${tag}" \
               aegis-platform/kali
           done
-          digest_a="$(docker image inspect --format='{{.Id}}' aegis-kali:base-a)"
-          digest_b="$(docker image inspect --format='{{.Id}}' aegis-kali:base-b)"
-          printf 'first=%s\nsecond=%s\n' "${digest_a}" "${digest_b}"
-          test "${digest_a}" = "${digest_b}"
-          printf '%s\n' "${digest_a}" > /tmp/aegis-image-digest.txt
-          docker tag aegis-kali:base-a aegis-kali:base
+          sha_a="$(sha256sum /tmp/aegis-kali-base-a.tar | awk '{print $1}')"
+          sha_b="$(sha256sum /tmp/aegis-kali-base-b.tar | awk '{print $1}')"
+          printf 'first=%s\nsecond=%s\n' "${sha_a}" "${sha_b}"
+          test "${sha_a}" = "${sha_b}"
+          printf 'sha256:%s\n' "${sha_a}" > /tmp/aegis-image-digest.txt
+          docker load -i /tmp/aegis-kali-base-a.tar
       - name: Verify runtime identity manifest and isolation contract
         run: |
           test "$(docker run --rm --entrypoint id aegis-kali:base -u)" = "10001"
