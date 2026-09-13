@@ -188,6 +188,7 @@ def test_campaign_completion_requires_independent_lead_and_creates_envelope(disp
         first_name='Campaign',
         last_name='Lead',
     )
+    project.members.add(lead)
     lead_membership = OrganizationMembership.objects.create(
         organization=organization,
         user=lead,
