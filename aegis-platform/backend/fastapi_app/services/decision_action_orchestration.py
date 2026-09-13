@@ -284,13 +284,13 @@ def _verification_proof(action: DecisionAction, actor: str, verification_validat
 def _find_replay(
     actions: list[DecisionAction],
     *,
-    event_type: str,
+    event_type: str | None,
     idempotency_sha256: str,
     request_sha256: str,
 ) -> tuple[DecisionAction, dict[str, Any]] | None:
     for candidate in actions:
         for event in candidate.events.all():
-            if event.event_type != event_type:
+            if event_type is not None and event.event_type != event_type:
                 continue
             command = _command_from_event(event)
             if not command or command.get("idempotency_sha256") != idempotency_sha256:
@@ -425,7 +425,7 @@ def transition(
         if key_sha and request_sha:
             replay = _find_replay(
                 [DecisionAction.objects.prefetch_related('events').get(pk=action.pk)],
-                event_type=f"action.{state}",
+                event_type=None,
                 idempotency_sha256=key_sha,
                 request_sha256=request_sha,
             )
