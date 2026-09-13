@@ -266,34 +266,8 @@ async def create_finding_confirmation(
     except FindingConfirmationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    confirmation = result.confirmation
-    if not result.replayed:
-        await sync_to_async(add_audit_entry, thread_sensitive=True)(
-            user=user_id,
-            action=AuditLog.Action.VULN_STATUS_CHANGE,
-            target=str(vuln_id),
-            project=str(vulnerability.project_id),
-            resource_type='vulnerability',
-            resource_repr=f'Governed finding confirmation {confirmation.id}',
-            changes={
-                'status': {'from': result.previous_status, 'to': confirmation.verdict},
-                'validation_status': confirmation.verdict,
-            },
-            metadata={
-                'operation': 'finding_confirmation',
-                'confirmation_id': str(confirmation.id),
-                'validation_id': str(confirmation.validation_run_id),
-                'evidence_id': str(confirmation.evidence_id),
-                'authorization_decision_id': str(confirmation.authorization_decision_id),
-                'evidence_sha256': confirmation.evidence_sha256,
-                'result_sha256': confirmation.result_sha256,
-                'verdict': confirmation.verdict,
-                'finding_present': confirmation.finding_present,
-                'policy_version': confirmation.policy_version,
-            },
-        )
     response.status_code = 200 if result.replayed else 201
-    return _serialize_confirmation(confirmation, replayed=result.replayed)
+    return _serialize_confirmation(result.confirmation, replayed=result.replayed)
 
 
 @router.get('/{vuln_id}/confirmations', response_model=List[FindingConfirmationResponse])
