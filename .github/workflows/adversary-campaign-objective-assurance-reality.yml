@@ -1,0 +1,159 @@
+name: Adversary Campaign Objective Assurance Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/campaign_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0027_adversary_campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/campaign_objectives.py'
+      - 'aegis-platform/backend/fastapi_app/routers/attack_path.py'
+      - '.github/workflows/adversary-campaign-objective-assurance-reality.yml'
+  push:
+    branches: [main, codex/adversary-campaign-objective-assurance-2026-09-13]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/campaign_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0027_adversary_campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/campaign_objectives.py'
+      - 'aegis-platform/backend/fastapi_app/routers/attack_path.py'
+      - '.github/workflows/adversary-campaign-objective-assurance-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: campaign-objective-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  campaign-objective-assurance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-campaign-objective-django-secret-key-0123456789abcdef
+      JWT_SECRET_KEY: ci-campaign-objective-jwt-secret-key-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-campaign-objective-evidence-hmac-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-campaign-objective-credential-fingerprint-key-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile campaign objective assurance plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/apps.py \
+            aegis-platform/backend/enterprise/campaign_models.py \
+            aegis-platform/backend/enterprise/migrations/0027_adversary_campaign_objective_assurance.py \
+            aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py \
+            aegis-platform/backend/fastapi_app/routers/campaign_objectives.py \
+            aegis-platform/backend/fastapi_app/routers/attack_path.py \
+            aegis-platform/backend/fastapi_app/services/test_campaign_objective_assurance.py
+      - name: Django schema reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from enterprise.campaign_models import AdversaryCampaign, CampaignObjective, CampaignObjectiveAssessment, CampaignAuditEvent
+          assert connection.vendor == 'postgresql', connection.vendor
+          assert CampaignObjectiveAssessment._meta.get_field('replay_fingerprint').unique is True
+          assert CampaignAuditEvent._meta.get_field('entry_hash').unique is True
+          assert any(c.name == 'uniq_campaign_target_objective' for c in CampaignObjective._meta.constraints)
+          assert AdversaryCampaign._meta.get_field('version').get_default() == 1
+          print('CAMPAIGN_OBJECTIVE_DATABASE=POSTGRESQL')
+          print('CAMPAIGN_OBJECTIVE_DB_INVARIANTS=PASS')
+          PY
+      - name: Verify API contracts
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.routers.campaign_objectives import CampaignCreateIn, ObjectiveCreateIn, ObjectiveAssessmentIn, CampaignCompleteIn
+          paths = app.openapi()['paths']
+          base = '/api/v1/attack-path/campaigns/projects/{project_id}'
+          assert base in paths
+          assert base + '/{campaign_id}/objectives' in paths
+          assert base + '/{campaign_id}/objectives/{objective_id}/assessments' in paths
+          assert base + '/{campaign_id}/complete' in paths
+          assert base + '/{campaign_id}/audit/verify' in paths
+          for model in (CampaignCreateIn, ObjectiveCreateIn, ObjectiveAssessmentIn, CampaignCompleteIn):
+              assert model.model_config.get('extra') == 'forbid'
+          print('CAMPAIGN_OBJECTIVE_API=PASS')
+          PY
+      - name: Run campaign objective PostgreSQL reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: pytest -q fastapi_app/services/test_campaign_objective_assurance.py --junitxml=/tmp/campaign-objective-junit.xml
+      - name: Run attack path assurance and governance regressions
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_assurance_obligation_governance.py \
+            fastapi_app/services/test_assurance_drift_governance.py \
+            fastapi_app/services/test_soc_closure_governance.py \
+            fastapi_app/services/test_finding_disposition.py \
+            --junitxml=/tmp/campaign-objective-regression-junit.xml
+      - name: Retain campaign objective evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-objective-assurance-${{ github.sha }}
+          path: |
+            /tmp/campaign-objective-junit.xml
+            /tmp/campaign-objective-regression-junit.xml
+          retention-days: 30
+          if-no-files-found: warn

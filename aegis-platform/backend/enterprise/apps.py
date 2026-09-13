@@ -11,6 +11,7 @@ class EnterpriseConfig(AppConfig):
         from . import soc_models  # noqa: F401
         from . import assurance_models  # noqa: F401
         from . import assurance_obligation_models  # noqa: F401
+        from . import campaign_models  # noqa: F401
 
     def ready(self):
         from . import signals  # noqa: F401
