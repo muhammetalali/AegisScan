@@ -7,9 +7,10 @@ on:
       - 'aegis-platform/backend/django_project/evidence/models.py'
       - 'aegis-platform/backend/django_project/evidence/migrations/0007_findingdisposition.py'
       - 'aegis-platform/backend/fastapi_app/services/finding_disposition.py'
-      - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
-      - 'aegis-platform/backend/fastapi_app/main.py'
       - 'aegis-platform/backend/fastapi_app/services/test_finding_disposition.py'
+      - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
       - '.github/workflows/finding-disposition-reality.yml'
   push:
     branches: [main, codex/finding-disposition-governance-2026-09-13]
@@ -17,9 +18,10 @@ on:
       - 'aegis-platform/backend/django_project/evidence/models.py'
       - 'aegis-platform/backend/django_project/evidence/migrations/0007_findingdisposition.py'
       - 'aegis-platform/backend/fastapi_app/services/finding_disposition.py'
-      - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
-      - 'aegis-platform/backend/fastapi_app/main.py'
       - 'aegis-platform/backend/fastapi_app/services/test_finding_disposition.py'
+      - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
       - '.github/workflows/finding-disposition-reality.yml'
   workflow_dispatch:
 
@@ -81,7 +83,9 @@ jobs:
             aegis-platform/backend/django_project/evidence/models.py \
             aegis-platform/backend/django_project/evidence/migrations/0007_findingdisposition.py \
             aegis-platform/backend/fastapi_app/services/finding_disposition.py \
+            aegis-platform/backend/fastapi_app/services/test_finding_disposition.py \
             aegis-platform/backend/fastapi_app/routers/finding_dispositions.py \
+            aegis-platform/backend/fastapi_app/routers/vulnerabilities.py \
             aegis-platform/backend/fastapi_app/main.py
       - name: Django model and migration reality
         working-directory: aegis-platform/backend
@@ -103,7 +107,7 @@ jobs:
           print('FINDING_DISPOSITION_DATABASE=POSTGRESQL')
           print('FINDING_DISPOSITION_DB_INVARIANTS=PASS')
           PY
-      - name: Verify governed disposition API contract and bypass guard
+      - name: Verify governed disposition API contract and intrinsic bypass guard
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
@@ -112,7 +116,7 @@ jobs:
           python - <<'PY'
           from fastapi_app.main import app
           from fastapi_app.routers.finding_dispositions import FindingDispositionCreate
-          from fastapi_app.routers.vulnerabilities import _GOVERNED_STATUS_MUTATIONS
+          from fastapi_app.routers.vulnerabilities import _GOVERNED_STATUS_MUTATIONS, _reject_direct_governed_status, GovernedStatusMutationError
           from django_project.vulnerabilities.models import Vulnerability
           paths = app.openapi()['paths']
           path = '/api/v1/vulnerabilities/{vuln_id}/dispositions'
@@ -120,17 +124,27 @@ jobs:
           assert FindingDispositionCreate.model_config.get('extra') == 'forbid'
           for status in (Vulnerability.Status.ACCEPTED_RISK, Vulnerability.Status.WONT_FIX, Vulnerability.Status.DUPLICATE):
               assert status in _GOVERNED_STATUS_MUTATIONS
+              try:
+                  _reject_direct_governed_status(status)
+              except GovernedStatusMutationError as exc:
+                  assert 'governed finding dispositions' in str(exc)
+              else:
+                  raise AssertionError(f'direct bypass remained open for {status}')
           print('FINDING_DISPOSITION_API_ROUTE=PASS')
           print('FINDING_DISPOSITION_STRICT_CONTRACT=PASS')
-          print('FINDING_DISPOSITION_BYPASS_GUARD=PASS')
+          print('FINDING_DISPOSITION_INTRINSIC_BYPASS_GUARD=PASS')
           PY
-      - name: Run existing governed-finding regression suites
+      - name: Run disposition behavior, PostgreSQL race, and governed-finding regressions
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
-          pytest -q fastapi_app/services/test_finding_confirmation.py fastapi_app/routers/test_remediation_concurrency.py --junitxml=/tmp/finding-disposition-junit.xml
+          pytest -q \
+            fastapi_app/services/test_finding_disposition.py \
+            fastapi_app/services/test_finding_confirmation.py \
+            fastapi_app/routers/test_remediation_concurrency.py \
+            --junitxml=/tmp/finding-disposition-junit.xml
       - name: Retain finding disposition evidence
         if: always()
         uses: actions/upload-artifact@v4
