@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,9 @@ REQUIRED_FIELDS = {
     "options": dict,
 }
 FORBIDDEN_EXECUTION_FIELDS = {"command", "cmd", "shell", "argv", "binary", "executable"}
+ALLOWED_TOP_LEVEL_FIELDS = frozenset(REQUIRED_FIELDS)
 MAX_MANIFEST_BYTES = 64 * 1024
+MAX_RUNTIME_MANIFEST_BYTES = 64 * 1024
 RUNTIME_MANIFEST_PATH = Path("/opt/aegis-runner/runtime-manifest.json")
 
 
@@ -42,21 +45,62 @@ def _fail(message: str, code: int = 64) -> int:
     return code
 
 
-def _load_manifest(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise ValueError("job manifest is missing")
-    if path.stat().st_size > MAX_MANIFEST_BYTES:
-        raise ValueError("job manifest exceeds size limit")
+def _read_regular_file_bounded(path: Path, limit: int, label: str) -> bytes:
+    """Read one immutable snapshot, rejecting symlinks/non-regular inputs and oversize data."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("job manifest is not valid UTF-8 JSON") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("job manifest must be an object")
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} is missing or unsafe") from exc
+
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        if metadata.st_size > limit:
+            raise ValueError(f"{label} exceeds size limit")
+        raw = os.read(fd, limit + 1)
+        if len(raw) > limit:
+            raise ValueError(f"{label} exceeds size limit")
+        return raw
+    finally:
+        os.close(fd)
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate JSON key: {key}")
+        payload[key] = value
     return payload
 
 
+def _decode_json_object(raw: bytes, label: str) -> dict[str, Any]:
+    try:
+        text = raw.decode("utf-8")
+        payload = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must be an object")
+    return payload
+
+
+def _load_manifest(path: Path) -> tuple[dict[str, Any], bytes]:
+    raw = _read_regular_file_bounded(path, MAX_MANIFEST_BYTES, "job manifest")
+    return _decode_json_object(raw, "job manifest"), raw
+
+
 def _validate_manifest(payload: dict[str, Any]) -> None:
+    forbidden = FORBIDDEN_EXECUTION_FIELDS.intersection(payload)
+    if forbidden:
+        raise ValueError("raw command execution fields are forbidden")
+
+    unknown = set(payload) - ALLOWED_TOP_LEVEL_FIELDS
+    if unknown:
+        raise ValueError(f"unknown top-level field: {sorted(unknown)[0]}")
+
     for field, expected_type in REQUIRED_FIELDS.items():
         value = payload.get(field)
         if not isinstance(value, expected_type) or (expected_type is str and not value.strip()):
@@ -68,20 +112,12 @@ def _validate_manifest(payload: dict[str, Any]) -> None:
         raise ValueError("unsupported risk level")
     if payload["profile"] != os.environ.get("AEGIS_RUNNER_PROFILE", "base"):
         raise ValueError("runner profile binding mismatch")
-    if FORBIDDEN_EXECUTION_FIELDS.intersection(payload):
-        raise ValueError("raw command execution fields are forbidden")
 
 
-def _load_runtime_manifest(path: Path = RUNTIME_MANIFEST_PATH) -> tuple[dict[str, Any], bytes]:
-    if not path.is_file():
-        raise ValueError("runtime manifest is missing")
-    raw = path.read_bytes()
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("runtime manifest is invalid") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("runtime manifest must be an object")
+def _load_runtime_manifest(path: Path | None = None) -> tuple[dict[str, Any], bytes]:
+    runtime_path = RUNTIME_MANIFEST_PATH if path is None else path
+    raw = _read_regular_file_bounded(runtime_path, MAX_RUNTIME_MANIFEST_BYTES, "runtime manifest")
+    payload = _decode_json_object(raw, "runtime manifest")
 
     expected = {
         "runtime": "aegis-kali",
@@ -116,10 +152,7 @@ def _runtime_provenance(payload: dict[str, Any], raw: bytes, runtime_raw: bytes)
 def main() -> int:
     manifest_path = Path(os.environ.get("AEGIS_JOB_MANIFEST", "/workspace/job.json"))
     try:
-        raw = manifest_path.read_bytes()
-        if len(raw) > MAX_MANIFEST_BYTES:
-            raise ValueError("job manifest exceeds size limit")
-        payload = _load_manifest(manifest_path)
+        payload, raw = _load_manifest(manifest_path)
         _validate_manifest(payload)
         _, runtime_raw = _load_runtime_manifest()
     except (OSError, ValueError) as exc:

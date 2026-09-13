@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,13 @@ def test_rejects_arbitrary_execution_fields(field):
         runner._validate_manifest(payload)
 
 
+def test_rejects_unknown_top_level_field():
+    payload = valid_manifest()
+    payload["unexpected"] = True
+    with pytest.raises(ValueError, match="unknown top-level field"):
+        runner._validate_manifest(payload)
+
+
 def test_rejects_profile_mismatch(monkeypatch):
     monkeypatch.setenv("AEGIS_RUNNER_PROFILE", "recon")
     with pytest.raises(ValueError, match="profile binding mismatch"):
@@ -74,6 +82,73 @@ def test_rejects_unknown_risk_level():
     payload["risk_level"] = "unbounded"
     with pytest.raises(ValueError, match="unsupported risk level"):
         runner._validate_manifest(payload)
+
+
+def test_load_manifest_returns_exact_bytes_that_were_parsed(tmp_path):
+    path = tmp_path / "job.json"
+    raw = (json.dumps(valid_manifest(), separators=(",", ":")) + "\n").encode()
+    path.write_bytes(raw)
+    payload, loaded = runner._load_manifest(path)
+    assert payload == valid_manifest()
+    assert loaded == raw
+
+
+def test_load_manifest_rejects_oversize_before_unbounded_read(tmp_path):
+    path = tmp_path / "job.json"
+    path.write_bytes(b"x" * (runner.MAX_MANIFEST_BYTES + 1))
+    with pytest.raises(ValueError, match="exceeds size limit"):
+        runner._load_manifest(path)
+
+
+def test_load_manifest_rejects_duplicate_json_keys(tmp_path):
+    path = tmp_path / "job.json"
+    path.write_text(
+        '{"execution_id":"one","execution_id":"two","capability_id":"c","asset_id":"a",'
+        '"authorization_id":"auth","authorization_decision":"authorized","risk_level":"passive",'
+        '"profile":"base","options":{}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="duplicate JSON key: execution_id"):
+        runner._load_manifest(path)
+
+
+def test_load_manifest_rejects_symlink_input(tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps(valid_manifest()), encoding="utf-8")
+    link = tmp_path / "job.json"
+    link.symlink_to(real)
+    with pytest.raises(ValueError, match="missing or unsafe"):
+        runner._load_manifest(link)
+
+
+def test_main_does_not_reopen_job_manifest(tmp_path, monkeypatch, capsys):
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps(valid_manifest()), encoding="utf-8")
+    runtime_path = tmp_path / "runtime-manifest.json"
+    runtime_path.write_text(json.dumps(valid_runtime_manifest()), encoding="utf-8")
+
+    monkeypatch.setenv("AEGIS_JOB_MANIFEST", str(job))
+    monkeypatch.setenv("AEGIS_RUNNER_VERSION", "0.1.0")
+    monkeypatch.setenv("AEGIS_RUNNER_PROFILE", "base")
+    monkeypatch.setenv("AEGIS_BASE_IMAGE_DIGEST", "sha256:base")
+    monkeypatch.setenv("AEGIS_BUILD_COMMIT", "commit-1")
+    monkeypatch.setattr(runner, "RUNTIME_MANIFEST_PATH", runtime_path)
+
+    original_load = runner._load_manifest
+    calls = 0
+
+    def load_once(path):
+        nonlocal calls
+        calls += 1
+        payload, raw = original_load(path)
+        os.unlink(path)
+        return payload, raw
+
+    monkeypatch.setattr(runner, "_load_manifest", load_once)
+    assert runner.main() == 0
+    assert calls == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "accepted-no-dispatch"
 
 
 def test_runtime_manifest_is_bound_to_environment(tmp_path, monkeypatch):
