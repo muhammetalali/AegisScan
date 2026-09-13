@@ -106,9 +106,6 @@ def _tenant_link_for_actor(*, project_id: str, user_id: str) -> TenantProject:
             project_id=str(link.project_id),
         )
     except (PermissionError, GovernedResponsibilityError) as exc:
-        # Deliberately collapse non-membership and inaccessible-project cases to
-        # the same not-found response so the endpoint cannot enumerate tenant
-        # project or entity existence across organizational boundaries.
         raise EntityCapabilityNotFound('Entity capability scope not found.') from exc
     return link
 
@@ -311,74 +308,75 @@ def _campaign_context(*, entity_id: str, link: TenantProject, actor_id: str) -> 
     return context
 
 
+def _latest_validation(finding: Vulnerability) -> ValidationRun | None:
+    return (
+        ValidationRun.objects.select_related('authorization_decision', 'finding__asset')
+        .filter(finding=finding)
+        .order_by('-created_at', '-id')
+        .first()
+    )
+
+
 def _confirmation_candidate(finding: Vulnerability) -> tuple[ValidationRun, Evidence] | None:
     if not finding.asset_id:
         return None
-    validations = (
-        ValidationRun.objects.select_related('authorization_decision', 'finding__asset')
-        .filter(
-            finding=finding,
-            status=ValidationRun.Status.COMPLETED,
-            authorized=True,
-            authorization_decision__isnull=False,
-        )
-        .order_by('-completed_at', '-created_at')[:25]
-    )
-    for validation in validations:
-        result = validation.result if isinstance(validation.result, dict) else {}
-        evidence_id = result.get('evidence_id')
-        if not evidence_id or not isinstance(result.get('finding_present'), bool):
-            continue
-        evidence = Evidence.objects.filter(pk=evidence_id, finding=finding, evidence_type='validation_output').first()
-        if evidence is None:
-            continue
-        expected_sha = hashlib.sha256(evidence.raw_output.encode('utf-8', errors='replace')).hexdigest()
-        if expected_sha != evidence.sha256:
-            continue
-        metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
-        if str(metadata.get('validation_run_id') or metadata.get('validation_id') or '') != str(validation.id):
-            continue
-        if metadata.get('finding_present') != result.get('finding_present'):
-            continue
-        if str(metadata.get('authorization_decision_id') or '') != str(validation.authorization_decision_id):
-            continue
-        decision, _reason = current_asset_authorization(finding.asset, validation.target_value)
-        if decision is None or decision.id != validation.authorization_decision_id:
-            continue
-        return validation, evidence
-    return None
+    validation = _latest_validation(finding)
+    if validation is None:
+        return None
+    if validation.status != ValidationRun.Status.COMPLETED or validation.authorized is not True:
+        return None
+    if not validation.authorization_decision_id:
+        return None
+    result = validation.result if isinstance(validation.result, dict) else {}
+    if result.get('finding_present') is not True:
+        return None
+    evidence_id = result.get('evidence_id')
+    if not evidence_id:
+        return None
+    evidence = Evidence.objects.filter(pk=evidence_id, finding=finding, evidence_type='validation_output').first()
+    if evidence is None:
+        return None
+    expected_sha = hashlib.sha256(evidence.raw_output.encode('utf-8', errors='replace')).hexdigest()
+    if expected_sha != evidence.sha256:
+        return None
+    metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
+    if str(metadata.get('validation_run_id') or metadata.get('validation_id') or '') != str(validation.id):
+        return None
+    if metadata.get('finding_present') is not True:
+        return None
+    if str(metadata.get('authorization_decision_id') or '') != str(validation.authorization_decision_id):
+        return None
+    decision, _reason = current_asset_authorization(finding.asset, validation.target_value)
+    if decision is None or decision.id != validation.authorization_decision_id:
+        return None
+    return validation, evidence
 
 
 def _verified_remediation(finding: Vulnerability) -> tuple[ValidationRun, Evidence] | None:
-    validations = (
-        ValidationRun.objects.select_related('authorization_decision', 'finding__asset')
-        .filter(
-            finding=finding,
-            status=ValidationRun.Status.COMPLETED,
-            authorized=True,
-            authorization_decision__isnull=False,
-        )
-        .order_by('-completed_at', '-created_at')[:25]
-    )
-    for validation in validations:
-        if get_state(validation) != RemediationState.VERIFIED:
-            continue
-        result = validation.result if isinstance(validation.result, dict) else {}
-        if result.get('finding_present') is not False:
-            continue
-        evidence_id = result.get('evidence_id')
-        evidence = Evidence.objects.filter(pk=evidence_id, finding=finding).first() if evidence_id else None
-        if evidence is None:
-            continue
-        expected_sha = hashlib.sha256(evidence.raw_output.encode('utf-8', errors='replace')).hexdigest()
-        if expected_sha != evidence.sha256:
-            continue
-        if finding.asset_id:
-            decision, _reason = current_asset_authorization(finding.asset, validation.target_value)
-            if decision is None or decision.id != validation.authorization_decision_id:
-                continue
-        return validation, evidence
-    return None
+    validation = _latest_validation(finding)
+    if validation is None:
+        return None
+    if validation.status != ValidationRun.Status.COMPLETED or validation.authorized is not True:
+        return None
+    if not validation.authorization_decision_id:
+        return None
+    if get_state(validation) != RemediationState.VERIFIED:
+        return None
+    result = validation.result if isinstance(validation.result, dict) else {}
+    if result.get('finding_present') is not False:
+        return None
+    evidence_id = result.get('evidence_id')
+    evidence = Evidence.objects.filter(pk=evidence_id, finding=finding).first() if evidence_id else None
+    if evidence is None:
+        return None
+    expected_sha = hashlib.sha256(evidence.raw_output.encode('utf-8', errors='replace')).hexdigest()
+    if expected_sha != evidence.sha256:
+        return None
+    if finding.asset_id:
+        decision, _reason = current_asset_authorization(finding.asset, validation.target_value)
+        if decision is None or decision.id != validation.authorization_decision_id:
+            return None
+    return validation, evidence
 
 
 def _finding_context(*, entity_id: str, link: TenantProject, actor_id: str) -> EntityCapabilityContext:
@@ -410,8 +408,8 @@ def _finding_context(*, entity_id: str, link: TenantProject, actor_id: str) -> E
         GateType.EVIDENCE,
         GateState.PASS if confirmation else GateState.BLOCKED,
         'CONFIRMATION_EVIDENCE_READY' if confirmation else 'CONFIRMATION_EVIDENCE_REQUIRED',
-        'A current authorized validation and lineage-consistent confirmation evidence are available.' if confirmation else 'Finding confirmation requires current authorized validation_output evidence.',
-        missing=[] if confirmation else ['finding_confirmation_evidence'],
+        'The latest validation is current, authorized, finding-present, and bound to lineage-consistent confirmation evidence.' if confirmation else 'Finding confirmation requires the latest validation to be completed, authorized, finding-present, and bound to current validation_output evidence.',
+        missing=[] if confirmation else ['latest_finding_present_validation', 'finding_confirmation_evidence'],
         evidence_refs=confirm_refs,
     )]
     if confirmation:
@@ -444,8 +442,6 @@ def _finding_context(*, entity_id: str, link: TenantProject, actor_id: str) -> E
     ]
     if risk:
         evidence_ready.add(risk_action)
-    # The current domain has no durable disposition-proposal record, so the
-    # proposer/approver SoD rule remains fail-closed instead of being guessed.
 
     close_action = 'finding.close'
     verifier_id = str(verified[0].user_id) if verified else ''
@@ -455,9 +451,9 @@ def _finding_context(*, entity_id: str, link: TenantProject, actor_id: str) -> E
         _gate(
             GateType.CLOSURE,
             GateState.PASS if verified else GateState.BLOCKED,
-            'REMEDIATION_VERIFIED' if verified else 'REMEDIATION_VERIFICATION_REQUIRED',
-            'Completed authorized remediation validation proves finding absence.' if verified else 'Finding closure requires a VERIFIED remediation validation.',
-            missing=[] if verified else ['remediation_verification'],
+            'LATEST_REMEDIATION_VERIFIED' if verified else 'LATEST_REMEDIATION_VERIFICATION_REQUIRED',
+            'The latest finding validation is a current authorized VERIFIED remediation proof showing finding absence.' if verified else 'Finding closure requires the latest validation to be a current authorized VERIFIED remediation proof.',
+            missing=[] if verified else ['latest_remediation_verification'],
             evidence_refs=close_refs,
         ),
         _gate(
@@ -756,9 +752,6 @@ def build_entity_capability_manifest(
     ]
     capabilities: list[CapabilityItem] = []
     for contract in contracts:
-        # Actor layer is an action classification, not caller authority. The
-        # server deterministically selects one layer declared by the canonical
-        # contract; role and responsibility remain database-resolved authority.
         evaluated_layer = contract.actor_layers[0]
         item = evaluate_action(
             contract,

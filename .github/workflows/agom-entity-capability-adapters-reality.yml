@@ -9,6 +9,7 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py'
       - 'aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py'
       - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_freshness.py'
       - 'aegis-platform/backend/fastapi_app/routers/governance.py'
       - 'aegis-platform/backend/fastapi_app/routers/test_entity_capability_api.py'
       - 'aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py'
@@ -31,6 +32,7 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py'
       - 'aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py'
       - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_entity_capability_freshness.py'
       - 'aegis-platform/backend/fastapi_app/routers/governance.py'
       - 'aegis-platform/backend/fastapi_app/routers/test_entity_capability_api.py'
       - '.github/workflows/agom-entity-capability-adapters-reality.yml'
@@ -95,6 +97,7 @@ jobs:
             aegis-platform/backend/fastapi_app/services/governed_operations.py \
             aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py \
             aegis-platform/backend/fastapi_app/services/test_entity_capability_adapters.py \
+            aegis-platform/backend/fastapi_app/services/test_entity_capability_freshness.py \
             aegis-platform/backend/fastapi_app/routers/governance.py \
             aegis-platform/backend/fastapi_app/routers/test_entity_capability_api.py
       - name: Verify Django schema reality and migration drift
@@ -114,6 +117,7 @@ jobs:
         run: |
           pytest -q --junitxml=agom-entity-capability-junit.xml \
             fastapi_app/services/test_entity_capability_adapters.py \
+            fastapi_app/services/test_entity_capability_freshness.py \
             fastapi_app/routers/test_entity_capability_api.py
       - name: Run AGOM authority regressions
         working-directory: aegis-platform/backend
