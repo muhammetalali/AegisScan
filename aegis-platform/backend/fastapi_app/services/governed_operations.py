@@ -29,6 +29,7 @@ def _contract(
     actor_layers: list[ActorLayer],
     allowed_roles: list[str],
     *,
+    responsibilities: list[str] | None = None,
     gates: list[GateType] | None = None,
     evidence: list[str] | None = None,
     sod: list[str] | None = None,
@@ -44,6 +45,7 @@ def _contract(
         allowed_states=allowed_states,
         actor_layers=actor_layers,
         allowed_roles=allowed_roles,
+        required_responsibilities=responsibilities or [],
         required_gates=gates or [],
         evidence_requirements=evidence or [],
         sod_rules=sod or [],
@@ -59,19 +61,22 @@ _ACTIONS = (
     _contract(
         'asset.authorization.approve', 'asset_authorization', 'Approve asset scope authorization',
         ['submitted'], [ActorLayer.GOVERN], ['owner', 'admin'],
+        responsibilities=['authorization_approver'],
         gates=[GateType.AUTHORIZATION], evidence=['ownership', 'scope'],
         resulting_projection={'lifecycle': 'approved'}, audit_event='asset.authorization.approved',
     ),
     _contract(
         'finding.confirm', 'finding', 'Confirm a finding as technically real',
-        ['pending_confirmation'], [ActorLayer.ASSURE], ['confirmer', 'analyst', 'manager', 'admin', 'owner'],
+        ['pending_confirmation'], [ActorLayer.ASSURE], ['analyst', 'manager', 'admin', 'owner'],
+        responsibilities=['finding_confirmer'],
         gates=[GateType.EVIDENCE], evidence=['finding_confirmation_evidence'],
         sod=['actor_must_not_be_finding_creator'],
         resulting_projection={'lifecycle': 'confirmed'}, audit_event='finding.confirmed',
     ),
     _contract(
         'finding.disposition.accept_risk', 'finding', 'Approve an accepted-risk disposition',
-        ['confirmed'], [ActorLayer.GOVERN], ['compliance', 'manager', 'admin', 'owner'],
+        ['confirmed'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
+        responsibilities=['risk_approver'],
         gates=[GateType.EVIDENCE, GateType.EXPIRY_REVIEW],
         evidence=['risk_correlation_snapshot', 'disposition_rationale'],
         sod=['actor_must_not_be_disposition_proposer'], time_aware=True,
@@ -80,7 +85,8 @@ _ACTIONS = (
     ),
     _contract(
         'finding.close', 'finding', 'Close a verified finding',
-        ['verified'], [ActorLayer.GOVERN], ['approver', 'manager', 'admin', 'owner'],
+        ['verified'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
+        responsibilities=['closure_approver'],
         gates=[GateType.CLOSURE, GateType.INDEPENDENT_VERIFICATION],
         evidence=['remediation_verification', 'closure_proof'],
         sod=['actor_must_not_be_remediation_verifier'],
@@ -89,6 +95,7 @@ _ACTIONS = (
     _contract(
         'campaign.objective.assess', 'crown_jewel_objective', 'Record a governed objective assessment',
         ['defined', 'assessing'], [ActorLayer.OPERATE, ActorLayer.ASSURE], ['analyst', 'manager', 'admin', 'owner'],
+        responsibilities=['campaign_assessor'],
         gates=[GateType.AUTHORIZATION, GateType.EVIDENCE, GateType.VALIDATION],
         evidence=['attack_path', 'objective_evidence'],
         side_effects=['append_objective_assessment', 'append_campaign_event'],
@@ -97,6 +104,7 @@ _ACTIONS = (
     _contract(
         'campaign.complete', 'campaign', 'Complete a campaign after all objectives are governed',
         ['active', 'assessing'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
+        responsibilities=['campaign_lead'],
         gates=[GateType.AUTHORIZATION, GateType.CLOSURE, GateType.EVIDENCE],
         evidence=['terminal_objective_assessments', 'completion_proof'],
         sod=['lead_must_not_be_sole_assessor_for_all_objectives'],
@@ -104,25 +112,29 @@ _ACTIONS = (
     ),
     _contract(
         'detection.publish', 'detection_revision', 'Publish a validated detection revision',
-        ['validated'], [ActorLayer.GOVERN], ['publisher', 'manager', 'admin', 'owner'],
+        ['validated'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
+        responsibilities=['detection_publisher'],
         gates=[GateType.VALIDATION, GateType.PUBLICATION], evidence=['passed_detection_validation'],
         resulting_projection={'lifecycle': 'published'}, audit_event='detection.published',
     ),
     _contract(
         'investigation.close', 'investigation_case', 'Close a contained investigation',
-        ['contained'], [ActorLayer.GOVERN], ['approver', 'manager', 'admin', 'owner'],
+        ['contained'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
+        responsibilities=['soc_closure_approver'],
         gates=[GateType.CLOSURE, GateType.EVIDENCE], evidence=['response_evidence', 'closure_proof'],
         resulting_projection={'lifecycle': 'closed'}, audit_event='investigation.closed',
     ),
     _contract(
         'assurance.obligation.satisfy', 'assurance_obligation', 'Satisfy an active assurance obligation',
-        ['active'], [ActorLayer.GOVERN, ActorLayer.ASSURE], ['owner', 'compliance', 'manager', 'admin'],
+        ['active'], [ActorLayer.GOVERN, ActorLayer.ASSURE], ['manager', 'admin', 'owner'],
+        responsibilities=['assurance_owner'],
         gates=[GateType.EVIDENCE], evidence=['satisfaction_proof'], time_aware=True,
         resulting_projection={'lifecycle': 'satisfied'}, audit_event='assurance.obligation.satisfied',
     ),
     _contract(
         'integration.live_accept', 'integration', 'Accept a tested connector for live use',
         ['tested'], [ActorLayer.GOVERN, ActorLayer.ASSURE], ['admin', 'owner'],
+        responsibilities=['integration_acceptor'],
         gates=[GateType.LIVE_ACCEPTANCE, GateType.EVIDENCE], evidence=['vendor_ack', 'acceptance_test_evidence'],
         time_aware=True, resulting_projection={'lifecycle': 'live_accepted'}, audit_event='integration.live_accepted',
     ),
@@ -151,6 +163,7 @@ def evaluate_action(
     current_state: str,
     actor_role: str,
     actor_layer: ActorLayer,
+    actor_responsibilities: Iterable[str] = (),
     evidence_ready: bool,
     sod_eligible: bool,
     gate_results: Iterable[GateResult] = (),
@@ -162,7 +175,19 @@ def evaluate_action(
             mode=ActionMode.HIDDEN,
             intent=contract.intent,
             reason_code='ACTOR_NOT_ELIGIBLE',
-            reason='Actor role/layer is not eligible for this governed action.',
+            reason='Actor membership role/layer is not eligible for this governed action.',
+        )
+
+    actor_responsibility_set = {str(item).strip() for item in actor_responsibilities if str(item).strip()}
+    missing_responsibilities = sorted(set(contract.required_responsibilities) - actor_responsibility_set)
+    if missing_responsibilities:
+        return CapabilityItem(
+            action_id=contract.action_id,
+            mode=ActionMode.HIDDEN,
+            intent=contract.intent,
+            reason_code='RESPONSIBILITY_NOT_ASSIGNED',
+            reason='Actor does not hold the governed responsibility required for this action.',
+            missing_requirements=missing_responsibilities,
         )
 
     if current_state not in contract.allowed_states:
@@ -232,10 +257,12 @@ def build_manifest(
     projection: ProjectionSnapshot,
     actor_role: str,
     actor_layer: ActorLayer,
+    actor_responsibilities: set[str] | None = None,
     evidence_ready_actions: set[str] | None = None,
     sod_eligible_actions: set[str] | None = None,
     gate_results_by_action: dict[str, list[GateResult]] | None = None,
 ) -> CapabilityManifest:
+    actor_responsibilities = actor_responsibilities or set()
     evidence_ready_actions = evidence_ready_actions or set()
     sod_eligible_actions = sod_eligible_actions or set()
     gate_results_by_action = gate_results_by_action or {}
@@ -247,6 +274,7 @@ def build_manifest(
             current_state=lifecycle,
             actor_role=actor_role,
             actor_layer=actor_layer,
+            actor_responsibilities=actor_responsibilities,
             evidence_ready=item.action_id in evidence_ready_actions or not item.evidence_requirements,
             sod_eligible=item.action_id in sod_eligible_actions or not item.sod_rules,
             gate_results=gate_results_by_action.get(item.action_id, []),
@@ -258,6 +286,7 @@ def build_manifest(
         projection=projection,
         actor_layer=actor_layer,
         actor_role=actor_role,
+        actor_responsibilities=sorted(actor_responsibilities),
         capabilities=capabilities,
         generated_at=datetime.now(timezone.utc),
     )
