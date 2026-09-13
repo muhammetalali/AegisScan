@@ -90,6 +90,7 @@ class ActionContract(BaseModel):
     allowed_states: list[str]
     actor_layers: list[ActorLayer]
     allowed_roles: list[str]
+    required_responsibilities: list[str] = Field(default_factory=list)
     required_gates: list[GateType] = Field(default_factory=list)
     evidence_requirements: list[str] = Field(default_factory=list)
     sod_rules: list[str] = Field(default_factory=list)
@@ -122,6 +123,7 @@ class CapabilityManifest(BaseModel):
     projection: ProjectionSnapshot
     actor_layer: ActorLayer
     actor_role: str
+    actor_responsibilities: list[str] = Field(default_factory=list)
     capabilities: list[CapabilityItem]
     generated_at: datetime
 
