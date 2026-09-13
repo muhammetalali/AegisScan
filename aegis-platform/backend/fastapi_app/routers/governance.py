@@ -17,12 +17,9 @@ from ..contracts.governed_responsibilities import (
 )
 from ..core.dependencies import get_current_user
 from ..services.decision_action_orchestration import get_action, list_actions
-from ..services.entity_capability_adapters import (
-    EntityCapabilityError,
-    EntityCapabilityNotFound,
-    build_entity_capability_manifest,
-)
+from ..services.entity_capability_adapters import EntityCapabilityError, EntityCapabilityNotFound
 from ..services.governance_engine import enrich_governance, governance_metrics
+from ..services.governed_capability_manifest import build_governed_capability_manifest
 from ..services.governed_operations import get_action_contract, registry_summary
 from ..services.governed_responsibility_authority import (
     GovernedResponsibilityConflict,
@@ -158,7 +155,7 @@ async def governed_entity_capabilities(
     """
     actor = _actor_id(user)
     try:
-        return await sync_to_async(build_entity_capability_manifest)(
+        return await sync_to_async(build_governed_capability_manifest)(
             project_id=project_id,
             user_id=actor,
             entity_type=entity_type,
