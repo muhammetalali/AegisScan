@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from datetime import timedelta
 from typing import Any
 from uuid import uuid4
@@ -27,7 +29,20 @@ TRANSITIONS: dict[str, set[str]] = {
     "awaiting_revalidation": {"verified", "in_progress", "deferred"},
     "verified": set(), "rejected": set(), "deferred": {"pending", "approved"},
 }
+_IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 _schema_ready = False
+
+
+class ActionConcurrencyConflict(ValueError):
+    """Base class for deterministic business-workflow concurrency conflicts."""
+
+
+class StaleActionVersion(ActionConcurrencyConflict):
+    pass
+
+
+class IdempotencyConflict(ActionConcurrencyConflict):
+    pass
 
 
 def initialize_action_store() -> None:
@@ -39,20 +54,97 @@ def _ensure_schema() -> None:
     initialize_action_store()
 
 
+def _canonical_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_idempotency_key(idempotency_key: str | None) -> str | None:
+    if idempotency_key is None:
+        return None
+    value = str(idempotency_key).strip()
+    if not _IDEMPOTENCY_KEY_RE.fullmatch(value):
+        raise ValueError("Idempotency key must be 8-128 safe ASCII characters")
+    return value
+
+
+def _idempotency_sha256(idempotency_key: str) -> str:
+    return hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+
+
+def _json_note(note: str | None) -> dict[str, Any] | None:
+    if not note:
+        return None
+    try:
+        payload = json.loads(str(note))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _command_from_event(event: DecisionActionEvent) -> dict[str, Any] | None:
+    payload = _json_note(event.note)
+    command = payload.get("_command") if payload else None
+    return command if isinstance(command, dict) else None
+
+
+def _event_note(
+    operator_note: str | None,
+    command: dict[str, Any],
+    *,
+    verification: dict[str, Any] | None = None,
+) -> str:
+    payload: dict[str, Any] = {"_command": command, "operator_note": operator_note or ""}
+    if verification:
+        payload.update(verification)
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _mutation_metadata(
+    *,
+    replayed: bool,
+    idempotency_sha256: str | None,
+    request_sha256: str | None,
+    result_state: str,
+    result_version: int,
+) -> dict[str, Any]:
+    return {
+        "replayed": replayed,
+        "idempotencySha256": idempotency_sha256,
+        "requestSha256": request_sha256,
+        "resultState": result_state,
+        "resultVersion": result_version,
+    }
+
+
 def _hydrate(action: DecisionAction) -> dict[str, Any]:
-    events = [
-        {"type": event.event_type, "at": event.created_at.isoformat(), "actor": event.actor, "note": event.note}
-        for event in action.events.all()
-    ]
+    events: list[dict[str, Any]] = []
+    verification: dict[str, Any] | None = None
+    for event in action.events.all():
+        payload = _json_note(event.note)
+        command = payload.get("_command") if payload else None
+        display_note = event.note
+        item: dict[str, Any] = {
+            "type": event.event_type,
+            "at": event.created_at.isoformat(),
+            "actor": event.actor,
+            "note": display_note,
+        }
+        if isinstance(command, dict):
+            display_note = str(payload.get("operator_note") or "") or None
+            item["note"] = display_note
+            item["command"] = {
+                "idempotencySha256": command.get("idempotency_sha256"),
+                "requestSha256": command.get("request_sha256"),
+                "expectedVersion": command.get("expected_version"),
+                "resultVersion": command.get("result_version"),
+                "resultState": command.get("result_state"),
+            }
+        if event.event_type == "action.verified" and payload and payload.get("verification_validation_id"):
+            verification = payload
+        events.append(item)
+
     risk_correlation = action.risk_correlation if action.risk_correlation_id else None
-    verification_event = next((event for event in reversed(events) if event["type"] == "action.verified"), None)
-    verification = None
-    if verification_event and verification_event.get("note"):
-        try:
-            payload = json.loads(str(verification_event["note"]))
-            verification = payload if isinstance(payload, dict) and payload.get("verification_validation_id") else None
-        except (TypeError, ValueError, json.JSONDecodeError):
-            verification = None
     return {
         "actionId": action.action_id,
         "decisionId": action.decision_id,
@@ -189,10 +281,31 @@ def _verification_proof(action: DecisionAction, actor: str, verification_validat
     }
 
 
+def _find_replay(
+    actions: list[DecisionAction],
+    *,
+    event_type: str | None,
+    idempotency_sha256: str,
+    request_sha256: str,
+) -> tuple[DecisionAction, dict[str, Any]] | None:
+    for candidate in actions:
+        for event in candidate.events.all():
+            if event_type is not None and event.event_type != event_type:
+                continue
+            command = _command_from_event(event)
+            if not command or command.get("idempotency_sha256") != idempotency_sha256:
+                continue
+            if command.get("request_sha256") != request_sha256:
+                raise IdempotencyConflict("Idempotency key was already used with a different request")
+            return candidate, command
+    return None
+
+
 def create_action(
     decision: dict[str, Any], owner: str, sla_hours: int, requested_by: str, *,
     organization: Organization, project: Project, validation: ValidationRun,
     risk_correlation: RiskCorrelationSnapshot | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     if decision.get("actionable") is False:
         raise ValueError(str(decision.get("actionabilityReason") or "Decision is not actionable"))
@@ -204,8 +317,45 @@ def create_action(
         raise ValueError("Project tenant lineage does not match the action organization")
     _validate_risk_correlation_lineage(decision, project, validation, risk_correlation)
 
+    key = _validate_idempotency_key(idempotency_key)
+    key_sha = _idempotency_sha256(key) if key else None
+    request_sha = _canonical_sha256({
+        "operation": "create_action",
+        "actor": requested_by,
+        "project_id": str(project.id),
+        "validation_id": str(validation.id),
+        "risk_correlation_id": str(risk_correlation.id) if risk_correlation else None,
+        "decision_id": str(decision.get("decisionId") or ""),
+        "owner": owner,
+        "sla_hours": max(1, sla_hours),
+    }) if key else None
+
     now = timezone.now()
     with transaction.atomic():
+        Project.objects.select_for_update().get(pk=project.pk)
+        if key_sha and request_sha:
+            candidates = list(
+                DecisionAction.objects.filter(project=project, requested_by=requested_by)
+                .select_related('risk_correlation').prefetch_related('events')
+            )
+            replay = _find_replay(
+                candidates,
+                event_type="action.created",
+                idempotency_sha256=key_sha,
+                request_sha256=request_sha,
+            )
+            if replay:
+                existing, command = replay
+                result = _hydrate(existing)
+                result["mutation"] = _mutation_metadata(
+                    replayed=True,
+                    idempotency_sha256=key_sha,
+                    request_sha256=request_sha,
+                    result_state=str(command.get("result_state") or existing.state),
+                    result_version=int(command.get("result_version") or existing.version),
+                )
+                return result
+
         action = DecisionAction.objects.create(
             organization=organization, project=project, validation=validation,
             risk_correlation=risk_correlation, action_id=f"act-{uuid4().hex[:12]}",
@@ -219,37 +369,125 @@ def create_action(
             recommended_action=decision.get("recommendedAction", "Apply remediation and re-validate."),
             remediation_plan=decision.get("revalidationPlan", []), created_at=now, updated_at=now,
         )
-        DecisionActionEvent.objects.create(action=action, event_type="action.created", actor=requested_by, created_at=now)
-    return _hydrate(DecisionAction.objects.select_related('risk_correlation').prefetch_related('events').get(pk=action.pk))
+        command = None
+        event_note = None
+        if key_sha and request_sha:
+            command = {
+                "idempotency_sha256": key_sha,
+                "request_sha256": request_sha,
+                "expected_version": None,
+                "result_version": 1,
+                "result_state": "pending",
+            }
+            event_note = _event_note(None, command)
+        DecisionActionEvent.objects.create(
+            action=action, event_type="action.created", actor=requested_by, note=event_note, created_at=now,
+        )
+    result = _hydrate(DecisionAction.objects.select_related('risk_correlation').prefetch_related('events').get(pk=action.pk))
+    if key_sha and request_sha:
+        result["mutation"] = _mutation_metadata(
+            replayed=False,
+            idempotency_sha256=key_sha,
+            request_sha256=request_sha,
+            result_state="pending",
+            result_version=1,
+        )
+    return result
 
 
 def transition(
     action_id: str, state: str, actor: str, note: str | None = None,
-    verification_validation_id: str | None = None,
+    verification_validation_id: str | None = None, *,
+    expected_version: int | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     if state not in STATES:
         raise ValueError(f"Invalid state: {state}")
+    if expected_version is not None and expected_version < 1:
+        raise ValueError("Expected version must be at least 1")
+    key = _validate_idempotency_key(idempotency_key)
+    key_sha = _idempotency_sha256(key) if key else None
+    request_sha = _canonical_sha256({
+        "operation": "transition",
+        "action_id": action_id,
+        "actor": actor,
+        "state": state,
+        "note": note or "",
+        "verification_validation_id": str(verification_validation_id) if verification_validation_id else None,
+        "expected_version": expected_version,
+    }) if key else None
+
     with transaction.atomic():
         action = _scoped_actions(actor, include_risk_correlation=False).select_for_update().filter(pk=action_id).first()
         if action is None:
             raise KeyError(action_id)
+
+        if key_sha and request_sha:
+            replay = _find_replay(
+                [DecisionAction.objects.prefetch_related('events').get(pk=action.pk)],
+                event_type=None,
+                idempotency_sha256=key_sha,
+                request_sha256=request_sha,
+            )
+            if replay:
+                _, command = replay
+                result = _hydrate(_scoped_actions(actor).prefetch_related('events').get(pk=action.pk))
+                result["mutation"] = _mutation_metadata(
+                    replayed=True,
+                    idempotency_sha256=key_sha,
+                    request_sha256=request_sha,
+                    result_state=str(command.get("result_state") or state),
+                    result_version=int(command.get("result_version") or action.version),
+                )
+                return result
+
+        if expected_version is not None and action.version != expected_version:
+            raise StaleActionVersion(
+                f"Stale action version: expected {expected_version}, current {action.version}"
+            )
         if state not in TRANSITIONS.get(action.state, set()):
             raise ValueError(f"Invalid transition: {action.state} -> {state}")
-        event_note = note
+
+        verification = None
         if state == "verified":
             action = DecisionAction.objects.select_related('validation__finding__project', 'risk_correlation').get(pk=action.pk)
-            proof = _verification_proof(action, actor, verification_validation_id)
-            proof["operator_note"] = note or ""
-            event_note = json.dumps(proof, sort_keys=True, separators=(',', ':'))
+            verification = _verification_proof(action, actor, verification_validation_id)
+
         now = timezone.now()
         action.state = state
         action.updated_at = now
         action.version += 1
         action.save(update_fields=['state', 'updated_at', 'version'])
+
+        command = None
+        event_note = note
+        if key_sha and request_sha:
+            command = {
+                "idempotency_sha256": key_sha,
+                "request_sha256": request_sha,
+                "expected_version": expected_version,
+                "result_version": action.version,
+                "result_state": state,
+            }
+            event_note = _event_note(note, command, verification=verification)
+        elif verification:
+            verification["operator_note"] = note or ""
+            event_note = json.dumps(verification, sort_keys=True, separators=(',', ':'))
+
         DecisionActionEvent.objects.create(
             action=action, event_type=f"action.{state}", actor=actor, note=event_note, created_at=now,
         )
-    return _hydrate(_scoped_actions(actor).prefetch_related('events').get(pk=action.pk))
+
+    result = _hydrate(_scoped_actions(actor).prefetch_related('events').get(pk=action.pk))
+    if key_sha and request_sha:
+        result["mutation"] = _mutation_metadata(
+            replayed=False,
+            idempotency_sha256=key_sha,
+            request_sha256=request_sha,
+            result_state=state,
+            result_version=action.version,
+        )
+    return result
 
 
 def list_actions(requested_by: str) -> list[dict[str, Any]]:

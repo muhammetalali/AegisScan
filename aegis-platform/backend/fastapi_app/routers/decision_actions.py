@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 from asgiref.sync import sync_to_async
 from django.db.models import Q
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.dependencies import get_current_user
 from ..services.assurance_correlation import correlate_all
@@ -12,7 +12,13 @@ from ..services.assurance_graph_aggregator import build_assurance_graph
 from ..services.graph_intelligence import analyze_graph
 from ..services.autonomous_triage import build_triage
 from ..services.security_decision import build_decision_pack
-from ..services.decision_action_orchestration import create_action, get_action, list_actions, transition
+from ..services.decision_action_orchestration import (
+    ActionConcurrencyConflict,
+    create_action,
+    get_action,
+    list_actions,
+    transition,
+)
 from ..services.workflow_intelligence import enrich_action, workflow_metrics
 from ..services.audit_writer import add_audit_entry
 from .assurance_graph import _load_validations
@@ -29,13 +35,20 @@ async def require_user(user=Depends(get_current_user)) -> dict[str, Any]:
 
 
 class ActionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     decision_id: str
     owner: str = Field(min_length=1, max_length=256)
     sla_hours: int = Field(default=24, ge=1, le=8760)
+    idempotency_key: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 
 
 class ActionTransition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     state: str
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
     note: str | None = Field(default=None, max_length=2000)
     verification_validation_id: str | None = None
 
@@ -104,7 +117,12 @@ async def actions_overview(user: dict[str, Any] = Depends(require_user)):
 
 
 @router.post("/actions", status_code=201)
-async def create_action_endpoint(body: ActionCreate, request: Request, user: dict[str, Any] = Depends(require_user)):
+async def create_action_endpoint(
+    body: ActionCreate,
+    request: Request,
+    response: Response,
+    user: dict[str, Any] = Depends(require_user),
+):
     actor = str(user.get("user_id") or user.get("id") or user.get("username") or "")
     if not actor:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
@@ -118,18 +136,31 @@ async def create_action_endpoint(body: ActionCreate, request: Request, user: dic
         item = await sync_to_async(create_action)(
             decision,body.owner,body.sla_hours,actor,
             organization=organization,project=project,validation=validation,risk_correlation=risk_correlation,
+            idempotency_key=body.idempotency_key,
         )
+    except ActionConcurrencyConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except PermissionError:
         raise HTTPException(status_code=404, detail="Decision scope not found")
+
+    mutation = item.get("mutation") if isinstance(item.get("mutation"), dict) else {}
+    replayed = bool(mutation.get("replayed"))
+    if replayed:
+        response.status_code = 200
     await sync_to_async(add_audit_entry)(
-        user=actor, action="decision_action.create", target=item["actionId"], project=str(project.id),
-        result="success", resource_type="decision_action",
+        user=actor,
+        action="decision_action.create.replay" if replayed else "decision_action.create",
+        target=item["actionId"], project=str(project.id), result="success", resource_type="decision_action",
         metadata={
             "organization_id":str(organization.id), "validation_id":str(validation.id),
             "risk_correlation_id":str(risk_correlation.id) if risk_correlation else None,
             "risk_correlation_sha256":risk_correlation.correlation_sha256 if risk_correlation else None,
+            "replayed":replayed,
+            "idempotency_sha256":mutation.get("idempotencySha256"),
+            "request_sha256":mutation.get("requestSha256"),
+            "result_version":mutation.get("resultVersion"),
         }, request=request,
     )
     return enrich_action(item)
@@ -154,9 +185,15 @@ async def action_transition(action_id: str, body: ActionTransition, request: Req
     try:
         item = await sync_to_async(transition)(
             action_id, body.state, actor, body.note, body.verification_validation_id,
+            expected_version=body.expected_version,
+            idempotency_key=body.idempotency_key,
         )
+        mutation = item.get("mutation") if isinstance(item.get("mutation"), dict) else {}
+        replayed = bool(mutation.get("replayed"))
         await sync_to_async(add_audit_entry)(
-            user=actor, action=f"decision_action.{body.state}", target=action_id,
+            user=actor,
+            action=f"decision_action.{body.state}.replay" if replayed else f"decision_action.{body.state}",
+            target=action_id,
             project=str(item.get("projectId") or "—"), result="success", resource_type="decision_action",
             metadata={
                 "note": body.note or "",
@@ -165,10 +202,17 @@ async def action_transition(action_id: str, body: ActionTransition, request: Req
                 "verification_evidence_sha256": item.get("verificationEvidenceSha256", []),
                 "risk_correlation_id": item.get("riskCorrelationId"),
                 "risk_correlation_sha256": item.get("riskCorrelationSha256"),
+                "expected_version": body.expected_version,
+                "replayed": replayed,
+                "idempotency_sha256": mutation.get("idempotencySha256"),
+                "request_sha256": mutation.get("requestSha256"),
+                "result_version": mutation.get("resultVersion"),
             }, request=request,
         )
         return enrich_action(item)
     except KeyError:
         raise HTTPException(status_code=404, detail="Action not found")
+    except ActionConcurrencyConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=409 if body.state == "verified" else 400, detail=str(exc))
