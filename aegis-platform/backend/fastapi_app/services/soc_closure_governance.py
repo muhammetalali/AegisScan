@@ -8,6 +8,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from django_project.evidence.models import Evidence, FindingDisposition, ValidationRun
+from django_project.vulnerabilities.models import Vulnerability
 from enterprise.models import InvestigationCase, OrganizationMembership
 from enterprise.soc_models import InvestigationCaseState, InvestigationClosure
 from fastapi_app.services.remediation_lifecycle import RemediationState, get_state, transition as remediation_transition
@@ -95,12 +96,28 @@ def close_investigation_case(*, case_id: str, project_id: str, user_id: str, exp
         raise ClosureGovernanceError('Disposition closure requires disposition_id only.')
 
     with transaction.atomic():
-        state = InvestigationCaseState.objects.select_for_update().select_related('case', 'decision_action').filter(case_id=case_id, case__project_id=project_id).first()
+        # decision_action is nullable, so select_related() produces a LEFT OUTER JOIN.
+        # Scope FOR UPDATE to the state row to preserve CAS without locking the
+        # nullable side of that join (which PostgreSQL explicitly rejects).
+        state = (
+            InvestigationCaseState.objects.select_for_update(of=('self',))
+            .select_related('case', 'decision_action')
+            .filter(case_id=case_id, case__project_id=project_id)
+            .first()
+        )
         if state is None:
             raise ClosureGovernanceError('SOC-managed investigation case not found in project.')
         case = state.case
         if not case.findings.filter(pk=finding_id).exists():
             raise ClosureGovernanceError('Closure finding is not linked to this investigation case.')
+
+        # Serialize closure with disposition/remediation mutations on the same
+        # finding. Finding disposition governance already locks this row, so this
+        # removes the race where a new immutable disposition could be published
+        # between "latest" evaluation and closure commit.
+        locked_finding = Vulnerability.objects.select_for_update().filter(pk=finding_id, project_id=project_id).first()
+        if locked_finding is None:
+            raise ClosureGovernanceError('Closure finding is outside the investigation project scope.')
 
         existing = InvestigationClosure.objects.filter(case_id=case_id).first()
         if existing is not None:
@@ -124,7 +141,7 @@ def close_investigation_case(*, case_id: str, project_id: str, user_id: str, exp
         if validation is not None:
             remediation_transition(validation.id, RemediationState.CLOSED, reason=f'Governed SOC investigation closure {case.id}; {normalized_rationale}'.strip(), evidence_id=str(evidence.id))
 
-        closure = InvestigationClosure.objects.create(case=case, finding_id=finding_id, closure_type=closure_type, validation_run=validation, disposition=disposition, evidence=evidence, decision_action=state.decision_action, policy_version=POLICY_VERSION, source_sha256=source_sha, closure_fingerprint=fingerprint, rationale=normalized_rationale, closed_by_id=user_id)
+        closure = InvestigationClosure.objects.create(case=case, finding=locked_finding, closure_type=closure_type, validation_run=validation, disposition=disposition, evidence=evidence, decision_action=state.decision_action, policy_version=POLICY_VERSION, source_sha256=source_sha, closure_fingerprint=fingerprint, rationale=normalized_rationale, closed_by_id=user_id)
         old_status = case.status
         case.status = InvestigationCase.Status.CLOSED
         case.closed_at = timezone.now()
