@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from enterprise.detection_models import DetectionRule
+from enterprise.models import OrganizationMembership, TenantProject
 from fastapi_app.core.dependencies import get_current_user
 from fastapi_app.services.detection_engineering import (
     DetectionEngineeringError,
@@ -126,10 +127,22 @@ async def publish_detection_revision(project_id: UUID, revision_id: UUID, body: 
 
 @sync_to_async
 def _list_rules(project_id: str, user_id: str, state: str | None, limit: int):
-    from django.db.models import Q
-    qs = DetectionRule.objects.filter(project_id=project_id).filter(
-        Q(project__owner_id=user_id) | Q(project__members__id=user_id)
-    ).distinct().order_by('-updated_at')
+    link = TenantProject.objects.select_related('organization').filter(project_id=project_id).first()
+    if link is None:
+        raise DetectionEngineeringError('Project is not bound to an enterprise tenant.')
+    permitted = OrganizationMembership.objects.filter(
+        organization=link.organization,
+        user_id=user_id,
+        user__is_active=True,
+        is_active=True,
+        role__in=OrganizationMembership.Role.values,
+    ).exists()
+    if not permitted:
+        raise PermissionError('Active tenant membership is required to read detection rules.')
+    qs = DetectionRule.objects.filter(
+        project_id=project_id,
+        organization=link.organization,
+    ).order_by('-updated_at')
     if state:
         qs = qs.filter(state=state)
     rows = list(qs[:limit])
@@ -147,4 +160,7 @@ def _list_rules(project_id: str, user_id: str, state: str | None, limit: int):
 async def list_detection_rules(project_id: UUID, state: str | None = None, limit: int = Query(50, ge=1, le=200), user=Depends(get_current_user)):
     if state and state not in set(DetectionRule.State.values):
         raise HTTPException(status_code=422, detail='Unsupported detection rule state')
-    return await _list_rules(str(project_id), _uid(user), state, limit)
+    try:
+        return await _list_rules(str(project_id), _uid(user), state, limit)
+    except (DetectionEngineeringError, PermissionError) as exc:
+        raise _translate(exc) from exc

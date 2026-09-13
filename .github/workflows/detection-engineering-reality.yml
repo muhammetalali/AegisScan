@@ -10,6 +10,7 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/services/test_detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/services/test_detection_validation_concurrency.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_detection_read_rbac.py'
       - 'aegis-platform/backend/fastapi_app/routers/detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/routers/enterprise_gap.py'
       - '.github/workflows/detection-engineering-reality.yml'
@@ -22,6 +23,7 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/services/test_detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/services/test_detection_validation_concurrency.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_detection_read_rbac.py'
       - 'aegis-platform/backend/fastapi_app/routers/detection_engineering.py'
       - 'aegis-platform/backend/fastapi_app/routers/enterprise_gap.py'
       - '.github/workflows/detection-engineering-reality.yml'
@@ -89,7 +91,8 @@ jobs:
             aegis-platform/backend/fastapi_app/routers/detection_engineering.py \
             aegis-platform/backend/fastapi_app/routers/enterprise_gap.py \
             aegis-platform/backend/fastapi_app/services/test_detection_engineering.py \
-            aegis-platform/backend/fastapi_app/services/test_detection_validation_concurrency.py
+            aegis-platform/backend/fastapi_app/services/test_detection_validation_concurrency.py \
+            aegis-platform/backend/fastapi_app/services/test_detection_read_rbac.py
       - name: Django model and migration reality
         working-directory: aegis-platform/backend
         env:
@@ -139,13 +142,13 @@ jobs:
           print('DETECTION_ENGINEERING_COMPILERS=PASS')
           print('DETECTION_ENGINEERING_SENTINEL_NATIVE_KQL=PASS')
           PY
-      - name: Run detection behavior, concurrency, and transport reality
+      - name: Run detection behavior, RBAC, concurrency, and transport reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
-          pytest -q fastapi_app/services/test_detection_engineering.py fastapi_app/services/test_detection_validation_concurrency.py --junitxml=/tmp/detection-engineering-junit.xml
+          pytest -q fastapi_app/services/test_detection_engineering.py fastapi_app/services/test_detection_validation_concurrency.py fastapi_app/services/test_detection_read_rbac.py --junitxml=/tmp/detection-engineering-junit.xml
       - name: Run governed finding regressions
         working-directory: aegis-platform/backend
         env:
