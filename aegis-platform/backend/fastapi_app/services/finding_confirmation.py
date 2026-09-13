@@ -10,9 +10,11 @@ from uuid import UUID
 from django.db import transaction
 
 from django_project.assets.models import Asset, AssetAuthorization
+from django_project.audit.models import AuditLog
 from django_project.evidence.models import Evidence, FindingConfirmation, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityStatusHistory
 
+from .audit_writer import add_audit_entry
 from .authorization_guard import asset_target, require_bound_validation_authorization
 
 
@@ -132,7 +134,7 @@ def _resolve_evidence(validation: ValidationRun, finding: Vulnerability) -> Evid
     metadata_validation_id = metadata.get('validation_run_id') or metadata.get('validation_id')
     if str(metadata_validation_id or '') != str(validation.id):
         raise FindingConfirmationError('Evidence is not bound to the requested validation run.')
-    if metadata.get('finding_present') is not result.get('finding_present'):
+    if metadata.get('finding_present') != result.get('finding_present'):
         raise FindingConfirmationError('Evidence finding_present does not match the validation result.')
     if str(metadata.get('authorization_decision_id') or '') != str(validation.authorization_decision_id):
         raise FindingConfirmationError('Evidence authorization lineage does not match the validation run.')
@@ -262,6 +264,31 @@ def confirm_finding(
                     f'validation={validation.id}; evidence_sha256={evidence.sha256}'
                 ),
             )
+
+        add_audit_entry(
+            user=str(actor_id),
+            action=AuditLog.Action.VULN_STATUS_CHANGE,
+            target=str(finding.id),
+            project=str(finding.project_id),
+            resource_type='vulnerability',
+            resource_repr=f'Governed finding confirmation {confirmation.id}',
+            changes={
+                'status': {'from': previous_status, 'to': finding.status},
+                'validation_status': finding.validation_status,
+            },
+            metadata={
+                'operation': 'finding_confirmation',
+                'confirmation_id': str(confirmation.id),
+                'validation_id': str(validation.id),
+                'evidence_id': str(evidence.id),
+                'authorization_decision_id': str(decision.id),
+                'evidence_sha256': evidence.sha256,
+                'result_sha256': result_sha256,
+                'verdict': verdict,
+                'finding_present': finding_present,
+                'policy_version': POLICY_VERSION,
+            },
+        )
 
         return ConfirmationResult(
             confirmation=confirmation,
