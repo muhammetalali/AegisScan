@@ -1,4 +1,4 @@
-FROM kalilinux/kali-rolling@sha256:REPLACE_WITH_VERIFIED_DIGEST
+FROM kalilinux/kali-rolling@sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd328c076224a552e7332a3
 
 ARG AEGIS_RUNNER_VERSION=0.1.0
 ARG BUILD_COMMIT=unknown
@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tini python3 python3-venv jq coreutils procps \
+    && apt-get install -y --no-install-recommends ca-certificates tini python3 jq coreutils procps \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 aegis \
