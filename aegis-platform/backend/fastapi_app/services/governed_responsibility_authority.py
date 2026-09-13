@@ -413,16 +413,24 @@ def revoke_responsibility(*, assignment_id: str, actor_id: str, reason: str, ide
     request_fingerprint = _sha(request_material)
 
     with transaction.atomic():
+        # Assignment organization is immutable. Read it without a row lock only
+        # to establish the canonical mutation lock order: Organization first.
+        organization_id = (
+            GovernedResponsibilityAssignment.objects.filter(pk=assignment_id)
+            .values_list('organization_id', flat=True)
+            .first()
+        )
+        if organization_id is None:
+            raise GovernedResponsibilityError('Governed responsibility assignment not found.')
+        organization = _organization_locked(str(organization_id))
+        _issuer_locked(organization, actor_id)
         assignment = (
             GovernedResponsibilityAssignment.objects.select_for_update()
-            .select_related('organization')
-            .filter(pk=assignment_id)
+            .filter(pk=assignment_id, organization=organization)
             .first()
         )
         if assignment is None:
             raise GovernedResponsibilityError('Governed responsibility assignment not found.')
-        organization = _organization_locked(str(assignment.organization_id))
-        _issuer_locked(organization, actor_id)
 
         replay = GovernedResponsibilityRevocation.objects.select_for_update().filter(idempotency_key=key).first()
         if replay is not None:
