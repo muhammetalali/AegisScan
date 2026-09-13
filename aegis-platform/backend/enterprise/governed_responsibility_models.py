@@ -68,7 +68,7 @@ class GovernedResponsibilityAssignment(models.Model):
     valid_until = models.DateTimeField(null=True, blank=True)
     reason = models.TextField()
     policy_version = models.CharField(max_length=64, default='agom-responsibility.v1')
-    idempotency_key = models.CharField(max_length=128, unique=True, editable=False)
+    idempotency_key = models.CharField(max_length=128, editable=False)
     request_fingerprint = models.CharField(max_length=64, editable=False, db_index=True)
     grant_fingerprint = models.CharField(max_length=64, unique=True, editable=False)
     issued_by = models.ForeignKey(
@@ -93,6 +93,7 @@ class GovernedResponsibilityAssignment(models.Model):
             models.Index(fields=['valid_until'], name='idx_govresp_valid_until'),
         ]
         constraints = [
+            models.UniqueConstraint(fields=['organization', 'idempotency_key'], name='uniq_govresp_grant_idem'),
             models.CheckConstraint(
                 condition=Q(valid_until__isnull=True) | Q(valid_until__gt=models.F('valid_from')),
                 name='govresp_valid_window',
@@ -136,6 +137,11 @@ class GovernedResponsibilityRevocation(models.Model):
     objects = _ImmutableGovernanceQuerySet.as_manager()
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='governed_responsibility_revocations',
+    )
     assignment = models.OneToOneField(
         GovernedResponsibilityAssignment,
         on_delete=models.PROTECT,
@@ -143,7 +149,7 @@ class GovernedResponsibilityRevocation(models.Model):
     )
     reason = models.TextField()
     policy_version = models.CharField(max_length=64, default='agom-responsibility.v1')
-    idempotency_key = models.CharField(max_length=128, unique=True, editable=False)
+    idempotency_key = models.CharField(max_length=128, editable=False)
     request_fingerprint = models.CharField(max_length=64, editable=False, db_index=True)
     revocation_fingerprint = models.CharField(max_length=64, unique=True, editable=False)
     revoked_by = models.ForeignKey(
@@ -155,10 +161,22 @@ class GovernedResponsibilityRevocation(models.Model):
 
     class Meta:
         ordering = ['-revoked_at', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['organization', 'idempotency_key'], name='uniq_govresp_revoke_idem'),
+        ]
+        indexes = [models.Index(fields=['organization', '-revoked_at'], name='idx_govresp_revoke_org')]
 
     def save(self, *args, **kwargs):
         if type(self).objects.filter(pk=self.pk).exists():
             raise ValidationError('Governed responsibility revocations are immutable.')
+        if self.assignment_id and self.organization_id:
+            assignment_org = (
+                GovernedResponsibilityAssignment.objects.filter(pk=self.assignment_id)
+                .values_list('organization_id', flat=True)
+                .first()
+            )
+            if assignment_org is not None and str(assignment_org) != str(self.organization_id):
+                raise ValidationError('Revocation organization must match the responsibility assignment organization.')
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
