@@ -16,6 +16,14 @@ from enterprise.governed_responsibility_models import (
     GovernedResponsibilityRevocation,
 )
 from enterprise.models import Organization, OrganizationMembership, TenantProject
+from fastapi_app.contracts.governed_operations import (
+    ActorLayer,
+    CapabilityManifest,
+    EntityRef,
+    GateResult,
+    ProjectionSnapshot,
+)
+from fastapi_app.services.governed_operations import build_manifest
 
 
 _POLICY_VERSION = 'agom-responsibility.v1'
@@ -25,6 +33,10 @@ _SCOPE_KINDS = set(GovernedResponsibilityAssignment.ScopeKind.values)
 
 
 class GovernedResponsibilityError(ValueError):
+    pass
+
+
+class GovernedResponsibilityConflict(GovernedResponsibilityError):
     pass
 
 
@@ -139,8 +151,8 @@ def _normalize_scope(*, scope_kind: str, project_id: str | None, entity_type: st
 
 
 def _append_event_locked(*, organization: Organization, assignment: GovernedResponsibilityAssignment, actor_id: str, event_type: str, payload: dict[str, Any]) -> GovernedResponsibilityEvent:
-    # Every caller must hold the Organization row lock. That lock serializes this
-    # per-organization chain so two governance writes cannot fork the audit head.
+    # Every caller holds the Organization row lock. This is the serialization
+    # primitive for the per-organization governance hash chain.
     previous = GovernedResponsibilityEvent.objects.filter(organization=organization).order_by('-id').first()
     previous_hash = previous.entry_hash if previous else ''
     envelope = {
@@ -188,7 +200,6 @@ def _grant_request_material(
         'project_id': str(project_id or ''),
         'entity_type': entity_type,
         'entity_id': entity_id,
-        # Omitted valid_from is request intent, not the generated effective timestamp.
         'valid_from': requested_valid_from.isoformat() if requested_valid_from else '<automatic>',
         'valid_until': valid_until.isoformat() if valid_until else '',
         'reason': reason,
@@ -209,7 +220,10 @@ def _overlapping_assignment_exists(
     valid_until: datetime | None,
     excluded_assignment_id: str | None,
 ) -> bool:
-    queryset = GovernedResponsibilityAssignment.objects.select_for_update().filter(
+    # The Organization row is already locked, so another authority mutation in
+    # this tenant cannot race this check. Avoid FOR UPDATE across nullable reverse
+    # joins (revocation/superseded_by), which PostgreSQL correctly rejects.
+    queryset = GovernedResponsibilityAssignment.objects.filter(
         organization=organization,
         membership=membership,
         responsibility=responsibility,
@@ -222,7 +236,6 @@ def _overlapping_assignment_exists(
     )
     if excluded_assignment_id:
         queryset = queryset.exclude(pk=excluded_assignment_id)
-    # Existing interval intersects [starts_at, valid_until). Null end means infinity.
     queryset = queryset.filter(Q(valid_until__isnull=True) | Q(valid_until__gt=starts_at))
     if valid_until is not None:
         queryset = queryset.filter(valid_from__lt=valid_until)
@@ -287,12 +300,10 @@ def grant_responsibility(
         organization = _organization_locked(organization_id)
         _issuer_locked(organization, actor_id)
 
-        # Replay is resolved before target/supersession state checks so a retry of a
-        # committed request still succeeds after that request changed current state.
         replay = GovernedResponsibilityAssignment.objects.select_for_update().filter(idempotency_key=key).first()
         if replay is not None:
             if str(replay.organization_id) != str(organization.id) or replay.request_fingerprint != request_fingerprint:
-                raise GovernedResponsibilityError('Idempotency key was already used for a different responsibility grant request.')
+                raise GovernedResponsibilityConflict('Idempotency key was already used for a different responsibility grant request.')
             return GrantResult(replay, True)
 
         membership = _target_membership_locked(organization, membership_id)
@@ -316,9 +327,9 @@ def grant_responsibility(
             if supersedes is None:
                 raise GovernedResponsibilityError('Superseded assignment does not match organization, member and responsibility.')
             if hasattr(supersedes, 'superseded_by'):
-                raise GovernedResponsibilityError('Responsibility assignment has already been superseded.')
+                raise GovernedResponsibilityConflict('Responsibility assignment has already been superseded.')
             if hasattr(supersedes, 'revocation'):
-                raise GovernedResponsibilityError('Revoked responsibility assignment cannot be superseded.')
+                raise GovernedResponsibilityConflict('Revoked responsibility assignment cannot be superseded.')
 
         if _overlapping_assignment_exists(
             organization=organization,
@@ -332,7 +343,7 @@ def grant_responsibility(
             valid_until=valid_until,
             excluded_assignment_id=str(supersedes.id) if supersedes else None,
         ):
-            raise GovernedResponsibilityError(
+            raise GovernedResponsibilityConflict(
                 'An overlapping current assignment already exists for this member, responsibility and exact scope; supersede it explicitly.'
             )
 
@@ -416,14 +427,14 @@ def revoke_responsibility(*, assignment_id: str, actor_id: str, reason: str, ide
         replay = GovernedResponsibilityRevocation.objects.select_for_update().filter(idempotency_key=key).first()
         if replay is not None:
             if str(replay.assignment_id) != str(assignment.id) or replay.request_fingerprint != request_fingerprint:
-                raise GovernedResponsibilityError('Idempotency key was already used for a different responsibility revocation request.')
+                raise GovernedResponsibilityConflict('Idempotency key was already used for a different responsibility revocation request.')
             return RevocationResult(replay, True)
 
         existing = GovernedResponsibilityRevocation.objects.select_for_update().filter(assignment=assignment).first()
         if existing is not None:
-            raise GovernedResponsibilityError('Responsibility assignment has already been revoked; replay requires the original idempotency key.')
+            raise GovernedResponsibilityConflict('Responsibility assignment has already been revoked; replay requires the original idempotency key.')
         if hasattr(assignment, 'superseded_by'):
-            raise GovernedResponsibilityError('A superseded responsibility assignment cannot be revoked as current authority.')
+            raise GovernedResponsibilityConflict('A superseded responsibility assignment cannot be revoked as current authority.')
 
         revocation_fingerprint = _sha({
             'request_fingerprint': request_fingerprint,
@@ -524,6 +535,41 @@ def resolve_actor_authority(
         membership_id=str(membership.id),
         role=membership.role,
         responsibilities=frozenset(assignments),
+    )
+
+
+def build_authoritative_manifest(
+    *,
+    organization_id: str,
+    user_id: str,
+    actor_layer: ActorLayer,
+    entity: EntityRef,
+    projection: ProjectionSnapshot,
+    evidence_ready_actions: set[str] | None = None,
+    sod_eligible_actions: set[str] | None = None,
+    gate_results_by_action: dict[str, list[GateResult]] | None = None,
+) -> CapabilityManifest:
+    """Build an AGOM manifest with role/responsibilities resolved server-side.
+
+    Projection/evidence/SoD/gates are trusted server inputs from domain adapters;
+    they are intentionally not accepted from a generic client authority request.
+    """
+    authority = resolve_actor_authority(
+        organization_id=organization_id,
+        user_id=user_id,
+        project_id=entity.project_id,
+        entity_type=entity.entity_type,
+        entity_id=entity.entity_id,
+    )
+    return build_manifest(
+        entity=entity,
+        projection=projection,
+        actor_role=authority.role,
+        actor_layer=actor_layer,
+        actor_responsibilities=set(authority.responsibilities),
+        evidence_ready_actions=evidence_ready_actions or set(),
+        sod_eligible_actions=sod_eligible_actions or set(),
+        gate_results_by_action=gate_results_by_action or {},
     )
 
 
