@@ -166,16 +166,11 @@ def confirm_finding(
     preflight_decision = _validate_preflight_authorization(validation)
 
     with transaction.atomic():
-        finding = (
-            Vulnerability.objects.select_for_update()
-            .select_related('asset', 'project')
-            .get(pk=finding_id)
-        )
-        validation = (
-            ValidationRun.objects.select_for_update()
-            .select_related('authorization_decision')
-            .get(pk=validation_id, finding=finding)
-        )
+        # Lock only base rows here. Joining nullable foreign keys under SELECT ... FOR UPDATE
+        # produces outer joins that PostgreSQL correctly refuses to lock. Related asset and
+        # authorization rows are locked explicitly below inside this same transaction.
+        finding = Vulnerability.objects.select_for_update().get(pk=finding_id)
+        validation = ValidationRun.objects.select_for_update().get(pk=validation_id, finding=finding)
 
         existing = FindingConfirmation.objects.select_for_update().filter(validation_run=validation).first()
         if existing is not None:
