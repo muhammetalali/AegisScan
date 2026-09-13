@@ -10,9 +10,39 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# Foundation packages are pinned to the exact versions proven by Reality CI.
+# The base image itself is digest-pinned; transitive dependencies not listed
+# here are already part of that immutable base layer.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tini python3 jq coreutils procps \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends \
+        ca-certificates=20260601 \
+        coreutils=9.10-1 \
+        jq=1.8.2-1 \
+        libexpat1=2.8.3-1 \
+        libffi8=3.8.0-2 \
+        libjq1=1.8.2-1 \
+        libncursesw6=6.6+20260608-2 \
+        libonig5=6.9.10-1+b1 \
+        libproc2-1=2:4.0.6-3 \
+        libpython3-stdlib=3.14.6-1 \
+        libpython3.14-minimal=3.14.6-1 \
+        libpython3.14-stdlib=3.14.6-1 \
+        libreadline8t64=8.3-4 \
+        libsqlite3-0=3.53.4-2 \
+        media-types=14.0.0 \
+        netbase=6.5 \
+        openssl=3.6.3-1 \
+        procps=2:4.0.6-3 \
+        python3=3.14.6-1 \
+        python3-minimal=3.14.6-1 \
+        python3.14=3.14.6-1 \
+        python3.14-minimal=3.14.6-1 \
+        readline-common=8.3-4 \
+        tini=0.19.0-6+b2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && test "$(dpkg-query -W -f='${Version}' python3)" = "3.14.6-1" \
+    && test "$(dpkg-query -W -f='${Version}' tini)" = "0.19.0-6+b2" \
+    && test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1"
 
 RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
