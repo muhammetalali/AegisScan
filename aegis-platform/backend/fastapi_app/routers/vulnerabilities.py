@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
@@ -10,14 +10,19 @@ import django
 django.setup()
 
 from asgiref.sync import sync_to_async
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, ConfigDict, Field
 
-from django_project.evidence.models import Evidence, ValidationRun
+from django_project.evidence.models import Evidence, FindingConfirmation, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityNote
 from django_project.audit.models import AuditLog
 from ..core.dependencies import get_current_user
 from ..services.audit_writer import add_audit_entry
+from ..services.finding_confirmation import (
+    FindingConfirmationError,
+    confirm_finding,
+    list_confirmations,
+)
 from ..services.remediation_lifecycle import RemediationState, get_state, verify_validation
 
 router = APIRouter()
@@ -52,6 +57,77 @@ class VulnerabilityUpdate(BaseModel):
     status: Optional[str] = None
     assigned_to: Optional[str] = None
     remediation: Optional[str] = None
+
+
+class FindingConfirmationCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    validation_id: UUID
+    verdict: Literal['confirmed', 'false_positive']
+    rationale: str = Field(min_length=3, max_length=2000)
+
+
+class FindingConfirmationResponse(BaseModel):
+    id: str
+    finding_id: str
+    validation_id: str
+    evidence_id: str
+    authorization_decision_id: str
+    verdict: str
+    finding_present: bool
+    policy_version: str
+    evidence_sha256: str
+    result_sha256: str
+    rationale: str
+    created_by: str
+    created_at: str
+    replayed: bool = False
+
+
+class GovernedStatusMutationError(ValueError):
+    pass
+
+
+_GOVERNED_STATUS_MUTATIONS = {
+    Vulnerability.Status.CONFIRMED,
+    Vulnerability.Status.FALSE_POSITIVE,
+    Vulnerability.Status.FIXED,
+}
+
+
+def _reject_direct_governed_status(status: Optional[str]) -> None:
+    if status not in _GOVERNED_STATUS_MUTATIONS:
+        return
+    if status in {Vulnerability.Status.CONFIRMED, Vulnerability.Status.FALSE_POSITIVE}:
+        raise GovernedStatusMutationError(
+            'confirmed/false_positive are governed finding verdicts; use POST /{vuln_id}/confirmations with completed authorized validation evidence.'
+        )
+    raise GovernedStatusMutationError(
+        'fixed is governed by remediation verification; use POST /{vuln_id}/verify followed by POST /{vuln_id}/close.'
+    )
+
+
+def _serialize_confirmation(
+    confirmation: FindingConfirmation,
+    *,
+    replayed: bool = False,
+) -> FindingConfirmationResponse:
+    return FindingConfirmationResponse(
+        id=str(confirmation.id),
+        finding_id=str(confirmation.finding_id),
+        validation_id=str(confirmation.validation_run_id),
+        evidence_id=str(confirmation.evidence_id),
+        authorization_decision_id=str(confirmation.authorization_decision_id),
+        verdict=confirmation.verdict,
+        finding_present=confirmation.finding_present,
+        policy_version=confirmation.policy_version,
+        evidence_sha256=confirmation.evidence_sha256,
+        result_sha256=confirmation.result_sha256,
+        rationale=confirmation.rationale,
+        created_by=str(confirmation.created_by_id),
+        created_at=confirmation.created_at.astimezone(timezone.utc).isoformat(),
+        replayed=replayed,
+    )
 
 
 @sync_to_async
@@ -120,6 +196,7 @@ def _update_vulnerability(vuln_id: UUID, user_id: str, update: VulnerabilityUpda
     if update.status is not None:
         allowed = {choice.value for choice in Vulnerability.Status}
         if update.status not in allowed: raise ValueError(f'invalid vulnerability status: {update.status}')
+        _reject_direct_governed_status(update.status)
         vulnerability.status = update.status
     if update.assigned_to is not None:
         from django.contrib.auth import get_user_model
@@ -134,6 +211,7 @@ def _update_vulnerability(vuln_id: UUID, user_id: str, update: VulnerabilityUpda
 @router.patch('/{vuln_id}', response_model=VulnerabilityResponse)
 async def update_vulnerability(vuln_id: UUID, update: VulnerabilityUpdate, user=Depends(get_current_user)):
     try: vulnerability = await _update_vulnerability(vuln_id, str(user.get('user_id')), update)
+    except GovernedStatusMutationError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not vulnerability: raise HTTPException(status_code=404, detail='Vulnerability not found')
     return await _serialize(vulnerability)
@@ -164,6 +242,41 @@ async def get_evidences(vuln_id: UUID, user=Depends(get_current_user)):
     vulnerability, evidences = await _get_evidences(vuln_id, str(user.get('user_id')))
     if not vulnerability: raise HTTPException(status_code=404, detail='Vulnerability not found')
     return [{'id': str(e.id), 'scan_id': str(e.scan_id) if e.scan_id else None, 'asset_id': str(e.asset_id) if e.asset_id else None, 'finding_id': str(e.finding_id) if e.finding_id else None, 'source': e.source, 'evidence_type': e.evidence_type, 'sha256': e.sha256, 'metadata': e.metadata, 'collected_at': e.collected_at.astimezone(timezone.utc).isoformat()} for e in evidences]
+
+
+@router.post('/{vuln_id}/confirmations', response_model=FindingConfirmationResponse, status_code=201)
+async def create_finding_confirmation(
+    vuln_id: UUID,
+    body: FindingConfirmationCreate,
+    response: Response,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.get('user_id'))
+    vulnerability = await _get_vulnerability(vuln_id, user_id)
+    if not vulnerability:
+        raise HTTPException(status_code=404, detail='Vulnerability not found')
+    try:
+        result = await sync_to_async(confirm_finding, thread_sensitive=True)(
+            finding_id=vuln_id,
+            validation_id=body.validation_id,
+            verdict=body.verdict,
+            rationale=body.rationale,
+            actor_id=user_id,
+        )
+    except FindingConfirmationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    response.status_code = 200 if result.replayed else 201
+    return _serialize_confirmation(result.confirmation, replayed=result.replayed)
+
+
+@router.get('/{vuln_id}/confirmations', response_model=List[FindingConfirmationResponse])
+async def get_finding_confirmations(vuln_id: UUID, user=Depends(get_current_user)):
+    vulnerability = await _get_vulnerability(vuln_id, str(user.get('user_id')))
+    if not vulnerability:
+        raise HTTPException(status_code=404, detail='Vulnerability not found')
+    rows = await sync_to_async(list_confirmations, thread_sensitive=True)(finding_id=vuln_id)
+    return [_serialize_confirmation(row) for row in rows]
 
 
 @sync_to_async
@@ -215,6 +328,7 @@ async def close_vulnerability(vuln_id: UUID, user=Depends(get_current_user)):
 def _bulk_update(vuln_ids: List[str], user_id: str, update: VulnerabilityUpdate):
     allowed = {choice.value for choice in Vulnerability.Status}
     if update.status is not None and update.status not in allowed: raise ValueError(f'invalid vulnerability status: {update.status}')
+    _reject_direct_governed_status(update.status)
     qs = Vulnerability.objects.filter(id__in=vuln_ids, project__owner_id=user_id) | Vulnerability.objects.filter(id__in=vuln_ids, project__members__id=user_id); qs=qs.distinct(); values={}
     if update.status is not None: values['status']=update.status
     if update.remediation is not None: values['remediation']=update.remediation
@@ -225,5 +339,6 @@ def _bulk_update(vuln_ids: List[str], user_id: str, update: VulnerabilityUpdate)
 @router.post('/bulk-update')
 async def bulk_update(vuln_ids: List[str], update: VulnerabilityUpdate, user=Depends(get_current_user)):
     try: updated=await _bulk_update(vuln_ids,str(user.get('user_id')),update)
+    except GovernedStatusMutationError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
     return {'updated':updated}

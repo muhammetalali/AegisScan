@@ -1,0 +1,154 @@
+# Final-head reality proof for evidence-governed finding confirmation.
+name: Finding Confirmation Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/django_project/evidence/models.py'
+      - 'aegis-platform/backend/django_project/evidence/migrations/**'
+      - 'aegis-platform/backend/fastapi_app/services/finding_confirmation.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_finding_confirmation.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_validation_api.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_remediation_concurrency.py'
+      - '.github/workflows/finding-confirmation-reality.yml'
+  push:
+    branches: [main, codex/governed-finding-confirmation-2026-09-13]
+    paths:
+      - 'aegis-platform/backend/django_project/evidence/models.py'
+      - 'aegis-platform/backend/django_project/evidence/migrations/**'
+      - 'aegis-platform/backend/fastapi_app/services/finding_confirmation.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_finding_confirmation.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_validation_api.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_remediation_concurrency.py'
+      - '.github/workflows/finding-confirmation-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: finding-confirmation-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  finding-confirmation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-finding-confirmation-django-secret-key-0123456789abcdef
+      JWT_SECRET_KEY: ci-finding-confirmation-jwt-secret-key-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-finding-confirmation-evidence-hmac-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-finding-confirmation-credential-fingerprint-key-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile governed finding confirmation plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/django_project/evidence/models.py \
+            aegis-platform/backend/django_project/evidence/migrations/0006_findingconfirmation.py \
+            aegis-platform/backend/fastapi_app/services/finding_confirmation.py \
+            aegis-platform/backend/fastapi_app/services/test_finding_confirmation.py \
+            aegis-platform/backend/fastapi_app/routers/vulnerabilities.py
+      - name: Django model and migration reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from django_project.evidence.models import FindingConfirmation
+          assert connection.vendor == 'postgresql', connection.vendor
+          assert FindingConfirmation._meta.get_field('validation_run').one_to_one is True
+          assert any(c.name == 'evidence_confirmation_verdict_presence' for c in FindingConfirmation._meta.constraints)
+          print('FINDING_CONFIRMATION_DATABASE=POSTGRESQL')
+          print('FINDING_CONFIRMATION_DB_INVARIANTS=PASS')
+          PY
+      - name: Evidence lineage confirmation replay and race suite
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_finding_confirmation.py \
+            fastapi_app/routers/test_validation_api.py \
+            fastapi_app/routers/test_remediation_concurrency.py \
+            --junitxml=/tmp/finding-confirmation-junit.xml
+      - name: Verify governed finding API contract
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.routers.vulnerabilities import FindingConfirmationCreate, _GOVERNED_STATUS_MUTATIONS
+          from django_project.vulnerabilities.models import Vulnerability
+
+          paths = app.openapi()['paths']
+          path = '/api/v1/vulnerabilities/{vuln_id}/confirmations'
+          assert path in paths
+          assert 'post' in paths[path]
+          assert 'get' in paths[path]
+          assert FindingConfirmationCreate.model_config.get('extra') == 'forbid'
+          assert FindingConfirmationCreate.model_fields['validation_id'].is_required()
+          assert FindingConfirmationCreate.model_fields['verdict'].is_required()
+          assert FindingConfirmationCreate.model_fields['rationale'].is_required()
+          assert Vulnerability.Status.CONFIRMED in _GOVERNED_STATUS_MUTATIONS
+          assert Vulnerability.Status.FALSE_POSITIVE in _GOVERNED_STATUS_MUTATIONS
+          assert Vulnerability.Status.FIXED in _GOVERNED_STATUS_MUTATIONS
+          print('FINDING_CONFIRMATION_API_ROUTE=PASS')
+          print('FINDING_CONFIRMATION_STRICT_CONTRACT=PASS')
+          print('FINDING_CONFIRMATION_BYPASS_GUARD=PASS')
+          PY
+      - name: Retain finding confirmation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: finding-confirmation-reality-${{ github.sha }}
+          path: /tmp/finding-confirmation-junit.xml
+          retention-days: 30
+          if-no-files-found: warn
