@@ -294,9 +294,10 @@ def validate_revision(*, revision_id: str, project_id: str, user_id: str, teleme
     canonical_events = sorted((_canonical(x).decode('utf-8') for x in telemetry))
     telemetry_sha = hashlib.sha256(('[' + ','.join(canonical_events) + ']').encode('utf-8')).hexdigest()
     with transaction.atomic():
-        revision = DetectionRevision.objects.select_for_update().select_related('rule').filter(pk=revision_id, rule__project_id=project_id).first()
+        revision = DetectionRevision.objects.select_for_update().filter(pk=revision_id, rule__project_id=project_id).first()
         if revision is None:
             raise DetectionEngineeringError('Detection revision not found in project.')
+        rule = DetectionRule.objects.select_for_update().get(pk=revision.rule_id)
         existing = DetectionValidation.objects.filter(revision=revision, telemetry_sha256=telemetry_sha, minimum_matches=minimum_matches).first()
         if existing:
             return ValidationResult(existing, True)
@@ -312,10 +313,11 @@ def validate_revision(*, revision_id: str, project_id: str, user_id: str, teleme
             matched_count=matched_count, minimum_matches=minimum_matches, status=status,
             result_sha256=_sha(result), result=result, tested_by_id=user_id,
         )
-        latest = revision.rule.revisions.order_by('-version').first()
+        latest = rule.revisions.order_by('-version').first()
         if status == DetectionValidation.Status.PASSED and latest and latest.id == revision.id:
-            DetectionRule.objects.filter(pk=revision.rule_id).update(state=DetectionRule.State.VALIDATED)
-        _append_event(revision.rule, user_id, 'validation.completed', {
+            rule.state = DetectionRule.State.VALIDATED
+            rule.save(update_fields=['state', 'updated_at'])
+        _append_event(rule, user_id, 'validation.completed', {
             'validation_id': str(validation.id), 'status': status, 'telemetry_sha256': telemetry_sha,
             'matched_count': matched_count, 'minimum_matches': minimum_matches, 'result_sha256': validation.result_sha256,
         }, revision)
