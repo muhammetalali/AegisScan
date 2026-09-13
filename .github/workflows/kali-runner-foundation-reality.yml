@@ -60,7 +60,35 @@ jobs:
           sha_a="$(sha256sum /tmp/aegis-kali-base-a.tar | awk '{print $1}')"
           sha_b="$(sha256sum /tmp/aegis-kali-base-b.tar | awk '{print $1}')"
           printf 'first=%s\nsecond=%s\n' "${sha_a}" "${sha_b}"
-          test "${sha_a}" = "${sha_b}"
+          if [ "${sha_a}" != "${sha_b}" ]; then
+            python - <<'PY'
+          import hashlib, json, tarfile, tempfile
+          from pathlib import Path
+
+          archives = [Path('/tmp/aegis-kali-base-a.tar'), Path('/tmp/aegis-kali-base-b.tar')]
+          snapshots = []
+          for archive in archives:
+              root = Path(tempfile.mkdtemp(prefix='aegis-repro-'))
+              with tarfile.open(archive) as tf:
+                  tf.extractall(root)
+              manifest = json.loads((root / 'manifest.json').read_text())[0]
+              config = json.loads((root / manifest['Config']).read_text())
+              layers = []
+              for layer in manifest['Layers']:
+                  payload = (root / layer).read_bytes()
+                  layers.append(hashlib.sha256(payload).hexdigest())
+              snapshots.append((manifest, config, layers))
+
+          left, right = snapshots
+          print('CONFIG_A', json.dumps(left[1], sort_keys=True, separators=(',', ':')))
+          print('CONFIG_B', json.dumps(right[1], sort_keys=True, separators=(',', ':')))
+          for index, (a, b) in enumerate(zip(left[2], right[2])):
+              print(f'LAYER_{index}: {a} {b} equal={a == b}')
+          if len(left[2]) != len(right[2]):
+              print(f'LAYER_COUNT: {len(left[2])} {len(right[2])}')
+          PY
+            exit 1
+          fi
           printf 'sha256:%s\n' "${sha_a}" > /tmp/aegis-image-digest.txt
           docker load -i /tmp/aegis-kali-base-a.tar
       - name: Verify runtime identity manifest and isolation contract
