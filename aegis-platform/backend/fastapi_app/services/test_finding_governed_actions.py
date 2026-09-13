@@ -8,12 +8,14 @@ import pytest
 from django.db import close_old_connections, connection
 
 from django_project.audit.models import AuditLog
-from django_project.evidence.models import Evidence, FindingConfirmation, ValidationRun
+from django_project.evidence.models import Evidence, FindingConfirmation, FindingDisposition, ValidationRun
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.governed_action_models import GovernedActionExecution
 from enterprise.governed_responsibility_models import GovernedResponsibilityAssignment
 from enterprise.models import OrganizationMembership
+from fastapi_app.core import dependencies as core_dependencies
+from fastapi_app.main import app
 from fastapi_app.services.governed_action_executor import (
     GovernedActionBlocked,
     GovernedActionConflict,
@@ -114,6 +116,13 @@ def _validation(*, user, finding, authorization, finding_present: bool, remediat
 def _ownerize(membership):
     membership.role = OrganizationMembership.Role.OWNER
     membership.save(update_fields=['role'])
+
+
+def _use_api_actor(user):
+    app.dependency_overrides[core_dependencies.get_current_user] = lambda: {
+        'user_id': str(user.id),
+        'is_staff': False,
+    }
 
 
 def _confirmation_request(disposition_fixture):
@@ -346,3 +355,126 @@ def test_postgresql_concurrent_exact_confirmation_is_single_execution(dispositio
     assert FindingConfirmation.objects.filter(finding=finding, validation_run=validation).count() == 1
     assert GovernedActionExecution.objects.filter(action_id='finding.confirm', entity_id=str(finding.id)).count() == 1
     assert AuditLog.objects.filter(metadata__governed_action_id='finding.confirm', resource_id=str(finding.id)).count() == 1
+
+
+def test_confirmation_compatibility_route_uses_governed_executor_and_replays(disposition_fixture):
+    client, owner, project, _asset, authorization, _scan, finding, organization, owner_membership = disposition_fixture
+    _ownerize(owner_membership)
+    confirmer, _membership = _actor(
+        owner=owner,
+        project=project,
+        organization=organization,
+        email='agom-route-confirmer@example.invalid',
+        role=OrganizationMembership.Role.ANALYST,
+        responsibility='finding_confirmer',
+    )
+    validation, _evidence = _validation(
+        user=confirmer,
+        finding=finding,
+        authorization=authorization,
+        finding_present=True,
+    )
+    _use_api_actor(confirmer)
+    body = {
+        'validation_id': str(validation.id),
+        'verdict': 'confirmed',
+        'rationale': 'Governed compatibility route confirmation.',
+        'expected_version': finding.version,
+        'idempotency_key': 'route-confirm-1',
+    }
+    first = client.post(f'/api/v1/vulnerabilities/{finding.id}/confirmations', json=body)
+    assert first.status_code == 201, first.text
+    assert first.json()['replayed'] is False
+    second = client.post(f'/api/v1/vulnerabilities/{finding.id}/confirmations', json=body)
+    assert second.status_code == 200, second.text
+    assert second.json()['replayed'] is True
+    assert second.json()['id'] == first.json()['id']
+    assert GovernedActionExecution.objects.filter(action_id='finding.confirm', entity_id=str(finding.id)).count() == 1
+
+
+def test_false_positive_compatibility_route_is_fail_closed(disposition_fixture):
+    client, owner, project, _asset, authorization, _scan, finding, organization, owner_membership = disposition_fixture
+    _ownerize(owner_membership)
+    confirmer, _membership = _actor(
+        owner=owner,
+        project=project,
+        organization=organization,
+        email='agom-false-positive@example.invalid',
+        role=OrganizationMembership.Role.ANALYST,
+        responsibility='finding_confirmer',
+    )
+    validation, _evidence = _validation(
+        user=confirmer,
+        finding=finding,
+        authorization=authorization,
+        finding_present=False,
+    )
+    _use_api_actor(confirmer)
+    response = client.post(
+        f'/api/v1/vulnerabilities/{finding.id}/confirmations',
+        json={
+            'validation_id': str(validation.id),
+            'verdict': 'false_positive',
+            'rationale': 'False positive still requires its own governed action.',
+            'expected_version': finding.version,
+            'idempotency_key': 'route-false-positive-1',
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()['detail']['code'] == 'FALSE_POSITIVE_GOVERNED_ACTION_NOT_IMPLEMENTED'
+    finding.refresh_from_db()
+    assert finding.status == Vulnerability.Status.OPEN
+    assert FindingConfirmation.objects.filter(finding=finding).count() == 0
+
+
+def test_disposition_compatibility_route_is_fail_closed(disposition_fixture):
+    client, _owner, _project, _asset, _authorization, _scan, finding, _organization, _membership = disposition_fixture
+    response = client.post(
+        f'/api/v1/vulnerabilities/{finding.id}/dispositions',
+        json={
+            'disposition': 'accepted_risk',
+            'rationale': 'Risk acceptance must not bypass the governed action plane.',
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()['detail']['code'] == 'RISK_ACCEPTANCE_GOVERNED_ACTION_NOT_IMPLEMENTED'
+    finding.refresh_from_db()
+    assert finding.status == Vulnerability.Status.OPEN
+    assert FindingDisposition.objects.filter(finding=finding).count() == 0
+
+
+def test_close_compatibility_route_uses_independent_governed_closure(disposition_fixture):
+    client, owner, project, authorization, finding, organization, _owner_membership, _confirmer, _validation_row, _evidence, confirm_kwargs = _confirmation_request(disposition_fixture)
+    execute_governed_action(**confirm_kwargs)
+    finding.refresh_from_db()
+    verified, _evidence = _validation(
+        user=owner,
+        finding=finding,
+        authorization=authorization,
+        finding_present=False,
+        remediation_state='verified',
+    )
+    closer, _membership = _actor(
+        owner=owner,
+        project=project,
+        organization=organization,
+        email='agom-route-closer@example.invalid',
+        role=OrganizationMembership.Role.MANAGER,
+        responsibility='closure_approver',
+    )
+    _use_api_actor(closer)
+    response = client.post(
+        f'/api/v1/vulnerabilities/{finding.id}/close',
+        json={
+            'expected_version': finding.version,
+            'idempotency_key': 'route-close-1',
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['closed'] is True
+    assert payload['validation_id'] == str(verified.id)
+    assert payload['version'] == finding.version + 1
+    finding.refresh_from_db()
+    assert finding.status == Vulnerability.Status.FIXED
+    assert finding.fixed_by_id == closer.id
