@@ -283,7 +283,11 @@ def satisfy_obligation(
         obligation = AssuranceObligation.objects.select_for_update().filter(pk=obligation_id, project_id=project_id).first()
         if obligation is None:
             raise AssuranceObligationError('Assurance obligation not found in project.')
-        if obligation.status == AssuranceObligation.Status.SATISFIED and obligation.satisfied_observation_id == observation_id:
+        if (
+            obligation.status == AssuranceObligation.Status.SATISFIED
+            and obligation.satisfied_observation_id is not None
+            and str(obligation.satisfied_observation_id) == str(observation_id)
+        ):
             return ObligationResult(obligation, True)
         if obligation.version != expected_version:
             raise StaleObligationVersion(f'Expected obligation version {expected_version}, current version is {obligation.version}.')
