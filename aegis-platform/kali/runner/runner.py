@@ -32,7 +32,9 @@ REQUIRED_FIELDS = {
     "profile": str,
     "options": dict,
 }
+FORBIDDEN_EXECUTION_FIELDS = {"command", "cmd", "shell", "argv", "binary", "executable"}
 MAX_MANIFEST_BYTES = 64 * 1024
+RUNTIME_MANIFEST_PATH = Path("/opt/aegis-runner/runtime-manifest.json")
 
 
 def _fail(message: str, code: int = 64) -> int:
@@ -66,13 +68,35 @@ def _validate_manifest(payload: dict[str, Any]) -> None:
         raise ValueError("unsupported risk level")
     if payload["profile"] != os.environ.get("AEGIS_RUNNER_PROFILE", "base"):
         raise ValueError("runner profile binding mismatch")
-
-    forbidden = {"command", "cmd", "shell", "argv", "binary", "executable"}
-    if forbidden.intersection(payload):
+    if FORBIDDEN_EXECUTION_FIELDS.intersection(payload):
         raise ValueError("raw command execution fields are forbidden")
 
 
-def _runtime_provenance(payload: dict[str, Any], raw: bytes) -> dict[str, Any]:
+def _load_runtime_manifest(path: Path = RUNTIME_MANIFEST_PATH) -> tuple[dict[str, Any], bytes]:
+    if not path.is_file():
+        raise ValueError("runtime manifest is missing")
+    raw = path.read_bytes()
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("runtime manifest is invalid") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("runtime manifest must be an object")
+
+    expected = {
+        "runtime": "aegis-kali",
+        "runner_version": os.environ.get("AEGIS_RUNNER_VERSION", "unknown"),
+        "profile": os.environ.get("AEGIS_RUNNER_PROFILE", "base"),
+        "base_image_digest": os.environ.get("AEGIS_BASE_IMAGE_DIGEST", "unknown"),
+        "build_commit": os.environ.get("AEGIS_BUILD_COMMIT", "unknown"),
+    }
+    for key, value in expected.items():
+        if payload.get(key) != value:
+            raise ValueError(f"runtime manifest binding mismatch: {key}")
+    return payload, raw
+
+
+def _runtime_provenance(payload: dict[str, Any], raw: bytes, runtime_raw: bytes) -> dict[str, Any]:
     return {
         "execution_id": payload["execution_id"],
         "capability_id": payload["capability_id"],
@@ -81,8 +105,10 @@ def _runtime_provenance(payload: dict[str, Any], raw: bytes) -> dict[str, Any]:
         "runtime": "aegis-kali",
         "runner_version": os.environ.get("AEGIS_RUNNER_VERSION", "unknown"),
         "runner_profile": os.environ.get("AEGIS_RUNNER_PROFILE", "base"),
+        "base_image_digest": os.environ.get("AEGIS_BASE_IMAGE_DIGEST", "unknown"),
         "build_commit": os.environ.get("AEGIS_BUILD_COMMIT", "unknown"),
         "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+        "runtime_manifest_digest": "sha256:" + hashlib.sha256(runtime_raw).hexdigest(),
         "status": "accepted-no-dispatch",
     }
 
@@ -95,12 +121,13 @@ def main() -> int:
             raise ValueError("job manifest exceeds size limit")
         payload = _load_manifest(manifest_path)
         _validate_manifest(payload)
+        _, runtime_raw = _load_runtime_manifest()
     except (OSError, ValueError) as exc:
         return _fail(str(exc))
 
     # Foundation PR deliberately performs no tool execution. This prevents an
     # unregistered capability from becoming an authorization bypass.
-    print(json.dumps(_runtime_provenance(payload, raw), sort_keys=True))
+    print(json.dumps(_runtime_provenance(payload, raw, runtime_raw), sort_keys=True))
     return 0
 
 
