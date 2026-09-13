@@ -56,6 +56,7 @@ RUN apt-get update \
         /var/lib/apt/lists/* \
         /var/cache/apt/archives/* \
         /var/cache/debconf/*-old \
+        /var/cache/ldconfig/aux-cache \
         /var/log/apt/* \
         /var/log/dpkg.log \
         /var/log/alternatives.log \
