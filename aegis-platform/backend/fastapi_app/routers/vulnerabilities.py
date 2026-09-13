@@ -10,7 +10,7 @@ import django
 django.setup()
 
 from asgiref.sync import sync_to_async
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.evidence.models import Evidence, FindingConfirmation, ValidationRun
@@ -248,6 +248,7 @@ async def get_evidences(vuln_id: UUID, user=Depends(get_current_user)):
 async def create_finding_confirmation(
     vuln_id: UUID,
     body: FindingConfirmationCreate,
+    response: Response,
     user=Depends(get_current_user),
 ):
     user_id = str(user.get('user_id'))
@@ -291,10 +292,8 @@ async def create_finding_confirmation(
                 'policy_version': confirmation.policy_version,
             },
         )
-    response = _serialize_confirmation(confirmation, replayed=result.replayed)
-    if result.replayed:
-        return response
-    return response
+    response.status_code = 200 if result.replayed else 201
+    return _serialize_confirmation(confirmation, replayed=result.replayed)
 
 
 @router.get('/{vuln_id}/confirmations', response_model=List[FindingConfirmationResponse])
