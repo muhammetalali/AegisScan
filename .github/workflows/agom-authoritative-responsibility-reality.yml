@@ -12,6 +12,7 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py'
       - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_responsibility_authority.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_responsibility_lock_order.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_operations.py'
       - 'aegis-platform/backend/fastapi_app/routers/governance.py'
       - 'aegis-platform/backend/fastapi_app/routers/test_governed_responsibility_api.py'
@@ -27,6 +28,7 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py'
       - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_responsibility_authority.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_responsibility_lock_order.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_operations.py'
       - 'aegis-platform/backend/fastapi_app/routers/governance.py'
       - 'aegis-platform/backend/fastapi_app/routers/test_governed_responsibility_api.py'
@@ -93,6 +95,7 @@ jobs:
             aegis-platform/backend/fastapi_app/contracts/governed_responsibilities.py \
             aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py \
             aegis-platform/backend/fastapi_app/services/test_governed_responsibility_authority.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_responsibility_lock_order.py \
             aegis-platform/backend/fastapi_app/routers/governance.py \
             aegis-platform/backend/fastapi_app/routers/test_governed_responsibility_api.py
       - name: Verify Django schema reality and migration drift
@@ -112,6 +115,7 @@ jobs:
         run: |
           pytest -q --junitxml=agom-authoritative-responsibility-junit.xml \
             fastapi_app/services/test_governed_responsibility_authority.py \
+            fastapi_app/services/test_governed_responsibility_lock_order.py \
             fastapi_app/routers/test_governed_responsibility_api.py
       - name: Run AGOM foundation regression tests
         working-directory: aegis-platform/backend
