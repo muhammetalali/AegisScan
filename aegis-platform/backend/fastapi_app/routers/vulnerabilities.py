@@ -92,6 +92,9 @@ _GOVERNED_STATUS_MUTATIONS = {
     Vulnerability.Status.CONFIRMED,
     Vulnerability.Status.FALSE_POSITIVE,
     Vulnerability.Status.FIXED,
+    Vulnerability.Status.ACCEPTED_RISK,
+    Vulnerability.Status.WONT_FIX,
+    Vulnerability.Status.DUPLICATE,
 }
 
 
@@ -101,6 +104,15 @@ def _reject_direct_governed_status(status: Optional[str]) -> None:
     if status in {Vulnerability.Status.CONFIRMED, Vulnerability.Status.FALSE_POSITIVE}:
         raise GovernedStatusMutationError(
             'confirmed/false_positive are governed finding verdicts; use POST /{vuln_id}/confirmations with completed authorized validation evidence.'
+        )
+    if status in {
+        Vulnerability.Status.ACCEPTED_RISK,
+        Vulnerability.Status.WONT_FIX,
+        Vulnerability.Status.DUPLICATE,
+    }:
+        raise GovernedStatusMutationError(
+            'accepted_risk/wont_fix/duplicate are governed finding dispositions; '
+            'use POST /{vuln_id}/dispositions with immutable tenant/risk lineage.'
         )
     raise GovernedStatusMutationError(
         'fixed is governed by remediation verification; use POST /{vuln_id}/verify followed by POST /{vuln_id}/close.'
