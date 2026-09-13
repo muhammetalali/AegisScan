@@ -7,6 +7,7 @@ from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan
 from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.services.evidence_identity import evidence_id
+from fastapi_app.services.wstg_observation_lineage import attach_wstg_evidence_metadata, attach_wstg_finding_lineage
 
 
 def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any]) -> list[Vulnerability]:
@@ -42,7 +43,7 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
                 f'{ip or scan.asset.name}. Service={service_label}, '
                 f'product={product_label}, version={version or "unknown"}.'
             )
-            raw_data = {'ip': ip, 'port': port_number, 'state': 'open', 'product': product, 'service': service, 'version': version, 'protocol': protocol}
+            raw_data = attach_wstg_finding_lineage({'ip': ip, 'port': port_number, 'state': 'open', 'product': product, 'service': service, 'version': version, 'protocol': protocol}, 'network.nmap')
 
             vulnerability = Vulnerability.objects.filter(
                 scan=scan, asset=scan.asset, source_engine='nmap',
@@ -89,7 +90,7 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
                         'source': 'nmap',
                         'evidence_type': 'scanner_output',
                         'raw_output': evidence.raw_output,
-                        'metadata': {**(evidence.metadata or {}), 'observation_port': port_number, 'observation_protocol': protocol, 'observation_ip': ip, 'finding_id': str(vulnerability.id)},
+                        'metadata': attach_wstg_evidence_metadata({**(evidence.metadata or {}), 'observation_port': port_number, 'observation_protocol': protocol, 'observation_ip': ip, 'finding_id': str(vulnerability.id)}, 'network.nmap'),
                         'collected_by': evidence.collected_by,
                     },
                 )
