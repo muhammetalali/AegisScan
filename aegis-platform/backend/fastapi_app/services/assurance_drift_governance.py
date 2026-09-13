@@ -169,6 +169,13 @@ def record_assurance_observation(
             payload=payload,
             observed_by_id=user_id,
         )
+        if classification == AssuranceObservation.Classification.RECURRENT:
+            from fastapi_app.services.assurance_obligation_governance import materialize_recurrence_obligation
+            materialize_recurrence_obligation(
+                project_id=project_id,
+                observation_id=str(observation.id),
+                user_id=user_id,
+            )
         return AssuranceObservationResult(observation, state, False)
 
 
