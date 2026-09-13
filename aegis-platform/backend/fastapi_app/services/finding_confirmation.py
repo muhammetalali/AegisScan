@@ -145,6 +145,15 @@ def _resolve_evidence(validation: ValidationRun, finding: Vulnerability) -> Evid
     return evidence
 
 
+def _latest_validation_locked(finding: Vulnerability) -> ValidationRun | None:
+    return (
+        ValidationRun.objects.select_for_update(of=('self',))
+        .filter(finding=finding)
+        .order_by('-created_at', '-id')
+        .first()
+    )
+
+
 def confirm_finding(
     *,
     finding_id: UUID | str,
@@ -172,9 +181,6 @@ def confirm_finding(
     preflight_decision = _validate_preflight_authorization(validation)
 
     with transaction.atomic():
-        # Lock only base rows here. Joining nullable foreign keys under SELECT ... FOR UPDATE
-        # produces outer joins that PostgreSQL correctly refuses to lock. Related asset and
-        # authorization rows are locked explicitly below inside this same transaction.
         finding = Vulnerability.objects.select_for_update(of=('self',)).get(pk=finding_id)
         validation = ValidationRun.objects.select_for_update(of=('self',)).get(pk=validation_id, finding=finding)
 
@@ -191,6 +197,11 @@ def confirm_finding(
                 previous_status=finding.status,
             )
 
+        latest_validation = _latest_validation_locked(finding)
+        if latest_validation is None or latest_validation.id != validation.id:
+            raise FindingConfirmationError(
+                'Finding confirmation must use the latest validation run evaluated by governance.'
+            )
         if expected_version is not None and int(finding.version) != int(expected_version):
             raise StaleFindingConfirmationVersion(
                 f'Expected finding version {expected_version}, current version is {finding.version}.'
