@@ -143,7 +143,7 @@ jobs:
         run: |
           pytest -q \
             fastapi_app/services/test_assurance_obligation_governance.py \
-            fastapi_app/services/test_assurance_recurrence_governance.py \
+            fastapi_app/services/test_assurance_drift_governance.py \
             fastapi_app/services/test_soc_closure_governance.py \
             fastapi_app/services/test_finding_disposition.py \
             --junitxml=/tmp/campaign-objective-regression-junit.xml
