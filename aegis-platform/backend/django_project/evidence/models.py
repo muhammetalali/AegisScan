@@ -205,16 +205,16 @@ class FindingDisposition(models.Model):
             models.CheckConstraint(
                 condition=(
                     models.Q(
-                        disposition__in=['accepted_risk', 'wont_fix'],
-                        risk_correlation__isnull=False,
-                        duplicate_of__isnull=True,
-                        review_at__isnull=False,
+                        ('disposition__in', ['accepted_risk', 'wont_fix']),
+                        ('risk_correlation__isnull', False),
+                        ('duplicate_of__isnull', True),
+                        ('review_at__isnull', False),
                     )
                     | models.Q(
-                        disposition='duplicate',
-                        risk_correlation__isnull=True,
-                        duplicate_of__isnull=False,
-                        review_at__isnull=True,
+                        ('disposition', 'duplicate'),
+                        ('risk_correlation__isnull', True),
+                        ('duplicate_of__isnull', False),
+                        ('review_at__isnull', True),
                     )
                 ),
                 name='evidence_disposition_lineage_shape',
