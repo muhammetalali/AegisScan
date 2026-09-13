@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ('enterprise', '0023_security_operations_plane'),
-        ('evidence', '0008_finding_disposition'),
+        ('evidence', '0007_findingdisposition'),
         ('vulnerabilities', '0002_delete_vulnerabilityevidence'),
     ]
 
