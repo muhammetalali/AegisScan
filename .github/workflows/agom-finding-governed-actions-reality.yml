@@ -1,0 +1,185 @@
+name: AGOM Finding Governed Actions Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/django_project/vulnerabilities/models.py'
+      - 'aegis-platform/backend/django_project/vulnerabilities/migrations/0003_vulnerability_governed_version.py'
+      - 'aegis-platform/backend/fastapi_app/services/finding_confirmation.py'
+      - 'aegis-platform/backend/fastapi_app/services/finding_closure.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_capability_manifest.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_action_executor.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_finding_governed_actions.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
+      - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governed_action_execution.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governance.py'
+      - '.github/workflows/agom-finding-governed-actions-reality.yml'
+  push:
+    branches: [main, codex/agom-finding-governed-actions-2026-09-13]
+    paths:
+      - 'aegis-platform/backend/django_project/vulnerabilities/models.py'
+      - 'aegis-platform/backend/django_project/vulnerabilities/migrations/0003_vulnerability_governed_version.py'
+      - 'aegis-platform/backend/fastapi_app/services/finding_confirmation.py'
+      - 'aegis-platform/backend/fastapi_app/services/finding_closure.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_capability_manifest.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_action_executor.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_finding_governed_actions.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
+      - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governed_action_execution.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governance.py'
+      - '.github/workflows/agom-finding-governed-actions-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-finding-governed-actions-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  finding-governed-actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-agom-finding-django-secret-0123456789abcdef
+      JWT_SECRET_KEY: ci-agom-finding-jwt-secret-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-agom-finding-evidence-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-agom-finding-fingerprint-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile Finding governed action plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/django_project/vulnerabilities/models.py \
+            aegis-platform/backend/django_project/vulnerabilities/migrations/0003_vulnerability_governed_version.py \
+            aegis-platform/backend/fastapi_app/services/finding_confirmation.py \
+            aegis-platform/backend/fastapi_app/services/finding_closure.py \
+            aegis-platform/backend/fastapi_app/services/governed_capability_manifest.py \
+            aegis-platform/backend/fastapi_app/services/governed_action_executor.py \
+            aegis-platform/backend/fastapi_app/services/test_finding_governed_actions.py \
+            aegis-platform/backend/fastapi_app/routers/vulnerabilities.py \
+            aegis-platform/backend/fastapi_app/routers/finding_dispositions.py \
+            aegis-platform/backend/fastapi_app/routers/governed_action_execution.py \
+            aegis-platform/backend/fastapi_app/routers/governance.py
+      - name: Verify Django migration and schema reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from django_project.vulnerabilities.models import Vulnerability
+          assert connection.vendor == 'postgresql', connection.vendor
+          field = Vulnerability._meta.get_field('version')
+          assert field.default == 1
+          assert field.null is False
+          print('AGOM_FINDING_VERSION_SCHEMA=WIRED')
+          PY
+      - name: Run Finding governed action Reality tests on PostgreSQL
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q --junitxml=agom-finding-governed-actions-junit.xml \
+            fastapi_app/services/test_finding_governed_actions.py
+      - name: Run AGOM executor and capability regressions
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_governed_action_executor.py \
+            fastapi_app/services/test_entity_capability_adapters.py \
+            fastapi_app/services/test_entity_capability_freshness.py \
+            fastapi_app/services/test_entity_capability_scope_guards.py
+      - name: Verify API contract and mutation bypass closure
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from fastapi_app.main import app
+          from fastapi_app.routers.vulnerabilities import FindingConfirmationCreate, FindingCloseRequest, VulnerabilityResponse
+
+          paths = app.openapi()['paths']
+          confirmations = '/api/v1/vulnerabilities/{vuln_id}/confirmations'
+          close = '/api/v1/vulnerabilities/{vuln_id}/close'
+          dispositions = '/api/v1/vulnerabilities/{vuln_id}/dispositions'
+          generic = '/api/v1/assurance/governance/actions/execute'
+          for path in (confirmations, close, dispositions, generic):
+              assert path in paths, path
+
+          for model in (FindingConfirmationCreate, FindingCloseRequest):
+              assert model.model_config.get('extra') == 'forbid'
+              assert model.model_fields['expected_version'].is_required()
+              assert model.model_fields['idempotency_key'].is_required()
+          assert 'version' in VulnerabilityResponse.model_fields
+
+          vuln_source = Path('fastapi_app/routers/vulnerabilities.py').read_text()
+          disposition_source = Path('fastapi_app/routers/finding_dispositions.py').read_text()
+          assert 'confirm_finding(' not in vuln_source
+          assert '_close_after_verification' not in vuln_source
+          assert "action_id='finding.confirm'" in vuln_source
+          assert "action_id='finding.close'" in vuln_source
+          assert 'govern_finding_disposition(' not in disposition_source
+          assert 'RISK_ACCEPTANCE_GOVERNED_ACTION_NOT_IMPLEMENTED' in disposition_source
+          assert 'FINDING_DISPOSITION_GOVERNANCE_NOT_MIGRATED' in disposition_source
+          print('AGOM_FINDING_COMPATIBILITY_ROUTES=EXECUTOR_WIRED')
+          print('AGOM_FINDING_DISPOSITION_MUTATION_BYPASS=CLOSED')
+          PY
+      - name: Retain Finding governed action Reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-finding-governed-actions-${{ github.sha }}
+          path: aegis-platform/backend/agom-finding-governed-actions-junit.xml
+          retention-days: 30
+          if-no-files-found: warn
