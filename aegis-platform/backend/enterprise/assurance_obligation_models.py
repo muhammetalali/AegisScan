@@ -24,6 +24,7 @@ class AssuranceObligationEventQuerySet(models.QuerySet):
 class AssuranceObligation(models.Model):
     class Kind(models.TextChoices):
         DISPOSITION_REVIEW = 'disposition_review', 'Disposition Review'
+        RECURRENCE_REVIEW = 'recurrence_review', 'Recurrence Review'
 
     class Status(models.TextChoices):
         OPEN = 'open', 'Open'
@@ -37,7 +38,9 @@ class AssuranceObligation(models.Model):
     project = models.ForeignKey('projects.Project', on_delete=models.PROTECT, related_name='assurance_obligations')
     asset = models.ForeignKey('assets.Asset', on_delete=models.PROTECT, related_name='assurance_obligations')
     finding = models.ForeignKey('vulnerabilities.Vulnerability', on_delete=models.PROTECT, related_name='assurance_obligations')
-    disposition = models.OneToOneField('evidence.FindingDisposition', on_delete=models.PROTECT, related_name='assurance_obligation')
+    disposition = models.OneToOneField('evidence.FindingDisposition', on_delete=models.PROTECT, related_name='assurance_obligation', null=True, blank=True)
+    source_disposition = models.ForeignKey('evidence.FindingDisposition', on_delete=models.PROTECT, related_name='recurrence_assurance_obligations', null=True, blank=True)
+    source_observation = models.OneToOneField('enterprise.AssuranceObservation', on_delete=models.PROTECT, related_name='recurrence_obligation', null=True, blank=True)
     schedule = models.ForeignKey('enterprise.ContinuousAssuranceSchedule', on_delete=models.PROTECT, related_name='governance_obligations')
     kind = models.CharField(max_length=32, choices=Kind.choices, default=Kind.DISPOSITION_REVIEW)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
@@ -67,6 +70,13 @@ class AssuranceObligation(models.Model):
                 ),
                 name='assurance_obligation_terminal_shape',
             ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(kind='disposition_review', disposition__isnull=False, source_observation__isnull=True)
+                    | models.Q(kind='recurrence_review', disposition__isnull=True, source_observation__isnull=False)
+                ),
+                name='assurance_obligation_source_shape',
+            ),
         ]
 
 
@@ -83,7 +93,7 @@ class AssuranceObligationEvent(models.Model):
     obligation = models.ForeignKey(AssuranceObligation, on_delete=models.PROTECT, related_name='events')
     sequence = models.PositiveIntegerField()
     event_type = models.CharField(max_length=32, choices=EventType.choices)
-    disposition = models.ForeignKey('evidence.FindingDisposition', on_delete=models.PROTECT, related_name='assurance_obligation_events')
+    disposition = models.ForeignKey('evidence.FindingDisposition', on_delete=models.PROTECT, related_name='assurance_obligation_events', null=True, blank=True)
     schedule = models.ForeignKey('enterprise.ContinuousAssuranceSchedule', on_delete=models.PROTECT, related_name='governance_events')
     execution = models.ForeignKey('enterprise.ContinuousAssuranceExecution', on_delete=models.PROTECT, null=True, blank=True, related_name='governance_events')
     observation = models.ForeignKey('enterprise.AssuranceObservation', on_delete=models.PROTECT, null=True, blank=True, related_name='obligation_events')

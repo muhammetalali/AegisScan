@@ -11,6 +11,7 @@ from ..services.assurance_obligation_governance import (
     AssuranceObligationError,
     list_assurance_obligations,
     materialize_assurance_obligation,
+    materialize_recurrence_obligation,
     reconcile_project_assurance_obligations,
     refresh_assurance_obligation,
 )
@@ -36,7 +37,10 @@ def _payload(obligation, replayed=None):
     result = {
         'id': str(obligation.id),
         'finding_id': str(obligation.finding_id),
-        'disposition_id': str(obligation.disposition_id),
+        'kind': obligation.kind,
+        'disposition_id': str(obligation.disposition_id) if obligation.disposition_id else None,
+        'source_disposition_id': str(obligation.source_disposition_id) if obligation.source_disposition_id else None,
+        'source_observation_id': str(obligation.source_observation_id) if obligation.source_observation_id else None,
         'schedule_id': str(obligation.schedule_id),
         'status': obligation.status,
         'due_at': obligation.due_at.isoformat(),
@@ -60,6 +64,17 @@ async def create_obligation(project_id: UUID, finding_id: UUID, body: AssuranceO
         finding_id=str(finding_id),
         user_id=str(current_user.get('user_id')),
         schedule_id=str(body.schedule_id) if body.schedule_id else None,
+    )
+    return _payload(result.obligation, result.replayed)
+
+
+@router.post('/projects/{project_id}/observations/{observation_id}/recurrence-obligation')
+async def replay_recurrence_obligation(project_id: UUID, observation_id: UUID, current_user=Depends(get_current_user)):
+    result = await _call(
+        materialize_recurrence_obligation,
+        project_id=str(project_id),
+        observation_id=str(observation_id),
+        user_id=str(current_user.get('user_id')),
     )
     return _payload(result.obligation, result.replayed)
 
