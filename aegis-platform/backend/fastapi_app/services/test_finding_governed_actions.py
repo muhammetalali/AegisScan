@@ -150,12 +150,11 @@ def _confirmation_request(disposition_fixture):
 
 
 def test_finding_manifest_exposes_durable_projection_version(disposition_fixture):
-    _client, owner, project, _asset, _authorization, _scan, finding, organization, owner_membership = disposition_fixture
+    _client, owner, project, _asset, _authorization, _scan, finding, _organization, owner_membership = disposition_fixture
     _ownerize(owner_membership)
     manifest = build_governed_capability_manifest(
-        organization_id=str(organization.id),
         project_id=str(project.id),
-        actor_id=str(owner.id),
+        user_id=str(owner.id),
         entity_type='finding',
         entity_id=str(finding.id),
     )
