@@ -5,16 +5,12 @@ from typing import List, Literal, Optional
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.evidence.models import FindingDisposition
 from ..core.dependencies import get_current_user
-from ..services.finding_disposition import (
-    FindingDispositionError,
-    govern_finding_disposition,
-    list_dispositions,
-)
+from ..services.finding_disposition import list_dispositions
 from . import vulnerabilities as vulnerability_routes
 
 
@@ -71,27 +67,34 @@ def _serialize(row: FindingDisposition, *, replayed: bool = False) -> FindingDis
 async def create_finding_disposition(
     vuln_id: UUID,
     body: FindingDispositionCreate,
-    response: Response,
     user=Depends(get_current_user),
 ):
     user_id = str(user.get('user_id'))
     vulnerability = await vulnerability_routes._get_vulnerability(vuln_id, user_id)
     if not vulnerability:
         raise HTTPException(status_code=404, detail='Vulnerability not found')
-    try:
-        result = await sync_to_async(govern_finding_disposition, thread_sensitive=True)(
-            finding_id=vuln_id,
-            disposition=body.disposition,
-            rationale=body.rationale,
-            actor_id=user_id,
-            risk_correlation_id=body.risk_correlation_id,
-            review_at=body.review_at,
-            duplicate_of_id=body.duplicate_of_id,
+
+    if body.disposition == FindingDisposition.Disposition.ACCEPTED_RISK:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'RISK_ACCEPTANCE_GOVERNED_ACTION_NOT_IMPLEMENTED',
+                'reason': (
+                    'Risk acceptance remains fail-closed until a durable authoritative proposer, '
+                    'input-aware Expiry/Review gate, and governed ActionContract execution path are implemented.'
+                ),
+            },
         )
-    except FindingDispositionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    response.status_code = 200 if result.replayed else 201
-    return _serialize(result.disposition, replayed=result.replayed)
+    raise HTTPException(
+        status_code=409,
+        detail={
+            'code': 'FINDING_DISPOSITION_GOVERNANCE_NOT_MIGRATED',
+            'reason': (
+                'wont_fix and duplicate mutations remain fail-closed until explicit governed ActionContracts, '
+                'authority, SoD, evidence, and audit execution semantics are implemented.'
+            ),
+        },
+    )
 
 
 @router.get('/{vuln_id}/dispositions', response_model=List[FindingDispositionResponse])
