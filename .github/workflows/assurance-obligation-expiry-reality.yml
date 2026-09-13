@@ -7,19 +7,25 @@ on:
       - 'aegis-platform/backend/enterprise/apps.py'
       - 'aegis-platform/backend/enterprise/assurance_obligation_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0026_assurance_obligation_expiry_governance.py'
+      - 'aegis-platform/backend/enterprise/migrations/0028_assurance_recurrence_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/assurance_drift_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_assurance_recurrence_obligation_governance.py'
       - 'aegis-platform/backend/fastapi_app/routers/assurance.py'
       - 'aegis-platform/backend/fastapi_app/routers/assurance_obligations.py'
       - '.github/workflows/assurance-obligation-expiry-reality.yml'
   push:
-    branches: [main, codex/assurance-obligation-expiry-governance-2026-09-13]
+    branches: [main, codex/assurance-obligation-expiry-governance-2026-09-13, codex/assurance-recurrence-obligation-port-2026-09-13]
     paths:
       - 'aegis-platform/backend/enterprise/apps.py'
       - 'aegis-platform/backend/enterprise/assurance_obligation_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0026_assurance_obligation_expiry_governance.py'
+      - 'aegis-platform/backend/enterprise/migrations/0028_assurance_recurrence_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/assurance_drift_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_assurance_recurrence_obligation_governance.py'
       - 'aegis-platform/backend/fastapi_app/routers/assurance.py'
       - 'aegis-platform/backend/fastapi_app/routers/assurance_obligations.py'
       - '.github/workflows/assurance-obligation-expiry-reality.yml'
@@ -83,10 +89,13 @@ jobs:
             aegis-platform/backend/enterprise/apps.py \
             aegis-platform/backend/enterprise/assurance_obligation_models.py \
             aegis-platform/backend/enterprise/migrations/0026_assurance_obligation_expiry_governance.py \
+            aegis-platform/backend/enterprise/migrations/0028_assurance_recurrence_obligation_governance.py \
+            aegis-platform/backend/fastapi_app/services/assurance_drift_governance.py \
             aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py \
             aegis-platform/backend/fastapi_app/routers/assurance.py \
             aegis-platform/backend/fastapi_app/routers/assurance_obligations.py \
-            aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py
+            aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py \
+            aegis-platform/backend/fastapi_app/services/test_assurance_recurrence_obligation_governance.py
       - name: Django schema reality
         working-directory: aegis-platform/backend
         env:
@@ -102,12 +111,17 @@ jobs:
           from django.db import connection
           from enterprise.assurance_obligation_models import AssuranceObligation, AssuranceObligationEvent
           assert connection.vendor == 'postgresql', connection.vendor
-          assert AssuranceObligation._meta.get_field('disposition').one_to_one is True
+          disposition = AssuranceObligation._meta.get_field('disposition')
+          source_observation = AssuranceObligation._meta.get_field('source_observation')
+          assert disposition.one_to_one is True and disposition.null is True
+          assert source_observation.one_to_one is True and source_observation.null is True
+          assert AssuranceObligationEvent._meta.get_field('disposition').null is True
           assert AssuranceObligationEvent._meta.get_field('replay_fingerprint').unique is True
           assert any(c.name == 'uniq_aobl_event_sequence' for c in AssuranceObligationEvent._meta.constraints)
           assert any(c.name == 'assurance_obligation_terminal_shape' for c in AssuranceObligation._meta.constraints)
+          assert any(c.name == 'assurance_obligation_source_shape' for c in AssuranceObligation._meta.constraints)
           print('ASSURANCE_OBLIGATION_DATABASE=POSTGRESQL')
-          print('ASSURANCE_OBLIGATION_DB_INVARIANTS=PASS')
+          print('ASSURANCE_RECURRENCE_DB_INVARIANTS=PASS')
           PY
       - name: Verify API contracts
         working-directory: aegis-platform/backend
@@ -121,18 +135,23 @@ jobs:
           paths = app.openapi()['paths']
           base = '/api/v1/assurance/drift/projects/{project_id}'
           assert base + '/findings/{finding_id}/obligations' in paths
+          assert base + '/observations/{observation_id}/recurrence-obligation' in paths
           assert base + '/obligations/reconcile' in paths
           assert base + '/obligations/{obligation_id}/refresh' in paths
           assert base + '/obligations' in paths
           assert AssuranceObligationRequest.model_config.get('extra') == 'forbid'
           print('ASSURANCE_OBLIGATION_API=PASS')
           PY
-      - name: Run obligation expiry behavior and PostgreSQL concurrency reality
+      - name: Run obligation expiry and recurrence PostgreSQL reality
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: pytest -q fastapi_app/services/test_assurance_obligation_governance.py --junitxml=/tmp/assurance-obligation-junit.xml
+        run: |
+          pytest -q \
+            fastapi_app/services/test_assurance_obligation_governance.py \
+            fastapi_app/services/test_assurance_recurrence_obligation_governance.py \
+            --junitxml=/tmp/assurance-obligation-junit.xml
       - name: Run assurance governance regressions
         working-directory: aegis-platform/backend
         env:
