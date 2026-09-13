@@ -1,0 +1,163 @@
+name: AGOM Authoritative Responsibility Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/governed_responsibility_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0029_agom_governed_responsibilities.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_responsibilities.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_responsibility_authority.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_governed_responsibility_api.py'
+      - '.github/workflows/agom-authoritative-responsibility-reality.yml'
+  push:
+    branches: [main, codex/agom-authoritative-responsibilities-2026-09-13]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/governed_responsibility_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0029_agom_governed_responsibilities.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_responsibilities.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_responsibility_authority.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_governed_responsibility_api.py'
+      - '.github/workflows/agom-authoritative-responsibility-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-authoritative-responsibility-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  authoritative-responsibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-agom-responsibility-django-secret-0123456789abcdef
+      JWT_SECRET_KEY: ci-agom-responsibility-jwt-secret-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-agom-responsibility-evidence-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-agom-responsibility-fingerprint-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile AGOM responsibility authority plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/governed_responsibility_models.py \
+            aegis-platform/backend/enterprise/migrations/0029_agom_governed_responsibilities.py \
+            aegis-platform/backend/fastapi_app/contracts/governed_responsibilities.py \
+            aegis-platform/backend/fastapi_app/services/governed_responsibility_authority.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_responsibility_authority.py \
+            aegis-platform/backend/fastapi_app/routers/governance.py \
+            aegis-platform/backend/fastapi_app/routers/test_governed_responsibility_api.py
+      - name: Verify Django schema reality and migration drift
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+      - name: Run authoritative responsibility and PostgreSQL concurrency tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q --junitxml=agom-authoritative-responsibility-junit.xml \
+            fastapi_app/services/test_governed_responsibility_authority.py \
+            fastapi_app/routers/test_governed_responsibility_api.py
+      - name: Run AGOM foundation regression tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_governed_operations.py
+      - name: Verify authoritative API and OpenAPI wiring
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from enterprise.governed_responsibility_models import GovernedResponsibilityAssignment
+
+          schema = app.openapi()
+          paths = schema['paths']
+          expected = {
+              '/api/v1/assurance/governance/responsibilities/grants': 'post',
+              '/api/v1/assurance/governance/responsibilities/{assignment_id}/revoke': 'post',
+              '/api/v1/assurance/governance/responsibilities/authority': 'get',
+              '/api/v1/assurance/governance/responsibilities/chain': 'get',
+          }
+          for path, method in expected.items():
+              assert path in paths, path
+              assert method in paths[path], f'{method} {path}'
+          responsibilities = set(GovernedResponsibilityAssignment.Responsibility.values)
+          assert 'campaign_lead' in responsibilities
+          assert 'finding_confirmer' in responsibilities
+          grant_schema = paths['/api/v1/assurance/governance/responsibilities/grants']['post']
+          request_ref = grant_schema['requestBody']['content']['application/json']['schema']['$ref']
+          request_name = request_ref.rsplit('/', 1)[-1]
+          properties = schema['components']['schemas'][request_name]['properties']
+          assert 'actor_role' not in properties
+          assert 'actor_responsibilities' not in properties
+          assert 'idempotency_key' in properties
+          print('AGOM_RESPONSIBILITY_API=WIRED')
+          print(f'AGOM_RESPONSIBILITY_TYPES={len(responsibilities)}')
+          PY
+      - name: Retain AGOM responsibility reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-authoritative-responsibility-${{ github.sha }}
+          path: aegis-platform/backend/agom-authoritative-responsibility-junit.xml
+          if-no-files-found: warn
