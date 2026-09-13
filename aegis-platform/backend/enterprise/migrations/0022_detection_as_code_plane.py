@@ -29,7 +29,7 @@ class Migration(migrations.Migration):
                 ('project', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='detection_rules', to='projects.project')),
             ],
             options={
-                'indexes': [models.Index(fields=['project','state'], name='idx_detection_rule_project_state'), models.Index(fields=['organization','state'], name='idx_detection_rule_org_state')],
+                'indexes': [models.Index(fields=['project','state'], name='idx_det_rule_proj_state'), models.Index(fields=['organization','state'], name='idx_detection_rule_org_state')],
                 'constraints': [models.UniqueConstraint(fields=('organization','project','slug'), name='uniq_detection_rule_scope_slug')],
             },
         ),
@@ -91,7 +91,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 'ordering': ['-created_at'],
-                'indexes': [models.Index(fields=['integration','-created_at'], name='idx_detection_publication_integration')],
+                'indexes': [models.Index(fields=['integration','-created_at'], name='idx_det_pub_integration')],
                 'constraints': [models.UniqueConstraint(fields=('revision','integration','package_sha256'), name='uniq_detection_publication_package')],
             },
         ),
