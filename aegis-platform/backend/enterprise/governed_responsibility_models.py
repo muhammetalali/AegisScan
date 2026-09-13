@@ -11,6 +11,14 @@ from django.utils import timezone
 from .models import Organization, OrganizationMembership
 
 
+class _ImmutableGovernanceQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Governed responsibility records are immutable; append a new governance record instead.')
+
+    def delete(self):
+        raise ValidationError('Governed responsibility records are immutable and cannot be deleted.')
+
+
 class GovernedResponsibilityAssignment(models.Model):
     """Immutable, idempotent grant of an AGOM responsibility to an organization member."""
 
@@ -31,6 +39,8 @@ class GovernedResponsibilityAssignment(models.Model):
         PROJECT = 'project', 'Project'
         ENTITY_TYPE = 'entity_type', 'Entity Type'
         ENTITY = 'entity', 'Entity'
+
+    objects = _ImmutableGovernanceQuerySet.as_manager()
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
@@ -123,6 +133,8 @@ class GovernedResponsibilityAssignment(models.Model):
 class GovernedResponsibilityRevocation(models.Model):
     """Immutable, idempotent revocation record; assignments themselves are never edited."""
 
+    objects = _ImmutableGovernanceQuerySet.as_manager()
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     assignment = models.OneToOneField(
         GovernedResponsibilityAssignment,
@@ -160,6 +172,8 @@ class GovernedResponsibilityEvent(models.Model):
         GRANTED = 'granted', 'Granted'
         REVOKED = 'revoked', 'Revoked'
         SUPERSEDED = 'superseded', 'Superseded'
+
+    objects = _ImmutableGovernanceQuerySet.as_manager()
 
     id = models.BigAutoField(primary_key=True)
     organization = models.ForeignKey(
