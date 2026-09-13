@@ -8,7 +8,6 @@ from pathlib import Path
 import re
 from typing import Any, Literal
 
-from .authorization_guard import current_asset_authorization
 from .capability_planner import Depth, plan_capabilities
 from .wstg_capability_mapping import WSTGCapabilityMapping
 from .wstg_catalog import PACK, WSTGCatalog
@@ -384,6 +383,7 @@ def _context_from_authorized_asset(asset, authorization) -> WSTGPlanningContext:
 def plan_wstg_for_authorized_asset(*, project_id: str, asset_id: str, depth: Depth = 'standard'):
     """Resolve persisted asset + current immutable authorization, then plan only."""
     from django_project.assets.models import Asset
+    from .authorization_guard import current_asset_authorization
 
     asset = Asset.objects.filter(pk=asset_id, project_id=project_id, is_active=True).first()
     if asset is None:
