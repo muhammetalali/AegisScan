@@ -41,5 +41,9 @@
   "files": {
     "tests.json": "277dafdbbab0e791a54e4ccbc88b271498da81bb800373fbab94feb7da8d10fc",
     "extensions.json": "11bdfc85efc14cc503a2033fac7983d8166d8b938d31d207ee685e29a5083999"
+  },
+  "capability_mapping_files": {
+    "capability_requirements.json": "68bca44a020201e0bed780ec29b3a4bb279b5c3c7e66ed3dd8f3bb88e0f8a2aa",
+    "mappings.json": "87d6a54b9a1311b79a64b836ecd231c3fc708b31d68b038dacb1fe64b0128a26"
   }
 }
