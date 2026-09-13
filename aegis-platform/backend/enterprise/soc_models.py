@@ -13,6 +13,9 @@ class SOCAppendOnlyQuerySet(models.QuerySet):
     def delete(self):
         raise ValidationError('SOC evidence is append-only and cannot be deleted.')
 
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('SOC evidence records must be created through the governed security operations service.')
+
     def bulk_update(self, objs, fields, **kwargs):
         raise ValidationError('SOC evidence is append-only and cannot be updated.')
 

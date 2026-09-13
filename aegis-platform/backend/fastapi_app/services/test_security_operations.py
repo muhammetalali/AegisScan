@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone
 from threading import Barrier
 
 import pytest
@@ -109,6 +109,8 @@ def test_audit_and_signal_evidence_are_immutable(detection_fixture):
     result = _ingest(user, project, revision)
     with pytest.raises(ValidationError):
         SecuritySignal.objects.filter(pk=result.signal.id).update(severity='low')
+    with pytest.raises(ValidationError):
+        SecuritySignal.objects.bulk_create([])
     event = InvestigationAuditEvent.objects.filter(case=result.case).first()
     with pytest.raises(ValidationError):
         event.delete()
