@@ -96,6 +96,8 @@ jobs:
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
           python - <<'PY'
+          import django
+          django.setup()
           from django.db import connection
           from django_project.evidence.models import FindingConfirmation
           assert connection.vendor == 'postgresql', connection.vendor
