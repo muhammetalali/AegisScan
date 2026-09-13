@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 from typing import Any
 
 from django.db import transaction
@@ -104,8 +104,11 @@ def ingest_detection_signal(*, revision_id: str, project_id: str, user_id: str, 
     with transaction.atomic():
         # Project lock serializes first-case correlation and generation allocation.
         TenantProject.objects.select_for_update().get(pk=link.pk)
+        # Lock only the revision row. source_evidence is nullable and therefore
+        # select_related() uses an OUTER JOIN; PostgreSQL rejects FOR UPDATE on
+        # the nullable side unless the locked relation is scoped explicitly.
         revision = (
-            DetectionRevision.objects.select_for_update().select_related('rule', 'source_finding', 'source_evidence')
+            DetectionRevision.objects.select_for_update(of=('self',)).select_related('rule', 'source_finding', 'source_evidence')
             .filter(pk=revision_id, rule__project_id=project_id).first()
         )
         if revision is None:
@@ -122,7 +125,7 @@ def ingest_detection_signal(*, revision_id: str, project_id: str, user_id: str, 
         payload_sha = _sha(event)
         fingerprint = _sha({
             'revision_id': str(revision.id), 'validation_id': str(validation.id), 'source': source,
-            'observed_at': observed_at.astimezone(timezone.utc).isoformat(), 'payload_sha256': payload_sha,
+            'observed_at': observed_at.astimezone(dt_timezone.utc).isoformat(), 'payload_sha256': payload_sha,
         })
         existing = SecuritySignal.objects.filter(fingerprint=fingerprint).first()
         if existing:
