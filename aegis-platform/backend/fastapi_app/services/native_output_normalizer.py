@@ -251,6 +251,7 @@ def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, 
                 'cookies': cookies[:64],
                 'post_message_listener_count': _positive_int(item.get('post_message_listener_count'), 100000),
                 'post_message_send_count': _positive_int(item.get('post_message_send_count'), 100000),
+                'post_message_receive_count': _positive_int(item.get('post_message_receive_count'), 100000),
                 'inner_html_write_count': _positive_int(item.get('inner_html_write_count'), 1000000),
                 'insert_adjacent_html_count': _positive_int(item.get('insert_adjacent_html_count'), 1000000),
                 'document_write_count': _positive_int(item.get('document_write_count'), 1000000),
@@ -285,6 +286,68 @@ def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, 
                 ),
             }
             result.append(safe)
+            continue
+        if kind == 'browser-web-messaging-assessment':
+            records: list[dict[str, Any]] = []
+            rows = item.get('records') if isinstance(item.get('records'), list) else []
+            for row in rows[:128]:
+                if not isinstance(row, dict):
+                    continue
+                direction = str(row.get('direction') or '').lower()
+                if direction not in {'send', 'receive'}:
+                    continue
+                data_type = str(row.get('data_type') or 'unknown').lower()
+                if data_type not in {
+                    'array', 'boolean', 'bigint', 'function', 'null', 'number', 'object',
+                    'string', 'symbol', 'undefined', 'unknown',
+                }:
+                    data_type = 'unknown'
+                peer_origin = str(row.get('peer_origin') or '')[:512]
+                if peer_origin not in {'*', '/', 'null', 'same-origin-default'} and not peer_origin.startswith(('http://', 'https://')):
+                    peer_origin = 'null'
+                keys = row.get('data_keys') if isinstance(row.get('data_keys'), list) else []
+                records.append({
+                    'direction': direction,
+                    'peer_origin': peer_origin,
+                    'same_origin_peer': row.get('same_origin_peer') is True,
+                    'data_type': data_type,
+                    'data_keys': sorted({
+                        str(value)[:80]
+                        for value in keys[:32]
+                        if isinstance(value, str)
+                        and value
+                        and not any(ch in value for ch in '\r\n\x00')
+                    })[:32],
+                })
+            status = str(item.get('status') or '')
+            if status not in {'observed', 'not-observed'}:
+                status = 'not-observed'
+            limitations = item.get('limitations') if isinstance(item.get('limitations'), list) else []
+            result.append({
+                'kind': kind,
+                'wstg_id': 'WSTG-CLNT-11',
+                'observation_only': True,
+                'final_decision': False,
+                'status': status,
+                'listener_count': _positive_int(item.get('listener_count'), 100000),
+                'send_count': _positive_int(item.get('send_count'), 100000),
+                'receive_count': _positive_int(item.get('receive_count'), 100000),
+                'metadata_record_count': len(records),
+                'wildcard_target_count': _positive_int(item.get('wildcard_target_count'), 128),
+                'explicit_target_origin_count': _positive_int(item.get('explicit_target_origin_count'), 128),
+                'cross_origin_receive_count': _positive_int(item.get('cross_origin_receive_count'), 128),
+                'wildcard_target_observed': item.get('wildcard_target_observed') is True,
+                'cross_origin_receive_observed': item.get('cross_origin_receive_observed') is True,
+                'origin_validation_confirmed': False,
+                'payload_values_captured': False,
+                'synthetic_cross_origin_messages_injected': False,
+                'limitations': [
+                    str(value)[:500]
+                    for value in limitations[:4]
+                    if isinstance(value, str)
+                ],
+                'records': records,
+            })
             continue
         if kind in {'browser-page-route', 'browser-websocket-channel'}:
             url = str(item.get('url') or '')[:2048]

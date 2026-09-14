@@ -21,6 +21,7 @@ import websockets
 
 from fastapi_app.services.scanner_adapters import validate_authorized_web_target
 from fastapi_app.services.scope_authorization import require_authorized_target
+from fastapi_app.services.web_messaging_semantics import assess_web_messaging
 
 _SCHEMA = 'aegis.browser-spa-discovery.v1'
 _MAX_SESSION_BYTES = 65536
@@ -488,6 +489,8 @@ _INSTRUMENTATION_SCRIPT = r"""
   const state = {
     postMessageListeners: 0,
     postMessagesSent: 0,
+    postMessagesReceived: 0,
+    webMessageRecords: [],
     innerHTMLWrites: 0,
     insertAdjacentHTMLCalls: 0,
     documentWriteCalls: 0,
@@ -496,6 +499,41 @@ _INSTRUMENTATION_SCRIPT = r"""
     blockedWebTransportCount: 0
   };
   Object.defineProperty(globalThis, '__aegisRuntimeSignals', {value: state, configurable: false});
+  const dataType = (value) => {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return 'array';
+    const kind = typeof value;
+    return ['boolean', 'bigint', 'function', 'number', 'object', 'string', 'symbol', 'undefined'].includes(kind)
+      ? kind : 'unknown';
+  };
+  const dataKeys = (value) => {
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return [];
+    try {
+      return Object.keys(value).slice(0, 32).map((key) => String(key).slice(0, 80)).sort();
+    } catch (_) {
+      return [];
+    }
+  };
+  const safePeerOrigin = (raw, direction) => {
+    const value = String(raw || '').trim();
+    if (value === '*' || value === '/' || value === 'null') return value;
+    if (!value) return direction === 'send' ? 'same-origin-default' : 'null';
+    try {
+      const parsed = new URL(value, location.href);
+      return parsed.origin;
+    } catch (_) {
+      return direction === 'send' ? 'same-origin-default' : 'null';
+    }
+  };
+  const recordWebMessage = (direction, data, peerOrigin) => {
+    if (state.webMessageRecords.length >= 128) return;
+    state.webMessageRecords.push({
+      direction,
+      peer_origin: safePeerOrigin(peerOrigin, direction),
+      data_type: dataType(data),
+      data_keys: dataKeys(data)
+    });
+  };
   try {
     const targetOrigin = __AEGIS_TARGET_ORIGIN__;
     const NativeWebSocket = window.WebSocket;
@@ -530,6 +568,10 @@ _INSTRUMENTATION_SCRIPT = r"""
   } catch (_) {}
   try {
     const originalAdd = EventTarget.prototype.addEventListener;
+    originalAdd.call(window, 'message', (event) => {
+      state.postMessagesReceived += 1;
+      recordWebMessage('receive', event.data, event.origin);
+    }, true);
     EventTarget.prototype.addEventListener = function(type, listener, options) {
       if (type === 'message') state.postMessageListeners += 1;
       return originalAdd.call(this, type, listener, options);
@@ -539,6 +581,14 @@ _INSTRUMENTATION_SCRIPT = r"""
     const originalPost = window.postMessage.bind(window);
     window.postMessage = function(...args) {
       state.postMessagesSent += 1;
+      let targetOrigin = '';
+      const targetArg = args[1];
+      if (typeof targetArg === 'string') {
+        targetOrigin = targetArg;
+      } else if (targetArg && typeof targetArg === 'object') {
+        try { targetOrigin = String(targetArg.targetOrigin || ''); } catch (_) {}
+      }
+      recordWebMessage('send', args[0], targetOrigin);
       return originalPost(...args);
     };
   } catch (_) {}
@@ -639,6 +689,8 @@ _RUNTIME_SUMMARY_EXPRESSION = r"""
     signals: {
       postMessageListeners: Number(signals.postMessageListeners || 0),
       postMessagesSent: Number(signals.postMessagesSent || 0),
+      postMessagesReceived: Number(signals.postMessagesReceived || 0),
+      webMessageRecords: Array.isArray(signals.webMessageRecords) ? signals.webMessageRecords.slice(0, 128) : [],
       innerHTMLWrites: Number(signals.innerHTMLWrites || 0),
       insertAdjacentHTMLCalls: Number(signals.insertAdjacentHTMLCalls || 0),
       documentWriteCalls: Number(signals.documentWriteCalls || 0),
@@ -1000,6 +1052,14 @@ async def discover(
             if isinstance(runtime_summary.get('signals'), dict)
             else {}
         )
+        messaging_assessment = assess_web_messaging(
+            signals.get('webMessageRecords') if isinstance(signals.get('webMessageRecords'), list) else [],
+            target_origin=target_origin,
+            listener_count=int(signals.get('postMessageListeners') or 0),
+            sent_count=int(signals.get('postMessagesSent') or 0),
+            received_count=int(signals.get('postMessagesReceived') or 0),
+        )
+        observations.insert(0, messaging_assessment)
         observations.insert(0, {
             'kind': 'browser-spa-summary',
             'identity_ref': identity_ref,
@@ -1016,6 +1076,7 @@ async def discover(
             'cookies': cookie_metadata,
             'post_message_listener_count': int(signals.get('postMessageListeners') or 0),
             'post_message_send_count': int(signals.get('postMessagesSent') or 0),
+            'post_message_receive_count': int(signals.get('postMessagesReceived') or 0),
             'inner_html_write_count': int(signals.get('innerHTMLWrites') or 0),
             'insert_adjacent_html_count': int(signals.get('insertAdjacentHTMLCalls') or 0),
             'document_write_count': int(signals.get('documentWriteCalls') or 0),

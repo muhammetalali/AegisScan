@@ -10,8 +10,12 @@ name: Browser SPA Discovery Reality
       - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
       - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
       - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_messaging_semantics.py'
       - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
       - 'aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_normalization.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py'
       - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/e2e/fixtures/browser-spa-target/**'
       - 'aegis-platform/e2e/browser_spa_discovery_e2e.py'
@@ -25,8 +29,12 @@ name: Browser SPA Discovery Reality
       - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
       - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
       - 'aegis-platform/backend/fastapi_app/services/native_packaging.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_messaging_semantics.py'
       - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
       - 'aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_normalization.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py'
       - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/e2e/fixtures/browser-spa-target/**'
       - 'aegis-platform/e2e/browser_spa_discovery_e2e.py'
@@ -90,7 +98,20 @@ jobs:
 
       - name: Compile Browser SPA implementation and fixtures
         run: |
-          python -m py_compile             aegis-platform/backend/fastapi_app/services/browser_spa_discovery.py             aegis-platform/backend/fastapi_app/services/browser_surface_graph.py             aegis-platform/backend/fastapi_app/services/credential_execution.py             aegis-platform/backend/fastapi_app/services/native_tool_runtime.py             aegis-platform/backend/fastapi_app/services/native_output_normalizer.py             aegis-platform/backend/fastapi_app/tasks/native_capabilities.py             aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py             aegis-platform/e2e/fixtures/browser-spa-target/app.py             aegis-platform/e2e/browser_spa_discovery_e2e.py
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/browser_spa_discovery.py \
+            aegis-platform/backend/fastapi_app/services/browser_surface_graph.py \
+            aegis-platform/backend/fastapi_app/services/credential_execution.py \
+            aegis-platform/backend/fastapi_app/services/native_tool_runtime.py \
+            aegis-platform/backend/fastapi_app/services/native_output_normalizer.py \
+            aegis-platform/backend/fastapi_app/services/web_messaging_semantics.py \
+            aegis-platform/backend/fastapi_app/tasks/native_capabilities.py \
+            aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py \
+            aegis-platform/backend/fastapi_app/services/test_web_messaging_normalization.py \
+            aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py \
+            aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py \
+            aegis-platform/e2e/fixtures/browser-spa-target/app.py \
+            aegis-platform/e2e/browser_spa_discovery_e2e.py
 
       - name: Django model and migration reality
         working-directory: aegis-platform/backend
@@ -102,33 +123,54 @@ jobs:
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
 
-      - name: Browser SPA isolation and persistence acceptance suite
+      - name: Browser SPA isolation and web-messaging acceptance suite
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
-          pytest -q             fastapi_app/services/test_browser_spa_discovery.py             fastapi_app/services/test_native_output_normalizer.py             --junitxml=/tmp/browser-spa-junit.xml
+          pytest -q \
+            fastapi_app/services/test_browser_spa_discovery.py \
+            fastapi_app/services/test_native_output_normalizer.py \
+            fastapi_app/services/test_web_messaging_normalization.py \
+            fastapi_app/services/test_web_messaging_semantics.py \
+            fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py \
+            --junitxml=/tmp/browser-spa-junit.xml
 
       - name: Build scanner image with Browser SPA capability
         run: |
-          docker build             --file aegis-platform/backend/Dockerfile.django             --tag aegisscan-browser-spa-ci:${{ github.sha }}             aegis-platform/backend
+          docker build \
+            --file aegis-platform/backend/Dockerfile.django \
+            --tag aegisscan-browser-spa-ci:${{ github.sha }} \
+            aegis-platform/backend
 
       - name: Prove packaged Browser SPA binary
         run: |
-          docker run --rm             --entrypoint /bin/sh             aegisscan-browser-spa-ci:${{ github.sha }}             -lc 'command -v aegis-browser-spa-discovery && command -v chromium && python -c "import websockets; print(websockets.__version__)"'
+          docker run --rm \
+            --entrypoint /bin/sh \
+            aegisscan-browser-spa-ci:${{ github.sha }} \
+            -lc 'command -v aegis-browser-spa-discovery && command -v chromium && python -c "import websockets; print(websockets.__version__)"'
 
       - name: Start real SPA and cross-origin fixtures
         run: |
           set -euo pipefail
-          PYTHONPATH=aegis-platform/backend             python -m uvicorn app:app             --app-dir aegis-platform/e2e/fixtures/browser-spa-target             --host 127.0.0.1 --port 18083             >/tmp/browser-spa-primary.log 2>&1 &
+          PYTHONPATH=aegis-platform/backend \
+            python -m uvicorn app:app \
+            --app-dir aegis-platform/e2e/fixtures/browser-spa-target \
+            --host 127.0.0.1 --port 18083 \
+            >/tmp/browser-spa-primary.log 2>&1 &
           echo $! >/tmp/browser-spa-primary.pid
 
-          PYTHONPATH=aegis-platform/backend             python -m uvicorn app:app             --app-dir aegis-platform/e2e/fixtures/browser-spa-target             --host 127.0.0.1 --port 18084             >/tmp/browser-spa-third-party.log 2>&1 &
+          PYTHONPATH=aegis-platform/backend \
+            python -m uvicorn app:app \
+            --app-dir aegis-platform/e2e/fixtures/browser-spa-target \
+            --host 127.0.0.1 --port 18084 \
+            >/tmp/browser-spa-third-party.log 2>&1 &
           echo $! >/tmp/browser-spa-third-party.pid
 
           for attempt in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:18083/health >/dev/null               && curl --fail --silent http://127.0.0.1:18084/health >/dev/null; then
+            if curl --fail --silent http://127.0.0.1:18083/health >/dev/null \
+              && curl --fail --silent http://127.0.0.1:18084/health >/dev/null; then
               exit 0
             fi
             sleep 1
@@ -167,9 +209,23 @@ jobs:
 
       - name: Run real Chromium SPA discovery E2E
         run: |
-          docker run --rm             --network host             --volume /tmp/browser-session.json:/tmp/browser-session.json:ro             --env AUTHORIZED_SCAN_TARGETS=127.0.0.1             --env ALLOW_SINGLE_LABEL_SCAN_TARGETS=1             aegisscan-browser-spa-ci:${{ github.sha }}             aegis-browser-spa-discovery             --session-file /tmp/browser-session.json             http://127.0.0.1:18083/             --identity-ref alice             --wait-ms 4000             --max-events 2000             > browser-spa-discovery-evidence.json
+          docker run --rm \
+            --network host \
+            --volume /tmp/browser-session.json:/tmp/browser-session.json:ro \
+            --env AUTHORIZED_SCAN_TARGETS=127.0.0.1 \
+            --env ALLOW_SINGLE_LABEL_SCAN_TARGETS=1 \
+            aegisscan-browser-spa-ci:${{ github.sha }} \
+            aegis-browser-spa-discovery \
+            --session-file /tmp/browser-session.json \
+            http://127.0.0.1:18083/ \
+            --identity-ref alice \
+            --wait-ms 4000 \
+            --max-events 2000 \
+            > browser-spa-discovery-evidence.json
 
-          python aegis-platform/e2e/browser_spa_discovery_e2e.py             browser-spa-discovery-evidence.json             | tee browser-spa-discovery-proof.json
+          python aegis-platform/e2e/browser_spa_discovery_e2e.py \
+            browser-spa-discovery-evidence.json \
+            | tee browser-spa-discovery-proof.json
 
       - name: Retain Browser SPA evidence
         if: always()
