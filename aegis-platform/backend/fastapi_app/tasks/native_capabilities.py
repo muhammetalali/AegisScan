@@ -39,6 +39,11 @@ from fastapi_app.services.native_tool_runtime import (
 )
 from fastapi_app.services.scanner_adapters import ScanResult, validate_authorized_target
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
+from fastapi_app.services.wstg_native_capabilities import (
+    get_wstg_internal_spec,
+    is_wstg_internal_capability,
+    run_wstg_internal_capability,
+)
 from fastapi_app.services.wstg_observation_lineage import attach_wstg_evidence_metadata
 
 
@@ -139,6 +144,15 @@ def _execute_runtime(
     credential_materials: tuple[dict[str, Any], ...],
 ) -> tuple[ScanResult, dict[str, Any]]:
     state_getter = lambda: _scan_control_state(str(scan.id))
+    if is_wstg_internal_capability(capability_id):
+        result = run_wstg_internal_capability(
+            capability_id,
+            target,
+            options,
+            state_getter=state_getter,
+            credential_materials=credential_materials,
+        )
+        return result, {'provider': 'internal-wstg-validator'}
     if not should_use_kali_recon(capability_id):
         result = run_native_tool(
             capability_id,
@@ -185,7 +199,11 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
     capability_id = str(config.get('capability_id') or '').strip()
     try:
         capability = get_capability(capability_id)
-        spec = get_native_tool_spec(capability_id)
+        spec = (
+            get_wstg_internal_spec(capability_id)
+            if is_wstg_internal_capability(capability_id)
+            else get_native_tool_spec(capability_id)
+        )
     except ValueError as exc:
         engine = _engine('invalid-native-capability', ScanEngine.EngineCategory.ANALYSIS, 60)
         return _fail(persisted, _execution(persisted, engine), str(exc))
