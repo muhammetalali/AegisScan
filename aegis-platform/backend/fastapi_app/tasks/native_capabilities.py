@@ -42,7 +42,6 @@ from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 from fastapi_app.services.wstg_native_capabilities import (
     get_wstg_internal_spec,
     is_wstg_internal_capability,
-    normalize_wstg_internal_output,
     run_wstg_internal_capability,
 )
 from fastapi_app.services.wstg_observation_lineage import attach_wstg_evidence_metadata
@@ -302,11 +301,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             spec=spec,
             credential_materials=credential_materials,
         )
-        normalized = (
-            normalize_wstg_internal_output(capability_id, result.stdout)
-            if is_wstg_internal_capability(capability_id)
-            else normalize_enriched_native_output(capability_id, result.stdout)
-        )
+        normalized = normalize_enriched_native_output(capability_id, result.stdout)
         ok, reason = revalidate_bound_authorization(scan, authorization)
         if not ok:
             return _fail(scan, execution, reason, authorization_snapshot(authorization))
