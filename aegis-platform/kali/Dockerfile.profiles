@@ -16,17 +16,9 @@ FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
 FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy
 FROM trufflesecurity/trufflehog:3.97.1 AS trufflehog
 
-FROM debian:bookworm-slim AS feroxbuster
-ARG FEROXBUSTER_VERSION=2.13.1
-ARG FEROXBUSTER_SHA256=7985c00e6803b0f25d5e9139f7472279f3f4d891429627a5cedc629e53992d80
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL --retry 4 --retry-all-errors \
-      "https://github.com/epi052/feroxbuster/releases/download/v${FEROXBUSTER_VERSION}/x86_64-linux-feroxbuster.tar.gz" \
-      -o /tmp/feroxbuster.tar.gz \
-    && printf '%s  %s\n' "$FEROXBUSTER_SHA256" /tmp/feroxbuster.tar.gz | sha256sum -c - \
-    && tar -xzf /tmp/feroxbuster.tar.gz -C /usr/local/bin feroxbuster \
-    && /usr/local/bin/feroxbuster --version
+FROM rust:1.90-bookworm AS feroxbuster
+RUN cargo install --locked --version 2.13.1 feroxbuster --root /opt/feroxbuster \
+    && /opt/feroxbuster/bin/feroxbuster --version
 
 FROM alpine/git:2.47.2 AS nikto-source
 ARG NIKTO_COMMIT=69681e2e4213c15b85a90c53b2169ecb2a88fb01
@@ -103,7 +95,7 @@ RUN apt-get update \
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
 COPY --from=go-tools /go/bin/httpx /usr/local/bin/httpx
 COPY --from=go-tools /go/bin/katana /usr/local/bin/katana
-COPY --from=feroxbuster /usr/local/bin/feroxbuster /usr/local/bin/feroxbuster
+COPY --from=feroxbuster /opt/feroxbuster/bin/feroxbuster /usr/local/bin/feroxbuster
 COPY --from=nikto-source /opt/nikto /opt/nikto
 COPY --from=nuclei-templates /opt/nuclei-templates /opt/nuclei-templates
 COPY aegis-platform/backend/resources/wordlists/web-common.txt /opt/aegis-wordlists/web-common.txt
