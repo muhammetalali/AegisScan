@@ -59,6 +59,7 @@ class WSTGProjectCoverage(ContractModel):
     source: Literal['postgresql']
     project_id: str
     project_name: str
+    scope_scan_id: str | None
     claim_policy: Literal['observation-only']
     completion_claim_allowed: Literal[False]
     finding_state_authority: Literal['governed-finding-confirmation']
