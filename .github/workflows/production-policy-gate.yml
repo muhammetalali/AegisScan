@@ -78,6 +78,15 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.backup.yml config --format json > /tmp/aegis-production-compose.json
       - name: Enforce production policy
         run: python aegis-platform/scripts/production_policy_gate.py /tmp/aegis-production-compose.json
+      - name: Prove Kali Recon immutable image binding in resolved production model
+        working-directory: aegis-platform
+        env:
+          AEGIS_RECON_PROVIDER: kali
+          AEGIS_KALI_RECON_IMAGE: ghcr.io/aegisscan/kali-recon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.backup.yml --profile kali-recon config --format json > /tmp/aegis-production-kali-compose.json
+          python scripts/production_policy_gate.py /tmp/aegis-production-kali-compose.json
       - name: Unit-test fail-closed policy decisions
         run: python -m pytest -q tests/test_production_policy_gate.py
       - name: Build production execution-plane images
