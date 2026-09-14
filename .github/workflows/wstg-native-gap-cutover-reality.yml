@@ -1,0 +1,85 @@
+name: WSTG Native Gap Cutover Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/wstg_capability_mapping.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_catalog.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_execution_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_observation_lineage.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_capability_mapping.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_applicability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_observation_lineage.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py'
+      - 'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py'
+      - 'aegis-platform/backend/resources/methodologies/wstg/v4.2/**'
+      - 'aegis-platform/backend/scripts/wstg_native_gap_cutover_reality.py'
+      - 'docs/WSTG_NATIVE_GAP_CUTOVER_GATE.md'
+      - '.github/workflows/wstg-native-gap-cutover-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/wstg_capability_mapping.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_catalog.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_execution_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_observation_lineage.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_capability_mapping.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_applicability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_observation_lineage.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py'
+      - 'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py'
+      - 'aegis-platform/backend/resources/methodologies/wstg/v4.2/**'
+      - 'aegis-platform/backend/scripts/wstg_native_gap_cutover_reality.py'
+      - 'docs/WSTG_NATIVE_GAP_CUTOVER_GATE.md'
+      - '.github/workflows/wstg-native-gap-cutover-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wstg-native-gap-cutover-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-gap-cutover-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove checkout is exact head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Install backend contract dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Run native-gap integration contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q
+          aegis-platform/backend/fastapi_app/services/test_wstg_capability_mapping.py
+          aegis-platform/backend/fastapi_app/services/test_wstg_applicability_planner.py
+          aegis-platform/backend/fastapi_app/services/test_wstg_observation_lineage.py
+          aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py
+          aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py
+      - name: Capture exact-head native-gap cutover evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          PYTHONPATH=aegis-platform/backend \
+            python aegis-platform/backend/scripts/wstg_native_gap_cutover_reality.py \
+            | tee artifacts/wstg-native-gap-cutover-reality.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wstg-native-gap-cutover-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/
+          if-no-files-found: error
