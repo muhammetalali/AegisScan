@@ -19,6 +19,13 @@ type EvidenceItem = {
   metadata: Record<string, unknown>
 }
 
+const wstgLineageCount = (metadata: Record<string, unknown>) => {
+  const lineage = metadata?.wstg_lineage
+  if (!lineage || typeof lineage !== 'object' || Array.isArray(lineage)) return 0
+  const tests = (lineage as { tests?: unknown }).tests
+  return Array.isArray(tests) ? tests.length : 0
+}
+
 export const Evidence = () => {
   const t = useLanguageStore(s => s.t)
   const [q, setQ] = useState('')
@@ -67,8 +74,8 @@ export const Evidence = () => {
         <section className="enterprise-card overflow-hidden rounded-2xl">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1120px] text-sm">
-              <thead><tr className="border-b bg-muted/20 text-xs text-muted-foreground"><th className="px-4 py-3 text-start">{t('Source')}</th><th className="px-4 py-3 text-start">{t('Type')}</th><th className="px-4 py-3 text-start">{t('Target')}</th><th className="px-4 py-3 text-start">{t('Finding')}</th><th className="px-4 py-3 text-start">{t('Scan')}</th><th className="px-4 py-3 text-start">SHA-256</th><th className="px-4 py-3 text-start">{t('Collected')}</th><th className="px-4 py-3 text-start">{t('Metadata')}</th></tr></thead>
-              <tbody>{items.length === 0 ? <tr><td colSpan={8} className="px-6 py-16 text-center"><FileText className="mx-auto h-7 w-7 text-muted-foreground"/><div className="mt-3 font-medium">{t('No evidence available')}</div></td></tr> : items.map(item => <tr key={item.id} className="border-b last:border-0 hover:bg-muted/20"><td className="px-4 py-3 font-semibold">{item.source || t('Not reported')}</td><td className="px-4 py-3"><span className="rounded-full border bg-muted/30 px-2 py-1 text-[11px]">{item.evidence_type || t('Not reported')}</span></td><td className="px-4 py-3 max-w-[220px] truncate font-mono text-xs">{item.target || t('Not reported')}</td><td className="px-4 py-3 font-mono text-[11px]">{item.finding_id || t('Not linked')}</td><td className="px-4 py-3 font-mono text-[11px]">{item.scan_id || t('Not linked')}</td><td className="px-4 py-3 font-mono text-[11px] max-w-[260px] truncate" title={item.sha256}>{item.sha256}</td><td className="px-4 py-3 text-xs text-muted-foreground">{new Date(item.collected_at).toLocaleString()}</td><td className="px-4 py-3 text-xs text-muted-foreground">{Object.keys(item.metadata || {}).length} {t('fields')}</td></tr>)}</tbody>
+              <thead><tr className="border-b bg-muted/20 text-xs text-muted-foreground"><th className="px-4 py-3 text-start">{t('Source')}</th><th className="px-4 py-3 text-start">{t('Type')}</th><th className="px-4 py-3 text-start">{t('Target')}</th><th className="px-4 py-3 text-start">{t('Finding')}</th><th className="px-4 py-3 text-start">{t('Scan')}</th><th className="px-4 py-3 text-start">SHA-256</th><th className="px-4 py-3 text-start">{t('Collected')}</th><th className="px-4 py-3 text-start">WSTG</th><th className="px-4 py-3 text-start">{t('Metadata')}</th></tr></thead>
+              <tbody>{items.length === 0 ? <tr><td colSpan={9} className="px-6 py-16 text-center"><FileText className="mx-auto h-7 w-7 text-muted-foreground"/><div className="mt-3 font-medium">{t('No evidence available')}</div></td></tr> : items.map(item => <tr key={item.id} className="border-b last:border-0 hover:bg-muted/20"><td className="px-4 py-3 font-semibold">{item.source || t('Not reported')}</td><td className="px-4 py-3"><span className="rounded-full border bg-muted/30 px-2 py-1 text-[11px]">{item.evidence_type || t('Not reported')}</span></td><td className="px-4 py-3 max-w-[220px] truncate font-mono text-xs">{item.target || t('Not reported')}</td><td className="px-4 py-3 font-mono text-[11px]">{item.finding_id || t('Not linked')}</td><td className="px-4 py-3 font-mono text-[11px]">{item.scan_id || t('Not linked')}</td><td className="px-4 py-3 font-mono text-[11px] max-w-[260px] truncate" title={item.sha256}>{item.sha256}</td><td className="px-4 py-3 text-xs text-muted-foreground">{new Date(item.collected_at).toLocaleString()}</td><td className="px-4 py-3 text-xs">{wstgLineageCount(item.metadata||{}) ? <span className="rounded-full border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary">{wstgLineageCount(item.metadata||{})} {t('tests')} · {t('observation only')}</span> : <span className="text-muted-foreground">{t('Not linked')}</span>}</td><td className="px-4 py-3 text-xs text-muted-foreground">{Object.keys(item.metadata || {}).length} {t('fields')}</td></tr>)}</tbody>
             </table>
           </div>
         </section>
