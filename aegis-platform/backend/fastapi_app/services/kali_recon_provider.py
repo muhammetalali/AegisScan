@@ -14,12 +14,16 @@ from typing import Any
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _AUTH_TOKEN_RE = re.compile(r'^[a-f0-9]{64}$')
-_RECON_CAPABILITIES = frozenset({
-    'recon.amass',
-    'recon.subfinder',
-    'recon.dnsenum',
-    'recon.fierce',
-})
+_SHA256_RE = re.compile(r'^sha256:[a-f0-9]{64}$')
+_COMMIT_RE = re.compile(r'^[a-f0-9]{40}$')
+_RUNTIME_TEXT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._+:/@-]{0,254}$')
+_RECON_TOOL_BY_CAPABILITY = {
+    'recon.amass': 'amass',
+    'recon.subfinder': 'subfinder',
+    'recon.dnsenum': 'dnsenum',
+    'recon.fierce': 'fierce',
+}
+_RECON_CAPABILITIES = frozenset(_RECON_TOOL_BY_CAPABILITY)
 
 
 class KaliReconProviderError(RuntimeError):
@@ -71,6 +75,92 @@ def _base_url() -> str:
     if port < 1024 or port > 65535:
         raise KaliReconProviderError('AEGIS_KALI_RECON_URL port must be between 1024 and 65535')
     return f'http://127.0.0.1:{port}'
+
+
+def _bounded_runtime_text(name: str, value: Any) -> str:
+    if not isinstance(value, str) or not _RUNTIME_TEXT_RE.fullmatch(value):
+        raise KaliReconProviderError(f'Kali recon provider runtime {name} is missing or invalid')
+    return value
+
+
+def _required_expected(name: str, validator: re.Pattern[str] | None = None) -> str:
+    value = os.getenv(name, '').strip()
+    if not value:
+        raise KaliReconProviderError(f'{name} is required when AEGIS_RECON_PROVIDER=kali')
+    if validator is not None and not validator.fullmatch(value):
+        raise KaliReconProviderError(f'{name} is invalid')
+    if validator is None and not _RUNTIME_TEXT_RE.fullmatch(value):
+        raise KaliReconProviderError(f'{name} is invalid')
+    return value
+
+
+def _trusted_expected_provenance() -> dict[str, str]:
+    return {
+        'runner_version': _required_expected('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION'),
+        'build_commit': _required_expected('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT', _COMMIT_RE),
+        'base_image_digest': _required_expected('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST', _SHA256_RE),
+        'tool_manifest_digest': _required_expected('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST', _SHA256_RE),
+        'image_digest': _required_expected('AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST', _SHA256_RE),
+        'runtime_manifest_digest': _required_expected(
+            'AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST', _SHA256_RE
+        ),
+    }
+
+
+def _validate_runtime_provenance(
+    *,
+    capability_id: str,
+    top_level_tool: Any,
+    runtime: Any,
+    expected: dict[str, str],
+) -> dict[str, Any]:
+    if not isinstance(runtime, dict):
+        raise KaliReconProviderError('Kali recon provider provenance is missing or invalid')
+    expected_tool = _RECON_TOOL_BY_CAPABILITY[capability_id]
+    if top_level_tool != expected_tool:
+        raise KaliReconProviderError('Kali recon provider tool binding mismatch')
+    if runtime.get('provider') != 'aegis-kali-recon':
+        raise KaliReconProviderError('Kali recon provider provenance provider is invalid')
+    if runtime.get('profile') != 'recon':
+        raise KaliReconProviderError('Kali recon provider provenance profile mismatch')
+    if runtime.get('tool') != expected_tool:
+        raise KaliReconProviderError('Kali recon provider provenance tool mismatch')
+
+    actual = {
+        'runner_version': _bounded_runtime_text('runner_version', runtime.get('runner_version')),
+        'build_commit': runtime.get('build_commit'),
+        'base_image_digest': runtime.get('base_image_digest'),
+        'tool_manifest_digest': runtime.get('tool_manifest_digest'),
+        'runtime_manifest_digest': runtime.get('runtime_manifest_digest'),
+    }
+    _bounded_runtime_text('tool_version', runtime.get('tool_version'))
+    _bounded_runtime_text('tool_source', runtime.get('tool_source'))
+
+    if not isinstance(actual['build_commit'], str) or not _COMMIT_RE.fullmatch(actual['build_commit']):
+        raise KaliReconProviderError('Kali recon provider runtime build_commit is missing or invalid')
+    for field in ('base_image_digest', 'tool_manifest_digest', 'runtime_manifest_digest'):
+        value = actual[field]
+        if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+            raise KaliReconProviderError(f'Kali recon provider runtime {field} is missing or invalid')
+
+    for field in (
+        'runner_version',
+        'build_commit',
+        'base_image_digest',
+        'tool_manifest_digest',
+        'runtime_manifest_digest',
+    ):
+        if actual[field] != expected[field]:
+            raise KaliReconProviderError(f'Kali recon provider pinned {field} mismatch')
+
+    trusted_runtime = dict(runtime)
+    # The execution image identity is owned by deployment/Control Plane authority.
+    # The provider cannot prove its own container image digest without a privileged
+    # runtime API, so never accept a provider-supplied value as authority.
+    trusted_runtime['image_digest'] = expected['image_digest']
+    trusted_runtime['runtime_manifest_digest'] = expected['runtime_manifest_digest']
+    trusted_runtime['provenance_authority'] = 'control-plane-deployment-pins'
+    return trusted_runtime
 
 
 def _request_json(method: str, path: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
@@ -151,6 +241,12 @@ def execute_kali_recon(
     ):
         if not value or len(value) > 255:
             raise KaliReconProviderError(f'{name} is required for Kali recon execution')
+
+    # Resolve the complete Control Plane trust anchor before any request leaves
+    # the worker. Kali mode is therefore fail-closed if deployment provenance is
+    # incomplete or malformed.
+    expected_provenance = _trusted_expected_provenance()
+
     control_token = secrets.token_hex(32)
     request_payload = {
         'schema_version': 1,
@@ -231,8 +327,12 @@ def execute_kali_recon(
             raise KaliReconProviderError('Kali recon provider response binding mismatch')
         if result.get('target') != target:
             raise KaliReconProviderError('Kali recon provider target binding mismatch')
-        if not isinstance(result.get('runtime'), dict) or result['runtime'].get('provider') != 'aegis-kali-recon':
-            raise KaliReconProviderError('Kali recon provider provenance is missing or invalid')
+        result['runtime'] = _validate_runtime_provenance(
+            capability_id=capability_id,
+            top_level_tool=result.get('tool'),
+            runtime=result.get('runtime'),
+            expected=expected_provenance,
+        )
         if not isinstance(result.get('exit_code'), int):
             raise KaliReconProviderError('Kali recon provider exit_code is invalid')
         if not isinstance(result.get('stdout'), str) or not isinstance(result.get('stderr'), str):

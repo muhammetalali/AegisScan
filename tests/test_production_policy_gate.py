@@ -10,6 +10,9 @@ MODULE = module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
 
+_IMAGE_DIGEST = 'sha256:' + ('a' * 64)
+_OTHER_IMAGE_DIGEST = 'sha256:' + ('b' * 64)
+
 
 def hardened_service(**extra):
     return {'read_only': True, 'security_opt': ['no-new-privileges:true'], 'cap_drop': ['ALL'], **extra}
@@ -79,8 +82,49 @@ def valid_model():
     }}
 
 
+def kali_model(*, image=f'ghcr.io/aegisscan/kali-recon@{_IMAGE_DIGEST}', expected=_IMAGE_DIGEST):
+    model = valid_model()
+    model['services']['scanner_worker']['environment'].update({
+        'AEGIS_RECON_PROVIDER': 'kali',
+        'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST': expected,
+    })
+    model['services']['kali_recon'] = {'image': image}
+    return model
+
+
 def test_accepts_hardened_resolved_production_model():
     assert MODULE.validate(valid_model()) == []
+
+
+def test_accepts_kali_recon_digest_qualified_image_bound_to_expected_digest():
+    assert MODULE.validate(kali_model()) == []
+    assert MODULE.validate(kali_model(image=_IMAGE_DIGEST)) == []
+
+
+def test_legacy_mode_does_not_require_kali_recon_image_binding():
+    model = valid_model()
+    model['services']['kali_recon'] = {'image': 'aegis-kali:recon'}
+    assert MODULE.validate(model) == []
+
+
+def test_rejects_kali_recon_mutable_or_missing_image_selection():
+    for image in ('', 'aegis-kali:recon', 'ghcr.io/aegisscan/kali-recon:latest'):
+        failures = MODULE.validate(kali_model(image=image))
+        assert any('immutable' in item for item in failures), (image, failures)
+
+    model = kali_model()
+    del model['services']['kali_recon']
+    failures = MODULE.validate(model)
+    assert any('requires the kali_recon production service' in item for item in failures)
+
+
+def test_rejects_kali_recon_missing_malformed_or_mismatched_expected_digest():
+    for expected in ('', 'sha256:bad', _OTHER_IMAGE_DIGEST):
+        failures = MODULE.validate(kali_model(expected=expected))
+        if expected == _OTHER_IMAGE_DIGEST:
+            assert any('does not match' in item for item in failures), failures
+        else:
+            assert any('requires a valid' in item for item in failures), failures
 
 
 def test_rejects_internal_ports_bind_mounts_fixture_scope_and_ci_target():
