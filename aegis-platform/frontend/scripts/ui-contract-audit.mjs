@@ -17,7 +17,7 @@ for (const match of source.matchAll(/import\('\.\/([^']+)'\)/g)) {
   if (size < 150) failures.push(`Suspiciously tiny routed module (${size} bytes): ./src/${relative}`)
 }
 const routePaths = [...source.matchAll(/<Route path="([^"]+)"/g)].map((m) => m[1])
-for (const required of ['/dashboard','/scan','/validations/new','/vulnerabilities','/compliance','/digital-twin','/assurance/graph','/reports','/investigation']) if (!routePaths.includes(required)) failures.push(`Required UI route missing: ${required}`)
+for (const required of ['/dashboard','/scan','/validations/new','/vulnerabilities','/compliance','/digital-twin','/assurance/graph','/reports','/investigation','/wstg']) if (!routePaths.includes(required)) failures.push(`Required UI route missing: ${required}`)
 if (!routePaths.includes('/')) failures.push('Protected workspace has no canonical root redirect')
 function walk(dir) { for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { if (['node_modules','dist','.git'].includes(entry.name)) continue; const full=path.join(dir,entry.name); if(entry.isDirectory()) walk(full); else if(/\.(ts|tsx)$/.test(entry.name)) scannedSourceFiles.push(full) } }
 walk(path.join(root,'src'))

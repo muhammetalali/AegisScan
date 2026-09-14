@@ -33,6 +33,7 @@ EXPECTED_ROUTES = {
     '/api/v1/digital-twin/projects/{project_id}/twins',
     '/api/v1/digital-twin/twins/{twin_id}/scenarios',
     '/api/v1/digital-twin/scenarios/{scenario_id}/simulate',
+    '/api/v1/wstg/projects/{project_id}/coverage',
 }
 
 

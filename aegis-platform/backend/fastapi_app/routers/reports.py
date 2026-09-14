@@ -29,10 +29,11 @@ from django_project.users.models import Permission
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.models import ReportRecipientDelivery, ReportSchedule, ReportScheduleExecution
 from enterprise.services import ensure_project_tenant, schedule_task
+from ..services.wstg_reporting import build_wstg_project_coverage
 
 router = APIRouter()
 SUPPORTED_FORMATS = {'json', 'csv', 'pdf'}
-SUPPORTED_REPORT_TYPES = {'full', 'findings', 'evidence', 'scan'}
+SUPPORTED_REPORT_TYPES = {'full', 'findings', 'evidence', 'scan', 'wstg'}
 
 class ReportCreate(BaseModel):
     project_id: str
@@ -285,10 +286,16 @@ def _build_payload(project_id: str, scan_id: Optional[str], report_type: str):
         'scan': {'id': str(scan.id), 'name': scan.name, 'status': scan.status, 'findings_count': scan.findings_count} if scan else None,
         'findings': [{'id': str(f.id), 'title': f.title, 'severity': f.severity, 'status': f.status, 'confidence': f.confidence, 'risk_score': f.risk_score, 'source_engine': f.source_engine, 'scan_id': str(f.scan_id), 'asset_id': str(f.asset_id) if f.asset_id else None} for f in findings.order_by('-risk_score', '-created_at')],
         'evidence': [{'id': str(e.id), 'finding_id': str(e.finding_id) if e.finding_id else None, 'scan_id': str(e.scan_id) if e.scan_id else None, 'source': e.source, 'evidence_type': e.evidence_type, 'sha256': e.sha256, 'collected_at': e.collected_at.astimezone(timezone.utc).isoformat()} for e in evidence.order_by('-collected_at')],
+        'wstg_coverage': build_wstg_project_coverage(project, scan_id=scan_id),
     }
-    if report_type == 'findings': payload['evidence'] = []
-    elif report_type == 'evidence': payload['findings'] = []
-    elif report_type == 'scan' and scan: payload = {'project': payload['project'], 'scan': payload['scan']}
+    if report_type == 'findings':
+        payload['evidence'] = []
+    elif report_type == 'evidence':
+        payload['findings'] = []
+    elif report_type == 'scan' and scan:
+        payload = {'project': payload['project'], 'scan': payload['scan']}
+    elif report_type == 'wstg':
+        payload = {'project': payload['project'], 'wstg_coverage': payload['wstg_coverage']}
     return payload
 
 def _make_csv(payload: dict) -> bytes:
@@ -297,6 +304,16 @@ def _make_csv(payload: dict) -> bytes:
     for item in payload.get('findings', []): writer.writerow(['finding', item['id'], item['title'], item['severity'], item['status'], item['risk_score'], item['source_engine'], item['scan_id'], item['asset_id']])
     writer.writerow([]); writer.writerow(['kind', 'id', 'finding_id', 'source', 'evidence_type', 'sha256', 'collected_at'])
     for item in payload.get('evidence', []): writer.writerow(['evidence', item['id'], item['finding_id'], item['source'], item['evidence_type'], item['sha256'], item['collected_at']])
+    coverage = payload.get('wstg_coverage')
+    if isinstance(coverage, dict):
+        writer.writerow([])
+        writer.writerow(['kind', 'wstg_id', 'category', 'classification', 'state', 'has_observation', 'evidence_records', 'finding_records', 'capability_ids', 'latest_observed_at'])
+        for item in coverage.get('tests', []):
+            writer.writerow([
+                'wstg', item['wstg_id'], item['category'], item['classification'], item['state'],
+                item['has_observation'], item['evidence_records'], item['finding_records'],
+                '|'.join(item.get('capability_ids', [])), item.get('latest_observed_at') or '',
+            ])
     return output.getvalue().encode('utf-8')
 
 def _make_pdf(payload: dict, title: str) -> bytes:
@@ -309,6 +326,21 @@ def _make_pdf(payload: dict, title: str) -> bytes:
     lines = [f"Project: {payload['project']['name']} ({payload['project']['id']})", f"Scan: {payload.get('scan', {}).get('name', 'n/a') if payload.get('scan') else 'n/a'}", f"Findings: {len(payload.get('findings', []))}", f"Evidence records: {len(payload.get('evidence', []))}", '']
     lines.extend(f"[{f['severity']}] {f['title']} | {f['status']} | risk={f['risk_score']}" for f in payload.get('findings', [])[:200])
     lines.extend(f"Evidence {e['id']} | {e['source']} | {e['evidence_type']} | sha256={e['sha256']}" for e in payload.get('evidence', [])[:200])
+    coverage = payload.get('wstg_coverage')
+    if isinstance(coverage, dict):
+        summary = coverage.get('summary', {})
+        lines.extend([
+            '',
+            'OWASP WSTG v4.2 observation coverage',
+            f"Observed tests: {summary.get('observed_tests', 0)}/{summary.get('total_tests', 97)}",
+            f"Observation coverage: {summary.get('observation_coverage_percent', 0)}%",
+            f"Rejected lineage records: {summary.get('rejected_lineage_records', 0)}",
+            'Claim policy: observation-only; completion_claim_allowed=false',
+        ])
+        lines.extend(
+            f"{row['wstg_id']} | {row['state']} | evidence={row['evidence_records']} | findings={row['finding_records']}"
+            for row in coverage.get('tests', [])[:97]
+        )
     for line in lines:
         if y < 45: pdf.showPage(); y = height - 45; pdf.setFont('Helvetica', 9)
         pdf.drawString(40, y, line[:150]); y -= 13
@@ -320,11 +352,11 @@ def _create_report(body: ReportCreate, user_id: str, payload: dict):
     if body.report_type not in SUPPORTED_REPORT_TYPES: raise HTTPException(status_code=400, detail=f'Unsupported report type: {body.report_type}')
     report = DataExport.objects.create(user_id=user_id, name=body.title, format=body.format, status=DataExport.Status.PROCESSING,
                                        resource_type='project_report', filters={'project_id': body.project_id, 'scan_id': body.scan_id, 'report_type': body.report_type, 'description': body.description, 'template_id': body.template_id},
-                                       fields=['project', 'scan', 'findings', 'evidence'], expires_at=django_timezone.now() + timedelta(days=django_settings.REPORT_RETENTION_DAYS))
+                                       fields=['project', 'scan', 'findings', 'evidence', 'wstg_coverage'], expires_at=django_timezone.now() + timedelta(days=django_settings.REPORT_RETENTION_DAYS))
     if body.format == 'json': content, ext = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), 'json'
     elif body.format == 'csv': content, ext = _make_csv(payload), 'csv'
     else: content, ext = _make_pdf(payload, body.title), 'pdf'
-    report.file.save(f'{report.id}.{ext}', ContentFile(content), save=False); report.file_size = len(content); report.artifact_sha256 = hashlib.sha256(content).hexdigest(); report.record_count = len(payload.get('findings', [])) + len(payload.get('evidence', [])); report.status = DataExport.Status.COMPLETED; report.completed_at = django_timezone.now(); report.save(update_fields=['file', 'file_size', 'artifact_sha256', 'record_count', 'status', 'completed_at']); return report
+    report.file.save(f'{report.id}.{ext}', ContentFile(content), save=False); report.file_size = len(content); report.artifact_sha256 = hashlib.sha256(content).hexdigest(); report.record_count = len(payload.get('findings', [])) + len(payload.get('evidence', [])) + len(payload.get('wstg_coverage', {}).get('tests', [])); report.status = DataExport.Status.COMPLETED; report.completed_at = django_timezone.now(); report.save(update_fields=['file', 'file_size', 'artifact_sha256', 'record_count', 'status', 'completed_at']); return report
 
 def _verify_report_artifact(report: DataExport) -> None:
     if not report.artifact_sha256:
@@ -406,6 +438,7 @@ async def list_templates(report_type: Optional[str] = None, current_user=Depends
         {'id': 'findings', 'name': 'Findings report', 'report_type': 'findings', 'formats': sorted(SUPPORTED_FORMATS)},
         {'id': 'evidence', 'name': 'Evidence report', 'report_type': 'evidence', 'formats': sorted(SUPPORTED_FORMATS)},
         {'id': 'scan', 'name': 'Scan summary report', 'report_type': 'scan', 'formats': sorted(SUPPORTED_FORMATS)},
+        {'id': 'wstg', 'name': 'OWASP WSTG v4.2 observation coverage', 'report_type': 'wstg', 'formats': sorted(SUPPORTED_FORMATS)},
     ]
     return [item for item in templates if not report_type or item['report_type'] == report_type]
 
