@@ -31,7 +31,7 @@ A M3 pass never requires byte-identical raw stdout, execution IDs, timestamps, i
 - explicit mismatch classes;
 - one fail-closed `semantic_equivalent` decision.
 
-The comparator canonicalizes dictionary/list ordering recursively but does not delete observation fields. Any normalized security-semantic drift therefore changes the observation digest. Finding projection drift is checked independently.
+The comparator canonicalizes dictionary-key ordering and the order of the outer observation/Finding collections only. Nested lists are preserved because sequence order may carry security meaning. Any nested sequence drift therefore fails closed unless a future capability contract explicitly normalizes that field before parity comparison. Finding projection drift is checked independently.
 
 The report also exposes `finding_projection_applicable`. Recon discovery capabilities such as `recon.fierce` intentionally have no vulnerability Finding projection in the current production registry, so their Finding count is expected to be `0/0` and is not presented as Finding proof. Capabilities with an approved projection (for example `web.nikto`) must additionally pass Finding projection parity.
 
