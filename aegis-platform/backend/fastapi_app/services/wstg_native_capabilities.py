@@ -144,15 +144,20 @@ def _method_policy(target: str) -> dict[str, Any]:
     }
 
 
-def _hpp_url(target: str, values: tuple[str, str]) -> str:
+def _request_url(target: str) -> str:
     parsed = urlsplit(target)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', parsed.query, ''))
+
+
+def _hpp_url(target: str, values: tuple[str, str]) -> str:
+    parsed = urlsplit(_request_url(target))
     query = parse_qsl(parsed.query, keep_blank_values=True)
     query.extend((('aegis_hpp_probe', values[0]), ('aegis_hpp_probe', values[1])))
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', urlencode(query, doseq=True), ''))
 
 
 def _duplicate_parameter_semantics(target: str) -> dict[str, Any]:
-    baseline = request_pinned('GET', target, timeout=10, max_body_bytes=16384)
+    baseline = request_pinned('GET', _request_url(target), timeout=10, max_body_bytes=16384)
     first = request_pinned('GET', _hpp_url(target, ('1', '2')), timeout=10, max_body_bytes=16384)
     reverse = request_pinned('GET', _hpp_url(target, ('2', '1')), timeout=10, max_body_bytes=16384)
     return {
