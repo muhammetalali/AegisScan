@@ -149,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm             --network "${AEGIS_M3_NETWORK}" --dns "${AEGIS_M3_DNS_IP}"             --entrypoint python aegis-m3:legacy - <<'PY'
+          docker run --rm -i             --network "${AEGIS_M3_NETWORK}" --dns "${AEGIS_M3_DNS_IP}"             --entrypoint python aegis-m3:legacy - <<'PY'
           import socket
           expected={'172.28.0.10'}
           actual={item[4][0] for item in socket.getaddrinfo('parity.test', None, type=socket.SOCK_STREAM)}
@@ -162,7 +162,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           chmod 0777 artifacts
-          docker run --rm             --network "${AEGIS_M3_NETWORK}" --dns "${AEGIS_M3_DNS_IP}"             -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M3_TARGET},172.28.0.0/16"             -e AEGIS_M3_TARGET -e AEGIS_M3_CAPABILITY             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-m3:legacy - <<'PY'
+          docker run --rm -i             --network "${AEGIS_M3_NETWORK}" --dns "${AEGIS_M3_DNS_IP}"             -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M3_TARGET},172.28.0.0/16"             -e AEGIS_M3_TARGET -e AEGIS_M3_CAPABILITY             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-m3:legacy - <<'PY'
           import json, os, subprocess
           from fastapi_app.services.native_tool_runtime import run_native_tool
 
