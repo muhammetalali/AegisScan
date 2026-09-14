@@ -7,7 +7,7 @@ import json
 from typing import Any, Literal
 
 from .capability_registry import get_capability
-from .wstg_capability_mapping import WSTGCapabilityMapping
+from .wstg_capability_mapping import EXPECTED_GAPS, WSTGCapabilityMapping
 
 
 EvidenceRole = Literal[
@@ -30,7 +30,7 @@ _CLASSIFICATION_SEMANTICS: dict[str, tuple[EvidenceRole, MethodologyState]] = {
     'AUTO_EXISTING': ('direct_observation', 'observed'),
     'ASSISTED_EXISTING': ('supporting_observation', 'observed'),
     'MANUAL_GOVERNED': ('supporting_context', 'manual_required'),
-    'GAP_NATIVE_SMALL': ('supporting_context', 'blocked_native_gap'),
+    'GAP_NATIVE_SMALL': ('supporting_observation', 'observed'),
     'CONDITIONAL_NA': ('conditional_context', 'inconclusive'),
 }
 
@@ -61,6 +61,8 @@ def _reverse_registry_index() -> dict[str, tuple[WSTGObservationLineageItem, ...
         evidence_role, methodology_state = semantics
         for binding in requirement.provider_bindings:
             if binding.kind != 'registry_capability':
+                continue
+            if test.classification == 'GAP_NATIVE_SMALL' and binding.ref != EXPECTED_GAPS.get(test.id):
                 continue
             rows.setdefault(binding.ref, []).append(WSTGObservationLineageItem(
                 wstg_id=test.id,
