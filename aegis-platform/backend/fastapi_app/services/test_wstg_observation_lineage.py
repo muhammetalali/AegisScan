@@ -55,6 +55,28 @@ class WSTGObservationLineageTests(unittest.TestCase):
         self.assertEqual(conditional['methodology_state'], 'inconclusive')
         self.assertFalse(conditional['completion_claim_allowed'])
 
+    def test_registered_planned_native_gaps_emit_blocked_lineage_without_cutover(self):
+        expected = {
+            'web.http-method-policy': 'WSTG-v42-CONF-06',
+            'web.duplicate-parameter-semantics': 'WSTG-v42-INPV-04',
+            'web.ssrf-canary-validation': 'WSTG-v42-INPV-19',
+            'tls.posture': 'WSTG-v42-CRYP-01',
+        }
+        for capability_id, wstg_id in expected.items():
+            with self.subTest(capability_id=capability_id):
+                payload = wstg_observation_lineage(capability_id)
+                rows = {item['wstg_id']: item for item in payload['tests']}
+                self.assertIn(wstg_id, rows)
+                row = rows[wstg_id]
+                self.assertEqual(row['classification'], 'GAP_NATIVE_SMALL')
+                self.assertEqual(row['evidence_role'], 'supporting_context')
+                self.assertEqual(row['methodology_state'], 'blocked_native_gap')
+                self.assertFalse(row['completion_claim_allowed'])
+                self.assertFalse(payload['completion_claim_allowed'])
+                decorated = attach_wstg_evidence_metadata({'capability_id': capability_id}, capability_id)
+                self.assertIn('wstg_lineage', decorated)
+                self.assertFalse(decorated['wstg_lineage']['completion_claim_allowed'])
+
     def test_decorators_preserve_business_data_and_replace_reserved_lineage(self):
         metadata = {'target': 'https://example.test', 'exit_code': 0}
         raw_data = {'rule_id': 'source-rule', '_aegisscan_wstg': {'attacker_controlled': True}}
