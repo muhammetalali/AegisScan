@@ -276,7 +276,7 @@ jobs:
         working-directory: aegis-platform
         run: |
           set -euo pipefail
-          mkdir -p ci-artifacts
+          install -d -m 0777 ci-artifacts
           docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm --no-deps \
             -v "$PWD/e2e:/e2e:ro" \
             -v "$PWD/ci-artifacts:/ci-artifacts" \
