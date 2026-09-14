@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 from .native_output_normalizer import normalize_native_output as _base_normalize_native_output
+from .wstg_native_capabilities import is_wstg_internal_capability, normalize_wstg_internal_output
 
 _ENRICHMENT_SCHEMA = 'aegis.js-parameter-enrichment.v1'
 _ALLOWED_URL_SCHEMES = {'http', 'https', 'ws', 'wss'}
@@ -263,6 +264,8 @@ def _enrich_browser_observations(base: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_enriched_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
+    if is_wstg_internal_capability(capability_id):
+        return normalize_wstg_internal_output(capability_id, stdout)
     if capability_id == 'web.httpx':
         observations = _normalize_httpx(stdout)
         summary = _parameter_surface(observations, source_family='httpx')
