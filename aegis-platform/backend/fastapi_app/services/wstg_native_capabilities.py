@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import ipaddress
 import json
@@ -8,17 +9,78 @@ import ssl
 from typing import Any, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from . import native_output_normalizer, native_tool_runtime
-from .native_tool_runtime import NativeToolSpec
+from .native_tool_runtime import NativeExecutionCancelled
 from .pinned_http import PinnedHTTPResponse, pinned_http_operation, request_pinned
 from .scanner_adapters import ScanResult, validate_authorized_web_target
 
-_INTERNAL_IDS = {
-    'web.http-method-policy',
-    'web.duplicate-parameter-semantics',
-    'web.ssrf-canary-validation',
-    'tls.posture',
+
+@dataclass(frozen=True)
+class WSTGInternalSpec:
+    capability_id: str
+    tool: str
+    category: str
+    description: str
+    scan_type: str
+    asset_types: tuple[str, ...]
+    risk: str
+    timeout: int
+    credential_mode: str = 'none'
+    credential_kinds: tuple[str, ...] = ()
+    credential_required: bool = False
+
+    @property
+    def allowed_options(self) -> tuple[str, ...]:
+        return ()
+
+
+WSTG_INTERNAL_SPECS: dict[str, WSTGInternalSpec] = {
+    'web.http-method-policy': WSTGInternalSpec(
+        capability_id='web.http-method-policy',
+        tool='aegis-internal-wstg',
+        category='web-protocol-security',
+        description='Bounded HTTP method-policy observation using GET, HEAD and OPTIONS only.',
+        scan_type='url',
+        asset_types=('website', 'api_endpoint'),
+        risk='active-low',
+        timeout=90,
+    ),
+    'web.duplicate-parameter-semantics': WSTGInternalSpec(
+        capability_id='web.duplicate-parameter-semantics',
+        tool='aegis-internal-wstg',
+        category='web-input-validation',
+        description=(
+            'Deterministic duplicate-parameter response-semantics observation using a synthetic inert query key.'
+        ),
+        scan_type='url',
+        asset_types=('website', 'api_endpoint'),
+        risk='active-low',
+        timeout=90,
+    ),
+    'web.ssrf-canary-validation': WSTGInternalSpec(
+        capability_id='web.ssrf-canary-validation',
+        tool='aegis-internal-wstg',
+        category='web-input-validation',
+        description=(
+            'Governed SSRF validation gate that abstains unless a first-class Aegis OAST/canary contract exists.'
+        ),
+        scan_type='url',
+        asset_types=('website', 'api_endpoint'),
+        risk='active-low',
+        timeout=60,
+    ),
+    'tls.posture': WSTGInternalSpec(
+        capability_id='tls.posture',
+        tool='aegis-internal-wstg',
+        category='transport-security',
+        description='Authorization-pinned TLS negotiation and certificate posture observation for HTTPS assets.',
+        scan_type='url',
+        asset_types=('website', 'api_endpoint'),
+        risk='active-low',
+        timeout=90,
+    ),
 }
+
+WSTG_INTERNAL_IDS = frozenset(WSTG_INTERNAL_SPECS)
 
 _WSTG_IDS = {
     'web.http-method-policy': 'WSTG-CONF-06',
@@ -27,32 +89,23 @@ _WSTG_IDS = {
     'tls.posture': 'WSTG-CRYP-01',
 }
 
-_SPECS = {
-    'web.http-method-policy': NativeToolSpec(
-        'web.http-method-policy', 'aegis-internal-wstg', 'web-protocol-security',
-        'Bounded HTTP method-policy observation using GET, HEAD and OPTIONS only.',
-        'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=90,
-    ),
-    'web.duplicate-parameter-semantics': NativeToolSpec(
-        'web.duplicate-parameter-semantics', 'aegis-internal-wstg', 'web-input-validation',
-        'Deterministic duplicate-parameter response-semantics observation using a synthetic inert query key.',
-        'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=90,
-    ),
-    'web.ssrf-canary-validation': NativeToolSpec(
-        'web.ssrf-canary-validation', 'aegis-internal-wstg', 'web-input-validation',
-        'Governed SSRF validation gate that abstains unless a first-class Aegis OAST/canary contract exists.',
-        'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=60,
-    ),
-    'tls.posture': NativeToolSpec(
-        'tls.posture', 'aegis-internal-wstg', 'transport-security',
-        'Authorization-pinned TLS negotiation and certificate posture observation for HTTPS assets.',
-        'url', ('website', 'api_endpoint'), 'active-low', 'url', None, timeout=90,
-    ),
-}
 
-_ORIGINAL_RUN = native_tool_runtime.run_native_tool
-_ORIGINAL_NORMALIZE = native_output_normalizer.normalize_native_output
-_INSTALLED = False
+def is_wstg_internal_capability(capability_id: str) -> bool:
+    return capability_id in WSTG_INTERNAL_SPECS
+
+
+def get_wstg_internal_spec(capability_id: str) -> WSTGInternalSpec:
+    try:
+        return WSTG_INTERNAL_SPECS[capability_id]
+    except KeyError as exc:
+        raise ValueError(f'Unknown internal WSTG capability: {capability_id}') from exc
+
+
+def validate_wstg_internal_options(capability_id: str, options: Mapping[str, Any]) -> dict[str, Any]:
+    get_wstg_internal_spec(capability_id)
+    if options:
+        raise ValueError(f'{capability_id} does not accept runtime options')
+    return {}
 
 
 def _base(capability_id: str) -> dict[str, Any]:
@@ -95,7 +148,7 @@ def _hpp_url(target: str, values: tuple[str, str]) -> str:
     parsed = urlsplit(target)
     query = parse_qsl(parsed.query, keep_blank_values=True)
     query.extend((('aegis_hpp_probe', values[0]), ('aegis_hpp_probe', values[1])))
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', urlencode(query, doseq=True), parsed.fragment))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', urlencode(query, doseq=True), ''))
 
 
 def _duplicate_parameter_semantics(target: str) -> dict[str, Any]:
@@ -180,22 +233,22 @@ def _tls_posture(target: str, destination) -> dict[str, Any]:
     raise RuntimeError('Authorized TLS destination contained no connectable IP address')
 
 
-def _run_internal(
+def run_wstg_internal_capability(
     capability_id: str,
     target: str,
-    options: dict[str, Any],
+    options: Mapping[str, Any] | None = None,
+    *,
     state_getter=None,
     poll_interval: float = 0.5,
     credential_materials: tuple[Mapping[str, Any], ...] | None = None,
 ) -> ScanResult:
     del poll_interval
-    spec = _SPECS[capability_id]
-    if options:
-        raise ValueError(f'{capability_id} does not accept runtime options')
+    spec = get_wstg_internal_spec(capability_id)
+    validate_wstg_internal_options(capability_id, options or {})
     if credential_materials:
         raise ValueError(f'{capability_id} does not accept credential material')
     if state_getter is not None and state_getter() == 'cancelled':
-        raise native_tool_runtime.NativeExecutionCancelled('Native capability execution cancelled')
+        raise NativeExecutionCancelled('Internal WSTG capability execution cancelled')
     canonical = validate_authorized_web_target(target)
     with pinned_http_operation(canonical) as destination:
         if capability_id == 'web.http-method-policy':
@@ -211,38 +264,11 @@ def _run_internal(
         'observations': [observation],
     }
     return ScanResult(
-        tool=spec.binary,
+        tool=spec.tool,
         target=canonical,
         exit_code=0,
         stdout=json.dumps(payload, sort_keys=True, separators=(',', ':')),
         stderr='',
-    )
-
-
-def _run_dispatch(
-    capability_id: str,
-    target: str,
-    options: dict[str, Any],
-    state_getter=None,
-    poll_interval: float = 0.5,
-    credential_materials: tuple[Mapping[str, Any], ...] | None = None,
-) -> ScanResult:
-    if capability_id in _INTERNAL_IDS:
-        return _run_internal(
-            capability_id,
-            target,
-            options,
-            state_getter=state_getter,
-            poll_interval=poll_interval,
-            credential_materials=credential_materials,
-        )
-    return _ORIGINAL_RUN(
-        capability_id,
-        target,
-        options,
-        state_getter=state_getter,
-        poll_interval=poll_interval,
-        credential_materials=credential_materials,
     )
 
 
@@ -265,9 +291,8 @@ def _safe_value(value: Any, *, depth: int = 0) -> Any:
     return str(value)[:512]
 
 
-def _normalize_dispatch(capability_id: str, raw: str) -> dict[str, Any]:
-    if capability_id not in _INTERNAL_IDS:
-        return _ORIGINAL_NORMALIZE(capability_id, raw)
+def normalize_wstg_internal_output(capability_id: str, raw: str) -> dict[str, Any]:
+    get_wstg_internal_spec(capability_id)
     try:
         data = json.loads(raw or '{}')
     except (TypeError, ValueError, json.JSONDecodeError):
@@ -292,15 +317,6 @@ def _normalize_dispatch(capability_id: str, raw: str) -> dict[str, Any]:
     }
 
 
-def register_wstg_native_capabilities() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    for capability_id, spec in _SPECS.items():
-        existing = native_tool_runtime.NATIVE_TOOL_SPECS.get(capability_id)
-        if existing is not None and existing != spec:
-            raise RuntimeError(f'Conflicting WSTG native capability registration: {capability_id}')
-        native_tool_runtime.NATIVE_TOOL_SPECS[capability_id] = spec
-    native_tool_runtime.run_native_tool = _run_dispatch
-    native_output_normalizer.normalize_native_output = _normalize_dispatch
-    _INSTALLED = True
+# Compatibility aliases kept private for the focused validator tests in this PR.
+_run_internal = run_wstg_internal_capability
+_normalize_dispatch = normalize_wstg_internal_output
