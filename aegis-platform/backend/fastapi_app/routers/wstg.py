@@ -66,7 +66,7 @@ class WSTGProjectCoverage(ContractModel):
     summary: WSTGCoverageSummary
     category_summary: dict[str, WSTGGroupCoverage]
     classification_summary: dict[str, WSTGGroupCoverage]
-    tests: list[WSTGTestCoverage]
+    tests: list[WSTGTestCoverage] = Field(min_length=97, max_length=97)
 
 
 @sync_to_async
