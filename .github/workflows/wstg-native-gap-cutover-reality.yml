@@ -60,16 +60,18 @@ jobs:
       - name: Install backend contract dependencies
         run: python -m pip install -r aegis-platform/backend/requirements.txt
       - name: Run native-gap integration contracts
+        working-directory: aegis-platform/backend
         env:
-          PYTHONPATH: aegis-platform/backend
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-        run: >-
-          python -m pytest -q -c /dev/null
-          aegis-platform/backend/fastapi_app/services/test_wstg_capability_mapping.py
-          aegis-platform/backend/fastapi_app/services/test_wstg_applicability_planner.py
-          aegis-platform/backend/fastapi_app/services/test_wstg_observation_lineage.py
-          aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py
-          aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py
+          PYTHONPATH: .
+        run: |
+          python -m unittest \
+            fastapi_app.services.test_wstg_capability_mapping \
+            fastapi_app.services.test_wstg_applicability_planner \
+            fastapi_app.services.test_wstg_observation_lineage \
+            -v
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -c /dev/null --rootdir=. \
+            fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py \
+            fastapi_app/tests/test_wstg_native_capabilities.py
       - name: Capture exact-head native-gap cutover evidence
         shell: bash
         run: |
