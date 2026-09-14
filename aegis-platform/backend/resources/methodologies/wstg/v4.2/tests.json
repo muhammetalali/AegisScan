@@ -1029,7 +1029,7 @@
     "category": "CLNT",
     "title": "Testing Web Messaging",
     "canonical": true,
-    "classification": "GAP_NATIVE_SMALL",
+    "classification": "ASSISTED_EXISTING",
     "source_path": "document/4-Web_Application_Security_Testing/11-Client-side_Testing/11-Testing_Web_Messaging.md",
     "source_sha256": "92dd9f5e800902d99602c3c2f9ef8b098109e7a55e022067e7f6d31cdecfc07a"
   },
