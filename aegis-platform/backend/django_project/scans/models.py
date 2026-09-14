@@ -47,6 +47,11 @@ class Scan(models.Model):
     authorization_decision = models.ForeignKey('assets.AssetAuthorization', on_delete=models.PROTECT, null=True, blank=True, related_name='bound_scans')
     engines = models.JSONField(_('engines'), default=list)
     config = models.JSONField(_('configuration'), default=dict, blank=True)
+    execution_contract = models.JSONField(_('execution contract'), default=dict, blank=True)
+    execution_contract_fingerprint = models.CharField(_('execution contract fingerprint'), max_length=64, blank=True)
+    execution_idempotency_key = models.CharField(_('execution idempotency key'), max_length=128, blank=True)
+    execution_idempotency_fingerprint = models.CharField(_('execution idempotency fingerprint'), max_length=64, blank=True)
+    execution_correlation_id = models.CharField(_('execution correlation ID'), max_length=128, blank=True)
     template = models.ForeignKey('projects.ScanTemplate', on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
     celery_task_id = models.CharField(_('celery task ID'), max_length=100, blank=True)
     started_at = models.DateTimeField(_('started at'), blank=True, null=True)
@@ -84,6 +89,14 @@ class Scan(models.Model):
             models.Index(fields=['initiated_by']),
             models.Index(fields=['celery_task_id']),
             models.Index(fields=['authorization_decision'], name='scans_scan_authori_0bb523_idx'),
+            models.Index(fields=['project', 'execution_correlation_id'], name='scans_scan_proj_corr_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['project', 'initiated_by', 'execution_idempotency_key'],
+                condition=~models.Q(execution_idempotency_key=''),
+                name='scans_scan_exec_idem_uq',
+            ),
         ]
 
     def __str__(self):
