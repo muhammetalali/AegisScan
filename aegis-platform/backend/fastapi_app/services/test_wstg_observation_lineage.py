@@ -34,7 +34,7 @@ class WSTGObservationLineageTests(unittest.TestCase):
         )
         self.assertTrue(all(item['completion_claim_allowed'] is False for item in first['tests']))
 
-    def test_browser_lineage_preserves_manual_gap_and_conditional_fail_closed_semantics(self):
+    def test_browser_lineage_preserves_manual_and_conditional_fail_closed_semantics(self):
         payload = wstg_observation_lineage('browser.spa-discovery')
         rows = {item['wstg_id']: item for item in payload['tests']}
 
@@ -44,16 +44,23 @@ class WSTGObservationLineageTests(unittest.TestCase):
         self.assertEqual(manual['methodology_state'], 'manual_required')
         self.assertFalse(manual['completion_claim_allowed'])
 
-        gap = rows['WSTG-v42-CLNT-11']
-        self.assertEqual(gap['classification'], 'GAP_NATIVE_SMALL')
-        self.assertEqual(gap['methodology_state'], 'blocked_native_gap')
-        self.assertFalse(gap['completion_claim_allowed'])
+        self.assertNotIn('WSTG-v42-CLNT-11', rows)
 
         conditional = rows['WSTG-v42-CLNT-08']
         self.assertEqual(conditional['classification'], 'CONDITIONAL_NA')
         self.assertEqual(conditional['evidence_role'], 'conditional_context')
         self.assertEqual(conditional['methodology_state'], 'inconclusive')
         self.assertFalse(conditional['completion_claim_allowed'])
+
+    def test_integrated_native_gap_lineage_is_observed_but_never_completion_authority(self):
+        payload = wstg_observation_lineage('browser.postmessage-instrumentation')
+        rows = {item['wstg_id']: item for item in payload['tests']}
+        gap = rows['WSTG-v42-CLNT-11']
+        self.assertEqual(gap['classification'], 'GAP_NATIVE_SMALL')
+        self.assertEqual(gap['evidence_role'], 'supporting_observation')
+        self.assertEqual(gap['methodology_state'], 'observed')
+        self.assertFalse(gap['completion_claim_allowed'])
+        self.assertFalse(payload['completion_claim_allowed'])
 
     def test_decorators_preserve_business_data_and_replace_reserved_lineage(self):
         metadata = {'target': 'https://example.test', 'exit_code': 0}
