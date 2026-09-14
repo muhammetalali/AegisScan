@@ -35,7 +35,7 @@
     "feroxbuster": {"profiles": ["web"], "source": "cargo", "version": "2.13.1"},
     "ffuf": {"package": "ffuf", "profiles": ["web"], "source": "kali-apt", "version": "2.2.1-1"},
     "fierce": {"package": "fierce", "profiles": ["recon"], "source": "kali-apt", "version": "1.6.0-2"},
-    "firefox-esr": {"package": "firefox-esr", "profiles": ["browser"], "sha256": "bbe8776c74132a8d33ea97e4957e52ae22001f9e9f4924889ad5466967ee9219", "source": "release-archive", "url": "https://deb.debian.org/debian/pool/main/f/firefox-esr/firefox-esr_140.14.0esr-2_amd64.deb", "version": "140.14.0esr-2"},
+    "firefox-esr": {"package": "firefox-esr", "profiles": ["browser"], "sha256": "bbe8776c74132a8d33ea97e4957e52ae22001f9e9f4924889ad5466967ee9219", "source": "release-archive", "url": "https://snapshot.debian.org/archive/debian/20260820T235959Z/pool/main/f/firefox-esr/firefox-esr_140.14.0esr-2_amd64.deb", "version": "140.14.0esr-2"},
     "gdb": {"package": "gdb", "profiles": ["binary"], "source": "kali-apt", "version": "17.2-1+b1"},
     "gobuster": {"package": "gobuster", "profiles": ["web"], "source": "kali-apt", "version": "3.8.2-1"},
     "httpx": {"module": "github.com/projectdiscovery/httpx/cmd/httpx", "profiles": ["web"], "source": "go", "version": "v1.10.0"},
