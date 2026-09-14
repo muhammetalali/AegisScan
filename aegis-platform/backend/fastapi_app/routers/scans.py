@@ -203,7 +203,9 @@ def _create_scan(scan: ScanCreate, user_id: str, execution_draft: GovernedExecut
             config=scan.config, initiated_by_id=user_id, status=Scan.Status.QUEUED,
             **execution_fields,
         )
-        return obj, engines, True
+        if execution_draft is not None:
+            return obj, engines, True
+        return obj, engines
 
 
 @sync_to_async
@@ -216,7 +218,7 @@ def _attach_celery_task(scan_id: str, task_id: str):
 
 @router.post('/', response_model=ScanResponse, status_code=201)
 async def create_scan(scan: ScanCreate, user=Depends(get_current_user)):
-    created, engines, _created_new = await _create_scan(scan, str(user.get('user_id')))
+    created, engines = await _create_scan(scan, str(user.get('user_id')))
     task_map = {'nmap': run_nmap_scan, 'nuclei': run_nuclei_scan, 'masscan': run_masscan_scan, 'semgrep': run_semgrep_scan}
     result = task_map[engines[0]].delay(str(created.id))
     created = await _attach_celery_task(str(created.id), result.id)
