@@ -83,10 +83,10 @@ def _bounded_runtime_text(name: str, value: Any) -> str:
     return value
 
 
-def _configured_expected(name: str, validator: re.Pattern[str] | None = None) -> str | None:
+def _required_expected(name: str, validator: re.Pattern[str] | None = None) -> str:
     value = os.getenv(name, '').strip()
     if not value:
-        return None
+        raise KaliReconProviderError(f'{name} is required when AEGIS_RECON_PROVIDER=kali')
     if validator is not None and not validator.fullmatch(value):
         raise KaliReconProviderError(f'{name} is invalid')
     if validator is None and not _RUNTIME_TEXT_RE.fullmatch(value):
@@ -94,7 +94,26 @@ def _configured_expected(name: str, validator: re.Pattern[str] | None = None) ->
     return value
 
 
-def _validate_runtime_provenance(*, capability_id: str, top_level_tool: Any, runtime: Any) -> None:
+def _trusted_expected_provenance() -> dict[str, str]:
+    return {
+        'runner_version': _required_expected('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION'),
+        'build_commit': _required_expected('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT', _COMMIT_RE),
+        'base_image_digest': _required_expected('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST', _SHA256_RE),
+        'tool_manifest_digest': _required_expected('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST', _SHA256_RE),
+        'image_digest': _required_expected('AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST', _SHA256_RE),
+        'runtime_manifest_digest': _required_expected(
+            'AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST', _SHA256_RE
+        ),
+    }
+
+
+def _validate_runtime_provenance(
+    *,
+    capability_id: str,
+    top_level_tool: Any,
+    runtime: Any,
+    expected: dict[str, str],
+) -> dict[str, Any]:
     if not isinstance(runtime, dict):
         raise KaliReconProviderError('Kali recon provider provenance is missing or invalid')
     expected_tool = _RECON_TOOL_BY_CAPABILITY[capability_id]
@@ -112,26 +131,36 @@ def _validate_runtime_provenance(*, capability_id: str, top_level_tool: Any, run
         'build_commit': runtime.get('build_commit'),
         'base_image_digest': runtime.get('base_image_digest'),
         'tool_manifest_digest': runtime.get('tool_manifest_digest'),
+        'runtime_manifest_digest': runtime.get('runtime_manifest_digest'),
     }
     _bounded_runtime_text('tool_version', runtime.get('tool_version'))
     _bounded_runtime_text('tool_source', runtime.get('tool_source'))
 
     if not isinstance(actual['build_commit'], str) or not _COMMIT_RE.fullmatch(actual['build_commit']):
         raise KaliReconProviderError('Kali recon provider runtime build_commit is missing or invalid')
-    if not isinstance(actual['base_image_digest'], str) or not _SHA256_RE.fullmatch(actual['base_image_digest']):
-        raise KaliReconProviderError('Kali recon provider runtime base_image_digest is missing or invalid')
-    if not isinstance(actual['tool_manifest_digest'], str) or not _SHA256_RE.fullmatch(actual['tool_manifest_digest']):
-        raise KaliReconProviderError('Kali recon provider runtime tool_manifest_digest is missing or invalid')
+    for field in ('base_image_digest', 'tool_manifest_digest', 'runtime_manifest_digest'):
+        value = actual[field]
+        if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+            raise KaliReconProviderError(f'Kali recon provider runtime {field} is missing or invalid')
 
-    expected = {
-        'runner_version': _configured_expected('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION'),
-        'build_commit': _configured_expected('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT', _COMMIT_RE),
-        'base_image_digest': _configured_expected('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST', _SHA256_RE),
-        'tool_manifest_digest': _configured_expected('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST', _SHA256_RE),
-    }
-    for field, value in expected.items():
-        if value is not None and actual[field] != value:
+    for field in (
+        'runner_version',
+        'build_commit',
+        'base_image_digest',
+        'tool_manifest_digest',
+        'runtime_manifest_digest',
+    ):
+        if actual[field] != expected[field]:
             raise KaliReconProviderError(f'Kali recon provider pinned {field} mismatch')
+
+    trusted_runtime = dict(runtime)
+    # The execution image identity is owned by deployment/Control Plane authority.
+    # The provider cannot prove its own container image digest without a privileged
+    # runtime API, so never accept a provider-supplied value as authority.
+    trusted_runtime['image_digest'] = expected['image_digest']
+    trusted_runtime['runtime_manifest_digest'] = expected['runtime_manifest_digest']
+    trusted_runtime['provenance_authority'] = 'control-plane-deployment-pins'
+    return trusted_runtime
 
 
 def _request_json(method: str, path: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
@@ -212,6 +241,12 @@ def execute_kali_recon(
     ):
         if not value or len(value) > 255:
             raise KaliReconProviderError(f'{name} is required for Kali recon execution')
+
+    # Resolve the complete Control Plane trust anchor before any request leaves
+    # the worker. Kali mode is therefore fail-closed if deployment provenance is
+    # incomplete or malformed.
+    expected_provenance = _trusted_expected_provenance()
+
     control_token = secrets.token_hex(32)
     request_payload = {
         'schema_version': 1,
@@ -292,10 +327,11 @@ def execute_kali_recon(
             raise KaliReconProviderError('Kali recon provider response binding mismatch')
         if result.get('target') != target:
             raise KaliReconProviderError('Kali recon provider target binding mismatch')
-        _validate_runtime_provenance(
+        result['runtime'] = _validate_runtime_provenance(
             capability_id=capability_id,
             top_level_tool=result.get('tool'),
             runtime=result.get('runtime'),
+            expected=expected_provenance,
         )
         if not isinstance(result.get('exit_code'), int):
             raise KaliReconProviderError('Kali recon provider exit_code is invalid')
