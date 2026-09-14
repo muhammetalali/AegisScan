@@ -316,7 +316,7 @@ def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, 
                         for value in keys[:32]
                         if isinstance(value, str)
                         and value
-                        and not any(ch in value for ch in '\\r\\n\\x00')
+                        and not any(ch in value for ch in '\r\n\x00')
                     })[:32],
                 })
             status = str(item.get('status') or '')
