@@ -23,7 +23,7 @@ const stateClass = (state: string) => {
   }
 }
 
-const labelState = (state: string) => state.replaceAll('_', ' ')
+const labelState = (state: string) => state.split('_').join(' ')
 
 export const WSTGCoveragePage = () => {
   const t = useLanguageStore(s => s.t)
