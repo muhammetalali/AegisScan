@@ -1,0 +1,150 @@
+name: JS Parameter Enrichment Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/native_output_enrichment.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_native_output_enrichment.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - '.github/workflows/js-parameter-enrichment-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/native_output_enrichment.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_native_output_enrichment.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - '.github/workflows/js-parameter-enrichment-reality.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: js-parameter-enrichment-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Run pure enrichment contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pip install --disable-pip-version-check pytest==9.1.1
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest \
+            aegis-platform/backend/fastapi_app/services/test_native_output_enrichment.py
+      - name: Audit canonical integration boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output' \
+            aegis-platform/backend/fastapi_app/tasks/native_capabilities.py
+          grep -q 'normalized = normalize_enriched_native_output(capability_id, result.stdout)' \
+            aegis-platform/backend/fastapi_app/tasks/native_capabilities.py
+          ! grep -R --line-number --fixed-strings 'shell=True' \
+            aegis-platform/backend/fastapi_app/services/native_output_enrichment.py
+      - name: Build real scanner image
+        run: |
+          docker build --pull=false -t aegisscan-js-parameter:ci \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+      - name: Prove real Httpx and Katana normalization with secret-value exclusion
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh aegisscan-js-parameter:ci -c '
+            set -eu
+            mkdir -p /tmp/aegis-enrichment-fixture/api /tmp/aegis-enrichment-fixture/static
+            cat > /tmp/aegis-enrichment-fixture/index.html <<"HTML"
+          <!doctype html><html><body>
+          <a href="/api/items?id=42&token=katana-secret-value">items</a>
+          <script src="/static/app.js?build=javascript-secret-value"></script>
+          </body></html>
+          HTML
+            printf "%s\n" "{\"ok\":true}" > /tmp/aegis-enrichment-fixture/api/items
+            printf "%s\n" "console.log(\"fixture\")" > /tmp/aegis-enrichment-fixture/static/app.js
+            python -m http.server 18086 --bind 127.0.0.1 --directory /tmp/aegis-enrichment-fixture >/tmp/aegis-enrichment-http.log 2>&1 &
+            server_pid=$!
+            trap "kill $server_pid >/dev/null 2>&1 || true" EXIT
+            ready=0
+            for attempt in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:18086/ >/dev/null; then ready=1; break; fi
+              sleep 0.25
+            done
+            test "$ready" -eq 1
+            httpx -u "http://127.0.0.1:18086/api/items?id=42&token=httpx-secret-value" -json -silent > /tmp/httpx.jsonl
+            katana -u http://127.0.0.1:18086 -d 1 -silent -jsonl > /tmp/katana.jsonl
+            test -s /tmp/httpx.jsonl
+            test -s /tmp/katana.jsonl
+            PYTHONPATH=/app python - <<"PY"
+          import json
+          from pathlib import Path
+          from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
+
+          httpx = normalize_enriched_native_output("web.httpx", Path("/tmp/httpx.jsonl").read_text())
+          katana = normalize_enriched_native_output("web.katana", Path("/tmp/katana.jsonl").read_text())
+          combined = json.dumps({"httpx": httpx, "katana": katana}, sort_keys=True)
+          for secret in ("42", "httpx-secret-value", "katana-secret-value", "javascript-secret-value"):
+              assert secret not in combined, secret
+          httpx_params = {
+              name
+              for item in httpx["observations"]
+              for name in item.get("query_parameter_names", [])
+          }
+          katana_params = {
+              name
+              for item in katana["observations"]
+              for name in item.get("query_parameter_names", [])
+          }
+          assert {"id", "token"} <= httpx_params
+          assert {"id", "token", "build"} <= katana_params
+          assert any(item.get("kind") == "web-javascript-resource" for item in katana["observations"])
+          assert httpx["enrichment"]["values_persisted"] is False
+          assert katana["enrichment"]["values_persisted"] is False
+          Path("/tmp/js-parameter-reality.json").write_text(json.dumps({
+              "schema": "aegis.js-parameter-reality.v1",
+              "httpx_parameter_names": sorted(httpx_params),
+              "katana_parameter_names": sorted(katana_params),
+              "httpx_observations": httpx["count"],
+              "katana_observations": katana["count"],
+              "values_persisted": False,
+          }, sort_keys=True, indent=2) + "\n")
+          PY
+            cat /tmp/js-parameter-reality.json
+          '
+      - name: Capture real enrichment evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker create --name aegis-js-parameter-evidence --entrypoint sh aegisscan-js-parameter:ci -c true >/dev/null
+          docker rm -f aegis-js-parameter-evidence >/dev/null 2>&1 || true
+          cat > js-parameter-reality.json <<JSON
+          {
+            "schema": "aegis.js-parameter-reality.v1",
+            "build_commit": "${AEGIS_EXACT_HEAD}",
+            "scanner_image": "$(docker image inspect aegisscan-js-parameter:ci --format '{{.Id}}')",
+            "capabilities": ["web.httpx", "web.katana", "browser.spa-discovery"],
+            "values_persisted": false,
+            "normalizer": "native_output_enrichment"
+          }
+          JSON
+      - name: Upload Reality evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: js-parameter-enrichment-${{ github.event.pull_request.head.sha || github.sha }}
+          path: js-parameter-reality.json
+          if-no-files-found: error
