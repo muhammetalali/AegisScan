@@ -4,7 +4,7 @@ import { AlertTriangle, Database, FileText, RefreshCw, Search, ShieldCheck } fro
 import { Link } from 'react-router-dom'
 
 import { apiHelpers } from '@/services/api'
-import { apiContractPaths, WSTGProjectCoverageSchema, type WSTGProjectCoverage } from '@/contracts/api'
+import { WSTGProjectCoverageSchema, type WSTGProjectCoverage } from '@/contracts/api'
 import { useLanguageStore } from '@/stores/languageStore'
 import { cn } from '@/utils/cn'
 
@@ -47,7 +47,7 @@ export const WSTGCoveragePage = () => {
     queryKey: ['wstg-project-coverage', projectId],
     enabled: Boolean(projectId),
     queryFn: async () => {
-      const payload = await apiHelpers.get<unknown>(apiContractPaths.wstgCoverage(projectId))
+      const payload = await apiHelpers.get<unknown>(`/wstg/projects/${projectId}/coverage`)
       return WSTGProjectCoverageSchema.parse(payload)
     },
   })
