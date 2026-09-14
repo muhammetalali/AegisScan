@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -56,9 +57,9 @@ def verify() -> dict:
         'strict_contract': 'WSTGProjectCoverageSchema' in contracts_source and '.strict()' in contracts_source,
         'report_type': '<option value="wstg">wstg</option>' in reports_source,
         'evidence_lineage_surface': 'wstgLineageCount' in evidence_source,
-        'no_direct_fetch': 'fetch(' not in page_source,
-        'no_direct_axios': 'axios.' not in page_source,
-        'observation_only_copy': 'observation only' in page_source.lower(),
+        'no_direct_fetch': re.search(r'\\bfetch\\s*\\(', page_source) is None,
+        'no_direct_axios': re.search(r'\\baxios\\s*\\.', page_source) is None,
+        'observation_only_copy': re.search(r'observation(?:-|\\s+)only', page_source, re.IGNORECASE) is not None,
     }
     failed = [name for name, ok in checks.items() if not ok]
     if failed:
