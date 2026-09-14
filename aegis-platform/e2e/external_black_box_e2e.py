@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Real HTTP-only AegisScan E2E harness."""
 from __future__ import annotations
-import os,sys,time,uuid
+import json,os,sys,time,uuid
+from pathlib import Path
 from typing import Any
 import requests
-BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD')
+BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip()
 def require(response:requests.Response,expected:set[int],label:str)->dict[str,Any]|list[Any]:
  if response.status_code not in expected: raise RuntimeError(f'{label} failed: HTTP {response.status_code}: {response.text[:1000]}')
  if not response.text:return {}
@@ -62,8 +63,17 @@ def main()->int:
  authorization=http(session,'POST',f'{API_V1}/assets/{asset_id}/authorization','Authoritative Nmap authorization',{200},json={'authorized':True,'reason':'CI controlled real scanner target'},timeout=20)
  if not isinstance(authorization,dict) or (authorization.get('configuration') or {}).get('authorized') is not True:raise RuntimeError(f'Authorization grant did not persist: {authorization!r}')
  prove_detection_response(session,email,password)
- scan=http(session,'POST',f'{API_V1}/scans/','Real Nmap scan creation',{201},json={'project_id':project_id,'name':f'External real Nmap {unique}','scan_type':'ip','asset_id':asset_id,'engines':['nmap'],'depth':'quick','config':{'host':TARGET}},timeout=20); scan_id=scan.get('id') if isinstance(scan,dict) else None
- if not scan_id:raise RuntimeError('Scan creation did not return id')
+ idempotency_key=f'e2e-governed-{unique}'; correlation_id=f'e2e-corr-{unique}'
+ execution=http(session,'POST',f'{API_V1}/capabilities/network.nmap/execute','Governed Nmap capability execution',{202},json={'project_id':project_id,'asset_id':asset_id,'depth':'quick','options':{},'credential_refs':[],'idempotency_key':idempotency_key,'correlation_id':correlation_id},timeout=20)
+ if not isinstance(execution,dict):raise RuntimeError(f'Governed execution response invalid: {execution!r}')
+ contract=execution.get('execution_contract') if isinstance(execution.get('execution_contract'),dict) else {}
+ scan=execution.get('scan') if isinstance(execution.get('scan'),dict) else {}
+ scan_id=scan.get('id')
+ if not scan_id:raise RuntimeError(f'Governed execution did not return canonical Scan id: {execution!r}')
+ if contract.get('contract_version')!='1.0' or contract.get('policy_version')!='capability-execution.v4':raise RuntimeError(f'Governed execution contract version invalid: {contract!r}')
+ if contract.get('capability_id')!='network.nmap' or contract.get('requested_capability_id')!='network.nmap':raise RuntimeError(f'Governed execution capability identity invalid: {contract!r}')
+ if contract.get('project_ref')!=f'project:{project_id}' or contract.get('asset_ref')!=f'asset:{asset_id}':raise RuntimeError(f'Governed execution scope identity invalid: {contract!r}')
+ if contract.get('idempotency_key')!=idempotency_key or not contract.get('runner_profile'):raise RuntimeError(f'Governed execution transport/runtime identity invalid: {contract!r}')
  deadline=time.monotonic()+TIMEOUT; last={}
  while time.monotonic()<deadline:
   last=http(session,'GET',f'{API_V1}/scans/{scan_id}','Scan polling',{200},timeout=20)
@@ -85,7 +95,10 @@ def main()->int:
  if not matching or matching[0].get('status')!='completed':raise RuntimeError(f'Nmap execution contract invalid: {executions}')
  auth_id=matching[0].get('result_data',{}).get('authorization_decision_id');
  if not auth_id:raise RuntimeError(f'Nmap execution lost authorization provenance: {matching[0]}')
- print('EXTERNAL_REAL_E2E=PASS'); print(f'project_id={project_id}'); print(f'asset_id={asset_id}'); print(f'scan_id={scan_id}'); print(f'finding_id={finding_id}'); print(f'evidence_count={len(scanner_evidence)}'); print(f'authorization_decision_id={auth_id}'); print(f'target={TARGET}'); return 0
+ if STATE_PATH:
+  state={'project_id':project_id,'asset_id':asset_id,'capability_id':'network.nmap','depth':'quick','idempotency_key':idempotency_key,'correlation_id':correlation_id,'scan_id':scan_id,'execution_contract':contract,'execution_contract_fingerprint':execution.get('execution_contract_fingerprint'),'policy_version':execution.get('policy_version')}
+  state_path=Path(STATE_PATH); state_path.parent.mkdir(parents=True,exist_ok=True); state_path.write_text(json.dumps(state,sort_keys=True,indent=2),encoding='utf-8')
+ print('EXTERNAL_REAL_E2E=PASS'); print(f'project_id={project_id}'); print(f'asset_id={asset_id}'); print(f'scan_id={scan_id}'); print(f'finding_id={finding_id}'); print(f'evidence_count={len(scanner_evidence)}'); print(f'authorization_decision_id={auth_id}'); print(f'target={TARGET}'); print(f'governed_contract_fingerprint={execution.get("execution_contract_fingerprint")}'); return 0
 if __name__=='__main__':
  try:raise SystemExit(main())
  except Exception as exc:print(f'EXTERNAL_REAL_E2E=FAIL: {exc}',file=sys.stderr,flush=True);raise

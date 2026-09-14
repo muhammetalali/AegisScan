@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import uuid
 from http.cookiejar import CookieJar
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 
@@ -63,3 +65,70 @@ class PlatformClient:
         if not isinstance(rows, list):
             raise PlatformClientError('Projects endpoint returned an invalid collection contract')
         return {'ready': ready, 'health': health, 'authenticated': True, 'project_count': len(rows), 'source': 'platform-api'}
+
+
+    def capability_plan(self, project_id: str, asset_id: str, depth: str = 'standard') -> dict:
+        if depth not in {'quick', 'standard', 'deep', 'comprehensive'}:
+            raise PlatformClientError(f'Unsupported governed execution depth: {depth}')
+        project = quote(str(project_id).strip(), safe='')
+        asset = quote(str(asset_id).strip(), safe='')
+        if not project or not asset:
+            raise PlatformClientError('project_id and asset_id are required')
+        result = self.request(
+            'GET',
+            f'/api/v1/capabilities/plan/{asset}?project_id={project}&depth={quote(depth, safe="")}',
+        )
+        if not isinstance(result, dict) or not isinstance(result.get('plan'), list):
+            raise PlatformClientError('Capability plan returned an invalid response contract')
+        return result
+
+    def execute_capability(
+        self,
+        *,
+        project_id: str,
+        asset_id: str,
+        capability_id: str,
+        depth: str = 'standard',
+        options: dict | None = None,
+        credential_refs: list[str] | None = None,
+        idempotency_key: str | None = None,
+        correlation_id: str | None = None,
+    ) -> dict:
+        if depth not in {'quick', 'standard', 'deep', 'comprehensive'}:
+            raise PlatformClientError(f'Unsupported governed execution depth: {depth}')
+        project = str(project_id).strip()
+        asset = str(asset_id).strip()
+        capability = str(capability_id).strip()
+        if not project or not asset or not capability:
+            raise PlatformClientError('project_id, asset_id and capability_id are required')
+
+        idem = str(idempotency_key or '').strip() or f'client-{uuid.uuid4()}'
+        correlation = str(correlation_id or '').strip() or f'client-corr-{uuid.uuid4()}'
+        payload = {
+            'project_id': project,
+            'asset_id': asset,
+            'depth': depth,
+            'options': dict(options or {}),
+            'credential_refs': [str(item).strip() for item in (credential_refs or []) if str(item).strip()],
+            'idempotency_key': idem,
+            'correlation_id': correlation,
+        }
+        result = self.request(
+            'POST',
+            f'/api/v1/capabilities/{quote(capability, safe="")}/execute',
+            payload,
+        )
+        if not isinstance(result, dict):
+            raise PlatformClientError('Governed capability execution returned an invalid response contract')
+        contract = result.get('execution_contract')
+        scan = result.get('scan')
+        if not isinstance(contract, dict) or contract.get('contract_version') != '1.0':
+            raise PlatformClientError('Governed capability execution omitted the versioned execution contract')
+        if not isinstance(scan, dict) or not str(scan.get('id') or '').strip():
+            raise PlatformClientError('Governed capability execution omitted the canonical Scan identity')
+        if str(contract.get('capability_id') or '').strip() == '':
+            raise PlatformClientError('Governed capability execution omitted the resolved capability identity')
+        policy_fingerprint = str(contract.get('policy_fingerprint') or '')
+        if len(policy_fingerprint) != 64:
+            raise PlatformClientError('Governed capability execution returned an invalid policy fingerprint')
+        return result
