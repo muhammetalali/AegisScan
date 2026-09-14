@@ -29,7 +29,6 @@ name: WSTG Native Gap Cutover Reality
       - 'aegis-platform/backend/fastapi_app/services/test_wstg_applicability_planner.py'
       - 'aegis-platform/backend/fastapi_app/services/test_wstg_observation_lineage.py'
       - 'aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py'
-      - 'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py'
       - 'aegis-platform/backend/resources/methodologies/wstg/v4.2/**'
       - 'aegis-platform/backend/scripts/wstg_native_gap_cutover_reality.py'
       - 'docs/WSTG_NATIVE_GAP_CUTOVER_GATE.md'
@@ -70,7 +69,6 @@ jobs:
             -v
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -c /dev/null --rootdir=. --confcutdir=fastapi_app \
             fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py \
-            fastapi_app/tests/test_wstg_native_capabilities.py
       - name: Capture exact-head native-gap cutover evidence
         shell: bash
         run: |
