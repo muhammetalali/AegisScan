@@ -64,7 +64,7 @@ jobs:
           PYTHONPATH: aegis-platform/backend
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: >-
-          python -m pytest -q
+          python -m pytest -q -c /dev/null
           aegis-platform/backend/fastapi_app/services/test_wstg_capability_mapping.py
           aegis-platform/backend/fastapi_app/services/test_wstg_applicability_planner.py
           aegis-platform/backend/fastapi_app/services/test_wstg_observation_lineage.py
