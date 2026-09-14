@@ -1,0 +1,115 @@
+name: Governed Execution Contract Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/django_project/scans/models.py'
+      - 'aegis-platform/backend/django_project/scans/migrations/**'
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_execution.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/__init__.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_execution_contract.py'
+      - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/routers/scans.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_governed_execution_contract.py'
+      - 'docs/GOVERNED_EXECUTION_CONTRACT.md'
+      - '.github/workflows/governed-execution-contract-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/django_project/scans/models.py'
+      - 'aegis-platform/backend/django_project/scans/migrations/**'
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_execution.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/__init__.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_execution_contract.py'
+      - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/routers/scans.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_governed_execution_contract.py'
+      - 'docs/GOVERNED_EXECUTION_CONTRACT.md'
+      - '.github/workflows/governed-execution-contract-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governed-execution-contract-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governed-execution-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      SECRET_KEY: governed-execution-contract-ci-secret-key-0123456789
+      JWT_SECRET_KEY: governed-execution-contract-ci-jwt-key-0123456789
+      DATABASE_URL: postgresql://aegis:aegis-ci@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: memory://
+      CELERY_RESULT_BACKEND: cache+memory://
+      AUTHORIZED_SCAN_TARGETS: example.test
+      DEBUG: 'True'
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Django contract and migration hygiene
+        working-directory: aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+      - name: Prove governed execution contract on PostgreSQL
+        working-directory: aegis-platform/backend
+        run: >-
+          python -m pytest -q
+          fastapi_app/routers/test_governed_execution_contract.py
+          fastapi_app/routers/test_cloud_capability_api.py
+          fastapi_app/routers/test_kubernetes_capability_api.py
+      - name: Capture exact-head evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/governed-execution-contract.json
+          import json
+          payload = {
+              'contract': 'aegis.governed-execution.v1',
+              'persistence': 'postgresql-scan',
+              'authorization_authority': 'server-asset-authorization',
+              'methodology_authority': 'server-wstg-lineage',
+              'idempotency': 'postgresql-unique-plus-semantic-fingerprint',
+              'parallel_orchestrator_created': False,
+              'execution_budget_ref_implemented': False,
+          }
+          print(json.dumps(payload, sort_keys=True, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: governed-execution-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
