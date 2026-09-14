@@ -5,7 +5,7 @@ from typing import Literal
 from asgiref.sync import sync_to_async
 from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import Project
 
@@ -20,21 +20,21 @@ class ContractModel(BaseModel):
 
 
 class WSTGGroupCoverage(ContractModel):
-    total: int
-    observed: int
-    observation_coverage_percent: float
+    total: int = Field(ge=0)
+    observed: int = Field(ge=0)
+    observation_coverage_percent: float = Field(ge=0, le=100)
 
 
 class WSTGCoverageSummary(ContractModel):
-    total_tests: int
-    observed_tests: int
-    observation_coverage_percent: float
-    auto_assisted_total: int
-    auto_assisted_observed: int
-    auto_assisted_observation_coverage_percent: float
-    trusted_evidence_records: int
-    trusted_finding_records: int
-    rejected_lineage_records: int
+    total_tests: Literal[97]
+    observed_tests: int = Field(ge=0, le=97)
+    observation_coverage_percent: float = Field(ge=0, le=100)
+    auto_assisted_total: Literal[70]
+    auto_assisted_observed: int = Field(ge=0, le=70)
+    auto_assisted_observation_coverage_percent: float = Field(ge=0, le=100)
+    trusted_evidence_records: int = Field(ge=0)
+    trusted_finding_records: int = Field(ge=0)
+    rejected_lineage_records: int = Field(ge=0)
     states: dict[str, int]
 
 
@@ -42,11 +42,11 @@ class WSTGTestCoverage(ContractModel):
     wstg_id: str
     category: str
     title: str
-    classification: str
+    classification: Literal['AUTO_EXISTING', 'ASSISTED_EXISTING', 'MANUAL_GOVERNED', 'GAP_NATIVE_SMALL', 'CONDITIONAL_NA']
     state: Literal['observed', 'not_observed', 'manual_required', 'blocked_native_gap', 'inconclusive']
     has_observation: bool
-    evidence_records: int
-    finding_records: int
+    evidence_records: int = Field(ge=0)
+    finding_records: int = Field(ge=0)
     capability_ids: list[str]
     latest_observed_at: str | None
     completion_claim_allowed: Literal[False]
