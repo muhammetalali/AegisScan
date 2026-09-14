@@ -183,9 +183,13 @@ class WSTGCapabilityMapping:
                     raise ValueError(f'{test.id} manual mapping must retain governed execution')
             elif test.classification == 'GAP_NATIVE_SMALL':
                 expected = EXPECTED_GAPS.get(test.id)
+                registered = [
+                    item.ref for item in requirement.provider_bindings
+                    if item.kind == 'registry_capability' and item.ref == expected
+                ]
                 planned = [item.ref for item in requirement.provider_bindings if item.kind == 'planned_native']
-                if requirement.availability != 'planned_native' or planned != [expected]:
-                    raise ValueError(f'{test.id} does not match the approved native gap')
+                if requirement.availability != 'existing' or registered != [expected] or planned:
+                    raise ValueError(f'{test.id} does not match the approved integrated native gap')
             elif test.classification == 'CONDITIONAL_NA':
                 if requirement.availability != 'conditional':
                     raise ValueError(f'{test.id} conditional applicability contract changed')
