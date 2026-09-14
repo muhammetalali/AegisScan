@@ -15,6 +15,7 @@ name: Browser SPA Discovery Reality
       - 'aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py'
       - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_normalization.py'
       - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py'
       - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/e2e/fixtures/browser-spa-target/**'
       - 'aegis-platform/e2e/browser_spa_discovery_e2e.py'
@@ -33,6 +34,7 @@ name: Browser SPA Discovery Reality
       - 'aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py'
       - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_normalization.py'
       - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py'
       - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/e2e/fixtures/browser-spa-target/**'
       - 'aegis-platform/e2e/browser_spa_discovery_e2e.py'
@@ -107,6 +109,7 @@ jobs:
             aegis-platform/backend/fastapi_app/services/test_browser_spa_discovery.py \
             aegis-platform/backend/fastapi_app/services/test_web_messaging_normalization.py \
             aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py \
+            aegis-platform/backend/fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py \
             aegis-platform/e2e/fixtures/browser-spa-target/app.py \
             aegis-platform/e2e/browser_spa_discovery_e2e.py
 
@@ -131,6 +134,7 @@ jobs:
             fastapi_app/services/test_native_output_normalizer.py \
             fastapi_app/services/test_web_messaging_normalization.py \
             fastapi_app/services/test_web_messaging_semantics.py \
+            fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py \
             --junitxml=/tmp/browser-spa-junit.xml
 
       - name: Build scanner image with Browser SPA capability
