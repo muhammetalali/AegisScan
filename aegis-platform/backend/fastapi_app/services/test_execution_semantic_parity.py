@@ -29,6 +29,7 @@ def test_parity_ignores_observation_and_nested_list_order():
 
     assert report.semantic_equivalent is True
     assert report.observation_equivalent is True
+    assert report.finding_projection_applicable is False
     assert report.finding_projection_equivalent is True
     assert report.mismatches == ()
 
@@ -111,6 +112,7 @@ def test_parity_fails_closed_on_finding_projection_drift():
 
     assert report.semantic_equivalent is False
     assert report.observation_equivalent is False
+    assert report.finding_projection_applicable is True
     assert report.finding_projection_equivalent is False
     assert 'finding-projection-drift' in report.mismatches
 
@@ -125,6 +127,7 @@ def test_parity_report_is_stable_and_bounded_contract():
     assert report['schema'] == 'aegis.execution-semantic-parity.v1'
     assert report['capability_id'] == 'recon.fierce'
     assert report['semantic_equivalent'] is True
+    assert report['finding_projection_applicable'] is False
     assert len(report['legacy_observation_digest']) == 64
     assert len(report['candidate_observation_digest']) == 64
     assert len(report['legacy_finding_digest']) == 64
