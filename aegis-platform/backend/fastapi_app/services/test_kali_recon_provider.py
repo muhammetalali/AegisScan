@@ -117,6 +117,16 @@ def test_execute_requires_all_control_plane_bindings(monkeypatch):
 
 def test_response_binding_and_provenance_are_fail_closed(monkeypatch):
     monkeypatch.setenv('AEGIS_RECON_PROVIDER', 'kali')
+    trust = {
+        'AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION': '0.1.0',
+        'AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT': 'b' * 40,
+        'AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST': 'sha256:' + 'a' * 64,
+        'AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST': 'sha256:' + 'c' * 64,
+        'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST': 'sha256:' + 'e' * 64,
+        'AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST': 'sha256:' + 'd' * 64,
+    }
+    for name, value in trust.items():
+        monkeypatch.setenv(name, value)
 
     def response(**overrides):
         payload = {
@@ -136,6 +146,7 @@ def test_response_binding_and_provenance_are_fail_closed(monkeypatch):
                 'base_image_digest': 'sha256:' + 'a' * 64,
                 'build_commit': 'b' * 40,
                 'tool_manifest_digest': 'sha256:' + 'c' * 64,
+                'runtime_manifest_digest': 'sha256:' + 'd' * 64,
                 'tool': 'subfinder',
                 'tool_version': 'v2.16.0',
                 'tool_source': 'go',
@@ -158,7 +169,10 @@ def test_response_binding_and_provenance_are_fail_closed(monkeypatch):
             poll_interval=0.01,
         )
 
-    assert invoke_with(response())['tool'] == 'subfinder'
+    result = invoke_with(response())
+    assert result['tool'] == 'subfinder'
+    assert result['runtime']['image_digest'] == trust['AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST']
+    assert result['runtime']['provenance_authority'] == 'control-plane-deployment-pins'
     for payload in (
         response(execution_ref='other'),
         response(capability_id='recon.amass'),
