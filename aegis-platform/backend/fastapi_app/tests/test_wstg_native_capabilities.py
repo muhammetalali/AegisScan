@@ -6,6 +6,7 @@ import pytest
 
 from fastapi_app.services import wstg_native_capabilities as wstg
 from fastapi_app.services.capability_registry import get_capability
+from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
 from fastapi_app.services.pinned_http import PinnedHTTPResponse
 
 
@@ -19,7 +20,7 @@ def _response(status: int = 200, body: bytes = b'ok', headers=None) -> PinnedHTT
     )
 
 
-def test_live_gap_capabilities_are_registered_with_web_profile():
+def test_live_gap_capabilities_are_internal_and_registered_with_web_profile():
     for capability_id in (
         'web.http-method-policy',
         'web.duplicate-parameter-semantics',
@@ -30,6 +31,9 @@ def test_live_gap_capabilities_are_registered_with_web_profile():
         assert capability.runner_profile == 'web'
         assert capability.authorization_required is True
         assert capability.evidence_required is True
+        assert capability.adapter == 'internal-validator'
+        assert capability_id in wstg.WSTG_INTERNAL_SPECS
+        assert capability_id not in NATIVE_TOOL_SPECS
 
 
 def test_http_method_policy_sends_only_safe_methods(monkeypatch):
@@ -60,9 +64,10 @@ def test_duplicate_parameter_probe_is_bounded_and_order_sensitive(monkeypatch):
         return _response(body=b'baseline')
 
     monkeypatch.setattr(wstg, 'request_pinned', fake_request)
-    observation = wstg._duplicate_parameter_semantics('https://example.test/path?keep=1')
+    observation = wstg._duplicate_parameter_semantics('https://example.test/path?keep=1#client-only')
     assert [item[0] for item in requested] == ['GET', 'GET', 'GET']
     assert all('keep=1' in item[1] for item in requested)
+    assert all('#client-only' not in item[1] for item in requested)
     assert observation['synthetic_parameter'] == 'aegis_hpp_probe'
     assert observation['order_sensitive_observed'] is True
     assert observation['final_decision'] is False
@@ -78,7 +83,7 @@ def test_ssrf_probe_refuses_unbound_oast_callback():
 
 def test_internal_normalizer_forces_observation_only():
     raw = '{"observations":[{"capability_id":"web.http-method-policy","wstg_id":"forged","final_decision":true,"observation_only":false,"statuses":{"GET":200}}]}'
-    normalized = wstg._normalize_dispatch('web.http-method-policy', raw)
+    normalized = wstg.normalize_wstg_internal_output('web.http-method-policy', raw)
     assert normalized['count'] == 1
     row = normalized['observations'][0]
     assert row['wstg_id'] == 'WSTG-CONF-06'
@@ -113,7 +118,7 @@ def test_runtime_dispatch_keeps_authorization_pinning(monkeypatch):
     monkeypatch.setattr(wstg, 'pinned_http_operation', fake_operation)
     monkeypatch.setattr(wstg, '_method_policy', lambda target: {**wstg._base('web.http-method-policy'), 'unsafe_methods_sent': False})
 
-    result = wstg._run_internal('web.http-method-policy', 'https://example.test/', {})
+    result = wstg.run_wstg_internal_capability('web.http-method-policy', 'https://example.test/', {})
     assert events == [('pin', 'https://example.test/')]
     assert result.exit_code == 0
     assert 'WSTG-CONF-06' in result.stdout
@@ -121,9 +126,9 @@ def test_runtime_dispatch_keeps_authorization_pinning(monkeypatch):
 
 def test_internal_capabilities_reject_options_and_credentials():
     with pytest.raises(ValueError, match='does not accept runtime options'):
-        wstg._run_internal('web.http-method-policy', 'https://example.test/', {'x': 1})
+        wstg.run_wstg_internal_capability('web.http-method-policy', 'https://example.test/', {'x': 1})
     with pytest.raises(ValueError, match='does not accept credential material'):
-        wstg._run_internal(
+        wstg.run_wstg_internal_capability(
             'web.http-method-policy',
             'https://example.test/',
             {},
