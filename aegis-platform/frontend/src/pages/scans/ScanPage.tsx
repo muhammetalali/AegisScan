@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, AlertCircle, ArrowUpRight, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { apiHelpers } from '@/services/api'
+import { CapabilityPlanSchema, GovernedCapabilityExecutionSchema, apiContractPaths, type CapabilityPlan } from '@/contracts/api'
 import { useLanguageStore } from '@/stores/languageStore'
 import { toast } from 'sonner'
 import { cn } from '@/utils/cn'
@@ -30,7 +31,6 @@ type Asset = {
   configuration: Record<string, unknown>
   is_active: boolean
 }
-type Engine = { id?: string; name?: string; slug?: string; enabled?: boolean }
 
 export const ScanPage = () => {
   const t = useLanguageStore((s) => s.t)
@@ -38,8 +38,8 @@ export const ScanPage = () => {
   const [open, setOpen] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [assetId, setAssetId] = useState('')
-  const [engine, setEngine] = useState('')
-  const [name, setName] = useState('')
+  const [capabilityId, setCapabilityId] = useState('')
+  const [depth, setDepth] = useState<'quick' | 'standard' | 'deep' | 'comprehensive'>('standard')
   const [busy, setBusy] = useState(false)
 
   const scans = useQuery<Scan[]>({
@@ -55,54 +55,41 @@ export const ScanPage = () => {
     queryFn: () => apiHelpers.get<Asset[]>('/assets/', { params: { project_id: projectId } }),
     enabled: Boolean(projectId),
   })
-  const engines = useQuery<Engine[]>({
-    queryKey: ['engines'],
-    queryFn: () => apiHelpers.get<Engine[]>('/engines'),
-    staleTime: 60_000,
+  const capabilityPlan = useQuery<CapabilityPlan>({
+    queryKey: ['capability-plan', projectId, assetId, depth],
+    queryFn: async () => CapabilityPlanSchema.parse(
+      await apiHelpers.get<unknown>(apiContractPaths.capabilityPlan(assetId), {
+        params: { project_id: projectId, depth },
+      }),
+    ),
+    enabled: Boolean(projectId && assetId),
+    staleTime: 30_000,
   })
 
-  const selectedAsset = assets.data?.find((asset) => asset.id === assetId)
+  const readyCapabilities = (capabilityPlan.data?.plan || []).filter((item) => item.execution_ready)
 
   const create = async () => {
-    if (!projectId || !name.trim() || !engine) return
+    if (!projectId || !assetId || !capabilityId) return
     setBusy(true)
     try {
-      const target =
-        selectedAsset?.configuration?.url ||
-        selectedAsset?.configuration?.host ||
-        selectedAsset?.configuration?.ip ||
-        selectedAsset?.configuration?.domain ||
-        selectedAsset?.configuration?.repo_url ||
-        selectedAsset?.configuration?.path ||
-        selectedAsset?.name
-      const scanType =
-        selectedAsset?.type === 'website' || selectedAsset?.type === 'domain'
-          ? 'url'
-          : selectedAsset?.type === 'network_range'
-            ? 'network'
-            : selectedAsset?.type === 'source_code'
-              ? 'code'
-              : selectedAsset?.type === 'file'
-                ? 'file'
-                : selectedAsset?.type === 'docker_image'
-                  ? 'docker'
-                  : selectedAsset?.type === 'api_endpoint'
-                    ? 'api'
-                    : 'ip'
-      const result = await apiHelpers.post<Scan>('/scans/', {
+      const idempotencyKey = `ui-${crypto.randomUUID()}`
+      const correlationId = `ui-corr-${crypto.randomUUID()}`
+      const raw = await apiHelpers.post<unknown>(apiContractPaths.capabilityExecute(capabilityId), {
         project_id: projectId,
-        name: name.trim(),
-        scan_type: scanType,
-        asset_id: assetId || undefined,
-        engines: [engine],
-        depth: 'standard',
-        config: target ? { target } : {},
-        authorized: true,
+        asset_id: assetId,
+        depth,
+        options: {},
+        credential_refs: [],
+        idempotency_key: idempotencyKey,
+        correlation_id: correlationId,
       })
+      const result = GovernedCapabilityExecutionSchema.parse(raw)
       await qc.invalidateQueries({ queryKey: ['scans'] })
       setOpen(false)
-      setName('')
-      toast.success(`${t('Scan queued')} · ${result.id}`)
+      setCapabilityId('')
+      toast.success(
+        `${t('Scan queued')} · ${result.scan.id} · ${result.execution_contract.runner_profile}`,
+      )
     } catch (error: any) {
       toast.error(error?.response?.data?.detail || error?.message || t('Unable to create scan'))
     } finally {
@@ -252,6 +239,7 @@ export const ScanPage = () => {
                   onChange={(event) => {
                     setProjectId(event.target.value)
                     setAssetId('')
+                    setCapabilityId('')
                   }}
                   className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
                 >
@@ -267,7 +255,10 @@ export const ScanPage = () => {
                 <span className="text-sm font-medium">{t('Asset')}</span>
                 <select
                   value={assetId}
-                  onChange={(event) => setAssetId(event.target.value)}
+                  onChange={(event) => {
+                    setAssetId(event.target.value)
+                    setCapabilityId('')
+                  }}
                   disabled={!projectId}
                   className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
                 >
@@ -282,32 +273,42 @@ export const ScanPage = () => {
                 </select>
               </label>
               <label className="block">
-                <span className="text-sm font-medium">{t('Scan name')}</span>
-                <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm font-medium">{t('Engine')}</span>
+                <span className="text-sm font-medium">{t('Depth')}</span>
                 <select
-                  value={engine}
-                  onChange={(event) => setEngine(event.target.value)}
+                  value={depth}
+                  onChange={(event) => {
+                    setDepth(event.target.value as 'quick' | 'standard' | 'deep' | 'comprehensive')
+                    setCapabilityId('')
+                  }}
                   className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
                 >
-                  <option value="">{t('Select engine')}</option>
-                  {(engines.data || [])
-                    .filter((item) => item.enabled !== false)
-                    .map((item) => {
-                      const id = String(item.slug || item.name || item.id || '')
-                      return (
-                        <option key={id} value={id}>
-                          {id}
-                        </option>
-                      )
-                    })}
+                  {(['quick', 'standard', 'deep', 'comprehensive'] as const).map((value) => (
+                    <option key={value} value={value}>{value}</option>
+                  ))}
                 </select>
+              </label>
+              <label className="block">
+                <span className="text-sm font-medium">{t('Capability')}</span>
+                <select
+                  value={capabilityId}
+                  onChange={(event) => setCapabilityId(event.target.value)}
+                  disabled={!assetId || capabilityPlan.isLoading}
+                  className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
+                >
+                  <option value="">
+                    {capabilityPlan.isLoading ? t('Loading...') : t('Select capability')}
+                  </option>
+                  {readyCapabilities.map((item) => (
+                    <option key={item.capability_id} value={item.capability_id}>
+                      {item.capability_id} · {item.risk} · {item.tool}
+                    </option>
+                  ))}
+                </select>
+                {assetId && capabilityPlan.isSuccess && readyCapabilities.length === 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {t('No governed capability is execution-ready for this asset and depth.')}
+                  </p>
+                ) : null}
               </label>
             </div>
             <div className="mt-7 flex justify-end gap-2">
@@ -316,10 +317,10 @@ export const ScanPage = () => {
               </button>
               <button
                 onClick={create}
-                disabled={busy || !projectId || !name.trim() || !engine}
+                disabled={busy || !projectId || !assetId || !capabilityId}
                 className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
               >
-                {busy ? t('Creating…') : t('Create scan')}
+                {busy ? t('Creating…') : t('Run capability')}
               </button>
             </div>
           </div>

@@ -1,0 +1,116 @@
+name: Governed Execution Interfaces Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis/platform_client.py'
+      - 'aegis/cli/main.py'
+      - 'tests/test_cli.py'
+      - 'tests/test_platform_client.py'
+      - 'aegis-platform/frontend/src/contracts/api.ts'
+      - 'aegis-platform/frontend/src/pages/scans/ScanPage.tsx'
+      - 'aegis-platform/frontend/scripts/ui-contract-audit.mjs'
+      - 'aegis-platform/e2e/external_black_box_e2e.py'
+      - 'aegis-platform/e2e/governed_interfaces_e2e.py'
+      - 'docs/GOVERNED_EXECUTION_INTERFACES.md'
+      - '.github/workflows/governed-execution-interfaces-reality.yml'
+      - '.github/workflows/external-black-box-e2e.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis/platform_client.py'
+      - 'aegis/cli/main.py'
+      - 'tests/test_cli.py'
+      - 'tests/test_platform_client.py'
+      - 'aegis-platform/frontend/src/contracts/api.ts'
+      - 'aegis-platform/frontend/src/pages/scans/ScanPage.tsx'
+      - 'aegis-platform/frontend/scripts/ui-contract-audit.mjs'
+      - 'aegis-platform/e2e/external_black_box_e2e.py'
+      - 'aegis-platform/e2e/governed_interfaces_e2e.py'
+      - 'docs/GOVERNED_EXECUTION_INTERFACES.md'
+      - '.github/workflows/governed-execution-interfaces-reality.yml'
+      - '.github/workflows/external-black-box-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governed-execution-interfaces-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  interface-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install CLI test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Prove PlatformClient and CLI governed interfaces
+        run: python -m pytest -q tests/test_platform_client.py tests/test_cli.py
+      - name: Install frontend dependencies
+        working-directory: aegis-platform/frontend
+        run: npm ci
+      - name: Prove frontend governed execution boundary
+        working-directory: aegis-platform/frontend
+        run: |
+          npm run audit:ui
+          npm run i18n:audit
+          npm run lint
+          npm run build
+      - name: Prove no direct UI execution authority regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('aegis-platform/frontend/src/pages/scans/ScanPage.tsx')
+          text=p.read_text(encoding='utf-8')
+          required=['apiContractPaths.capabilityPlan','apiContractPaths.capabilityExecute','idempotency_key','correlation_id']
+          for item in required:
+              assert item in text, item
+          forbidden=["apiHelpers.post<Scan>('/scans/","authorized: true","setEngine("]
+          for item in forbidden:
+              assert item not in text, item
+          print('GOVERNED_UI_EXECUTION_BOUNDARY=PASS')
+          PY
+      - name: Capture exact-head interface evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/governed-interfaces.json
+          import json
+          print(json.dumps({
+              'contract_version':'1.0',
+              'policy_version':'capability-execution.v4',
+              'web':'server-capability-plan-plus-governed-execute',
+              'api':'canonical-capability-execute',
+              'cli':'PlatformClient.execute_capability',
+              'automation':'PlatformClient.execute_capability',
+              'direct_ui_scans_create':False,
+              'parallel_orchestrator_created':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: governed-execution-interfaces-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error

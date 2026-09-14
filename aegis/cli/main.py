@@ -229,6 +229,71 @@ def platform_status(
         console.print(f"[green]Platform API authenticated[/green] | projects={result['project_count']}")
 
 
+@app.command('run')
+def governed_run(
+    project_id: str = typer.Option(..., '--project-id', help='Canonical platform project UUID'),
+    asset_id: str = typer.Option(..., '--asset-id', help='Authorized canonical asset UUID'),
+    capability_id: str = typer.Option(..., '--capability', help='Registered semantic capability ID'),
+    depth: str = typer.Option('standard', '--depth', help='quick|standard|deep|comprehensive'),
+    options_json: str = typer.Option('{}', '--options-json', help='JSON object validated by the server capability contract'),
+    credential_ref: Optional[list[str]] = typer.Option(None, '--credential-ref', help='Credential Vault reference; repeatable'),
+    idempotency_key: Optional[str] = typer.Option(None, '--idempotency-key'),
+    correlation_id: Optional[str] = typer.Option(None, '--correlation-id'),
+    base_url: Optional[str] = typer.Option(None, '--base-url', envvar='AEGIS_PLATFORM_URL'),
+    email: Optional[str] = typer.Option(None, '--email', envvar='AEGIS_EMAIL'),
+    password: Optional[str] = typer.Option(None, '--password', envvar='AEGIS_PASSWORD', hide_input=True),
+    json_output: bool = typer.Option(False, '--json'),
+) -> None:
+    """نفّذ capability عبر Governed Execution API المركزي؛ لا ينفذ أدوات محلياً."""
+    if not base_url or not email or not password:
+        console.print('[red]AEGIS_PLATFORM_URL وAEGIS_EMAIL وAEGIS_PASSWORD مطلوبة[/red]')
+        raise typer.Exit(2)
+    try:
+        parsed_options = json.loads(options_json)
+    except json.JSONDecodeError as exc:
+        console.print(f'[red]--options-json must be valid JSON: {exc.msg}[/red]')
+        raise typer.Exit(2) from exc
+    if not isinstance(parsed_options, dict):
+        console.print('[red]--options-json must contain a JSON object[/red]')
+        raise typer.Exit(2)
+
+    try:
+        client = PlatformClient(base_url)
+        client.login(email, password)
+        result = client.execute_capability(
+            project_id=project_id,
+            asset_id=asset_id,
+            capability_id=capability_id,
+            depth=depth,
+            options=parsed_options,
+            credential_refs=credential_ref or [],
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+        )
+    except PlatformClientError as exc:
+        console.print(f'[red]Governed execution failed: {exc}[/red]')
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return
+
+    contract = result['execution_contract']
+    scan = result['scan']
+    methodology = ', '.join(contract.get('methodology_refs') or []) or '—'
+    console.print(Panel.fit(
+        f"[bold green]Governed execution accepted[/]\n"
+        f"Scan: [cyan]{scan['id']}[/]\n"
+        f"Capability: [cyan]{contract['capability_id']}[/]\n"
+        f"Runner profile: [cyan]{contract['runner_profile']}[/]\n"
+        f"Policy: [cyan]{contract['policy_version']}[/]\n"
+        f"Correlation: [cyan]{result['correlation_id']}[/]\n"
+        f"Idempotency reused: [cyan]{result['idempotency_reused']}[/]\n"
+        f"WSTG: [cyan]{methodology}[/]",
+        title='Aegis Governed Execution',
+    ))
+
+
 # ═══════════════════════════════════════════════════════════════
 #  findings — عرض الثغرات
 # ═══════════════════════════════════════════════════════════════

@@ -81,3 +81,103 @@ def test_platform_status_reports_only_authenticated_platform_state(monkeypatch):
     assert result.exit_code == 0
     assert 'platform-api' in result.output
     assert 'project_count' in result.output
+
+
+def test_governed_run_requires_canonical_platform_credentials(monkeypatch):
+    for key in ('AEGIS_PLATFORM_URL', 'AEGIS_EMAIL', 'AEGIS_PASSWORD'):
+        monkeypatch.delenv(key, raising=False)
+    result = runner.invoke(
+        app,
+        ['run', '--project-id', 'p1', '--asset-id', 'a1', '--capability', 'network.nmap'],
+    )
+    assert result.exit_code == 2
+    assert 'AEGIS_PLATFORM_URL' in result.output
+
+
+def test_governed_run_uses_platform_client_and_emits_machine_readable_contract(monkeypatch):
+    calls = {}
+
+    class Client:
+        def __init__(self, base_url):
+            assert base_url == 'https://platform.example'
+
+        def login(self, email, password):
+            calls['login'] = (email, password)
+
+        def execute_capability(self, **kwargs):
+            calls['execute'] = kwargs
+            return {
+                'capability_id': 'network.nmap',
+                'policy_version': 'capability-execution.v4',
+                'execution_contract': {
+                    'contract_version': '1.0',
+                    'policy_version': 'capability-execution.v4',
+                    'capability_id': 'network.nmap',
+                    'runner_profile': 'network',
+                    'methodology_refs': [],
+                    'policy_fingerprint': 'b' * 64,
+                },
+                'execution_contract_fingerprint': 'c' * 64,
+                'correlation_id': 'corr-cli-0001',
+                'idempotency_reused': False,
+                'scan': {'id': 'scan-cli-1', 'status': 'queued'},
+            }
+
+    monkeypatch.setattr('aegis.cli.main.PlatformClient', Client)
+    result = runner.invoke(
+        app,
+        [
+            'run',
+            '--base-url', 'https://platform.example',
+            '--email', 'operator@example.test',
+            '--password', 'secret',
+            '--project-id', 'p1',
+            '--asset-id', 'a1',
+            '--capability', 'network.nmap',
+            '--depth', 'quick',
+            '--options-json', '{"ports":"80"}',
+            '--credential-ref', 'cred-1',
+            '--idempotency-key', 'idem-cli-0001',
+            '--correlation-id', 'corr-cli-0001',
+            '--json',
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls['login'] == ('operator@example.test', 'secret')
+    assert calls['execute'] == {
+        'project_id': 'p1',
+        'asset_id': 'a1',
+        'capability_id': 'network.nmap',
+        'depth': 'quick',
+        'options': {'ports': '80'},
+        'credential_refs': ['cred-1'],
+        'idempotency_key': 'idem-cli-0001',
+        'correlation_id': 'corr-cli-0001',
+    }
+    payload = __import__('json').loads(result.output)
+    assert payload['scan']['id'] == 'scan-cli-1'
+    assert payload['execution_contract']['contract_version'] == '1.0'
+
+
+def test_governed_run_rejects_non_object_options_before_platform_call(monkeypatch):
+    class Client:
+        def __init__(self, _base_url):
+            raise AssertionError('Platform client must not be created for invalid local JSON input')
+
+    monkeypatch.setattr('aegis.cli.main.PlatformClient', Client)
+    result = runner.invoke(
+        app,
+        [
+            'run',
+            '--base-url', 'https://platform.example',
+            '--email', 'operator@example.test',
+            '--password', 'secret',
+            '--project-id', 'p1',
+            '--asset-id', 'a1',
+            '--capability', 'network.nmap',
+            '--options-json', '[]',
+        ],
+    )
+    assert result.exit_code == 2
+    assert 'JSON object' in result.output
