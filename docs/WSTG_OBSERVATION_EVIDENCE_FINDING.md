@@ -10,7 +10,7 @@ The authoritative chain is:
 
 ## Methodology lineage
 
-`fastapi_app.services.wstg_observation_lineage` reverses the canonical PR-3 mapping only through `registry_capability` provider bindings. It never maps a WSTG identity directly to a binary or shell command.
+`fastapi_app.services.wstg_observation_lineage` reverses the canonical PR-3 mapping through evidence-producing semantic capability bindings. Canonical `registry_capability` bindings are included directly; a `planned_native` binding is included only after that exact semantic capability ID resolves in the authoritative Capability Registry. This attaches trusted provenance to implemented validator evidence without changing the WSTG classification, mapping availability, planner state, or completion authority. It never maps a WSTG identity directly to a binary or shell command.
 
 Each persisted lineage payload contains:
 
@@ -57,7 +57,7 @@ Integrated execution paths:
 - native finding projection
 - Nmap finding ingestion
 
-Capabilities without a canonical WSTG registry binding do not invent WSTG coverage.
+Capabilities without a canonical WSTG executable binding do not invent WSTG coverage. Registered native-gap validators may carry `blocked_native_gap` lineage while the corresponding WSTG test remains `GAP_NATIVE_SMALL` and planner-blocked.
 
 ## Governance boundary
 
@@ -69,7 +69,7 @@ Risk Correlation, Attack Path, Detection Engineering, Investigation, Evidence Re
 
 `WSTG Observation Evidence Finding Reality` proves on the exact PR/main HEAD:
 
-1. reverse lineage equals the canonical PR-3 provider bindings;
+1. reverse lineage equals canonical executable PR-3 bindings, including registered planned-native validators only as blocked-gap provenance;
 2. no lineage grants methodology completion;
 3. manual/gap/conditional classes remain fail-closed;
 4. PostgreSQL persists lineage in real Evidence and Finding rows;
