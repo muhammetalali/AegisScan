@@ -58,6 +58,7 @@ def _auth_token() -> str:
 
 
 def _direct_opener():
+    # Never let HTTP_PROXY/HTTPS_PROXY redirect authorization-bound loopback traffic.
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
 
@@ -105,6 +106,7 @@ def _validate_runtime_provenance(*, capability_id: str, top_level_tool: Any, run
         raise KaliReconProviderError('Kali recon provider provenance profile mismatch')
     if runtime.get('tool') != expected_tool:
         raise KaliReconProviderError('Kali recon provider provenance tool mismatch')
+
     actual = {
         'runner_version': _bounded_runtime_text('runner_version', runtime.get('runner_version')),
         'build_commit': runtime.get('build_commit'),
@@ -113,12 +115,14 @@ def _validate_runtime_provenance(*, capability_id: str, top_level_tool: Any, run
     }
     _bounded_runtime_text('tool_version', runtime.get('tool_version'))
     _bounded_runtime_text('tool_source', runtime.get('tool_source'))
+
     if not isinstance(actual['build_commit'], str) or not _COMMIT_RE.fullmatch(actual['build_commit']):
         raise KaliReconProviderError('Kali recon provider runtime build_commit is missing or invalid')
     if not isinstance(actual['base_image_digest'], str) or not _SHA256_RE.fullmatch(actual['base_image_digest']):
         raise KaliReconProviderError('Kali recon provider runtime base_image_digest is missing or invalid')
     if not isinstance(actual['tool_manifest_digest'], str) or not _SHA256_RE.fullmatch(actual['tool_manifest_digest']):
         raise KaliReconProviderError('Kali recon provider runtime tool_manifest_digest is missing or invalid')
+
     expected = {
         'runner_version': _configured_expected('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION'),
         'build_commit': _configured_expected('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT', _COMMIT_RE),
@@ -132,11 +136,19 @@ def _validate_runtime_provenance(*, capability_id: str, top_level_tool: Any, run
 
 def _request_json(method: str, path: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
     body = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
-    request = urllib.request.Request(_base_url() + path, data=body, method=method, headers={
-        'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Aegis-Recon-Token': _auth_token(),
-    })
+    request = urllib.request.Request(
+        _base_url() + path,
+        data=body,
+        method=method,
+        headers={
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Aegis-Recon-Token': _auth_token(),
+        },
+    )
+    opener = _direct_opener()
     try:
-        with _direct_opener().open(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
         raw = exc.read(8192)
@@ -160,7 +172,12 @@ def _control(execution_ref: str, control_token: str, state: str) -> None:
     last_error: KaliReconProviderError | None = None
     for attempt in range(20):
         try:
-            result = _request_json('POST', path, {'control_token': control_token, 'state': state}, timeout=3)
+            result = _request_json(
+                'POST',
+                path,
+                {'control_token': control_token, 'state': state},
+                timeout=3,
+            )
         except KaliReconProviderError as exc:
             last_error = exc
             if 'execution_ref is not active' not in str(exc) or attempt == 19:
@@ -170,28 +187,56 @@ def _control(execution_ref: str, control_token: str, state: str) -> None:
         if result.get('status') != 'ok' or result.get('state') != state:
             raise KaliReconProviderError(f'Kali recon provider did not enter requested state {state!r}')
         return
-    if last_error is not None:
+    if last_error is not None:  # pragma: no cover - loop always raises or returns.
         raise last_error
 
 
-def execute_kali_recon(*, capability_id: str, target: str, options: dict[str, Any], timeout_seconds: int,
-                       execution_ref: str, authorization_ref: str, scope_ref: str,
-                       state_getter: Callable[[], str] | None, poll_interval: float) -> dict[str, Any]:
+def execute_kali_recon(
+    *,
+    capability_id: str,
+    target: str,
+    options: dict[str, Any],
+    timeout_seconds: int,
+    execution_ref: str,
+    authorization_ref: str,
+    scope_ref: str,
+    state_getter: Callable[[], str] | None,
+    poll_interval: float,
+) -> dict[str, Any]:
     if capability_id not in _RECON_CAPABILITIES:
         raise KaliReconProviderError(f'{capability_id} is not a Kali recon provider capability')
-    for name, value in (('execution_ref', execution_ref), ('authorization_ref', authorization_ref), ('scope_ref', scope_ref)):
+    for name, value in (
+        ('execution_ref', execution_ref),
+        ('authorization_ref', authorization_ref),
+        ('scope_ref', scope_ref),
+    ):
         if not value or len(value) > 255:
             raise KaliReconProviderError(f'{name} is required for Kali recon execution')
     control_token = secrets.token_hex(32)
-    request_payload = {'schema_version': 1, 'execution_ref': execution_ref, 'authorization_ref': authorization_ref,
-                       'scope_ref': scope_ref, 'control_token': control_token, 'capability_id': capability_id,
-                       'target': target, 'options': options, 'timeout_seconds': int(timeout_seconds)}
+    request_payload = {
+        'schema_version': 1,
+        'execution_ref': execution_ref,
+        'authorization_ref': authorization_ref,
+        'scope_ref': scope_ref,
+        'control_token': control_token,
+        'capability_id': capability_id,
+        'target': target,
+        'options': options,
+        'timeout_seconds': int(timeout_seconds),
+    }
     holder: dict[str, Any] = {}
+
     def invoke() -> None:
         try:
-            holder['result'] = _request_json('POST', '/v1/execute', request_payload, timeout=float(timeout_seconds + 15))
-        except BaseException as exc:
+            holder['result'] = _request_json(
+                'POST',
+                '/v1/execute',
+                request_payload,
+                timeout=float(timeout_seconds + 15),
+            )
+        except BaseException as exc:  # captured and re-raised on the caller thread
             holder['error'] = exc
+
     thread = threading.Thread(target=invoke, name=f'kali-recon-{execution_ref[:32]}', daemon=True)
     thread.start()
     previous_state = 'running'
@@ -247,7 +292,11 @@ def execute_kali_recon(*, capability_id: str, target: str, options: dict[str, An
             raise KaliReconProviderError('Kali recon provider response binding mismatch')
         if result.get('target') != target:
             raise KaliReconProviderError('Kali recon provider target binding mismatch')
-        _validate_runtime_provenance(capability_id=capability_id, top_level_tool=result.get('tool'), runtime=result.get('runtime'))
+        _validate_runtime_provenance(
+            capability_id=capability_id,
+            top_level_tool=result.get('tool'),
+            runtime=result.get('runtime'),
+        )
         if not isinstance(result.get('exit_code'), int):
             raise KaliReconProviderError('Kali recon provider exit_code is invalid')
         if not isinstance(result.get('stdout'), str) or not isinstance(result.get('stderr'), str):
