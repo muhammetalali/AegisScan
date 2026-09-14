@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import unittest
 
+from fastapi_app.services.wstg_capability_mapping import EXPECTED_GAPS
 from fastapi_app.services.wstg_execution_planner import (
     WSTGExecutionPlanner,
     WSTGPlanningContext,
@@ -42,9 +43,16 @@ class WSTGApplicabilityPlannerTests(unittest.TestCase):
             if item.classification == 'GAP_NATIVE_SMALL'
         }
         self.assertTrue(gap_ids)
+        planned_gaps = {
+            item.wstg_id: item
+            for item in result.items
+            if item.wstg_id in gap_ids
+        }
+        self.assertEqual(set(planned_gaps), gap_ids)
+        self.assertTrue(all(item.status == 'planned' for item in planned_gaps.values()))
         self.assertEqual(
-            {item.wstg_id for item in result.items if item.wstg_id in gap_ids and item.status == 'blocked'},
-            gap_ids,
+            {wstg_id: item.provider_capability_ids for wstg_id, item in planned_gaps.items()},
+            {wstg_id: (EXPECTED_GAPS[wstg_id],) for wstg_id in gap_ids},
         )
 
     def test_conditional_flash_test_fails_closed_without_authoritative_fact(self):
