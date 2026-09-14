@@ -32,3 +32,5 @@ The Reality gate independently proves:
 A future cutover is a separate reviewed change. It must be based on independently proven runtime behavior and the approved architecture, not on capability registration, green unit tests, or passive telemetry alone.
 
 This gate does not dispatch scans, create Findings, confirm Findings, close Findings, accept risk, change WSTG classifications, or grant client-side authorization authority.
+
+This gate also does not certify the technical completeness of a native validator. Runtime implementation and its focused validator tests remain Account B scope; a validator bug discovered by this gate must be fixed and proven in that implementation lane before any methodology cutover.
