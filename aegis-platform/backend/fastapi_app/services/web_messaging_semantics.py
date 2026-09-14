@@ -127,6 +127,7 @@ def assess_web_messaging(
         'limitations': [
             'Receiver event.origin validation is not inferred from passive instrumentation.',
             'No synthetic cross-origin postMessage traffic is injected by this capability.',
+            'Assessment records are bounded to the evaluated top-level document context.',
         ],
         'records': normalized,
     }
