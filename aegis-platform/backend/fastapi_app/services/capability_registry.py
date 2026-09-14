@@ -10,11 +10,13 @@ from .cloud_capability import register_cloud_capability
 from .kali_profile_policy import resolve_kali_profile, validate_profile_policy
 from .kubernetes_capability import register_kubernetes_capability
 from .native_tool_runtime import NATIVE_TOOL_SPECS, validate_native_options
+from .wstg_native_capabilities import register_wstg_native_capabilities
 
 register_api_schema_capability()
 register_api_runtime_capability()
 register_kubernetes_capability()
 register_cloud_capability()
+register_wstg_native_capabilities()
 
 
 class RetiredCapabilityError(ValueError):
