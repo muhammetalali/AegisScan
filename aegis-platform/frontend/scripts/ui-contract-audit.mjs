@@ -21,6 +21,12 @@ for (const required of ['/dashboard','/scan','/validations/new','/vulnerabilitie
 if (!routePaths.includes('/')) failures.push('Protected workspace has no canonical root redirect')
 function walk(dir) { for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { if (['node_modules','dist','.git'].includes(entry.name)) continue; const full=path.join(dir,entry.name); if(entry.isDirectory()) walk(full); else if(/\.(ts|tsx)$/.test(entry.name)) scannedSourceFiles.push(full) } }
 walk(path.join(root,'src'))
+const scanPagePath=path.join(root,'src','pages','scans','ScanPage.tsx')
+const scanPage=fs.readFileSync(scanPagePath,'utf8')
+if(!scanPage.includes('apiContractPaths.capabilityPlan'))failures.push('ScanPage must use the server-side governed capability planner')
+if(!scanPage.includes('apiContractPaths.capabilityExecute'))failures.push('ScanPage must execute through the governed capability endpoint')
+if(/apiHelpers\.post(?:<[^>]+>)?\(\s*['"]\/scans\//.test(scanPage))failures.push('ScanPage must not create raw /scans executions directly')
+if(/authorized\s*:\s*true/.test(scanPage))failures.push('ScanPage must not claim client-side authorization authority')
 const hardcodedMetricPatterns=[/\bAssets:\s*\d+\b/i,/\bServices:\s*\d+\b/i,/\bRelationships:\s*\d+\b/i,/\bAttack Paths:\s*\d+\b/i,/\bControls:\s*\d+\b/i,/\bFindings:\s*\d+\s*(?:→|->)\s*\d+\b/i,/\bRisk\s+\d+\/100\b/i,/\bRisk\s*Score\s*[:=]\s*\d+(?:\.\d+)?\b/i]
 const syntheticOperationalPatterns=[/\.catch\s*\(\s*\(\s*\)\s*=>\s*\[\s*\{\s*metric_type\s*:/i,/uptime_percentage\s*:\s*\d+(?:\.\d+)?/i,/status\s*:\s*['"]healthy['"][^\n}]*response_time_ms\s*:\s*\d+/i]
 const stubPatterns=[/coming soon/i,/not implemented/i,/lorem ipsum/i,/mock data/i,/dummy data/i,/placeholder data/i,/backend integration intentionally deferred/i]
