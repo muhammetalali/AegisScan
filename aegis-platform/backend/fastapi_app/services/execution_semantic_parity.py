@@ -45,18 +45,25 @@ def _json_key(value: Any) -> str:
 
 
 def _canonical(value: Any) -> Any:
+    """Canonicalize object-key ordering while preserving nested sequence semantics."""
     if isinstance(value, dict):
         return {str(key): _canonical(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
     if isinstance(value, list):
-        items = [_canonical(item) for item in value]
-        return sorted(items, key=_json_key)
+        return [_canonical(item) for item in value]
     if isinstance(value, tuple):
-        return _canonical(list(value))
+        return [_canonical(item) for item in value]
     return value
 
 
+def _canonical_collection(values: list[Any]) -> list[Any]:
+    """Treat the outer observation/Finding collection as a set, not nested lists."""
+    items = [_canonical(item) for item in values]
+    return sorted(items, key=_json_key)
+
+
 def _digest(value: Any) -> str:
-    payload = _json_key(_canonical(value)).encode('utf-8')
+    canonical = _canonical_collection(value) if isinstance(value, list) else _canonical(value)
+    payload = _json_key(canonical).encode('utf-8')
     return hashlib.sha256(payload).hexdigest()
 
 
