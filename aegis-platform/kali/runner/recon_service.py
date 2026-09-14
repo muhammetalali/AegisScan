@@ -402,6 +402,7 @@ def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]
                 'base_image_digest': runtime.get('base_image_digest'),
                 'build_commit': runtime.get('build_commit'),
                 'tool_manifest_digest': runtime.get('tool_manifest_digest'),
+                'runtime_manifest_digest': _sha256(RUNTIME_MANIFEST),
                 'tool': request['tool'],
                 'tool_version': tool_meta.get('version'),
                 'tool_source': tool_meta.get('source'),
