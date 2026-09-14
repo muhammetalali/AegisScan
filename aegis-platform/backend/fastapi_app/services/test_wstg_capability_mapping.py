@@ -53,7 +53,7 @@ class WSTGCapabilityMappingTests(unittest.TestCase):
             with self.subTest(capability_id=capability_id):
                 self.assertEqual(get_capability(capability_id).id, capability_id)
 
-    def test_only_five_approved_native_gaps_exist(self):
+    def test_only_reviewed_approved_native_gaps_exist(self):
         actual = {}
         for test in self.mapping.catalog.tests:
             if test.classification != 'GAP_NATIVE_SMALL':
