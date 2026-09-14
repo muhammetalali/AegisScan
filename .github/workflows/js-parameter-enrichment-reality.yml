@@ -163,14 +163,17 @@ jobs:
           import json
           import subprocess
           from pathlib import Path
-          path = Path('.js-parameter-reality/js-parameter-reality.json')
-          payload = json.loads(path.read_text())
+          source_path = Path('.js-parameter-reality/js-parameter-reality.json')
+          payload = json.loads(source_path.read_text())
           payload['scanner_image'] = subprocess.check_output([
               'docker', 'image', 'inspect', 'aegisscan-js-parameter:ci', '--format', '{{.Id}}'
           ], text=True).strip()
-          path.write_text(json.dumps(payload, sort_keys=True, indent=2) + '\n')
+          # The runtime evidence is intentionally created by the unprivileged
+          # scanner UID inside the bind mount. Do not mutate that file from the
+          # host runner; emit a runner-owned provenance envelope instead.
+          output_path = Path('js-parameter-reality.json')
+          output_path.write_text(json.dumps(payload, sort_keys=True, indent=2) + '\n')
           PY
-          cp .js-parameter-reality/js-parameter-reality.json js-parameter-reality.json
           cat js-parameter-reality.json
       - name: Upload Reality evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
