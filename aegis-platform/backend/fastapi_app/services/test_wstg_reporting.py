@@ -86,6 +86,16 @@ def _fixture_project():
         metadata=tampered,
         collected_by=owner,
     )
+    mismatched_source = attach_wstg_evidence_metadata({'target': '127.0.0.1'}, 'network.nmap')
+    Evidence.objects.create(
+        scan=scan,
+        asset=asset,
+        source='semgrep',
+        evidence_type='scanner_output',
+        raw_output='<mismatched-source/>',
+        metadata=mismatched_source,
+        collected_by=owner,
+    )
     return owner, outsider, project, scan
 
 
@@ -106,7 +116,7 @@ def test_project_coverage_is_canonical_observation_only_and_rejects_tampered_lin
     assert coverage['summary']['observed_tests'] == 5
     assert coverage['summary']['trusted_evidence_records'] == 1
     assert coverage['summary']['trusted_finding_records'] == 1
-    assert coverage['summary']['rejected_lineage_records'] == 1
+    assert coverage['summary']['rejected_lineage_records'] == 2
     assert coverage['summary']['states']['observed'] == 5
     assert coverage['summary']['states']['manual_required'] == 21
     assert coverage['summary']['states']['blocked_native_gap'] == 5
@@ -167,7 +177,7 @@ def test_wstg_json_report_persists_integrity_bound_artifact(settings, tmp_path):
     assert '"methodology": "WSTG"' in artifact
     assert '"completion_claim_allowed": false' in artifact
     assert '"claim_policy": "observation-only"' in artifact
-    assert '"rejected_lineage_records": 1' in artifact
+    assert '"rejected_lineage_records": 2' in artifact
 
 
 @pytest.mark.django_db(transaction=True)
