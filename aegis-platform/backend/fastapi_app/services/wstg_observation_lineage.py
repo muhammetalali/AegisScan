@@ -48,6 +48,24 @@ class WSTGObservationLineageItem:
         return asdict(self)
 
 
+def _executable_binding_capability_id(binding) -> str | None:
+    """Resolve evidence-producing capability bindings without promoting methodology state.
+
+    Canonical registry bindings are always executable. A planned-native binding only
+    becomes evidence-addressable after the exact semantic capability ID is registered
+    in the authoritative Capability Registry. This does not change WSTG classification,
+    mapping availability, planner state, or completion authority.
+    """
+    if binding.kind not in {'registry_capability', 'planned_native'}:
+        return None
+    try:
+        return get_capability(binding.ref).id
+    except ValueError:
+        if binding.kind == 'planned_native':
+            return None
+        raise
+
+
 @lru_cache(maxsize=1)
 def _reverse_registry_index() -> dict[str, tuple[WSTGObservationLineageItem, ...]]:
     mapping = WSTGCapabilityMapping()
@@ -60,9 +78,10 @@ def _reverse_registry_index() -> dict[str, tuple[WSTGObservationLineageItem, ...
             raise ValueError(f'Unsupported WSTG classification for observation lineage: {test.classification}')
         evidence_role, methodology_state = semantics
         for binding in requirement.provider_bindings:
-            if binding.kind != 'registry_capability':
+            capability_id = _executable_binding_capability_id(binding)
+            if capability_id is None:
                 continue
-            rows.setdefault(binding.ref, []).append(WSTGObservationLineageItem(
+            rows.setdefault(capability_id, []).append(WSTGObservationLineageItem(
                 wstg_id=test.id,
                 classification=test.classification,
                 semantic_requirement_id=requirement.id,
