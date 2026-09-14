@@ -311,6 +311,8 @@ def native_observation_finding_specs(
             severity=severity,
             confidence=confidence,
             category=category,
+            cwe_id=str(observation.get('cwe_id') or '')[:64],
+            owasp_category=str(observation.get('owasp_category') or '')[:200],
             remediation=str(observation.get('remediation') or '')[:5000],
             affected_urls=tuple(sorted(set(affected))),
             raw_data={
@@ -326,6 +328,41 @@ def native_observation_finding_specs(
         ))
     return findings
 
+
+
+def browser_postmessage_finding_specs(normalized: dict[str, Any]) -> list[NativeFindingSpec]:
+    observations = normalized.get('observations') if isinstance(normalized, dict) else None
+    if not isinstance(observations, list):
+        return []
+    findings: list[NativeFindingSpec] = []
+    for observation in observations:
+        if not isinstance(observation, dict) or observation.get('kind') != 'browser-spa-summary':
+            continue
+        try:
+            wildcard_sends = max(0, int(observation.get('post_message_wildcard_send_count') or 0))
+        except (TypeError, ValueError):
+            wildcard_sends = 0
+        if wildcard_sends <= 0:
+            continue
+        target_origin = str(observation.get('target_origin') or '')[:2048]
+        findings.append(NativeFindingSpec(
+            rule_id='wstg.postmessage-wildcard-target-origin',
+            title='Window postMessage uses wildcard targetOrigin',
+            description=(
+                'Runtime instrumentation observed one or more postMessage sends using targetOrigin="*", '
+                'which can disclose cross-window messages to an unintended origin.'
+            ),
+            severity='medium',
+            confidence='high',
+            category='wstg-native-validation',
+            cwe_id='CWE-346',
+            owasp_category='A04:2021-Insecure Design',
+            remediation='Use an explicit, validated target origin and validate message origins on every receiving handler.',
+            affected_urls=(target_origin,) if target_origin.startswith(('http://', 'https://')) else (),
+            raw_data={'target_origin': target_origin, 'wildcard_send_count': wildcard_sends},
+            identity_key='wstg.postmessage-wildcard-target-origin|' + target_origin,
+        ))
+    return findings
 
 def _finding_id(scan_id: str, capability_id: str, spec: NativeFindingSpec) -> UUID:
     identity = spec.identity_key or spec.rule_id
@@ -379,6 +416,19 @@ def project_native_findings(
         specs = kubernetes_finding_specs(normalized)
     elif capability_id == 'cloud.read-only-posture':
         specs = cloud_finding_specs(normalized)
+    elif capability_id == 'browser.postmessage-instrumentation':
+        specs = browser_postmessage_finding_specs(normalized)
+    elif capability_id in {
+        'web.http-method-policy',
+        'web.duplicate-parameter-semantics',
+        'web.ssrf-canary-validation',
+        'tls.posture',
+    }:
+        specs = native_observation_finding_specs(
+            normalized,
+            observation_kind='wstg-native-finding',
+            category='wstg-native-validation',
+        )
     elif capability_id == 'web.nikto':
         specs = native_observation_finding_specs(
             normalized,
