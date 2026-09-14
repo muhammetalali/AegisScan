@@ -366,8 +366,7 @@ def _tls_version_supported(destination: PinnedHTTPDestination, version: ssl.TLSV
                 context.set_ciphers('DEFAULT:@SECLEVEL=0')
             except ssl.SSLError:
                 pass
-            with context.wrap_socket(raw, server_hostname=destination.host) as wrapped:
-                wrapped.do_handshake()
+            with context.wrap_socket(raw, server_hostname=destination.host):
                 return True
         except (OSError, ssl.SSLError, ValueError):
             try:
@@ -413,7 +412,7 @@ def validate_tls_posture(target: str) -> dict[str, Any]:
     certificate_valid = True
     certificate_error = ''
     try:
-        request_pinned('HEAD', target, timeout=10, max_body_bytes=0, destination=destination)
+        request_pinned('HEAD', target, timeout=10, max_body_bytes=8388608, destination=destination)
     except RuntimeError as exc:
         cause = exc.__cause__
         if isinstance(cause, ssl.SSLCertVerificationError):

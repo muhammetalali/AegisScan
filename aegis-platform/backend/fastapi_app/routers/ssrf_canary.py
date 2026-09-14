@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 import re
 
@@ -31,7 +32,7 @@ def _control_token() -> str:
 
 def _require_control(value: str | None) -> None:
     expected = _control_token()
-    if value != expected:
+    if not hmac.compare_digest(value or '', expected):
         raise HTTPException(status_code=403, detail='SSRF canary control authorization failed')
 
 
