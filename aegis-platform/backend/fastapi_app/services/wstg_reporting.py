@@ -10,6 +10,7 @@ from django_project.evidence.models import Evidence
 from django_project.projects.models import Project
 from django_project.vulnerabilities.models import Vulnerability
 
+from .capability_registry import get_capability
 from .wstg_catalog import WSTGCatalog
 from .wstg_observation_lineage import wstg_observation_lineage
 
@@ -33,15 +34,18 @@ def _iso(value) -> str | None:
     return value.astimezone(timezone.utc).isoformat()
 
 
-def _trusted_lineage(value: Any) -> dict[str, Any] | None:
+def _trusted_lineage(value: Any, *, expected_source: str | None = None) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     capability_id = value.get('capability_id')
     if not isinstance(capability_id, str) or not capability_id:
         return None
     try:
+        capability = get_capability(capability_id)
         canonical = wstg_observation_lineage(capability_id)
     except (KeyError, ValueError):
+        return None
+    if expected_source is not None and str(expected_source).strip().lower() != capability.tool.strip().lower():
         return None
     if (
         value.get('schema') != canonical['schema']
@@ -63,14 +67,14 @@ def _project_evidence(project: Project, scan_id: str | None):
     ).distinct()
     if scan_id:
         qs = qs.filter(scan_id=scan_id)
-    return qs.only('id', 'metadata', 'collected_at')
+    return qs.only('id', 'source', 'metadata', 'collected_at')
 
 
 def _project_findings(project: Project, scan_id: str | None):
     qs = Vulnerability.objects.filter(project=project)
     if scan_id:
         qs = qs.filter(scan_id=scan_id)
-    return qs.only('id', 'raw_data', 'updated_at')
+    return qs.only('id', 'source_engine', 'raw_data', 'updated_at')
 
 
 def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None) -> dict[str, Any]:
@@ -100,7 +104,7 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
         raw = metadata.get('wstg_lineage')
         if raw is None:
             continue
-        lineage = _trusted_lineage(raw)
+        lineage = _trusted_lineage(raw, expected_source=evidence.source)
         if lineage is None:
             rejected_lineage_records += 1
             continue
@@ -121,7 +125,7 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
         raw = raw_data.get('_aegisscan_wstg')
         if raw is None:
             continue
-        lineage = _trusted_lineage(raw)
+        lineage = _trusted_lineage(raw, expected_source=finding.source_engine)
         if lineage is None:
             rejected_lineage_records += 1
             continue
