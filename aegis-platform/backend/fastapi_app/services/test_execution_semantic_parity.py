@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi_app.services.execution_semantic_parity import compare_execution_semantics
 
 
-def test_parity_ignores_observation_and_nested_list_order():
+def test_parity_ignores_only_outer_observation_order():
     legacy = {
         'schema': 'aegis.native-output.v1',
         'capability_id': 'recon.dnsenum',
@@ -17,7 +17,7 @@ def test_parity_ignores_observation_and_nested_list_order():
         'capability_id': 'recon.dnsenum',
         'observations': [
             {'kind': 'dns-address', 'value': '10.0.0.10'},
-            {'addresses': ['10.0.0.1', '10.0.0.2'], 'value': 'b.parity.test', 'kind': 'dns-hostname'},
+            {'addresses': ['10.0.0.2', '10.0.0.1'], 'value': 'b.parity.test', 'kind': 'dns-hostname'},
         ],
     }
 
@@ -32,6 +32,29 @@ def test_parity_ignores_observation_and_nested_list_order():
     assert report.finding_projection_applicable is False
     assert report.finding_projection_equivalent is True
     assert report.mismatches == ()
+
+
+def test_parity_fails_closed_on_nested_sequence_order_drift():
+    legacy = {
+        'observations': [
+            {'kind': 'ordered-chain', 'value': 'x', 'hops': ['first', 'second']},
+        ],
+    }
+    candidate = {
+        'observations': [
+            {'kind': 'ordered-chain', 'value': 'x', 'hops': ['second', 'first']},
+        ],
+    }
+
+    report = compare_execution_semantics(
+        capability_id='recon.fierce',
+        legacy_normalized=legacy,
+        candidate_normalized=candidate,
+    )
+
+    assert report.semantic_equivalent is False
+    assert report.observation_equivalent is False
+    assert 'normalized-observation-drift' in report.mismatches
 
 
 def test_parity_does_not_consider_runtime_provenance_or_raw_stdout():
