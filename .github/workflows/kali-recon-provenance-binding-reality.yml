@@ -7,6 +7,13 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
       - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py'
       - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provenance_binding.py'
+      - 'aegis-platform/kali/runner/recon_service.py'
+      - 'aegis-platform/kali/runner/profile_runtime_manifest.py'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/kali/tool-manifest.json'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
       - '.github/workflows/kali-recon-provenance-binding-reality.yml'
   push:
     branches: [main]
@@ -14,6 +21,13 @@ on:
       - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
       - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py'
       - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provenance_binding.py'
+      - 'aegis-platform/kali/runner/recon_service.py'
+      - 'aegis-platform/kali/runner/profile_runtime_manifest.py'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/kali/tool-manifest.json'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
       - '.github/workflows/kali-recon-provenance-binding-reality.yml'
 
 permissions:
@@ -43,7 +57,8 @@ jobs:
           python -m py_compile \
             aegis-platform/backend/fastapi_app/services/kali_recon_provider.py \
             aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py \
-            aegis-platform/backend/fastapi_app/services/test_kali_recon_provenance_binding.py
+            aegis-platform/backend/fastapi_app/services/test_kali_recon_provenance_binding.py \
+            aegis-platform/kali/runner/recon_service.py
       - name: Run Recon provider and provenance contracts
         env:
           PYTHONPATH: aegis-platform/backend
@@ -52,12 +67,160 @@ jobs:
           python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest \
             aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py \
             aegis-platform/backend/fastapi_app/services/test_kali_recon_provenance_binding.py
+      - name: Prove development and production trust-anchor wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          export AUTHORIZED_SCAN_TARGETS=aegis-scan-target
+          export POSTGRES_PASSWORD=reality-only
+          docker compose -f aegis-platform/docker-compose.yml --profile kali-recon config > compose.dev.yml
+          docker compose -f aegis-platform/docker-compose.yml -f aegis-platform/docker-compose.prod.yml --profile kali-recon config > compose.prod.yml
+          for key in \
+            AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION \
+            AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT \
+            AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST \
+            AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST \
+            AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST \
+            AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST
+          do
+            grep -q "$key" compose.dev.yml
+            grep -q "$key" compose.prod.yml
+          done
       - name: Audit execution boundary
         shell: bash
         run: |
           set -euo pipefail
           ! grep -n --fixed-strings 'shell=True' aegis-platform/backend/fastapi_app/services/kali_recon_provider.py
           grep -q "runtime.get('profile') != 'recon'" aegis-platform/backend/fastapi_app/services/kali_recon_provider.py
-          grep -q 'AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT' aegis-platform/backend/fastapi_app/services/kali_recon_provider.py
-          grep -q 'AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST' aegis-platform/backend/fastapi_app/services/kali_recon_provider.py
-          grep -q 'AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST' aegis-platform/backend/fastapi_app/services/kali_recon_provider.py
+          grep -q 'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST' aegis-platform/backend/fastapi_app/services/kali_recon_provider.py
+          grep -q 'AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST' aegis-platform/backend/fastapi_app/services/kali_recon_provider.py
+          grep -q "'runtime_manifest_digest': _sha256(RUNTIME_MANIFEST)" aegis-platform/kali/runner/recon_service.py
+
+  control-plane-runtime-reality:
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_RECON_REALITY_AUTH_TOKEN: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact Recon image
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-recon \
+            -t aegis-kali:recon \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+      - name: Derive Control Plane deployment trust anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint cat aegis-kali:recon /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('runtime-manifest.json','rb').read()
+          r=json.loads(raw)
+          print('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION='+r['runner_version'])
+          print('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT='+r['build_commit'])
+          print('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST='+r['base_image_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST='+r['tool_manifest_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST=$(docker image inspect aegis-kali:recon --format '{{.Id}}')" >> "$GITHUB_ENV"
+      - name: Start isolated real provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-recon-binding \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700 \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_RECON_REALITY_AUTH_TOKEN}" \
+            --entrypoint /usr/bin/tini aegis-kali:recon -- python3 /opt/aegis-runner/recon_service.py
+          for _ in $(seq 1 30); do
+            docker exec aegis-recon-binding python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=2)); assert d['status']=='ok'" && exit 0
+            sleep 1
+          done
+          docker logs aegis-recon-binding
+          exit 1
+      - name: Prove production Control Plane client against real provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --network container:aegis-recon-binding \
+            -v "$PWD/aegis-platform/backend:/app:ro" \
+            -e PYTHONPATH=/app \
+            -e AEGIS_RECON_PROVIDER=kali \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_RECON_REALITY_AUTH_TOKEN}" \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            --entrypoint python3 aegis-kali:recon - <<'PY'
+          import os
+          from fastapi_app.services.kali_recon_provider import execute_kali_recon
+          result=execute_kali_recon(
+              capability_id='recon.subfinder', target='example.com', options={}, timeout_seconds=120,
+              execution_ref='cp-real-success', authorization_ref='auth-reality',
+              scope_ref='project:reality:asset:example-com', state_getter=None, poll_interval=0.1,
+          )
+          assert result['status']=='completed'
+          runtime=result['runtime']
+          assert runtime['image_digest']==os.environ['AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST']
+          assert runtime['runtime_manifest_digest']==os.environ['AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST']
+          assert runtime['provenance_authority']=='control-plane-deployment-pins'
+          PY
+      - name: Prove trusted pin drift fails closed against real provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --network container:aegis-recon-binding \
+            -v "$PWD/aegis-platform/backend:/app:ro" \
+            -e PYTHONPATH=/app \
+            -e AEGIS_RECON_PROVIDER=kali \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_RECON_REALITY_AUTH_TOKEN}" \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT=0000000000000000000000000000000000000000 \
+            -e AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            --entrypoint python3 aegis-kali:recon - <<'PY'
+          from fastapi_app.services.kali_recon_provider import KaliReconProviderError, execute_kali_recon
+          try:
+              execute_kali_recon(
+                  capability_id='recon.subfinder', target='example.com', options={}, timeout_seconds=120,
+                  execution_ref='cp-real-drift', authorization_ref='auth-reality',
+                  scope_ref='project:reality:asset:example-com', state_getter=None, poll_interval=0.1,
+              )
+          except KaliReconProviderError as exc:
+              assert 'pinned build_commit mismatch' in str(exc), str(exc)
+          else:
+              raise AssertionError('trusted build pin drift was accepted')
+          PY
+      - name: Cleanup
+        if: always()
+        run: docker rm -f aegis-recon-binding >/dev/null 2>&1 || true
