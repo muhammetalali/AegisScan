@@ -488,6 +488,7 @@ _INSTRUMENTATION_SCRIPT = r"""
   const state = {
     postMessageListeners: 0,
     postMessagesSent: 0,
+    postMessageWildcardSends: 0,
     innerHTMLWrites: 0,
     insertAdjacentHTMLCalls: 0,
     documentWriteCalls: 0,
@@ -536,10 +537,16 @@ _INSTRUMENTATION_SCRIPT = r"""
     };
   } catch (_) {}
   try {
-    const originalPost = window.postMessage.bind(window);
-    window.postMessage = function(...args) {
+    const originalPost = Window.prototype.postMessage;
+    Window.prototype.postMessage = function(message, targetOrigin, ...rest) {
       state.postMessagesSent += 1;
-      return originalPost(...args);
+      const effectiveTarget = (
+        typeof targetOrigin === 'string'
+          ? targetOrigin
+          : (targetOrigin && typeof targetOrigin === 'object' ? targetOrigin.targetOrigin : '')
+      );
+      if (effectiveTarget === '*') state.postMessageWildcardSends += 1;
+      return originalPost.call(this, message, targetOrigin, ...rest);
     };
   } catch (_) {}
   try {
@@ -639,6 +646,7 @@ _RUNTIME_SUMMARY_EXPRESSION = r"""
     signals: {
       postMessageListeners: Number(signals.postMessageListeners || 0),
       postMessagesSent: Number(signals.postMessagesSent || 0),
+      postMessageWildcardSends: Number(signals.postMessageWildcardSends || 0),
       innerHTMLWrites: Number(signals.innerHTMLWrites || 0),
       insertAdjacentHTMLCalls: Number(signals.insertAdjacentHTMLCalls || 0),
       documentWriteCalls: Number(signals.documentWriteCalls || 0),
@@ -1016,6 +1024,7 @@ async def discover(
             'cookies': cookie_metadata,
             'post_message_listener_count': int(signals.get('postMessageListeners') or 0),
             'post_message_send_count': int(signals.get('postMessagesSent') or 0),
+            'post_message_wildcard_send_count': int(signals.get('postMessageWildcardSends') or 0),
             'inner_html_write_count': int(signals.get('innerHTMLWrites') or 0),
             'insert_adjacent_html_count': int(signals.get('insertAdjacentHTMLCalls') or 0),
             'document_write_count': int(signals.get('documentWriteCalls') or 0),
