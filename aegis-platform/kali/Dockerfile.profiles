@@ -131,7 +131,7 @@ FROM profile-common AS profile-browser
 ENV AEGIS_RUNNER_PROFILE=browser
 LABEL io.aegisscan.runner.profile=browser
 ADD --checksum=sha256:bbe8776c74132a8d33ea97e4957e52ae22001f9e9f4924889ad5466967ee9219 \
-    https://archive.kali.org/kali/pool/main/f/firefox-esr/firefox-esr_140.14.0esr-2_amd64.deb \
+    https://deb.debian.org/debian/pool/main/f/firefox-esr/firefox-esr_140.14.0esr-2_amd64.deb \
     /tmp/firefox-esr.deb
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium=150.0.7871.181-1 /tmp/firefox-esr.deb \
