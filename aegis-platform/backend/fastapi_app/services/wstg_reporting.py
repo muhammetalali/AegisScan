@@ -57,17 +57,23 @@ def _trusted_lineage(value: Any) -> dict[str, Any] | None:
     return canonical
 
 
-def _project_evidence(project: Project):
-    return Evidence.objects.filter(
+def _project_evidence(project: Project, scan_id: str | None):
+    qs = Evidence.objects.filter(
         Q(scan__project=project) | Q(finding__project=project) | Q(asset__project=project)
-    ).distinct().only('id', 'metadata', 'collected_at')
+    ).distinct()
+    if scan_id:
+        qs = qs.filter(scan_id=scan_id)
+    return qs.only('id', 'metadata', 'collected_at')
 
 
-def _project_findings(project: Project):
-    return Vulnerability.objects.filter(project=project).only('id', 'raw_data', 'updated_at')
+def _project_findings(project: Project, scan_id: str | None):
+    qs = Vulnerability.objects.filter(project=project)
+    if scan_id:
+        qs = qs.filter(scan_id=scan_id)
+    return qs.only('id', 'raw_data', 'updated_at')
 
 
-def build_wstg_project_coverage(project: Project) -> dict[str, Any]:
+def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None) -> dict[str, Any]:
     catalog = WSTGCatalog()
     rows: dict[str, dict[str, Any]] = {}
     for test in catalog.tests:
@@ -89,7 +95,7 @@ def build_wstg_project_coverage(project: Project) -> dict[str, Any]:
     trusted_finding_records = 0
     rejected_lineage_records = 0
 
-    for evidence in _project_evidence(project):
+    for evidence in _project_evidence(project, scan_id):
         metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
         raw = metadata.get('wstg_lineage')
         if raw is None:
@@ -110,7 +116,7 @@ def build_wstg_project_coverage(project: Project) -> dict[str, Any]:
             if row['latest_observed_at'] is None or observed_at > row['latest_observed_at']:
                 row['latest_observed_at'] = observed_at
 
-    for finding in _project_findings(project):
+    for finding in _project_findings(project, scan_id):
         raw_data = finding.raw_data if isinstance(finding.raw_data, dict) else {}
         raw = raw_data.get('_aegisscan_wstg')
         if raw is None:
@@ -174,6 +180,7 @@ def build_wstg_project_coverage(project: Project) -> dict[str, Any]:
         'source': 'postgresql',
         'project_id': str(project.id),
         'project_name': project.name,
+        'scope_scan_id': str(scan_id) if scan_id else None,
         'claim_policy': OBSERVATION_ONLY_POLICY,
         'completion_claim_allowed': COMPLETION_CLAIM_ALLOWED,
         'finding_state_authority': FINDING_STATE_AUTHORITY,
