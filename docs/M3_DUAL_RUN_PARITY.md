@@ -33,6 +33,8 @@ A M3 pass never requires byte-identical raw stdout, execution IDs, timestamps, i
 
 The comparator canonicalizes dictionary/list ordering recursively but does not delete observation fields. Any normalized security-semantic drift therefore changes the observation digest. Finding projection drift is checked independently.
 
+The report also exposes `finding_projection_applicable`. Recon discovery capabilities such as `recon.fierce` intentionally have no vulnerability Finding projection in the current production registry, so their Finding count is expected to be `0/0` and is not presented as Finding proof. Capabilities with an approved projection (for example `web.nikto`) must additionally pass Finding projection parity.
+
 ## Deterministic real dual-run Reality
 
 The dedicated `M3 Dual-run Parity Reality` gate now proves a real execution pair rather than fixture-only comparator behavior.
