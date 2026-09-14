@@ -9,7 +9,7 @@ import re
 from typing import Any, Literal
 
 from .capability_planner import Depth, plan_capabilities
-from .wstg_capability_mapping import WSTGCapabilityMapping
+from .wstg_capability_mapping import EXPECTED_GAPS, WSTGCapabilityMapping
 from .wstg_catalog import PACK, WSTGCatalog
 
 WSTGPlanStatus = Literal['planned', 'manual_required', 'inconclusive', 'blocked', 'not_applicable']
@@ -295,10 +295,20 @@ class WSTGExecutionPlanner:
                     applicability_refs = context.evidence_refs
                     eligible = ()
                 elif test.classification == 'GAP_NATIVE_SMALL':
-                    status = 'blocked'
-                    reason = 'Approved native validator remains blocked until reviewed canonical integration.'
-                    applicability_refs = context.evidence_refs
-                    eligible = ()
+                    expected_native = EXPECTED_GAPS.get(test.id)
+                    if expected_native and expected_native in eligible:
+                        status = 'planned'
+                        reason = (
+                            'Reviewed bounded native validator is registered, packaged and execution-ready; '
+                            'dispatch remains authorization-bound and observation-only.'
+                        )
+                        applicability_refs = context.evidence_refs
+                        eligible = (expected_native,)
+                    else:
+                        status = 'blocked'
+                        reason = 'Approved native validator is not execution-ready; planner fails closed.'
+                        applicability_refs = context.evidence_refs
+                        eligible = ()
                 elif eligible or service_refs:
                     status = 'planned'
                     reason = (
