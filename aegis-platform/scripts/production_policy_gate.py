@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 
@@ -16,6 +17,7 @@ NO_NEW_PRIVILEGES_SERVICES = HARDENED_SERVICES - {'scanner_worker'}
 _TRUTHY = {'1', 'true', 'yes', 'on'}
 _SCANNER_BOOTSTRAP_CAPS = {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
 _BACKUP_SECRET_TARGETS = {'/run/secrets/s3-credentials.json', '/run/secrets/encryption.key'}
+_IMAGE_DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
 
 
 def _tokens(value) -> set[str]:
@@ -42,6 +44,19 @@ def _command_text(service: dict) -> str:
     if isinstance(value, list):
         return ' '.join(str(item) for item in value)
     return str(value)
+
+
+def _immutable_image_digest(value) -> str | None:
+    """Return the immutable digest selected by an OCI reference or local image ID."""
+    image = str(value or '').strip()
+    if _IMAGE_DIGEST_RE.fullmatch(image):
+        return image
+    if '@' not in image:
+        return None
+    digest = image.rsplit('@', 1)[1]
+    if _IMAGE_DIGEST_RE.fullmatch(digest):
+        return digest
+    return None
 
 
 def validate(model: dict) -> list[str]:
@@ -150,6 +165,33 @@ def validate(model: dict) -> list[str]:
         failures.append('scanner_worker does not share the scanner_egress network namespace')
     if 'scanner-worker-entrypoint.sh' not in _command_text(scanner_worker):
         failures.append('scanner_worker does not use the audited non-root capability handoff launcher')
+
+    scanner_env = scanner_worker.get('environment') or {}
+    recon_provider = str(scanner_env.get('AEGIS_RECON_PROVIDER', 'legacy')).strip().lower() or 'legacy'
+    if recon_provider == 'kali':
+        kali_recon = services.get('kali_recon')
+        if not isinstance(kali_recon, dict):
+            failures.append('Kali Recon mode requires the kali_recon production service')
+        else:
+            selected_digest = _immutable_image_digest(kali_recon.get('image'))
+            expected_digest = str(
+                scanner_env.get('AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST', '')
+            ).strip()
+            if selected_digest is None:
+                failures.append(
+                    'Kali Recon production image must be selected by immutable '
+                    'sha256 image ID or digest-qualified OCI reference'
+                )
+            if not _IMAGE_DIGEST_RE.fullmatch(expected_digest):
+                failures.append(
+                    'Kali Recon mode requires a valid '
+                    'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST trust value'
+                )
+            elif selected_digest is not None and selected_digest != expected_digest:
+                failures.append(
+                    'Kali Recon production image digest does not match '
+                    'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST'
+                )
 
     egress = services.get('scanner_egress', {})
     egress_caps = _tokens(egress.get('cap_add'))
