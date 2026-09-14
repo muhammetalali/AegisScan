@@ -13,7 +13,7 @@ from django_project.scans.models import Scan
 from django_project.users.models import User
 from fastapi_app.core import dependencies as core_dependencies
 from fastapi_app.routers import wstg as wstg_router
-from fastapi_app.routers.reports import _build_payload, _make_csv
+from fastapi_app.routers.reports import ReportCreate, _build_payload, _create_report, _make_csv
 from fastapi_app.services.nmap_finding_ingestion import ingest_nmap_findings
 from fastapi_app.services.wstg_observation_lineage import attach_wstg_evidence_metadata
 from fastapi_app.services.wstg_reporting import build_wstg_project_coverage
@@ -136,6 +136,32 @@ def test_wstg_report_projection_reuses_same_coverage_contract():
     assert 'WSTG-v42-INFO-02' in csv_text
     assert 'observation-only' not in csv_text
     assert 'observed' in csv_text
+
+
+@pytest.mark.django_db
+def test_wstg_json_report_persists_integrity_bound_artifact(settings, tmp_path):
+    owner, _, project, _ = _fixture_project()
+    settings.MEDIA_ROOT = tmp_path
+    payload = async_to_sync(_build_payload)(str(project.id), None, 'wstg')
+    body = ReportCreate(
+        project_id=str(project.id),
+        title='WSTG Observation Coverage',
+        report_type='wstg',
+        format='json',
+        template_id='wstg',
+    )
+
+    report = async_to_sync(_create_report)(body, str(owner.id), payload)
+
+    assert report.status == report.Status.COMPLETED
+    assert report.file_size > 0
+    assert len(report.artifact_sha256) == 64
+    assert report.record_count == 97
+    artifact = report.file.read().decode('utf-8')
+    assert '"methodology": "WSTG"' in artifact
+    assert '"completion_claim_allowed": false' in artifact
+    assert '"claim_policy": "observation-only"' in artifact
+    assert '"rejected_lineage_records": 1' in artifact
 
 
 @pytest.mark.django_db(transaction=True)
