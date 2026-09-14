@@ -6,6 +6,7 @@ name: M3 Dual-run Parity Reality
     paths:
       - 'aegis-platform/backend/fastapi_app/services/execution_semantic_parity.py'
       - 'aegis-platform/backend/fastapi_app/services/test_execution_semantic_parity.py'
+      - 'aegis-platform/e2e/m3_dns_fixture.py'
       - 'docs/M3_DUAL_RUN_PARITY.md'
       - '.github/workflows/m3-dual-run-parity-reality.yml'
   push:
@@ -13,6 +14,7 @@ name: M3 Dual-run Parity Reality
     paths:
       - 'aegis-platform/backend/fastapi_app/services/execution_semantic_parity.py'
       - 'aegis-platform/backend/fastapi_app/services/test_execution_semantic_parity.py'
+      - 'aegis-platform/e2e/m3_dns_fixture.py'
       - 'docs/M3_DUAL_RUN_PARITY.md'
       - '.github/workflows/m3-dual-run-parity-reality.yml'
   workflow_dispatch:
@@ -41,26 +43,15 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
       - name: Install backend dependencies
         run: python -m pip install -r aegis-platform/backend/requirements.txt
-      - name: Prove semantic comparator contract
-        working-directory: aegis-platform/backend
-        run: python -m pytest -q fastapi_app/services/test_execution_semantic_parity.py
-      - name: Prove this gate cannot claim real dual-run completion
-        shell: bash
+      - name: Compile M3 contracts and deterministic fixture
         run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          doc=Path('docs/M3_DUAL_RUN_PARITY.md').read_text(encoding='utf-8')
-          required=[
-              'not M3 completion evidence',
-              'real legacy + Kali executions',
-              'blocked until PR #125',
-              'M4 Canary',
-          ]
-          for marker in required:
-              assert marker in doc, marker
-          print('M3_CONTRACT_ONLY_GATE=PASS')
-          PY
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/execution_semantic_parity.py             aegis-platform/backend/fastapi_app/services/test_execution_semantic_parity.py             aegis-platform/e2e/m3_dns_fixture.py
+      - name: Prove semantic comparator contract
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_execution_semantic_parity.py
       - name: Capture exact-head comparator evidence
         shell: bash
         run: |
@@ -74,9 +65,8 @@ jobs:
               'semantic_scope':['normalized-observations','finding-projection'],
               'raw_stdout_byte_equality_required':False,
               'runtime_provenance_is_semantic_output':False,
-              'real_dual_run_proven':False,
+              'real_dual_run_required':True,
               'cutover_allowed':False,
-              'blocking_dependency':'PR-125-current-main-sync-and-merge',
           },sort_keys=True,indent=2))
           PY
       - uses: actions/upload-artifact@v4
@@ -84,3 +74,285 @@ jobs:
           name: m3-semantic-parity-contract-${{ env.AEGIS_EXACT_HEAD }}
           path: artifacts/
           if-no-files-found: error
+
+  real-dual-run-parity:
+    needs: semantic-parity-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_M3_AUTH_TOKEN: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_M3_NETWORK: aegis-m3-parity
+      AEGIS_M3_DNS_IP: 172.28.0.53
+      AEGIS_M3_TARGET: parity.test
+      AEGIS_M3_CAPABILITY: recon.fierce
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+
+      - name: Build exact legacy scanner runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache             -t aegis-m3:legacy             -f aegis-platform/backend/Dockerfile.django             aegis-platform/backend
+
+      - name: Build exact governed Kali Recon runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache             --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}"             --build-arg AEGIS_RUNNER_VERSION=0.1.0             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             -t aegis-kali:base             -f aegis-platform/kali/Dockerfile.base             aegis-platform/kali
+          docker build --no-cache             --build-arg AEGIS_BASE_IMAGE=aegis-kali:base             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             --target profile-recon             -t aegis-kali:recon             -f aegis-platform/kali/Dockerfile.profiles             .
+
+      - name: Derive immutable Kali deployment trust anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:recon --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected Kali Recon image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          print('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_RECON_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+
+      - name: Start deterministic authorized DNS fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network create --subnet 172.28.0.0/16 "${AEGIS_M3_NETWORK}"
+          docker run -d --name aegis-m3-dns             --network "${AEGIS_M3_NETWORK}" --ip "${AEGIS_M3_DNS_IP}"             --user 0:0             -v "$PWD/aegis-platform/e2e/m3_dns_fixture.py:/opt/aegis-m3-dns-fixture.py:ro"             --entrypoint python aegis-m3:legacy /opt/aegis-m3-dns-fixture.py
+          for _ in $(seq 1 30); do
+            if docker logs aegis-m3-dns 2>&1 | grep -q 'AEGIS_M3_DNS_FIXTURE_READY'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-m3-dns
+          exit 1
+
+      - name: Prove deterministic fixture resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm             --network "${AEGIS_M3_NETWORK}" --dns "${AEGIS_M3_DNS_IP}"             --entrypoint python aegis-m3:legacy - <<'PY'
+          import socket
+          expected={'172.28.0.10'}
+          actual={item[4][0] for item in socket.getaddrinfo('parity.test', None, type=socket.SOCK_STREAM)}
+          assert actual == expected, (actual, expected)
+          PY
+
+      - name: Execute real legacy production runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          chmod 0777 artifacts
+          docker run --rm             --network "${AEGIS_M3_NETWORK}" --dns "${AEGIS_M3_DNS_IP}"             -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M3_TARGET},172.28.0.0/16"             -e AEGIS_M3_TARGET -e AEGIS_M3_CAPABILITY             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-m3:legacy - <<'PY'
+          import json, os, subprocess
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          capability=os.environ['AEGIS_M3_CAPABILITY']
+          target=os.environ['AEGIS_M3_TARGET']
+          options={}
+          result=run_native_tool(capability, target, options)
+          if result.exit_code != 0:
+              raise SystemExit(f'legacy execution failed: exit={result.exit_code} stderr={result.stderr[:2000]}')
+          version=subprocess.check_output(
+              ['dpkg-query','-W','-f=${Version}','fierce'],
+              text=True,
+          ).strip()
+          payload={
+              'backend':'legacy',
+              'capability_id':capability,
+              'target':result.target,
+              'options':options,
+              'tool':result.tool,
+              'tool_version':version,
+              'exit_code':result.exit_code,
+              'stdout':result.stdout,
+              'stderr':result.stderr,
+              'runtime_provenance':{'provider':'legacy-native-worker'},
+          }
+          with open('/artifacts/legacy-execution.json','w',encoding='utf-8') as handle:
+              json.dump(payload,handle,sort_keys=True)
+          PY
+
+      - name: Start real governed Kali Recon provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-m3-kali             --network "${AEGIS_M3_NETWORK}" --dns "${AEGIS_M3_DNS_IP}"             --read-only --cap-drop ALL --security-opt no-new-privileges:true             --pids-limit 128 --memory 512m --cpus 1             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700             --tmpfs /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700             -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_M3_AUTH_TOKEN}"             --entrypoint /usr/bin/tini "${AEGIS_KALI_RECON_IMAGE}" -- python3 /opt/aegis-runner/recon_service.py
+          for _ in $(seq 1 30); do
+            if docker exec aegis-m3-kali python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=2)); assert d['status']=='ok'"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-m3-kali
+          exit 1
+
+      - name: Prove provider image identity before candidate execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNING_IMAGE="$(docker inspect --format '{{.Image}}' aegis-m3-kali)"
+          test "$RUNNING_IMAGE" = "${AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST}"
+
+      - name: Execute real Kali candidate through production Control Plane provider client
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i             --network container:aegis-m3-kali             -v "$PWD/aegis-platform/backend:/app:ro"             -v "$PWD/artifacts:/artifacts"             -e PYTHONPATH=/app             -e AEGIS_RECON_PROVIDER=kali             -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_M3_AUTH_TOKEN}"             -e AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION             -e AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT             -e AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST             -e AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST             -e AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST             -e AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST             -e AEGIS_M3_TARGET -e AEGIS_M3_CAPABILITY             --entrypoint python3 "${AEGIS_KALI_RECON_IMAGE}" - <<'PY'
+          import json, os
+          from fastapi_app.services.kali_recon_provider import execute_kali_recon
+
+          capability=os.environ['AEGIS_M3_CAPABILITY']
+          target=os.environ['AEGIS_M3_TARGET']
+          options={}
+          result=execute_kali_recon(
+              capability_id=capability,
+              target=target,
+              options=options,
+              timeout_seconds=300,
+              execution_ref='m3-kali-real',
+              authorization_ref='authorization:m3-reality',
+              scope_ref='project:m3-reality:asset:parity-test',
+              state_getter=None,
+              poll_interval=0.1,
+          )
+          if result['exit_code'] != 0:
+              raise SystemExit(f"kali execution failed: exit={result['exit_code']} stderr={result['stderr'][:2000]}")
+          runtime=result['runtime']
+          assert runtime['provider']=='aegis-kali-recon'
+          assert runtime['profile']=='recon'
+          assert runtime['provenance_authority']=='control-plane-deployment-pins'
+          assert runtime['image_digest']==os.environ['AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST']
+          payload={
+              'backend':'kali',
+              'capability_id':capability,
+              'target':result['target'],
+              'options':options,
+              'tool':result['tool'],
+              'exit_code':result['exit_code'],
+              'stdout':result['stdout'],
+              'stderr':result['stderr'],
+              'runtime_provenance':runtime,
+          }
+          with open('/artifacts/kali-execution.json','w',encoding='utf-8') as handle:
+              json.dump(payload,handle,sort_keys=True)
+          PY
+
+      - name: Compare production-normalized semantics and Finding projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i             -v "$PWD/artifacts:/artifacts"             -e AEGIS_EXACT_HEAD -e GITHUB_REF             --entrypoint python aegis-m3:legacy - <<'PY'
+          import json, os
+          from fastapi_app.services.execution_semantic_parity import compare_execution_semantics
+          from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
+
+          with open('/artifacts/legacy-execution.json',encoding='utf-8') as handle:
+              legacy=json.load(handle)
+          with open('/artifacts/kali-execution.json',encoding='utf-8') as handle:
+              kali=json.load(handle)
+
+          for field in ('capability_id','target','options','tool'):
+              assert legacy[field] == kali[field], (field, legacy[field], kali[field])
+
+          capability=legacy['capability_id']
+          legacy_normalized=normalize_enriched_native_output(capability, legacy['stdout'])
+          kali_normalized=normalize_enriched_native_output(capability, kali['stdout'])
+
+          assert legacy_normalized.get('count',0) > 0, legacy_normalized
+          assert kali_normalized.get('count',0) > 0, kali_normalized
+
+          legacy_values={
+              (item.get('kind'),item.get('value'))
+              for item in legacy_normalized.get('observations',[])
+              if isinstance(item,dict)
+          }
+          kali_values={
+              (item.get('kind'),item.get('value'))
+              for item in kali_normalized.get('observations',[])
+              if isinstance(item,dict)
+          }
+          expected={
+              ('dns-hostname','parity.test'),
+              ('dns-hostname','www.parity.test'),
+              ('dns-hostname','mail.parity.test'),
+              ('dns-hostname','ns1.parity.test'),
+          }
+          assert expected & legacy_values, (expected, legacy_values)
+          assert expected & kali_values, (expected, kali_values)
+
+          report=compare_execution_semantics(
+              capability_id=capability,
+              legacy_normalized=legacy_normalized,
+              candidate_normalized=kali_normalized,
+          )
+          if not report.semantic_equivalent:
+              raise AssertionError(report.as_dict())
+
+          evidence={
+              'schema':'aegis.m3-real-dual-run.v1',
+              'exact_head':os.environ['AEGIS_EXACT_HEAD'],
+              'fixture':'deterministic-authorized-local-dns-v1',
+              'capability_id':capability,
+              'target':legacy['target'],
+              'options':legacy['options'],
+              'legacy_runtime':{
+                  'provider':legacy['runtime_provenance']['provider'],
+                  'tool':legacy['tool'],
+                  'tool_version':legacy['tool_version'],
+              },
+              'candidate_runtime':kali['runtime_provenance'],
+              'legacy_normalized':legacy_normalized,
+              'candidate_normalized':kali_normalized,
+              'parity':report.as_dict(),
+              'real_dual_run_proven':True,
+              'raw_stdout_byte_equality_required':False,
+              'cutover_allowed':False,
+              'note':'M4 remains blocked until PR merge and fresh exact-main proof.',
+          }
+          with open('/artifacts/m3-real-dual-run.json','w',encoding='utf-8') as handle:
+              json.dump(evidence,handle,sort_keys=True,indent=2)
+          print(json.dumps(report.as_dict(),sort_keys=True))
+          PY
+
+      - name: Capture exact-head proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > artifacts/head-sha.txt
+          test "$(cat artifacts/head-sha.txt)" = "${AEGIS_EXACT_HEAD}"
+          test -s artifacts/legacy-execution.json
+          test -s artifacts/kali-execution.json
+          test -s artifacts/m3-real-dual-run.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m3-real-dual-run-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f aegis-m3-kali aegis-m3-dns >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_M3_NETWORK}" >/dev/null 2>&1 || true
