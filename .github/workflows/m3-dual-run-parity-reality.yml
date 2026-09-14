@@ -1,0 +1,86 @@
+name: M3 Dual-run Parity Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/execution_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_execution_semantic_parity.py'
+      - 'docs/M3_DUAL_RUN_PARITY.md'
+      - '.github/workflows/m3-dual-run-parity-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/execution_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_execution_semantic_parity.py'
+      - 'docs/M3_DUAL_RUN_PARITY.md'
+      - '.github/workflows/m3-dual-run-parity-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m3-dual-run-parity-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semantic-parity-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Prove semantic comparator contract
+        working-directory: aegis-platform/backend
+        run: python -m pytest -q fastapi_app/services/test_execution_semantic_parity.py
+      - name: Prove this gate cannot claim real dual-run completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          doc=Path('docs/M3_DUAL_RUN_PARITY.md').read_text(encoding='utf-8')
+          required=[
+              'not M3 completion evidence',
+              'real legacy + Kali executions',
+              'blocked until PR #125',
+              'M4 Canary',
+          ]
+          for marker in required:
+              assert marker in doc, marker
+          print('M3_CONTRACT_ONLY_GATE=PASS')
+          PY
+      - name: Capture exact-head comparator evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/m3-semantic-parity-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.execution-semantic-parity.v1',
+              'semantic_scope':['normalized-observations','finding-projection'],
+              'raw_stdout_byte_equality_required':False,
+              'runtime_provenance_is_semantic_output':False,
+              'real_dual_run_proven':False,
+              'cutover_allowed':False,
+              'blocking_dependency':'PR-125-current-main-sync-and-merge',
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m3-semantic-parity-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
