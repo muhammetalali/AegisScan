@@ -1,0 +1,181 @@
+name: Kali Profiles Parity Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/kali/**'
+      - 'aegis-platform/backend/fastapi_app/services/kali_profile_policy.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_kali_profile_policy.py'
+      - '.github/workflows/kali-profiles-parity-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/kali/**'
+      - 'aegis-platform/backend/fastapi_app/services/kali_profile_policy.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_kali_profile_policy.py'
+      - '.github/workflows/kali-profiles-parity-reality.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kali-profiles-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Run pure profile and registry contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pip install --disable-pip-version-check pytest==9.1.1 psutil
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest \
+            aegis-platform/backend/fastapi_app/services/test_kali_profile_policy.py \
+            aegis-platform/kali/tests/test_profile_contract.py
+      - name: Reject forbidden supply-chain and execution patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number 'kali-linux-everything\|@latest\|:latest' aegis-platform/kali
+          ! grep -R --line-number --fixed-strings 'shell=True' aegis-platform/kali
+          ! grep -R --line-number -E 'assetfinder|findomain|chaos|shosubgo|aquatone|hakrawler|urlfinder|dirsearch|sqlmap|commix|hydra' aegis-platform/kali/tool-manifest.json
+
+  profile-images:
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [network, recon, web, api, browser, code, cloud, binary, crypto]
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_BASE_DIGEST: sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd328c076224a552e7332a3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build pinned foundation and profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target "profile-${{ matrix.profile }}" \
+            -t "aegis-kali:${{ matrix.profile }}" \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+      - name: Verify non-root profile identity and fail-closed runner binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile='${{ matrix.profile }}'
+          test "$(docker run --rm --entrypoint id "aegis-kali:${profile}" -u)" = "10001"
+          test "$(docker image inspect "aegis-kali:${profile}" --format '{{ index .Config.Labels "io.aegisscan.runner.profile" }}')" = "$profile"
+          docker run --rm --entrypoint env "aegis-kali:${profile}" | grep -Fx "AEGIS_RUNNER_PROFILE=${profile}"
+          docker run --rm --entrypoint cat "aegis-kali:${profile}" /opt/aegis-runner/runtime-manifest.json | tee runtime-manifest.json
+          python - "$profile" <<'PY'
+          import json, os, sys
+          payload = json.load(open('runtime-manifest.json'))
+          profile = sys.argv[1]
+          assert payload['runtime'] == 'aegis-kali'
+          assert payload['profile'] == profile
+          assert payload['build_commit'] == os.environ['AEGIS_EXACT_HEAD']
+          assert payload['base_image_digest'] == os.environ['AEGIS_BASE_DIGEST']
+          assert payload['dispatch_enabled'] is False
+          assert payload['dispatch_state'] == 'accepted-no-dispatch'
+          assert payload['tool_manifest_digest'].startswith('sha256:')
+          assert isinstance(payload['profile_capabilities'], list)
+          assert isinstance(payload['profile_tools'], dict)
+          assert isinstance(payload['profile_artifacts'], dict)
+          PY
+          mkdir -p /tmp/aegis-profile-reality
+          printf '{"execution_id":"profile-reality","capability_id":"foundation.contract","asset_id":"asset-reality","authorization_id":"auth-reality","authorization_decision":"authorized","risk_level":"passive","profile":"%s","options":{}}\n' "$profile" > /tmp/aegis-profile-reality/job.json
+          docker run --rm \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 128 \
+            --memory 512m \
+            --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+            -v /tmp/aegis-profile-reality/job.json:/workspace/job.json:ro \
+            "aegis-kali:${profile}" | tee runner-result.json
+          grep -q '"status": "accepted-no-dispatch"' runner-result.json
+          grep -q "\"runner_profile\": \"${profile}\"" runner-result.json
+      - name: Generate profile SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: aegis-kali:${{ matrix.profile }}
+          format: spdx-json
+          output-file: profile.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Bind image, runtime, tool, artifact and SBOM provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile='${{ matrix.profile }}'
+          image_id="$(docker image inspect "aegis-kali:${profile}" --format '{{.Id}}')"
+          python - "$profile" "$image_id" <<'PY'
+          import hashlib, json, os, pathlib, sys
+          profile, image_id = sys.argv[1:]
+          runtime_bytes = pathlib.Path('runtime-manifest.json').read_bytes()
+          runtime = json.loads(runtime_bytes)
+          manifest = pathlib.Path('aegis-platform/kali/tool-manifest.json').read_bytes()
+          sbom = pathlib.Path('profile.spdx.json').read_bytes()
+          payload = {
+              'runtime': 'aegis-kali',
+              'runner_version': runtime['runner_version'],
+              'profile': profile,
+              'dispatch_enabled': runtime['dispatch_enabled'],
+              'dispatch_state': runtime['dispatch_state'],
+              'image_digest': image_id,
+              'base_image_digest': os.environ['AEGIS_BASE_DIGEST'],
+              'build_commit': os.environ['AEGIS_EXACT_HEAD'],
+              'runtime_manifest_digest': 'sha256:' + hashlib.sha256(runtime_bytes).hexdigest(),
+              'tool_manifest_digest': 'sha256:' + hashlib.sha256(manifest).hexdigest(),
+              'sbom_digest': 'sha256:' + hashlib.sha256(sbom).hexdigest(),
+              'tool_versions': runtime['profile_tools'],
+              'artifact_versions': runtime['profile_artifacts'],
+          }
+          pathlib.Path('profile-provenance.json').write_text(json.dumps(payload, sort_keys=True, indent=2) + '\n')
+          PY
+          cat profile-provenance.json
+      - name: Upload profile evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kali-profile-${{ matrix.profile }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            runtime-manifest.json
+            runner-result.json
+            profile-provenance.json
+            profile.spdx.json
+          if-no-files-found: error
