@@ -9,6 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from fastapi_app.services.capability_registry import get_capability
 from fastapi_app.services.wstg_capability_mapping import WSTGCapabilityMapping
 from fastapi_app.services.wstg_observation_lineage import wstg_observation_lineage
 
@@ -26,15 +27,29 @@ INTEGRATION_FILES = (
 def verify() -> dict:
     mapping = WSTGCapabilityMapping()
     expected: dict[str, set[str]] = {}
-    classifications = Counter()
+    registry_capabilities: set[str] = set()
+    registered_planned_native: set[str] = set()
+    registry_classifications = Counter()
+    lineage_classifications = Counter()
 
     for test in mapping.catalog.tests:
         requirement = mapping.resolve(test.id)[0]
         for binding in requirement.provider_bindings:
-            if binding.kind != 'registry_capability':
+            capability_id = None
+            if binding.kind == 'registry_capability':
+                capability_id = binding.ref
+                registry_capabilities.add(capability_id)
+                registry_classifications[test.classification] += 1
+            elif binding.kind == 'planned_native':
+                try:
+                    capability_id = get_capability(binding.ref).id
+                except ValueError:
+                    continue
+                registered_planned_native.add(capability_id)
+            else:
                 continue
-            expected.setdefault(binding.ref, set()).add(test.id)
-            classifications[test.classification] += 1
+            expected.setdefault(capability_id, set()).add(test.id)
+            lineage_classifications[test.classification] += 1
 
     fingerprints: dict[str, str] = {}
     for capability_id, expected_ids in sorted(expected.items()):
@@ -91,8 +106,11 @@ def verify() -> dict:
             'Executed semantic capability observation -> persisted Evidence/Finding provenance only; '
             'no WSTG pass/fail claim and no finding confirmation/closure/disposition authority'
         ),
-        'registry_capabilities_with_wstg_lineage': len(expected),
-        'registry_binding_occurrences_by_classification': dict(sorted(classifications.items())),
+        'registry_capabilities_with_wstg_lineage': len(registry_capabilities),
+        'registered_planned_native_capabilities_with_blocked_lineage': sorted(registered_planned_native),
+        'capabilities_with_wstg_lineage': len(expected),
+        'registry_binding_occurrences_by_classification': dict(sorted(registry_classifications.items())),
+        'lineage_binding_occurrences_by_classification': dict(sorted(lineage_classifications.items())),
         'capability_lineage_fingerprints': fingerprints,
         'unmapped_capability_wstg_tests': len(unmapped['tests']),
         'integration_files': integration,
