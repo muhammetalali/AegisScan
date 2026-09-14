@@ -103,7 +103,9 @@ def test_tool_manifest_provenance_is_bound_to_profile_build_inputs():
 def test_browser_firefox_is_bound_to_immutable_archive_artifact():
     firefox = MANIFEST['tools']['firefox-esr']
     assert firefox['source'] == 'release-archive'
-    assert firefox['url'].startswith('https://archive.kali.org/kali/pool/')
+    assert firefox['url'].startswith(
+        'https://snapshot.debian.org/archive/debian/20260820T235959Z/pool/'
+    )
     assert firefox['url'] in DOCKERFILE
     assert f"--checksum=sha256:{firefox['sha256']}" in DOCKERFILE
     assert f"firefox-esr={firefox['version']}" not in DOCKERFILE
