@@ -24,6 +24,7 @@ class SemanticParityReport:
     capability_id: str
     semantic_equivalent: bool
     observation_equivalent: bool
+    finding_projection_applicable: bool
     finding_projection_equivalent: bool
     legacy_observation_digest: str
     candidate_observation_digest: str
@@ -64,6 +65,21 @@ def _normalized_observations(normalized: dict[str, Any]) -> list[dict[str, Any]]
     if not isinstance(observations, list):
         return []
     return [dict(item) for item in observations if isinstance(item, dict)]
+
+
+FINDING_PROJECTION_CAPABILITIES = frozenset({
+    'browser.dom-snapshot',
+    'api.openapi-contract-security',
+    'api.openapi-runtime-conformance',
+    'kubernetes.read-only-posture',
+    'cloud.read-only-posture',
+    'web.nikto',
+    'code.trivy-config',
+})
+
+
+def _finding_projection_applicable(capability_id: str) -> bool:
+    return capability_id in FINDING_PROJECTION_CAPABILITIES
 
 
 def _finding_specs(capability_id: str, normalized: dict[str, Any]) -> list[dict[str, Any]]:
@@ -128,6 +144,7 @@ def compare_execution_semantics(
     candidate_finding_digest = _digest(candidate_findings)
 
     observation_equivalent = legacy_observation_digest == candidate_observation_digest
+    finding_applicable = _finding_projection_applicable(capability)
     finding_equivalent = legacy_finding_digest == candidate_finding_digest
     mismatches: list[str] = []
     if not observation_equivalent:
@@ -140,6 +157,7 @@ def compare_execution_semantics(
         capability_id=capability,
         semantic_equivalent=observation_equivalent and finding_equivalent,
         observation_equivalent=observation_equivalent,
+        finding_projection_applicable=finding_applicable,
         finding_projection_equivalent=finding_equivalent,
         legacy_observation_digest=legacy_observation_digest,
         candidate_observation_digest=candidate_observation_digest,
