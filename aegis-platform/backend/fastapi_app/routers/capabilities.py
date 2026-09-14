@@ -24,6 +24,7 @@ from ..services.credential_execution import (
 )
 from ..services.native_packaging import PACKAGED_NATIVE_CAPABILITIES, is_packaged_native_capability
 from ..services.native_tool_runtime import NATIVE_TOOL_SPECS
+from ..services.wstg_native_capabilities import WSTG_INTERNAL_SPECS, is_wstg_internal_capability
 from ..services.external_fabric import ExternalFabricError, dynamic_plugin_capabilities, resolve_dynamic_capability
 from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
 from ..tasks.native_capabilities import run_native_capability_scan
@@ -152,6 +153,7 @@ async def capability_packaging(user=Depends(get_current_user)):
         'specialized': sorted(_TASKS),
         'native_packaged': sorted(PACKAGED_NATIVE_CAPABILITIES),
         'native_registered': sorted(NATIVE_TOOL_SPECS),
+        'internal_registered': sorted(WSTG_INTERNAL_SPECS),
         'plugin_delegated': plugin_items,
         'retired': RETIRED_CAPABILITIES,
     }
@@ -304,7 +306,7 @@ async def execute_capability(
         'credential_required': capability.credential_required,
     }
 
-    if capability.id in NATIVE_TOOL_SPECS:
+    if capability.id in NATIVE_TOOL_SPECS or is_wstg_internal_capability(capability.id):
         created = await _create_native_scan(
             capability.id,
             request.project_id,
