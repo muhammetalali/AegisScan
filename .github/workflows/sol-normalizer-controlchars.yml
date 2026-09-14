@@ -1,0 +1,41 @@
+name: Sol Normalizer Control Character Fix
+
+on:
+  push:
+    branches:
+      - sol-web-messaging-validator
+    paths:
+      - .github/workflows/sol-normalizer-controlchars.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: sol-web-messaging-validator
+          fetch-depth: 0
+      - name: Correct control-character guard
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('aegis-platform/backend/fastapi_app/services/native_output_normalizer.py')
+          text = path.read_text(encoding='utf-8')
+          old = "and not any(ch in value for ch in '\\\\r\\\\n\\\\x00')"
+          new = r"and not any(ch in value for ch in '\r\n\x00')"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one escaped control-character guard, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Commit correction
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add aegis-platform/backend/fastapi_app/services/native_output_normalizer.py
+          git commit -m 'Fix web messaging metadata control-character guard'
+          git push origin HEAD:sol-web-messaging-validator
