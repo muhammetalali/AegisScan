@@ -1,5 +1,6 @@
 """Executable API contracts shared across AegisScan assurance domains."""
 
+from .governed_execution import GovernedExecutionEnvelope
 from .api import (
     ApiError,
     AttackPathEdge,
@@ -20,4 +21,5 @@ __all__ = [
     "ComplianceValidationItem",
     "ScenarioSimulationResponse",
     "UnifiedValidationOut",
+    "GovernedExecutionEnvelope",
 ]

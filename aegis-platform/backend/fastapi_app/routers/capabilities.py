@@ -9,12 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.assets.models import Asset, AssetAuthorization
+from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.system.credential_vault import CredentialVaultDenied
 
 from ..core.dependencies import get_current_user
 from ..celery_app import BROWSER_QUEUE
 from ..services.authorization_guard import asset_target
+from ..services.governed_execution_contract import GovernedExecutionDraft, finalize_governed_execution_contract, prepare_governed_execution_draft
 from ..services.capability_planner import planning_summary
 from ..services.capability_registry import RETIRED_CAPABILITIES, RetiredCapabilityError, get_capability, list_capabilities, validate_capability_options
 from ..services.credential_execution import (
@@ -32,7 +34,7 @@ from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 from .scans import ScanCreate, _attach_celery_task, _create_scan, _serialize_scan
 
 router = APIRouter()
-_POLICY_VERSION = 'capability-execution.v3'
+_POLICY_VERSION = 'capability-execution.v4'
 _TASKS = {
     'nmap': run_nmap_scan,
     'masscan': run_masscan_scan,
@@ -49,6 +51,18 @@ class CapabilityExecutionRequest(BaseModel):
     depth: Literal['quick', 'standard', 'deep', 'comprehensive'] = 'standard'
     options: dict[str, Any] = Field(default_factory=dict)
     credential_refs: list[str] = Field(default_factory=list, max_length=3)
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        pattern=r'^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$',
+    )
+    correlation_id: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        pattern=r'^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$',
+    )
 
 
 @sync_to_async
@@ -91,14 +105,36 @@ def _create_native_scan(
     user_id: str,
     depth: str,
     config: dict[str, Any],
-) -> Scan:
+    execution_draft: GovernedExecutionDraft,
+) -> tuple[Scan, bool]:
     capability = get_capability(capability_id)
     with transaction.atomic():
-        asset = Asset.objects.select_for_update().filter(pk=asset_id, project_id=project_id).first()
-        if asset is None:
+        project = Project.objects.select_for_update().filter(pk=project_id).first()
+        if project is None:
             raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
-        project = asset.project
         if str(project.owner_id) != str(user_id) and not project.members.filter(pk=user_id).exists():
+            raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
+
+        if execution_draft.idempotency_key:
+            existing = (
+                Scan.objects.select_for_update()
+                .filter(
+                    project=project,
+                    initiated_by_id=user_id,
+                    execution_idempotency_key=execution_draft.idempotency_key,
+                )
+                .first()
+            )
+            if existing is not None:
+                if existing.execution_idempotency_fingerprint != execution_draft.idempotency_fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail='Execution idempotency key is already bound to a different governed request',
+                    )
+                return existing, False
+
+        asset = Asset.objects.select_for_update().filter(pk=asset_id, project=project).first()
+        if asset is None:
             raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
         target = asset_target(asset)
         if not target:
@@ -113,7 +149,12 @@ def _create_native_scan(
             raise HTTPException(status_code=403, detail='Asset has no currently valid authorization decision')
         if decision.asset_identity_snapshot != asset.id or decision.target_snapshot != target:
             raise HTTPException(status_code=409, detail='Asset authorization no longer matches the current asset target')
-        return Scan.objects.create(
+
+        envelope, contract_fingerprint = finalize_governed_execution_contract(
+            execution_draft,
+            authorization_id=str(decision.id),
+        )
+        created = Scan.objects.create(
             project=project,
             name=f'{capability.id} validation for {asset.name}',
             scan_type=capability.scan_type,
@@ -124,7 +165,13 @@ def _create_native_scan(
             config=config,
             initiated_by_id=user_id,
             status=Scan.Status.QUEUED,
+            execution_contract=envelope,
+            execution_contract_fingerprint=contract_fingerprint,
+            execution_idempotency_key=execution_draft.idempotency_key,
+            execution_idempotency_fingerprint=execution_draft.idempotency_fingerprint,
+            execution_correlation_id=execution_draft.correlation_id,
         )
+        return created, True
 
 
 @router.get('/')
@@ -288,6 +335,23 @@ async def execute_capability(
                 )
             options = {**options, 'identity_ref': 'anonymous'}
 
+    try:
+        execution_draft = prepare_governed_execution_draft(
+            policy_version=_POLICY_VERSION,
+            actor_id=user_id,
+            project_id=request.project_id,
+            asset_id=request.asset_id,
+            requested_capability_id=requested_capability_id,
+            capability=capability,
+            allowed_options=options,
+            credential_refs=credential_refs,
+            depth=request.depth,
+            idempotency_key=request.idempotency_key,
+            correlation_id=request.correlation_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     config = {
         'target': target,
         'capability_options': options,
@@ -307,22 +371,26 @@ async def execute_capability(
     }
 
     if capability.id in NATIVE_TOOL_SPECS or is_wstg_internal_capability(capability.id):
-        created = await _create_native_scan(
+        created, created_new = await _create_native_scan(
             capability.id,
             request.project_id,
             request.asset_id,
             user_id,
             request.depth,
             config,
+            execution_draft,
         )
-        if capability.id == 'browser.spa-discovery':
-            task = run_native_capability_scan.apply_async(
-                args=[str(created.id)],
-                queue=BROWSER_QUEUE,
-                routing_key=BROWSER_QUEUE,
-            )
+        if created_new:
+            if capability.id == 'browser.spa-discovery':
+                task = run_native_capability_scan.apply_async(
+                    args=[str(created.id)],
+                    queue=BROWSER_QUEUE,
+                    routing_key=BROWSER_QUEUE,
+                )
+            else:
+                task = run_native_capability_scan.delay(str(created.id))
         else:
-            task = run_native_capability_scan.delay(str(created.id))
+            task = None
     else:
         scan_request = ScanCreate(
             project_id=request.project_id,
@@ -333,10 +401,15 @@ async def execute_capability(
             depth=request.depth,
             config=config,
         )
-        created, engines = await _create_scan(scan_request, user_id)
-        task = _TASKS[engines[0]].delay(str(created.id))
+        created, engines, created_new = await _create_scan(
+            scan_request,
+            user_id,
+            execution_draft=execution_draft,
+        )
+        task = _TASKS[engines[0]].delay(str(created.id)) if created_new else None
 
-    created = await _attach_celery_task(str(created.id), task.id)
+    if task is not None:
+        created = await _attach_celery_task(str(created.id), task.id)
     serialized = await _serialize_scan(created)
     return {
         'capability_id': requested_capability_id,
@@ -346,6 +419,14 @@ async def execute_capability(
         'authorization_required': capability.authorization_required,
         'evidence_required': capability.evidence_required,
         'execution_mode': capability.execution_mode,
-        'credential_context': credential_context,
+        'credential_context': (
+            created.config.get('credential_context', credential_context)
+            if not created_new and isinstance(created.config, dict)
+            else credential_context
+        ),
+        'execution_contract': created.execution_contract,
+        'execution_contract_fingerprint': created.execution_contract_fingerprint,
+        'correlation_id': created.execution_correlation_id,
+        'idempotency_reused': not created_new,
         'scan': serialized,
     }
