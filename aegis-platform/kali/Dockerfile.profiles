@@ -51,11 +51,20 @@ RUN mkdir /opt/nuclei-templates && cd /opt/nuclei-templates \
 FROM ${AEGIS_BASE_IMAGE} AS profile-common
 USER root
 ARG SOURCE_DATE_EPOCH=0
+ENV PYTHONPATH=/opt/aegis-python
 COPY aegis-platform/kali/tool-manifest.json /opt/aegis-runner/tool-manifest.json
 COPY aegis-platform/kali/runner/profile_runtime_manifest.py /opt/aegis-runner/profile_runtime_manifest.py
+RUN mkdir -p /opt/aegis-python/fastapi_app/services \
+    && touch /opt/aegis-python/fastapi_app/__init__.py /opt/aegis-python/fastapi_app/services/__init__.py
+COPY aegis-platform/backend/fastapi_app/services/scope_authorization.py /opt/aegis-python/fastapi_app/services/scope_authorization.py
+COPY aegis-platform/backend/fastapi_app/services/pinned_http.py /opt/aegis-python/fastapi_app/services/pinned_http.py
+COPY aegis-platform/backend/fastapi_app/services/scanner_adapters.py /opt/aegis-python/fastapi_app/services/scanner_adapters.py
+COPY aegis-platform/backend/fastapi_app/services/wstg_native_validator.py /opt/aegis-python/fastapi_app/services/wstg_native_validator.py
+COPY aegis-platform/backend/fastapi_app/services/browser_spa_discovery.py /opt/aegis-python/fastapi_app/services/browser_spa_discovery.py
 RUN test "$SOURCE_DATE_EPOCH" -gt 0 \
     && chmod 0444 /opt/aegis-runner/tool-manifest.json \
-    && chmod 0755 /opt/aegis-runner/profile_runtime_manifest.py
+    && chmod 0755 /opt/aegis-runner/profile_runtime_manifest.py /opt/aegis-python/fastapi_app/services/wstg_native_validator.py /opt/aegis-python/fastapi_app/services/browser_spa_discovery.py \
+    && ln -sf /opt/aegis-python/fastapi_app/services/wstg_native_validator.py /usr/local/bin/aegis-wstg-native
 
 FROM profile-common AS profile-network
 ENV AEGIS_RUNNER_PROFILE=network
@@ -121,18 +130,24 @@ RUN ln -s /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
 USER 10001:10001
 
 FROM profile-common AS profile-browser
-ENV AEGIS_RUNNER_PROFILE=browser
+ENV AEGIS_RUNNER_PROFILE=browser \
+    PATH=/opt/aegis-browser-runtime/bin:${PATH}
 LABEL io.aegisscan.runner.profile=browser
 ADD --checksum=sha256:bbe8776c74132a8d33ea97e4957e52ae22001f9e9f4924889ad5466967ee9219 \
     https://archive.kali.org/kali/pool/main/f/firefox-esr/firefox-esr_140.14.0esr-2_amd64.deb \
     /tmp/firefox-esr.deb
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium=150.0.7871.181-1 /tmp/firefox-esr.deb \
+    && apt-get install -y --no-install-recommends chromium=150.0.7871.181-1 python3-pip=26.1.2+dfsg-1 python3-venv=3.14.6-1 /tmp/firefox-esr.deb \
     && test "$(dpkg-query -W -f='${Version}' firefox-esr)" = '140.14.0esr-2' \
     && rm -f /tmp/firefox-esr.deb \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log \
     && chromium --version | grep -q '150.0.7871.181' \
     && firefox-esr --version | grep -q '140.14.0' \
+    && python3 -m venv /opt/aegis-browser-runtime \
+    && /opt/aegis-browser-runtime/bin/pip install --disable-pip-version-check --no-cache-dir websockets==15.0.1 \
+    && /opt/aegis-browser-runtime/bin/python -c 'import websockets; assert websockets.__version__ == "15.0.1"' \
+    && ln -sf /opt/aegis-python/fastapi_app/services/browser_spa_discovery.py /usr/local/bin/aegis-browser-spa-discovery \
+    && command -v aegis-browser-spa-discovery >/dev/null \
     && python3 /opt/aegis-runner/profile_runtime_manifest.py \
     && chmod 0444 /opt/aegis-runner/runtime-manifest.json
 USER 10001:10001
