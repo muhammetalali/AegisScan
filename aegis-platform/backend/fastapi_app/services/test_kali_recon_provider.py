@@ -129,7 +129,17 @@ def test_response_binding_and_provenance_are_fail_closed(monkeypatch):
             'exit_code': 0,
             'stdout': '',
             'stderr': '',
-            'runtime': {'provider': 'aegis-kali-recon'},
+            'runtime': {
+                'provider': 'aegis-kali-recon',
+                'profile': 'recon',
+                'runner_version': '0.1.0',
+                'base_image_digest': 'sha256:' + 'a' * 64,
+                'build_commit': 'b' * 40,
+                'tool_manifest_digest': 'sha256:' + 'c' * 64,
+                'tool': 'subfinder',
+                'tool_version': 'v2.16.0',
+                'tool_source': 'go',
+            },
         }
         payload.update(overrides)
         return payload
