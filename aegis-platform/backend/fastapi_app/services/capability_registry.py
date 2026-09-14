@@ -10,13 +10,12 @@ from .cloud_capability import register_cloud_capability
 from .kali_profile_policy import resolve_kali_profile, validate_profile_policy
 from .kubernetes_capability import register_kubernetes_capability
 from .native_tool_runtime import NATIVE_TOOL_SPECS, validate_native_options
-from .wstg_native_capabilities import register_wstg_native_capabilities
+from .wstg_native_capabilities import WSTG_INTERNAL_SPECS, validate_wstg_internal_options
 
 register_api_schema_capability()
 register_api_runtime_capability()
 register_kubernetes_capability()
 register_cloud_capability()
-register_wstg_native_capabilities()
 
 
 class RetiredCapabilityError(ValueError):
@@ -53,8 +52,6 @@ class Capability:
     credential_mode: str = 'none'
     credential_kinds: tuple[str, ...] = ()
     credential_required: bool = False
-    # Placement metadata only. The legacy governed worker remains the actual
-    # dispatch backend until a later migration PR proves dual-run parity.
     runner_profile: str = ''
 
     def public_dict(self) -> dict[str, Any]:
@@ -112,6 +109,25 @@ for _id, _spec in NATIVE_TOOL_SPECS.items():
         runner_profile=resolve_kali_profile(_id),
     )
 
+for _id, _spec in WSTG_INTERNAL_SPECS.items():
+    if _id in CAPABILITIES:
+        raise RuntimeError(f'Duplicate internal WSTG capability id: {_id}')
+    CAPABILITIES[_id] = Capability(
+        id=_id,
+        tool=_spec.tool,
+        category=_spec.category,
+        description=_spec.description,
+        scan_type=_spec.scan_type,
+        asset_types=_spec.asset_types,
+        risk=_spec.risk,
+        allowed_options=_spec.allowed_options,
+        adapter='internal-validator',
+        credential_mode=_spec.credential_mode,
+        credential_kinds=_spec.credential_kinds,
+        credential_required=_spec.credential_required,
+        runner_profile=resolve_kali_profile(_id),
+    )
+
 validate_profile_policy(set(CAPABILITIES))
 
 
@@ -142,6 +158,9 @@ def validate_capability_options(capability: Capability, options: dict[str, Any])
     unknown = sorted(set(options) - set(capability.allowed_options))
     if unknown:
         raise ValueError(f'Unsupported options for {capability.id}: {unknown}')
+
+    if capability.id in WSTG_INTERNAL_SPECS:
+        return validate_wstg_internal_options(capability.id, options)
 
     if capability.id in NATIVE_TOOL_SPECS:
         normalized = validate_native_options(NATIVE_TOOL_SPECS[capability.id], options)
