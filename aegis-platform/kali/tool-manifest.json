@@ -16,7 +16,7 @@
     "crypto": {"capabilities": [], "production_allowed": true},
     "full": {"capabilities": [], "production_allowed": false},
     "network": {"capabilities": ["network.nmap", "network.masscan", "network.rustscan", "network.nbtscan-host", "network.nbtscan-range"], "production_allowed": true},
-    "recon": {"capabilities": ["recon.amass", "recon.subfinder", "recon.dnsenum", "recon.fierce"], "production_allowed": true},
+    "recon": {"capabilities": ["recon.amass", "recon.subfinder", "recon.dnsenum", "recon.fierce"], "production_allowed": true, "provider_dispatch": "semantic-only"},
     "web": {"capabilities": ["web.nuclei", "web.httpx", "web.katana", "web.security-headers", "web.gobuster", "web.dirb", "web.feroxbuster", "web.ffuf", "web.nikto", "web.waf-detection"], "production_allowed": true}
   },
   "runner_version": "0.1.0",

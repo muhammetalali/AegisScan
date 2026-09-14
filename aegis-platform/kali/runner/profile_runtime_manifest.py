@@ -38,7 +38,14 @@ def main() -> int:
     if profile == 'full' and policy.get('production_allowed') is not False:
         raise SystemExit('full profile must remain CI/lab-only')
     if tool_manifest.get('policy', {}).get('dispatch_state') != 'placement-only':
-        raise SystemExit('profile tool manifest must remain placement-only before migration cutover')
+        raise SystemExit('profile tool manifest must retain placement-only public semantics during provider migration')
+
+    provider_dispatch = policy.get('provider_dispatch')
+    if provider_dispatch not in {None, 'semantic-only'}:
+        raise SystemExit(f'unsupported provider_dispatch for profile {profile}: {provider_dispatch}')
+    if profile != 'recon' and provider_dispatch is not None:
+        raise SystemExit('provider dispatch is currently permitted only for the recon profile')
+    dispatch_enabled = profile == 'recon' and provider_dispatch == 'semantic-only'
 
     tools = {}
     for name, metadata in sorted(tool_manifest.get('tools', {}).items()):
@@ -56,8 +63,8 @@ def main() -> int:
         artifacts[name] = _sha256(path)
 
     base['profile'] = profile
-    base['dispatch_enabled'] = False
-    base['dispatch_state'] = 'accepted-no-dispatch'
+    base['dispatch_enabled'] = dispatch_enabled
+    base['dispatch_state'] = 'semantic-recon-provider' if dispatch_enabled else 'accepted-no-dispatch'
     base['profile_tools'] = tools
     base['profile_artifacts'] = artifacts
     base['tool_manifest_digest'] = _sha256(TOOLS)
