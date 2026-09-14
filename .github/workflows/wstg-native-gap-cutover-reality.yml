@@ -62,6 +62,7 @@ jobs:
       - name: Run native-gap integration contracts
         env:
           PYTHONPATH: aegis-platform/backend
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: >-
           python -m pytest -q
           aegis-platform/backend/fastapi_app/services/test_wstg_capability_mapping.py
