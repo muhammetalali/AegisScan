@@ -2,11 +2,26 @@ ARG AEGIS_BASE_IMAGE=aegis-kali:base
 
 FROM golang:1.26-bookworm AS go-tools
 RUN set -eux; \
-    export CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org; \
-    go install github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
-    go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
-    go install github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
-    go install github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
+    export CGO_ENABLED=0 GOOS=linux GOARCH=amd64; \
+    export GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org GODEBUG=http2client=0; \
+    go_install_with_retry() { \
+        module="$1"; \
+        attempt=1; \
+        until go install "$module"; do \
+            if [ "$attempt" -ge 5 ]; then \
+                echo "go install failed after $attempt attempts: $module" >&2; \
+                exit 1; \
+            fi; \
+            sleep_seconds=$((attempt * 15)); \
+            echo "retrying go install for $module in ${sleep_seconds}s" >&2; \
+            sleep "$sleep_seconds"; \
+            attempt=$((attempt + 1)); \
+        done; \
+    }; \
+    go_install_with_retry github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
+    go_install_with_retry github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
+    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
+    go_install_with_retry github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
 
 FROM rust:1.90-bookworm AS rustscan
 RUN cargo install --locked --version 2.4.1 rustscan --root /opt/rustscan \
