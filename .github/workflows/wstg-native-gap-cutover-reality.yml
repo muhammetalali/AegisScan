@@ -68,7 +68,7 @@ jobs:
             fastapi_app.services.test_wstg_observation_lineage \
             -v
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -c /dev/null --rootdir=. --confcutdir=fastapi_app \
-            fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py \
+            fastapi_app/services/test_wstg_web_messaging_instrumentation_gate.py
       - name: Capture exact-head native-gap cutover evidence
         shell: bash
         run: |
