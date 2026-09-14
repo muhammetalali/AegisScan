@@ -251,6 +251,7 @@ def _normalize_browser_spa_observations(data: dict[str, Any]) -> list[dict[str, 
                 'cookies': cookies[:64],
                 'post_message_listener_count': _positive_int(item.get('post_message_listener_count'), 100000),
                 'post_message_send_count': _positive_int(item.get('post_message_send_count'), 100000),
+                'post_message_wildcard_send_count': _positive_int(item.get('post_message_wildcard_send_count'), 100000),
                 'inner_html_write_count': _positive_int(item.get('inner_html_write_count'), 1000000),
                 'insert_adjacent_html_count': _positive_int(item.get('insert_adjacent_html_count'), 1000000),
                 'document_write_count': _positive_int(item.get('document_write_count'), 1000000),
@@ -562,6 +563,51 @@ def _normalize_trivy_config(raw: str) -> list[dict[str, Any]]:
     return observations
 
 
+
+def _normalize_wstg_native_observations(data: dict[str, Any]) -> list[dict[str, Any]]:
+    observations = data.get('observations') if isinstance(data.get('observations'), list) else []
+    result: list[dict[str, Any]] = []
+    string_fields = (
+        'validator', 'status', 'reason', 'rule_id', 'title', 'description',
+        'severity', 'confidence', 'category', 'location', 'parameter', 'cwe_id',
+        'owasp_category', 'remediation', 'certificate_status', 'canary_origin',
+        'canary_token_fingerprint', 'observation', 'target_origin',
+    )
+    bool_fields = ('order_sensitive', 'callback_observed', 'tls', 'certificate_valid')
+    int_fields = ('request_count', 'response_status', 'target_response_status')
+    list_fields = ('advertised_methods', 'methods', 'supported_protocols', 'resolved_ips')
+    for item in observations[:2000]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get('kind') or '')[:100]
+        if kind not in {'wstg-native-validation', 'wstg-native-finding', 'wstg-native-observation'}:
+            continue
+        safe: dict[str, Any] = {'kind': kind}
+        for key in string_fields:
+            if key in item:
+                safe[key] = str(item.get(key) or '')[:5000]
+        for key in bool_fields:
+            if key in item:
+                safe[key] = item.get(key) is True
+        for key in int_fields:
+            if key in item:
+                safe[key] = _positive_int(item.get(key), 10_000_000)
+        for key in list_fields:
+            if isinstance(item.get(key), list):
+                safe[key] = [str(value)[:256] for value in item[key][:128]]
+        for key in ('first_response', 'second_response'):
+            value = item.get(key)
+            if not isinstance(value, dict):
+                continue
+            safe[key] = {
+                'status': _positive_int(value.get('status'), 599),
+                'content_type': str(value.get('content_type') or '')[:200],
+                'body_length': _positive_int(value.get('body_length'), 8_388_608),
+                'body_sha256': str(value.get('body_sha256') or '')[:64],
+            }
+        result.append(safe)
+    return result
+
 def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     """Convert stable tool output formats into bounded AegisScan observations."""
     raw = stdout or ''
@@ -631,7 +677,7 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
             if not observations and data.get('error'):
                 observations.append({'kind': 'browser-error', 'summary': str(data['error'])[:2000]})
 
-    elif capability_id == 'browser.spa-discovery':
+    elif capability_id in {'browser.spa-discovery', 'browser.postmessage-instrumentation'}:
         data = _json(raw)
         if isinstance(data, dict):
             observations.extend(_normalize_browser_spa_observations(data))
@@ -639,6 +685,21 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
                 observations.append({
                     'kind': 'browser-spa-error',
                     'summary': str(data['error'])[:2000],
+                })
+
+    elif capability_id in {
+        'web.http-method-policy',
+        'web.duplicate-parameter-semantics',
+        'web.ssrf-canary-validation',
+        'tls.posture',
+    }:
+        data = _json(raw)
+        if isinstance(data, dict):
+            observations.extend(_normalize_wstg_native_observations(data))
+            if not observations and data.get('error'):
+                observations.append({
+                    'kind': 'wstg-native-error',
+                    'summary': str(data.get('summary') or data['error'])[:2000],
                 })
 
     elif capability_id == 'api.openapi-contract-security':
