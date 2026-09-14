@@ -66,82 +66,112 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm --entrypoint sh aegisscan-js-parameter:ci -c '
-            set -eu
-            mkdir -p /tmp/aegis-enrichment-fixture/api /tmp/aegis-enrichment-fixture/static
-            cat > /tmp/aegis-enrichment-fixture/index.html <<"HTML"
-          <!doctype html><html><body>
-          <a href="/api/items?id=42&token=katana-secret-value">items</a>
-          <script src="/static/app.js?build=javascript-secret-value"></script>
-          </body></html>
-          HTML
-            printf "%s\n" "{\"ok\":true}" > /tmp/aegis-enrichment-fixture/api/items
-            printf "%s\n" "console.log(\"fixture\")" > /tmp/aegis-enrichment-fixture/static/app.js
-            python -m http.server 18086 --bind 127.0.0.1 --directory /tmp/aegis-enrichment-fixture >/tmp/aegis-enrichment-http.log 2>&1 &
-            server_pid=$!
-            trap "kill $server_pid >/dev/null 2>&1 || true" EXIT
-            ready=0
-            for attempt in $(seq 1 30); do
-              if curl -fsS http://127.0.0.1:18086/ >/dev/null; then ready=1; break; fi
-              sleep 0.25
-            done
-            test "$ready" -eq 1
-            httpx -u "http://127.0.0.1:18086/api/items?id=42&token=httpx-secret-value" -json -silent > /tmp/httpx.jsonl
-            katana -u http://127.0.0.1:18086 -d 1 -silent -jsonl > /tmp/katana.jsonl
-            test -s /tmp/httpx.jsonl
-            test -s /tmp/katana.jsonl
-            PYTHONPATH=/app python - <<"PY"
+          rm -rf .js-parameter-reality
+          mkdir -p .js-parameter-reality
+          chmod 0777 .js-parameter-reality
+          cat > .js-parameter-reality/verify.py <<'PY'
           import json
+          import os
           from pathlib import Path
           from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
 
-          httpx = normalize_enriched_native_output("web.httpx", Path("/tmp/httpx.jsonl").read_text())
-          katana = normalize_enriched_native_output("web.katana", Path("/tmp/katana.jsonl").read_text())
-          combined = json.dumps({"httpx": httpx, "katana": katana}, sort_keys=True)
-          for secret in ("42", "httpx-secret-value", "katana-secret-value", "javascript-secret-value"):
+          httpx = normalize_enriched_native_output('web.httpx', Path('/tmp/httpx.jsonl').read_text())
+          katana = normalize_enriched_native_output('web.katana', Path('/tmp/katana.jsonl').read_text())
+          combined = json.dumps({'httpx': httpx, 'katana': katana}, sort_keys=True)
+          secrets = (
+              'id-value-never-persist-9f3a',
+              'httpx-secret-value-5bb4',
+              'katana-secret-value-a08d',
+              'javascript-secret-value-72c1',
+          )
+          for secret in secrets:
               assert secret not in combined, secret
           httpx_params = {
               name
-              for item in httpx["observations"]
-              for name in item.get("query_parameter_names", [])
+              for item in httpx['observations']
+              for name in item.get('query_parameter_names', [])
           }
           katana_params = {
               name
-              for item in katana["observations"]
-              for name in item.get("query_parameter_names", [])
+              for item in katana['observations']
+              for name in item.get('query_parameter_names', [])
           }
-          assert {"id", "token"} <= httpx_params
-          assert {"id", "token", "build"} <= katana_params
-          assert any(item.get("kind") == "web-javascript-resource" for item in katana["observations"])
-          assert httpx["enrichment"]["values_persisted"] is False
-          assert katana["enrichment"]["values_persisted"] is False
-          Path("/tmp/js-parameter-reality.json").write_text(json.dumps({
-              "schema": "aegis.js-parameter-reality.v1",
-              "httpx_parameter_names": sorted(httpx_params),
-              "katana_parameter_names": sorted(katana_params),
-              "httpx_observations": httpx["count"],
-              "katana_observations": katana["count"],
-              "values_persisted": False,
-          }, sort_keys=True, indent=2) + "\n")
+          assert {'id', 'token'} <= httpx_params
+          assert {'id', 'token', 'build'} <= katana_params
+          assert any(item.get('kind') == 'web-javascript-resource' for item in katana['observations'])
+          assert httpx['enrichment']['values_persisted'] is False
+          assert katana['enrichment']['values_persisted'] is False
+          Path('/evidence/js-parameter-reality.json').write_text(json.dumps({
+              'schema': 'aegis.js-parameter-reality.v1',
+              'build_commit': os.environ['AEGIS_EXACT_HEAD'],
+              'capabilities': ['web.httpx', 'web.katana', 'browser.spa-discovery'],
+              'httpx_parameter_names': sorted(httpx_params),
+              'katana_parameter_names': sorted(katana_params),
+              'httpx_observations': httpx['count'],
+              'katana_observations': katana['count'],
+              'javascript_resource_observed': True,
+              'values_persisted': False,
+              'normalizer': 'native_output_enrichment',
+          }, sort_keys=True, indent=2) + '\n')
           PY
-            cat /tmp/js-parameter-reality.json
-          '
-      - name: Capture real enrichment evidence
+          cat > .js-parameter-reality/run.sh <<'SH'
+          #!/bin/sh
+          set -eu
+          mkdir -p /tmp/aegis-enrichment-fixture/api /tmp/aegis-enrichment-fixture/static
+          printf '%s\n' '<!doctype html><html><body><a href="/api/items?id=id-value-never-persist-9f3a&token=katana-secret-value-a08d">items</a><script src="/static/app.js?build=javascript-secret-value-72c1"></script></body></html>' > /tmp/aegis-enrichment-fixture/index.html
+          printf '%s\n' '{"ok":true}' > /tmp/aegis-enrichment-fixture/api/items
+          printf '%s\n' 'console.log("fixture")' > /tmp/aegis-enrichment-fixture/static/app.js
+          python -m http.server 18086 --bind 127.0.0.1 --directory /tmp/aegis-enrichment-fixture >/tmp/aegis-enrichment-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18086/ >/dev/null; then ready=1; break; fi
+            sleep 0.25
+          done
+          test "$ready" -eq 1
+          httpx -u 'http://127.0.0.1:18086/api/items?id=id-value-never-persist-9f3a&token=httpx-secret-value-5bb4' -json -silent > /tmp/httpx.jsonl
+          katana -u http://127.0.0.1:18086 -d 1 -silent -jsonl > /tmp/katana.jsonl
+          test -s /tmp/httpx.jsonl
+          test -s /tmp/katana.jsonl
+          PYTHONPATH=/app python /evidence/verify.py
+          cat /evidence/js-parameter-reality.json
+          SH
+          chmod 0755 .js-parameter-reality/run.sh
+          docker run --rm \
+            --name aegis-js-parameter-runtime \
+            --entrypoint sh \
+            -e AEGIS_EXACT_HEAD="${AEGIS_EXACT_HEAD}" \
+            -v "$PWD/.js-parameter-reality:/evidence" \
+            aegisscan-js-parameter:ci \
+            /evidence/run.sh
+          test -s .js-parameter-reality/js-parameter-reality.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('.js-parameter-reality/js-parameter-reality.json')
+          payload = json.loads(path.read_text())
+          assert payload['values_persisted'] is False
+          assert {'id', 'token'} <= set(payload['httpx_parameter_names'])
+          assert {'id', 'token', 'build'} <= set(payload['katana_parameter_names'])
+          PY
+      - name: Bind scanner image provenance to real enrichment evidence
         shell: bash
         run: |
           set -euo pipefail
-          docker create --name aegis-js-parameter-evidence --entrypoint sh aegisscan-js-parameter:ci -c true >/dev/null
-          docker rm -f aegis-js-parameter-evidence >/dev/null 2>&1 || true
-          cat > js-parameter-reality.json <<JSON
-          {
-            "schema": "aegis.js-parameter-reality.v1",
-            "build_commit": "${AEGIS_EXACT_HEAD}",
-            "scanner_image": "$(docker image inspect aegisscan-js-parameter:ci --format '{{.Id}}')",
-            "capabilities": ["web.httpx", "web.katana", "browser.spa-discovery"],
-            "values_persisted": false,
-            "normalizer": "native_output_enrichment"
-          }
-          JSON
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          path = Path('.js-parameter-reality/js-parameter-reality.json')
+          payload = json.loads(path.read_text())
+          payload['scanner_image'] = subprocess.check_output([
+              'docker', 'image', 'inspect', 'aegisscan-js-parameter:ci', '--format', '{{.Id}}'
+          ], text=True).strip()
+          path.write_text(json.dumps(payload, sort_keys=True, indent=2) + '\n')
+          PY
+          cp .js-parameter-reality/js-parameter-reality.json js-parameter-reality.json
+          cat js-parameter-reality.json
       - name: Upload Reality evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
