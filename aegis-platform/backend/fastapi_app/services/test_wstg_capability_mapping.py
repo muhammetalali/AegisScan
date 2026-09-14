@@ -59,8 +59,12 @@ class WSTGCapabilityMappingTests(unittest.TestCase):
             if test.classification != 'GAP_NATIVE_SMALL':
                 continue
             requirement = self.mapping.resolve(test.id)[0]
+            self.assertEqual(requirement.availability, 'existing')
+            self.assertFalse(any(item.kind == 'planned_native' for item in requirement.provider_bindings))
             actual[test.id] = [
-                item.ref for item in requirement.provider_bindings if item.kind == 'planned_native'
+                item.ref
+                for item in requirement.provider_bindings
+                if item.kind == 'registry_capability' and item.ref == EXPECTED_GAPS[test.id]
             ][0]
         self.assertEqual(actual, EXPECTED_GAPS)
 
