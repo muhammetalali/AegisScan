@@ -39,5 +39,5 @@ def test_web_messaging_planner_remains_blocked_until_cutover_review():
     assert item.classification == 'GAP_NATIVE_SMALL'
     assert item.status == 'blocked'
     assert item.provider_capability_ids == ()
-    assert item.authorization_required is False
+    assert item.authorization_required is True
     assert 'blocked until reviewed canonical integration' in item.reason
