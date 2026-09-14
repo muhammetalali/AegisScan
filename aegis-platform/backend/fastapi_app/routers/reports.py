@@ -286,7 +286,7 @@ def _build_payload(project_id: str, scan_id: Optional[str], report_type: str):
         'scan': {'id': str(scan.id), 'name': scan.name, 'status': scan.status, 'findings_count': scan.findings_count} if scan else None,
         'findings': [{'id': str(f.id), 'title': f.title, 'severity': f.severity, 'status': f.status, 'confidence': f.confidence, 'risk_score': f.risk_score, 'source_engine': f.source_engine, 'scan_id': str(f.scan_id), 'asset_id': str(f.asset_id) if f.asset_id else None} for f in findings.order_by('-risk_score', '-created_at')],
         'evidence': [{'id': str(e.id), 'finding_id': str(e.finding_id) if e.finding_id else None, 'scan_id': str(e.scan_id) if e.scan_id else None, 'source': e.source, 'evidence_type': e.evidence_type, 'sha256': e.sha256, 'collected_at': e.collected_at.astimezone(timezone.utc).isoformat()} for e in evidence.order_by('-collected_at')],
-        'wstg_coverage': build_wstg_project_coverage(project),
+        'wstg_coverage': build_wstg_project_coverage(project, scan_id=scan_id),
     }
     if report_type == 'findings':
         payload['evidence'] = []
