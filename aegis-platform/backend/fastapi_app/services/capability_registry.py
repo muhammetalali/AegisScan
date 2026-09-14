@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from .api_runtime_capability import CAPABILITY_ID as API_RUNTIME_CAPABILITY_ID, register_api_runtime_capability
 from .api_schema_capability import CAPABILITY_ID as API_SCHEMA_CAPABILITY_ID, register_api_schema_capability
 from .cloud_capability import register_cloud_capability
+from .kali_profile_policy import resolve_kali_profile, validate_profile_policy
 from .kubernetes_capability import register_kubernetes_capability
 from .native_tool_runtime import NATIVE_TOOL_SPECS, validate_native_options
 
@@ -50,6 +51,9 @@ class Capability:
     credential_mode: str = 'none'
     credential_kinds: tuple[str, ...] = ()
     credential_required: bool = False
+    # Placement metadata only. The legacy governed worker remains the actual
+    # dispatch backend until a later migration PR proves dual-run parity.
+    runner_profile: str = ''
 
     def public_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -64,22 +68,26 @@ CAPABILITIES: dict[str, Capability] = {
         id='network.nmap', tool='nmap', category='network-reconnaissance',
         description='Authorized host and network service discovery using the native Nmap adapter.',
         scan_type='ip', asset_types=('ip_address', 'domain'), risk='active-low',
+        runner_profile=resolve_kali_profile('network.nmap'),
     ),
     'network.masscan': Capability(
         id='network.masscan', tool='masscan', category='network-reconnaissance',
         description='Authorized high-speed network port discovery using the native Masscan adapter.',
         scan_type='network', asset_types=('network_range',), risk='active-medium',
         allowed_options=('ports', 'rate'),
+        runner_profile=resolve_kali_profile('network.masscan'),
     ),
     'web.nuclei': Capability(
         id='web.nuclei', tool='nuclei', category='web-vulnerability-assessment',
         description='Authorized template-driven web and API vulnerability assessment using the native Nuclei adapter.',
         scan_type='url', asset_types=('website', 'api_endpoint'), risk='active-medium',
+        runner_profile=resolve_kali_profile('web.nuclei'),
     ),
     'code.semgrep': Capability(
         id='code.semgrep', tool='semgrep', category='source-code-analysis',
         description='Authorized static source-code analysis using the native Semgrep adapter.',
         scan_type='code', asset_types=('source_code', 'repository'), risk='passive',
+        runner_profile=resolve_kali_profile('code.semgrep'),
     ),
 }
 
@@ -99,7 +107,10 @@ for _id, _spec in NATIVE_TOOL_SPECS.items():
         credential_mode=_spec.credential_mode,
         credential_kinds=_spec.credential_kinds,
         credential_required=_spec.credential_required,
+        runner_profile=resolve_kali_profile(_id),
     )
+
+validate_profile_policy(set(CAPABILITIES))
 
 
 def list_capabilities() -> list[Capability]:

@@ -1,0 +1,192 @@
+ARG AEGIS_BASE_IMAGE=aegis-kali:base
+
+FROM golang:1.26-bookworm AS go-tools
+RUN set -eux; \
+    export CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org; \
+    go install github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
+    go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
+    go install github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
+    go install github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
+
+FROM rust:1.90-bookworm AS rustscan
+RUN cargo install --locked --version 2.4.1 rustscan --root /opt/rustscan \
+    && /opt/rustscan/bin/rustscan --version
+
+FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
+FROM ghcr.io/aquasecurity/trivy:0.74.0 AS trivy
+FROM trufflesecurity/trufflehog:3.97.1 AS trufflehog
+
+FROM debian:bookworm-slim AS feroxbuster
+ARG FEROXBUSTER_VERSION=2.13.1
+ARG FEROXBUSTER_SHA256=7985c00e6803b0f25d5e9139f7472279f3f4d891429627a5cedc629e53992d80
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL --retry 4 --retry-all-errors \
+      "https://github.com/epi052/feroxbuster/releases/download/v${FEROXBUSTER_VERSION}/x86_64-linux-feroxbuster.tar.gz" \
+      -o /tmp/feroxbuster.tar.gz \
+    && printf '%s  %s\n' "$FEROXBUSTER_SHA256" /tmp/feroxbuster.tar.gz | sha256sum -c - \
+    && tar -xzf /tmp/feroxbuster.tar.gz -C /usr/local/bin feroxbuster \
+    && /usr/local/bin/feroxbuster --version
+
+FROM alpine/git:2.47.2 AS nikto-source
+ARG NIKTO_COMMIT=69681e2e4213c15b85a90c53b2169ecb2a88fb01
+RUN mkdir /opt/nikto && cd /opt/nikto \
+    && git init \
+    && git remote add origin https://github.com/sullo/nikto.git \
+    && git fetch --depth 1 origin "$NIKTO_COMMIT" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$NIKTO_COMMIT" \
+    && rm -rf .git
+
+FROM alpine/git:2.47.2 AS nuclei-templates
+ARG NUCLEI_TEMPLATES_COMMIT=0cb51d4bfae945e5ec2644fc8c2d2e6ea84bbffe
+RUN mkdir /opt/nuclei-templates && cd /opt/nuclei-templates \
+    && git init \
+    && git remote add origin https://github.com/projectdiscovery/nuclei-templates.git \
+    && git fetch --depth 1 origin "$NUCLEI_TEMPLATES_COMMIT" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$NUCLEI_TEMPLATES_COMMIT" \
+    && rm -rf .git
+
+FROM ${AEGIS_BASE_IMAGE} AS profile-common
+USER root
+ARG SOURCE_DATE_EPOCH=0
+COPY aegis-platform/kali/tool-manifest.json /opt/aegis-runner/tool-manifest.json
+COPY aegis-platform/kali/runner/profile_runtime_manifest.py /opt/aegis-runner/profile_runtime_manifest.py
+RUN test "$SOURCE_DATE_EPOCH" -gt 0 \
+    && chmod 0444 /opt/aegis-runner/tool-manifest.json \
+    && chmod 0755 /opt/aegis-runner/profile_runtime_manifest.py
+
+FROM profile-common AS profile-network
+ENV AEGIS_RUNNER_PROFILE=network
+LABEL io.aegisscan.runner.profile=network
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      nmap=7.99+dfsg-1kali1 masscan=2:1.3.2+ds1-2 nbtscan=1.7.2-3 \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log \
+    && nmap --version | grep -q '7.99' \
+    && masscan --version 2>&1 | grep -q '1.3.2' \
+    && nbtscan -h 2>&1 | grep -qi 'nbtscan'
+COPY --from=rustscan /opt/rustscan/bin/rustscan /usr/local/bin/rustscan
+RUN rustscan --version | grep -q '2.4.1' \
+    && python3 /opt/aegis-runner/profile_runtime_manifest.py \
+    && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+USER 10001:10001
+
+FROM profile-common AS profile-recon
+ENV AEGIS_RUNNER_PROFILE=recon
+LABEL io.aegisscan.runner.profile=recon
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends dnsenum=1.3.2-1 fierce=1.6.0-2 \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log
+COPY --from=go-tools /go/bin/amass /usr/local/bin/amass
+COPY --from=go-tools /go/bin/subfinder /usr/local/bin/subfinder
+RUN amass -version 2>&1 | grep -q '5.1.1' \
+    && subfinder -version 2>&1 | grep -q '2.16.0' \
+    && command -v dnsenum >/dev/null && command -v fierce >/dev/null \
+    && python3 /opt/aegis-runner/profile_runtime_manifest.py \
+    && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+USER 10001:10001
+
+FROM profile-common AS profile-web
+ENV AEGIS_RUNNER_PROFILE=web \
+    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates \
+    AEGIS_WORDLIST_ROOT=/opt/aegis-wordlists
+LABEL io.aegisscan.runner.profile=web
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      curl=8.21.0-2 gobuster=3.8.2-1 ffuf=2.2.1-1 dirb=2.22+dfsg-7 wafw00f=2.4.2-1 \
+      perl=5.42.2-3 libjson-perl=4.10000-1 libxml-writer-perl=0.900-2 libnet-ssleay-perl=1.96-1+b1 \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log
+COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
+COPY --from=go-tools /go/bin/httpx /usr/local/bin/httpx
+COPY --from=go-tools /go/bin/katana /usr/local/bin/katana
+COPY --from=feroxbuster /usr/local/bin/feroxbuster /usr/local/bin/feroxbuster
+COPY --from=nikto-source /opt/nikto /opt/nikto
+COPY --from=nuclei-templates /opt/nuclei-templates /opt/nuclei-templates
+COPY aegis-platform/backend/resources/wordlists/web-common.txt /opt/aegis-wordlists/web-common.txt
+RUN ln -s /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
+    && chmod 0755 /opt/nikto/program/nikto.pl /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/katana /usr/local/bin/feroxbuster \
+    && chmod 0444 /opt/aegis-wordlists/web-common.txt \
+    && nuclei -version 2>&1 | grep -q '3.11.1' \
+    && httpx -version 2>&1 | grep -q '1.10.0' \
+    && katana -version 2>&1 | grep -q '1.7.0' \
+    && feroxbuster --version | grep -q '2.13.1' \
+    && nikto -Version 2>&1 | grep -q 'Nikto' \
+    && test -f /opt/nuclei-templates/http/misconfiguration/http-missing-security-headers.yaml \
+    && python3 /opt/aegis-runner/profile_runtime_manifest.py \
+    && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+USER 10001:10001
+
+FROM profile-common AS profile-browser
+ENV AEGIS_RUNNER_PROFILE=browser
+LABEL io.aegisscan.runner.profile=browser
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium=150.0.7871.181-1 firefox-esr=140.14.0esr-2 \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log \
+    && chromium --version | grep -q '150.0.7871.181' \
+    && firefox-esr --version | grep -q '140.14.0' \
+    && python3 /opt/aegis-runner/profile_runtime_manifest.py \
+    && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+USER 10001:10001
+
+FROM profile-common AS profile-code
+ENV AEGIS_RUNNER_PROFILE=code \
+    PATH=/opt/aegis-code-tools/bin:${PATH}
+LABEL io.aegisscan.runner.profile=code
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-pip=26.1.2+dfsg-1 python3-venv=3.14.6-1 \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log \
+    && python3 -m venv /opt/aegis-code-tools \
+    && /opt/aegis-code-tools/bin/pip install --disable-pip-version-check --no-cache-dir semgrep==1.177.0 checkov==3.3.16 \
+    && /opt/aegis-code-tools/bin/semgrep --version | grep -q '1.177.0' \
+    && /opt/aegis-code-tools/bin/checkov --version | grep -q '3.3.16'
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=trufflehog /usr/bin/trufflehog /usr/local/bin/trufflehog
+RUN trivy --version | grep -q '0.74.0' \
+    && trufflehog --version 2>&1 | grep -q '3.97.1' \
+    && python3 /opt/aegis-runner/profile_runtime_manifest.py \
+    && chmod 0444 /opt/aegis-runner/runtime-manifest.json \
+    && chown -R 10001:10001 /opt/aegis-code-tools
+USER 10001:10001
+
+FROM profile-common AS profile-binary
+ENV AEGIS_RUNNER_PROFILE=binary
+LABEL io.aegisscan.runner.profile=binary
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      binutils=2.47-2 checksec=2.6.0-2 binwalk=2.4.3+dfsg1-3 \
+      libimage-exiftool-perl=13.55+dfsg-1 xxd=2:9.2.0858-1 gdb=17.2-1+b1 \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log \
+    && objdump --version | grep -q '2.47' \
+    && readelf --version | grep -q '2.47' \
+    && checksec --version 2>&1 | grep -q '2.6.0' \
+    && binwalk --help >/dev/null \
+    && exiftool -ver | grep -q '13.55' \
+    && gdb --version | grep -q '17.2' \
+    && command -v xxd >/dev/null \
+    && python3 /opt/aegis-runner/profile_runtime_manifest.py \
+    && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+USER 10001:10001
+
+# Aegis-native service bundles are deliberately fail-closed at this migration
+# step: profile identity exists, but no invented wrapper/tool is packaged here.
+# Dispatch remains on the current governed worker until the reviewed adapter
+# bundle and semantic parity proof are available.
+FROM profile-common AS profile-api
+ENV AEGIS_RUNNER_PROFILE=api
+LABEL io.aegisscan.runner.profile=api
+RUN python3 /opt/aegis-runner/profile_runtime_manifest.py && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+USER 10001:10001
+
+FROM profile-common AS profile-cloud
+ENV AEGIS_RUNNER_PROFILE=cloud
+LABEL io.aegisscan.runner.profile=cloud
+RUN python3 /opt/aegis-runner/profile_runtime_manifest.py && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+USER 10001:10001
+
+FROM profile-common AS profile-crypto
+ENV AEGIS_RUNNER_PROFILE=crypto
+LABEL io.aegisscan.runner.profile=crypto
+RUN python3 /opt/aegis-runner/profile_runtime_manifest.py && chmod 0444 /opt/aegis-runner/runtime-manifest.json
+USER 10001:10001
