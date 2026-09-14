@@ -124,11 +124,12 @@ def test_project_coverage_is_canonical_observation_only_and_rejects_tampered_lin
 
 @pytest.mark.django_db
 def test_wstg_report_projection_reuses_same_coverage_contract():
-    _, _, project, _ = _fixture_project()
+    _, _, project, scan = _fixture_project()
 
-    payload = async_to_sync(_build_payload)(str(project.id), None, 'wstg')
+    payload = async_to_sync(_build_payload)(str(project.id), str(scan.id), 'wstg')
 
     assert set(payload) == {'project', 'wstg_coverage'}
+    assert payload['wstg_coverage']['scope_scan_id'] == str(scan.id)
     assert payload['wstg_coverage']['summary']['observed_tests'] == 5
     assert payload['wstg_coverage']['completion_claim_allowed'] is False
     csv_bytes = _make_csv(payload)
