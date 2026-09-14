@@ -92,7 +92,7 @@ jobs:
             -t "aegis-kali:${{ matrix.profile }}" \
             -f aegis-platform/kali/Dockerfile.profiles \
             .
-      - name: Verify non-root profile identity and fail-closed runner binding
+      - name: Verify non-root profile identity and runner/provider binding
         shell: bash
         run: |
           set -euo pipefail
@@ -109,8 +109,12 @@ jobs:
           assert payload['profile'] == profile
           assert payload['build_commit'] == os.environ['AEGIS_EXACT_HEAD']
           assert payload['base_image_digest'] == os.environ['AEGIS_BASE_DIGEST']
-          assert payload['dispatch_enabled'] is False
-          assert payload['dispatch_state'] == 'accepted-no-dispatch'
+          if profile == 'recon':
+              assert payload['dispatch_enabled'] is True
+              assert payload['dispatch_state'] == 'semantic-recon-provider'
+          else:
+              assert payload['dispatch_enabled'] is False
+              assert payload['dispatch_state'] == 'accepted-no-dispatch'
           assert payload['tool_manifest_digest'].startswith('sha256:')
           assert isinstance(payload['profile_capabilities'], list)
           assert isinstance(payload['profile_tools'], dict)

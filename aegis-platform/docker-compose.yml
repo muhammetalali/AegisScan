@@ -128,11 +128,47 @@ services:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
       DJANGO_SETTINGS_MODULE: django_project.settings
+      AEGIS_RECON_PROVIDER: ${AEGIS_RECON_PROVIDER:-legacy}
+      AEGIS_KALI_RECON_URL: ${AEGIS_KALI_RECON_URL:-http://127.0.0.1:18765}
+      AEGIS_KALI_RECON_AUTH_TOKEN: ${AEGIS_KALI_RECON_AUTH_TOKEN:-}
     depends_on:
       scanner_egress: {condition: service_healthy}
       django: {condition: service_healthy}
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
+  kali_recon:
+    image: ${AEGIS_KALI_RECON_IMAGE:-aegis-kali:recon}
+    container_name: aegis-kali-recon
+    profiles: [kali-recon]
+    restart: unless-stopped
+    user: "10001:10001"
+    entrypoint: ["/usr/bin/tini", "--", "python3", "/opt/aegis-runner/recon_service.py"]
+    network_mode: "service:scanner_egress"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+      - /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700
+    environment:
+      AEGIS_RECON_LISTEN_HOST: 127.0.0.1
+      AEGIS_RECON_LISTEN_PORT: "18765"
+      AEGIS_KALI_RECON_AUTH_TOKEN: ${AEGIS_KALI_RECON_AUTH_TOKEN:-}
+      HOME: /tmp/aegis-home
+      TMPDIR: /tmp
+      XDG_CACHE_HOME: /tmp/aegis-home/.cache
+      XDG_CONFIG_HOME: /tmp/aegis-home/.config
+    depends_on:
+      scanner_egress: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=2)); assert d['status']=='ok' and d['profile']=='recon'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
   browser_worker:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-browser-worker
@@ -147,6 +183,7 @@ services:
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       DJANGO_SETTINGS_MODULE: django_project.settings
+      AEGIS_KALI_RECON_AUTH_TOKEN: ""
     depends_on:
       scanner_egress: {condition: service_healthy}
       django: {condition: service_healthy}

@@ -23,13 +23,21 @@ from fastapi_app.services.credential_execution import (
     resolve_credential_refs_for_worker,
 )
 from fastapi_app.services.evidence_identity import evidence_id
+from fastapi_app.services.kali_recon_provider import (
+    KaliReconProviderCancelled,
+    execute_kali_recon,
+    should_use_kali_recon,
+)
 from fastapi_app.services.native_finding_projection import project_native_findings, sync_scan_finding_counts
 from fastapi_app.services.native_output_normalizer import normalize_native_output
 from fastapi_app.services.native_tool_runtime import (
     NativeExecutionCancelled,
+    effective_native_timeout,
     get_native_tool_spec,
     run_native_tool,
+    validate_native_options,
 )
+from fastapi_app.services.scanner_adapters import ScanResult, validate_authorized_target
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 from fastapi_app.services.wstg_observation_lineage import attach_wstg_evidence_metadata
 
@@ -120,6 +128,51 @@ def _configured_credential_refs(config: dict[str, Any]) -> list[str]:
     return [str(item) for item in refs] if isinstance(refs, list) else []
 
 
+def _execute_runtime(
+    *,
+    capability_id: str,
+    target: str,
+    options: dict[str, Any],
+    scan: Scan,
+    authorization,
+    spec,
+    credential_materials: tuple[dict[str, Any], ...],
+) -> tuple[ScanResult, dict[str, Any]]:
+    state_getter = lambda: _scan_control_state(str(scan.id))
+    if not should_use_kali_recon(capability_id):
+        result = run_native_tool(
+            capability_id,
+            target,
+            options,
+            state_getter=state_getter,
+            credential_materials=credential_materials,
+        )
+        return result, {'provider': 'legacy-native-worker'}
+    if credential_materials:
+        raise ValueError('Kali recon provider does not accept credential material')
+    canonical_target = validate_authorized_target(target)
+    normalized_options = validate_native_options(spec, options)
+    provider_result = execute_kali_recon(
+        capability_id=capability_id,
+        target=canonical_target,
+        options=normalized_options,
+        timeout_seconds=effective_native_timeout(spec, normalized_options),
+        execution_ref=str(scan.id),
+        authorization_ref=str(authorization.id),
+        scope_ref=f'project:{scan.project_id}:asset:{scan.asset_id}',
+        state_getter=state_getter,
+        poll_interval=0.5,
+    )
+    result = ScanResult(
+        tool=str(provider_result['tool']),
+        target=str(provider_result['target']),
+        exit_code=int(provider_result['exit_code']),
+        stdout=str(provider_result['stdout']),
+        stderr=str(provider_result['stderr']),
+    )
+    return result, dict(provider_result['runtime'])
+
+
 @shared_task(
     bind=True,
     name='fastapi_app.tasks.native_capabilities.run_native_capability_scan',
@@ -177,6 +230,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
     credential_refs = _configured_credential_refs(config)
     credential_context = config.get('credential_context') if isinstance(config.get('credential_context'), dict) else empty_credential_context()
     credential_materials: tuple[dict[str, Any], ...] = ()
+    runtime_provenance: dict[str, Any] = {'provider': 'not-started'}
     try:
         if spec.credential_required and len(credential_refs) != 1:
             return _fail(
@@ -220,11 +274,13 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                     )
                 options = {**options, 'identity_ref': 'anonymous'}
 
-        result = run_native_tool(
-            capability_id,
-            str(target),
-            options,
-            state_getter=lambda: _scan_control_state(scan_id),
+        result, runtime_provenance = _execute_runtime(
+            capability_id=capability_id,
+            target=str(target),
+            options=options,
+            scan=scan,
+            authorization=authorization,
+            spec=spec,
             credential_materials=credential_materials,
         )
         normalized = normalize_native_output(capability_id, result.stdout)
@@ -266,6 +322,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                         'adapter': capability.adapter,
                         'normalized': normalized,
                         'credential_context': credential_context,
+                        'runtime_provenance': runtime_provenance,
                         **snapshot,
                     }, capability.id),
                     'collected_by': scan.initiated_by,
@@ -308,6 +365,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
                 'finding_ids': finding_ids,
                 'credential_context': credential_context,
                 'graph_projection': graph_projection,
+                'runtime_provenance': runtime_provenance,
                 **snapshot,
             }
             execution.save(update_fields=[
@@ -336,13 +394,23 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             'observation_count': normalized['count'],
             'credential_context': credential_context,
             'graph_projection': graph_projection,
+            'runtime_provenance': runtime_provenance,
             **snapshot,
         }
-    except NativeExecutionCancelled:
+    except (NativeExecutionCancelled, KaliReconProviderCancelled):
         return _cancelled(scan, execution)
     except CredentialVaultDenied as exc:
         return _fail(scan, execution, str(exc), credential_context)
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
-        return _fail(scan, execution, str(exc), {**authorization_snapshot(authorization), 'credential_context': credential_context})
+        return _fail(
+            scan,
+            execution,
+            str(exc),
+            {
+                **authorization_snapshot(authorization),
+                'credential_context': credential_context,
+                'runtime_provenance': runtime_provenance,
+            },
+        )

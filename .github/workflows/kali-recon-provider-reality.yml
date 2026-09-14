@@ -1,0 +1,281 @@
+name: Kali Recon Provider Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/kali/**'
+      - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
+      - 'aegis-platform/docker-compose.yml'
+      - '.github/workflows/kali-recon-provider-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/kali/**'
+      - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
+      - 'aegis-platform/docker-compose.yml'
+      - '.github/workflows/kali-recon-provider-reality.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kali-recon-provider-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Compile provider integration
+        run: |
+          python -m py_compile \
+            aegis-platform/kali/runner/recon_service.py \
+            aegis-platform/kali/runner/profile_runtime_manifest.py \
+            aegis-platform/backend/fastapi_app/services/kali_recon_provider.py \
+            aegis-platform/backend/fastapi_app/tasks/native_capabilities.py
+      - name: Run recon contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pip install --disable-pip-version-check pytest==9.1.1 psutil
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest \
+            aegis-platform/backend/fastapi_app/services/test_kali_profile_policy.py \
+            aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py \
+            aegis-platform/kali/tests/test_profile_contract.py \
+            aegis-platform/kali/tests/test_recon_provider_contract.py \
+            aegis-platform/kali/tests/test_recon_compose_contract.py
+      - name: Validate compose graph and shell boundary
+        run: |
+          mkdir -p aegis-platform/backend
+          : > aegis-platform/backend/.env
+          docker compose -f aegis-platform/docker-compose.yml --profile kali-recon config > compose.resolved.yml
+          grep -q 'network_mode: service:scanner_egress' compose.resolved.yml
+          grep -q 'aegis-kali-recon' compose.resolved.yml
+          ! grep -R --line-number --fixed-strings 'shell=True' \
+            aegis-platform/kali/runner/recon_service.py \
+            aegis-platform/backend/fastapi_app/services/kali_recon_provider.py
+
+  runtime-reality:
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_BASE_DIGEST: sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd328c076224a552e7332a3
+      AEGIS_RECON_REALITY_AUTH_TOKEN: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact Recon profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-recon \
+            -t aegis-kali:recon \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+      - name: Verify immutable runtime contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker run --rm --entrypoint id aegis-kali:recon -u)" = '10001'
+          docker run --rm --entrypoint cat aegis-kali:recon /opt/aegis-runner/runtime-manifest.json | tee runtime-manifest.json
+          python - <<'PY'
+          import json, os
+          r=json.load(open('runtime-manifest.json'))
+          assert r['runtime']=='aegis-kali'
+          assert r['profile']=='recon'
+          assert r['dispatch_enabled'] is True
+          assert r['dispatch_state']=='semantic-recon-provider'
+          assert r['build_commit']==os.environ['AEGIS_EXACT_HEAD']
+          assert r['base_image_digest']==os.environ['AEGIS_BASE_DIGEST']
+          assert set(r['profile_capabilities'])=={'recon.amass','recon.subfinder','recon.dnsenum','recon.fierce'}
+          assert set(r['profile_tools'])=={'amass','subfinder','dnsenum','fierce'}
+          PY
+      - name: Start isolated real provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-recon-reality \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700 \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_RECON_REALITY_AUTH_TOKEN}" \
+            --entrypoint /usr/bin/tini aegis-kali:recon -- python3 /opt/aegis-runner/recon_service.py
+          for _ in $(seq 1 30); do
+            docker exec aegis-recon-reality python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=2)); assert d['status']=='ok' and d['profile']=='recon'" && exit 0
+            sleep 1
+          done
+          docker logs aegis-recon-reality
+          exit 1
+      - name: Prove provider authentication boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-recon-reality python3 - <<'PY'
+          import json, urllib.error, urllib.request
+          p={'schema_version':1,'execution_ref':'unauthorized','authorization_ref':'auth','scope_ref':'project:p:asset:a','control_token':'d'*64,'capability_id':'recon.subfinder','target':'example.com','options':{},'timeout_seconds':30}
+          q=urllib.request.Request('http://127.0.0.1:18765/v1/execute',data=json.dumps(p).encode(),headers={'Content-Type':'application/json'},method='POST')
+          try:
+              urllib.request.urlopen(q,timeout=5)
+          except urllib.error.HTTPError as exc:
+              body=json.load(exc); assert exc.code==401 and body=={'status':'unauthorized'}, body
+          else:
+              raise AssertionError('unauthenticated provider request was not rejected')
+          PY
+      - name: Prove real Subfinder execution and provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i -e AEGIS_EXACT_HEAD="${AEGIS_EXACT_HEAD}" -e AEGIS_BASE_DIGEST="${AEGIS_BASE_DIGEST}" aegis-recon-reality python3 - <<'PY' | tee recon-real-result.json
+          import json, os, urllib.request
+          p={'schema_version':1,'execution_ref':'reality-subfinder','authorization_ref':'auth-reality','scope_ref':'project:reality:asset:example-com','control_token':'a'*64,'capability_id':'recon.subfinder','target':'example.com','options':{},'timeout_seconds':120}
+          q=urllib.request.Request('http://127.0.0.1:18765/v1/execute',data=json.dumps(p).encode(),headers={'Content-Type':'application/json','Accept':'application/json','X-Aegis-Recon-Token':os.environ['AEGIS_KALI_RECON_AUTH_TOKEN']},method='POST')
+          r=json.load(urllib.request.urlopen(q,timeout=135))
+          assert r['status']=='completed'
+          assert r['execution_ref']=='reality-subfinder'
+          assert r['capability_id']=='recon.subfinder'
+          assert r['target']=='example.com'
+          assert r['tool']=='subfinder'
+          assert r['exit_code']==0, r.get('stderr')
+          x=r['runtime']
+          assert x['provider']=='aegis-kali-recon'
+          assert x['profile']=='recon'
+          assert x['build_commit']==os.environ['AEGIS_EXACT_HEAD']
+          assert x['base_image_digest']==os.environ['AEGIS_BASE_DIGEST']
+          assert x['tool']=='subfinder' and x['tool_version']=='v2.16.0'
+          print(json.dumps(r,sort_keys=True))
+          PY
+      - name: Prove semantic rejection boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-recon-reality python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+          def rejected(payload):
+              q=urllib.request.Request('http://127.0.0.1:18765/v1/execute',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','X-Aegis-Recon-Token':os.environ['AEGIS_KALI_RECON_AUTH_TOKEN']},method='POST')
+              try: urllib.request.urlopen(q,timeout=5)
+              except urllib.error.HTTPError as e:
+                  b=json.load(e); assert e.code==400 and b['status']=='rejected'; return
+              raise AssertionError('request was not rejected')
+          p={'schema_version':1,'execution_ref':'reject','authorization_ref':'auth','scope_ref':'project:p:asset:a','control_token':'b'*64,'capability_id':'recon.subfinder','target':'example.com','options':{},'timeout_seconds':30}
+          rejected({**p,'argv':['sh','-c','id']})
+          rejected({**p,'capability_id':'web.httpx'})
+          PY
+      - name: Prove pause resume cancel process control
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/fake-subfinder <<'SH'
+          #!/bin/sh
+          trap 'exit 0' TERM INT
+          sleep 60
+          printf '%s\n' never.example
+          SH
+          chmod 0755 /tmp/fake-subfinder
+          docker run -d --name aegis-recon-control \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700 \
+            -v /tmp/fake-subfinder:/usr/local/bin/subfinder:ro \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_RECON_REALITY_AUTH_TOKEN}" \
+            --entrypoint /usr/bin/tini aegis-kali:recon -- python3 /opt/aegis-runner/recon_service.py
+          for _ in $(seq 1 20); do
+            docker exec aegis-recon-control python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=1)" && break
+            sleep 1
+          done
+          docker exec -i aegis-recon-control python3 - <<'PY' | tee control-result.json
+          import json, os, threading, time, urllib.request
+          base='http://127.0.0.1:18765'; auth={'X-Aegis-Recon-Token':os.environ['AEGIS_KALI_RECON_AUTH_TOKEN']}
+          p={'schema_version':1,'execution_ref':'control-reality','authorization_ref':'auth-control','scope_ref':'project:p:asset:a','control_token':'c'*64,'capability_id':'recon.subfinder','target':'example.com','options':{},'timeout_seconds':90}
+          holder={}
+          def execute():
+              q=urllib.request.Request(base+'/v1/execute',data=json.dumps(p).encode(),headers={'Content-Type':'application/json',**auth},method='POST')
+              holder['result']=json.load(urllib.request.urlopen(q,timeout=100))
+          t=threading.Thread(target=execute); t.start(); time.sleep(1)
+          for state in ('paused','running','cancelled'):
+              q=urllib.request.Request(base+'/v1/executions/control-reality/control',data=json.dumps({'control_token':'c'*64,'state':state}).encode(),headers={'Content-Type':'application/json',**auth},method='POST')
+              r=json.load(urllib.request.urlopen(q,timeout=5)); assert r=={'status':'ok','state':state}, r; time.sleep(0.5)
+          t.join(10); assert not t.is_alive()
+          r=holder['result']; assert r['status']=='cancelled'; assert r['execution_ref']=='control-reality'; assert r['capability_id']=='recon.subfinder'
+          print(json.dumps(r,sort_keys=True))
+          PY
+      - name: Prove container isolation
+        shell: bash
+        run: |
+          docker inspect aegis-recon-reality > recon-container-inspect.json
+          python - <<'PY'
+          import json
+          d=json.load(open('recon-container-inspect.json'))[0]; h=d['HostConfig']
+          assert h['ReadonlyRootfs'] is True
+          assert 'ALL' in (h.get('CapDrop') or [])
+          assert any('no-new-privileges' in x for x in (h.get('SecurityOpt') or []))
+          assert not h.get('Privileged') and not h.get('PortBindings')
+          assert d['Config']['User']=='10001:10001'
+          assert all('docker.sock' not in str(m.get('Source','')) for m in (d.get('Mounts') or []))
+          PY
+      - name: Generate Recon SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: aegis-kali:recon
+          format: spdx-json
+          output-file: recon.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Bind Reality provenance
+        shell: bash
+        run: |
+          image_id="$(docker image inspect aegis-kali:recon --format '{{.Id}}')"
+          python - "$image_id" <<'PY'
+          import hashlib,json,os,pathlib,sys
+          rb=pathlib.Path('runtime-manifest.json').read_bytes(); sb=pathlib.Path('recon.spdx.json').read_bytes(); eb=pathlib.Path('recon-real-result.json').read_bytes(); r=json.loads(rb)
+          p={'runtime':'aegis-kali','profile':'recon','provider':'aegis-kali-recon','image_digest':sys.argv[1],'base_image_digest':os.environ['AEGIS_BASE_DIGEST'],'build_commit':os.environ['AEGIS_EXACT_HEAD'],'runtime_manifest_digest':'sha256:'+hashlib.sha256(rb).hexdigest(),'tool_manifest_digest':r['tool_manifest_digest'],'sbom_digest':'sha256:'+hashlib.sha256(sb).hexdigest(),'real_execution_digest':'sha256:'+hashlib.sha256(eb).hexdigest(),'tool_versions':r['profile_tools']}
+          pathlib.Path('recon-provider-provenance.json').write_text(json.dumps(p,sort_keys=True,indent=2)+'\n')
+          PY
+      - name: Upload exact-head Reality evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kali-recon-provider-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            runtime-manifest.json
+            recon-real-result.json
+            control-result.json
+            recon-container-inspect.json
+            recon-provider-provenance.json
+            recon.spdx.json
+          if-no-files-found: error
+      - name: Cleanup
+        if: always()
+        run: docker rm -f aegis-recon-reality aegis-recon-control >/dev/null 2>&1 || true

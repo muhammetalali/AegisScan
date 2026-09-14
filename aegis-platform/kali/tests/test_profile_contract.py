@@ -11,6 +11,7 @@ from fastapi_app.services.kali_profile_policy import CAPABILITY_PROFILE_MAP, PRO
 KALI = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((KALI / 'tool-manifest.json').read_text(encoding='utf-8'))
 DOCKERFILE = (KALI / 'Dockerfile.profiles').read_text(encoding='utf-8')
+RECON_SERVICE = (KALI / 'runner' / 'recon_service.py').read_text(encoding='utf-8')
 
 
 def test_manifest_capability_assignments_match_control_plane_exactly():
@@ -33,6 +34,29 @@ def test_profiles_match_policy_and_full_is_never_production():
     assert MANIFEST['profiles']['full']['production_allowed'] is False
     assert MANIFEST['profiles']['full']['capabilities'] == []
     assert 'full' not in CAPABILITY_PROFILE_MAP.values()
+
+
+def test_recon_is_only_profile_with_semantic_provider_dispatch():
+    assert MANIFEST['profiles']['recon']['provider_dispatch'] == 'semantic-only'
+    for name, policy in MANIFEST['profiles'].items():
+        if name != 'recon':
+            assert 'provider_dispatch' not in policy, name
+    recon_capabilities = set(MANIFEST['profiles']['recon']['capabilities'])
+    assert recon_capabilities == {'recon.amass', 'recon.subfinder', 'recon.dnsenum', 'recon.fierce'}
+
+
+def test_recon_service_is_packaged_only_in_recon_profile_and_has_no_shell_dispatch():
+    recon_start = DOCKERFILE.index('FROM profile-common AS profile-recon')
+    web_start = DOCKERFILE.index('FROM profile-common AS profile-web')
+    recon_stage = DOCKERFILE[recon_start:web_start]
+    before_recon = DOCKERFILE[:recon_start]
+    after_recon = DOCKERFILE[web_start:]
+    assert 'COPY aegis-platform/kali/runner/recon_service.py /opt/aegis-runner/recon_service.py' in recon_stage
+    assert 'recon_service.py' not in before_recon
+    assert 'recon_service.py' not in after_recon
+    assert 'shell=True' not in RECON_SERVICE
+    assert "payload.get('argv')" not in RECON_SERVICE
+    assert "payload.get('binary')" not in RECON_SERVICE
 
 
 def test_manifest_has_no_floating_tool_versions_or_duplicate_tool_families():
