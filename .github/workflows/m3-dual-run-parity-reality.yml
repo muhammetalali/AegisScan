@@ -291,14 +291,14 @@ jobs:
               for item in kali_normalized.get('observations',[])
               if isinstance(item,dict)
           }
-          expected={
-              ('dns-hostname','parity.test'),
+          expected_children={
               ('dns-hostname','www.parity.test'),
               ('dns-hostname','mail.parity.test'),
               ('dns-hostname','ns1.parity.test'),
+              ('dns-hostname','api.parity.test'),
           }
-          assert expected & legacy_values, (expected, legacy_values)
-          assert expected & kali_values, (expected, kali_values)
+          assert expected_children & legacy_values, (expected_children, legacy_values)
+          assert expected_children & kali_values, (expected_children, kali_values)
 
           report=compare_execution_semantics(
               capability_id=capability,
