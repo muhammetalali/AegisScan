@@ -20,6 +20,14 @@ FORBIDDEN_SECRET_VALUES = (
     'response-secret-must-not-persist',
 )
 
+_WEB_MESSAGING_RECORD_KEYS = {
+    'direction',
+    'peer_origin',
+    'same_origin_peer',
+    'data_type',
+    'data_keys',
+}
+
 
 def _fail(message: str) -> None:
     raise AssertionError(message)
@@ -68,6 +76,53 @@ def main() -> int:
         _fail('postMessage runtime listener discovery was not proven')
     if int(summary.get('inner_html_write_count') or 0) < 1:
         _fail('DOM sink instrumentation was not exercised')
+
+    web_messaging = [
+        item for item in observations
+        if item.get('kind') == 'browser-web-messaging-assessment'
+    ]
+    if len(web_messaging) != 1:
+        _fail('WSTG-CLNT-11 browser web-messaging assessment is missing or duplicated')
+    web_message = web_messaging[0]
+    if web_message.get('wstg_id') != 'WSTG-CLNT-11':
+        _fail(f'unexpected web-messaging methodology binding: {web_message.get("wstg_id")}')
+    if web_message.get('status') != 'observed':
+        _fail(f'fixture postMessage activity was not observed: {web_message.get("status")}')
+    if web_message.get('observation_only') is not True or web_message.get('final_decision') is not False:
+        _fail('web-messaging evidence crossed the observation-only decision boundary')
+    if web_message.get('origin_validation_confirmed') is not False:
+        _fail('passive telemetry incorrectly claimed receiver origin validation')
+    if web_message.get('payload_values_captured') is not False:
+        _fail('web-messaging assessment claimed payload-value capture')
+    if web_message.get('synthetic_cross_origin_messages_injected') is not False:
+        _fail('browser capability unexpectedly claimed active cross-origin message injection')
+    if int(web_message.get('listener_count') or 0) < 1:
+        _fail('web-messaging assessment did not preserve listener evidence')
+    if int(web_message.get('send_count') or 0) < 1:
+        _fail('web-messaging assessment did not preserve send evidence')
+    if int(web_message.get('metadata_record_count') or 0) < 1:
+        _fail('web-messaging assessment produced no bounded metadata records')
+    if int(web_message.get('wildcard_target_count') or 0) < 1 or web_message.get('wildcard_target_observed') is not True:
+        _fail('fixture wildcard postMessage target was not observed')
+
+    message_records = web_message.get('records')
+    if not isinstance(message_records, list) or not message_records:
+        _fail('web-messaging assessment records are missing')
+    for record in message_records:
+        if not isinstance(record, dict):
+            _fail('web-messaging assessment record is not an object')
+        unexpected = set(record) - _WEB_MESSAGING_RECORD_KEYS
+        if unexpected:
+            _fail(f'web-messaging record leaked unapproved fields: {sorted(unexpected)}')
+    wildcard_fixture_sends = [
+        record for record in message_records
+        if record.get('direction') == 'send'
+        and record.get('peer_origin') == '*'
+        and record.get('data_type') == 'object'
+        and record.get('data_keys') == ['type']
+    ]
+    if not wildcard_fixture_sends:
+        _fail('metadata-only fixture postMessage record was not proven')
 
     local_keys = set(summary.get('local_storage_keys') or [])
     session_keys = set(summary.get('session_storage_keys') or [])
@@ -137,6 +192,11 @@ def main() -> int:
         'endpoint_count': len(endpoints),
         'graphql_operation_count': len(graphql_ops),
         'websocket_count': len(ws_urls),
+        'web_messaging_listener_count': int(web_message.get('listener_count') or 0),
+        'web_messaging_send_count': int(web_message.get('send_count') or 0),
+        'web_messaging_receive_count': int(web_message.get('receive_count') or 0),
+        'web_messaging_metadata_record_count': int(web_message.get('metadata_record_count') or 0),
+        'web_messaging_wildcard_target_count': int(web_message.get('wildcard_target_count') or 0),
         'blocked_out_of_scope_requests': int(summary.get('blocked_out_of_scope_request_count') or 0),
         'blocked_cross_origin_websockets': int(summary.get('blocked_websocket_count') or 0),
         'blocked_cross_origin_webtransports': int(summary.get('blocked_webtransport_count') or 0),
