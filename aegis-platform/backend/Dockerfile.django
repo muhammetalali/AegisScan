@@ -113,6 +113,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && python -m pip install --no-cache-dir semgrep checkov==3.3.16
 
+# Python's httpx package installs a console script named `httpx`, which can overwrite
+# the ProjectDiscovery binary copied earlier. Restore the governed scanner binary
+# after Python dependency installation and prove the final PATH resolves to it.
+COPY --from=pd_tools /go/bin/httpx /usr/local/bin/httpx
+RUN chmod 0755 /usr/local/bin/httpx \
+    && test "$(command -v httpx)" = "/usr/local/bin/httpx" \
+    && /usr/local/bin/httpx -version
+
 COPY . .
 RUN mkdir -p /opt/aegis-wordlists \
     && cp /app/resources/wordlists/web-common.txt /opt/aegis-wordlists/web-common.txt \

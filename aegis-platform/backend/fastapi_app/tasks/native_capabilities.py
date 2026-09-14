@@ -29,7 +29,7 @@ from fastapi_app.services.kali_recon_provider import (
     should_use_kali_recon,
 )
 from fastapi_app.services.native_finding_projection import project_native_findings, sync_scan_finding_counts
-from fastapi_app.services.native_output_normalizer import normalize_native_output
+from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
 from fastapi_app.services.native_tool_runtime import (
     NativeExecutionCancelled,
     effective_native_timeout,
@@ -283,7 +283,7 @@ def run_native_capability_scan(self, scan_id: str) -> dict[str, Any]:
             spec=spec,
             credential_materials=credential_materials,
         )
-        normalized = normalize_native_output(capability_id, result.stdout)
+        normalized = normalize_enriched_native_output(capability_id, result.stdout)
         ok, reason = revalidate_bound_authorization(scan, authorization)
         if not ok:
             return _fail(scan, execution, reason, authorization_snapshot(authorization))
