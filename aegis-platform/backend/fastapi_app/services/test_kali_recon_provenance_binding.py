@@ -180,11 +180,12 @@ def test_deployment_pins_reject_authenticated_runtime_drift(
 
 
 def test_execution_image_digest_comes_only_from_control_plane_anchor(monkeypatch):
+    forged_digest = 'sha256:' + 'f' * 64
     payload = _response()
-    payload['runtime']['image_digest'] = 'sha256:' + 'f' * 64
+    payload['runtime']['image_digest'] = forged_digest
     result = _invoke(monkeypatch, payload)
     assert result['runtime']['image_digest'] == _TRUST['AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST']
-    assert result['runtime']['image_digest'] != payload['runtime']['image_digest']
+    assert result['runtime']['image_digest'] != forged_digest
 
 
 @pytest.mark.parametrize(
