@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from django_project.assets.models import Asset
+from django_project.audit.models import DataExport
 from django_project.evidence.models import Evidence
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
@@ -154,7 +155,7 @@ def test_wstg_json_report_persists_integrity_bound_artifact(settings, tmp_path):
 
     report = async_to_sync(_create_report)(body, str(owner.id), payload)
 
-    assert report.status == report.Status.COMPLETED
+    assert report.status == DataExport.Status.COMPLETED
     assert report.file_size > 0
     assert len(report.artifact_sha256) == 64
     assert report.record_count == 97
