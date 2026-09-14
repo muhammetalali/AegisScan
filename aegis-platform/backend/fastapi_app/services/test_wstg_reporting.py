@@ -157,7 +157,11 @@ def test_wstg_json_report_persists_integrity_bound_artifact(settings, tmp_path):
     assert report.file_size > 0
     assert len(report.artifact_sha256) == 64
     assert report.record_count == 97
-    artifact = report.file.read().decode('utf-8')
+    report.file.open('rb')
+    try:
+        artifact = report.file.read().decode('utf-8')
+    finally:
+        report.file.close()
     assert '"methodology": "WSTG"' in artifact
     assert '"completion_claim_allowed": false' in artifact
     assert '"claim_policy": "observation-only"' in artifact
