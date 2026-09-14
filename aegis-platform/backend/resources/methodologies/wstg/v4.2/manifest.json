@@ -18,9 +18,9 @@
     "APIT": 1
   },
   "classification_counts": {
-    "ASSISTED_EXISTING": 45,
+    "ASSISTED_EXISTING": 46,
     "AUTO_EXISTING": 25,
-    "GAP_NATIVE_SMALL": 5,
+    "GAP_NATIVE_SMALL": 4,
     "MANUAL_GOVERNED": 21,
     "CONDITIONAL_NA": 1
   },
@@ -39,11 +39,11 @@
     }
   ],
   "files": {
-    "tests.json": "277dafdbbab0e791a54e4ccbc88b271498da81bb800373fbab94feb7da8d10fc",
+    "tests.json": "97693025ad06e9be446a61c9d726560bc7172773097308a14deea70c498481bf",
     "extensions.json": "11bdfc85efc14cc503a2033fac7983d8166d8b938d31d207ee685e29a5083999"
   },
   "capability_mapping_files": {
-    "capability_requirements.json": "68bca44a020201e0bed780ec29b3a4bb279b5c3c7e66ed3dd8f3bb88e0f8a2aa",
+    "capability_requirements.json": "c6f54e95b4c3c2f0357f79bc86d4c499b55fc68ba800928f8d8cb9397d2ce634",
     "mappings.json": "87d6a54b9a1311b79a64b836ecd231c3fc708b31d68b038dacb1fe64b0128a26"
   },
   "planner_files": {

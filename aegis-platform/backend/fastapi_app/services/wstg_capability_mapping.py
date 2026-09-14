@@ -28,7 +28,6 @@ EXPECTED_GAPS = {
     'WSTG-v42-INPV-04': 'web.duplicate-parameter-semantics',
     'WSTG-v42-INPV-19': 'web.ssrf-canary-validation',
     'WSTG-v42-CRYP-01': 'tls.posture',
-    'WSTG-v42-CLNT-11': 'browser.postmessage-instrumentation',
 }
 _BANNED_REQUIREMENT_TERMS = {
     'nmap', 'masscan', 'rustscan', 'nuclei', 'semgrep', 'httpx', 'katana', 'ffuf',

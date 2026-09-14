@@ -119,7 +119,7 @@ def test_project_coverage_is_canonical_observation_only_and_rejects_tampered_lin
     assert coverage['summary']['rejected_lineage_records'] == 2
     assert coverage['summary']['states']['observed'] == 5
     assert coverage['summary']['states']['manual_required'] == 21
-    assert coverage['summary']['states']['blocked_native_gap'] == 5
+    assert coverage['summary']['states']['blocked_native_gap'] == 4
     assert coverage['summary']['states']['inconclusive'] == 1
 
     rows = {item['wstg_id']: item for item in coverage['tests']}
@@ -130,6 +130,9 @@ def test_project_coverage_is_canonical_observation_only_and_rejects_tampered_lin
     assert rows['WSTG-v42-IDNT-02']['state'] == 'manual_required'
     assert rows['WSTG-v42-INPV-04']['state'] == 'blocked_native_gap'
     assert rows['WSTG-v42-CLNT-08']['state'] == 'inconclusive'
+    assert rows['WSTG-v42-CLNT-11']['classification'] == 'ASSISTED_EXISTING'
+    assert rows['WSTG-v42-CLNT-11']['state'] == 'not_observed'
+    assert rows['WSTG-v42-CLNT-11']['evidence_records'] == 0
     assert all(item['completion_claim_allowed'] is False for item in coverage['tests'])
 
 

@@ -29,8 +29,8 @@ class WSTGCoverageSummary(ContractModel):
     total_tests: Literal[97]
     observed_tests: int = Field(ge=0, le=97)
     observation_coverage_percent: float = Field(ge=0, le=100)
-    auto_assisted_total: Literal[70]
-    auto_assisted_observed: int = Field(ge=0, le=70)
+    auto_assisted_total: Literal[71]
+    auto_assisted_observed: int = Field(ge=0, le=71)
     auto_assisted_observation_coverage_percent: float = Field(ge=0, le=100)
     trusted_evidence_records: int = Field(ge=0)
     trusted_finding_records: int = Field(ge=0)

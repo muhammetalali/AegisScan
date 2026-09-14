@@ -1421,15 +1421,11 @@
   {
     "id": "web.clnt.web-messaging",
     "description": "Test Web Messaging",
-    "availability": "planned_native",
+    "availability": "existing",
     "provider_bindings": [
       {
         "kind": "registry_capability",
         "ref": "browser.spa-discovery"
-      },
-      {
-        "kind": "planned_native",
-        "ref": "browser.postmessage-instrumentation"
       }
     ]
   },

@@ -36,8 +36,9 @@ class WSTGCatalogTests(unittest.TestCase):
     def test_preserve_every_matrix_row_classification_not_only_totals(self):
         pairs = [(item.id, item.classification) for item in self.catalog.tests]
         digest = hashlib.sha256(json.dumps(pairs, separators=(',', ':')).encode()).hexdigest()
-        # Derived from all 97 rows of the user's approved XLSX, not from the pack manifest.
-        self.assertEqual(digest, 'c0a5eef1da43030a1a7f97380e71f5b237dbdc8abf6efb4f901061a38d3dd081')
+        # Golden digest for all 97 classification rows after the audited CLNT-11
+        # web-messaging runtime-evidence cutover; it intentionally locks every row.
+        self.assertEqual(digest, '46e929ec184def64faac9c878dd40f7e405d82923deadbd72212ffa977a0cb3f')
 
     def test_official_and_extension_namespaces_remain_separate(self):
         self.assertEqual(len(self.catalog.extensions), 8)
