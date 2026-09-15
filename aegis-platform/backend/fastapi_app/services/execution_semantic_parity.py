@@ -132,7 +132,8 @@ def compare_execution_semantics(
     The comparison is deliberately backend-agnostic: execution IDs, timestamps, runtime
     provider metadata, image digests and raw stdout are not inputs. A backend migration
     passes only when normalized observations and the Finding projection are equivalent.
-    List ordering is non-semantic and is canonicalized recursively.
+    Only the outer observation/Finding collection ordering is non-semantic; nested
+    sequence ordering is preserved because it may carry security meaning.
     """
     capability = str(capability_id or '').strip()
     if not capability:
