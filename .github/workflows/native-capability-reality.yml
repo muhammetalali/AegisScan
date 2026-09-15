@@ -301,7 +301,10 @@ jobs:
               amass = run_native_tool('recon.amass', 'example.com', {'timeout_minutes': 1})
           except subprocess.TimeoutExpired as exc:
               assert exc.timeout == 90, exc
-              assert exc.cmd and str(exc.cmd[0]).endswith('/amass'), exc
+              assert exc.cmd == [
+                  '/usr/local/bin/aegis-amass-runtime', '--target', 'example.com',
+                  '--timeout-minutes', '1',
+              ], exc
               print('amass-real-passive-bounded-timeout-ok')
           else:
               assert amass.exit_code == 0, amass.stderr

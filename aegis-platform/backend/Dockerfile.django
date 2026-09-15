@@ -19,8 +19,18 @@ RUN set -eux; \
     }; \
     go_install_with_retry github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
     go_install_with_retry github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
-    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
-    go_install_with_retry github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
+    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0
+
+FROM golang:1.26-bookworm AS amass_tool
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY resources/build-amass-v5-aegis.sh /usr/local/bin/build-amass-v5-aegis
+COPY resources/patches/amass-v5.1.1-aegis-engine-auth.patch /opt/aegis/amass-v5.1.1-aegis-engine-auth.patch
+RUN chmod 0755 /usr/local/bin/build-amass-v5-aegis \
+    && /usr/local/bin/build-amass-v5-aegis \
+       /opt/aegis/amass-v5.1.1-aegis-engine-auth.patch \
+       /go/bin/amass
 
 FROM rust:1.90-bookworm AS rustscan
 RUN cargo install --locked --version 2.4.1 rustscan --root /opt/rustscan \
@@ -74,7 +84,7 @@ COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
 COPY --from=pd_tools /go/bin/httpx /usr/local/bin/httpx
 COPY --from=pd_tools /go/bin/subfinder /usr/local/bin/subfinder
 COPY --from=pd_tools /go/bin/katana /usr/local/bin/katana
-COPY --from=pd_tools /go/bin/amass /usr/local/bin/amass
+COPY --from=amass_tool /go/bin/amass /usr/local/bin/amass
 COPY --from=rustscan /opt/rustscan/bin/rustscan /usr/local/bin/rustscan
 COPY --from=feroxbuster /opt/feroxbuster/bin/feroxbuster /usr/local/bin/feroxbuster
 COPY --from=nikto_source /opt/nikto /opt/nikto
@@ -122,6 +132,7 @@ RUN groupadd --gid 10001 aegis \
     && chown -R aegis:aegis /app /opt/trivy-cache \
     && chmod 0755 \
         /app/scanner-worker-entrypoint.sh \
+        /app/fastapi_app/services/amass_managed_runtime.py \
         /app/fastapi_app/services/browser_security_probe.py \
         /app/fastapi_app/services/browser_spa_discovery.py \
         /app/fastapi_app/services/api_schema_security.py \
@@ -131,6 +142,7 @@ RUN groupadd --gid 10001 aegis \
         /app/fastapi_app/services/kubernetes_security.py \
         /app/fastapi_app/services/cloud_launcher.py \
         /app/fastapi_app/services/cloud_security.py \
+    && ln -sf /app/fastapi_app/services/amass_managed_runtime.py /usr/local/bin/aegis-amass-runtime \
     && ln -sf /app/fastapi_app/services/browser_security_probe.py /usr/local/bin/aegis-browser-security \
     && ln -sf /app/fastapi_app/services/browser_spa_discovery.py /usr/local/bin/aegis-browser-spa-discovery \
     && ln -sf /app/fastapi_app/services/api_schema_security.py /usr/local/bin/aegis-api-schema-security \
@@ -161,6 +173,7 @@ RUN command -v nmap >/dev/null \
     && command -v httpx >/dev/null \
     && command -v rustscan >/dev/null \
     && command -v amass >/dev/null \
+    && command -v aegis-amass-runtime >/dev/null \
     && command -v feroxbuster >/dev/null \
     && command -v nikto >/dev/null \
     && command -v subfinder >/dev/null \

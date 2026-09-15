@@ -20,8 +20,18 @@ RUN set -eux; \
     }; \
     go_install_with_retry github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
     go_install_with_retry github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
-    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
-    go_install_with_retry github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
+    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0
+
+FROM golang:1.26-bookworm AS amass-tool
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY aegis-platform/backend/resources/build-amass-v5-aegis.sh /usr/local/bin/build-amass-v5-aegis
+COPY aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch /opt/aegis/amass-v5.1.1-aegis-engine-auth.patch
+RUN chmod 0755 /usr/local/bin/build-amass-v5-aegis \
+    && /usr/local/bin/build-amass-v5-aegis \
+       /opt/aegis/amass-v5.1.1-aegis-engine-auth.patch \
+       /go/bin/amass
 
 FROM rust:1.90-bookworm AS rustscan
 RUN cargo install --locked --version 2.4.1 rustscan --root /opt/rustscan \
@@ -86,11 +96,14 @@ LABEL io.aegisscan.runner.profile=recon
 RUN apt-get update \
     && apt-get install -y --no-install-recommends dnsenum=1.3.2-1 fierce=1.6.0-2 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log
-COPY --from=go-tools /go/bin/amass /usr/local/bin/amass
+COPY --from=amass-tool /go/bin/amass /usr/local/bin/amass
 COPY --from=go-tools /go/bin/subfinder /usr/local/bin/subfinder
+COPY aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py /opt/aegis-runner/amass_managed_runtime.py
 COPY aegis-platform/kali/runner/recon_service.py /opt/aegis-runner/recon_service.py
-RUN chmod 0755 /opt/aegis-runner/recon_service.py \
+RUN chmod 0755 /opt/aegis-runner/recon_service.py /opt/aegis-runner/amass_managed_runtime.py \
+    && ln -sf /opt/aegis-runner/amass_managed_runtime.py /usr/local/bin/aegis-amass-runtime \
     && amass -version 2>&1 | grep -q '5.1.1' \
+    && command -v aegis-amass-runtime >/dev/null \
     && subfinder -version 2>&1 | grep -q '2.16.0' \
     && command -v dnsenum >/dev/null && command -v fierce >/dev/null \
     && python3 /opt/aegis-runner/profile_runtime_manifest.py \

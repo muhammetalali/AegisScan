@@ -65,8 +65,35 @@ def test_amass_timeout_is_bounded():
     assert effective_native_timeout(spec, {}) == 330
     assert effective_native_timeout(spec, {'timeout_minutes': 1}) == 90
     assert effective_native_timeout(spec, {'timeout_minutes': 30}) == 1830
-    with pytest.raises(ValueError):
-        validate_native_options(spec, {'timeout_minutes': 31})
+    for invalid in (31, True):
+        with pytest.raises(ValueError):
+            validate_native_options(spec, {'timeout_minutes': invalid})
+
+
+def test_amass_runtime_uses_managed_engine_wrapper(monkeypatch):
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'example.invalid')
+    monkeypatch.setattr(
+        'fastapi_app.services.scope_authorization.socket.getaddrinfo',
+        lambda *args, **kwargs: [(2, 1, 6, '', ('93.184.216.34', 0))],
+    )
+
+    def which(binary):
+        return {
+            'amass': '/usr/local/bin/amass',
+            'aegis-amass-runtime': '/usr/local/bin/aegis-amass-runtime',
+        }.get(binary)
+
+    monkeypatch.setattr('fastapi_app.services.native_tool_runtime.shutil.which', which)
+    spec = get_native_tool_spec('recon.amass')
+    argv, target = build_native_argv(spec, 'Example.Invalid', {'timeout_minutes': 7})
+    assert target == 'example.invalid'
+    assert argv == [
+        '/usr/local/bin/aegis-amass-runtime',
+        '--target',
+        'example.invalid',
+        '--timeout-minutes',
+        '7',
+    ]
 
 
 def test_feroxbuster_wordlist_must_stay_under_governed_root(tmp_path: Path, monkeypatch):

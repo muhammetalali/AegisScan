@@ -46,7 +46,7 @@ def request(**overrides) -> dict:
 
 def test_all_registered_recon_capabilities_have_fixed_tool_paths_and_commands(runtime):
     expected = {
-        'recon.amass': ['/usr/local/bin/amass', 'enum', '-passive', '-d', 'example.invalid', '-timeout', '5'],
+        'recon.amass': ['/usr/local/bin/aegis-amass-runtime', '--target', 'example.invalid', '--timeout-minutes', '5'],
         'recon.subfinder': ['/usr/local/bin/subfinder', '-d', 'example.invalid', '-silent', '-duc'],
         'recon.dnsenum': ['/usr/bin/dnsenum', 'example.invalid'],
         'recon.fierce': ['/usr/bin/fierce', '--domain', 'example.invalid'],
@@ -125,6 +125,17 @@ def test_duplicate_json_keys_are_rejected():
     )
     with pytest.raises(recon.ProtocolError, match='duplicate JSON field'):
         recon._load_json_bytes(body)
+
+
+def test_amass_command_uses_managed_runtime_not_direct_enum(runtime):
+    normalized = recon._validate_request(
+        request(capability_id='recon.amass', options={'timeout_minutes': 5}),
+        runtime,
+    )
+    command = recon._build_command(normalized)
+    assert command[0] == '/usr/local/bin/aegis-amass-runtime'
+    assert '/usr/local/bin/amass' not in command
+    assert 'enum' not in command
 
 
 def test_runtime_environment_is_secret_minimized_and_fixed():

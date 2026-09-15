@@ -3,6 +3,7 @@ set -eu
 
 TABLE='aegis_egress'
 CHAIN='egress'
+INGRESS_CHAIN='ingress'
 IFACE="${SCANNER_EGRESS_INTERFACE:-eth0}"
 CONTROL_ENDPOINTS="${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}"
 PRIVATE_TARGETS="${SCANNER_EGRESS_PRIVATE_TARGETS:-}"
@@ -89,6 +90,13 @@ ip link set "$IFACE" promisc on
 nft delete table netdev "$TABLE" >/dev/null 2>&1 || true
 nft add table netdev "$TABLE"
 nft "add chain netdev $TABLE $CHAIN { type filter hook egress device \"$IFACE\" priority 0; policy accept; }"
+nft "add chain netdev $TABLE $INGRESS_CHAIN { type filter hook ingress device \"$IFACE\" priority 0; policy accept; }"
+
+# Amass v5's collection engine listens on :4000. The legacy scanner worker and
+# governed Kali Recon provider intentionally share this network namespace, so
+# loopback coordination is required. Never expose the transient engine API on
+# the namespace's external interface.
+nft add rule netdev "$TABLE" "$INGRESS_CHAIN" tcp dport 4000 counter drop
 
 # Permit only the exact private control-plane endpoints required by the scanner
 # worker. Public destinations remain reachable unless blocked by the explicit

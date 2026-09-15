@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 COMPOSE = (Path(__file__).resolve().parents[2] / 'docker-compose.yml').read_text(encoding='utf-8')
+SCANNER_EGRESS = (
+    Path(__file__).resolve().parents[2] / 'docker' / 'scanner-egress' / 'entrypoint.sh'
+).read_text(encoding='utf-8')
 
 
 def _service_block(name: str, next_name: str) -> str:
@@ -51,3 +54,8 @@ def test_frontend_has_no_self_dependency_cycle():
     assert '      frontend:' not in depends
     assert '      django: {condition: service_started}' in depends
     assert '      fastapi: {condition: service_healthy}' in depends
+
+
+def test_scanner_egress_keeps_amass_engine_port_loopback_only():
+    assert "type filter hook ingress device" in SCANNER_EGRESS
+    assert 'nft add rule netdev "$TABLE" "$INGRESS_CHAIN" tcp dport 4000 counter drop' in SCANNER_EGRESS
