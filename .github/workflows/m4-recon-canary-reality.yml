@@ -93,7 +93,7 @@ jobs:
           aegis-platform/backend/fastapi_app/tasks/test_recon_canary_routing.py
       - name: Prove production rollout and rollback gates
         run: >-
-          python -m pytest -q
+          python -m pytest -q -c /dev/null -p no:cacheprovider -p no:django --noconftest
           tests/test_production_preflight.py
           tests/test_production_host_deploy.py
       - name: Prove production compose receives governed canary environment
