@@ -34,6 +34,8 @@ CAPABILITY_TO_TOOL = {
     'recon.dnsenum': 'dnsenum',
     'recon.fierce': 'fierce',
 }
+AMASS_RUNTIME_PATH = '/usr/local/bin/aegis-amass-runtime'
+
 TOOL_PATHS = {
     'amass': '/usr/local/bin/amass',
     'subfinder': '/usr/local/bin/subfinder',
@@ -217,7 +219,13 @@ def _build_command(request: dict[str, Any]) -> list[str]:
     tool = request['tool']
     binary = TOOL_PATHS[tool]
     if capability_id == 'recon.amass':
-        return [binary, 'enum', '-passive', '-d', target, '-timeout', str(request['options']['timeout_minutes'])]
+        return [
+            AMASS_RUNTIME_PATH,
+            '--target',
+            target,
+            '--timeout-minutes',
+            str(request['options']['timeout_minutes']),
+        ]
     if capability_id == 'recon.subfinder':
         return [binary, '-d', target, '-silent', '-duc']
     if capability_id == 'recon.dnsenum':
