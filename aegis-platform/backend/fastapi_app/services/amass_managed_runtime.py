@@ -199,11 +199,12 @@ def run_managed_amass(
         tempfile.mkdtemp(prefix="aegis-amass-", dir=root_dir or os.environ.get("TMPDIR") or "/tmp")
     )
     os.chmod(managed_root, 0o700)
-    output_dir = managed_root / "output"
-    output_dir.mkdir(mode=0o700)
     env = _minimal_environment(managed_root)
-    # The patched Amass v5 Engine and client both require this one-time token.
-    # Generate it inside the managed execution and never inherit or emit it.
+    # Amass v5's engine does not accept a -dir flag. Its OAM repository is
+    # rooted in XDG_CONFIG_HOME, so the engine, enum client and subs exporter
+    # must share this per-execution XDG namespace. Passing a separate -dir to
+    # enum/subs makes the exporter read a different repository and can return
+    # an empty discovered-name set after a successful enumeration.
     env["AEGIS_AMASS_ENGINE_TOKEN"] = secrets.token_hex(32)
     engine_log = managed_root / "engine.log"
     enum_stdout = managed_root / "enum.stdout"
@@ -228,8 +229,8 @@ def run_managed_amass(
             enum_code = _run_to_files(
                 [
                     binary, "enum", "-passive", "-d", canonical_target,
-                    "-timeout", str(timeout), "-dir", str(output_dir),
-                    "-engine", ENGINE_URL, "-nocolor", "-silent",
+                    "-timeout", str(timeout), "-engine", ENGINE_URL,
+                    "-nocolor", "-silent",
                 ],
                 cwd=managed_root,
                 env=env,
@@ -246,8 +247,8 @@ def run_managed_amass(
 
             subs_code = _run_to_files(
                 [
-                    binary, "subs", "-dir", str(output_dir), "-d",
-                    canonical_target, "-names", "-nocolor",
+                    binary, "subs", "-d", canonical_target,
+                    "-names", "-nocolor",
                 ],
                 cwd=managed_root,
                 env=env,
