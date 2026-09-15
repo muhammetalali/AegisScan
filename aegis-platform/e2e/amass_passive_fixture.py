@@ -11,11 +11,11 @@ from urllib.parse import parse_qs, urlsplit
 
 API_HOST = 'api.hackertarget.com'
 TARGET = 'parity.test'
-TARGET_IP = '172.32.0.10'
+TARGET_IP = '172.29.0.10'
 RESULTS = (
-    'www.parity.test,172.32.0.11\n'
-    'api.parity.test,172.32.0.12\n'
-    'mail.parity.test,172.32.0.13\n'
+    'www.parity.test,172.29.0.11\n'
+    'api.parity.test,172.29.0.12\n'
+    'mail.parity.test,172.29.0.13\n'
 )
 
 
@@ -98,7 +98,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--cert', required=True)
     parser.add_argument('--key', required=True)
-    parser.add_argument('--fixture-ip', default='172.32.0.53')
+    parser.add_argument('--fixture-ip', default='172.29.0.53')
     args = parser.parse_args()
 
     class UDPHandler(socketserver.BaseRequestHandler):
