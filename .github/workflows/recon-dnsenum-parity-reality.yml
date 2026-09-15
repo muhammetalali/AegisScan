@@ -1,0 +1,423 @@
+name: Recon DNSenum Parity Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/test_dnsenum_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_enrichment.py'
+      - 'aegis-platform/backend/fastapi_app/services/execution_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
+      - 'aegis-platform/kali/runner/recon_service.py'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/e2e/m3_dns_fixture.py'
+      - 'docs/RECON_DNSENUM_SEMANTIC_PARITY.md'
+      - '.github/workflows/recon-dnsenum-parity-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/test_dnsenum_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_normalizer.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_output_enrichment.py'
+      - 'aegis-platform/backend/fastapi_app/services/execution_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/native_tool_runtime.py'
+      - 'aegis-platform/kali/runner/recon_service.py'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/e2e/m3_dns_fixture.py'
+      - 'docs/RECON_DNSENUM_SEMANTIC_PARITY.md'
+      - '.github/workflows/recon-dnsenum-parity-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recon-dnsenum-parity-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dnsenum-parity-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile DNSenum parity contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/test_dnsenum_semantic_parity.py \
+            aegis-platform/backend/fastapi_app/services/native_output_normalizer.py \
+            aegis-platform/backend/fastapi_app/services/native_output_enrichment.py \
+            aegis-platform/backend/fastapi_app/services/execution_semantic_parity.py \
+            aegis-platform/e2e/m3_dns_fixture.py
+      - name: Prove DNSenum normalization and semantic comparator contract
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_dnsenum_semantic_parity.py
+          aegis-platform/backend/fastapi_app/services/test_execution_semantic_parity.py
+      - name: Prove default-Kali still holds DNSenum on legacy
+        env:
+          PYTHONPATH: aegis-platform/backend
+          AEGIS_RECON_PROVIDER: default-kali
+        run: |
+          python - <<'PY'
+          from fastapi_app.services.kali_recon_provider import recon_provider_decision
+          decision = recon_provider_decision('recon.dnsenum')
+          assert decision.selected_provider == 'legacy', decision
+          assert decision.parity_approved is False, decision
+          assert decision.reason == 'capability-not-parity-approved', decision
+          PY
+      - name: Capture exact-head contract evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/dnsenum-parity-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.recon-dnsenum-parity-contract.v1',
+              'capability_id':'recon.dnsenum',
+              'semantic_scope':['normalized-observations','finding-projection'],
+              'real_dual_run_required':True,
+              'default_kali_promotion_allowed':False,
+              'm6_retirement_allowed':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon-dnsenum-parity-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+
+  real-dnsenum-dual-run:
+    needs: dnsenum-parity-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_DNSENUM_AUTH_TOKEN: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_DNSENUM_NETWORK: aegis-dnsenum-parity
+      AEGIS_DNSENUM_DNS_IP: 172.28.0.53
+      AEGIS_DNSENUM_TARGET: parity.test
+      AEGIS_DNSENUM_CAPABILITY: recon.dnsenum
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+
+      - name: Build exact legacy scanner runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache \
+            -t aegis-dnsenum:legacy \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+
+      - name: Build exact governed Kali Recon runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-recon \
+            -t aegis-kali:recon \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+
+      - name: Derive immutable Kali deployment trust anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:recon --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected Kali Recon image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          assert 'recon.dnsenum' in runtime['profile_capabilities']
+          assert runtime['profile_tools']['dnsenum']['version']
+          print('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          print('AEGIS_DNSENUM_KALI_TOOL_VERSION='+runtime['profile_tools']['dnsenum']['version'])
+          PY
+          echo "AEGIS_KALI_RECON_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+
+      - name: Start deterministic authorized DNS fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network create --subnet 172.28.0.0/16 "${AEGIS_DNSENUM_NETWORK}"
+          docker run -d --name aegis-dnsenum-dns \
+            --network "${AEGIS_DNSENUM_NETWORK}" --ip "${AEGIS_DNSENUM_DNS_IP}" \
+            --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/m3_dns_fixture.py:/opt/aegis-dns-fixture.py:ro" \
+            --entrypoint python aegis-dnsenum:legacy /opt/aegis-dns-fixture.py
+          for _ in $(seq 1 30); do
+            if docker logs aegis-dnsenum-dns 2>&1 | grep -q 'AEGIS_M3_DNS_FIXTURE_READY'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-dnsenum-dns
+          exit 1
+
+      - name: Prove deterministic fixture resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --network "${AEGIS_DNSENUM_NETWORK}" --dns "${AEGIS_DNSENUM_DNS_IP}" \
+            --entrypoint python aegis-dnsenum:legacy - <<'PY'
+          import socket
+          expected={'172.28.0.10'}
+          actual={item[4][0] for item in socket.getaddrinfo('parity.test', None, type=socket.SOCK_STREAM)}
+          assert actual == expected, (actual, expected)
+          PY
+
+      - name: Execute real legacy DNSenum production runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          chmod 0777 artifacts
+          docker run --rm -i \
+            --network "${AEGIS_DNSENUM_NETWORK}" --dns "${AEGIS_DNSENUM_DNS_IP}" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_DNSENUM_TARGET},172.28.0.0/16" \
+            -e AEGIS_DNSENUM_TARGET -e AEGIS_DNSENUM_CAPABILITY \
+            -v "$PWD/artifacts:/artifacts" \
+            --entrypoint python aegis-dnsenum:legacy - <<'PY'
+          import json, os, subprocess
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          capability=os.environ['AEGIS_DNSENUM_CAPABILITY']
+          target=os.environ['AEGIS_DNSENUM_TARGET']
+          result=run_native_tool(capability, target, {})
+          if result.exit_code != 0:
+              raise SystemExit(f'legacy DNSenum failed: exit={result.exit_code} stderr={result.stderr[:4000]}')
+          version=subprocess.check_output(['dpkg-query','-W','-f=${Version}','dnsenum'],text=True).strip()
+          with open('/artifacts/legacy-execution.json','w',encoding='utf-8') as handle:
+              json.dump({
+                  'backend':'legacy',
+                  'capability_id':capability,
+                  'target':result.target,
+                  'options':{},
+                  'tool':result.tool,
+                  'tool_version':version,
+                  'exit_code':result.exit_code,
+                  'stdout':result.stdout,
+                  'stderr':result.stderr,
+                  'runtime_provenance':{'provider':'legacy-native-worker'},
+              },handle,sort_keys=True)
+          PY
+
+      - name: Start real governed Kali Recon provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-dnsenum-kali \
+            --network "${AEGIS_DNSENUM_NETWORK}" --dns "${AEGIS_DNSENUM_DNS_IP}" \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700 \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_DNSENUM_AUTH_TOKEN}" \
+            --entrypoint /usr/bin/tini "${AEGIS_KALI_RECON_IMAGE}" -- python3 /opt/aegis-runner/recon_service.py
+          for _ in $(seq 1 30); do
+            if docker exec aegis-dnsenum-kali python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=2)); assert d['status']=='ok'"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-dnsenum-kali
+          exit 1
+
+      - name: Prove provider image identity before candidate execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNING_IMAGE="$(docker inspect --format '{{.Image}}' aegis-dnsenum-kali)"
+          test "$RUNNING_IMAGE" = "${AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST}"
+
+      - name: Execute real Kali DNSenum through production provider client
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --network container:aegis-dnsenum-kali \
+            -v "$PWD/aegis-platform/backend:/app:ro" \
+            -v "$PWD/artifacts:/artifacts" \
+            -e PYTHONPATH=/app \
+            -e AEGIS_RECON_PROVIDER=kali \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_DNSENUM_AUTH_TOKEN}" \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            -e AEGIS_DNSENUM_TARGET -e AEGIS_DNSENUM_CAPABILITY \
+            --entrypoint python3 "${AEGIS_KALI_RECON_IMAGE}" - <<'PY'
+          import json, os
+          from fastapi_app.services.kali_recon_provider import execute_kali_recon
+
+          capability=os.environ['AEGIS_DNSENUM_CAPABILITY']
+          target=os.environ['AEGIS_DNSENUM_TARGET']
+          result=execute_kali_recon(
+              capability_id=capability,
+              target=target,
+              options={},
+              timeout_seconds=300,
+              execution_ref='dnsenum-kali-real',
+              authorization_ref='authorization:dnsenum-parity-reality',
+              scope_ref='project:dnsenum-parity:asset:parity-test',
+              state_getter=None,
+              poll_interval=0.1,
+          )
+          if result['exit_code'] != 0:
+              raise SystemExit(f"Kali DNSenum failed: exit={result['exit_code']} stderr={result['stderr'][:4000]}")
+          runtime=result['runtime']
+          assert runtime['provider']=='aegis-kali-recon'
+          assert runtime['profile']=='recon'
+          assert runtime['provenance_authority']=='control-plane-deployment-pins'
+          assert runtime['image_digest']==os.environ['AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST']
+          with open('/artifacts/kali-execution.json','w',encoding='utf-8') as handle:
+              json.dump({
+                  'backend':'kali',
+                  'capability_id':capability,
+                  'target':result['target'],
+                  'options':{},
+                  'tool':result['tool'],
+                  'exit_code':result['exit_code'],
+                  'stdout':result['stdout'],
+                  'stderr':result['stderr'],
+                  'runtime_provenance':runtime,
+              },handle,sort_keys=True)
+          PY
+
+      - name: Compare production-normalized DNSenum semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            -v "$PWD/artifacts:/artifacts" \
+            -e AEGIS_EXACT_HEAD -e AEGIS_DNSENUM_KALI_TOOL_VERSION \
+            --entrypoint python aegis-dnsenum:legacy - <<'PY'
+          import json, os
+          from fastapi_app.services.execution_semantic_parity import compare_execution_semantics
+          from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
+
+          with open('/artifacts/legacy-execution.json',encoding='utf-8') as handle:
+              legacy=json.load(handle)
+          with open('/artifacts/kali-execution.json',encoding='utf-8') as handle:
+              kali=json.load(handle)
+          for field in ('capability_id','target','options','tool'):
+              assert legacy[field] == kali[field], (field, legacy[field], kali[field])
+
+          capability=legacy['capability_id']
+          legacy_normalized=normalize_enriched_native_output(capability, legacy['stdout'])
+          kali_normalized=normalize_enriched_native_output(capability, kali['stdout'])
+          assert legacy_normalized.get('count',0) > 0, legacy_normalized
+          assert kali_normalized.get('count',0) > 0, kali_normalized
+
+          legacy_values={(item.get('kind'),item.get('value')) for item in legacy_normalized['observations'] if isinstance(item,dict)}
+          kali_values={(item.get('kind'),item.get('value')) for item in kali_normalized['observations'] if isinstance(item,dict)}
+          required={('dns-hostname','parity.test'),('dns-address','172.28.0.10')}
+          assert required <= legacy_values, (required, legacy_values)
+          assert required <= kali_values, (required, kali_values)
+
+          report=compare_execution_semantics(
+              capability_id=capability,
+              legacy_normalized=legacy_normalized,
+              candidate_normalized=kali_normalized,
+          )
+          if not report.semantic_equivalent:
+              raise AssertionError(report.as_dict())
+
+          evidence={
+              'schema':'aegis.recon-dnsenum-real-dual-run.v1',
+              'exact_head':os.environ['AEGIS_EXACT_HEAD'],
+              'fixture':'deterministic-authorized-local-dns-v1',
+              'capability_id':capability,
+              'target':legacy['target'],
+              'legacy_runtime':{
+                  'provider':legacy['runtime_provenance']['provider'],
+                  'tool':legacy['tool'],
+                  'tool_version':legacy['tool_version'],
+              },
+              'candidate_runtime':kali['runtime_provenance'],
+              'candidate_tool_version':os.environ['AEGIS_DNSENUM_KALI_TOOL_VERSION'],
+              'legacy_normalized':legacy_normalized,
+              'candidate_normalized':kali_normalized,
+              'parity':report.as_dict(),
+              'real_dual_run_proven':True,
+              'raw_stdout_byte_equality_required':False,
+              'production_promotion_performed':False,
+              'm6_retirement_allowed':False,
+          }
+          with open('/artifacts/dnsenum-real-dual-run.json','w',encoding='utf-8') as handle:
+              json.dump(evidence,handle,sort_keys=True,indent=2)
+          print(json.dumps(report.as_dict(),sort_keys=True))
+          PY
+
+      - name: Capture exact-head proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > artifacts/head-sha.txt
+          test "$(cat artifacts/head-sha.txt)" = "${AEGIS_EXACT_HEAD}"
+          test -s artifacts/legacy-execution.json
+          test -s artifacts/kali-execution.json
+          test -s artifacts/dnsenum-real-dual-run.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon-dnsenum-real-dual-run-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f aegis-dnsenum-kali aegis-dnsenum-dns >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_DNSENUM_NETWORK}" >/dev/null 2>&1 || true
