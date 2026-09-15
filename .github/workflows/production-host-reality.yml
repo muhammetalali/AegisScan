@@ -74,6 +74,20 @@ jobs:
           test "$(stat -c '%a' /tmp/aegis-runtime/secrets/s3-credentials.json)" = 600
           test "$(stat -c '%a' /tmp/aegis-runtime/secrets/backup-encryption.key)" = 600
           test "$(stat -c '%s' /tmp/aegis-runtime/secrets/backup-encryption.key)" = 32
+          cat >>/tmp/aegis-runtime/production.env <<'EOF'
+          AEGIS_RECON_PROVIDER=default-kali
+          AEGIS_KALI_RECON_CANARY_BPS=0
+          AEGIS_KALI_RECON_IMAGE=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_URL=http://127.0.0.1:18765
+          AEGIS_KALI_RECON_AUTH_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION=0.1.0
+          AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+          COMPOSE_PROFILES=kali-recon
+          EOF
 
       - name: Prove generated secret material passes production preflight
         shell: bash
