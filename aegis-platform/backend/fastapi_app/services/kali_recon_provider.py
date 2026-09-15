@@ -301,16 +301,20 @@ def _validate_runtime_provenance(
 
 
 def _request_json(method: str, path: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
-    body = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    normalized_method = str(method or '').strip().upper()
+    body = None
+    headers = {
+        'Accept': 'application/json',
+        'X-Aegis-Recon-Token': _auth_token(),
+    }
+    if normalized_method != 'GET':
+        body = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        headers['Content-Type'] = 'application/json'
     request = urllib.request.Request(
         _base_url() + path,
         data=body,
-        method=method,
-        headers={
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Aegis-Recon-Token': _auth_token(),
-        },
+        method=normalized_method,
+        headers=headers,
     )
     opener = _direct_opener()
     try:
@@ -331,6 +335,46 @@ def _request_json(method: str, path: str, payload: dict[str, Any], *, timeout: f
     if not isinstance(result, dict):
         raise KaliReconProviderError('Kali recon provider response must be a JSON object')
     return result
+
+
+def _validate_runtime_attestation(payload: Any, expected: dict[str, str]) -> None:
+    if not isinstance(payload, dict) or payload.get('status') != 'ok':
+        raise KaliReconProviderError('Kali recon provider runtime attestation is missing or invalid')
+    runtime = payload.get('runtime')
+    if not isinstance(runtime, dict):
+        raise KaliReconProviderError('Kali recon provider runtime attestation is missing or invalid')
+    if runtime.get('provider') != 'aegis-kali-recon':
+        raise KaliReconProviderError('Kali recon provider attested provider is invalid')
+    if runtime.get('profile') != 'recon':
+        raise KaliReconProviderError('Kali recon provider attested profile mismatch')
+
+    actual = {
+        'runner_version': _bounded_runtime_text('runner_version', runtime.get('runner_version')),
+        'build_commit': runtime.get('build_commit'),
+        'base_image_digest': runtime.get('base_image_digest'),
+        'tool_manifest_digest': runtime.get('tool_manifest_digest'),
+        'runtime_manifest_digest': runtime.get('runtime_manifest_digest'),
+    }
+    if not isinstance(actual['build_commit'], str) or not _COMMIT_RE.fullmatch(actual['build_commit']):
+        raise KaliReconProviderError('Kali recon provider attested build_commit is missing or invalid')
+    for field in ('base_image_digest', 'tool_manifest_digest', 'runtime_manifest_digest'):
+        value = actual[field]
+        if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+            raise KaliReconProviderError(f'Kali recon provider attested {field} is missing or invalid')
+    for field in (
+        'runner_version',
+        'build_commit',
+        'base_image_digest',
+        'tool_manifest_digest',
+        'runtime_manifest_digest',
+    ):
+        if actual[field] != expected[field]:
+            raise KaliReconProviderError(f'Kali recon provider pinned {field} mismatch')
+
+
+def _preflight_runtime_attestation(expected: dict[str, str]) -> None:
+    attestation = _request_json('GET', '/v1/runtime', {}, timeout=5)
+    _validate_runtime_attestation(attestation, expected)
 
 
 def _control(execution_ref: str, control_token: str, state: str) -> None:
@@ -383,6 +427,10 @@ def execute_kali_recon(
     # the worker. Kali mode is therefore fail-closed if deployment provenance is
     # incomplete or malformed.
     expected_provenance = _trusted_expected_provenance()
+    # Authenticate and bind the provider runtime before any scanner binary is
+    # launched. A drifted deployment pin therefore fails closed at the trust
+    # boundary instead of after a potentially long external execution.
+    _preflight_runtime_attestation(expected_provenance)
 
     control_token = secrets.token_hex(32)
     request_payload = {
