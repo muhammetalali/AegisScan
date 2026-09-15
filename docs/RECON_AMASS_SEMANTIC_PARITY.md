@@ -51,6 +51,15 @@ Reality proof must demonstrate both conditions:
 
 ## Deterministic parity source
 
+The managed runtime supplies a private `-config` file with the
+`FQDN->FQDN` transformation. Amass v5.1.1 initializes an empty transformation
+map and loads configuration before creating its default files. In a fresh
+per-execution HOME, relying on those defaults silently skips discovery
+handlers and exports only the seed domain. The explicit configuration is
+shared by the legacy and Kali execution paths, enables hostname discovery,
+and is removed with the execution state. The parity gate still requires all
+three discovered fixture names; returning the seed alone cannot pass.
+
 Parity uses the real Amass v5.1.1 binary and its real DNSRepo passive plugin.
 
 The isolated fixture provides:

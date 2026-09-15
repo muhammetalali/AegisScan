@@ -34,6 +34,9 @@ if args[0] == "engine":
         sock.close()
 elif args[0] == "enum":
     assert "-dir" not in args
+    config = Path(args[args.index("-config") + 1])
+    assert config.read_text() == "transformations:\\n  FQDN->FQDN: {}\\n"
+    assert config.stat().st_mode & 0o777 == 0o600
     assert args[args.index("-engine") + 1] == "http://127.0.0.1:4000"
     assert (store / "engine-store").is_file()
     (store / "asset.db").write_text("fixture", encoding="utf-8")

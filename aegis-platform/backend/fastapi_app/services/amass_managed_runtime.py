@@ -206,6 +206,13 @@ def run_managed_amass(
     # enum/subs makes the exporter read a different repository and can return
     # an empty discovered-name set after a successful enumeration.
     env["AEGIS_AMASS_ENGINE_TOKEN"] = secrets.token_hex(32)
+    # v5 starts with an empty transformation map. Without an explicit config,
+    # enum succeeds but no discovery handlers run: subs only echoes the seed.
+    # Enable hostname discovery, not the upstream FQDN->ALL expansion into
+    # unrelated asset types. Load this exact private config fail-closed.
+    config_path = managed_root / "passive.yaml"
+    config_path.write_text("transformations:\n  FQDN->FQDN: {}\n", encoding="utf-8")
+    config_path.chmod(0o600)
     engine_log = managed_root / "engine.log"
     enum_stdout = managed_root / "enum.stdout"
     enum_stderr = managed_root / "enum.stderr"
@@ -229,6 +236,7 @@ def run_managed_amass(
             enum_code = _run_to_files(
                 [
                     binary, "enum", "-passive", "-d", canonical_target,
+                    "-config", str(config_path),
                     "-timeout", str(timeout), "-engine", ENGINE_URL,
                     "-nocolor", "-silent",
                 ],
