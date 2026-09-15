@@ -60,7 +60,7 @@ def _immutable_image_digest(value) -> str | None:
 
 
 def _validate_recon_image_binding(services: dict, scanner_env: dict, failures: list[str]) -> None:
-    recon_provider = str(scanner_env.get('AEGIS_RECON_PROVIDER', 'default-kali')).strip().lower() or 'default-kali'
+    recon_provider = str(scanner_env.get('AEGIS_RECON_PROVIDER', 'legacy')).strip().lower() or 'legacy'
     raw_bps = str(scanner_env.get('AEGIS_KALI_RECON_CANARY_BPS', '0')).strip()
     try:
         canary_bps = int(raw_bps)
