@@ -4,7 +4,7 @@ from fastapi_app.services.execution_semantic_parity import compare_execution_sem
 from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
 
 
-_DNSENUM_SAMPLE_A = '''
+_DNSENUM_REALISTIC_SAMPLE = '''
 Host's addresses:
 __________________
 parity.test. 60 IN A 172.28.0.10
@@ -23,7 +23,15 @@ www.parity.test. 60 IN A 172.28.0.11
 api.parity.test. 60 IN A 172.28.0.13
 '''
 
-_DNSENUM_SAMPLE_B = '''
+_DNSENUM_SEMANTIC_SAMPLE_A = '''
+parity.test. 60 IN A 172.28.0.10
+ns1.parity.test. 60 IN A 172.28.0.53
+mail.parity.test. 60 IN A 172.28.0.12
+www.parity.test. 60 IN A 172.28.0.11
+api.parity.test. 60 IN A 172.28.0.13
+'''
+
+_DNSENUM_SEMANTIC_SAMPLE_B = '''
 api.parity.test. 60 IN A 172.28.0.13
 www.parity.test. 60 IN A 172.28.0.11
 mail.parity.test. 60 IN A 172.28.0.12
@@ -33,7 +41,7 @@ parity.test. 60 IN A 172.28.0.10
 
 
 def test_dnsenum_normalizer_extracts_deterministic_fixture_semantics():
-    normalized = normalize_enriched_native_output('recon.dnsenum', _DNSENUM_SAMPLE_A)
+    normalized = normalize_enriched_native_output('recon.dnsenum', _DNSENUM_REALISTIC_SAMPLE)
     values = {
         (item.get('kind'), item.get('value'))
         for item in normalized['observations']
@@ -51,8 +59,8 @@ def test_dnsenum_normalizer_extracts_deterministic_fixture_semantics():
 
 
 def test_dnsenum_semantic_parity_ignores_output_order_only():
-    legacy = normalize_enriched_native_output('recon.dnsenum', _DNSENUM_SAMPLE_A)
-    candidate = normalize_enriched_native_output('recon.dnsenum', _DNSENUM_SAMPLE_B)
+    legacy = normalize_enriched_native_output('recon.dnsenum', _DNSENUM_SEMANTIC_SAMPLE_A)
+    candidate = normalize_enriched_native_output('recon.dnsenum', _DNSENUM_SEMANTIC_SAMPLE_B)
 
     report = compare_execution_semantics(
         capability_id='recon.dnsenum',
@@ -68,10 +76,10 @@ def test_dnsenum_semantic_parity_ignores_output_order_only():
 
 
 def test_dnsenum_semantic_parity_fails_closed_on_missing_observation():
-    legacy = normalize_enriched_native_output('recon.dnsenum', _DNSENUM_SAMPLE_A)
+    legacy = normalize_enriched_native_output('recon.dnsenum', _DNSENUM_SEMANTIC_SAMPLE_A)
     candidate = normalize_enriched_native_output(
         'recon.dnsenum',
-        _DNSENUM_SAMPLE_B.replace('api.parity.test. 60 IN A 172.28.0.13\n', ''),
+        _DNSENUM_SEMANTIC_SAMPLE_B.replace('api.parity.test. 60 IN A 172.28.0.13\n', ''),
     )
 
     report = compare_execution_semantics(
