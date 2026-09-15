@@ -27,6 +27,17 @@ HOST_RE = re.compile(r"^[A-Za-z0-9.-]+$")
 BACKUP_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 TRUTHY = {"1", "true", "yes", "on"}
 
+HEX64_RE = re.compile(r"^[a-f0-9]{64}$")
+SHA256_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
+COMMIT_RE = re.compile(r"^[a-f0-9]{40}$")
+RUNTIME_TEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:/@-]{0,254}$")
+KALI_RECON_SHA256_PINS = (
+    "AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST",
+    "AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST",
+    "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST",
+    "AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST",
+)
+
 
 def _items(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
@@ -213,6 +224,59 @@ def _check_remote_backup(environment: dict[str, str], failures: list[str]) -> No
         failures.append("AEGIS_BACKUP_S3_CA_BUNDLE must point to an existing CA bundle")
 
 
+
+def _check_recon_provider_rollout(environment: dict[str, str], failures: list[str]) -> None:
+    mode = environment.get("AEGIS_RECON_PROVIDER", "legacy").strip().lower()
+    raw_bps = environment.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip()
+    try:
+        canary_bps = int(raw_bps)
+    except ValueError:
+        canary_bps = -1
+
+    if mode not in {"legacy", "canary"}:
+        failures.append("AEGIS_RECON_PROVIDER must be legacy or canary during M4")
+        return
+    if canary_bps < 0 or canary_bps > 2500 or str(canary_bps) != raw_bps:
+        failures.append("AEGIS_KALI_RECON_CANARY_BPS must be a canonical integer from 0 to 2500")
+        return
+    if mode == "legacy":
+        if canary_bps != 0:
+            failures.append("AEGIS_KALI_RECON_CANARY_BPS must be 0 while AEGIS_RECON_PROVIDER=legacy")
+        return
+    if canary_bps == 0:
+        return
+
+    parsed = urlparse(environment.get("AEGIS_KALI_RECON_URL", "").strip())
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or not parsed.port
+        or parsed.port < 1024
+        or parsed.port > 65535
+    ):
+        failures.append("AEGIS_KALI_RECON_URL must be an explicit http://127.0.0.1 high-port endpoint")
+
+    token = environment.get("AEGIS_KALI_RECON_AUTH_TOKEN", "").strip()
+    if not HEX64_RE.fullmatch(token):
+        failures.append("AEGIS_KALI_RECON_AUTH_TOKEN must be a 64-character lowercase hexadecimal token")
+
+    runner_version = environment.get("AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION", "").strip()
+    if not RUNTIME_TEXT_RE.fullmatch(runner_version):
+        failures.append("AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION is required and invalid")
+
+    build_commit = environment.get("AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT", "").strip()
+    if not COMMIT_RE.fullmatch(build_commit):
+        failures.append("AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT must be a 40-character lowercase commit SHA")
+
+    for name in KALI_RECON_SHA256_PINS:
+        if not SHA256_RE.fullmatch(environment.get(name, "").strip()):
+            failures.append(f"{name} must be an immutable sha256 digest")
+
 def _check_certificate(cert: Path, key: Path, failures: list[str]) -> None:
     if not cert.is_file() or not key.is_file():
         failures.append("TLS fullchain.pem and privkey.pem must both exist")
@@ -264,6 +328,7 @@ def validate(environment: dict[str, str], tls_dir: Path, check_tls: bool = True)
     if not targets or any(_is_forbidden_scan_target(target) for target in targets):
         failures.append("AUTHORIZED_SCAN_TARGETS must be explicit and exclude wildcard, loopback, link-local and CI targets")
     _check_alert_webhook(environment.get("ALERT_WEBHOOK_URL", ""), failures)
+    _check_recon_provider_rollout(environment, failures)
     _check_remote_backup(environment, failures)
     if check_tls:
         _check_certificate(tls_dir / "fullchain.pem", tls_dir / "privkey.pem", failures)
