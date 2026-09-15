@@ -9,6 +9,10 @@ from pathlib import Path
 BASE = Path('/opt/aegis-runner/runtime-manifest.json')
 TOOLS = Path('/opt/aegis-runner/tool-manifest.json')
 PROFILE_ARTIFACTS = {
+    'recon': {
+        'adapter.amass-v5': Path('/usr/local/bin/amass'),
+        'binary.amass-v5': Path('/usr/local/libexec/amass-real'),
+    },
     'web': {
         'wordlist.web-common': Path('/opt/aegis-wordlists/web-common.txt'),
     },
