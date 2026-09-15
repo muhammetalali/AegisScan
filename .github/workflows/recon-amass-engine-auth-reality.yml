@@ -37,7 +37,7 @@ concurrency:
 jobs:
   auth-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -49,8 +49,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Install contract test dependency
-        run: python -m pip install pytest
+      - name: Install backend contract dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
       - name: Compile auth boundary contracts
         run: |
           python -m py_compile \
