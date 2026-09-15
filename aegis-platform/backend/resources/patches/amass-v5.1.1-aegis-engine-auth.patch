@@ -1,9 +1,7 @@
 diff --git a/engine/api/client/v1/client.go b/engine/api/client/v1/client.go
-index ba2b331..0000000 100644
 --- a/engine/api/client/v1/client.go
 +++ b/engine/api/client/v1/client.go
-@@ -4,6 +4,7 @@
- package v1
+@@ -5,6 +5,7 @@ package v1
  
  import (
  	"context"
@@ -11,13 +9,13 @@ index ba2b331..0000000 100644
  	"encoding/json"
  	"fmt"
  	"io"
-@@ -23,11 +24,43 @@ import (
+@@ -25,13 +26,44 @@ import (
  	oam "github.com/owasp-amass/open-asset-model"
  )
  
 -const MaxBulkItems = 1000
 +const (
-+	MaxBulkItems    = 1000
++	MaxBulkItems     = 1000
 +	engineAuthHeader = "X-Aegis-Amass-Token"
 +)
 +
@@ -51,7 +49,7 @@ index ba2b331..0000000 100644
  	done       chan struct{}
 +	token      string
  }
-@@ -50,11 +83,22 @@ type BulkAddAssetsResponse struct {
+@@ -52,11 +84,22 @@ type BulkAddAssetsResponse struct {
  
  // NewClient returns a pointer to a Client struct for the specified server URL.
  func NewClient(url string) (*Client, error) {
@@ -73,7 +71,7 @@ index ba2b331..0000000 100644
 +		token:      token,
  	}, nil
  }
-@@ -281,7 +325,9 @@ func (c *Client) Subscribe(ctx context.Context, token uuid.UUID) (<-chan string,
+@@ -283,7 +326,9 @@ func (c *Client) Subscribe(ctx context.Context, token uuid.UUID) (<-chan string,
  	sessionID := token.String()
  	u.Path += "/sessions/" + sessionID + "/ws/logs"
  
@@ -85,11 +83,9 @@ index ba2b331..0000000 100644
  		return nil, err
  	}
 diff --git a/engine/api/server/server.go b/engine/api/server/server.go
-index 2b1f3b0..0000000 100644
 --- a/engine/api/server/server.go
 +++ b/engine/api/server/server.go
-@@ -4,10 +4,15 @@
- package server
+@@ -5,10 +5,15 @@ package server
  
  import (
  	"context"
@@ -104,7 +100,7 @@ index 2b1f3b0..0000000 100644
  	"time"
  
  	"github.com/gorilla/mux"
-@@ -15,6 +20,8 @@ import (
+@@ -17,6 +22,8 @@ import (
  	et "github.com/owasp-amass/amass/v5/engine/types"
  )
  
@@ -113,7 +109,7 @@ index 2b1f3b0..0000000 100644
  type ErrorResponse struct {
  	Error   string `json:"error"`
  	Details string `json:"details,omitempty"`
-@@ -29,9 +36,22 @@ type Server struct {
+@@ -31,9 +38,22 @@ type Server struct {
  	ch     chan struct{}
  	srv    *http.Server
  	apiV1  *v1.V1Handlers
@@ -139,12 +135,7 @@ index 2b1f3b0..0000000 100644
  	r := mux.NewRouter()
  	ctx, cancel := context.WithCancel(context.Background())
  
--	apiV1, err := v1.NewV1Handlers(ctx, d, mgr, logger)
-+	apiV1, err := v1.NewV1Handlers(ctx, d, mgr, logger)
- 	if err != nil {
- 		cancel()
- 		return nil, err
-@@ -53,6 +73,7 @@ func NewServer(logger *slog.Logger, d et.Dispatcher, mgr et.SessionManager) (*Ser
+@@ -55,6 +75,7 @@ func NewServer(logger *slog.Logger, d et.Dispatcher, mgr et.SessionManager) (*Ser
  			IdleTimeout:  60 * time.Second,
  		},
  		apiV1: apiV1,
@@ -152,35 +143,14 @@ index 2b1f3b0..0000000 100644
  	}
  
  	srv.routes(r)
-@@ -88,7 +109,19 @@ const assetTypeRE = `[a-z0-9][a-z0-9_-]{0,63}`
- GET    /api/v1/sessions/{session_token}/ws/logs
+@@ -90,6 +111,7 @@ GET    /api/v1/sessions/{session_token}/ws/logs
  */
  func (s *Server) routes(r *mux.Router) {
 +	r.Use(s.authMiddleware)
  	r.Use(s.loggingMiddleware)
-+
-+	r.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-+		writeError(w, http.StatusNotFound, "route not found", nil)
-+	})
-+	r.MethodNotAllowedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-+		writeError(w, http.StatusMethodNotAllowed, "method not allowed", nil)
-+	})
-+
-+	v1 := r.PathPrefix("/api/v1").Subrouter()
-+	v1.HandleFunc("/health", s.apiV1.HealthCheck).Methods(http.MethodGet)
  
--	r.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
--		writeError(w, http.StatusNotFound, "route not found", nil)
--	})
--	r.MethodNotAllowedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
--		writeError(w, http.StatusMethodNotAllowed, "method not allowed", nil)
--	})
--
--	v1 := r.PathPrefix("/api/v1").Subrouter()
--	v1.HandleFunc("/health", s.apiV1.HealthCheck).Methods(http.MethodGet)
--
- 	sessions := v1.PathPrefix("/sessions").Subrouter()
-@@ -111,6 +144,18 @@ func (s *Server) routes(r *mux.Router) {
+ 	r.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+@@ -113,6 +135,18 @@ func (s *Server) routes(r *mux.Router) {
  	ws.HandleFunc("/logs", s.apiV1.WSLogsHandler).Methods(http.MethodGet)
  }
  
