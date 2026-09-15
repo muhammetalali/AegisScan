@@ -39,6 +39,8 @@ def valid_environment(tmp_path: Path) -> dict[str, str]:
         "CORS_ALLOWED_ORIGINS": "https://security.example.com",
         "CSRF_TRUSTED_ORIGINS": "https://security.example.com",
         "AUTHORIZED_SCAN_TARGETS": "authorized.example.com,203.0.113.10",
+        "AEGIS_RECON_PROVIDER": "legacy",
+        "AEGIS_KALI_RECON_CANARY_BPS": "0",
         "ALERT_WEBHOOK_URL": "https://alerts.example.com/aegis",
         "AEGIS_REMOTE_BACKUP_ENABLED": "true",
         "AEGIS_BACKUP_S3_ENDPOINT": "https://backups.example.com",
@@ -137,3 +139,67 @@ def test_rejects_disabled_remote_backup(tmp_path: Path):
     environment["AEGIS_REMOTE_BACKUP_ENABLED"] = "false"
     failures = preflight.validate(environment, tmp_path, check_tls=False)
     assert "AEGIS_REMOTE_BACKUP_ENABLED must be explicitly true" in failures
+
+def _enable_valid_recon_canary(environment: dict[str, str]) -> None:
+    environment.update({
+        "AEGIS_RECON_PROVIDER": "canary",
+        "AEGIS_KALI_RECON_CANARY_BPS": "2500",
+        "AEGIS_KALI_RECON_URL": "http://127.0.0.1:18765",
+        "AEGIS_KALI_RECON_AUTH_TOKEN": "a" * 64,
+        "AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION": "0.1.0",
+        "AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT": "b" * 40,
+        "AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST": "sha256:" + "c" * 64,
+        "AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST": "sha256:" + "d" * 64,
+        "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST": "sha256:" + "e" * 64,
+        "AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST": "sha256:" + "f" * 64,
+    })
+
+
+def test_recon_canary_production_preflight_accepts_bounded_pinned_rollout(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    _enable_valid_recon_canary(environment)
+    assert preflight.validate(environment, tmp_path, check_tls=False) == []
+
+
+def test_recon_canary_zero_is_valid_emergency_rollback_without_kali_secrets(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    environment["AEGIS_RECON_PROVIDER"] = "canary"
+    environment["AEGIS_KALI_RECON_CANARY_BPS"] = "0"
+    assert preflight.validate(environment, tmp_path, check_tls=False) == []
+
+
+def test_recon_canary_production_preflight_blocks_m5_and_invalid_rollout(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    environment["AEGIS_RECON_PROVIDER"] = "kali"
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert "AEGIS_RECON_PROVIDER must be legacy or canary during M4" in failures
+
+    for invalid in ("-1", "2501", "1.5", "00", ""):
+        environment = valid_environment(tmp_path)
+        environment["AEGIS_RECON_PROVIDER"] = "canary"
+        environment["AEGIS_KALI_RECON_CANARY_BPS"] = invalid
+        failures = preflight.validate(environment, tmp_path, check_tls=False)
+        assert any("AEGIS_KALI_RECON_CANARY_BPS" in failure for failure in failures)
+
+
+def test_active_recon_canary_requires_complete_loopback_trust_anchor(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    _enable_valid_recon_canary(environment)
+    environment["AEGIS_KALI_RECON_URL"] = "http://kali-recon:18765"
+    environment["AEGIS_KALI_RECON_AUTH_TOKEN"] = "short"
+    environment["AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT"] = "not-a-commit"
+    environment["AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST"] = "sha256:short"
+
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert any("AEGIS_KALI_RECON_URL" in failure for failure in failures)
+    assert any("AEGIS_KALI_RECON_AUTH_TOKEN" in failure for failure in failures)
+    assert any("AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT" in failure for failure in failures)
+    assert any("AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST" in failure for failure in failures)
+
+
+def test_legacy_recon_mode_rejects_stale_nonzero_canary_percentage(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    environment["AEGIS_KALI_RECON_CANARY_BPS"] = "100"
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert "AEGIS_KALI_RECON_CANARY_BPS must be 0 while AEGIS_RECON_PROVIDER=legacy" in failures
+
