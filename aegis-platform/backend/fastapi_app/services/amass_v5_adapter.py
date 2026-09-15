@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -21,11 +22,13 @@ WORKDIR_PREFIX = 'aegis-amass-v5-'
 ENGINE_HOST = '127.0.0.1'
 ENGINE_PORT = 4000
 ENGINE_URL = f'http://{ENGINE_HOST}:{ENGINE_PORT}'
+ENGINE_AUTH_HEADER = 'X-Aegis-Amass-Token'
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_DIAGNOSTIC_BYTES = 64 * 1024
 _DOMAIN_RE = re.compile(
     r'^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
 )
+_TOKEN_RE = re.compile(r'^[a-f0-9]{64}$')
 
 
 class AdapterError(RuntimeError):
@@ -54,6 +57,13 @@ def _managed_enum_request(argv: list[str]) -> tuple[str, int] | None:
     if timeout_minutes < 1 or timeout_minutes > 30:
         raise AdapterError('Amass timeout must be between 1 and 30 minutes')
     return target, timeout_minutes
+
+
+def _new_engine_token() -> str:
+    token = secrets.token_hex(32)
+    if not _TOKEN_RE.fullmatch(token):
+        raise AdapterError('Failed to generate a valid Amass engine authentication token')
+    return token
 
 
 def _minimal_environment(root: Path) -> dict[str, str]:
@@ -89,19 +99,24 @@ def _port_open() -> bool:
         sock.close()
 
 
-def _health_ok() -> bool:
+def _health_ok(token: str) -> bool:
+    if not _TOKEN_RE.fullmatch(token):
+        return False
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     request = urllib.request.Request(
         ENGINE_URL + '/api/v1/health',
         method='GET',
-        headers={'Accept': 'application/json'},
+        headers={
+            'Accept': 'application/json',
+            ENGINE_AUTH_HEADER: token,
+        },
     )
     try:
         with opener.open(request, timeout=0.5) as response:
             raw = response.read(4097)
             if response.status != 200 or len(raw) > 4096:
                 return False
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
         return False
     try:
         payload = json.loads(raw.decode('utf-8'))
@@ -110,12 +125,16 @@ def _health_ok() -> bool:
     return isinstance(payload, dict)
 
 
-def _wait_for_engine(process: subprocess.Popen[bytes], timeout_seconds: float = 12.0) -> None:
+def _wait_for_engine(
+    process: subprocess.Popen[bytes],
+    token: str,
+    timeout_seconds: float = 12.0,
+) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise AdapterError(f'Amass engine exited before becoming healthy (exit={process.returncode})')
-        if _health_ok():
+        if _health_ok(token):
             return
         time.sleep(0.1)
     raise AdapterError('Amass engine did not become healthy within the startup deadline')
@@ -191,6 +210,7 @@ def _run_managed_enum(target: str, timeout_minutes: int) -> int:
 
     lock_fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
     engine: subprocess.Popen[bytes] | None = None
+    owned_listener = False
     try:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -209,6 +229,8 @@ def _run_managed_enum(target: str, timeout_minutes: int) -> int:
             database.mkdir(mode=0o700)
             logs.mkdir(mode=0o700)
             environment = _minimal_environment(root)
+            engine_token = _new_engine_token()
+            environment['AEGIS_AMASS_ENGINE_TOKEN'] = engine_token
 
             engine = subprocess.Popen(
                 [REAL_AMASS, 'engine', '-silent', '-log-dir', str(logs)],
@@ -219,7 +241,8 @@ def _run_managed_enum(target: str, timeout_minutes: int) -> int:
                 env=environment,
                 cwd=str(root),
             )
-            _wait_for_engine(engine)
+            _wait_for_engine(engine, engine_token)
+            owned_listener = True
 
             enum_result = _run_command(
                 [
@@ -243,6 +266,7 @@ def _run_managed_enum(target: str, timeout_minutes: int) -> int:
             _stop_engine(engine)
             engine = None
             _wait_for_port_close()
+            owned_listener = False
 
             if enum_result.returncode != 0:
                 diagnostic = _bounded_diagnostic(enum_result.stderr, enum_result.stdout)
@@ -282,16 +306,17 @@ def _run_managed_enum(target: str, timeout_minutes: int) -> int:
                 sys.stderr.write(diagnostic + ('\n' if not diagnostic.endswith('\n') else ''))
             return 0
     finally:
-        try:
-            _stop_engine(engine)
-            if not _port_open():
-                pass
-        finally:
+        _stop_engine(engine)
+        if owned_listener:
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            except OSError:
+                _wait_for_port_close()
+            except AdapterError:
                 pass
-            os.close(lock_fd)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(lock_fd)
 
 
 def main(argv: list[str] | None = None) -> int:
