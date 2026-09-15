@@ -37,6 +37,8 @@ def _canonical_domain(value: str) -> str:
 
 
 def _bounded_timeout_minutes(value: int) -> int:
+    if isinstance(value, bool):
+        raise AmassRuntimeError("Amass timeout_minutes must be an integer")
     try:
         minutes = int(value)
     except (TypeError, ValueError) as exc:
