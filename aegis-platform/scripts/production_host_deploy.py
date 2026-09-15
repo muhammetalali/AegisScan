@@ -88,6 +88,31 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _execution_profile_environment(environment: dict[str, str]) -> dict[str, str]:
+    resolved = dict(environment)
+    mode = resolved.get("AEGIS_RECON_PROVIDER", "legacy").strip().lower()
+    try:
+        canary_bps = int(resolved.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip())
+    except ValueError:
+        canary_bps = 0
+
+    profiles = {
+        item.strip()
+        for item in resolved.get("COMPOSE_PROFILES", "").split(",")
+        if item.strip()
+    }
+    if mode == "kali" or (mode == "canary" and canary_bps > 0):
+        profiles.add("kali-recon")
+    else:
+        profiles.discard("kali-recon")
+
+    if profiles:
+        resolved["COMPOSE_PROFILES"] = ",".join(sorted(profiles))
+    else:
+        resolved.pop("COMPOSE_PROFILES", None)
+    return resolved
+
+
 def _validate_origin(origin: str) -> str:
     parsed = urlparse(origin.strip())
     if (
@@ -294,7 +319,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     _assert_clean_repo()
     _ensure_release(release_sha)
     env_values = _load_env_file(env_file)
-    deployment_env = {**os.environ, **env_values}
+    deployment_env = _execution_profile_environment({**os.environ, **env_values})
     previous_sha = _current_sha()
     _preflight(env_file, deployment_env)
     backup = _backup_before_upgrade(env_file, deployment_env)
