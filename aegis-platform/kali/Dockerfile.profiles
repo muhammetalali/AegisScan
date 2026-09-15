@@ -86,11 +86,13 @@ LABEL io.aegisscan.runner.profile=recon
 RUN apt-get update \
     && apt-get install -y --no-install-recommends dnsenum=1.3.2-1 fierce=1.6.0-2 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log
-COPY --from=go-tools /go/bin/amass /usr/local/bin/amass
+COPY --from=go-tools /go/bin/amass /usr/local/libexec/amass-real
+COPY aegis-platform/backend/fastapi_app/services/amass_v5_adapter.py /usr/local/bin/amass
 COPY --from=go-tools /go/bin/subfinder /usr/local/bin/subfinder
 COPY aegis-platform/kali/runner/recon_service.py /opt/aegis-runner/recon_service.py
-RUN chmod 0755 /opt/aegis-runner/recon_service.py \
+RUN chmod 0755 /opt/aegis-runner/recon_service.py /usr/local/bin/amass /usr/local/libexec/amass-real \
     && amass -version 2>&1 | grep -q '5.1.1' \
+    && /usr/local/libexec/amass-real -version 2>&1 | grep -q '5.1.1' \
     && subfinder -version 2>&1 | grep -q '2.16.0' \
     && command -v dnsenum >/dev/null && command -v fierce >/dev/null \
     && python3 /opt/aegis-runner/profile_runtime_manifest.py \
@@ -99,8 +101,7 @@ USER 10001:10001
 
 FROM profile-common AS profile-web
 ENV AEGIS_RUNNER_PROFILE=web \
-    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates \
-    AEGIS_WORDLIST_ROOT=/opt/aegis-wordlists
+    NUCLEI_TEMPLATES_DIR=/opt/aegis-wordlists
 LABEL io.aegisscan.runner.profile=web
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
