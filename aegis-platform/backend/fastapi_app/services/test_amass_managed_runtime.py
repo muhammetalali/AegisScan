@@ -12,13 +12,17 @@ def _fake_amass(tmp_path: Path) -> str:
     script = tmp_path / "fake-amass"
     script.write_text(
         """#!/usr/bin/env python3
+import os
 import socket
 import sys
 import time
 from pathlib import Path
 
 args = sys.argv[1:]
+store = Path(os.environ["XDG_CONFIG_HOME"]) / "amass"
 if args[0] == "engine":
+    store.mkdir(parents=True, exist_ok=True)
+    (store / "engine-store").write_text("owned", encoding="utf-8")
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("0.0.0.0", 4000))
@@ -29,13 +33,14 @@ if args[0] == "engine":
     finally:
         sock.close()
 elif args[0] == "enum":
+    assert "-dir" not in args
     assert args[args.index("-engine") + 1] == "http://127.0.0.1:4000"
-    output = Path(args[args.index("-dir") + 1])
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "asset.db").write_text("fixture", encoding="utf-8")
+    assert (store / "engine-store").is_file()
+    (store / "asset.db").write_text("fixture", encoding="utf-8")
 elif args[0] == "subs":
-    output = Path(args[args.index("-dir") + 1])
-    assert (output / "asset.db").is_file()
+    assert "-dir" not in args
+    assert (store / "engine-store").is_file()
+    assert (store / "asset.db").is_file()
     print("www.parity.test")
     print("api.parity.test")
     print("mail.parity.test")
@@ -48,7 +53,7 @@ else:
     return str(script)
 
 
-def test_managed_amass_owns_engine_collects_discovered_names_and_tears_down(tmp_path):
+def test_managed_amass_owns_engine_uses_shared_xdg_store_collects_names_and_tears_down(tmp_path):
     binary = _fake_amass(tmp_path)
     code, stdout, stderr = amass.run_managed_amass(
         target="Parity.Test",
