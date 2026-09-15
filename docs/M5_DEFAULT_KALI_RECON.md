@@ -9,12 +9,14 @@ M5 does not equate "default Kali" with unconditional routing of every Recon capa
 The trust boundary remains evidence-driven:
 
 - **recon.fierce** is parity-approved and routes to Kali by default.
-- **recon.amass**, **recon.subfinder**, and **recon.dnsenum** remain on the legacy native
-  worker until each has its own approved dual-run semantic-parity evidence.
+- **recon.dnsenum** is parity-approved after independent fresh-main dual-run evidence and
+  now routes to Kali by default.
+- **recon.amass** and **recon.subfinder** remain on the legacy native worker until each has
+  its own approved dual-run semantic-parity evidence.
 - non-Recon capabilities remain on their existing execution paths.
 
-This prevents M5 from silently widening execution trust beyond the evidence established
-by M3 and M4.
+This prevents M5 from silently widening execution trust beyond evidence that has passed
+exact-head PR validation and fresh-main Reality.
 
 ## Routing contract
 
@@ -30,10 +32,11 @@ Modes:
 - **kali**: engineering/reality override that routes all supported Recon capabilities to
   Kali. Production preflight and production policy reject this mode.
 
-The approved M5 set is deliberately explicit: **recon.fierce**.
+The approved M5 set is deliberately explicit: **recon.fierce** and **recon.dnsenum**.
 
 The approved set must never be expanded solely because a tool is packaged in the Kali
-profile. Admission requires independent semantic-parity evidence.
+profile. Admission requires independent semantic-parity evidence, a reviewed promotion
+change, and fresh-main proof.
 
 ## Production default
 
@@ -68,10 +71,11 @@ For default-kali, production execution-plane acceptance must prove from inside t
 scanner_worker that:
 
 1. recon.fierce resolves to Kali with reason default-kali-parity-approved;
-2. an unapproved Recon capability such as recon.subfinder resolves to legacy with reason
+2. recon.dnsenum resolves to Kali with reason default-kali-parity-approved;
+3. an unapproved Recon capability such as recon.subfinder resolves to legacy with reason
    capability-not-parity-approved;
-3. the kali_recon service is running;
-4. the provider passes authenticated runtime attestation against deployment trust pins.
+4. the kali_recon service is running;
+5. the provider passes authenticated runtime attestation against deployment trust pins.
 
 Public HTTPS acceptance remains a separate application availability proof and is not used
 as evidence of scanner execution-plane readiness.
@@ -93,17 +97,18 @@ The M4 zero-BPS canary rollback remains supported as an intermediate operational
 M5 Default Kali Reality must prove on the exact PR/main SHA:
 
 1. default-Kali routing and task integration contracts;
-2. unapproved Recon capabilities cannot enter Kali under M5 default routing;
+2. only parity-approved Recon capabilities can enter Kali under M5 default routing;
 3. raw kali mode is rejected by production preflight/policy;
 4. production Compose resolves to default-kali with an immutable bound Kali image;
 5. exact legacy and exact governed Kali Recon images build successfully;
 6. deterministic authorized DNS fixture execution;
 7. real recon.fierce execution through the production Kali provider client;
-8. real legacy rollback execution against the same fixture;
-9. non-empty normalized observations from both paths;
-10. semantic equivalence between the M5 default execution and legacy rollback reference;
-11. runtime provenance is bound to the exact immutable image and deployment trust anchor;
-12. unapproved capability routing and explicit legacy rollback are captured in evidence.
+8. real recon.dnsenum execution through default-kali is proven by Recon DNSenum Parity Reality;
+9. real legacy rollback execution against the same fixture;
+10. non-empty normalized observations from compared execution paths;
+11. semantic equivalence remains green for every admitted capability;
+12. runtime provenance is bound to the exact immutable image and deployment trust anchor;
+13. unapproved capability routing and explicit legacy rollback are captured in evidence.
 
 ## Non-goals
 
@@ -122,10 +127,11 @@ M5 is complete only after:
 - routing, task, production preflight, policy, deployment, and Compose contracts are green;
 - real default-Kali and real legacy rollback executions are proven;
 - semantic parity remains green for every default-Kali admitted capability;
+- every approved capability promotion is independently proven on exact PR head and fresh main;
 - exact PR head is terminal green and behind=0;
 - the PR is merged using the verified expected-head SHA;
 - fresh exact-main M5 Default Kali Reality and all mandatory release workflows are
   terminal green;
 - exact-main M5 artifacts are inspected and bound to the current main SHA.
 
-Until all conditions are satisfied, M6 Legacy Retirement remains blocked.
+Until all conditions are satisfied for the remaining legacy capabilities, M6 Legacy Retirement remains blocked.
