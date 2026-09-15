@@ -1,0 +1,501 @@
+name: M4 Recon Canary Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_recon_canary_routing.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_recon_canary_routing.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/backend/.env.example'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'tests/test_production_preflight.py'
+      - 'tests/test_production_host_deploy.py'
+      - 'aegis-platform/e2e/m3_dns_fixture.py'
+      - 'docs/M4_RECON_CANARY.md'
+      - '.github/workflows/m4-recon-canary-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_recon_canary_routing.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_recon_canary_routing.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/backend/.env.example'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'tests/test_production_preflight.py'
+      - 'tests/test_production_host_deploy.py'
+      - 'aegis-platform/e2e/m3_dns_fixture.py'
+      - 'docs/M4_RECON_CANARY.md'
+      - '.github/workflows/m4-recon-canary-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m4-recon-canary-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile M4 routing and production contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/kali_recon_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_recon_canary_routing.py \
+            aegis-platform/backend/fastapi_app/tasks/native_capabilities.py \
+            aegis-platform/backend/fastapi_app/tasks/test_recon_canary_routing.py \
+            aegis-platform/scripts/production_preflight.py \
+            aegis-platform/scripts/production_host_deploy.py \
+            tests/test_production_preflight.py \
+            tests/test_production_host_deploy.py
+      - name: Prove pure routing policy
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py
+          aegis-platform/backend/fastapi_app/services/test_recon_canary_routing.py
+      - name: Prove native task wiring
+        env:
+          PYTHONPATH: aegis-platform/backend
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          SECRET_KEY: ci-m4-native-task-secret-key-0123456789abcdef
+          JWT_SECRET_KEY: ci-m4-native-task-jwt-key-0123456789abcdef
+          DATABASE_URL: sqlite:////tmp/aegis-m4-task.sqlite3
+        run: >-
+          python -m pytest -q
+          aegis-platform/backend/fastapi_app/tasks/test_recon_canary_routing.py
+      - name: Prove production rollout and rollback gates
+        run: >-
+          python -m pytest -q
+          tests/test_production_preflight.py
+          tests/test_production_host_deploy.py
+      - name: Prove production compose receives governed canary environment
+        shell: bash
+        env:
+          AUTHORIZED_SCAN_TARGETS: authorized.example.com
+          POSTGRES_PASSWORD: m4-compose-contract-password
+          AEGIS_RECON_PROVIDER: canary
+          AEGIS_KALI_RECON_CANARY_BPS: '2500'
+          AEGIS_KALI_RECON_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION: 0.1.0
+          AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+          COMPOSE_PROFILES: kali-recon
+        run: |
+          set -euo pipefail
+          docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.prod.yml \
+            config --format json > /tmp/m4-compose.json
+          python - <<'PY'
+          import json
+          payload=json.load(open('/tmp/m4-compose.json'))
+          worker=payload['services']['scanner_worker']['environment']
+          assert worker['AEGIS_RECON_PROVIDER']=='canary'
+          assert str(worker['AEGIS_KALI_RECON_CANARY_BPS'])=='2500'
+          assert worker['AEGIS_KALI_RECON_URL']=='http://127.0.0.1:18765'
+          assert worker['AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT']=='b'*40
+          assert 'kali_recon' in payload['services']
+          assert payload['services']['kali_recon']['network_mode']=='service:scanner_egress'
+          PY
+      - name: Capture exact-head contract evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/m4-canary-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.m4-recon-canary-contract.v1',
+              'default_provider':'legacy',
+              'canary_mode':'explicit',
+              'assignment':'sha256-stable-scan-id',
+              'max_canary_bps':2500,
+              'parity_approved_capabilities':['recon.fierce'],
+              'silent_provider_fallback':False,
+              'rollback':'AEGIS_KALI_RECON_CANARY_BPS=0',
+              'm5_default_kali_enabled':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m4-canary-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+
+  real-canary-routing:
+    needs: canary-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_M4_AUTH_TOKEN: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_M4_NETWORK: aegis-m4-canary
+      AEGIS_M4_DNS_IP: 172.29.0.53
+      AEGIS_M4_TARGET: parity.test
+      AEGIS_M4_CAPABILITY: recon.fierce
+      AEGIS_M4_CANARY_BPS: '2500'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+
+      - name: Build exact legacy scanner runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache \
+            -t aegis-m4:legacy \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+
+      - name: Build exact governed Kali Recon runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-recon \
+            -t aegis-kali:recon \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+
+      - name: Derive immutable Kali deployment trust anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:recon --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected Kali Recon image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          print('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_RECON_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+
+      - name: Start deterministic authorized DNS fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network create --subnet 172.29.0.0/16 "${AEGIS_M4_NETWORK}"
+          docker run -d --name aegis-m4-dns \
+            --network "${AEGIS_M4_NETWORK}" --ip "${AEGIS_M4_DNS_IP}" \
+            --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/m3_dns_fixture.py:/opt/aegis-m4-dns-fixture.py:ro" \
+            --entrypoint python aegis-m4:legacy /opt/aegis-m4-dns-fixture.py
+          for _ in $(seq 1 30); do
+            if docker logs aegis-m4-dns 2>&1 | grep -q 'AEGIS_M3_DNS_FIXTURE_READY'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-m4-dns
+          exit 1
+
+      - name: Derive stable selected and holdback canary cohorts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          chmod 0777 artifacts
+          docker run --rm -i \
+            -e AEGIS_RECON_PROVIDER=canary \
+            -e AEGIS_KALI_RECON_CANARY_BPS="${AEGIS_M4_CANARY_BPS}" \
+            -e AEGIS_M4_CAPABILITY \
+            -v "$PWD/artifacts:/artifacts" \
+            --entrypoint python aegis-m4:legacy - <<'PY'
+          import json, os
+          from fastapi_app.services.kali_recon_provider import recon_provider_decision
+
+          capability=os.environ['AEGIS_M4_CAPABILITY']
+          selected=holdback=None
+          for index in range(10000):
+              key=f'm4-real-route-{index}'
+              decision=recon_provider_decision(capability,routing_key=key)
+              if decision.selected_provider=='kali' and selected is None:
+                  selected=(key,decision.as_dict())
+              if decision.selected_provider=='legacy' and decision.reason=='canary-holdback' and holdback is None:
+                  holdback=(key,decision.as_dict())
+              if selected and holdback:
+                  break
+          assert selected and holdback
+          payload={
+              'selected_key':selected[0],
+              'selected_decision':selected[1],
+              'holdback_key':holdback[0],
+              'holdback_decision':holdback[1],
+          }
+          json.dump(payload,open('/artifacts/routing-cohorts.json','w'),sort_keys=True,indent=2)
+          PY
+
+      - name: Execute real legacy holdback through production native runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --network "${AEGIS_M4_NETWORK}" --dns "${AEGIS_M4_DNS_IP}" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M4_TARGET},172.29.0.0/16" \
+            -e AEGIS_RECON_PROVIDER=canary \
+            -e AEGIS_KALI_RECON_CANARY_BPS="${AEGIS_M4_CANARY_BPS}" \
+            -e AEGIS_M4_TARGET -e AEGIS_M4_CAPABILITY \
+            -v "$PWD/artifacts:/artifacts" \
+            --entrypoint python aegis-m4:legacy - <<'PY'
+          import json, os, subprocess
+          from fastapi_app.services.kali_recon_provider import recon_provider_decision
+          from fastapi_app.services.native_tool_runtime import run_native_tool
+
+          routes=json.load(open('/artifacts/routing-cohorts.json'))
+          capability=os.environ['AEGIS_M4_CAPABILITY']
+          target=os.environ['AEGIS_M4_TARGET']
+          decision=recon_provider_decision(capability,routing_key=routes['holdback_key'])
+          assert decision.selected_provider=='legacy'
+          result=run_native_tool(capability,target,{})
+          assert result.exit_code==0, result.stderr[:2000]
+          version=subprocess.check_output(['dpkg-query','-W','-f=${Version}','fierce'],text=True).strip()
+          json.dump({
+              'backend':'legacy',
+              'capability_id':capability,
+              'target':result.target,
+              'options':{},
+              'tool':result.tool,
+              'tool_version':version,
+              'exit_code':result.exit_code,
+              'stdout':result.stdout,
+              'stderr':result.stderr,
+              'runtime_provenance':{
+                  'provider':'legacy-native-worker',
+                  'routing_decision':decision.as_dict(),
+              },
+          },open('/artifacts/legacy-holdback.json','w'),sort_keys=True)
+          PY
+
+      - name: Start real governed Kali Recon provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-m4-kali \
+            --network "${AEGIS_M4_NETWORK}" --dns "${AEGIS_M4_DNS_IP}" \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700 \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_M4_AUTH_TOKEN}" \
+            --entrypoint /usr/bin/tini "${AEGIS_KALI_RECON_IMAGE}" -- python3 /opt/aegis-runner/recon_service.py
+          for _ in $(seq 1 30); do
+            if docker exec aegis-m4-kali python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=2)); assert d['status']=='ok'"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-m4-kali
+          exit 1
+
+      - name: Prove provider image identity before selected execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNING_IMAGE="$(docker inspect --format '{{.Image}}' aegis-m4-kali)"
+          test "$RUNNING_IMAGE" = "${AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST}"
+
+      - name: Execute real selected canary through production provider client
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --network container:aegis-m4-kali \
+            -v "$PWD/aegis-platform/backend:/app:ro" \
+            -v "$PWD/artifacts:/artifacts" \
+            -e PYTHONPATH=/app \
+            -e AEGIS_RECON_PROVIDER=canary \
+            -e AEGIS_KALI_RECON_CANARY_BPS="${AEGIS_M4_CANARY_BPS}" \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_M4_AUTH_TOKEN}" \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            -e AEGIS_M4_TARGET -e AEGIS_M4_CAPABILITY \
+            --entrypoint python3 "${AEGIS_KALI_RECON_IMAGE}" - <<'PY'
+          import json, os
+          from fastapi_app.services.kali_recon_provider import execute_kali_recon, recon_provider_decision
+
+          routes=json.load(open('/artifacts/routing-cohorts.json'))
+          capability=os.environ['AEGIS_M4_CAPABILITY']
+          target=os.environ['AEGIS_M4_TARGET']
+          decision=recon_provider_decision(capability,routing_key=routes['selected_key'])
+          assert decision.selected_provider=='kali'
+          result=execute_kali_recon(
+              capability_id=capability,
+              target=target,
+              options={},
+              timeout_seconds=300,
+              execution_ref='m4-kali-selected',
+              authorization_ref='authorization:m4-reality',
+              scope_ref='project:m4-reality:asset:parity-test',
+              state_getter=None,
+              poll_interval=0.1,
+          )
+          assert result['exit_code']==0, result['stderr'][:2000]
+          runtime=dict(result['runtime'])
+          runtime['routing_decision']=decision.as_dict()
+          assert runtime['provider']=='aegis-kali-recon'
+          assert runtime['provenance_authority']=='control-plane-deployment-pins'
+          assert runtime['image_digest']==os.environ['AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST']
+          json.dump({
+              'backend':'kali',
+              'capability_id':capability,
+              'target':result['target'],
+              'options':{},
+              'tool':result['tool'],
+              'exit_code':result['exit_code'],
+              'stdout':result['stdout'],
+              'stderr':result['stderr'],
+              'runtime_provenance':runtime,
+          },open('/artifacts/kali-selected.json','w'),sort_keys=True)
+          PY
+
+      - name: Prove semantic parity, cohort evidence, and zero-BPS rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            -v "$PWD/artifacts:/artifacts" \
+            -e AEGIS_EXACT_HEAD -e AEGIS_M4_CANARY_BPS \
+            --entrypoint python aegis-m4:legacy - <<'PY'
+          import json, os
+          from fastapi_app.services import kali_recon_provider as routing
+          from fastapi_app.services.execution_semantic_parity import compare_execution_semantics
+          from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
+
+          routes=json.load(open('/artifacts/routing-cohorts.json'))
+          legacy=json.load(open('/artifacts/legacy-holdback.json'))
+          kali=json.load(open('/artifacts/kali-selected.json'))
+          for field in ('capability_id','target','options','tool'):
+              assert legacy[field]==kali[field], (field,legacy[field],kali[field])
+
+          capability=legacy['capability_id']
+          legacy_normalized=normalize_enriched_native_output(capability,legacy['stdout'])
+          kali_normalized=normalize_enriched_native_output(capability,kali['stdout'])
+          assert legacy_normalized.get('count',0)>0
+          assert kali_normalized.get('count',0)>0
+          parity=compare_execution_semantics(
+              capability_id=capability,
+              legacy_normalized=legacy_normalized,
+              candidate_normalized=kali_normalized,
+          )
+          assert parity.semantic_equivalent, parity.as_dict()
+          assert routes['selected_decision']['selected_provider']=='kali'
+          assert routes['holdback_decision']['selected_provider']=='legacy'
+          assert routes['selected_decision']['bucket'] < int(os.environ['AEGIS_M4_CANARY_BPS'])
+          assert routes['holdback_decision']['bucket'] >= int(os.environ['AEGIS_M4_CANARY_BPS'])
+
+          os.environ['AEGIS_RECON_PROVIDER']='canary'
+          os.environ['AEGIS_KALI_RECON_CANARY_BPS']='0'
+          selected_rollback=routing.recon_provider_decision(capability,routing_key=routes['selected_key'])
+          holdback_rollback=routing.recon_provider_decision(capability,routing_key=routes['holdback_key'])
+          assert selected_rollback.selected_provider=='legacy'
+          assert holdback_rollback.selected_provider=='legacy'
+          assert selected_rollback.reason=='canary-rollback-zero'
+          assert holdback_rollback.reason=='canary-rollback-zero'
+
+          evidence={
+              'schema':'aegis.m4-recon-canary.v1',
+              'exact_head':os.environ['AEGIS_EXACT_HEAD'],
+              'fixture':'deterministic-authorized-local-dns-v1',
+              'capability_id':capability,
+              'target':legacy['target'],
+              'default_provider':'legacy',
+              'canary_bps':int(os.environ['AEGIS_M4_CANARY_BPS']),
+              'max_canary_bps':2500,
+              'selected_routing_decision':routes['selected_decision'],
+              'holdback_routing_decision':routes['holdback_decision'],
+              'selected_runtime':kali['runtime_provenance'],
+              'holdback_runtime':legacy['runtime_provenance'],
+              'legacy_normalized':legacy_normalized,
+              'candidate_normalized':kali_normalized,
+              'semantic_parity':parity.as_dict(),
+              'zero_bps_rollback_proven':True,
+              'silent_provider_fallback':False,
+              'm5_default_kali_enabled':False,
+              'note':'M5 remains blocked until M4 merge and fresh exact-main terminal-green proof.',
+          }
+          json.dump(evidence,open('/artifacts/m4-real-canary.json','w'),sort_keys=True,indent=2)
+          print(json.dumps(parity.as_dict(),sort_keys=True))
+          PY
+
+      - name: Capture exact-head proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > artifacts/head-sha.txt
+          test "$(cat artifacts/head-sha.txt)" = "${AEGIS_EXACT_HEAD}"
+          test -s artifacts/routing-cohorts.json
+          test -s artifacts/legacy-holdback.json
+          test -s artifacts/kali-selected.json
+          test -s artifacts/m4-real-canary.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m4-real-canary-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f aegis-m4-kali aegis-m4-dns >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_M4_NETWORK}" >/dev/null 2>&1 || true
