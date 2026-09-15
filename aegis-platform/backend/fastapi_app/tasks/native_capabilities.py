@@ -26,7 +26,7 @@ from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.kali_recon_provider import (
     KaliReconProviderCancelled,
     execute_kali_recon,
-    should_use_kali_recon,
+    recon_provider_decision,
 )
 from fastapi_app.services.native_finding_projection import project_native_findings, sync_scan_finding_counts
 from fastapi_app.services.native_output_enrichment import normalize_enriched_native_output
@@ -153,7 +153,9 @@ def _execute_runtime(
             credential_materials=credential_materials,
         )
         return result, {'provider': 'internal-wstg-validator'}
-    if not should_use_kali_recon(capability_id):
+    routing_decision = recon_provider_decision(capability_id, routing_key=str(scan.id))
+    routing_evidence = routing_decision.as_dict()
+    if routing_decision.selected_provider != 'kali':
         result = run_native_tool(
             capability_id,
             target,
@@ -161,7 +163,10 @@ def _execute_runtime(
             state_getter=state_getter,
             credential_materials=credential_materials,
         )
-        return result, {'provider': 'legacy-native-worker'}
+        return result, {
+            'provider': 'legacy-native-worker',
+            'routing_decision': routing_evidence,
+        }
     if credential_materials:
         raise ValueError('Kali recon provider does not accept credential material')
     canonical_target = validate_authorized_target(target)
@@ -184,7 +189,9 @@ def _execute_runtime(
         stdout=str(provider_result['stdout']),
         stderr=str(provider_result['stderr']),
     )
-    return result, dict(provider_result['runtime'])
+    runtime = dict(provider_result['runtime'])
+    runtime['routing_decision'] = routing_evidence
+    return result, runtime
 
 
 @shared_task(

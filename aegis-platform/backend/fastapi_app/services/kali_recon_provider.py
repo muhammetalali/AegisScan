@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from typing import Any
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -24,6 +26,29 @@ _RECON_TOOL_BY_CAPABILITY = {
     'recon.fierce': 'fierce',
 }
 _RECON_CAPABILITIES = frozenset(_RECON_TOOL_BY_CAPABILITY)
+
+_ROUTING_SCHEMA = 'aegis.recon-provider-routing.v1'
+_CANARY_BUCKET_COUNT = 10_000
+_MAX_CANARY_BPS = 2_500
+_CANARY_PARITY_APPROVED_CAPABILITIES = frozenset({'recon.fierce'})
+
+
+@dataclass(frozen=True)
+class ReconProviderDecision:
+    schema: str
+    mode: str
+    capability_id: str
+    selected_provider: str
+    recon_capability: bool
+    parity_approved: bool
+    canary_bps: int
+    bucket: int | None
+    routing_key_digest: str
+    reason: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
 
 
 class KaliReconProviderError(RuntimeError):
@@ -41,13 +66,125 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def provider_mode() -> str:
     mode = os.getenv('AEGIS_RECON_PROVIDER', 'legacy').strip().lower()
-    if mode not in {'legacy', 'kali'}:
-        raise KaliReconProviderError('AEGIS_RECON_PROVIDER must be legacy or kali')
+    if mode not in {'legacy', 'canary', 'kali'}:
+        raise KaliReconProviderError('AEGIS_RECON_PROVIDER must be legacy, canary, or kali')
     return mode
 
 
-def should_use_kali_recon(capability_id: str) -> bool:
-    return capability_id in _RECON_CAPABILITIES and provider_mode() == 'kali'
+def _canary_bps() -> int:
+    raw = os.getenv('AEGIS_KALI_RECON_CANARY_BPS', '0').strip()
+    if not re.fullmatch(r'\d{1,5}', raw):
+        raise KaliReconProviderError('AEGIS_KALI_RECON_CANARY_BPS must be an integer from 0 to 2500')
+    value = int(raw)
+    if value < 0 or value > _MAX_CANARY_BPS:
+        raise KaliReconProviderError('AEGIS_KALI_RECON_CANARY_BPS must be an integer from 0 to 2500')
+    return value
+
+
+def _routing_key_digest(capability_id: str, routing_key: str) -> tuple[str, int]:
+    normalized = str(routing_key or '').strip()
+    if not normalized or len(normalized) > 255:
+        raise KaliReconProviderError('A non-empty routing_key of at most 255 characters is required for active canary routing')
+    material = f'{_ROUTING_SCHEMA}\x00{capability_id}\x00{normalized}'.encode('utf-8')
+    digest = hashlib.sha256(material).hexdigest()
+    bucket = int(digest[:16], 16) % _CANARY_BUCKET_COUNT
+    return digest, bucket
+
+
+def recon_provider_decision(capability_id: str, *, routing_key: str | None = None) -> ReconProviderDecision:
+    capability = str(capability_id or '').strip()
+    mode = provider_mode()
+    recon_capability = capability in _RECON_CAPABILITIES
+    parity_approved = capability in _CANARY_PARITY_APPROVED_CAPABILITIES
+
+    if not recon_capability:
+        return ReconProviderDecision(
+            schema=_ROUTING_SCHEMA,
+            mode=mode,
+            capability_id=capability,
+            selected_provider='legacy',
+            recon_capability=False,
+            parity_approved=False,
+            canary_bps=0,
+            bucket=None,
+            routing_key_digest='',
+            reason='capability-not-kali-recon',
+        )
+
+    if mode == 'legacy':
+        return ReconProviderDecision(
+            schema=_ROUTING_SCHEMA,
+            mode=mode,
+            capability_id=capability,
+            selected_provider='legacy',
+            recon_capability=True,
+            parity_approved=parity_approved,
+            canary_bps=0,
+            bucket=None,
+            routing_key_digest='',
+            reason='legacy-default',
+        )
+
+    if mode == 'kali':
+        return ReconProviderDecision(
+            schema=_ROUTING_SCHEMA,
+            mode=mode,
+            capability_id=capability,
+            selected_provider='kali',
+            recon_capability=True,
+            parity_approved=parity_approved,
+            canary_bps=_CANARY_BUCKET_COUNT,
+            bucket=None,
+            routing_key_digest='',
+            reason='explicit-kali-mode',
+        )
+
+    canary_bps = _canary_bps()
+    if not parity_approved:
+        return ReconProviderDecision(
+            schema=_ROUTING_SCHEMA,
+            mode=mode,
+            capability_id=capability,
+            selected_provider='legacy',
+            recon_capability=True,
+            parity_approved=False,
+            canary_bps=canary_bps,
+            bucket=None,
+            routing_key_digest='',
+            reason='capability-not-parity-approved',
+        )
+    if canary_bps == 0:
+        return ReconProviderDecision(
+            schema=_ROUTING_SCHEMA,
+            mode=mode,
+            capability_id=capability,
+            selected_provider='legacy',
+            recon_capability=True,
+            parity_approved=True,
+            canary_bps=0,
+            bucket=None,
+            routing_key_digest='',
+            reason='canary-rollback-zero',
+        )
+
+    digest, bucket = _routing_key_digest(capability, routing_key or '')
+    selected = bucket < canary_bps
+    return ReconProviderDecision(
+        schema=_ROUTING_SCHEMA,
+        mode=mode,
+        capability_id=capability,
+        selected_provider='kali' if selected else 'legacy',
+        recon_capability=True,
+        parity_approved=True,
+        canary_bps=canary_bps,
+        bucket=bucket,
+        routing_key_digest=digest,
+        reason='canary-selected' if selected else 'canary-holdback',
+    )
+
+
+def should_use_kali_recon(capability_id: str, *, routing_key: str | None = None) -> bool:
+    return recon_provider_decision(capability_id, routing_key=routing_key).selected_provider == 'kali'
 
 
 def _auth_token() -> str:
@@ -164,16 +301,20 @@ def _validate_runtime_provenance(
 
 
 def _request_json(method: str, path: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
-    body = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    normalized_method = str(method or '').strip().upper()
+    body = None
+    headers = {
+        'Accept': 'application/json',
+        'X-Aegis-Recon-Token': _auth_token(),
+    }
+    if normalized_method != 'GET':
+        body = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        headers['Content-Type'] = 'application/json'
     request = urllib.request.Request(
         _base_url() + path,
         data=body,
-        method=method,
-        headers={
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Aegis-Recon-Token': _auth_token(),
-        },
+        method=normalized_method,
+        headers=headers,
     )
     opener = _direct_opener()
     try:
@@ -194,6 +335,46 @@ def _request_json(method: str, path: str, payload: dict[str, Any], *, timeout: f
     if not isinstance(result, dict):
         raise KaliReconProviderError('Kali recon provider response must be a JSON object')
     return result
+
+
+def _validate_runtime_attestation(payload: Any, expected: dict[str, str]) -> None:
+    if not isinstance(payload, dict) or payload.get('status') != 'ok':
+        raise KaliReconProviderError('Kali recon provider runtime attestation is missing or invalid')
+    runtime = payload.get('runtime')
+    if not isinstance(runtime, dict):
+        raise KaliReconProviderError('Kali recon provider runtime attestation is missing or invalid')
+    if runtime.get('provider') != 'aegis-kali-recon':
+        raise KaliReconProviderError('Kali recon provider attested provider is invalid')
+    if runtime.get('profile') != 'recon':
+        raise KaliReconProviderError('Kali recon provider attested profile mismatch')
+
+    actual = {
+        'runner_version': _bounded_runtime_text('runner_version', runtime.get('runner_version')),
+        'build_commit': runtime.get('build_commit'),
+        'base_image_digest': runtime.get('base_image_digest'),
+        'tool_manifest_digest': runtime.get('tool_manifest_digest'),
+        'runtime_manifest_digest': runtime.get('runtime_manifest_digest'),
+    }
+    if not isinstance(actual['build_commit'], str) or not _COMMIT_RE.fullmatch(actual['build_commit']):
+        raise KaliReconProviderError('Kali recon provider attested build_commit is missing or invalid')
+    for field in ('base_image_digest', 'tool_manifest_digest', 'runtime_manifest_digest'):
+        value = actual[field]
+        if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+            raise KaliReconProviderError(f'Kali recon provider attested {field} is missing or invalid')
+    for field in (
+        'runner_version',
+        'build_commit',
+        'base_image_digest',
+        'tool_manifest_digest',
+        'runtime_manifest_digest',
+    ):
+        if actual[field] != expected[field]:
+            raise KaliReconProviderError(f'Kali recon provider pinned {field} mismatch')
+
+
+def _preflight_runtime_attestation(expected: dict[str, str]) -> None:
+    attestation = _request_json('GET', '/v1/runtime', {}, timeout=5)
+    _validate_runtime_attestation(attestation, expected)
 
 
 def _control(execution_ref: str, control_token: str, state: str) -> None:
@@ -246,6 +427,10 @@ def execute_kali_recon(
     # the worker. Kali mode is therefore fail-closed if deployment provenance is
     # incomplete or malformed.
     expected_provenance = _trusted_expected_provenance()
+    # Authenticate and bind the provider runtime before any scanner binary is
+    # launched. A drifted deployment pin therefore fails closed at the trust
+    # boundary instead of after a potentially long external execution.
+    _preflight_runtime_attestation(expected_provenance)
 
     control_token = secrets.token_hex(32)
     request_payload = {

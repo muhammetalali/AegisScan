@@ -162,3 +162,31 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
         ("deploy", None),
         ("accept", "https://security.example.com"),
     ]
+
+def test_execution_profile_environment_activates_kali_only_for_active_canary():
+    base = {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"}
+    legacy = deploy._execution_profile_environment(base)
+    assert "COMPOSE_PROFILES" not in legacy
+
+    canary = deploy._execution_profile_environment({
+        "AEGIS_RECON_PROVIDER": "canary",
+        "AEGIS_KALI_RECON_CANARY_BPS": "250",
+        "COMPOSE_PROFILES": "monitoring",
+    })
+    assert set(canary["COMPOSE_PROFILES"].split(",")) == {"monitoring", "kali-recon"}
+
+    rollback = deploy._execution_profile_environment({
+        "AEGIS_RECON_PROVIDER": "canary",
+        "AEGIS_KALI_RECON_CANARY_BPS": "0",
+        "COMPOSE_PROFILES": "monitoring,kali-recon",
+    })
+    assert rollback["COMPOSE_PROFILES"] == "monitoring"
+
+
+def test_execution_profile_environment_keeps_explicit_kali_runtime_available_for_nonproduction_proof():
+    resolved = deploy._execution_profile_environment({
+        "AEGIS_RECON_PROVIDER": "kali",
+        "AEGIS_KALI_RECON_CANARY_BPS": "0",
+    })
+    assert resolved["COMPOSE_PROFILES"] == "kali-recon"
+
