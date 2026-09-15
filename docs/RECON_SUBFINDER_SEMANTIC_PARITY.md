@@ -2,8 +2,9 @@
 
 ## Objective
 
-This phase proves real semantic parity for `recon.subfinder` between the legacy native
-scanner runtime and the governed Kali Recon provider before any routing promotion.
+This capability first proved real semantic parity between the legacy native scanner
+runtime and the governed Kali Recon provider. After exact-head and fresh-main proof, this
+separate promotion phase admits `recon.subfinder` to governed `default-kali` routing.
 
 A successful binary exit or empty result set is not parity evidence. Admission requires
 non-empty normalized observations produced by the real pinned Subfinder v2.16.0 binary on
@@ -19,7 +20,8 @@ network:
 
 - both execution planes run the real `subfinder -d <target> -silent -duc` command;
 - the Docker network is internal and has no external egress;
-- a deterministic DNS fixture resolves only `api.hackertarget.com`;
+- a deterministic DNS fixture resolves `api.hackertarget.com` to the local HTTPS fixture
+  and resolves the explicitly authorized target `parity.test` to its isolated `/32` test address;
 - every other passive-source hostname receives NXDOMAIN;
 - an HTTPS fixture presents an ephemeral CA-signed certificate for
   `api.hackertarget.com` and returns deterministic HackerTarget host-search records;
@@ -49,12 +51,24 @@ The contract explicitly proves:
 3. both real executions produce non-empty observations;
 4. the expected deterministic hostnames are present on both sides;
 5. raw stdout byte equality is not required;
-6. no production routing promotion is performed by this phase.
+6. the promotion Reality re-runs the same real dual execution using `default-kali` for the
+   governed candidate path;
+7. runtime provenance and the routing decision are captured in exact-head evidence.
 
-## Governance boundary
+## Promotion rule
 
-This phase does not modify the default-Kali approved capability set. Until a separate
-promotion phase is independently reviewed and proven, `recon.subfinder` must remain
-legacy-routed under `AEGIS_RECON_PROVIDER=default-kali`.
+Successful parity evidence is necessary but not sufficient for production promotion.
+`recon.subfinder` may enter the parity-approved default-Kali set only after the parity PR
+is merged, fresh-main Reality succeeds, the exact-main artifact is inspected, and a
+separate promotion change re-proves routing, runtime provenance, rollback policy, and the
+real dual-run under `default-kali`.
 
+This promotion does not retire the legacy worker. `recon.amass` remains legacy-routed and
 M6 Legacy Retirement remains blocked.
+
+## Exit gate
+
+The Subfinder promotion stage closes only when its exact PR head is terminal green,
+`behind=0`, the promotion artifact reports `production_promotion_performed=true`, the PR
+is merged with expected-head protection, and fresh-main Subfinder Reality and mandatory
+release workflows are terminal green on the resulting main SHA.
