@@ -146,6 +146,7 @@ jobs:
       AEGIS_AMASS_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       AEGIS_AMASS_NETWORK: aegis-amass-parity
       AEGIS_AMASS_FIXTURE_IP: 172.30.0.53
+      AEGIS_AMASS_NETWORK_GATEWAY: 172.30.0.1
       AEGIS_AMASS_TARGET_IP: 172.30.0.10
       AEGIS_AMASS_TARGET: parity.test
       AEGIS_AMASS_CAPABILITY: recon.amass
@@ -319,8 +320,12 @@ jobs:
             --network container:aegis-amass-legacy \
             --cap-add NET_ADMIN \
             -e AEGIS_AMASS_FIXTURE_IP \
+            -e AEGIS_AMASS_NETWORK_GATEWAY \
             --entrypoint sh aegis-amass:scanner-egress -c '
               set -eu
+              IFACE="$(ip route show 172.30.0.0/16 | awk '"'"'NR==1 {print $3}'"'"')"
+              test -n "$IFACE"
+              ip route replace default via "$AEGIS_AMASS_NETWORK_GATEWAY" dev "$IFACE"
               nft add table ip aegis_amass_fixture
               nft "add chain ip aegis_amass_fixture output { type nat hook output priority -100; policy accept; }"
               nft add rule ip aegis_amass_fixture output ip daddr != 127.0.0.0/8 udp dport 53 dnat to ${AEGIS_AMASS_FIXTURE_IP}:53
@@ -361,6 +366,16 @@ jobs:
           assert struct.unpack('!H',response[:2])[0] == query_id, response[:12]
           assert struct.unpack('!H',response[6:8])[0] >= 1, response[:12]
           assert bytes((172,30,0,53)) in response, response
+
+          # The synthetic default route only makes OUTPUT DNAT reachable.
+          # Docker's internal network must still deny public Internet egress.
+          probe=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+          probe.settimeout(0.75)
+          try:
+              code=probe.connect_ex(('1.1.1.1',443))
+          finally:
+              probe.close()
+          assert code != 0, code
           PY
 
       - name: Execute real legacy Amass managed runtime
