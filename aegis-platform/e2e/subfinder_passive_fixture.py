@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 
 API_HOST = "api.hackertarget.com"
 TARGET = "parity.test"
+TARGET_IP = "172.31.0.10"
 RESULTS = (
     "www.parity.test,172.31.0.11\n"
     "api.parity.test,172.31.0.12\n"
@@ -50,12 +51,13 @@ def _response(packet: bytes, fixture_ip: str) -> bytes:
     answers: list[bytes] = []
     if qclass != 1:
         rcode = 4
-    elif name != API_HOST:
+    elif name not in {API_HOST, TARGET}:
         rcode = 3
     else:
         rcode = 0
         if qtype in {1, 255}:
-            rdata = bytes(int(part) for part in fixture_ip.split("."))
+            resolved_ip = fixture_ip if name == API_HOST else TARGET_IP
+            rdata = bytes(int(part) for part in resolved_ip.split("."))
             answers.append(b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, len(rdata)) + rdata)
     flags = 0x8000 | 0x0400 | (request_flags & 0x0100) | rcode
     header = query_id + struct.pack("!HHHHH", flags, 1, len(answers), 0, 0)
