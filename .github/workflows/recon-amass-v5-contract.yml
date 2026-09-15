@@ -1,0 +1,98 @@
+name: Recon Amass V5 Contract
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recon-amass-v5-contract-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  amass-v5-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile Amass v5 contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/amass_v5_adapter.py \
+            aegis-platform/backend/fastapi_app/services/test_amass_v5_adapter.py \
+            aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py \
+            aegis-platform/backend/fastapi_app/services/native_tool_runtime.py \
+            aegis-platform/kali/runner/recon_service.py \
+            aegis-platform/e2e/amass_passive_fixture.py
+      - name: Prove adapter and semantic contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_amass_v5_adapter.py
+          aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py
+          aegis-platform/backend/fastapi_app/services/test_execution_semantic_parity.py
+          aegis-platform/backend/fastapi_app/services/test_native_parity_contract.py
+          aegis-platform/kali/tests/test_recon_provider_contract.py
+      - name: Prove Amass remains default-Kali holdback
+        env:
+          PYTHONPATH: aegis-platform/backend
+          AEGIS_RECON_PROVIDER: default-kali
+        run: |
+          python - <<'PY'
+          from fastapi_app.services.kali_recon_provider import recon_provider_decision
+          d = recon_provider_decision('recon.amass')
+          assert d.selected_provider == 'legacy', d
+          assert d.parity_approved is False, d
+          assert d.reason == 'capability-not-parity-approved', d
+          PY
+      - name: Prove exact-source authenticated packaging contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '79299dce87b0085db0f2f4ef3e9c52cccb49f514' aegis-platform/backend/resources/build-amass-v5-aegis.sh
+          grep -q 'apply --check' aegis-platform/backend/resources/build-amass-v5-aegis.sh
+          grep -q 'AEGIS_AMASS_ENGINE_TOKEN' aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch
+          grep -q 'X-Aegis-Amass-Token' aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch
+          grep -q 'patch.amass-v5-engine-auth' aegis-platform/kali/runner/profile_runtime_manifest.py
+      - name: Capture contract evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/amass-v5-contract.json
+          import json
+          print(json.dumps({
+            'schema':'aegis.recon-amass-v5-parity-contract.v1',
+            'capability_id':'recon.amass',
+            'tool_version':'v5.1.1',
+            'upstream_commit':'79299dce87b0085db0f2f4ef3e9c52cccb49f514',
+            'result_extraction':'isolated-graph-then-subs-names',
+            'engine_auth':'per-execution-256-bit-token',
+            'production_promotion_performed':False,
+            'default_provider':'legacy',
+            'm6_retirement_allowed':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon-amass-v5-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
