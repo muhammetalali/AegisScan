@@ -7,7 +7,7 @@ import json
 import socket
 import ssl
 from typing import Any, Mapping
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from .native_tool_runtime import NativeExecutionCancelled
 from .pinned_http import PinnedHTTPResponse, pinned_http_operation, request_pinned
@@ -144,17 +144,27 @@ def _method_policy(target: str) -> dict[str, Any]:
     }
 
 
-def _hpp_url(target: str, values: tuple[str, str]) -> str:
+def _wire_url(target: str) -> str:
     parsed = urlsplit(target)
-    query = parse_qsl(parsed.query, keep_blank_values=True)
-    query.extend((('aegis_hpp_probe', values[0]), ('aegis_hpp_probe', values[1])))
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', urlencode(query, doseq=True), ''))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', parsed.query, ''))
+
+
+def _hpp_url(target: str, values: tuple[str, str]) -> str:
+    parsed = urlsplit(_wire_url(target))
+    probe_query = urlencode((
+        ('aegis_hpp_probe', values[0]),
+        ('aegis_hpp_probe', values[1]),
+    ))
+    separator = '' if not parsed.query or parsed.query.endswith('&') else '&'
+    query = f'{parsed.query}{separator}{probe_query}'
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or '/', query, ''))
 
 
 def _duplicate_parameter_semantics(target: str) -> dict[str, Any]:
-    baseline = request_pinned('GET', target, timeout=10, max_body_bytes=16384)
-    first = request_pinned('GET', _hpp_url(target, ('1', '2')), timeout=10, max_body_bytes=16384)
-    reverse = request_pinned('GET', _hpp_url(target, ('2', '1')), timeout=10, max_body_bytes=16384)
+    baseline_target = _wire_url(target)
+    baseline = request_pinned('GET', baseline_target, timeout=10, max_body_bytes=16384)
+    first = request_pinned('GET', _hpp_url(baseline_target, ('1', '2')), timeout=10, max_body_bytes=16384)
+    reverse = request_pinned('GET', _hpp_url(baseline_target, ('2', '1')), timeout=10, max_body_bytes=16384)
     return {
         **_base('web.duplicate-parameter-semantics'),
         'synthetic_parameter': 'aegis_hpp_probe',

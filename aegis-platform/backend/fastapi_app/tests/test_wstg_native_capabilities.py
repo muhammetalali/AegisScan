@@ -56,7 +56,7 @@ def test_duplicate_parameter_probe_is_bounded_and_order_sensitive(monkeypatch):
     requested = []
 
     def fake_request(method, target, **kwargs):
-        requested.append((method, target))
+        requested.append((method, target, kwargs))
         if 'aegis_hpp_probe=1&aegis_hpp_probe=2' in target:
             return _response(body=b'forward')
         if 'aegis_hpp_probe=2&aegis_hpp_probe=1' in target:
@@ -64,13 +64,31 @@ def test_duplicate_parameter_probe_is_bounded_and_order_sensitive(monkeypatch):
         return _response(body=b'baseline')
 
     monkeypatch.setattr(wstg, 'request_pinned', fake_request)
-    observation = wstg._duplicate_parameter_semantics('https://example.test/path?keep=1#client-only')
-    assert [item[0] for item in requested] == ['GET', 'GET', 'GET']
-    assert all('keep=1' in item[1] for item in requested)
-    assert all('#client-only' not in item[1] for item in requested)
+    observation = wstg._duplicate_parameter_semantics(
+        'https://example.test/path?keep=a%20b&blank=&encoded=%2f#client-only'
+    )
+    baseline = 'https://example.test/path?keep=a%20b&blank=&encoded=%2f'
+    assert [(method, target) for method, target, _ in requested] == [
+        ('GET', baseline),
+        ('GET', f'{baseline}&aegis_hpp_probe=1&aegis_hpp_probe=2'),
+        ('GET', f'{baseline}&aegis_hpp_probe=2&aegis_hpp_probe=1'),
+    ]
+    assert all(kwargs == {'timeout': 10, 'max_body_bytes': 16384} for _, _, kwargs in requested)
     assert observation['synthetic_parameter'] == 'aegis_hpp_probe'
     assert observation['order_sensitive_observed'] is True
+    assert observation['wstg_id'] == 'WSTG-INPV-04'
+    assert observation['observation_only'] is True
     assert observation['final_decision'] is False
+    assert observation['abstained'] is False
+
+
+def test_hpp_url_handles_queryless_and_trailing_separator_targets():
+    assert wstg._hpp_url('https://example.test#client-only', ('1', '2')) == (
+        'https://example.test/?aegis_hpp_probe=1&aegis_hpp_probe=2'
+    )
+    assert wstg._hpp_url('https://example.test/path?keep=1&#client-only', ('2', '1')) == (
+        'https://example.test/path?keep=1&aegis_hpp_probe=2&aegis_hpp_probe=1'
+    )
 
 
 def test_ssrf_probe_refuses_unbound_oast_callback():
