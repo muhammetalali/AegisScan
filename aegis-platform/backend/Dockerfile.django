@@ -19,8 +19,18 @@ RUN set -eux; \
     }; \
     go_install_with_retry github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
     go_install_with_retry github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
-    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
-    go_install_with_retry github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
+    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0
+
+FROM golang:1.26-bookworm AS amass_tool
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY resources/build-amass-v5-aegis.sh /usr/local/bin/build-amass-v5-aegis
+COPY resources/patches/amass-v5.1.1-aegis-engine-auth.patch /opt/aegis/amass-v5.1.1-aegis-engine-auth.patch
+RUN chmod 0755 /usr/local/bin/build-amass-v5-aegis \
+    && /usr/local/bin/build-amass-v5-aegis \
+       /opt/aegis/amass-v5.1.1-aegis-engine-auth.patch \
+       /go/bin/amass
 
 FROM rust:1.90-bookworm AS rustscan
 RUN cargo install --locked --version 2.4.1 rustscan --root /opt/rustscan \
@@ -74,7 +84,8 @@ COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
 COPY --from=pd_tools /go/bin/httpx /usr/local/bin/httpx
 COPY --from=pd_tools /go/bin/subfinder /usr/local/bin/subfinder
 COPY --from=pd_tools /go/bin/katana /usr/local/bin/katana
-COPY --from=pd_tools /go/bin/amass /usr/local/libexec/amass-real
+COPY --from=amass_tool /go/bin/amass /usr/local/libexec/amass-real
+COPY resources/patches/amass-v5.1.1-aegis-engine-auth.patch /opt/aegis-runner/amass-v5.1.1-aegis-engine-auth.patch
 COPY fastapi_app/services/amass_v5_adapter.py /usr/local/bin/amass
 COPY --from=rustscan /opt/rustscan/bin/rustscan /usr/local/bin/rustscan
 COPY --from=feroxbuster /opt/feroxbuster/bin/feroxbuster /usr/local/bin/feroxbuster
@@ -85,6 +96,7 @@ COPY --from=trufflehog /usr/bin/trufflehog /usr/local/bin/trufflehog
 COPY --from=nuclei_templates /opt/nuclei-templates /opt/nuclei-templates
 RUN ln -sf /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
     && chmod 0755 /opt/nikto/program/nikto.pl /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/subfinder /usr/local/bin/katana /usr/local/bin/amass /usr/local/libexec/amass-real /usr/local/bin/rustscan /usr/local/bin/feroxbuster /usr/local/bin/trivy /usr/local/bin/trufflehog \
+    && chmod 0444 /opt/aegis-runner/amass-v5.1.1-aegis-engine-auth.patch \
     && /usr/local/bin/nuclei -version \
     && /usr/local/bin/httpx -version \
     && /usr/local/bin/subfinder -version \
@@ -164,6 +176,7 @@ RUN command -v nmap >/dev/null \
     && command -v rustscan >/dev/null \
     && command -v amass >/dev/null \
     && test -x /usr/local/libexec/amass-real \
+    && test -r /opt/aegis-runner/amass-v5.1.1-aegis-engine-auth.patch \
     && command -v feroxbuster >/dev/null \
     && command -v nikto >/dev/null \
     && command -v subfinder >/dev/null \
