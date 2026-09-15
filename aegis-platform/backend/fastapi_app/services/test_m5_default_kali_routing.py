@@ -11,7 +11,7 @@ def test_default_kali_routes_only_parity_approved_capabilities(monkeypatch):
     assert approved.selected_provider == "kali"
     assert approved.recon_capability is True
     assert approved.parity_approved is True
-    assert approved.canary_bps == 10_000
+    assert approved.canary_bps == 0
     assert approved.bucket is None
     assert approved.routing_key_digest == ""
     assert approved.reason == "default-kali-parity-approved"
