@@ -47,7 +47,7 @@ def request(**overrides) -> dict:
 def test_all_registered_recon_capabilities_have_fixed_tool_paths_and_commands(runtime):
     expected = {
         'recon.amass': ['/usr/local/bin/amass', 'enum', '-passive', '-d', 'example.invalid', '-timeout', '5'],
-        'recon.subfinder': ['/usr/local/bin/subfinder', '-d', 'example.invalid', '-silent'],
+        'recon.subfinder': ['/usr/local/bin/subfinder', '-d', 'example.invalid', '-silent', '-duc'],
         'recon.dnsenum': ['/usr/bin/dnsenum', 'example.invalid'],
         'recon.fierce': ['/usr/bin/fierce', '--domain', 'example.invalid'],
     }

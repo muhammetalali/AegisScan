@@ -633,7 +633,7 @@ def normalize_native_output(capability_id: str, stdout: str) -> dict[str, Any]:
     if capability_id == 'network.rustscan':
         observations.extend(_normalize_rustscan(raw))
 
-    elif capability_id == 'recon.amass':
+    elif capability_id in {'recon.amass', 'recon.subfinder'}:
         observations.extend(_normalize_amass(raw))
 
     elif capability_id == 'web.feroxbuster':
