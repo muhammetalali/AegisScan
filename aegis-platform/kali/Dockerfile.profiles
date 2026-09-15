@@ -101,7 +101,7 @@ USER 10001:10001
 
 FROM profile-common AS profile-web
 ENV AEGIS_RUNNER_PROFILE=web \
-    NUCLEI_TEMPLATES_DIR=/opt/aegis-wordlists
+    NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates
 LABEL io.aegisscan.runner.profile=web
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
