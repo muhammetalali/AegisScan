@@ -163,6 +163,7 @@ jobs:
       AEGIS_M4_AUTH_TOKEN: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
       AEGIS_M4_NETWORK: aegis-m4-canary
       AEGIS_M4_DNS_IP: 172.29.0.53
+      AEGIS_M4_FIXTURE_CIDR: 172.28.0.0/16
       AEGIS_M4_TARGET: parity.test
       AEGIS_M4_CAPABILITY: recon.fierce
       AEGIS_M4_CANARY_BPS: '2500'
@@ -286,7 +287,7 @@ jobs:
           set -euo pipefail
           docker run --rm -i \
             --network "${AEGIS_M4_NETWORK}" --dns "${AEGIS_M4_DNS_IP}" \
-            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M4_TARGET},172.29.0.0/16" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M4_TARGET},${AEGIS_M4_FIXTURE_CIDR}" \
             -e AEGIS_RECON_PROVIDER=canary \
             -e AEGIS_KALI_RECON_CANARY_BPS="${AEGIS_M4_CANARY_BPS}" \
             -e AEGIS_M4_TARGET -e AEGIS_M4_CAPABILITY \
