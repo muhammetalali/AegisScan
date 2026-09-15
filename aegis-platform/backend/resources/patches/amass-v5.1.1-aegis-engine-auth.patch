@@ -9,7 +9,7 @@ diff --git a/engine/api/client/v1/client.go b/engine/api/client/v1/client.go
  	"encoding/json"
  	"fmt"
  	"io"
-@@ -25,13 +26,44 @@ import (
+@@ -25,11 +26,31 @@ import (
  	oam "github.com/owasp-amass/open-asset-model"
  )
  
@@ -49,7 +49,7 @@ diff --git a/engine/api/client/v1/client.go b/engine/api/client/v1/client.go
  	done       chan struct{}
 +	token      string
  }
-@@ -52,11 +84,22 @@ type BulkAddAssetsResponse struct {
+@@ -52,9 +73,20 @@ type BulkAddAssetsResponse struct {
  
  // NewClient returns a pointer to a Client struct for the specified server URL.
  func NewClient(url string) (*Client, error) {
@@ -71,7 +71,7 @@ diff --git a/engine/api/client/v1/client.go b/engine/api/client/v1/client.go
 +		token:      token,
  	}, nil
  }
-@@ -283,7 +326,9 @@ func (c *Client) Subscribe(ctx context.Context, token uuid.UUID) (<-chan string,
+@@ -283,7 +315,9 @@ func (c *Client) Subscribe(ctx context.Context, token uuid.UUID) (<-chan string,
  	sessionID := token.String()
  	u.Path += "/sessions/" + sessionID + "/ws/logs"
  
