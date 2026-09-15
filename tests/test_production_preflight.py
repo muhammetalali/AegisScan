@@ -140,17 +140,20 @@ def test_rejects_disabled_remote_backup(tmp_path: Path):
     failures = preflight.validate(environment, tmp_path, check_tls=False)
     assert "AEGIS_REMOTE_BACKUP_ENABLED must be explicitly true" in failures
 
+
 def _enable_valid_recon_canary(environment: dict[str, str]) -> None:
+    image_digest = "sha256:" + "e" * 64
     environment.update({
         "AEGIS_RECON_PROVIDER": "canary",
         "AEGIS_KALI_RECON_CANARY_BPS": "2500",
+        "AEGIS_KALI_RECON_IMAGE": "ghcr.io/aegisscan/kali-recon@" + image_digest,
         "AEGIS_KALI_RECON_URL": "http://127.0.0.1:18765",
         "AEGIS_KALI_RECON_AUTH_TOKEN": "a" * 64,
         "AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION": "0.1.0",
         "AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT": "b" * 40,
         "AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST": "sha256:" + "c" * 64,
         "AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST": "sha256:" + "d" * 64,
-        "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST": "sha256:" + "e" * 64,
+        "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST": image_digest,
         "AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST": "sha256:" + "f" * 64,
     })
 
@@ -202,4 +205,3 @@ def test_legacy_recon_mode_rejects_stale_nonzero_canary_percentage(tmp_path: Pat
     environment["AEGIS_KALI_RECON_CANARY_BPS"] = "100"
     failures = preflight.validate(environment, tmp_path, check_tls=False)
     assert "AEGIS_KALI_RECON_CANARY_BPS must be 0 while AEGIS_RECON_PROVIDER=legacy" in failures
-

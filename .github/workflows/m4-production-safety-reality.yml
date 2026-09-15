@@ -1,0 +1,163 @@
+name: M4 Production Safety Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/scripts/production_policy_gate.py'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'tests/test_m4_recon_production_safety.py'
+      - 'tests/test_production_policy_gate.py'
+      - 'tests/test_production_preflight.py'
+      - 'tests/test_production_host_deploy.py'
+      - '.github/workflows/m4-production-safety-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/scripts/production_policy_gate.py'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'tests/test_m4_recon_production_safety.py'
+      - 'tests/test_production_policy_gate.py'
+      - 'tests/test_production_preflight.py'
+      - 'tests/test_production_host_deploy.py'
+      - '.github/workflows/m4-production-safety-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m4-production-safety-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      POSTGRES_PASSWORD: ci-m4-policy-secret-not-for-production
+      SECRET_KEY: ci-m4-django-key-012345678901234567890123456789
+      JWT_SECRET_KEY: ci-m4-jwt-key-012345678901234567890123456789
+      DATABASE_URL: postgresql://aegis:ci-m4-policy-secret-not-for-production@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-m4-browser-fingerprint-key-0123456789
+      AUTHORIZED_SCAN_TARGETS: production-m4.example
+      AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
+      AEGIS_BACKUP_S3_BUCKET: aegisscan-production-backups
+      AEGIS_BACKUP_S3_CREDENTIALS_FILE: /run/aegis-policy/s3.json
+      AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /run/aegis-policy/backup.key
+      AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused test dependency
+        run: python -m pip install pytest==9.1.1
+      - name: Compile production safety contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/scripts/production_policy_gate.py \
+            aegis-platform/scripts/production_preflight.py \
+            aegis-platform/scripts/production_host_deploy.py \
+            tests/test_m4_recon_production_safety.py
+      - name: Prove M4 production trust rollback and readiness contracts
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider -p no:django --noconftest
+          tests/test_m4_recon_production_safety.py
+          tests/test_production_policy_gate.py
+          tests/test_production_preflight.py
+          tests/test_production_host_deploy.py
+      - name: Prepare resolved production Compose environment
+        working-directory: aegis-platform
+        run: |
+          printf '%s\n' \
+            'DEBUG=False' \
+            'SECRET_KEY=ci-m4-django-key-012345678901234567890123456789' \
+            'JWT_SECRET_KEY=ci-m4-jwt-key-012345678901234567890123456789' \
+            'DATABASE_URL=postgresql://aegis:ci-m4-policy-secret-not-for-production@postgres:5432/aegisdb' \
+            'REDIS_URL=redis://redis:6379/0' \
+            'CELERY_BROKER_URL=redis://redis:6379/0' \
+            'CELERY_RESULT_BACKEND=redis://redis:6379/0' \
+            'ALLOWED_HOSTS=localhost,nginx' \
+            'AUTHORIZED_SCAN_TARGETS=production-m4.example' \
+            'SCANNER_EGRESS_PRIVATE_TARGETS=' > backend/.env
+      - name: Prove active canary resolved model uses immutable matching image
+        working-directory: aegis-platform
+        env:
+          AEGIS_RECON_PROVIDER: canary
+          AEGIS_KALI_RECON_CANARY_BPS: '2500'
+          AEGIS_KALI_RECON_IMAGE: ghcr.io/aegisscan/kali-recon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          COMPOSE_PROFILES: kali-recon
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.backup.yml --profile kali-recon config --format json > /tmp/m4-active-canary.json
+          python scripts/production_policy_gate.py /tmp/m4-active-canary.json
+      - name: Prove mutable active-canary image fails closed
+        working-directory: aegis-platform
+        env:
+          AEGIS_RECON_PROVIDER: canary
+          AEGIS_KALI_RECON_CANARY_BPS: '2500'
+          AEGIS_KALI_RECON_IMAGE: aegis-kali:recon
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          COMPOSE_PROFILES: kali-recon
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.backup.yml --profile kali-recon config --format json > /tmp/m4-mutable-canary.json
+          if python scripts/production_policy_gate.py /tmp/m4-mutable-canary.json > /tmp/m4-mutable-result.json; then
+            echo 'mutable active-canary image unexpectedly passed policy' >&2
+            exit 1
+          fi
+          grep -q 'immutable' /tmp/m4-mutable-result.json
+      - name: Prove mismatched active-canary digest fails closed
+        working-directory: aegis-platform
+        env:
+          AEGIS_RECON_PROVIDER: canary
+          AEGIS_KALI_RECON_CANARY_BPS: '2500'
+          AEGIS_KALI_RECON_IMAGE: ghcr.io/aegisscan/kali-recon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          COMPOSE_PROFILES: kali-recon
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.backup.yml --profile kali-recon config --format json > /tmp/m4-mismatch-canary.json
+          if python scripts/production_policy_gate.py /tmp/m4-mismatch-canary.json > /tmp/m4-mismatch-result.json; then
+            echo 'mismatched active-canary image unexpectedly passed policy' >&2
+            exit 1
+          fi
+          grep -q 'does not match' /tmp/m4-mismatch-result.json
+      - name: Capture exact-head safety evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/m4-production-safety.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.m4-production-safety.v1',
+              'active_canary_immutable_image_binding':True,
+              'rollback_forces_legacy_zero_bps':True,
+              'active_canary_requires_internal_runtime_attestation':True,
+              'public_acceptance_is_not_used_as_execution_plane_proof':True,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m4-production-safety-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error

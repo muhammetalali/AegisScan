@@ -59,6 +59,51 @@ def _immutable_image_digest(value) -> str | None:
     return None
 
 
+def _validate_recon_image_binding(services: dict, scanner_env: dict, failures: list[str]) -> None:
+    recon_provider = str(scanner_env.get('AEGIS_RECON_PROVIDER', 'legacy')).strip().lower() or 'legacy'
+    raw_bps = str(scanner_env.get('AEGIS_KALI_RECON_CANARY_BPS', '0')).strip()
+    try:
+        canary_bps = int(raw_bps)
+    except ValueError:
+        canary_bps = -1
+
+    if recon_provider not in {'legacy', 'canary', 'kali'}:
+        failures.append('AEGIS_RECON_PROVIDER must be legacy, canary, or kali')
+        return
+    if recon_provider == 'canary' and (
+        canary_bps < 0 or canary_bps > 2500 or str(canary_bps) != raw_bps
+    ):
+        failures.append('AEGIS_KALI_RECON_CANARY_BPS must be a canonical integer from 0 to 2500')
+        return
+
+    requires_binding = recon_provider == 'kali' or (recon_provider == 'canary' and canary_bps > 0)
+    if not requires_binding:
+        return
+
+    kali_recon = services.get('kali_recon')
+    if not isinstance(kali_recon, dict):
+        failures.append('Active Kali Recon execution requires the kali_recon production service')
+        return
+
+    selected_digest = _immutable_image_digest(kali_recon.get('image'))
+    expected_digest = str(scanner_env.get('AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST', '')).strip()
+    if selected_digest is None:
+        failures.append(
+            'Active Kali Recon production image must be selected by immutable '
+            'sha256 image ID or digest-qualified OCI reference'
+        )
+    if not _IMAGE_DIGEST_RE.fullmatch(expected_digest):
+        failures.append(
+            'Active Kali Recon execution requires a valid '
+            'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST trust value'
+        )
+    elif selected_digest is not None and selected_digest != expected_digest:
+        failures.append(
+            'Active Kali Recon production image digest does not match '
+            'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST'
+        )
+
+
 def validate(model: dict) -> list[str]:
     failures: list[str] = []
     services = model.get('services') if isinstance(model, dict) else None
@@ -167,31 +212,7 @@ def validate(model: dict) -> list[str]:
         failures.append('scanner_worker does not use the audited non-root capability handoff launcher')
 
     scanner_env = scanner_worker.get('environment') or {}
-    recon_provider = str(scanner_env.get('AEGIS_RECON_PROVIDER', 'legacy')).strip().lower() or 'legacy'
-    if recon_provider == 'kali':
-        kali_recon = services.get('kali_recon')
-        if not isinstance(kali_recon, dict):
-            failures.append('Kali Recon mode requires the kali_recon production service')
-        else:
-            selected_digest = _immutable_image_digest(kali_recon.get('image'))
-            expected_digest = str(
-                scanner_env.get('AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST', '')
-            ).strip()
-            if selected_digest is None:
-                failures.append(
-                    'Kali Recon production image must be selected by immutable '
-                    'sha256 image ID or digest-qualified OCI reference'
-                )
-            if not _IMAGE_DIGEST_RE.fullmatch(expected_digest):
-                failures.append(
-                    'Kali Recon mode requires a valid '
-                    'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST trust value'
-                )
-            elif selected_digest is not None and selected_digest != expected_digest:
-                failures.append(
-                    'Kali Recon production image digest does not match '
-                    'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST'
-                )
+    _validate_recon_image_binding(services, scanner_env, failures)
 
     egress = services.get('scanner_egress', {})
     egress_caps = _tokens(egress.get('cap_add'))

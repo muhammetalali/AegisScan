@@ -43,6 +43,16 @@ def _items(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _immutable_image_digest(value: str) -> str | None:
+    image = value.strip()
+    if SHA256_RE.fullmatch(image):
+        return image
+    if "@" not in image:
+        return None
+    digest = image.rsplit("@", 1)[1]
+    return digest if SHA256_RE.fullmatch(digest) else None
+
+
 def _check_credential_vault(environment: dict[str, str], failures: list[str]) -> None:
     raw_keys = [
         item.strip()
@@ -106,7 +116,6 @@ def _check_alert_webhook(value: str, failures: list[str]) -> None:
         failures.append(
             "ALERT_WEBHOOK_URL must be an explicit HTTPS destination without URL credentials, fragment, loopback or link-local host"
         )
-
 
 
 def _truthy(value: str) -> bool:
@@ -224,7 +233,6 @@ def _check_remote_backup(environment: dict[str, str], failures: list[str]) -> No
         failures.append("AEGIS_BACKUP_S3_CA_BUNDLE must point to an existing CA bundle")
 
 
-
 def _check_recon_provider_rollout(environment: dict[str, str], failures: list[str]) -> None:
     mode = environment.get("AEGIS_RECON_PROVIDER", "legacy").strip().lower()
     raw_bps = environment.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip()
@@ -280,6 +288,18 @@ def _check_recon_provider_rollout(environment: dict[str, str], failures: list[st
     for name in KALI_RECON_SHA256_PINS:
         if not SHA256_RE.fullmatch(environment.get(name, "").strip()):
             failures.append(f"{name} must be an immutable sha256 digest")
+
+    expected_image_digest = environment.get("AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST", "").strip()
+    selected_image_digest = _immutable_image_digest(environment.get("AEGIS_KALI_RECON_IMAGE", ""))
+    if selected_image_digest is None:
+        failures.append(
+            "AEGIS_KALI_RECON_IMAGE must be an immutable sha256 image ID or digest-qualified OCI reference for active canary"
+        )
+    elif SHA256_RE.fullmatch(expected_image_digest) and selected_image_digest != expected_image_digest:
+        failures.append(
+            "AEGIS_KALI_RECON_IMAGE must match AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST for active canary"
+        )
+
 
 def _check_certificate(cert: Path, key: Path, failures: list[str]) -> None:
     if not cert.is_file() or not key.is_file():
