@@ -12,6 +12,7 @@ PROFILE_ARTIFACTS = {
     'recon': {
         'adapter.amass-v5': Path('/usr/local/bin/amass'),
         'binary.amass-v5': Path('/usr/local/libexec/amass-real'),
+        'patch.amass-v5-engine-auth': Path('/opt/aegis-runner/amass-v5.1.1-aegis-engine-auth.patch'),
     },
     'web': {
         'wordlist.web-common': Path('/opt/aegis-wordlists/web-common.txt'),
