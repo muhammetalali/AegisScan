@@ -12,9 +12,25 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+retry() {
+    max_attempts="$1"
+    shift
+    attempt=1
+    while ! "$@"; do
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            echo "command failed after ${attempt} attempts: $*" >&2
+            return 1
+        fi
+        sleep_seconds=$((attempt * 10))
+        echo "retrying in ${sleep_seconds}s: $*" >&2
+        sleep "$sleep_seconds"
+        attempt=$((attempt + 1))
+    done
+}
+
 git -C "$SOURCE_ROOT" init -q
 git -C "$SOURCE_ROOT" remote add origin "$AMASS_REPOSITORY"
-git -C "$SOURCE_ROOT" fetch -q --depth 1 origin "$AMASS_COMMIT"
+retry 5 git -C "$SOURCE_ROOT" fetch -q --depth 1 origin "$AMASS_COMMIT"
 git -C "$SOURCE_ROOT" checkout -q --detach FETCH_HEAD
 test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$AMASS_COMMIT"
 
@@ -25,14 +41,16 @@ gofmt -w \
     "$SOURCE_ROOT/engine/api/server/server.go"
 
 mkdir -p "$(dirname "$OUTPUT_PATH")"
+export GOPROXY=https://proxy.golang.org,direct
+export GOSUMDB=sum.golang.org
+export GODEBUG=http2client=0
 (
     cd "$SOURCE_ROOT"
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    retry 5 env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
         go build -trimpath -buildvcs=false -o "$OUTPUT_PATH" ./cmd/amass
 )
 chmod 0755 "$OUTPUT_PATH"
 "$OUTPUT_PATH" -version 2>&1 | grep -q '5.1.1'
 
-# The security patch is part of the executable contract, not documentation.
 grep -q 'AEGIS_AMASS_ENGINE_TOKEN' "$SOURCE_ROOT/engine/api/client/v1/client.go"
 grep -q 'X-Aegis-Amass-Token' "$SOURCE_ROOT/engine/api/server/server.go"
