@@ -122,6 +122,7 @@ RUN groupadd --gid 10001 aegis \
     && chown -R aegis:aegis /app /opt/trivy-cache \
     && chmod 0755 \
         /app/scanner-worker-entrypoint.sh \
+        /app/fastapi_app/services/amass_managed_runtime.py \
         /app/fastapi_app/services/browser_security_probe.py \
         /app/fastapi_app/services/browser_spa_discovery.py \
         /app/fastapi_app/services/api_schema_security.py \
@@ -131,6 +132,7 @@ RUN groupadd --gid 10001 aegis \
         /app/fastapi_app/services/kubernetes_security.py \
         /app/fastapi_app/services/cloud_launcher.py \
         /app/fastapi_app/services/cloud_security.py \
+    && ln -sf /app/fastapi_app/services/amass_managed_runtime.py /usr/local/bin/aegis-amass-runtime \
     && ln -sf /app/fastapi_app/services/browser_security_probe.py /usr/local/bin/aegis-browser-security \
     && ln -sf /app/fastapi_app/services/browser_spa_discovery.py /usr/local/bin/aegis-browser-spa-discovery \
     && ln -sf /app/fastapi_app/services/api_schema_security.py /usr/local/bin/aegis-api-schema-security \
@@ -161,6 +163,7 @@ RUN command -v nmap >/dev/null \
     && command -v httpx >/dev/null \
     && command -v rustscan >/dev/null \
     && command -v amass >/dev/null \
+    && command -v aegis-amass-runtime >/dev/null \
     && command -v feroxbuster >/dev/null \
     && command -v nikto >/dev/null \
     && command -v subfinder >/dev/null \
