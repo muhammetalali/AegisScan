@@ -417,10 +417,17 @@ jobs:
         run: |
           set -euo pipefail
           docker exec -i aegis-amass-legacy python - <<'PY'
-          import os, socket
-          listener=socket.socket()
-          listener.bind(('127.0.0.1',4000))
-          listener.close()
+          import os
+          from pathlib import Path
+
+          wanted_port=f'{4000:04X}'
+          for table in (Path('/proc/net/tcp'), Path('/proc/net/tcp6')):
+              for line in table.read_text(encoding='ascii', errors='strict').splitlines()[1:]:
+                  fields=line.split()
+                  if len(fields) < 10 or ':' not in fields[1]:
+                      continue
+                  _, local_port=fields[1].rsplit(':', 1)
+                  assert not (fields[3] == '0A' and local_port.upper() == wanted_port), line
           for pid in os.listdir('/proc'):
               if not pid.isdigit():
                   continue
@@ -491,10 +498,17 @@ jobs:
         run: |
           set -euo pipefail
           docker exec -i aegis-amass-kali python3 - <<'PY'
-          import os, socket
-          listener=socket.socket()
-          listener.bind(('127.0.0.1',4000))
-          listener.close()
+          import os
+          from pathlib import Path
+
+          wanted_port=f'{4000:04X}'
+          for table in (Path('/proc/net/tcp'), Path('/proc/net/tcp6')):
+              for line in table.read_text(encoding='ascii', errors='strict').splitlines()[1:]:
+                  fields=line.split()
+                  if len(fields) < 10 or ':' not in fields[1]:
+                      continue
+                  _, local_port=fields[1].rsplit(':', 1)
+                  assert not (fields[3] == '0A' and local_port.upper() == wanted_port), line
           for pid in os.listdir('/proc'):
               if not pid.isdigit():
                   continue
