@@ -9,7 +9,7 @@ diff --git a/engine/api/client/v1/client.go b/engine/api/client/v1/client.go
  	"encoding/json"
  	"fmt"
  	"io"
-@@ -25,11 +26,31 @@ import (
+@@ -25,11 +26,38 @@ import (
  	oam "github.com/owasp-amass/open-asset-model"
  )
  
@@ -49,7 +49,7 @@ diff --git a/engine/api/client/v1/client.go b/engine/api/client/v1/client.go
  	done       chan struct{}
 +	token      string
  }
-@@ -52,9 +73,20 @@ type BulkAddAssetsResponse struct {
+@@ -52,9 +80,20 @@ type BulkAddAssetsResponse struct {
  
  // NewClient returns a pointer to a Client struct for the specified server URL.
  func NewClient(url string) (*Client, error) {
@@ -71,7 +71,7 @@ diff --git a/engine/api/client/v1/client.go b/engine/api/client/v1/client.go
 +		token:      token,
  	}, nil
  }
-@@ -283,7 +315,9 @@ func (c *Client) Subscribe(ctx context.Context, token uuid.UUID) (<-chan string,
+@@ -283,7 +322,9 @@ func (c *Client) Subscribe(ctx context.Context, token uuid.UUID) (<-chan string,
  	sessionID := token.String()
  	u.Path += "/sessions/" + sessionID + "/ws/logs"
  
@@ -85,7 +85,7 @@ diff --git a/engine/api/client/v1/client.go b/engine/api/client/v1/client.go
 diff --git a/engine/api/server/server.go b/engine/api/server/server.go
 --- a/engine/api/server/server.go
 +++ b/engine/api/server/server.go
-@@ -5,10 +5,15 @@ package server
+@@ -5,9 +5,14 @@ package server
  
  import (
  	"context"
@@ -109,7 +109,7 @@ diff --git a/engine/api/server/server.go b/engine/api/server/server.go
  type ErrorResponse struct {
  	Error   string `json:"error"`
  	Details string `json:"details,omitempty"`
-@@ -31,9 +38,22 @@ type Server struct {
+@@ -31,9 +38,25 @@ type Server struct {
  	ch     chan struct{}
  	srv    *http.Server
  	apiV1  *v1.V1Handlers
@@ -135,7 +135,7 @@ diff --git a/engine/api/server/server.go b/engine/api/server/server.go
  	r := mux.NewRouter()
  	ctx, cancel := context.WithCancel(context.Background())
  
-@@ -55,6 +75,7 @@ func NewServer(logger *slog.Logger, d et.Dispatcher, mgr et.SessionManager) (*Ser
+@@ -55,6 +78,7 @@ func NewServer(logger *slog.Logger, d et.Dispatcher, mgr et.SessionManager) (*Ser
  			IdleTimeout:  60 * time.Second,
  		},
  		apiV1: apiV1,
@@ -143,14 +143,14 @@ diff --git a/engine/api/server/server.go b/engine/api/server/server.go
  	}
  
  	srv.routes(r)
-@@ -90,6 +111,7 @@ GET    /api/v1/sessions/{session_token}/ws/logs
+@@ -90,5 +114,6 @@ GET    /api/v1/sessions/{session_token}/ws/logs
  */
  func (s *Server) routes(r *mux.Router) {
 +	r.Use(s.authMiddleware)
  	r.Use(s.loggingMiddleware)
  
  	r.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-@@ -113,6 +135,18 @@ func (s *Server) routes(r *mux.Router) {
+@@ -113,6 +138,17 @@ func (s *Server) routes(r *mux.Router) {
  	ws.HandleFunc("/logs", s.apiV1.WSLogsHandler).Methods(http.MethodGet)
  }
  
