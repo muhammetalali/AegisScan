@@ -247,6 +247,10 @@ def _check_recon_provider_rollout(environment: dict[str, str], failures: list[st
         return
 
     parsed = urlparse(environment.get("AEGIS_KALI_RECON_URL", "").strip())
+    try:
+        provider_port = parsed.port
+    except ValueError:
+        provider_port = None
     if (
         parsed.scheme != "http"
         or parsed.hostname != "127.0.0.1"
@@ -255,9 +259,9 @@ def _check_recon_provider_rollout(environment: dict[str, str], failures: list[st
         or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
-        or not parsed.port
-        or parsed.port < 1024
-        or parsed.port > 65535
+        or not provider_port
+        or provider_port < 1024
+        or provider_port > 65535
     ):
         failures.append("AEGIS_KALI_RECON_URL must be an explicit http://127.0.0.1 high-port endpoint")
 
