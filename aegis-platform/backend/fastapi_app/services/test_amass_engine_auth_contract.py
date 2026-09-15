@@ -4,9 +4,9 @@ from pathlib import Path
 
 from fastapi_app.services import amass_managed_runtime as runtime
 
-ROOT = Path(__file__).resolve().parents[3]
-BUILDER = ROOT / "resources" / "build-amass-v5-aegis.sh"
-PATCH = ROOT / "resources" / "patches" / "amass-v5.1.1-aegis-engine-auth.patch"
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+BUILDER = BACKEND_ROOT / "resources" / "build-amass-v5-aegis.sh"
+PATCH = BACKEND_ROOT / "resources" / "patches" / "amass-v5.1.1-aegis-engine-auth.patch"
 RUNTIME_SOURCE = Path(runtime.__file__).resolve()
 
 
@@ -29,9 +29,9 @@ def test_amass_engine_patch_requires_authenticated_http_and_websocket_clients():
     assert 'http.StatusUnauthorized' in patch
 
 
-def test_managed_runtime_generates_token_inside_execution_boundary():
+def test_managed_runtime_generates_token_inside_execution_boundary(tmp_path):
     source = RUNTIME_SOURCE.read_text(encoding="utf-8")
     assert 'import secrets' in source
     assert 'env["AEGIS_AMASS_ENGINE_TOKEN"] = secrets.token_hex(32)' in source
-    environment = runtime._minimal_environment(Path("/tmp/aegis-amass-contract-env"))
+    environment = runtime._minimal_environment(tmp_path / "runtime")
     assert "AEGIS_AMASS_ENGINE_TOKEN" not in environment
