@@ -1,0 +1,162 @@
+name: Recon Amass Engine Auth Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py'
+      - 'aegis-platform/backend/resources/build-amass-v5-aegis.sh'
+      - 'aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/e2e/amass_engine_auth_reality.py'
+      - '.github/workflows/recon-amass-engine-auth-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py'
+      - 'aegis-platform/backend/resources/build-amass-v5-aegis.sh'
+      - 'aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/e2e/amass_engine_auth_reality.py'
+      - '.github/workflows/recon-amass-engine-auth-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recon-amass-engine-auth-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  auth-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Compile auth boundary contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py \
+            aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py \
+            aegis-platform/e2e/amass_engine_auth_reality.py
+      - name: Prove exact source and authenticated engine contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py
+      - name: Capture contract evidence
+        run: |
+          mkdir -p artifacts
+          printf '%s\n' "${AEGIS_EXACT_HEAD}" > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/amass-engine-auth-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.recon-amass-engine-auth-contract.v1',
+              'exact_source_commit':'79299dce87b0085db0f2f4ef3e9c52cccb49f514',
+              'per_execution_token_required':True,
+              'unauthenticated_loopback_allowed':False,
+              'wrong_token_loopback_allowed':False,
+              'correct_token_required':True,
+              'token_persisted_in_artifact':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon-amass-engine-auth-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-auth-boundary:
+    needs: auth-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact legacy scanner image
+        run: |
+          set -euo pipefail
+          docker build --no-cache \
+            -t aegis-amass-auth:legacy \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+      - name: Build exact governed Kali Recon image
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali-auth:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali-auth:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-recon \
+            -t aegis-kali-auth:recon \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+      - name: Prove real legacy Amass engine authentication boundary
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -v "$PWD/aegis-platform/e2e/amass_engine_auth_reality.py:/probe.py:ro" \
+            --entrypoint python3 aegis-amass-auth:legacy /probe.py
+      - name: Prove real Kali Amass engine authentication boundary
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            -v "$PWD/aegis-platform/e2e/amass_engine_auth_reality.py:/probe.py:ro" \
+            --entrypoint python3 aegis-kali-auth:recon /probe.py
+      - name: Capture exact-head real auth evidence
+        run: |
+          mkdir -p artifacts
+          printf '%s\n' "${AEGIS_EXACT_HEAD}" > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/amass-engine-auth-real.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.recon-amass-engine-auth-real.v1',
+              'legacy_real_binary_proven':True,
+              'kali_real_binary_proven':True,
+              'no_token_status':401,
+              'wrong_token_status':401,
+              'correct_token_status':200,
+              'token_persisted_in_artifact':False,
+              'engine_teardown_required':True,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon-amass-engine-auth-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
