@@ -318,6 +318,7 @@ jobs:
           docker run -d --name aegis-amass-dns-redirect \
             --network container:aegis-amass-legacy \
             --cap-add NET_ADMIN \
+            -e AEGIS_AMASS_FIXTURE_IP \
             --entrypoint sh aegis-amass:scanner-egress -c '
               set -eu
               nft add table ip aegis_amass_fixture
@@ -328,13 +329,13 @@ jobs:
               exec tail -f /dev/null
             '
           for _ in $(seq 1 30); do
-            if docker logs aegis-amass-dns-redirect 2>&1 | grep -q 'dnat to ${AEGIS_AMASS_FIXTURE_IP}:53'; then
+            if docker logs aegis-amass-dns-redirect 2>&1 | grep -q "dnat to ${AEGIS_AMASS_FIXTURE_IP}:53"; then
               break
             fi
             sleep 0.2
           done
-          docker logs aegis-amass-dns-redirect 2>&1 | grep -q 'dnat to ${AEGIS_AMASS_FIXTURE_IP}:53'
-          docker exec aegis-amass-legacy python - <<'PY'
+          docker logs aegis-amass-dns-redirect 2>&1 | grep -q "dnat to ${AEGIS_AMASS_FIXTURE_IP}:53"
+          docker exec -i aegis-amass-legacy python - <<'PY'
           import socket
           resolved={item[4][0] for item in socket.getaddrinfo('bgp.tools', None, type=socket.SOCK_STREAM)}
           assert resolved == {'172.30.0.53'}, resolved
