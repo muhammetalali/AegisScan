@@ -113,6 +113,24 @@ def _execution_profile_environment(environment: dict[str, str]) -> dict[str, str
     return resolved
 
 
+def _rollback_execution_environment(environment: dict[str, str]) -> dict[str, str]:
+    """Return an execution environment compatible with pre-M4 releases."""
+    safe = dict(environment)
+    safe["AEGIS_RECON_PROVIDER"] = "legacy"
+    safe["AEGIS_KALI_RECON_CANARY_BPS"] = "0"
+    return _execution_profile_environment(safe)
+
+
+def _recon_rollout_state(environment: dict[str, str]) -> tuple[str, int]:
+    mode = environment.get("AEGIS_RECON_PROVIDER", "legacy").strip().lower()
+    raw_bps = environment.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip()
+    try:
+        bps = int(raw_bps)
+    except ValueError as exc:
+        raise DeployError("AEGIS_KALI_RECON_CANARY_BPS must be an integer") from exc
+    return mode, bps
+
+
 def _validate_origin(origin: str) -> str:
     parsed = urlparse(origin.strip())
     if (
@@ -273,6 +291,66 @@ def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
     )
 
 
+def _execution_plane_acceptance(
+    env_file: Path,
+    deployment_env: dict[str, str],
+    attempts: int = 40,
+) -> None:
+    mode, canary_bps = _recon_rollout_state(deployment_env)
+    active_canary = mode == "canary" and canary_bps > 0
+    if active_canary:
+        command = (
+            "from fastapi_app.services.kali_recon_provider import "
+            "_preflight_runtime_attestation,_trusted_expected_provenance; "
+            "_preflight_runtime_attestation(_trusted_expected_provenance())"
+        )
+    elif mode == "canary":
+        command = (
+            "from fastapi_app.services.kali_recon_provider import recon_provider_decision; "
+            "d=recon_provider_decision('recon.fierce',routing_key='deployment-acceptance'); "
+            "assert d.selected_provider == 'legacy' and d.reason == 'canary-rollback-zero'"
+        )
+    else:
+        # provider_mode exists in both pre-M4 and M4+ releases, so this is also
+        # a compatibility proof after automatic rollback to an older release.
+        command = (
+            "from fastapi_app.services.kali_recon_provider import provider_mode; "
+            "assert provider_mode() == 'legacy'"
+        )
+
+    last_error = ""
+    for _ in range(attempts):
+        running = _running_services(env_file, deployment_env)
+        if "scanner_worker" not in running:
+            last_error = "scanner_worker is not running"
+            time.sleep(3)
+            continue
+        if active_canary and "kali_recon" not in running:
+            last_error = "active canary requires running kali_recon service"
+            time.sleep(3)
+            continue
+        try:
+            _run(
+                _compose(
+                    env_file,
+                    "exec",
+                    "-T",
+                    "scanner_worker",
+                    "python",
+                    "-c",
+                    command,
+                ),
+                cwd=PLATFORM_DIR,
+                env=deployment_env,
+                timeout=20,
+            )
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            last_error = str(exc)[-2000:]
+            time.sleep(3)
+    raise DeployError(f"Recon execution-plane acceptance did not become healthy: {last_error}")
+
+
 def _accept(origin: str, attempts: int = 40) -> None:
     command = [
         sys.executable,
@@ -309,8 +387,10 @@ def _rollback_application(
             "restore the pre-deploy backup before rolling application code back. "
             f"changed migrations: {migrations[:20]}"
         )
+    rollback_env = _rollback_execution_environment(deployment_env)
     _checkout(previous_sha)
-    _deploy_stack(env_file, deployment_env)
+    _deploy_stack(env_file, rollback_env)
+    _execution_plane_acceptance(env_file, rollback_env)
     _accept(origin)
 
 
@@ -330,6 +410,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         _preflight(env_file, deployment_env)
         deployment_attempted = True
         _deploy_stack(env_file, deployment_env)
+        _execution_plane_acceptance(env_file, deployment_env)
         _accept(origin)
     except BaseException:
         if previous_sha != release_sha:
