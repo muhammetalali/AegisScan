@@ -8,6 +8,7 @@ on:
       - 'aegis-platform/backend/**'
       - 'aegis-platform/frontend/**'
       - 'aegis-platform/scripts/create_slsa_provenance.py'
+      - 'aegis-platform/scripts/install_cosign_release.sh'
       - 'aegis-platform/scripts/verify_image_supply_chain.sh'
       - 'tests/test_supply_chain_provenance.py'
   push:
@@ -31,9 +32,14 @@ jobs:
       - uses: actions/setup-python@v6
         with: {python-version: '3.12'}
       - run: python -m pip install pytest==9.1.1
+      - name: Prove pinned Cosign bootstrap
+        run: |
+          sh aegis-platform/scripts/install_cosign_release.sh "$RUNNER_TEMP/cosign"
+          "$RUNNER_TEMP/cosign" version
       - run: python -m pytest -q tests/test_supply_chain_provenance.py
       - run: |
           shellcheck aegis-platform/scripts/verify_image_supply_chain.sh
+          shellcheck aegis-platform/scripts/install_cosign_release.sh
           python -m py_compile aegis-platform/scripts/create_slsa_provenance.py
 
   publish:
@@ -62,8 +68,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
-      - uses: sigstore/cosign-installer@v3
-        with: {cosign-release: 'v2.6.1'}
+      - name: Install pinned Cosign with resilient download
+        run: |
+          sh aegis-platform/scripts/install_cosign_release.sh "$HOME/.local/bin/cosign"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: anchore/sbom-action/download-syft@v0
         with: {syft-version: 'v1.38.0'}
       - uses: docker/login-action@v3

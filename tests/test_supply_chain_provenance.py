@@ -36,3 +36,19 @@ def test_provenance_rejects_mutable_or_malformed_digest(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["p", "--image", "image", "--digest", "latest", "--dockerfile", "D", "--output", str(tmp_path / "p")])
     with pytest.raises(SystemExit):
         MODULE.main()
+
+
+WORKFLOW = Path(__file__).parents[1] / ".github/workflows/supply-chain-release.yml"
+COSIGN_INSTALLER = Path(__file__).parents[1] / "aegis-platform/scripts/install_cosign_release.sh"
+
+
+def test_supply_chain_cosign_bootstrap_is_executed_on_pr_and_publish():
+    workflow = WORKFLOW.read_text()
+    installer = COSIGN_INSTALLER.read_text()
+    assert "sigstore/cosign-installer@" not in workflow
+    assert workflow.count("install_cosign_release.sh") >= 3
+    assert "COSIGN_VERSION='v2.6.1'" in installer
+    assert "COSIGN_LINUX_AMD64_SHA256='064954c5d8c7e3b28188eee5b1727b31c411550bc5fefd41aa672d3c761d103a'" in installer
+    assert "--retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 180" in installer
+    assert "sha256sum --check --strict" in installer
+    assert 'grep -F "$COSIGN_VERSION"' in installer
