@@ -170,10 +170,17 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
     ]
 
 
-def test_execution_profile_environment_activates_kali_only_for_active_canary():
+def test_execution_profile_environment_activates_governed_kali_for_default_and_active_canary():
     base = {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"}
     legacy = deploy._execution_profile_environment(base)
     assert "COMPOSE_PROFILES" not in legacy
+
+    default_kali = deploy._execution_profile_environment({
+        "AEGIS_RECON_PROVIDER": "default-kali",
+        "AEGIS_KALI_RECON_CANARY_BPS": "0",
+        "COMPOSE_PROFILES": "monitoring",
+    })
+    assert set(default_kali["COMPOSE_PROFILES"].split(",")) == {"monitoring", "kali-recon"}
 
     canary = deploy._execution_profile_environment({
         "AEGIS_RECON_PROVIDER": "canary",

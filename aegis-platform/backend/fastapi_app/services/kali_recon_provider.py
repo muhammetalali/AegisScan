@@ -30,7 +30,7 @@ _RECON_CAPABILITIES = frozenset(_RECON_TOOL_BY_CAPABILITY)
 _ROUTING_SCHEMA = 'aegis.recon-provider-routing.v1'
 _CANARY_BUCKET_COUNT = 10_000
 _MAX_CANARY_BPS = 2_500
-_CANARY_PARITY_APPROVED_CAPABILITIES = frozenset({'recon.fierce'})
+_PARITY_APPROVED_CAPABILITIES = frozenset({'recon.fierce'})
 
 
 @dataclass(frozen=True)
@@ -66,8 +66,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def provider_mode() -> str:
     mode = os.getenv('AEGIS_RECON_PROVIDER', 'legacy').strip().lower()
-    if mode not in {'legacy', 'canary', 'kali'}:
-        raise KaliReconProviderError('AEGIS_RECON_PROVIDER must be legacy, canary, or kali')
+    if mode not in {'legacy', 'canary', 'default-kali', 'kali'}:
+        raise KaliReconProviderError('AEGIS_RECON_PROVIDER must be legacy, canary, default-kali, or kali')
     return mode
 
 
@@ -95,7 +95,7 @@ def recon_provider_decision(capability_id: str, *, routing_key: str | None = Non
     capability = str(capability_id or '').strip()
     mode = provider_mode()
     recon_capability = capability in _RECON_CAPABILITIES
-    parity_approved = capability in _CANARY_PARITY_APPROVED_CAPABILITIES
+    parity_approved = capability in _PARITY_APPROVED_CAPABILITIES
 
     if not recon_capability:
         return ReconProviderDecision(
@@ -123,6 +123,33 @@ def recon_provider_decision(capability_id: str, *, routing_key: str | None = Non
             bucket=None,
             routing_key_digest='',
             reason='legacy-default',
+        )
+
+    if mode == 'default-kali':
+        if not parity_approved:
+            return ReconProviderDecision(
+                schema=_ROUTING_SCHEMA,
+                mode=mode,
+                capability_id=capability,
+                selected_provider='legacy',
+                recon_capability=True,
+                parity_approved=False,
+                canary_bps=0,
+                bucket=None,
+                routing_key_digest='',
+                reason='capability-not-parity-approved',
+            )
+        return ReconProviderDecision(
+            schema=_ROUTING_SCHEMA,
+            mode=mode,
+            capability_id=capability,
+            selected_provider='kali',
+            recon_capability=True,
+            parity_approved=True,
+            canary_bps=0,
+            bucket=None,
+            routing_key_digest='',
+            reason='default-kali-parity-approved',
         )
 
     if mode == 'kali':
@@ -223,7 +250,7 @@ def _bounded_runtime_text(name: str, value: Any) -> str:
 def _required_expected(name: str, validator: re.Pattern[str] | None = None) -> str:
     value = os.getenv(name, '').strip()
     if not value:
-        raise KaliReconProviderError(f'{name} is required when AEGIS_RECON_PROVIDER=kali')
+        raise KaliReconProviderError(f'{name} is required when governed Kali Recon execution is active')
     if validator is not None and not validator.fullmatch(value):
         raise KaliReconProviderError(f'{name} is invalid')
     if validator is None and not _RUNTIME_TEXT_RE.fullmatch(value):

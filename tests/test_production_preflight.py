@@ -164,6 +164,18 @@ def test_recon_canary_production_preflight_accepts_bounded_pinned_rollout(tmp_pa
     assert preflight.validate(environment, tmp_path, check_tls=False) == []
 
 
+def test_default_kali_production_preflight_accepts_only_complete_pinned_rollout(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    _enable_valid_recon_canary(environment)
+    environment["AEGIS_RECON_PROVIDER"] = "default-kali"
+    environment["AEGIS_KALI_RECON_CANARY_BPS"] = "0"
+    assert preflight.validate(environment, tmp_path, check_tls=False) == []
+
+    environment["AEGIS_KALI_RECON_CANARY_BPS"] = "1"
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert "AEGIS_KALI_RECON_CANARY_BPS must be 0 while AEGIS_RECON_PROVIDER=default-kali" in failures
+
+
 def test_recon_canary_zero_is_valid_emergency_rollback_without_kali_secrets(tmp_path: Path):
     environment = valid_environment(tmp_path)
     environment["AEGIS_RECON_PROVIDER"] = "canary"
@@ -171,11 +183,11 @@ def test_recon_canary_zero_is_valid_emergency_rollback_without_kali_secrets(tmp_
     assert preflight.validate(environment, tmp_path, check_tls=False) == []
 
 
-def test_recon_canary_production_preflight_blocks_m5_and_invalid_rollout(tmp_path: Path):
+def test_recon_production_preflight_rejects_raw_kali_override_and_invalid_canary(tmp_path: Path):
     environment = valid_environment(tmp_path)
     environment["AEGIS_RECON_PROVIDER"] = "kali"
     failures = preflight.validate(environment, tmp_path, check_tls=False)
-    assert "AEGIS_RECON_PROVIDER must be legacy or canary during M4" in failures
+    assert "AEGIS_RECON_PROVIDER must be legacy, canary, or default-kali in production" in failures
 
     for invalid in ("-1", "2501", "1.5", "00", ""):
         environment = valid_environment(tmp_path)

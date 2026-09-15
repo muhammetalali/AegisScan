@@ -1,5 +1,7 @@
 # M4 Recon Canary
 
+> Status: completed on canonical main at 022510ca98792fcf0bf409899fcb7bb6dea50768. The exact-main M4 Reality and mandatory release suite were terminal green before M5 began.
+
 ## Objective
 
 M4 introduces a bounded, deterministic canary for the governed Kali Recon execution fabric without changing the platform default away from the legacy native worker.

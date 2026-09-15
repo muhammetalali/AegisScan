@@ -90,7 +90,7 @@ def _load_env_file(path: Path) -> dict[str, str]:
 
 def _execution_profile_environment(environment: dict[str, str]) -> dict[str, str]:
     resolved = dict(environment)
-    mode = resolved.get("AEGIS_RECON_PROVIDER", "legacy").strip().lower()
+    mode = resolved.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
     try:
         canary_bps = int(resolved.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip())
     except ValueError:
@@ -101,7 +101,7 @@ def _execution_profile_environment(environment: dict[str, str]) -> dict[str, str
         for item in resolved.get("COMPOSE_PROFILES", "").split(",")
         if item.strip()
     }
-    if mode == "kali" or (mode == "canary" and canary_bps > 0):
+    if mode in {"default-kali", "kali"} or (mode == "canary" and canary_bps > 0):
         profiles.add("kali-recon")
     else:
         profiles.discard("kali-recon")
@@ -122,7 +122,7 @@ def _rollback_execution_environment(environment: dict[str, str]) -> dict[str, st
 
 
 def _recon_rollout_state(environment: dict[str, str]) -> tuple[str, int]:
-    mode = environment.get("AEGIS_RECON_PROVIDER", "legacy").strip().lower()
+    mode = environment.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
     raw_bps = environment.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip()
     try:
         bps = int(raw_bps)
@@ -298,7 +298,18 @@ def _execution_plane_acceptance(
 ) -> None:
     mode, canary_bps = _recon_rollout_state(deployment_env)
     active_canary = mode == "canary" and canary_bps > 0
-    if active_canary:
+    active_kali = mode in {"default-kali", "kali"} or active_canary
+    if mode == "default-kali":
+        command = (
+            "from fastapi_app.services.kali_recon_provider import "
+            "_preflight_runtime_attestation,_trusted_expected_provenance,recon_provider_decision; "
+            "approved=recon_provider_decision('recon.fierce'); "
+            "unapproved=recon_provider_decision('recon.subfinder'); "
+            "assert approved.selected_provider == 'kali' and approved.reason == 'default-kali-parity-approved'; "
+            "assert unapproved.selected_provider == 'legacy' and unapproved.reason == 'capability-not-parity-approved'; "
+            "_preflight_runtime_attestation(_trusted_expected_provenance())"
+        )
+    elif active_kali:
         command = (
             "from fastapi_app.services.kali_recon_provider import "
             "_preflight_runtime_attestation,_trusted_expected_provenance; "
@@ -325,8 +336,8 @@ def _execution_plane_acceptance(
             last_error = "scanner_worker is not running"
             time.sleep(3)
             continue
-        if active_canary and "kali_recon" not in running:
-            last_error = "active canary requires running kali_recon service"
+        if active_kali and "kali_recon" not in running:
+            last_error = "active governed Kali Recon execution requires running kali_recon service"
             time.sleep(3)
             continue
         try:

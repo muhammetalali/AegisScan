@@ -85,7 +85,7 @@ def valid_model():
 def kali_model(*, image=f'ghcr.io/aegisscan/kali-recon@{_IMAGE_DIGEST}', expected=_IMAGE_DIGEST):
     model = valid_model()
     model['services']['scanner_worker']['environment'].update({
-        'AEGIS_RECON_PROVIDER': 'kali',
+        'AEGIS_RECON_PROVIDER': 'default-kali',
         'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST': expected,
     })
     model['services']['kali_recon'] = {'image': image}
@@ -99,6 +99,13 @@ def test_accepts_hardened_resolved_production_model():
 def test_accepts_kali_recon_digest_qualified_image_bound_to_expected_digest():
     assert MODULE.validate(kali_model()) == []
     assert MODULE.validate(kali_model(image=_IMAGE_DIGEST)) == []
+
+
+def test_rejects_raw_kali_override_in_production_policy():
+    model = kali_model()
+    model['services']['scanner_worker']['environment']['AEGIS_RECON_PROVIDER'] = 'kali'
+    failures = MODULE.validate(model)
+    assert any('must be legacy, canary, or default-kali in production' in item for item in failures)
 
 
 def test_legacy_mode_does_not_require_kali_recon_image_binding():

@@ -99,5 +99,5 @@ def test_non_recon_never_routes_to_kali_and_explicit_kali_mode_is_preserved(monk
 
 def test_invalid_provider_mode_fails_closed(monkeypatch):
     monkeypatch.setenv('AEGIS_RECON_PROVIDER', 'random')
-    with pytest.raises(provider.KaliReconProviderError, match='legacy, canary, or kali'):
+    with pytest.raises(provider.KaliReconProviderError, match='legacy, canary, default-kali, or kali'):
         provider.recon_provider_decision('recon.fierce', routing_key='scan-1')

@@ -53,6 +53,11 @@ jobs:
       AEGIS_BACKUP_S3_CREDENTIALS_FILE: /run/aegis-policy/s3.json
       AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /run/aegis-policy/backup.key
       AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
+      AEGIS_RECON_PROVIDER: default-kali
+      AEGIS_KALI_RECON_CANARY_BPS: '0'
+      AEGIS_KALI_RECON_IMAGE: ghcr.io/aegisscan/kali-recon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      COMPOSE_PROFILES: kali-recon
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -81,7 +86,8 @@ jobs:
       - name: Prove Kali Recon immutable image binding in resolved production model
         working-directory: aegis-platform
         env:
-          AEGIS_RECON_PROVIDER: kali
+          AEGIS_RECON_PROVIDER: default-kali
+          AEGIS_KALI_RECON_CANARY_BPS: '0'
           AEGIS_KALI_RECON_IMAGE: ghcr.io/aegisscan/kali-recon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         run: |

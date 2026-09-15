@@ -67,16 +67,19 @@ def _validate_recon_image_binding(services: dict, scanner_env: dict, failures: l
     except ValueError:
         canary_bps = -1
 
-    if recon_provider not in {'legacy', 'canary', 'kali'}:
-        failures.append('AEGIS_RECON_PROVIDER must be legacy, canary, or kali')
+    if recon_provider not in {'legacy', 'canary', 'default-kali'}:
+        failures.append('AEGIS_RECON_PROVIDER must be legacy, canary, or default-kali in production')
         return
-    if recon_provider == 'canary' and (
-        canary_bps < 0 or canary_bps > 2500 or str(canary_bps) != raw_bps
-    ):
+    if canary_bps < 0 or canary_bps > 2500 or str(canary_bps) != raw_bps:
         failures.append('AEGIS_KALI_RECON_CANARY_BPS must be a canonical integer from 0 to 2500')
         return
+    if recon_provider in {'legacy', 'default-kali'} and canary_bps != 0:
+        failures.append(
+            f'AEGIS_KALI_RECON_CANARY_BPS must be 0 while AEGIS_RECON_PROVIDER={recon_provider}'
+        )
+        return
 
-    requires_binding = recon_provider == 'kali' or (recon_provider == 'canary' and canary_bps > 0)
+    requires_binding = recon_provider == 'default-kali' or (recon_provider == 'canary' and canary_bps > 0)
     if not requires_binding:
         return
 
