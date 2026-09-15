@@ -219,7 +219,7 @@ def _build_command(request: dict[str, Any]) -> list[str]:
     if capability_id == 'recon.amass':
         return [binary, 'enum', '-passive', '-d', target, '-timeout', str(request['options']['timeout_minutes'])]
     if capability_id == 'recon.subfinder':
-        return [binary, '-d', target, '-silent']
+        return [binary, '-d', target, '-silent', '-duc']
     if capability_id == 'recon.dnsenum':
         return [binary, target]
     if capability_id == 'recon.fierce':
