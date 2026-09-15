@@ -6,7 +6,7 @@ name: Recon Amass Engine Auth Reality
     paths:
       - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py'
-      - 'aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_amass_engine_auth_contract.py'
       - 'aegis-platform/backend/resources/build-amass-v5-aegis.sh'
       - 'aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch'
       - 'aegis-platform/kali/Dockerfile.base'
@@ -18,7 +18,7 @@ name: Recon Amass Engine Auth Reality
     paths:
       - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py'
-      - 'aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_amass_engine_auth_contract.py'
       - 'aegis-platform/backend/resources/build-amass-v5-aegis.sh'
       - 'aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch'
       - 'aegis-platform/kali/Dockerfile.base'
@@ -55,14 +55,14 @@ jobs:
         run: |
           python -m py_compile \
             aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py \
-            aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py \
+            aegis-platform/backend/fastapi_app/services/test_amass_engine_auth_contract.py \
             aegis-platform/e2e/amass_engine_auth_reality.py
       - name: Prove exact source and authenticated engine contracts
         env:
           PYTHONPATH: aegis-platform/backend
         run: >-
           python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
-          aegis-platform/backend/fastapi_app/services/test_amass_semantic_parity.py
+          aegis-platform/backend/fastapi_app/services/test_amass_engine_auth_contract.py
       - name: Capture contract evidence
         run: |
           mkdir -p artifacts
