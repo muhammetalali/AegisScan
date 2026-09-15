@@ -56,11 +56,39 @@ def _response(*, capability_id: str = 'recon.subfinder', tool: str = 'subfinder'
     return payload
 
 
-def _invoke(monkeypatch, payload, *, capability_id: str = 'recon.subfinder', trust: bool = True):
+def _invoke(
+    monkeypatch,
+    payload,
+    *,
+    capability_id: str = 'recon.subfinder',
+    trust: bool = True,
+    calls: list[str] | None = None,
+):
     monkeypatch.setenv('AEGIS_RECON_PROVIDER', 'kali')
     if trust:
         _set_trust_anchor(monkeypatch)
-    monkeypatch.setattr(provider, '_request_json', lambda *args, **kwargs: payload)
+
+    def transport(method, path, *args, **kwargs):
+        if calls is not None:
+            calls.append(path)
+        if path == '/v1/runtime':
+            runtime = payload.get('runtime') if isinstance(payload, dict) else None
+            runtime = runtime if isinstance(runtime, dict) else {}
+            return {
+                'status': 'ok',
+                'runtime': {
+                    'provider': runtime.get('provider'),
+                    'profile': runtime.get('profile'),
+                    'runner_version': runtime.get('runner_version'),
+                    'build_commit': runtime.get('build_commit'),
+                    'base_image_digest': runtime.get('base_image_digest'),
+                    'tool_manifest_digest': runtime.get('tool_manifest_digest'),
+                    'runtime_manifest_digest': runtime.get('runtime_manifest_digest'),
+                },
+            }
+        return payload
+
+    monkeypatch.setattr(provider, '_request_json', transport)
     return provider.execute_kali_recon(
         capability_id=capability_id,
         target='example.invalid',
@@ -177,6 +205,18 @@ def test_deployment_pins_reject_authenticated_runtime_drift(
     monkeypatch.setenv(env_name, bad_value)
     with pytest.raises(provider.KaliReconProviderError, match=f'pinned {field} mismatch'):
         _invoke(monkeypatch, payload, trust=False)
+
+
+def test_authenticated_runtime_drift_is_rejected_before_tool_execution(monkeypatch):
+    payload = _response()
+    _set_trust_anchor(
+        monkeypatch,
+        AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT='f' * 40,
+    )
+    calls: list[str] = []
+    with pytest.raises(provider.KaliReconProviderError, match='pinned build_commit mismatch'):
+        _invoke(monkeypatch, payload, trust=False, calls=calls)
+    assert calls == ['/v1/runtime']
 
 
 def test_execution_image_digest_comes_only_from_control_plane_anchor(monkeypatch):
