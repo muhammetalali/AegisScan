@@ -74,7 +74,8 @@ COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
 COPY --from=pd_tools /go/bin/httpx /usr/local/bin/httpx
 COPY --from=pd_tools /go/bin/subfinder /usr/local/bin/subfinder
 COPY --from=pd_tools /go/bin/katana /usr/local/bin/katana
-COPY --from=pd_tools /go/bin/amass /usr/local/bin/amass
+COPY --from=pd_tools /go/bin/amass /usr/local/libexec/amass-real
+COPY fastapi_app/services/amass_v5_adapter.py /usr/local/bin/amass
 COPY --from=rustscan /opt/rustscan/bin/rustscan /usr/local/bin/rustscan
 COPY --from=feroxbuster /opt/feroxbuster/bin/feroxbuster /usr/local/bin/feroxbuster
 COPY --from=nikto_source /opt/nikto /opt/nikto
@@ -83,12 +84,13 @@ COPY --from=trivy_checks /opt/trivy-cache /opt/trivy-cache
 COPY --from=trufflehog /usr/bin/trufflehog /usr/local/bin/trufflehog
 COPY --from=nuclei_templates /opt/nuclei-templates /opt/nuclei-templates
 RUN ln -sf /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
-    && chmod 0755 /opt/nikto/program/nikto.pl /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/subfinder /usr/local/bin/katana /usr/local/bin/amass /usr/local/bin/rustscan /usr/local/bin/feroxbuster /usr/local/bin/trivy /usr/local/bin/trufflehog \
+    && chmod 0755 /opt/nikto/program/nikto.pl /usr/local/bin/nuclei /usr/local/bin/httpx /usr/local/bin/subfinder /usr/local/bin/katana /usr/local/bin/amass /usr/local/libexec/amass-real /usr/local/bin/rustscan /usr/local/bin/feroxbuster /usr/local/bin/trivy /usr/local/bin/trufflehog \
     && /usr/local/bin/nuclei -version \
     && /usr/local/bin/httpx -version \
     && /usr/local/bin/subfinder -version \
     && /usr/local/bin/katana -version \
     && /usr/local/bin/amass -version \
+    && /usr/local/libexec/amass-real -version \
     && /usr/local/bin/rustscan --version \
     && /usr/local/bin/feroxbuster --version \
     && /usr/local/bin/nikto -Version >/tmp/nikto-version.txt \
@@ -161,6 +163,7 @@ RUN command -v nmap >/dev/null \
     && command -v httpx >/dev/null \
     && command -v rustscan >/dev/null \
     && command -v amass >/dev/null \
+    && test -x /usr/local/libexec/amass-real \
     && command -v feroxbuster >/dev/null \
     && command -v nikto >/dev/null \
     && command -v subfinder >/dev/null \
