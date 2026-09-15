@@ -25,10 +25,20 @@ def test_managed_enum_contract_is_exact_and_bounded():
             adapter._managed_enum_request(list(argv))
 
 
+def test_engine_token_is_random_scoped_and_strict(monkeypatch):
+    monkeypatch.setattr(adapter.secrets, 'token_hex', lambda size: 'a' * (size * 2))
+    assert adapter._new_engine_token() == 'a' * 64
+
+    monkeypatch.setattr(adapter.secrets, 'token_hex', lambda _size: 'NOT-HEX')
+    with pytest.raises(adapter.AdapterError, match='authentication token'):
+        adapter._new_engine_token()
+
+
 def test_adapter_environment_is_secret_minimized(tmp_path: Path, monkeypatch):
     monkeypatch.setenv('DATABASE_URL', 'postgres://sensitive')
     monkeypatch.setenv('AWS_ACCESS_KEY_ID', 'sensitive')
     monkeypatch.setenv('AEGIS_KALI_RECON_AUTH_TOKEN', 'f' * 64)
+    monkeypatch.setenv('AEGIS_AMASS_ENGINE_TOKEN', 'e' * 64)
     monkeypatch.setenv('SSL_CERT_FILE', '/tmp/test-ca.pem')
 
     environment = adapter._minimal_environment(tmp_path)
@@ -39,10 +49,16 @@ def test_adapter_environment_is_secret_minimized(tmp_path: Path, monkeypatch):
     assert 'DATABASE_URL' not in environment
     assert 'AWS_ACCESS_KEY_ID' not in environment
     assert 'AEGIS_KALI_RECON_AUTH_TOKEN' not in environment
+    assert 'AEGIS_AMASS_ENGINE_TOKEN' not in environment
     assert set(environment) <= {
         'HOME', 'LANG', 'LC_ALL', 'NO_COLOR', 'PATH', 'TMPDIR',
         'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
     }
+
+
+def test_health_probe_rejects_invalid_tokens_without_network_access():
+    assert adapter._health_ok('short') is False
+    assert adapter._health_ok('G' * 64) is False
 
 
 def test_diagnostics_are_bounded():
