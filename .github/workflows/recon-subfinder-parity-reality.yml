@@ -126,6 +126,7 @@ jobs:
       AEGIS_SUBFINDER_AUTH_TOKEN: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
       AEGIS_SUBFINDER_NETWORK: aegis-subfinder-parity
       AEGIS_SUBFINDER_FIXTURE_IP: 172.31.0.53
+      AEGIS_SUBFINDER_TARGET_IP: 172.31.0.10
       AEGIS_SUBFINDER_TARGET: parity.test
       AEGIS_SUBFINDER_CAPABILITY: recon.subfinder
     steps:
@@ -246,8 +247,13 @@ jobs:
           docker run --rm -i \
             --network "${AEGIS_SUBFINDER_NETWORK}" --dns "${AEGIS_SUBFINDER_FIXTURE_IP}" \
             -v "$PWD/fixture-tls/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro" \
+            -e AEGIS_SUBFINDER_TARGET -e AEGIS_SUBFINDER_TARGET_IP \
             --entrypoint python aegis-subfinder:legacy - <<'PY'
-          import urllib.request
+          import os, socket, urllib.request
+          target=os.environ['AEGIS_SUBFINDER_TARGET']
+          expected_target_ip=os.environ['AEGIS_SUBFINDER_TARGET_IP']
+          resolved={item[4][0] for item in socket.getaddrinfo(target, None, type=socket.SOCK_STREAM)}
+          assert resolved == {expected_target_ip}, (resolved, expected_target_ip)
           body=urllib.request.urlopen(
               'https://api.hackertarget.com/hostsearch/?q=parity.test',
               timeout=5,
@@ -265,7 +271,7 @@ jobs:
           docker run --rm -i \
             --network "${AEGIS_SUBFINDER_NETWORK}" --dns "${AEGIS_SUBFINDER_FIXTURE_IP}" \
             -v "$PWD/fixture-tls/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro" \
-            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_SUBFINDER_TARGET}" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_SUBFINDER_TARGET},${AEGIS_SUBFINDER_TARGET_IP}/32" \
             -e AEGIS_SUBFINDER_TARGET -e AEGIS_SUBFINDER_CAPABILITY \
             -v "$PWD/artifacts:/artifacts" \
             --entrypoint python aegis-subfinder:legacy - <<'PY'
