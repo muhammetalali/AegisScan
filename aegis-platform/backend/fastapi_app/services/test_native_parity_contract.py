@@ -45,6 +45,14 @@ def test_rustscan_ports_accept_only_explicit_tcp_port_lists():
             validate_native_options(spec, {'ports': invalid})
 
 
+def test_subfinder_runtime_is_pinned_and_disables_update_checks(monkeypatch):
+    monkeypatch.setattr('fastapi_app.services.native_tool_runtime.shutil.which', lambda binary: '/usr/local/bin/subfinder')
+    spec = get_native_tool_spec('recon.subfinder')
+    argv, target = build_native_argv(spec, 'Example.Invalid', {})
+    assert target == 'example.invalid'
+    assert argv == ['/usr/local/bin/subfinder', '-d', 'example.invalid', '-silent', '-duc']
+
+
 def test_amass_timeout_is_bounded():
     spec = get_native_tool_spec('recon.amass')
     assert validate_native_options(spec, {})['timeout_minutes'] == 5
