@@ -156,7 +156,25 @@ def test_response_binding_and_provenance_are_fail_closed(monkeypatch):
         return payload
 
     def invoke_with(payload):
-        monkeypatch.setattr(provider, '_request_json', lambda *args, **kwargs: payload)
+        def transport(method, path, *args, **kwargs):
+            if path == '/v1/runtime':
+                runtime = payload.get('runtime') if isinstance(payload, dict) else None
+                runtime = runtime if isinstance(runtime, dict) else {}
+                return {
+                    'status': 'ok',
+                    'runtime': {
+                        'provider': runtime.get('provider'),
+                        'profile': runtime.get('profile'),
+                        'runner_version': runtime.get('runner_version'),
+                        'build_commit': runtime.get('build_commit'),
+                        'base_image_digest': runtime.get('base_image_digest'),
+                        'tool_manifest_digest': runtime.get('tool_manifest_digest'),
+                        'runtime_manifest_digest': runtime.get('runtime_manifest_digest'),
+                    },
+                }
+            return payload
+
+        monkeypatch.setattr(provider, '_request_json', transport)
         return provider.execute_kali_recon(
             capability_id='recon.subfinder',
             target='example.invalid',
