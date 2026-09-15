@@ -82,18 +82,22 @@ jobs:
           from pathlib import Path
           from fastapi_app.services import amass_managed_runtime as runtime
 
+          # Private runtime state stays inside the disposable container. Only
+          # the selected diagnostic exports belong in the host artifact mount.
+          state_dir=Path('/tmp/aegis-diagnostic-state')
+          state_dir.mkdir(mode=0o700)
           original_rmtree=runtime.shutil.rmtree
           runtime.shutil.rmtree=lambda *_args, **_kwargs: None
           try:
               code,stdout,stderr=runtime.run_managed_amass(
                   target='parity.test',
                   timeout_minutes=1,
-                  root_dir='/artifacts',
+                  root_dir=str(state_dir),
               )
           finally:
               runtime.shutil.rmtree=original_rmtree
           json.dump({'exit_code':code,'stdout':stdout,'stderr':stderr},open('/artifacts/runtime-result.json','w'),sort_keys=True,indent=2)
-          roots=list(Path('/artifacts').glob('aegis-amass-*'))
+          roots=list(state_dir.glob('aegis-amass-*'))
           assert len(roots)==1, roots
           root=roots[0]
           (Path('/artifacts')/'managed-root.txt').write_text(str(root),encoding='utf-8')
