@@ -1,0 +1,225 @@
+name: Recon Amass V5 Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recon-amass-v5-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-amass-v5-dual-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_AMASS_PROVIDER_TOKEN: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+      AEGIS_AMASS_NETWORK: aegis-amass-parity
+      AEGIS_AMASS_FIXTURE_IP: 172.29.0.53
+      AEGIS_AMASS_TARGET_IP: 172.29.0.10
+      AEGIS_AMASS_TARGET: parity.test
+      AEGIS_AMASS_CAPABILITY: recon.amass
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+
+      - name: Build exact legacy scanner runtime
+        run: docker build --no-cache -t aegis-amass:legacy -f aegis-platform/backend/Dockerfile.django aegis-platform/backend
+
+      - name: Build exact governed Kali Recon runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base -f aegis-platform/kali/Dockerfile.base aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-recon -t aegis-kali:recon \
+            -f aegis-platform/kali/Dockerfile.profiles .
+
+      - name: Derive immutable Kali and Amass artifact trust anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          chmod 0777 artifacts
+          IMAGE_ID="$(docker image inspect aegis-kali:recon --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > artifacts/kali-runtime-manifest.json
+          docker run --rm -i --entrypoint python3 "$IMAGE_ID" - <<'PY' > artifacts/kali-amass-artifact-hashes.json
+          import hashlib, json
+          paths={
+            'adapter.amass-v5':'/usr/local/bin/amass',
+            'binary.amass-v5':'/usr/local/libexec/amass-real',
+            'patch.amass-v5-engine-auth':'/opt/aegis-runner/amass-v5.1.1-aegis-engine-auth.patch',
+          }
+          print(json.dumps({k:'sha256:'+hashlib.sha256(open(v,'rb').read()).hexdigest() for k,v in paths.items()},sort_keys=True))
+          PY
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('artifacts/kali-runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          actual=json.load(open('artifacts/kali-amass-artifact-hashes.json',encoding='utf-8'))
+          assert runtime['profile_tools']['amass']['version']=='v5.1.1'
+          assert 'recon.amass' in runtime['profile_capabilities']
+          for name,value in actual.items():
+              assert runtime['profile_artifacts'].get(name)==value,(name,runtime['profile_artifacts'].get(name),value)
+          print('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_RECON_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+
+      - name: Prove patched Amass engine authentication boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENGINE_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          docker run -d --name aegis-amass-auth-boundary \
+            --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            -e AEGIS_AMASS_ENGINE_TOKEN="$ENGINE_TOKEN" \
+            -v "$PWD/aegis-platform/e2e/amass_v5_engine_auth_probe.py:/opt/auth-probe.py:ro" \
+            --entrypoint /bin/sh "${AEGIS_KALI_RECON_IMAGE}" \
+            -c 'mkdir -p /tmp/logs /tmp/home && HOME=/tmp/home exec /usr/local/libexec/amass-real engine -silent -log-dir /tmp/logs'
+          for _ in $(seq 1 30); do
+            if docker exec aegis-amass-auth-boundary python3 /opt/auth-probe.py; then
+              docker rm -f aegis-amass-auth-boundary >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-amass-auth-boundary
+          exit 1
+
+      - name: Generate fixture TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fixture-tls
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 -subj '/CN=AegisScan Amass Parity CA' -keyout fixture-tls/ca.key -out fixture-tls/ca.crt
+          openssl req -newkey rsa:2048 -sha256 -nodes -subj '/CN=api.hackertarget.com' -keyout fixture-tls/server.key -out fixture-tls/server.csr
+          printf '%s\n' 'basicConstraints=CA:FALSE' 'keyUsage=digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:api.hackertarget.com' > fixture-tls/server.ext
+          openssl x509 -req -sha256 -days 1 -in fixture-tls/server.csr -CA fixture-tls/ca.crt -CAkey fixture-tls/ca.key -CAcreateserial -extfile fixture-tls/server.ext -out fixture-tls/server.crt
+          chmod 0644 fixture-tls/ca.crt fixture-tls/server.crt
+          chmod 0600 fixture-tls/ca.key fixture-tls/server.key
+
+      - name: Start deterministic Docker-internal HackerTarget fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network create --internal --subnet 172.29.0.0/16 "${AEGIS_AMASS_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_AMASS_NETWORK}")" = true
+          docker run -d --name aegis-amass-fixture --network "${AEGIS_AMASS_NETWORK}" --ip "${AEGIS_AMASS_FIXTURE_IP}" --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/amass_passive_fixture.py:/opt/fixture.py:ro" \
+            -v "$PWD/fixture-tls/server.crt:/tls/server.crt:ro" -v "$PWD/fixture-tls/server.key:/tls/server.key:ro" \
+            --entrypoint python aegis-amass:legacy /opt/fixture.py --cert /tls/server.crt --key /tls/server.key --fixture-ip "${AEGIS_AMASS_FIXTURE_IP}"
+          for _ in $(seq 1 30); do
+            docker logs aegis-amass-fixture 2>&1 | grep -q 'AEGIS_AMASS_PASSIVE_FIXTURE_READY' && exit 0
+            sleep 1
+          done
+          docker logs aegis-amass-fixture
+          exit 1
+
+      - name: Prove deterministic fixture and no external route
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_AMASS_NETWORK}")" = true
+          docker run --rm -i --network "${AEGIS_AMASS_NETWORK}" --dns "${AEGIS_AMASS_FIXTURE_IP}" \
+            -v "$PWD/fixture-tls/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro" \
+            -e AEGIS_AMASS_TARGET -e AEGIS_AMASS_TARGET_IP --entrypoint python aegis-amass:legacy - <<'PY'
+          import os,socket,urllib.request
+          resolved={x[4][0] for x in socket.getaddrinfo(os.environ['AEGIS_AMASS_TARGET'],None,type=socket.SOCK_STREAM)}
+          assert resolved=={os.environ['AEGIS_AMASS_TARGET_IP']},resolved
+          body=urllib.request.urlopen('https://api.hackertarget.com/hostsearch/?q=parity.test',timeout=5).read().decode()
+          assert set(body.splitlines())=={'www.parity.test,172.29.0.11','api.parity.test,172.29.0.12','mail.parity.test,172.29.0.13'}
+          PY
+
+      - name: Execute real legacy Amass production runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network "${AEGIS_AMASS_NETWORK}" --dns "${AEGIS_AMASS_FIXTURE_IP}" \
+            -v "$PWD/fixture-tls/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro" \
+            -v "$PWD/artifacts:/artifacts" -v "$PWD/aegis-platform/e2e/amass_v5_legacy_capture.py:/opt/capture.py:ro" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_AMASS_TARGET},${AEGIS_AMASS_TARGET_IP}/32" \
+            -e AEGIS_AMASS_TARGET -e AEGIS_AMASS_CAPABILITY --entrypoint python aegis-amass:legacy /opt/capture.py
+
+      - name: Start governed Kali Recon provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-amass-kali --network "${AEGIS_AMASS_NETWORK}" --dns "${AEGIS_AMASS_FIXTURE_IP}" \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700 \
+            -v "$PWD/fixture-tls/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro" \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_AMASS_PROVIDER_TOKEN}" \
+            --entrypoint /usr/bin/tini "${AEGIS_KALI_RECON_IMAGE}" -- python3 /opt/aegis-runner/recon_service.py
+          for _ in $(seq 1 30); do
+            docker exec aegis-amass-kali python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=2)); assert d['status']=='ok'" && exit 0
+            sleep 1
+          done
+          docker logs aegis-amass-kali
+          exit 1
+
+      - name: Execute real engineering-Kali Amass through production provider client
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker inspect --format '{{.Image}}' aegis-amass-kali)" = "${AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST}"
+          docker run --rm --network container:aegis-amass-kali \
+            -v "$PWD/aegis-platform/backend:/app:ro" -v "$PWD/artifacts:/artifacts" \
+            -v "$PWD/aegis-platform/e2e/amass_v5_kali_capture.py:/opt/capture.py:ro" \
+            -e PYTHONPATH=/app -e AEGIS_RECON_PROVIDER=kali -e AEGIS_KALI_RECON_CANARY_BPS=0 \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_AMASS_PROVIDER_TOKEN}" \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION -e AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST -e AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST -e AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            -e AEGIS_AMASS_TARGET -e AEGIS_AMASS_CAPABILITY --entrypoint python3 "${AEGIS_KALI_RECON_IMAGE}" /opt/capture.py
+
+      - name: Compare production-normalized Amass semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/artifacts:/artifacts" \
+            -v "$PWD/aegis-platform/e2e/amass_v5_parity_compare.py:/opt/compare.py:ro" \
+            --entrypoint python aegis-amass:legacy /opt/compare.py --artifacts /artifacts --exact-head "${AEGIS_EXACT_HEAD}"
+          ! grep -R -q 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          test "$(cat artifacts/head-sha.txt)" = "${AEGIS_EXACT_HEAD}"
+          test -s artifacts/amass-v5-real-dual-run.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon-amass-v5-real-dual-run-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-amass-auth-boundary aegis-amass-kali aegis-amass-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_AMASS_NETWORK}" >/dev/null 2>&1 || true
