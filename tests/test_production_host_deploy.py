@@ -148,6 +148,11 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
     monkeypatch.setattr(deploy, "_migration_changes", lambda *_: [])
     monkeypatch.setattr(deploy, "_checkout", lambda sha: events.append(("checkout", sha)))
     monkeypatch.setattr(deploy, "_deploy_stack", lambda *args, **kwargs: events.append(("deploy", None)))
+    monkeypatch.setattr(
+        deploy,
+        "_execution_plane_acceptance",
+        lambda *args, **kwargs: events.append(("execution-plane", None)),
+    )
     monkeypatch.setattr(deploy, "_accept", lambda origin: events.append(("accept", origin)))
 
     deploy._rollback_application(
@@ -160,8 +165,10 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
     assert events == [
         ("checkout", "a" * 40),
         ("deploy", None),
+        ("execution-plane", None),
         ("accept", "https://security.example.com"),
     ]
+
 
 def test_execution_profile_environment_activates_kali_only_for_active_canary():
     base = {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"}
@@ -189,4 +196,3 @@ def test_execution_profile_environment_keeps_explicit_kali_runtime_available_for
         "AEGIS_KALI_RECON_CANARY_BPS": "0",
     })
     assert resolved["COMPOSE_PROFILES"] == "kali-recon"
-
