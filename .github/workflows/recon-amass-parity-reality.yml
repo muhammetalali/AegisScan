@@ -266,6 +266,8 @@ jobs:
           import socket, urllib.request
           resolved={item[4][0] for item in socket.getaddrinfo('dnsrepo.noc.org', None, type=socket.SOCK_STREAM)}
           assert resolved == {'172.30.0.53'}, resolved
+          bgp={item[4][0] for item in socket.getaddrinfo('bgp.tools', None, type=socket.SOCK_STREAM)}
+          assert bgp == {'172.30.0.53'}, bgp
           body=urllib.request.urlopen(
               'https://dnsrepo.noc.org/?domain=parity.test',
               timeout=5,
@@ -273,6 +275,11 @@ jobs:
           for expected in ('www.parity.test','api.parity.test','mail.parity.test'):
               assert expected in body, body
           PY
+
+      - name: Build production scanner egress helper for isolated DNS redirect and ingress proof
+        run: |
+          set -euo pipefail
+          docker build --no-cache -t aegis-amass:scanner-egress aegis-platform/docker/scanner-egress
 
       - name: Start shared-namespace legacy and governed Kali runtimes
         run: |
@@ -304,6 +311,34 @@ jobs:
           done
           docker logs aegis-amass-kali
           exit 1
+
+      - name: Redirect Amass hard-coded bootstrap DNS to the isolated fixture
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-amass-dns-redirect \
+            --network container:aegis-amass-legacy \
+            --cap-add NET_ADMIN \
+            --entrypoint sh aegis-amass:scanner-egress -c '
+              set -eu
+              nft add table ip aegis_amass_fixture
+              nft "add chain ip aegis_amass_fixture output { type nat hook output priority -100; policy accept; }"
+              nft add rule ip aegis_amass_fixture output udp dport 53 dnat to ${AEGIS_AMASS_FIXTURE_IP}:53
+              nft add rule ip aegis_amass_fixture output tcp dport 53 dnat to ${AEGIS_AMASS_FIXTURE_IP}:53
+              nft list table ip aegis_amass_fixture
+              exec tail -f /dev/null
+            '
+          for _ in $(seq 1 30); do
+            if docker logs aegis-amass-dns-redirect 2>&1 | grep -q 'dnat to ${AEGIS_AMASS_FIXTURE_IP}:53'; then
+              break
+            fi
+            sleep 0.2
+          done
+          docker logs aegis-amass-dns-redirect 2>&1 | grep -q 'dnat to ${AEGIS_AMASS_FIXTURE_IP}:53'
+          docker exec aegis-amass-legacy python - <<'PY'
+          import socket
+          resolved={item[4][0] for item in socket.getaddrinfo('bgp.tools', None, type=socket.SOCK_STREAM)}
+          assert resolved == {'172.30.0.53'}, resolved
+          PY
 
       - name: Execute real legacy Amass managed runtime
         run: |
@@ -528,11 +563,6 @@ jobs:
           json.dump(report.as_dict(),open('/artifacts/amass-parity-report.json','w',encoding='utf-8'),sort_keys=True)
           PY
 
-      - name: Build production scanner egress boundary
-        run: |
-          set -euo pipefail
-          docker build --no-cache -t aegis-amass:scanner-egress aegis-platform/docker/scanner-egress
-
       - name: Prove TCP 4000 is externally denied and loopback reachable
         run: |
           set -euo pipefail
@@ -621,5 +651,5 @@ jobs:
       - name: Cleanup isolated Amass parity runtime
         if: always()
         run: |
-          docker rm -f aegis-amass-port-server aegis-amass-egress aegis-amass-kali aegis-amass-legacy aegis-amass-fixture >/dev/null 2>&1 || true
+          docker rm -f aegis-amass-port-server aegis-amass-egress aegis-amass-dns-redirect aegis-amass-kali aegis-amass-legacy aegis-amass-fixture >/dev/null 2>&1 || true
           docker network rm "${AEGIS_AMASS_NETWORK}" >/dev/null 2>&1 || true
