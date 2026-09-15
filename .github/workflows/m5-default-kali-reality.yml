@@ -162,8 +162,8 @@ jobs:
           print(json.dumps({
               'schema':'aegis.m5-default-kali-contract.v1',
               'default_provider':'default-kali',
-              'parity_approved_capabilities':['recon.fierce'],
-              'legacy_holdback_capabilities':['recon.amass','recon.subfinder','recon.dnsenum'],
+              'parity_approved_capabilities':['recon.dnsenum','recon.fierce'],
+              'legacy_holdback_capabilities':['recon.amass','recon.subfinder'],
               'raw_kali_production_allowed':False,
               'silent_provider_fallback':False,
               'rollback':'AEGIS_RECON_PROVIDER=legacy',
@@ -278,12 +278,15 @@ jobs:
           import json
           from fastapi_app.services.kali_recon_provider import recon_provider_decision
           approved=recon_provider_decision('recon.fierce')
-          held={cap:recon_provider_decision(cap).as_dict() for cap in ('recon.amass','recon.subfinder','recon.dnsenum')}
+          dnsenum=recon_provider_decision('recon.dnsenum')
+          held={cap:recon_provider_decision(cap).as_dict() for cap in ('recon.amass','recon.subfinder')}
           assert approved.selected_provider=='kali'
           assert approved.reason=='default-kali-parity-approved'
+          assert dnsenum.selected_provider=='kali'
+          assert dnsenum.reason=='default-kali-parity-approved'
           assert all(item['selected_provider']=='legacy' for item in held.values())
           assert all(item['reason']=='capability-not-parity-approved' for item in held.values())
-          json.dump({'approved':approved.as_dict(),'held_legacy':held},open('/artifacts/routing-boundary.json','w'),sort_keys=True,indent=2)
+          json.dump({'approved':approved.as_dict(),'dnsenum':dnsenum.as_dict(),'held_legacy':held},open('/artifacts/routing-boundary.json','w'),sort_keys=True,indent=2)
           PY
 
       - name: Execute real legacy rollback reference
@@ -410,6 +413,7 @@ jobs:
           parity=compare_execution_semantics(capability_id=capability,legacy_normalized=legacy_normalized,candidate_normalized=kali_normalized)
           assert parity.semantic_equivalent, parity.as_dict()
           assert boundary['approved']['selected_provider']=='kali'
+          assert boundary['dnsenum']['selected_provider']=='kali'
           assert all(item['selected_provider']=='legacy' for item in boundary['held_legacy'].values())
           os.environ['AEGIS_RECON_PROVIDER']='legacy'
           os.environ['AEGIS_KALI_RECON_CANARY_BPS']='0'
@@ -421,9 +425,10 @@ jobs:
               'fixture':'deterministic-authorized-local-dns-v1',
               'default_provider':'default-kali',
               'capability_id':capability,
-              'parity_approved_capabilities':['recon.fierce'],
+              'parity_approved_capabilities':['recon.dnsenum','recon.fierce'],
               'held_legacy_capabilities':sorted(boundary['held_legacy']),
               'default_routing_decision':boundary['approved'],
+              'dnsenum_routing_decision':boundary['dnsenum'],
               'default_runtime':kali['runtime_provenance'],
               'rollback_runtime':legacy['runtime_provenance'],
               'legacy_normalized':legacy_normalized,

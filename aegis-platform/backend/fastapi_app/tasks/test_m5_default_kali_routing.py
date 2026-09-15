@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from fastapi_app.services.native_tool_runtime import get_native_tool_spec
 from fastapi_app.services.scanner_adapters import ScanResult
 from fastapi_app.tasks import native_capabilities as native_task
@@ -15,7 +17,11 @@ def _authorization():
     return SimpleNamespace(id="authorization-m5")
 
 
-def test_default_kali_executes_parity_approved_recon_through_provider(monkeypatch):
+@pytest.mark.parametrize(
+    ("capability_id", "tool"),
+    (("recon.fierce", "fierce"), ("recon.dnsenum", "dnsenum")),
+)
+def test_default_kali_executes_parity_approved_recon_through_provider(monkeypatch, capability_id, tool):
     monkeypatch.setenv("AEGIS_RECON_PROVIDER", "default-kali")
     monkeypatch.setenv("AEGIS_KALI_RECON_CANARY_BPS", "0")
     captured = {}
@@ -31,7 +37,7 @@ def test_default_kali_executes_parity_approved_recon_through_provider(monkeypatc
     def kali(**kwargs):
         captured.update(kwargs)
         return {
-            "tool": "fierce",
+            "tool": tool,
             "target": "parity.test",
             "exit_code": 0,
             "stdout": "kali",
@@ -45,18 +51,20 @@ def test_default_kali_executes_parity_approved_recon_through_provider(monkeypatc
 
     monkeypatch.setattr(native_task, "execute_kali_recon", kali)
 
+    scan_id = f"m5-approved-{tool}"
     result, provenance = native_task._execute_runtime(
-        capability_id="recon.fierce",
+        capability_id=capability_id,
         target="parity.test",
         options={},
-        scan=_scan("m5-approved"),
+        scan=_scan(scan_id),
         authorization=_authorization(),
-        spec=get_native_tool_spec("recon.fierce"),
+        spec=get_native_tool_spec(capability_id),
         credential_materials=(),
     )
 
     assert result.stdout == "kali"
-    assert captured["execution_ref"] == "m5-approved"
+    assert captured["capability_id"] == capability_id
+    assert captured["execution_ref"] == scan_id
     assert captured["authorization_ref"] == "authorization-m5"
     assert captured["scope_ref"] == "project:project-m5:asset:asset-m5"
     assert provenance["provider"] == "aegis-kali-recon"

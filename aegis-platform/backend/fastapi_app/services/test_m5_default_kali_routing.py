@@ -7,16 +7,17 @@ def test_default_kali_routes_only_parity_approved_capabilities(monkeypatch):
     monkeypatch.setenv("AEGIS_RECON_PROVIDER", "default-kali")
     monkeypatch.setenv("AEGIS_KALI_RECON_CANARY_BPS", "0")
 
-    approved = provider.recon_provider_decision("recon.fierce")
-    assert approved.selected_provider == "kali"
-    assert approved.recon_capability is True
-    assert approved.parity_approved is True
-    assert approved.canary_bps == 0
-    assert approved.bucket is None
-    assert approved.routing_key_digest == ""
-    assert approved.reason == "default-kali-parity-approved"
+    for capability in ("recon.fierce", "recon.dnsenum"):
+        approved = provider.recon_provider_decision(capability)
+        assert approved.selected_provider == "kali"
+        assert approved.recon_capability is True
+        assert approved.parity_approved is True
+        assert approved.canary_bps == 0
+        assert approved.bucket is None
+        assert approved.routing_key_digest == ""
+        assert approved.reason == "default-kali-parity-approved"
 
-    for capability in ("recon.amass", "recon.subfinder", "recon.dnsenum"):
+    for capability in ("recon.amass", "recon.subfinder"):
         decision = provider.recon_provider_decision(capability)
         assert decision.selected_provider == "legacy"
         assert decision.recon_capability is True
@@ -38,7 +39,11 @@ def test_default_kali_requires_no_canary_assignment_key(monkeypatch):
 
     first = provider.recon_provider_decision("recon.fierce")
     second = provider.recon_provider_decision("recon.fierce", routing_key="ignored-for-default")
+    dnsenum = provider.recon_provider_decision("recon.dnsenum", routing_key="ignored-for-default")
 
     assert first == second
+    assert dnsenum.selected_provider == "kali"
+    assert dnsenum.parity_approved is True
     assert provider.should_use_kali_recon("recon.fierce") is True
+    assert provider.should_use_kali_recon("recon.dnsenum") is True
     assert provider.should_use_kali_recon("recon.subfinder") is False
