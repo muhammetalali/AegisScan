@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -201,6 +202,7 @@ def run_managed_amass(
     output_dir = managed_root / "output"
     output_dir.mkdir(mode=0o700)
     env = _minimal_environment(managed_root)
+    env["AEGIS_AMASS_ENGINE_TOKEN"] = secrets.token_hex(32)
     engine_log = managed_root / "engine.log"
     enum_stdout = managed_root / "enum.stdout"
     enum_stderr = managed_root / "enum.stderr"
