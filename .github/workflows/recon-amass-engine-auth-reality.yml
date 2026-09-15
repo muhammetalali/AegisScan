@@ -1,0 +1,227 @@
+name: Recon Amass Engine Auth Reality
+
+'on':
+  pull_request:
+    branches:
+      - main
+      - 'chatgpt-a/recon-amass-runtime-parity-2026-09-15'
+    paths:
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py'
+      - 'aegis-platform/backend/resources/build-amass-v5-aegis.sh'
+      - 'aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - '.github/workflows/recon-amass-engine-auth-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py'
+      - 'aegis-platform/backend/resources/build-amass-v5-aegis.sh'
+      - 'aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - '.github/workflows/recon-amass-engine-auth-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recon-amass-engine-auth-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine-auth-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Prove exact upstream pin and authenticated engine contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'AMASS_COMMIT="79299dce87b0085db0f2f4ef3e9c52cccb49f514"' aegis-platform/backend/resources/build-amass-v5-aegis.sh
+          grep -q 'AEGIS_AMASS_ENGINE_TOKEN' aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch
+          grep -q 'X-Aegis-Amass-Token' aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch
+          grep -q 'secrets.token_hex(32)' aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py
+          grep -q 'env\["AEGIS_AMASS_ENGINE_TOKEN"\]' aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py
+          ! grep -q 'go_install_with_retry github.com/owasp-amass/amass' aegis-platform/backend/Dockerfile.django
+          ! grep -q 'go_install_with_retry github.com/owasp-amass/amass' aegis-platform/kali/Dockerfile.profiles
+      - name: Capture contract evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python - <<'PY' > artifacts/amass-engine-auth-contract.json
+          import json, os
+          print(json.dumps({
+              'schema':'aegis.recon-amass-engine-auth-contract.v1',
+              'exact_head':os.environ['AEGIS_EXACT_HEAD'],
+              'amass_upstream_commit':'79299dce87b0085db0f2f4ef3e9c52cccb49f514',
+              'engine_auth_header':'X-Aegis-Amass-Token',
+              'token_bits':256,
+              'token_source':'per-execution-cryptographic-random',
+              'same_namespace_unauthenticated_access_allowed':False,
+              'production_promotion_performed':False,
+          },sort_keys=True,indent=2))
+          PY
+          printf '%s\n' "$AEGIS_EXACT_HEAD" > artifacts/head-sha.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon-amass-engine-auth-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-engine-auth:
+    needs: engine-auth-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact legacy scanner runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache -t aegis-amass-auth:legacy -f aegis-platform/backend/Dockerfile.django aegis-platform/backend
+      - name: Build exact governed Kali Recon runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-recon \
+            -t aegis-amass-auth:kali \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+      - name: Prove both production images contain the same patched Amass binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          LEGACY_SHA="$(docker run --rm --entrypoint sha256sum aegis-amass-auth:legacy /usr/local/bin/amass | awk '{print $1}')"
+          KALI_SHA="$(docker run --rm --entrypoint sha256sum aegis-amass-auth:kali /usr/local/bin/amass | awk '{print $1}')"
+          test -n "$LEGACY_SHA"
+          test "$LEGACY_SHA" = "$KALI_SHA"
+          echo "AEGIS_AMASS_BINARY_SHA=$LEGACY_SHA" >> "$GITHUB_ENV"
+      - name: Prove real Engine authentication in legacy image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --network none --entrypoint python aegis-amass-auth:legacy - <<'PY'
+          import os, subprocess, time, urllib.error, urllib.request
+          token='1'*64
+          env={**os.environ,'AEGIS_AMASS_ENGINE_TOKEN':token}
+          process=subprocess.Popen(['/usr/local/bin/amass','engine','-silent'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+          try:
+              opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+              url='http://127.0.0.1:4000/api/v1/health'
+              deadline=time.monotonic()+15
+              while True:
+                  try:
+                      req=urllib.request.Request(url,headers={'X-Aegis-Amass-Token':token})
+                      with opener.open(req,timeout=1) as response:
+                          assert response.status == 200
+                      break
+                  except Exception:
+                      if process.poll() is not None or time.monotonic() >= deadline:
+                          raise
+                      time.sleep(.1)
+              for headers in ({},{'X-Aegis-Amass-Token':'2'*64}):
+                  try:
+                      opener.open(urllib.request.Request(url,headers=headers),timeout=2)
+                  except urllib.error.HTTPError as exc:
+                      assert exc.code == 401, exc.code
+                  else:
+                      raise AssertionError('unauthenticated Amass Engine request unexpectedly succeeded')
+          finally:
+              process.terminate()
+              try: process.wait(timeout=5)
+              except subprocess.TimeoutExpired:
+                  process.kill(); process.wait(timeout=5)
+          PY
+      - name: Prove real Engine authentication in governed Kali image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --network none --entrypoint python3 aegis-amass-auth:kali - <<'PY'
+          import os, subprocess, time, urllib.error, urllib.request
+          token='3'*64
+          env={**os.environ,'AEGIS_AMASS_ENGINE_TOKEN':token}
+          process=subprocess.Popen(['/usr/local/bin/amass','engine','-silent'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+          try:
+              opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+              url='http://127.0.0.1:4000/api/v1/health'
+              deadline=time.monotonic()+15
+              while True:
+                  try:
+                      req=urllib.request.Request(url,headers={'X-Aegis-Amass-Token':token})
+                      with opener.open(req,timeout=1) as response:
+                          assert response.status == 200
+                      break
+                  except Exception:
+                      if process.poll() is not None or time.monotonic() >= deadline:
+                          raise
+                      time.sleep(.1)
+              for headers in ({},{'X-Aegis-Amass-Token':'4'*64}):
+                  try:
+                      opener.open(urllib.request.Request(url,headers=headers),timeout=2)
+                  except urllib.error.HTTPError as exc:
+                      assert exc.code == 401, exc.code
+                  else:
+                      raise AssertionError('unauthenticated Amass Engine request unexpectedly succeeded')
+          finally:
+              process.terminate()
+              try: process.wait(timeout=5)
+              except subprocess.TimeoutExpired:
+                  process.kill(); process.wait(timeout=5)
+          PY
+      - name: Capture exact-head auth evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python - <<'PY' > artifacts/amass-engine-auth-reality.json
+          import json, os
+          print(json.dumps({
+              'schema':'aegis.recon-amass-engine-auth-reality.v1',
+              'exact_head':os.environ['AEGIS_EXACT_HEAD'],
+              'amass_binary_sha256':os.environ['AEGIS_AMASS_BINARY_SHA'],
+              'legacy_no_token_status':401,
+              'legacy_wrong_token_status':401,
+              'legacy_correct_token_status':200,
+              'kali_no_token_status':401,
+              'kali_wrong_token_status':401,
+              'kali_correct_token_status':200,
+              'same_binary_across_runtimes':True,
+              'token_bits':256,
+              'production_promotion_performed':False,
+          },sort_keys=True,indent=2))
+          PY
+          printf '%s\n' "$AEGIS_EXACT_HEAD" > artifacts/head-sha.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recon-amass-engine-auth-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
