@@ -55,7 +55,10 @@ Parity uses the real Amass v5.1.1 binary and its real DNSRepo passive plugin.
 
 The isolated fixture provides:
 
-- authoritative DNS for `dnsrepo.noc.org` and `parity.test`;
+- authoritative DNS for `dnsrepo.noc.org`, `bgp.tools`, and `parity.test`;
+- an execution-namespace DNS DNAT rule for Amass v5.1.1 hard-coded public resolver traffic;
+- an explicit loopback exclusion so Docker embedded DNS on `127.0.0.11` remains intact for
+  normal libc target authorization and container name resolution;
 - NXDOMAIN for unrelated public data-source hosts;
 - a fixture CA and HTTPS endpoint for the real DNSRepo URL shape;
 - three deterministic discovered names:
@@ -63,6 +66,11 @@ The isolated fixture provides:
   - `api.parity.test`
   - `mail.parity.test`
 - no public-Internet egress.
+
+The Reality gate proves the hard-coded-resolver path with a raw DNS packet sent to
+`8.8.8.8:53`; the nftables DNAT must return the deterministic `bgp.tools` answer from
+the local fixture. This is distinct from merely proving `getaddrinfo()`, which traverses
+Docker's embedded DNS and would not exercise the Amass resolver path.
 
 Legacy and Kali executions share the same isolated DNS/TLS fixture and the same
 `timeout_minutes=1` option.
