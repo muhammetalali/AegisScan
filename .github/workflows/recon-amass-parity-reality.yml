@@ -343,7 +343,7 @@ jobs:
       - name: Prove legacy Amass engine teardown
         run: |
           set -euo pipefail
-          docker exec aegis-amass-legacy python - <<'PY'
+          docker exec -i aegis-amass-legacy python - <<'PY'
           import os, socket
           listener=socket.socket()
           listener.bind(('127.0.0.1',4000))
@@ -417,7 +417,7 @@ jobs:
       - name: Prove Kali Amass engine teardown
         run: |
           set -euo pipefail
-          docker exec aegis-amass-kali python3 - <<'PY'
+          docker exec -i aegis-amass-kali python3 - <<'PY'
           import os, socket
           listener=socket.socket()
           listener.bind(('127.0.0.1',4000))
@@ -554,16 +554,24 @@ jobs:
             --network container:aegis-amass-egress \
             --entrypoint python aegis-amass:legacy -c \
             "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('0.0.0.0',4000));s.listen(8);time.sleep(300)"
+          for _ in $(seq 1 30); do
+            if docker run --rm --network container:aegis-amass-egress \
+              --entrypoint python aegis-amass:legacy -c \
+              "import socket;s=socket.create_connection(('127.0.0.1',4000),1);s.close()"; then
+              break
+            fi
+            sleep 0.2
+          done
           docker run --rm --network container:aegis-amass-egress \
             --entrypoint python aegis-amass:legacy -c \
-            "import socket;s=socket.create_connection(('127.0.0.1',4000),2);s.close()"
+            "import socket;s=socket.create_connection(('127.0.0.1',4000),1);s.close()"
 
           EGRESS_IP="$(docker inspect --format '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-amass-egress)"
           test -n "$EGRESS_IP"
           docker run --rm --network "${AEGIS_AMASS_NETWORK}" \
             -e EGRESS_IP="$EGRESS_IP" \
             --entrypoint python aegis-amass:legacy -c \
-            "import os,socket;code=socket.socket().connect_ex((os.environ['EGRESS_IP'],4000));assert code != 0, code"
+            "import os,socket;s=socket.socket();s.settimeout(2);code=s.connect_ex((os.environ['EGRESS_IP'],4000));s.close();assert code != 0, code"
           python - <<'PY' > artifacts/amass-ingress-boundary.json
           import json
           print(json.dumps({
