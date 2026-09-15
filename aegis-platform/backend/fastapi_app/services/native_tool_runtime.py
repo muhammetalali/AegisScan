@@ -147,6 +147,8 @@ def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> di
         if value is None or value == '':
             continue
         if definition.kind == 'int':
+            if isinstance(value, bool):
+                raise ValueError(f'{name} must be an integer')
             try:
                 value = int(value)
             except (TypeError, ValueError) as exc:

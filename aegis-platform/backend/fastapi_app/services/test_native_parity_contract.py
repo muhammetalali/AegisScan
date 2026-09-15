@@ -65,8 +65,9 @@ def test_amass_timeout_is_bounded():
     assert effective_native_timeout(spec, {}) == 330
     assert effective_native_timeout(spec, {'timeout_minutes': 1}) == 90
     assert effective_native_timeout(spec, {'timeout_minutes': 30}) == 1830
-    with pytest.raises(ValueError):
-        validate_native_options(spec, {'timeout_minutes': 31})
+    for invalid in (31, True):
+        with pytest.raises(ValueError):
+            validate_native_options(spec, {'timeout_minutes': invalid})
 
 
 def test_amass_runtime_uses_managed_engine_wrapper(monkeypatch):
