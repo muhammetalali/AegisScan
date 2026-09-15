@@ -47,6 +47,10 @@ def test_rustscan_ports_accept_only_explicit_tcp_port_lists():
 
 def test_subfinder_runtime_is_pinned_and_disables_update_checks(monkeypatch):
     monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'example.invalid')
+    monkeypatch.setattr(
+        'fastapi_app.services.scope_authorization.socket.getaddrinfo',
+        lambda *args, **kwargs: [(2, 1, 6, '', ('93.184.216.34', 0))],
+    )
     monkeypatch.setattr('fastapi_app.services.native_tool_runtime.shutil.which', lambda binary: '/usr/local/bin/subfinder')
     spec = get_native_tool_spec('recon.subfinder')
     argv, target = build_native_argv(spec, 'Example.Invalid', {})
