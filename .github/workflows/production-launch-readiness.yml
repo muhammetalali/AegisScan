@@ -232,6 +232,17 @@ jobs:
           CORS_ALLOWED_ORIGINS: https://security.example.com
           CSRF_TRUSTED_ORIGINS: https://security.example.com
           AUTHORIZED_SCAN_TARGETS: authorized.example.com,203.0.113.10
+          AEGIS_RECON_PROVIDER: default-kali
+          AEGIS_KALI_RECON_CANARY_BPS: '0'
+          AEGIS_KALI_RECON_IMAGE: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_URL: http://127.0.0.1:18765
+          AEGIS_KALI_RECON_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION: 0.1.0
+          AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
           ALERT_WEBHOOK_URL: https://alerts.example.com/aegis
           AEGIS_REMOTE_BACKUP_ENABLED: 'true'
           AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
