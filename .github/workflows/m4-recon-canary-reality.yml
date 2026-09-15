@@ -145,7 +145,7 @@ jobs:
               'parity_approved_capabilities':['recon.fierce'],
               'silent_provider_fallback':False,
               'rollback':'AEGIS_KALI_RECON_CANARY_BPS=0',
-              'm5_default_kali_enabled':False,
+              'm5_default_kali_tested_in_this_run':False,
           },sort_keys=True,indent=2))
           PY
       - uses: actions/upload-artifact@v4
@@ -470,8 +470,8 @@ jobs:
               'semantic_parity':parity.as_dict(),
               'zero_bps_rollback_proven':True,
               'silent_provider_fallback':False,
-              'm5_default_kali_enabled':False,
-              'note':'M5 remains blocked until M4 merge and fresh exact-main terminal-green proof.',
+              'm5_default_kali_tested_in_this_run':False,
+              'note':'M4 canary semantics are validated independently of the M5 default-Kali reality gate.',
           }
           json.dump(evidence,open('/artifacts/m4-real-canary.json','w'),sort_keys=True,indent=2)
           print(json.dumps(parity.as_dict(),sort_keys=True))
