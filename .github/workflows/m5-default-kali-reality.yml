@@ -109,6 +109,19 @@ jobs:
         env:
           AUTHORIZED_SCAN_TARGETS: authorized.example.com
           POSTGRES_PASSWORD: m5-compose-contract-password
+          SECRET_KEY: ci-m5-django-key-012345678901234567890123456789
+          JWT_SECRET_KEY: ci-m5-jwt-key-012345678901234567890123456789
+          DATABASE_URL: postgresql://aegis:m5-compose-contract-password@postgres:5432/aegisdb
+          REDIS_URL: redis://redis:6379/0
+          CELERY_BROKER_URL: redis://redis:6379/0
+          CELERY_RESULT_BACKEND: redis://redis:6379/0
+          CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+          CREDENTIAL_FINGERPRINT_KEY: ci-m5-browser-fingerprint-key-0123456789
+          AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
+          AEGIS_BACKUP_S3_BUCKET: aegisscan-production-backups
+          AEGIS_BACKUP_S3_CREDENTIALS_FILE: /run/aegis-m5-policy/s3.json
+          AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /run/aegis-m5-policy/backup.key
+          AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
           AEGIS_RECON_PROVIDER: default-kali
           AEGIS_KALI_RECON_CANARY_BPS: '0'
           AEGIS_KALI_RECON_IMAGE: ghcr.io/aegisscan/kali-recon@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
@@ -125,6 +138,7 @@ jobs:
           docker compose \
             -f aegis-platform/docker-compose.yml \
             -f aegis-platform/docker-compose.prod.yml \
+            -f aegis-platform/docker-compose.backup.yml \
             config --format json > /tmp/m5-compose.json
           python aegis-platform/scripts/production_policy_gate.py /tmp/m5-compose.json
           python - <<'PY'
