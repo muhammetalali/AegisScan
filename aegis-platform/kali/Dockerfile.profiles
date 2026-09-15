@@ -88,9 +88,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log
 COPY --from=go-tools /go/bin/amass /usr/local/bin/amass
 COPY --from=go-tools /go/bin/subfinder /usr/local/bin/subfinder
+COPY aegis-platform/backend/fastapi_app/services/amass_managed_runtime.py /opt/aegis-runner/amass_managed_runtime.py
 COPY aegis-platform/kali/runner/recon_service.py /opt/aegis-runner/recon_service.py
-RUN chmod 0755 /opt/aegis-runner/recon_service.py \
+RUN chmod 0755 /opt/aegis-runner/recon_service.py /opt/aegis-runner/amass_managed_runtime.py \
+    && ln -sf /opt/aegis-runner/amass_managed_runtime.py /usr/local/bin/aegis-amass-runtime \
     && amass -version 2>&1 | grep -q '5.1.1' \
+    && command -v aegis-amass-runtime >/dev/null \
     && subfinder -version 2>&1 | grep -q '2.16.0' \
     && command -v dnsenum >/dev/null && command -v fierce >/dev/null \
     && python3 /opt/aegis-runner/profile_runtime_manifest.py \
