@@ -2,9 +2,9 @@
 
 ## Objective
 
-Prove that `recon.dnsenum` produces semantically equivalent normalized security observations when executed through the legacy native worker and the governed Kali Recon provider.
+Prove that `recon.dnsenum` produces semantically equivalent normalized security observations when executed through the legacy native worker and the governed Kali Recon provider, and keep that parity proof continuously bound to the production default-Kali routing decision.
 
-This stage is evidence-only. It does **not** expand `_PARITY_APPROVED_CAPABILITIES`, does not change production routing, and does not begin M6 Legacy Retirement.
+The initial parity stage was evidence-only and did not expand `_PARITY_APPROVED_CAPABILITIES`. After that PR merged, fresh-main Reality succeeded on the merge SHA and the exact-main artifact was inspected. A separate promotion change can therefore admit `recon.dnsenum` to the approved default-Kali set without weakening the original evidence boundary.
 
 ## Safety boundary
 
@@ -27,22 +27,29 @@ The exact PR/main SHA must prove all of the following:
 9. both executions produce non-empty normalized observations;
 10. both normalized outputs contain the deterministic fixture zone and fixture address;
 11. `compare_execution_semantics()` reports semantic equivalence;
-12. `default-kali` routing still holds `recon.dnsenum` on legacy until a separate reviewed promotion change expands the approved set;
-13. exact-head evidence is uploaded and bound to the tested SHA.
+12. `default-kali` routes `recon.dnsenum` to Kali only after the approved-set change is present;
+13. the same Reality run proves the promoted path uses `default-kali`, not the engineering-only raw `kali` override;
+14. exact-head evidence is uploaded and bound to the tested SHA.
 
 ## Promotion rule
 
 Successful parity evidence is necessary but not sufficient for production promotion.
 
-A later, separate change may add `recon.dnsenum` to the parity-approved default-Kali set only after:
+`recon.dnsenum` may be added to the parity-approved default-Kali set only after:
 
-- this parity PR is merged;
+- the parity PR is merged;
 - fresh-main parity Reality succeeds on the merge SHA;
-- the exact-main evidence artifact is inspected;
-- production routing, rollback, policy and deployment gates are updated and re-proven.
+- the exact-main evidence artifact is inspected and shows semantic equivalence with no mismatches;
+- a separate reviewed promotion change updates routing and its governing Reality assertions;
+- the promotion PR proves real DNSenum execution in `default-kali` mode;
+- production rollback, provenance and policy gates remain green.
 
-Until then, `recon.dnsenum` remains legacy-routed in `default-kali` mode.
+The currently promoted set must remain explicit. Amass and Subfinder stay legacy-routed until they independently satisfy the same process.
+
+## M6 boundary
+
+DNSenum promotion does not retire the legacy worker. `m6_retirement_allowed` remains false while any in-scope Recon capability still depends on legacy routing or while rollback/observation requirements remain open.
 
 ## Exit gate
 
-This stage closes only when the exact PR head is terminal green, the PR is merged with expected-head protection, fresh-main DNSenum parity Reality is terminal green, and its artifact is bound to the resulting main SHA.
+The parity stage is closed because its exact PR head and fresh-main merge SHA both passed real dual-run Reality and the merge-SHA artifact was inspected. The promotion stage closes only when its own exact PR head is terminal green, behind=0, merged with expected-head protection, and followed by fresh-main DNSenum Reality whose artifact proves `production_promotion_performed=true` on the resulting main SHA.
