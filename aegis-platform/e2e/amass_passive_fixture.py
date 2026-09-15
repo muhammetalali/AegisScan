@@ -10,6 +10,7 @@ import threading
 from urllib.parse import parse_qs, urlsplit
 
 API_HOST = "dnsrepo.noc.org"
+BGP_HOST = "bgp.tools"
 TARGET = "parity.test"
 TARGET_IP = "172.30.0.10"
 RESULTS = (
@@ -51,12 +52,12 @@ def _response(packet: bytes, fixture_ip: str) -> bytes:
     answers: list[bytes] = []
     if qclass != 1:
         rcode = 4
-    elif name not in {API_HOST, TARGET}:
+    elif name not in {API_HOST, BGP_HOST, TARGET}:
         rcode = 3
     else:
         rcode = 0
         if qtype in {1, 255}:
-            resolved_ip = fixture_ip if name == API_HOST else TARGET_IP
+            resolved_ip = fixture_ip if name in {API_HOST, BGP_HOST} else TARGET_IP
             rdata = bytes(int(part) for part in resolved_ip.split("."))
             answers.append(b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, len(rdata)) + rdata)
     flags = 0x8000 | 0x0400 | (request_flags & 0x0100) | rcode
@@ -142,7 +143,10 @@ def main() -> None:
     threading.Thread(target=udp.serve_forever, name="dns-udp", daemon=True).start()
     threading.Thread(target=tcp.serve_forever, name="dns-tcp", daemon=True).start()
     threading.Thread(target=https.serve_forever, name="https", daemon=True).start()
-    print(f"AEGIS_AMASS_PASSIVE_FIXTURE_READY {API_HOST} {args.fixture_ip}", flush=True)
+    print(
+        f"AEGIS_AMASS_PASSIVE_FIXTURE_READY {API_HOST} {BGP_HOST} {args.fixture_ip}",
+        flush=True,
+    )
     threading.Event().wait()
 
 
