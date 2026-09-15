@@ -32,7 +32,7 @@ def test_canary_is_hard_bounded_and_only_parity_approved_capability_can_enter(mo
     monkeypatch.setenv('AEGIS_RECON_PROVIDER', 'canary')
     monkeypatch.setenv('AEGIS_KALI_RECON_CANARY_BPS', '2500')
 
-    unapproved = provider.recon_provider_decision('recon.subfinder', routing_key='scan-1')
+    unapproved = provider.recon_provider_decision('recon.amass', routing_key='scan-1')
     assert unapproved.selected_provider == 'legacy'
     assert unapproved.recon_capability is True
     assert unapproved.parity_approved is False

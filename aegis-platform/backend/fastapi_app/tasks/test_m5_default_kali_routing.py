@@ -19,7 +19,7 @@ def _authorization():
 
 @pytest.mark.parametrize(
     ("capability_id", "tool"),
-    (("recon.fierce", "fierce"), ("recon.dnsenum", "dnsenum")),
+    (("recon.fierce", "fierce"), ("recon.dnsenum", "dnsenum"), ("recon.subfinder", "subfinder")),
 )
 def test_default_kali_executes_parity_approved_recon_through_provider(monkeypatch, capability_id, tool):
     monkeypatch.setenv("AEGIS_RECON_PROVIDER", "default-kali")
@@ -80,7 +80,7 @@ def test_default_kali_keeps_unapproved_recon_on_legacy(monkeypatch):
     def legacy(*args, **kwargs):
         calls.append((args, kwargs))
         return ScanResult(
-            tool="subfinder",
+            tool="amass",
             target="example.com",
             exit_code=0,
             stdout="legacy",
@@ -97,12 +97,12 @@ def test_default_kali_keeps_unapproved_recon_on_legacy(monkeypatch):
     )
 
     result, provenance = native_task._execute_runtime(
-        capability_id="recon.subfinder",
+        capability_id="recon.amass",
         target="example.com",
         options={},
         scan=_scan("m5-unapproved"),
         authorization=_authorization(),
-        spec=get_native_tool_spec("recon.subfinder"),
+        spec=get_native_tool_spec("recon.amass"),
         credential_materials=(),
     )
 

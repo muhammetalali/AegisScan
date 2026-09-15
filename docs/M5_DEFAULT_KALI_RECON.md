@@ -10,9 +10,11 @@ The trust boundary remains evidence-driven:
 
 - **recon.fierce** is parity-approved and routes to Kali by default.
 - **recon.dnsenum** is parity-approved after independent fresh-main dual-run evidence and
+  routes to Kali by default.
+- **recon.subfinder** is parity-approved after independent fresh-main dual-run evidence and
   now routes to Kali by default.
-- **recon.amass** and **recon.subfinder** remain on the legacy native worker until each has
-  its own approved dual-run semantic-parity evidence.
+- **recon.amass** remains on the legacy native worker until it has its own approved
+  dual-run semantic-parity evidence.
 - non-Recon capabilities remain on their existing execution paths.
 
 This prevents M5 from silently widening execution trust beyond evidence that has passed
@@ -32,7 +34,7 @@ Modes:
 - **kali**: engineering/reality override that routes all supported Recon capabilities to
   Kali. Production preflight and production policy reject this mode.
 
-The approved M5 set is deliberately explicit: **recon.fierce** and **recon.dnsenum**.
+The approved M5 set is deliberately explicit: **recon.fierce**, **recon.dnsenum**, and **recon.subfinder**.
 
 The approved set must never be expanded solely because a tool is packaged in the Kali
 profile. Admission requires independent semantic-parity evidence, a reviewed promotion
@@ -72,10 +74,11 @@ scanner_worker that:
 
 1. recon.fierce resolves to Kali with reason default-kali-parity-approved;
 2. recon.dnsenum resolves to Kali with reason default-kali-parity-approved;
-3. an unapproved Recon capability such as recon.subfinder resolves to legacy with reason
+3. recon.subfinder resolves to Kali with reason default-kali-parity-approved;
+4. the remaining unapproved Recon capability recon.amass resolves to legacy with reason
    capability-not-parity-approved;
-4. the kali_recon service is running;
-5. the provider passes authenticated runtime attestation against deployment trust pins.
+5. the kali_recon service is running;
+6. the provider passes authenticated runtime attestation against deployment trust pins.
 
 Public HTTPS acceptance remains a separate application availability proof and is not used
 as evidence of scanner execution-plane readiness.
@@ -104,11 +107,12 @@ M5 Default Kali Reality must prove on the exact PR/main SHA:
 6. deterministic authorized DNS fixture execution;
 7. real recon.fierce execution through the production Kali provider client;
 8. real recon.dnsenum execution through default-kali is proven by Recon DNSenum Parity Reality;
-9. real legacy rollback execution against the same fixture;
-10. non-empty normalized observations from compared execution paths;
-11. semantic equivalence remains green for every admitted capability;
-12. runtime provenance is bound to the exact immutable image and deployment trust anchor;
-13. unapproved capability routing and explicit legacy rollback are captured in evidence.
+9. real recon.subfinder execution through default-kali is proven by Recon Subfinder Parity Reality;
+10. real legacy rollback execution against the same fixture;
+11. non-empty normalized observations from compared execution paths;
+12. semantic equivalence remains green for every admitted capability;
+13. runtime provenance is bound to the exact immutable image and deployment trust anchor;
+14. unapproved capability routing and explicit legacy rollback are captured in evidence.
 
 ## Non-goals
 
