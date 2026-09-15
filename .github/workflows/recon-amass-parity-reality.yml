@@ -323,8 +323,8 @@ jobs:
               set -eu
               nft add table ip aegis_amass_fixture
               nft "add chain ip aegis_amass_fixture output { type nat hook output priority -100; policy accept; }"
-              nft add rule ip aegis_amass_fixture output udp dport 53 dnat to ${AEGIS_AMASS_FIXTURE_IP}:53
-              nft add rule ip aegis_amass_fixture output tcp dport 53 dnat to ${AEGIS_AMASS_FIXTURE_IP}:53
+              nft add rule ip aegis_amass_fixture output ip daddr != 127.0.0.0/8 udp dport 53 dnat to ${AEGIS_AMASS_FIXTURE_IP}:53
+              nft add rule ip aegis_amass_fixture output ip daddr != 127.0.0.0/8 tcp dport 53 dnat to ${AEGIS_AMASS_FIXTURE_IP}:53
               nft list table ip aegis_amass_fixture
               exec tail -f /dev/null
             '
@@ -336,9 +336,31 @@ jobs:
           done
           docker logs aegis-amass-dns-redirect 2>&1 | grep -q "dnat to ${AEGIS_AMASS_FIXTURE_IP}:53"
           docker exec -i aegis-amass-legacy python - <<'PY'
+          import random
           import socket
-          resolved={item[4][0] for item in socket.getaddrinfo('bgp.tools', None, type=socket.SOCK_STREAM)}
-          assert resolved == {'172.30.0.53'}, resolved
+          import struct
+
+          # libc/Docker DNS must remain functional for target authorization.
+          resolved={
+              item[4][0]
+              for item in socket.getaddrinfo('parity.test', None, type=socket.SOCK_STREAM)
+          }
+          assert resolved == {'172.30.0.10'}, resolved
+
+          # Amass does not rely only on libc DNS: v5.1.1 performs bootstrap
+          # queries directly against hard-coded public resolver IPs. Prove the
+          # namespace DNAT redirects that exact wire path to the isolated fixture.
+          query_id=random.randint(0, 65535)
+          qname=b''.join(bytes([len(label)])+label.encode('ascii') for label in 'bgp.tools'.split('.'))+b'\x00'
+          packet=struct.pack('!HHHHHH',query_id,0x0100,1,0,0,0)+qname+struct.pack('!HH',1,1)
+          sock=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+          sock.settimeout(2)
+          sock.sendto(packet,('8.8.8.8',53))
+          response,_=sock.recvfrom(2048)
+          sock.close()
+          assert struct.unpack('!H',response[:2])[0] == query_id, response[:12]
+          assert struct.unpack('!H',response[6:8])[0] >= 1, response[:12]
+          assert bytes((172,30,0,53)) in response, response
           PY
 
       - name: Execute real legacy Amass managed runtime
