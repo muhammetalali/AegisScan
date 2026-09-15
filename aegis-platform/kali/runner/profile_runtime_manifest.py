@@ -52,7 +52,7 @@ def main() -> int:
         if profile in metadata.get('profiles', []):
             tools[name] = {
                 key: metadata[key]
-                for key in ('version', 'commit', 'sha256', 'source')
+                for key in ('version', 'commit', 'sha256', 'source', 'patch')
                 if key in metadata
             }
 
