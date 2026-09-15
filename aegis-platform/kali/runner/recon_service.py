@@ -448,20 +448,48 @@ class ReconHandler(BaseHTTPRequestHandler):
         return _load_json_bytes(self.rfile.read(length))
 
     def do_GET(self) -> None:
-        if self.path != '/healthz':
-            self._json(HTTPStatus.NOT_FOUND, {'status': 'not_found'})
+        if self.path == '/healthz':
+            try:
+                runtime = _runtime_contract()
+                self._json(HTTPStatus.OK, {
+                    'status': 'ok',
+                    'provider': 'aegis-kali-recon',
+                    'profile': runtime['profile'],
+                    'dispatch_enabled': True,
+                    'build_commit': runtime.get('build_commit'),
+                })
+            except Exception as exc:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {'status': 'unhealthy', 'error': str(exc)})
             return
-        try:
-            runtime = _runtime_contract()
-            self._json(HTTPStatus.OK, {
-                'status': 'ok',
-                'provider': 'aegis-kali-recon',
-                'profile': runtime['profile'],
-                'dispatch_enabled': True,
-                'build_commit': runtime.get('build_commit'),
-            })
-        except Exception as exc:
-            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {'status': 'unhealthy', 'error': str(exc)})
+
+        if self.path == '/v1/runtime':
+            try:
+                expected_token = _provider_auth_token()
+                received_token = self.headers.get('X-Aegis-Recon-Token', '')
+                if not hmac.compare_digest(received_token, expected_token):
+                    self._json(HTTPStatus.UNAUTHORIZED, {'status': 'unauthorized'})
+                    return
+                runtime = _runtime_contract()
+                self._json(HTTPStatus.OK, {
+                    'status': 'ok',
+                    'runtime': {
+                        'provider': 'aegis-kali-recon',
+                        'profile': runtime['profile'],
+                        'runner_version': runtime.get('runner_version'),
+                        'build_commit': runtime.get('build_commit'),
+                        'base_image_digest': runtime.get('base_image_digest'),
+                        'tool_manifest_digest': runtime.get('tool_manifest_digest'),
+                        'runtime_manifest_digest': _sha256(RUNTIME_MANIFEST),
+                    },
+                })
+            except Exception as exc:
+                self._json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {'status': 'unhealthy', 'error': str(exc)},
+                )
+            return
+
+        self._json(HTTPStatus.NOT_FOUND, {'status': 'not_found'})
 
     def do_POST(self) -> None:
         try:
