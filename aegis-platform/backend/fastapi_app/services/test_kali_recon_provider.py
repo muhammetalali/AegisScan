@@ -18,7 +18,7 @@ def test_provider_mode_defaults_to_legacy_and_kali_is_explicit(monkeypatch):
     assert provider.should_use_kali_recon('web.httpx') is False
 
     monkeypatch.setenv('AEGIS_RECON_PROVIDER', 'automatic')
-    with pytest.raises(provider.KaliReconProviderError, match='legacy or kali'):
+    with pytest.raises(provider.KaliReconProviderError, match='legacy, canary, or kali'):
         provider.provider_mode()
 
 
