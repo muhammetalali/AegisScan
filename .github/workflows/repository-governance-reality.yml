@@ -7,6 +7,7 @@ name: Repository Governance Reality
       - '.github/governance/**'
       - '.github/workflows/required-ci-governance.yml'
       - '.github/workflows/repository-governance-reality.yml'
+      - 'scripts/admin/repository_ruleset_admin.py'
       - 'scripts/ci/required_ci_governance.py'
       - 'scripts/ci/repository_governance_reality.py'
       - 'docs/REPOSITORY_GOVERNANCE.md'
@@ -29,10 +30,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Compile governance scripts
-        run: python3 -m py_compile scripts/ci/required_ci_governance.py scripts/ci/repository_governance_reality.py
+        run: >-
+          python3 -m py_compile
+          scripts/admin/repository_ruleset_admin.py
+          scripts/ci/required_ci_governance.py
+          scripts/ci/repository_governance_reality.py
       - name: Validate governance policy contract
         if: github.event_name == 'pull_request'
-        run: python3 scripts/ci/repository_governance_reality.py .github/governance/main-ruleset-spec.json --mode spec
+        run: |
+          python3 scripts/ci/repository_governance_reality.py .github/governance/main-ruleset-spec.json --mode spec
+          python3 scripts/admin/repository_ruleset_admin.py .github/governance/main-ruleset-spec.json --mode plan > /tmp/aegis-ruleset-plan.json
+          grep -q 'REPOSITORY_RULESET_ADMIN_PLAN_PASS' /tmp/aegis-ruleset-plan.json
       - name: Prove live main rules
         if: github.event_name != 'pull_request'
         env:
