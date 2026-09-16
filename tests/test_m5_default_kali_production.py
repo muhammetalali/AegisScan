@@ -131,9 +131,10 @@ def test_default_kali_execution_plane_acceptance_proves_routing_and_attestation(
     command = " ".join(calls[-1])
     assert "scanner_worker" in command
     assert "recon_provider_decision('recon.fierce')" in command
-    assert "recon_provider_decision('recon.subfinder')" in command
+    assert "'recon.subfinder'" in command
+    assert "'recon.amass'" in command
     assert "default-kali-parity-approved" in command
-    assert "capability-not-parity-approved" in command
+    assert "capability-not-parity-approved" not in command
     assert "_preflight_runtime_attestation" in command
 
     monkeypatch.setattr(deploy, "_running_services", lambda *_: {"scanner_worker"})
