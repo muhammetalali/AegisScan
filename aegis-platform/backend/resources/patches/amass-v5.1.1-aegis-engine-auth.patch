@@ -182,3 +182,20 @@ diff --git a/engine/api/server/v1/handlers.go b/engine/api/server/v1/handlers.go
 @@ -130 +130 @@ func (v *V1Handlers) CreateSessionHandler(w http.ResponseWriter, r *http.Request
 -	sess, err := v.mgr.NewSession(&config)
 +	sess, err := v.mgr.NewSession(sessionConfig)
+diff --git a/engine/plugins/support/dispatch.go b/engine/plugins/support/dispatch.go
+index 089792c..04bca3b 100644
+--- a/engine/plugins/support/dispatch.go
++++ b/engine/plugins/support/dispatch.go
+@@ -9,0 +10 @@ import (
++	"strings"
+@@ -72,0 +74,10 @@ func ProcessFQDNsWithSource(e *et.Event, entities []*dbt.Entity, src *et.Source)
++		if parent, ok := e.Entity.Asset.(*oamdns.FQDN); ok &&
++			e.Entity.ID != entity.ID &&
++			strings.HasSuffix(fqdn.Name, "."+parent.Name) {
++			_, _ = e.Session.DB().CreateEdge(ctx, &dbt.Edge{
++				Relation:   &general.SimpleRelation{Name: "node"},
++				FromEntity: e.Entity,
++				ToEntity:   entity,
++			})
++		}
++

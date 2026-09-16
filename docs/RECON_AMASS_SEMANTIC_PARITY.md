@@ -65,6 +65,10 @@ through `config.NewConfig()` before applying the authenticated client's JSON.
 This preserves upstream runtime defaults that are intentionally excluded from
 JSON while retaining the exact governed scope and transformations. Reality
 evidence requires one authenticated DNSRepo fixture request from each runtime.
+The patch also records a `node` relationship when a passive source discovers
+a hostname beneath the FQDN it queried. Without that relationship Amass v5
+stores the hostname asset but omits it from `amass subs`, hiding successful
+passive discoveries from managed runtime output.
 
 Parity uses the real Amass v5.1.1 binary and its real DNSRepo passive plugin.
 

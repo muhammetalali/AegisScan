@@ -82,6 +82,8 @@ def test_amass_parity_requires_exact_authenticated_source_build(tmp_path):
     assert 'http.StatusUnauthorized' in patch
     assert 'sessionConfig := config.NewConfig()' in patch
     assert 'v.mgr.NewSession(sessionConfig)' in patch
+    assert 'strings.HasSuffix(fqdn.Name, "."+parent.Name)' in patch
+    assert 'Relation:   &general.SimpleRelation{Name: "node"}' in patch
     assert 'import secrets' in source
     assert 'env["AEGIS_AMASS_ENGINE_TOKEN"] = secrets.token_hex(32)' in source
     assert 'AEGIS_AMASS_ENGINE_TOKEN' not in runtime._minimal_environment(tmp_path / 'env')

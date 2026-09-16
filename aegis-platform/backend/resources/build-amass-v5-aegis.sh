@@ -37,7 +37,8 @@ git -C "$SOURCE_ROOT" apply --unidiff-zero "$PATCH_PATH"
 gofmt -w \
     "$SOURCE_ROOT/engine/api/client/v1/client.go" \
     "$SOURCE_ROOT/engine/api/server/server.go" \
-    "$SOURCE_ROOT/engine/api/server/v1/handlers.go"
+    "$SOURCE_ROOT/engine/api/server/v1/handlers.go" \
+    "$SOURCE_ROOT/engine/plugins/support/dispatch.go"
 
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 export GOPROXY=https://proxy.golang.org,direct

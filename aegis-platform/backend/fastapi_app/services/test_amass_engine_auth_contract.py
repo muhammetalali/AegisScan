@@ -18,6 +18,7 @@ def test_amass_source_build_is_exact_commit_and_patch_gated():
     assert "grep -q 'AEGIS_AMASS_ENGINE_TOKEN'" in builder
     assert "grep -q 'X-Aegis-Amass-Token'" in builder
     assert '"$SOURCE_ROOT/engine/api/server/v1/handlers.go"' in builder
+    assert '"$SOURCE_ROOT/engine/plugins/support/dispatch.go"' in builder
 
 
 def test_amass_engine_patch_requires_authenticated_http_and_websocket_clients():
@@ -31,6 +32,7 @@ def test_amass_engine_patch_requires_authenticated_http_and_websocket_clients():
     assert 'sessionConfig := config.NewConfig()' in patch
     assert 'json.Unmarshal(raw, sessionConfig)' in patch
     assert 'v.mgr.NewSession(sessionConfig)' in patch
+    assert 'strings.HasSuffix(fqdn.Name, "."+parent.Name)' in patch
 
 
 def test_managed_runtime_generates_token_inside_execution_boundary(tmp_path):
