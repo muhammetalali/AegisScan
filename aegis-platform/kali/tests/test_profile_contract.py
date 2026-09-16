@@ -103,7 +103,7 @@ def test_tool_manifest_provenance_is_bound_to_profile_build_inputs():
             patch = patch_path.read_text(encoding='utf-8')
             assert 'AEGIS_AMASS_ENGINE_TOKEN' in patch, name
             assert 'X-Aegis-Amass-Token' in patch, name
-            assert 'git -C "$SOURCE_ROOT" apply --check "$PATCH_PATH"' in AMASS_BUILD, name
+            assert 'git -C "$SOURCE_ROOT" apply --unidiff-zero --check "$PATCH_PATH"' in AMASS_BUILD, name
             assert 'go build -trimpath -buildvcs=false' in AMASS_BUILD, name
         elif source == 'cargo':
             assert f"--version {tool['version']} {name}" in DOCKERFILE, name
