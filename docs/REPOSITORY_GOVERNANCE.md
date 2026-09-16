@@ -23,6 +23,22 @@ The approval count is intentionally `0` in the initial ruleset because the repos
 
 Signed-commit enforcement is intentionally not enabled in this first ruleset. Release provenance and supply-chain signing remain mandatory, but repository commit-signature enforcement should only be activated after every automated commit actor used by the project has been proven compatible; enabling it speculatively could deadlock release integration.
 
+## Administrative activation
+
+Repository rulesets require GitHub repository-administration write permission. AegisScan keeps the desired state in source control and provides an idempotent applicator at `scripts/admin/repository_ruleset_admin.py`.
+
+The applicator never accepts a token value as a command-line argument and never persists credentials. Supply an administrator-scoped token through the `AEGIS_GITHUB_ADMIN_TOKEN` environment variable and run:
+
+```bash
+AEGIS_GITHUB_ADMIN_TOKEN='<admin-token>' \
+python3 scripts/admin/repository_ruleset_admin.py \
+  .github/governance/main-ruleset-spec.json \
+  --repo muhammetalali/AegisScan \
+  --mode apply
+```
+
+The operation is idempotent: it creates the named ruleset if absent, updates that exact named ruleset if present, refuses duplicate rulesets with the same name, and immediately verifies both the stored ruleset and the effective rules on `main`. A read-only verification can be performed with `--mode verify`. The token must never be committed, echoed into CI logs, or stored in repository fixtures.
+
 ## Required CI policy
 
 AegisScan does not mark every workflow as an unconditional GitHub required check. Several Reality workflows are path-filtered, so doing that would leave unrelated pull requests permanently waiting for checks that GitHub never schedules.
@@ -53,7 +69,7 @@ Critical path-sensitive gates include External Black-Box E2E, Production Runtime
 
 `.github/workflows/repository-governance-reality.yml` has two modes:
 
-- Pull requests validate the proposed ruleset contract without pretending the currently unprotected branch is already compliant.
+- Pull requests validate the proposed ruleset contract and dry-run the administrative payload without pretending the currently unprotected branch is already compliant.
 - Every push to `main`, plus manual dispatch, queries GitHub for the live branch and applicable repository rules and fails closed unless protection, PR-only integration, force-push protection, deletion protection, strict status checks, and the required governance context are active.
 
 A repository-governance phase is not closed merely because these files exist. Closure requires a live active ruleset and a green `Repository Governance Reality` run against the exact protected `main` SHA.
