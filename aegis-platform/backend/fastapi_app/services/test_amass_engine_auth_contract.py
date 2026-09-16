@@ -13,10 +13,11 @@ RUNTIME_SOURCE = Path(runtime.__file__).resolve()
 def test_amass_source_build_is_exact_commit_and_patch_gated():
     builder = BUILDER.read_text(encoding="utf-8")
     assert 'AMASS_COMMIT="79299dce87b0085db0f2f4ef3e9c52cccb49f514"' in builder
-    assert 'git -C "$SOURCE_ROOT" apply --check "$PATCH_PATH"' in builder
+    assert 'git -C "$SOURCE_ROOT" apply --unidiff-zero --check "$PATCH_PATH"' in builder
     assert 'go build -trimpath -buildvcs=false' in builder
     assert "grep -q 'AEGIS_AMASS_ENGINE_TOKEN'" in builder
     assert "grep -q 'X-Aegis-Amass-Token'" in builder
+    assert '"$SOURCE_ROOT/engine/api/server/v1/handlers.go"' in builder
 
 
 def test_amass_engine_patch_requires_authenticated_http_and_websocket_clients():
@@ -27,6 +28,9 @@ def test_amass_engine_patch_requires_authenticated_http_and_websocket_clients():
     assert 'clone.Header.Set(engineAuthHeader, t.token)' in patch
     assert 'headers.Set(engineAuthHeader, c.token)' in patch
     assert 'http.StatusUnauthorized' in patch
+    assert 'sessionConfig := config.NewConfig()' in patch
+    assert 'json.Unmarshal(raw, sessionConfig)' in patch
+    assert 'v.mgr.NewSession(sessionConfig)' in patch
 
 
 def test_managed_runtime_generates_token_inside_execution_boundary(tmp_path):

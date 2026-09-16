@@ -125,6 +125,11 @@ jobs:
           PY
           cat artifacts/runtime-result.json
           cat artifacts/engine.log || true
+          cat artifacts/enum.stderr || true
+          cat artifacts/subs.stderr || true
+          cat artifacts/runtime-files.json
+          cat artifacts/asset-db-inspection.json || true
+          docker logs aegis-amass-diagnostic-fixture 2>&1
 
       - name: Upload exact diagnostics
         if: always()

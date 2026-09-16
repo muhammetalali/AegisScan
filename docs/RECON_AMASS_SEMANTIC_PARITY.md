@@ -60,6 +60,12 @@ shared by the legacy and Kali execution paths, enables hostname discovery,
 and is removed with the execution state. The parity gate still requires all
 three discovered fixture names; returning the seed alone cannot pass.
 
+The reviewed Amass patch also constructs Engine-side session configuration
+through `config.NewConfig()` before applying the authenticated client's JSON.
+This preserves upstream runtime defaults that are intentionally excluded from
+JSON while retaining the exact governed scope and transformations. Reality
+evidence requires one authenticated DNSRepo fixture request from each runtime.
+
 Parity uses the real Amass v5.1.1 binary and its real DNSRepo passive plugin.
 
 The isolated fixture provides:

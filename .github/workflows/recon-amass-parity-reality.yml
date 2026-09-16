@@ -519,6 +519,12 @@ jobs:
               assert b'amass\x00engine' not in cmd, (pid,cmd)
           PY
 
+      - name: Prove both real runtimes reached the isolated DNSRepo source
+        run: |
+          set -euo pipefail
+          hit_count="$(docker logs aegis-amass-fixture 2>&1 | grep -c '^AEGIS_AMASS_PASSIVE_FIXTURE_HIT parity.test$' || true)"
+          test "${hit_count}" -ge 2
+
       - name: Prove foreign Amass engine reuse fails closed
         run: |
           set -euo pipefail
@@ -694,6 +700,7 @@ jobs:
           PY
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: recon-amass-real-dual-run-${{ env.AEGIS_EXACT_HEAD }}
           path: artifacts/

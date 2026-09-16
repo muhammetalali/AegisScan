@@ -168,3 +168,17 @@ diff --git a/engine/api/server/server.go b/engine/api/server/server.go
  func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		start := time.Now()
+diff --git a/engine/api/server/v1/handlers.go b/engine/api/server/v1/handlers.go
+--- a/engine/api/server/v1/handlers.go
++++ b/engine/api/server/v1/handlers.go
+@@ -120,2 +120,2 @@ func (v *V1Handlers) CreateSessionHandler(w http.ResponseWriter, r *http.Request
+-	var config config.Config
+-	if err := json.Unmarshal(raw, &config); err != nil {
++	sessionConfig := config.NewConfig()
++	if err := json.Unmarshal(raw, sessionConfig); err != nil {
+@@ -126 +126 @@ func (v *V1Handlers) CreateSessionHandler(w http.ResponseWriter, r *http.Request
+-	for k, t := range config.Transformations {
++	for k, t := range sessionConfig.Transformations {
+@@ -130 +130 @@ func (v *V1Handlers) CreateSessionHandler(w http.ResponseWriter, r *http.Request
+-	sess, err := v.mgr.NewSession(&config)
++	sess, err := v.mgr.NewSession(sessionConfig)

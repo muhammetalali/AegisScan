@@ -32,9 +32,12 @@ retry 5 git -C "$SOURCE_ROOT" fetch -q --depth 1 origin "$AMASS_COMMIT"
 git -C "$SOURCE_ROOT" checkout -q --detach FETCH_HEAD
 test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$AMASS_COMMIT"
 
-git -C "$SOURCE_ROOT" apply --check "$PATCH_PATH"
-git -C "$SOURCE_ROOT" apply "$PATCH_PATH"
-gofmt -w "$SOURCE_ROOT/engine/api/client/v1/client.go" "$SOURCE_ROOT/engine/api/server/server.go"
+git -C "$SOURCE_ROOT" apply --unidiff-zero --check "$PATCH_PATH"
+git -C "$SOURCE_ROOT" apply --unidiff-zero "$PATCH_PATH"
+gofmt -w \
+    "$SOURCE_ROOT/engine/api/client/v1/client.go" \
+    "$SOURCE_ROOT/engine/api/server/server.go" \
+    "$SOURCE_ROOT/engine/api/server/v1/handlers.go"
 
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 export GOPROXY=https://proxy.golang.org,direct

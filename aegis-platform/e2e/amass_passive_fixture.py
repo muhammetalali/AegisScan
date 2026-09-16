@@ -89,6 +89,7 @@ class HTTPSFixture(http.server.BaseHTTPRequestHandler):
                 + "</body></html>\n"
             ).encode("ascii")
             self.send_response(200)
+            print(f"AEGIS_AMASS_PASSIVE_FIXTURE_HIT {query['domain'][0]}", flush=True)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")

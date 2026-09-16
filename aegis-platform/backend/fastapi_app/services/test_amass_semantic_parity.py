@@ -73,13 +73,15 @@ def test_amass_parity_requires_exact_authenticated_source_build(tmp_path):
     source = Path(runtime.__file__).read_text(encoding='utf-8')
 
     assert 'AMASS_COMMIT="79299dce87b0085db0f2f4ef3e9c52cccb49f514"' in builder
-    assert 'git -C "$SOURCE_ROOT" apply --check "$PATCH_PATH"' in builder
+    assert 'git -C "$SOURCE_ROOT" apply --unidiff-zero --check "$PATCH_PATH"' in builder
     assert 'go build -trimpath -buildvcs=false' in builder
     assert 'engineAuthHeader = "X-Aegis-Amass-Token"' in patch
     assert 'subtle.ConstantTimeCompare' in patch
     assert 'clone.Header.Set(engineAuthHeader, t.token)' in patch
     assert 'headers.Set(engineAuthHeader, c.token)' in patch
     assert 'http.StatusUnauthorized' in patch
+    assert 'sessionConfig := config.NewConfig()' in patch
+    assert 'v.mgr.NewSession(sessionConfig)' in patch
     assert 'import secrets' in source
     assert 'env["AEGIS_AMASS_ENGINE_TOKEN"] = secrets.token_hex(32)' in source
     assert 'AEGIS_AMASS_ENGINE_TOKEN' not in runtime._minimal_environment(tmp_path / 'env')
