@@ -111,6 +111,18 @@ by the existing Amass normalizer. The stage fails closed when:
 - TCP/4000 remains occupied after execution;
 - the production ingress boundary exposes TCP/4000 externally.
 
+## CI harness integrity
+
+Readiness and boundary probes are part of the security evidence and must not introduce
+false negatives. Under `set -o pipefail`, a pipeline such as
+`docker logs ... | grep -q ...` can return exit 141 even when the expected line is
+present, because `grep -q` closes the pipe after the first match and the producer
+receives SIGPIPE.
+
+Amass Reality therefore captures container logs first and performs the assertion against
+the captured value. This preserves fail-closed semantics for the assertion while ensuring
+a successful readiness/boundary condition cannot be misclassified as a harness failure.
+
 ## Evidence
 
 The exact-head artifact must contain:
