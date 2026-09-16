@@ -249,7 +249,8 @@ jobs:
             --cert /tls/server.crt --key /tls/server.key \
             --fixture-ip "${AEGIS_AMASS_FIXTURE_IP}"
           for _ in $(seq 1 30); do
-            if docker logs aegis-amass-fixture 2>&1 | grep -q 'AEGIS_AMASS_PASSIVE_FIXTURE_READY'; then
+            fixture_logs="$(docker logs aegis-amass-fixture 2>&1 || true)"
+            if grep -Fq 'AEGIS_AMASS_PASSIVE_FIXTURE_READY' <<<"$fixture_logs"; then
               exit 0
             fi
             sleep 1
@@ -334,12 +335,14 @@ jobs:
               exec tail -f /dev/null
             '
           for _ in $(seq 1 30); do
-            if docker logs aegis-amass-dns-redirect 2>&1 | grep -q "dnat to ${AEGIS_AMASS_FIXTURE_IP}:53"; then
+            redirect_logs="$(docker logs aegis-amass-dns-redirect 2>&1 || true)"
+            if grep -Fq "dnat to ${AEGIS_AMASS_FIXTURE_IP}:53" <<<"$redirect_logs"; then
               break
             fi
             sleep 0.2
           done
-          docker logs aegis-amass-dns-redirect 2>&1 | grep -q "dnat to ${AEGIS_AMASS_FIXTURE_IP}:53"
+          redirect_logs="$(docker logs aegis-amass-dns-redirect 2>&1 || true)"
+          grep -Fq "dnat to ${AEGIS_AMASS_FIXTURE_IP}:53" <<<"$redirect_logs"
           docker exec -i aegis-amass-legacy python - <<'PY'
           import random
           import socket
@@ -631,12 +634,14 @@ jobs:
             -e SCANNER_EGRESS_PRIVATE_TARGETS=172.30.0.0/16 \
             aegis-amass:scanner-egress
           for _ in $(seq 1 30); do
-            if docker logs aegis-amass-egress 2>&1 | grep -q 'kernel egress policy installed'; then
+            egress_logs="$(docker logs aegis-amass-egress 2>&1 || true)"
+            if grep -Fq 'kernel egress policy installed' <<<"$egress_logs"; then
               break
             fi
             sleep 1
           done
-          docker logs aegis-amass-egress 2>&1 | grep -q 'kernel egress policy installed'
+          egress_logs="$(docker logs aegis-amass-egress 2>&1 || true)"
+          grep -Fq 'kernel egress policy installed' <<<"$egress_logs"
 
           docker run -d --name aegis-amass-port-server \
             --network container:aegis-amass-egress \
