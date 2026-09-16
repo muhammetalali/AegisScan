@@ -38,6 +38,10 @@ def test_parity_service_is_not_packaged_into_production_network_profile():
 
 
 def test_parity_runtime_matches_production_nmap_minimum_raw_socket_capability():
+    assert '--user 0:0' in WORKFLOW
     assert '--cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true' in WORKFLOW
     assert '--cap-add NET_ADMIN' not in WORKFLOW
+    assert '--cap-add SETUID' not in WORKFLOW
+    assert '--cap-add SETGID' not in WORKFLOW
+    assert '--cap-add SETPCAP' not in WORKFLOW
     assert 'test "$cap_eff" = "0000000000002000"' in WORKFLOW
