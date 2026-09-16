@@ -162,7 +162,7 @@ ENV AEGIS_RUNNER_PROFILE=code \
     PATH=/opt/aegis-code-tools/bin:${PATH}
 LABEL io.aegisscan.runner.profile=code
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3-pip=26.1.2+dfsg-1 python3-venv=3.14.6-1 \
+    && apt-get install -y --no-install-recommends python3-pip=26.1.2+dfsg-1 python3-venv=3.14.7-3 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log \
     && python3 -m venv /opt/aegis-code-tools \
     && /opt/aegis-code-tools/bin/pip install --disable-pip-version-check --no-cache-dir semgrep==1.177.0 checkov==3.3.16 \
