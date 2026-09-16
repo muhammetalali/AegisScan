@@ -116,8 +116,15 @@ def _assert_live_rules(repo: str, token: str, spec: dict[str, Any]) -> dict[str,
         raise RulesetAdminError("GitHub returned an unexpected ruleset detail")
     if detail.get("name") != name or detail.get("target") != "branch" or detail.get("enforcement") != "active":
         raise RulesetAdminError("named ruleset is not active with the expected identity")
-    if detail.get("bypass_actors") not in ([], None):
-        raise RulesetAdminError("named ruleset contains bypass actors")
+    bypass_actors = detail.get("bypass_actors")
+    if not isinstance(bypass_actors, list):
+        raise RulesetAdminError("named ruleset did not expose bypass_actors for verification")
+    if bypass_actors:
+        raise RulesetAdminError(f"named ruleset contains bypass actors: {bypass_actors}")
+    conditions = detail.get("conditions") or {}
+    live_includes = ((conditions.get("ref_name") or {}).get("include") or [])
+    if "~DEFAULT_BRANCH" not in live_includes and "refs/heads/main" not in live_includes:
+        raise RulesetAdminError("named ruleset does not target the default/main branch")
 
     branch = spec["target_branch"]
     branch_payload = _api_json("GET", f"/repos/{repo}/branches/{urllib.parse.quote(branch, safe='')}", token)
@@ -147,8 +154,16 @@ def _assert_live_rules(repo: str, token: str, spec: dict[str, Any]) -> dict[str,
         status_ok = status_ok or context in contexts
     if not status_ok or not strict_ok:
         raise RulesetAdminError("effective required-status-check rule is incomplete")
-    if not any((rule.get("parameters") or {}).get("required_review_thread_resolution") is True for rule in by_type["pull_request"]):
-        raise RulesetAdminError("effective pull-request rule does not require review-thread resolution")
+    spec_rules = {rule.get("type"): rule for rule in spec["ruleset"]["rules"] if isinstance(rule, dict)}
+    expected_approvals = int(
+        (spec_rules["pull_request"].get("parameters") or {}).get("required_approving_review_count", -1)
+    )
+    if not any(
+        (rule.get("parameters") or {}).get("required_review_thread_resolution") is True
+        and int((rule.get("parameters") or {}).get("required_approving_review_count", -1)) == expected_approvals
+        for rule in by_type["pull_request"]
+    ):
+        raise RulesetAdminError("effective pull-request rule does not match approval/thread policy")
     return {
         "repository": repo,
         "ruleset_id": ruleset_id,
