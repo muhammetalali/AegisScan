@@ -61,6 +61,10 @@ services:
       postgres: {condition: service_healthy}
 
   scanner_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.django
+      target: production-no-legacy-recon
     env_file: !reset []
     volumes: !reset []
     read_only: true
@@ -70,6 +74,7 @@ services:
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
       DJANGO_SETTINGS_MODULE: django_project.settings
       AEGIS_RECON_PROVIDER: ${AEGIS_RECON_PROVIDER:-default-kali}
+      AEGIS_RECON_LEGACY_DISABLED: "true"
       AEGIS_KALI_RECON_CANARY_BPS: ${AEGIS_KALI_RECON_CANARY_BPS:-0}
       AEGIS_KALI_RECON_URL: ${AEGIS_KALI_RECON_URL:-http://127.0.0.1:18765}
       AEGIS_KALI_RECON_AUTH_TOKEN: ${AEGIS_KALI_RECON_AUTH_TOKEN:-}

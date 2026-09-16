@@ -29,6 +29,7 @@ IMMUTABLE_IMAGE = "ghcr.io/aegisscan/kali-recon@" + IMAGE_DIGEST
 def _default_kali_environment() -> dict[str, str]:
     return {
         "AEGIS_RECON_PROVIDER": "default-kali",
+        "AEGIS_RECON_LEGACY_DISABLED": "true",
         "AEGIS_KALI_RECON_CANARY_BPS": "0",
         "AEGIS_KALI_RECON_IMAGE": IMMUTABLE_IMAGE,
         "AEGIS_KALI_RECON_URL": "http://127.0.0.1:18765",
@@ -75,7 +76,7 @@ def test_default_kali_preflight_rejects_raw_kali_and_canary_percentage():
     raw["AEGIS_RECON_PROVIDER"] = "kali"
     failures: list[str] = []
     preflight._check_recon_provider_rollout(raw, failures)
-    assert "AEGIS_RECON_PROVIDER must be legacy, canary, or default-kali in production" in failures
+    assert "AEGIS_RECON_PROVIDER must be default-kali after M6 legacy Recon retirement" in failures
 
     stale = _default_kali_environment()
     stale["AEGIS_KALI_RECON_CANARY_BPS"] = "1"
@@ -88,6 +89,7 @@ def test_default_kali_resolved_policy_requires_bound_provider_service():
     environment = _default_kali_environment()
     scanner_env = {
         "AEGIS_RECON_PROVIDER": environment["AEGIS_RECON_PROVIDER"],
+        "AEGIS_RECON_LEGACY_DISABLED": "true",
         "AEGIS_KALI_RECON_CANARY_BPS": "0",
         "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST": IMAGE_DIGEST,
     }
@@ -137,6 +139,7 @@ def test_default_kali_execution_plane_acceptance_proves_routing_and_attestation(
     assert "default-kali-parity-approved" in command
     assert "capability-not-parity-approved" not in command
     assert "_preflight_runtime_attestation" in command
+    assert "legacy_recon_disabled" in command
 
     monkeypatch.setattr(deploy, "_running_services", lambda *_: {"scanner_worker"})
     with pytest.raises(deploy.DeployError, match="kali_recon"):

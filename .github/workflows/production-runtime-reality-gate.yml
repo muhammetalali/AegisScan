@@ -107,8 +107,11 @@ jobs:
           AEGIS_BACKUP_S3_CREDENTIALS_FILE: /run/aegis-policy/s3.json
           AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /run/aegis-policy/backup.key
           AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
-          AEGIS_RECON_PROVIDER: legacy
+          AEGIS_RECON_PROVIDER: default-kali
           AEGIS_KALI_RECON_CANARY_BPS: '0'
+          AEGIS_KALI_RECON_IMAGE: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          COMPOSE_PROFILES: kali-recon
         run: |
           set -euo pipefail
           : > aegis-platform/backend/.env

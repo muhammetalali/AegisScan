@@ -1,0 +1,319 @@
+name: M6 Legacy Recon Retirement Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &m6_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_m6_legacy_recon_retirement.py'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/kali/**'
+      - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/production_policy_gate.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'aegis-platform/e2e/m3_dns_fixture.py'
+      - 'tests/test_m4_recon_production_safety.py'
+      - 'tests/test_m5_default_kali_production.py'
+      - 'tests/test_production_preflight.py'
+      - 'tests/test_production_policy_gate.py'
+      - 'tests/test_production_host_deploy.py'
+      - 'docs/M6_LEGACY_RECON_RETIREMENT.md'
+      - '.github/workflows/m6-legacy-recon-retirement-reality.yml'
+  push:
+    branches: [main]
+    paths: *m6_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m6-legacy-recon-retirement-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  retirement-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Compile retirement contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/kali_recon_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_m6_legacy_recon_retirement.py \
+            aegis-platform/scripts/production_preflight.py \
+            aegis-platform/scripts/production_policy_gate.py \
+            aegis-platform/scripts/production_host_deploy.py
+      - name: Prove retired routing fails closed
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_m6_legacy_recon_retirement.py
+          aegis-platform/backend/fastapi_app/services/test_m5_default_kali_routing.py
+          aegis-platform/backend/fastapi_app/services/test_recon_canary_routing.py
+      - name: Prove current production policy and rollback contracts
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider -p no:django --noconftest
+          tests/test_m4_recon_production_safety.py
+          tests/test_m5_default_kali_production.py
+          tests/test_production_preflight.py
+          tests/test_production_policy_gate.py
+          tests/test_production_host_deploy.py
+          aegis-platform/kali/tests/test_recon_compose_contract.py
+      - name: Prove resolved production Compose selects retirement target
+        env:
+          AUTHORIZED_SCAN_TARGETS: authorized.example.com
+          POSTGRES_PASSWORD: m6-compose-contract-password
+          SECRET_KEY: ci-m6-django-key-012345678901234567890123456789
+          JWT_SECRET_KEY: ci-m6-jwt-key-012345678901234567890123456789
+          DATABASE_URL: postgresql://aegis:m6-compose-contract-password@postgres:5432/aegisdb
+          REDIS_URL: redis://redis:6379/0
+          CELERY_BROKER_URL: redis://redis:6379/0
+          CELERY_RESULT_BACKEND: redis://redis:6379/0
+          CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+          CREDENTIAL_FINGERPRINT_KEY: ci-m6-browser-fingerprint-key-0123456789
+          AEGIS_BACKUP_S3_ENDPOINT: https://backups.example.com
+          AEGIS_BACKUP_S3_BUCKET: aegisscan-production-backups
+          AEGIS_BACKUP_S3_CREDENTIALS_FILE: /run/aegis-m6-policy/s3.json
+          AEGIS_BACKUP_ENCRYPTION_KEY_FILE: /run/aegis-m6-policy/backup.key
+          AEGIS_BACKUP_REQUIRE_VERSIONING: 'true'
+          AEGIS_RECON_PROVIDER: default-kali
+          AEGIS_KALI_RECON_CANARY_BPS: '0'
+          AEGIS_KALI_RECON_IMAGE: ghcr.io/aegisscan/kali-recon@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          AEGIS_KALI_RECON_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION: 0.1.0
+          AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+          COMPOSE_PROFILES: kali-recon
+        run: |
+          set -euo pipefail
+          docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.prod.yml \
+            -f aegis-platform/docker-compose.backup.yml \
+            config --format json > /tmp/m6-compose.json
+          python aegis-platform/scripts/production_policy_gate.py /tmp/m6-compose.json
+          python - <<'PY'
+          import json
+          model=json.load(open('/tmp/m6-compose.json'))
+          worker=model['services']['scanner_worker']
+          assert worker['build']['target']=='production-no-legacy-recon', worker['build']
+          assert worker['environment']['AEGIS_RECON_PROVIDER']=='default-kali'
+          assert worker['environment']['AEGIS_RECON_LEGACY_DISABLED']=='true'
+          assert str(worker['environment']['AEGIS_KALI_RECON_CANARY_BPS'])=='0'
+          PY
+      - name: Capture exact-head contract evidence
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/m6-retirement-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.m6-legacy-recon-retirement-contract.v1',
+              'production_provider':'default-kali',
+              'legacy_recon_disabled':True,
+              'canary_production_allowed':False,
+              'legacy_in_release_rollback_allowed':False,
+              'rollback_boundary':'previous-main-contained-release',
+              'retired_capabilities':['recon.amass','recon.dnsenum','recon.fierce','recon.subfinder'],
+              'production_scanner_target':'production-no-legacy-recon',
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m6-retirement-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-retired-runtime:
+    needs: retirement-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_M6_AUTH_TOKEN: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+      AEGIS_M6_NETWORK: aegis-m6-retirement
+      AEGIS_M6_DNS_IP: 172.30.0.53
+      AEGIS_M6_TARGET: parity.test
+      AEGIS_M6_CAPABILITY: recon.fierce
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build production scanner without legacy Recon
+        run: |
+          set -euo pipefail
+          docker build --no-cache --target production-no-legacy-recon \
+            -t aegis-m6:scanner \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+      - name: Prove retired executables are physically absent
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh aegis-m6:scanner -c '
+            set -eu
+            command -v nmap >/dev/null
+            command -v nuclei >/dev/null
+            for retired in amass aegis-amass-runtime subfinder dnsenum fierce; do
+              if command -v "$retired" >/dev/null 2>&1; then
+                echo "retired executable remains reachable: $retired" >&2
+                exit 1
+              fi
+            done
+          '
+      - name: Build exact governed Kali Recon runtime
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali-m6:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali-m6:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-recon \
+            -t aegis-kali-m6:recon \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+      - name: Derive immutable Kali deployment trust anchor
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali-m6:recon --format '{{.Id}}')"
+          case "$IMAGE_ID" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib,json
+          raw=open('runtime-manifest.json','rb').read(); runtime=json.loads(raw)
+          print('AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_RECON_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+      - name: Start deterministic authorized DNS fixture
+        run: |
+          set -euo pipefail
+          docker network create --internal --subnet 172.30.0.0/16 "${AEGIS_M6_NETWORK}"
+          docker run -d --name aegis-m6-dns \
+            --network "${AEGIS_M6_NETWORK}" --ip "${AEGIS_M6_DNS_IP}" \
+            --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/m3_dns_fixture.py:/fixture.py:ro" \
+            --entrypoint python aegis-m6:scanner /fixture.py
+          for _ in $(seq 1 30); do
+            if docker logs aegis-m6-dns 2>&1 | grep -q 'AEGIS_M3_DNS_FIXTURE_READY'; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-m6-dns; exit 1
+      - name: Start real governed Kali provider
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-m6-kali \
+            --network "${AEGIS_M6_NETWORK}" --dns "${AEGIS_M6_DNS_IP}" \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /run:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700 \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_M6_AUTH_TOKEN}" \
+            --entrypoint /usr/bin/tini "${AEGIS_KALI_RECON_IMAGE}" -- python3 /opt/aegis-runner/recon_service.py
+          for _ in $(seq 1 30); do
+            if docker exec aegis-m6-kali python3 -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18765/healthz',timeout=2)); assert d['status']=='ok'"; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-m6-kali; exit 1
+      - name: Execute real Recon only through retired production scanner
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts && chmod 0777 artifacts
+          docker run --rm -i \
+            --network container:aegis-m6-kali \
+            -v "$PWD/artifacts:/artifacts" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M6_TARGET},172.30.0.0/16" \
+            -e AEGIS_RECON_PROVIDER=default-kali \
+            -e AEGIS_RECON_LEGACY_DISABLED=true \
+            -e AEGIS_KALI_RECON_CANARY_BPS=0 \
+            -e AEGIS_KALI_RECON_AUTH_TOKEN="${AEGIS_M6_AUTH_TOKEN}" \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_RECON_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            -e AEGIS_M6_TARGET -e AEGIS_M6_CAPABILITY \
+            --entrypoint python aegis-m6:scanner - <<'PY'
+          import json,os
+          from fastapi_app.services.kali_recon_provider import (
+              KaliReconProviderError, execute_kali_recon, recon_provider_decision,
+          )
+          capabilities=('recon.amass','recon.dnsenum','recon.fierce','recon.subfinder')
+          decisions=[recon_provider_decision(item) for item in capabilities]
+          assert all(item.selected_provider=='kali' for item in decisions), decisions
+          os.environ['AEGIS_RECON_PROVIDER']='legacy'
+          try:
+              recon_provider_decision('recon.fierce')
+          except KaliReconProviderError as exc:
+              assert 'retired' in str(exc).lower(), exc
+          else:
+              raise AssertionError('legacy Recon route did not fail closed')
+          os.environ['AEGIS_RECON_PROVIDER']='default-kali'
+          result=execute_kali_recon(
+              capability_id=os.environ['AEGIS_M6_CAPABILITY'],
+              target=os.environ['AEGIS_M6_TARGET'],options={},timeout_seconds=300,
+              execution_ref='m6-retirement-real',authorization_ref='authorization:m6-reality',
+              scope_ref='project:m6-reality:asset:parity-test',state_getter=None,poll_interval=0.1,
+          )
+          assert result['exit_code']==0, result['stderr'][:2000]
+          assert result['stdout'].strip(), result
+          runtime=result['runtime']
+          assert runtime['provider']=='aegis-kali-recon'
+          assert runtime['image_digest']==os.environ['AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST']
+          json.dump({
+              'schema':'aegis.m6-legacy-recon-retirement-real.v1',
+              'capability_id':os.environ['AEGIS_M6_CAPABILITY'],
+              'target':result['target'],'exit_code':result['exit_code'],
+              'all_recon_selected_kali':True,'legacy_route_rejected':True,
+              'legacy_binaries_present':False,'runtime_provenance':runtime,
+          },open('/artifacts/m6-retirement-real.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Capture and upload exact-head evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          test "$(cat artifacts/head-sha.txt)" = "${AEGIS_EXACT_HEAD}"
+          test -s artifacts/m6-retirement-real.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m6-retirement-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-m6-kali aegis-m6-dns >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_M6_NETWORK}" >/dev/null 2>&1 || true

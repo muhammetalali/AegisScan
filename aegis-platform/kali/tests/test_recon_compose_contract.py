@@ -43,6 +43,18 @@ def test_scanner_worker_provider_selection_is_explicit_and_fail_closed():
     assert 'kali_recon:' not in block
 
 
+def test_production_scanner_retires_legacy_recon_binaries_and_routes():
+    production = (
+        Path(__file__).resolve().parents[2] / 'docker-compose.prod.yml'
+    ).read_text(encoding='utf-8')
+    start = production.index('  scanner_worker:')
+    end = production.index('  browser_worker:', start)
+    block = production[start:end]
+    assert 'target: production-no-legacy-recon' in block
+    assert 'AEGIS_RECON_PROVIDER: ${AEGIS_RECON_PROVIDER:-default-kali}' in block
+    assert 'AEGIS_RECON_LEGACY_DISABLED: "true"' in block
+
+
 def test_browser_worker_overrides_recon_provider_auth_token_to_empty():
     block = _service_block('browser_worker', 'celery_beat')
     assert 'AEGIS_KALI_RECON_AUTH_TOKEN: ""' in block

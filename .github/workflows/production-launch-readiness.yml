@@ -233,6 +233,7 @@ jobs:
           CSRF_TRUSTED_ORIGINS: https://security.example.com
           AUTHORIZED_SCAN_TARGETS: authorized.example.com,203.0.113.10
           AEGIS_RECON_PROVIDER: default-kali
+          AEGIS_RECON_LEGACY_DISABLED: 'true'
           AEGIS_KALI_RECON_CANARY_BPS: '0'
           AEGIS_KALI_RECON_IMAGE: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           AEGIS_KALI_RECON_URL: http://127.0.0.1:18765

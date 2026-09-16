@@ -62,7 +62,7 @@ FROM alpine/git:2.47.2 AS nuclei_templates
 RUN git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git /opt/nuclei-templates \
     && rm -rf /opt/nuclei-templates/.git
 
-FROM python:3.12-slim
+FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -205,4 +205,28 @@ EXPOSE 8000
 
 USER 10001:10001
 
+CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+
+# Production scanner target: the control-plane worker remains, but all legacy
+# Recon executables are physically absent. Recon can execute only through the
+# authenticated, attested Kali provider in the shared loopback namespace.
+FROM runtime AS production-no-legacy-recon
+USER root
+RUN rm -f \
+        /usr/local/bin/amass \
+        /usr/local/bin/aegis-amass-runtime \
+        /usr/local/bin/subfinder \
+        /usr/bin/dnsenum \
+        /usr/bin/fierce \
+    && ! command -v amass \
+    && ! command -v aegis-amass-runtime \
+    && ! command -v subfinder \
+    && ! command -v dnsenum \
+    && ! command -v fierce
+USER 10001:10001
+CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+
+# Keep the default target suitable for independent parity and rollback-reference
+# workflows. Production Compose explicitly selects production-no-legacy-recon.
+FROM runtime AS legacy-parity-reference
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]

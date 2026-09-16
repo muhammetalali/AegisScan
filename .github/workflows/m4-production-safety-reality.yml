@@ -96,7 +96,7 @@ jobs:
             'ALLOWED_HOSTS=localhost,nginx' \
             'AUTHORIZED_SCAN_TARGETS=production-m4.example' \
             'SCANNER_EGRESS_PRIVATE_TARGETS=' > backend/.env
-      - name: Prove active canary resolved model uses immutable matching image
+      - name: Prove active canary is retired from the current production release
         working-directory: aegis-platform
         env:
           AEGIS_RECON_PROVIDER: canary
@@ -107,39 +107,11 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.backup.yml --profile kali-recon config --format json > /tmp/m4-active-canary.json
-          python scripts/production_policy_gate.py /tmp/m4-active-canary.json
-      - name: Prove mutable active-canary image fails closed
-        working-directory: aegis-platform
-        env:
-          AEGIS_RECON_PROVIDER: canary
-          AEGIS_KALI_RECON_CANARY_BPS: '2500'
-          AEGIS_KALI_RECON_IMAGE: aegis-kali:recon
-          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          COMPOSE_PROFILES: kali-recon
-        run: |
-          set -euo pipefail
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.backup.yml --profile kali-recon config --format json > /tmp/m4-mutable-canary.json
-          if python scripts/production_policy_gate.py /tmp/m4-mutable-canary.json > /tmp/m4-mutable-result.json; then
-            echo 'mutable active-canary image unexpectedly passed policy' >&2
+          if python scripts/production_policy_gate.py /tmp/m4-active-canary.json > /tmp/m4-active-canary-result.json; then
+            echo 'retired active-canary mode unexpectedly passed current production policy' >&2
             exit 1
           fi
-          grep -q 'immutable' /tmp/m4-mutable-result.json
-      - name: Prove mismatched active-canary digest fails closed
-        working-directory: aegis-platform
-        env:
-          AEGIS_RECON_PROVIDER: canary
-          AEGIS_KALI_RECON_CANARY_BPS: '2500'
-          AEGIS_KALI_RECON_IMAGE: ghcr.io/aegisscan/kali-recon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-          COMPOSE_PROFILES: kali-recon
-        run: |
-          set -euo pipefail
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.backup.yml --profile kali-recon config --format json > /tmp/m4-mismatch-canary.json
-          if python scripts/production_policy_gate.py /tmp/m4-mismatch-canary.json > /tmp/m4-mismatch-result.json; then
-            echo 'mismatched active-canary image unexpectedly passed policy' >&2
-            exit 1
-          fi
-          grep -q 'does not match' /tmp/m4-mismatch-result.json
+          grep -q 'must be default-kali after M6 legacy Recon retirement' /tmp/m4-active-canary-result.json
       - name: Capture exact-head safety evidence
         shell: bash
         run: |
@@ -150,7 +122,7 @@ jobs:
           import json
           print(json.dumps({
               'schema':'aegis.m4-production-safety.v1',
-              'active_canary_immutable_image_binding':True,
+              'active_canary_retired_from_current_release':True,
               'rollback_forces_legacy_zero_bps':True,
               'active_canary_requires_internal_runtime_attestation':True,
               'public_acceptance_is_not_used_as_execution_plane_proof':True,

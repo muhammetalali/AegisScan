@@ -302,7 +302,8 @@ def _execution_plane_acceptance(
     if mode == "default-kali":
         command = (
             "from fastapi_app.services.kali_recon_provider import "
-            "_preflight_runtime_attestation,_trusted_expected_provenance,recon_provider_decision; "
+            "_preflight_runtime_attestation,_trusted_expected_provenance,legacy_recon_disabled,recon_provider_decision; "
+            "assert legacy_recon_disabled() is True; "
             "capabilities=('recon.fierce','recon.dnsenum','recon.subfinder','recon.amass'); "
             "decisions=[recon_provider_decision(capability) for capability in capabilities]; "
             "assert all(item.selected_provider == 'kali' for item in decisions); "

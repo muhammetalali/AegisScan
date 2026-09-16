@@ -39,7 +39,13 @@ def valid_model():
             command='celery -A fastapi_app.celery_app worker -Q default',
         ),
         'scanner_worker': scanner_handoff_service(
-            environment={'AUTHORIZED_SCAN_TARGETS':'security.example'},
+            environment={
+                'AUTHORIZED_SCAN_TARGETS':'security.example',
+                'AEGIS_RECON_PROVIDER':'default-kali',
+                'AEGIS_RECON_LEGACY_DISABLED':'true',
+                'AEGIS_KALI_RECON_CANARY_BPS':'0',
+                'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST':_IMAGE_DIGEST,
+            },
             command='sh /app/scanner-worker-entrypoint.sh',
             user='0:0',
             network_mode='service:scanner_egress',
@@ -65,6 +71,7 @@ def valid_model():
             cap_add=['NET_ADMIN'],
             environment={'SCANNER_EGRESS_PRIVATE_TARGETS':''},
         ),
+        'kali_recon': {'image': f'ghcr.io/aegisscan/kali-recon@{_IMAGE_DIGEST}'},
         'celery_beat': hardened_service(environment={'AUTHORIZED_SCAN_TARGETS':'security.example'}),
         'backup': hardened_service(
             user='10001:10001',
@@ -105,13 +112,21 @@ def test_rejects_raw_kali_override_in_production_policy():
     model = kali_model()
     model['services']['scanner_worker']['environment']['AEGIS_RECON_PROVIDER'] = 'kali'
     failures = MODULE.validate(model)
-    assert any('must be legacy, canary, or default-kali in production' in item for item in failures)
+    assert any('must be default-kali after M6 legacy Recon retirement' in item for item in failures)
 
 
-def test_legacy_mode_does_not_require_kali_recon_image_binding():
+def test_legacy_mode_is_rejected_after_retirement():
     model = valid_model()
-    model['services']['kali_recon'] = {'image': 'aegis-kali:recon'}
-    assert MODULE.validate(model) == []
+    model['services']['scanner_worker']['environment']['AEGIS_RECON_PROVIDER'] = 'legacy'
+    failures = MODULE.validate(model)
+    assert any('must be default-kali after M6 legacy Recon retirement' in item for item in failures)
+
+
+def test_missing_retirement_lock_is_rejected():
+    model = kali_model()
+    model['services']['scanner_worker']['environment']['AEGIS_RECON_LEGACY_DISABLED'] = 'false'
+    failures = MODULE.validate(model)
+    assert any('AEGIS_RECON_LEGACY_DISABLED must be explicitly true' in item for item in failures)
 
 
 def test_rejects_kali_recon_mutable_or_missing_image_selection():

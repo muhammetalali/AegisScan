@@ -7,6 +7,8 @@ name: M5 Default Kali Reality
       - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
       - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py'
       - 'aegis-platform/backend/fastapi_app/services/test_m5_default_kali_routing.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_m6_legacy_recon_retirement.py'
+      - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
       - 'aegis-platform/backend/fastapi_app/tasks/test_m5_default_kali_routing.py'
       - 'aegis-platform/docker-compose.prod.yml'
@@ -27,6 +29,8 @@ name: M5 Default Kali Reality
       - 'aegis-platform/backend/fastapi_app/services/kali_recon_provider.py'
       - 'aegis-platform/backend/fastapi_app/services/test_kali_recon_provider.py'
       - 'aegis-platform/backend/fastapi_app/services/test_m5_default_kali_routing.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_m6_legacy_recon_retirement.py'
+      - 'aegis-platform/backend/Dockerfile.django'
       - 'aegis-platform/backend/fastapi_app/tasks/native_capabilities.py'
       - 'aegis-platform/backend/fastapi_app/tasks/test_m5_default_kali_routing.py'
       - 'aegis-platform/docker-compose.prod.yml'
@@ -146,6 +150,7 @@ jobs:
           payload=json.load(open('/tmp/m5-compose.json'))
           worker=payload['services']['scanner_worker']['environment']
           assert worker['AEGIS_RECON_PROVIDER']=='default-kali'
+          assert worker['AEGIS_RECON_LEGACY_DISABLED']=='true'
           assert str(worker['AEGIS_KALI_RECON_CANARY_BPS'])=='0'
           assert worker['AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST']=='sha256:'+'e'*64
           assert payload['services']['kali_recon']['image'].endswith('@sha256:'+'e'*64)
@@ -166,8 +171,8 @@ jobs:
               'legacy_holdback_capabilities':[],
               'raw_kali_production_allowed':False,
               'silent_provider_fallback':False,
-              'rollback':'AEGIS_RECON_PROVIDER=legacy',
-              'm6_legacy_retirement_enabled':False,
+              'rollback':'previous-main-contained-release',
+              'm6_legacy_retirement_enabled':True,
           },sort_keys=True,indent=2))
           PY
       - uses: actions/upload-artifact@v4
@@ -441,7 +446,7 @@ jobs:
               'legacy_rollback_proven':True,
               'raw_kali_production_allowed':False,
               'silent_provider_fallback':False,
-              'm6_legacy_retirement_enabled':False,
+              'm6_legacy_retirement_enabled':True,
           }
           json.dump(evidence,open('/artifacts/m5-default-kali.json','w'),sort_keys=True,indent=2)
           print(json.dumps(parity.as_dict(),sort_keys=True))
