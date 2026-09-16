@@ -1,0 +1,289 @@
+name: Network Nmap Parity Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &nmap_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/nmap_parser.py'
+      - 'aegis-platform/backend/fastapi_app/services/nmap_finding_ingestion.py'
+      - 'aegis-platform/backend/fastapi_app/services/nmap_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nmap_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/scanner_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/tool_abstraction.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/security_scan.py'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/kali/tool-manifest.json'
+      - 'aegis-platform/kali/runner/profile_runtime_manifest.py'
+      - 'aegis-platform/kali/runner/network_nmap_parity_service.py'
+      - 'aegis-platform/kali/tests/test_network_nmap_parity_contract.py'
+      - 'aegis-platform/e2e/nmap_tcp_fixture.py'
+      - 'docs/NETWORK_NMAP_SEMANTIC_PARITY.md'
+      - '.github/workflows/network-nmap-parity-reality.yml'
+  push:
+    branches: [main]
+    paths: *nmap_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-nmap-parity-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused contract dependencies
+        run: python -m pip install pytest defusedxml
+      - name: Compile parity contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/kali/runner/network_nmap_parity_service.py \
+            aegis-platform/backend/fastapi_app/services/nmap_semantic_parity.py \
+            aegis-platform/backend/fastapi_app/services/test_nmap_semantic_parity.py \
+            aegis-platform/kali/tests/test_network_nmap_parity_contract.py \
+            aegis-platform/e2e/nmap_tcp_fixture.py
+      - name: Prove semantic comparator and parity-only boundary
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_nmap_semantic_parity.py
+          aegis-platform/kali/tests/test_network_nmap_parity_contract.py
+      - name: Capture exact-head contract evidence
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/network-nmap-parity-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-nmap-parity-contract.v1',
+              'capability_id':'network.nmap',
+              'candidate_profile':'network',
+              'candidate_mode':'parity-only',
+              'production_cutover':False,
+              'raw_command_fields_allowed':False,
+              'loopback_provider_required':True,
+              'semantic_fields':['ip','port','protocol','state','service','product','version'],
+              'real_dual_run_required':True,
+              'public_internet_fixture_allowed':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-parity-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-nmap-dual-run:
+    needs: parity-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_NMAP_NETWORK: aegis-nmap-parity
+      AEGIS_NMAP_TARGET: 172.31.0.10
+      AEGIS_NMAP_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact legacy scanner reference
+        run: |
+          set -euo pipefail
+          docker build --no-cache \
+            --target legacy-parity-reference \
+            -t aegis-nmap:legacy \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+      - name: Build exact governed Kali network runtime
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-network \
+            -t aegis-kali:network \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+          docker run --rm --entrypoint sh aegis-kali:network -c \
+            'nmap --version | grep -q "7.99" && command -v nmap >/dev/null'
+          docker run --rm --entrypoint cat aegis-kali:network \
+            /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY'
+          import json
+          runtime=json.load(open('runtime-manifest.json'))
+          assert runtime['profile']=='network', runtime
+          assert runtime['dispatch_enabled'] is False, runtime
+          assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
+          assert 'network.nmap' in runtime['profile_capabilities'], runtime
+          assert runtime['profile_tools']['nmap']['version']=='7.99+dfsg-1kali1', runtime
+          PY
+      - name: Start deterministic internal target and shared scanner namespace
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          chmod 0777 artifacts
+          docker network create --internal --subnet 172.31.0.0/24 "${AEGIS_NMAP_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_NMAP_NETWORK}")" = true
+          docker run -d --name aegis-nmap-fixture \
+            --network "${AEGIS_NMAP_NETWORK}" --ip "${AEGIS_NMAP_TARGET}" \
+            --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/nmap_tcp_fixture.py:/fixture.py:ro" \
+            --entrypoint python aegis-nmap:legacy /fixture.py
+          docker run -d --name aegis-nmap-legacy \
+            --network "${AEGIS_NMAP_NETWORK}" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_NMAP_TARGET}/32" \
+            -v "$PWD/artifacts:/artifacts" \
+            --entrypoint sleep aegis-nmap:legacy infinity
+          for _ in $(seq 1 30); do
+            if docker logs aegis-nmap-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-nmap-fixture
+          exit 1
+      - name: Execute real legacy Nmap through the production adapter
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nmap-legacy python - <<'PY'
+          import json
+          from fastapi_app.services.scanner_adapters import run_nmap
+          result=run_nmap('172.31.0.10', timeout=300)
+          assert result.exit_code == 0, result.stderr
+          open('/artifacts/legacy.xml','w',encoding='utf-8').write(result.stdout)
+          json.dump({'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'stderr':result.stderr},open('/artifacts/legacy-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Start parity-only Kali Nmap candidate in the scanner loopback namespace
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-nmap-kali \
+            --network container:aegis-nmap-legacy \
+            --user 10001:10001 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            -e AEGIS_KALI_NETWORK_PARITY_MODE=true \
+            -e AEGIS_KALI_NETWORK_PARITY_AUTH_TOKEN="${AEGIS_NMAP_AUTH_TOKEN}" \
+            -v "$PWD/aegis-platform/kali/runner/network_nmap_parity_service.py:/opt/aegis-runner/network_nmap_parity_service.py:ro" \
+            --entrypoint python3 aegis-kali:network \
+            /opt/aegis-runner/network_nmap_parity_service.py
+          for _ in $(seq 1 30); do
+            if docker exec aegis-nmap-legacy python - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nmap-kali
+          exit 1
+      - name: Execute candidate semantic intent and prove runtime binding
+        run: |
+          set -euo pipefail
+          docker exec -i \
+            -e AEGIS_NMAP_AUTH_TOKEN="${AEGIS_NMAP_AUTH_TOKEN}" \
+            aegis-nmap-legacy python - <<'PY'
+          import json, os, urllib.request
+          payload={
+              'schema_version':1,
+              'execution_ref':'nmap-parity-execution',
+              'authorization_ref':'nmap-parity-authorization',
+              'scope_ref':'project:parity:asset:nmap',
+              'capability_id':'network.nmap',
+              'target':'172.31.0.10',
+              'options':{},
+              'timeout_seconds':300,
+          }
+          req=urllib.request.Request(
+              'http://127.0.0.1:18766/v1/execute',
+              data=json.dumps(payload).encode(),
+              method='POST',
+              headers={
+                  'Content-Type':'application/json',
+                  'Accept':'application/json',
+                  'X-Aegis-Network-Parity-Token':os.environ['AEGIS_NMAP_AUTH_TOKEN'],
+              },
+          )
+          result=json.loads(urllib.request.urlopen(req,timeout=315).read())
+          assert result['status']=='completed', result
+          assert result['exit_code']==0, result
+          runtime=result['runtime']
+          assert runtime['provider']=='aegis-kali-network-parity', runtime
+          assert runtime['profile']=='network', runtime
+          assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
+          assert runtime['tool']=='nmap', runtime
+          assert runtime['tool_version']=='7.99+dfsg-1kali1', runtime
+          open('/artifacts/candidate.xml','w',encoding='utf-8').write(result['stdout'])
+          json.dump(result,open('/artifacts/candidate-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove finding-relevant Nmap semantic parity
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nmap-legacy python - <<'PY'
+          import json
+          from fastapi_app.services.nmap_semantic_parity import compare_nmap_semantics
+          legacy=open('/artifacts/legacy.xml',encoding='utf-8').read()
+          candidate=open('/artifacts/candidate.xml',encoding='utf-8').read()
+          comparison=compare_nmap_semantics(legacy,candidate)
+          assert comparison['equivalent'] is True, json.dumps(comparison,sort_keys=True,indent=2)
+          json.dump(comparison,open('/artifacts/semantic-parity.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Capture exact-head immutable evidence
+        run: |
+          set -euo pipefail
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          git rev-parse HEAD > artifacts/head-sha.txt
+          docker image inspect aegis-kali:network --format '{{.Id}}' > artifacts/kali-network-image-id.txt
+          docker image inspect aegis-nmap:legacy --format '{{.Id}}' > artifacts/legacy-image-id.txt
+          python - <<'PY' > artifacts/network-boundary.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-nmap-real-parity.v1',
+              'target':'172.31.0.10',
+              'fixture_network_internal':True,
+              'public_internet_fixture':False,
+              'candidate_loopback_only':True,
+              'candidate_production_dispatch':False,
+              'legacy_adapter_executed':True,
+              'kali_candidate_executed':True,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-parity-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-nmap-kali aegis-nmap-legacy aegis-nmap-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_NMAP_NETWORK}" >/dev/null 2>&1 || true
