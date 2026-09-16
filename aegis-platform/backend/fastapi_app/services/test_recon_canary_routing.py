@@ -28,16 +28,16 @@ def test_canary_zero_is_immediate_rollback_without_routing_key(monkeypatch):
     assert decision.reason == 'canary-rollback-zero'
 
 
-def test_canary_is_hard_bounded_and_only_parity_approved_capability_can_enter(monkeypatch):
+def test_canary_is_hard_bounded_and_promoted_amass_participates(monkeypatch):
     monkeypatch.setenv('AEGIS_RECON_PROVIDER', 'canary')
     monkeypatch.setenv('AEGIS_KALI_RECON_CANARY_BPS', '2500')
 
-    unapproved = provider.recon_provider_decision('recon.amass', routing_key='scan-1')
-    assert unapproved.selected_provider == 'legacy'
-    assert unapproved.recon_capability is True
-    assert unapproved.parity_approved is False
-    assert unapproved.bucket is None
-    assert unapproved.reason == 'capability-not-parity-approved'
+    amass = provider.recon_provider_decision('recon.amass', routing_key='scan-1')
+    assert amass.selected_provider in {'kali', 'legacy'}
+    assert amass.recon_capability is True
+    assert amass.parity_approved is True
+    assert amass.bucket is not None
+    assert amass.reason in {'canary-selected', 'canary-holdback'}
 
     monkeypatch.setenv('AEGIS_KALI_RECON_CANARY_BPS', '2501')
     with pytest.raises(provider.KaliReconProviderError, match='0 to 2500'):
