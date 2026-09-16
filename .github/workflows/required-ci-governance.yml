@@ -1,0 +1,31 @@
+name: Required CI Governance
+
+'on':
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: required-ci-governance-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance:
+    name: Aegis Required CI Governance
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile governance verifier
+        run: python3 -m py_compile scripts/ci/required_ci_governance.py
+      - name: Enforce exact-SHA required CI policy
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/required_ci_governance.py .github/governance/required-ci-policy.json
