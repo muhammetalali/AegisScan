@@ -1,0 +1,40 @@
+name: Repository Governance Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/governance/**'
+      - '.github/workflows/required-ci-governance.yml'
+      - '.github/workflows/repository-governance-reality.yml'
+      - 'scripts/ci/required_ci_governance.py'
+      - 'scripts/ci/repository_governance_reality.py'
+      - 'docs/REPOSITORY_GOVERNANCE.md'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-governance-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance-reality:
+    name: Repository Governance Reality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile governance scripts
+        run: python3 -m py_compile scripts/ci/required_ci_governance.py scripts/ci/repository_governance_reality.py
+      - name: Validate governance policy contract
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/ci/repository_governance_reality.py .github/governance/main-ruleset-spec.json --mode spec
+      - name: Prove live main rules
+        if: github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/repository_governance_reality.py .github/governance/main-ruleset-spec.json --mode live
