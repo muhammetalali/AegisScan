@@ -118,7 +118,7 @@ LABEL io.aegisscan.runner.profile=web
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       curl=8.21.0-2 gobuster=3.8.2-1 ffuf=2.2.1-1 dirb=2.22+dfsg-7 wafw00f=2.4.2-1 \
-      perl=5.42.2-3 libjson-perl=4.10000-1 libxml-writer-perl=0.900-2 libnet-ssleay-perl=1.96-1+b1 \
+      perl=5.42.3-1 libjson-perl=4.10000-1 libxml-writer-perl=0.900-2 libnet-ssleay-perl=1.96-1+b1 \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
 COPY --from=go-tools /go/bin/httpx /usr/local/bin/httpx
