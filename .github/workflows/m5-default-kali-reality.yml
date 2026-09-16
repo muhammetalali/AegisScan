@@ -162,8 +162,8 @@ jobs:
           print(json.dumps({
               'schema':'aegis.m5-default-kali-contract.v1',
               'default_provider':'default-kali',
-              'parity_approved_capabilities':['recon.dnsenum','recon.fierce','recon.subfinder'],
-              'legacy_holdback_capabilities':['recon.amass'],
+              'parity_approved_capabilities':['recon.amass','recon.dnsenum','recon.fierce','recon.subfinder'],
+              'legacy_holdback_capabilities':[],
               'raw_kali_production_allowed':False,
               'silent_provider_fallback':False,
               'rollback':'AEGIS_RECON_PROVIDER=legacy',
@@ -280,16 +280,13 @@ jobs:
           approved=recon_provider_decision('recon.fierce')
           dnsenum=recon_provider_decision('recon.dnsenum')
           subfinder=recon_provider_decision('recon.subfinder')
-          held={cap:recon_provider_decision(cap).as_dict() for cap in ('recon.amass',)}
-          assert approved.selected_provider=='kali'
-          assert approved.reason=='default-kali-parity-approved'
-          assert dnsenum.selected_provider=='kali'
-          assert dnsenum.reason=='default-kali-parity-approved'
-          assert subfinder.selected_provider=='kali'
-          assert subfinder.reason=='default-kali-parity-approved'
-          assert all(item['selected_provider']=='legacy' for item in held.values())
-          assert all(item['reason']=='capability-not-parity-approved' for item in held.values())
-          json.dump({'approved':approved.as_dict(),'dnsenum':dnsenum.as_dict(),'subfinder':subfinder.as_dict(),'held_legacy':held},open('/artifacts/routing-boundary.json','w'),sort_keys=True,indent=2)
+          amass=recon_provider_decision('recon.amass')
+          held={}
+          for decision in (approved,dnsenum,subfinder,amass):
+              assert decision.selected_provider=='kali'
+              assert decision.parity_approved is True
+              assert decision.reason=='default-kali-parity-approved'
+          json.dump({'approved':approved.as_dict(),'dnsenum':dnsenum.as_dict(),'subfinder':subfinder.as_dict(),'amass':amass.as_dict(),'held_legacy':held},open('/artifacts/routing-boundary.json','w'),sort_keys=True,indent=2)
           PY
 
       - name: Execute real legacy rollback reference
@@ -418,7 +415,8 @@ jobs:
           assert boundary['approved']['selected_provider']=='kali'
           assert boundary['dnsenum']['selected_provider']=='kali'
           assert boundary['subfinder']['selected_provider']=='kali'
-          assert all(item['selected_provider']=='legacy' for item in boundary['held_legacy'].values())
+          assert boundary['amass']['selected_provider']=='kali'
+          assert boundary['held_legacy']=={}
           os.environ['AEGIS_RECON_PROVIDER']='legacy'
           os.environ['AEGIS_KALI_RECON_CANARY_BPS']='0'
           rollback=routing.recon_provider_decision(capability)
@@ -429,11 +427,12 @@ jobs:
               'fixture':'deterministic-authorized-local-dns-v1',
               'default_provider':'default-kali',
               'capability_id':capability,
-              'parity_approved_capabilities':['recon.dnsenum','recon.fierce','recon.subfinder'],
+              'parity_approved_capabilities':['recon.amass','recon.dnsenum','recon.fierce','recon.subfinder'],
               'held_legacy_capabilities':sorted(boundary['held_legacy']),
               'default_routing_decision':boundary['approved'],
               'dnsenum_routing_decision':boundary['dnsenum'],
               'subfinder_routing_decision':boundary['subfinder'],
+              'amass_routing_decision':boundary['amass'],
               'default_runtime':kali['runtime_provenance'],
               'rollback_runtime':legacy['runtime_provenance'],
               'legacy_normalized':legacy_normalized,

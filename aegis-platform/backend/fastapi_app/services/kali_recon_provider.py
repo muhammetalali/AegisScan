@@ -30,7 +30,7 @@ _RECON_CAPABILITIES = frozenset(_RECON_TOOL_BY_CAPABILITY)
 _ROUTING_SCHEMA = 'aegis.recon-provider-routing.v1'
 _CANARY_BUCKET_COUNT = 10_000
 _MAX_CANARY_BPS = 2_500
-_PARITY_APPROVED_CAPABILITIES = frozenset({'recon.dnsenum', 'recon.fierce', 'recon.subfinder'})
+_PARITY_APPROVED_CAPABILITIES = frozenset({'recon.amass', 'recon.dnsenum', 'recon.fierce', 'recon.subfinder'})
 
 
 @dataclass(frozen=True)

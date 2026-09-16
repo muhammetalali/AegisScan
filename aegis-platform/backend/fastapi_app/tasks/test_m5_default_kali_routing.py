@@ -19,7 +19,7 @@ def _authorization():
 
 @pytest.mark.parametrize(
     ("capability_id", "tool"),
-    (("recon.fierce", "fierce"), ("recon.dnsenum", "dnsenum"), ("recon.subfinder", "subfinder")),
+    (("recon.amass", "amass"), ("recon.fierce", "fierce"), ("recon.dnsenum", "dnsenum"), ("recon.subfinder", "subfinder")),
 )
 def test_default_kali_executes_parity_approved_recon_through_provider(monkeypatch, capability_id, tool):
     monkeypatch.setenv("AEGIS_RECON_PROVIDER", "default-kali")
@@ -72,42 +72,30 @@ def test_default_kali_executes_parity_approved_recon_through_provider(monkeypatc
     assert provenance["routing_decision"]["reason"] == "default-kali-parity-approved"
 
 
-def test_default_kali_keeps_unapproved_recon_on_legacy(monkeypatch):
+def test_default_kali_selected_amass_failure_does_not_fall_back_to_legacy(monkeypatch):
     monkeypatch.setenv("AEGIS_RECON_PROVIDER", "default-kali")
     monkeypatch.setenv("AEGIS_KALI_RECON_CANARY_BPS", "0")
-    calls = []
 
-    def legacy(*args, **kwargs):
-        calls.append((args, kwargs))
-        return ScanResult(
-            tool="amass",
-            target="example.com",
-            exit_code=0,
-            stdout="legacy",
-            stderr="",
-        )
-
-    monkeypatch.setattr(native_task, "run_native_tool", legacy)
+    monkeypatch.setattr(
+        native_task,
+        "run_native_tool",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("selected Kali Amass failure silently reached legacy runtime")
+        ),
+    )
     monkeypatch.setattr(
         native_task,
         "execute_kali_recon",
-        lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("unapproved Recon capability reached Kali provider")
-        ),
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("candidate failure")),
     )
 
-    result, provenance = native_task._execute_runtime(
-        capability_id="recon.amass",
-        target="example.com",
-        options={},
-        scan=_scan("m5-unapproved"),
-        authorization=_authorization(),
-        spec=get_native_tool_spec("recon.amass"),
-        credential_materials=(),
-    )
-
-    assert result.stdout == "legacy"
-    assert len(calls) == 1
-    assert provenance["provider"] == "legacy-native-worker"
-    assert provenance["routing_decision"]["selected_provider"] == "legacy"
-    assert provenance["routing_decision"]["reason"] == "capability-not-parity-approved"
+    with pytest.raises(RuntimeError, match="candidate failure"):
+        native_task._execute_runtime(
+            capability_id="recon.amass",
+            target="example.com",
+            options={},
+            scan=_scan("m5-amass-no-fallback"),
+            authorization=_authorization(),
+            spec=get_native_tool_spec("recon.amass"),
+            credential_materials=(),
+        )

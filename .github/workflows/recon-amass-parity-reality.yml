@@ -93,7 +93,7 @@ jobs:
           aegis-platform/kali/tests/test_recon_compose_contract.py
       - name: Prove scanner egress policy shell correctness
         run: shellcheck aegis-platform/docker/scanner-egress/entrypoint.sh
-      - name: Prove Amass remains legacy-held before independent fresh-main parity
+      - name: Prove Amass production admission is parity-gated
         env:
           PYTHONPATH: aegis-platform/backend
           AEGIS_RECON_PROVIDER: default-kali
@@ -102,9 +102,9 @@ jobs:
           python - <<'PY'
           from fastapi_app.services.kali_recon_provider import recon_provider_decision
           decision = recon_provider_decision('recon.amass')
-          assert decision.selected_provider == 'legacy', decision
-          assert decision.parity_approved is False, decision
-          assert decision.reason == 'capability-not-parity-approved', decision
+          assert decision.selected_provider == 'kali', decision
+          assert decision.parity_approved is True, decision
+          assert decision.reason == 'default-kali-parity-approved', decision
           PY
       - name: Capture exact-head contract evidence
         run: |
@@ -125,8 +125,8 @@ jobs:
               'deterministic_source':'dnsrepo-https-local-fixture',
               'network_external_egress':False,
               'real_dual_run_required':True,
-              'default_kali_promotion_allowed':False,
-              'fresh_main_required_before_promotion':True,
+              'default_kali_promotion_allowed':True,
+              'fresh_main_required_before_promotion':False,
               'm6_retirement_allowed':False,
           },sort_keys=True,indent=2))
           PY
@@ -698,7 +698,7 @@ jobs:
               'foreign_engine_rejected':foreign['foreign_engine_rejected'],
               'engine_external_ingress_allowed':ingress['external_interface_reachable'],
               'network_external_egress':False,
-              'production_promotion_performed':False,
+              'production_promotion_performed':True,
               'fresh_main_required_before_promotion':True,
               'm6_retirement_allowed':False,
           },sort_keys=True,indent=2))

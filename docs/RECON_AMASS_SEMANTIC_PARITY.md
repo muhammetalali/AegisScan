@@ -6,9 +6,9 @@ This stage proves that `recon.amass` can move from the legacy native worker to t
 governed Kali Recon provider without changing the normalized security meaning of the
 execution and without weakening runtime isolation.
 
-This document is a parity gate, not a production promotion decision. Amass remains
-legacy-routed under `default-kali` until an independent fresh-main parity run is green
-and a separate reviewed promotion change admits it to the parity-approved set.
+The independent parity gate is complete on exact PR head and fresh main. The reviewed
+promotion phase admits Amass to the parity-approved `default-kali` set while retaining
+the explicit legacy rollback mode and keeping M6 Legacy Retirement separately gated.
 
 ## Why Amass requires a managed runtime
 
@@ -138,15 +138,13 @@ The exact-head artifact must contain:
 
 ## Promotion boundary
 
-This parity PR deliberately keeps:
+The completed parity evidence permits the reviewed promotion to:
 
-- `recon.amass` out of `_PARITY_APPROVED_CAPABILITIES`;
-- `default-kali` routing for Amass on the legacy native worker;
-- M6 Legacy Retirement blocked.
-
-Only after this workflow passes on the exact PR head, the PR is merged with a verified
-expected-head SHA, and the same real dual-run passes on the resulting exact `main` SHA
-may the separate Amass promotion PR be opened.
+- include `recon.amass` in `_PARITY_APPROVED_CAPABILITIES`;
+- route Amass through governed Kali under `default-kali`;
+- preserve `AEGIS_RECON_PROVIDER=legacy` as the explicit emergency rollback;
+- preserve fail-closed behavior with no silent provider fallback;
+- keep M6 Legacy Retirement disabled until its own retirement proof is complete.
 
 ## Exit gate
 
@@ -162,4 +160,4 @@ Amass parity is complete only when:
 8. exact-head CI is terminal green and branch divergence is zero;
 9. exact-main fresh Reality is terminal green and its artifact is inspected.
 
-Until then, Amass remains legacy-held and M6 remains closed.
+Amass is no longer legacy-held under default-Kali after promotion; M6 remains closed until the separate retirement phase is proven.

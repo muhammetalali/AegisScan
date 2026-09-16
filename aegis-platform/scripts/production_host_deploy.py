@@ -303,10 +303,11 @@ def _execution_plane_acceptance(
         command = (
             "from fastapi_app.services.kali_recon_provider import "
             "_preflight_runtime_attestation,_trusted_expected_provenance,recon_provider_decision; "
-            "approved=recon_provider_decision('recon.fierce'); "
-            "unapproved=recon_provider_decision('recon.subfinder'); "
-            "assert approved.selected_provider == 'kali' and approved.reason == 'default-kali-parity-approved'; "
-            "assert unapproved.selected_provider == 'legacy' and unapproved.reason == 'capability-not-parity-approved'; "
+            "capabilities=('recon.fierce','recon.dnsenum','recon.subfinder','recon.amass'); "
+            "decisions=[recon_provider_decision(capability) for capability in capabilities]; "
+            "assert all(item.selected_provider == 'kali' for item in decisions); "
+            "assert all(item.parity_approved is True for item in decisions); "
+            "assert all(item.reason == 'default-kali-parity-approved' for item in decisions); "
             "_preflight_runtime_attestation(_trusted_expected_provenance())"
         )
     elif active_kali:
