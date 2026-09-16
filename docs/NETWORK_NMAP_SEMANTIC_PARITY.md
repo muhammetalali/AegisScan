@@ -22,6 +22,7 @@ The parity candidate:
 - accepts only semantic `network.nmap` intent, never raw command/argv/binary fields;
 - executes the same fixed Nmap shape as the legacy adapter: `-Pn -sV -oX - -- <target>`;
 - uses the pinned `profile-network` Nmap and immutable runtime/tool-manifest provenance;
+- mirrors the current production raw-scan requirement with UID 0 but narrows Linux capabilities to `CAP_NET_RAW` only; the candidate does not receive the production worker's `SETUID`, `SETGID`, or `SETPCAP` capabilities;
 - rejects any runtime whose production dispatch state is not `accepted-no-dispatch`.
 
 ## Reality gate
