@@ -31,6 +31,7 @@ _ROUTING_SCHEMA = 'aegis.recon-provider-routing.v1'
 _CANARY_BUCKET_COUNT = 10_000
 _MAX_CANARY_BPS = 2_500
 _PARITY_APPROVED_CAPABILITIES = frozenset({'recon.amass', 'recon.dnsenum', 'recon.fierce', 'recon.subfinder'})
+_TRUTHY = frozenset({'1', 'true', 'yes', 'on'})
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,17 @@ def provider_mode() -> str:
     return mode
 
 
+def legacy_recon_disabled() -> bool:
+    return os.getenv('AEGIS_RECON_LEGACY_DISABLED', '').strip().lower() in _TRUTHY
+
+
+def _reject_retired_legacy_route(capability_id: str, reason: str) -> None:
+    if legacy_recon_disabled():
+        raise KaliReconProviderError(
+            f'Legacy Recon execution is retired; {capability_id} cannot select the legacy provider ({reason})'
+        )
+
+
 def _canary_bps() -> int:
     raw = os.getenv('AEGIS_KALI_RECON_CANARY_BPS', '0').strip()
     if not re.fullmatch(r'\d{1,5}', raw):
@@ -98,6 +110,10 @@ def recon_provider_decision(capability_id: str, *, routing_key: str | None = Non
     parity_approved = capability in _PARITY_APPROVED_CAPABILITIES
 
     if not recon_capability:
+        if legacy_recon_disabled() and capability.startswith('recon.'):
+            raise KaliReconProviderError(
+                f'Legacy Recon execution is retired; unknown Recon capability {capability!r} is not admitted'
+            )
         return ReconProviderDecision(
             schema=_ROUTING_SCHEMA,
             mode=mode,
@@ -112,6 +128,7 @@ def recon_provider_decision(capability_id: str, *, routing_key: str | None = Non
         )
 
     if mode == 'legacy':
+        _reject_retired_legacy_route(capability, 'legacy-default')
         return ReconProviderDecision(
             schema=_ROUTING_SCHEMA,
             mode=mode,
@@ -127,6 +144,7 @@ def recon_provider_decision(capability_id: str, *, routing_key: str | None = Non
 
     if mode == 'default-kali':
         if not parity_approved:
+            _reject_retired_legacy_route(capability, 'capability-not-parity-approved')
             return ReconProviderDecision(
                 schema=_ROUTING_SCHEMA,
                 mode=mode,
@@ -168,6 +186,7 @@ def recon_provider_decision(capability_id: str, *, routing_key: str | None = Non
 
     canary_bps = _canary_bps()
     if not parity_approved:
+        _reject_retired_legacy_route(capability, 'capability-not-parity-approved')
         return ReconProviderDecision(
             schema=_ROUTING_SCHEMA,
             mode=mode,
@@ -181,6 +200,7 @@ def recon_provider_decision(capability_id: str, *, routing_key: str | None = Non
             reason='capability-not-parity-approved',
         )
     if canary_bps == 0:
+        _reject_retired_legacy_route(capability, 'canary-rollback-zero')
         return ReconProviderDecision(
             schema=_ROUTING_SCHEMA,
             mode=mode,
@@ -196,6 +216,8 @@ def recon_provider_decision(capability_id: str, *, routing_key: str | None = Non
 
     digest, bucket = _routing_key_digest(capability, routing_key or '')
     selected = bucket < canary_bps
+    if not selected:
+        _reject_retired_legacy_route(capability, 'canary-holdback')
     return ReconProviderDecision(
         schema=_ROUTING_SCHEMA,
         mode=mode,

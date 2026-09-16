@@ -235,24 +235,24 @@ def _check_remote_backup(environment: dict[str, str], failures: list[str]) -> No
 
 def _check_recon_provider_rollout(environment: dict[str, str], failures: list[str]) -> None:
     mode = environment.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
+    legacy_disabled = _truthy(environment.get("AEGIS_RECON_LEGACY_DISABLED", ""))
     raw_bps = environment.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip()
     try:
         canary_bps = int(raw_bps)
     except ValueError:
         canary_bps = -1
 
-    if mode not in {"legacy", "canary", "default-kali"}:
-        failures.append("AEGIS_RECON_PROVIDER must be legacy, canary, or default-kali in production")
+    if mode != "default-kali":
+        failures.append("AEGIS_RECON_PROVIDER must be default-kali after M6 legacy Recon retirement")
+        return
+    if not legacy_disabled:
+        failures.append("AEGIS_RECON_LEGACY_DISABLED must be explicitly true after M6 retirement")
         return
     if canary_bps < 0 or canary_bps > 2500 or str(canary_bps) != raw_bps:
         failures.append("AEGIS_KALI_RECON_CANARY_BPS must be a canonical integer from 0 to 2500")
         return
-    if mode in {"legacy", "default-kali"} and canary_bps != 0:
+    if canary_bps != 0:
         failures.append(f"AEGIS_KALI_RECON_CANARY_BPS must be 0 while AEGIS_RECON_PROVIDER={mode}")
-        return
-    if mode == "legacy":
-        return
-    if mode == "canary" and canary_bps == 0:
         return
 
     parsed = urlparse(environment.get("AEGIS_KALI_RECON_URL", "").strip())

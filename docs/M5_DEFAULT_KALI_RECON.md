@@ -83,17 +83,12 @@ scanner_worker that:
 Public HTTPS acceptance remains a separate application availability proof and is not used
 as evidence of scanner execution-plane readiness.
 
-## Rollback
+## Rollback after M6
 
-Emergency rollback remains explicit and pre-M4 compatible:
-
-AEGIS_RECON_PROVIDER=legacy
-AEGIS_KALI_RECON_CANARY_BPS=0
-
-The deployment layer removes the kali-recon Compose profile during rollback and re-validates
-the legacy execution plane before public acceptance.
-
-The M4 zero-BPS canary rollback remains supported as an intermediate operational state.
+M5 originally retained explicit legacy and zero-BPS canary rollback modes. M6 retires
+those routes from the current production release. Recovery now checks out a prior,
+main-contained release and redeploys its compatible legacy configuration only when the
+migration-safety gate permits rollback. See `M6_LEGACY_RECON_RETIREMENT.md`.
 
 ## Reality proof
 
@@ -139,4 +134,5 @@ M5 is complete only after:
   terminal green;
 - exact-main M5 artifacts are inspected and bound to the current main SHA.
 
-All current Recon capabilities are now parity-admitted to default-Kali. M6 Legacy Retirement remains a separate gated phase and is not enabled by this promotion.
+All current Recon capabilities are parity-admitted to default-Kali. M6 adds the separately
+proven production retirement lock and stripped scanner image.

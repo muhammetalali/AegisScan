@@ -61,26 +61,26 @@ def _immutable_image_digest(value) -> str | None:
 
 def _validate_recon_image_binding(services: dict, scanner_env: dict, failures: list[str]) -> None:
     recon_provider = str(scanner_env.get('AEGIS_RECON_PROVIDER', 'legacy')).strip().lower() or 'legacy'
+    legacy_disabled = str(scanner_env.get('AEGIS_RECON_LEGACY_DISABLED', '')).strip().lower() in _TRUTHY
     raw_bps = str(scanner_env.get('AEGIS_KALI_RECON_CANARY_BPS', '0')).strip()
     try:
         canary_bps = int(raw_bps)
     except ValueError:
         canary_bps = -1
 
-    if recon_provider not in {'legacy', 'canary', 'default-kali'}:
-        failures.append('AEGIS_RECON_PROVIDER must be legacy, canary, or default-kali in production')
+    if recon_provider != 'default-kali':
+        failures.append('AEGIS_RECON_PROVIDER must be default-kali after M6 legacy Recon retirement')
+        return
+    if not legacy_disabled:
+        failures.append('AEGIS_RECON_LEGACY_DISABLED must be explicitly true after M6 retirement')
         return
     if canary_bps < 0 or canary_bps > 2500 or str(canary_bps) != raw_bps:
         failures.append('AEGIS_KALI_RECON_CANARY_BPS must be a canonical integer from 0 to 2500')
         return
-    if recon_provider in {'legacy', 'default-kali'} and canary_bps != 0:
+    if canary_bps != 0:
         failures.append(
             f'AEGIS_KALI_RECON_CANARY_BPS must be 0 while AEGIS_RECON_PROVIDER={recon_provider}'
         )
-        return
-
-    requires_binding = recon_provider == 'default-kali' or (recon_provider == 'canary' and canary_bps > 0)
-    if not requires_binding:
         return
 
     kali_recon = services.get('kali_recon')

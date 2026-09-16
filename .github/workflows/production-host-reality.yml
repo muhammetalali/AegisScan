@@ -76,6 +76,7 @@ jobs:
           test "$(stat -c '%s' /tmp/aegis-runtime/secrets/backup-encryption.key)" = 32
           cat >>/tmp/aegis-runtime/production.env <<'EOF'
           AEGIS_RECON_PROVIDER=default-kali
+          AEGIS_RECON_LEGACY_DISABLED=true
           AEGIS_KALI_RECON_CANARY_BPS=0
           AEGIS_KALI_RECON_IMAGE=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           AEGIS_KALI_RECON_URL=http://127.0.0.1:18765

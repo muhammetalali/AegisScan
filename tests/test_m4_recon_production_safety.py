@@ -43,37 +43,24 @@ def _active_canary_environment() -> dict[str, str]:
     }
 
 
-def test_preflight_active_canary_requires_matching_immutable_image_selector():
+def test_preflight_retires_active_canary_from_current_production_release():
     environment = _active_canary_environment()
     failures: list[str] = []
     preflight._check_recon_provider_rollout(environment, failures)
-    assert failures == []
-
-    for image in ("", "aegis-kali:recon", "ghcr.io/aegisscan/kali-recon:latest"):
-        broken = dict(environment)
-        broken["AEGIS_KALI_RECON_IMAGE"] = image
-        failures = []
-        preflight._check_recon_provider_rollout(broken, failures)
-        assert any("AEGIS_KALI_RECON_IMAGE" in item and "immutable" in item for item in failures), failures
-
-    broken = dict(environment)
-    broken["AEGIS_KALI_RECON_IMAGE"] = "ghcr.io/aegisscan/kali-recon@" + OTHER_DIGEST
-    failures = []
-    preflight._check_recon_provider_rollout(broken, failures)
-    assert any("must match" in item for item in failures), failures
+    assert any("must be default-kali after M6" in item for item in failures)
 
 
-def test_preflight_legacy_and_zero_bps_rollback_do_not_require_provider_image():
+def test_preflight_legacy_and_zero_bps_canary_are_not_current_release_modes():
     for environment in (
         {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"},
         {"AEGIS_RECON_PROVIDER": "canary", "AEGIS_KALI_RECON_CANARY_BPS": "0"},
     ):
         failures: list[str] = []
         preflight._check_recon_provider_rollout(environment, failures)
-        assert failures == []
+        assert any("must be default-kali after M6" in item for item in failures)
 
 
-def test_resolved_policy_binds_active_canary_image_to_expected_digest():
+def test_resolved_policy_retires_active_canary():
     scanner_env = {
         "AEGIS_RECON_PROVIDER": "canary",
         "AEGIS_KALI_RECON_CANARY_BPS": "2500",
@@ -82,31 +69,17 @@ def test_resolved_policy_binds_active_canary_image_to_expected_digest():
     services = {"kali_recon": {"image": IMMUTABLE_IMAGE}}
     failures: list[str] = []
     policy._validate_recon_image_binding(services, scanner_env, failures)
-    assert failures == []
-
-    failures = []
-    policy._validate_recon_image_binding({}, scanner_env, failures)
-    assert any("requires the kali_recon production service" in item for item in failures)
-
-    failures = []
-    policy._validate_recon_image_binding({"kali_recon": {"image": "aegis-kali:recon"}}, scanner_env, failures)
-    assert any("immutable" in item for item in failures)
-
-    mismatched = dict(scanner_env)
-    mismatched["AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST"] = OTHER_DIGEST
-    failures = []
-    policy._validate_recon_image_binding(services, mismatched, failures)
-    assert any("does not match" in item for item in failures)
+    assert any("must be default-kali after M6" in item for item in failures)
 
 
-def test_resolved_policy_preserves_legacy_and_zero_bps_rollback_without_kali_service():
+def test_resolved_policy_rejects_legacy_and_zero_bps_canary():
     for scanner_env in (
         {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"},
         {"AEGIS_RECON_PROVIDER": "canary", "AEGIS_KALI_RECON_CANARY_BPS": "0"},
     ):
         failures: list[str] = []
         policy._validate_recon_image_binding({}, scanner_env, failures)
-        assert failures == []
+        assert any("must be default-kali after M6" in item for item in failures)
 
 
 def test_rollback_environment_forces_pre_m4_compatible_legacy_mode():
