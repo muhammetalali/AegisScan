@@ -151,7 +151,7 @@ jobs:
       AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       AEGIS_M6_AUTH_TOKEN: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
       AEGIS_M6_NETWORK: aegis-m6-retirement
-      AEGIS_M6_DNS_IP: 172.30.0.53
+      AEGIS_M6_DNS_IP: 172.28.0.53
       AEGIS_M6_TARGET: parity.test
       AEGIS_M6_CAPABILITY: recon.fierce
     steps:
@@ -219,7 +219,7 @@ jobs:
       - name: Start deterministic authorized DNS fixture
         run: |
           set -euo pipefail
-          docker network create --internal --subnet 172.30.0.0/16 "${AEGIS_M6_NETWORK}"
+          docker network create --internal --subnet 172.28.0.0/16 "${AEGIS_M6_NETWORK}"
           docker run -d --name aegis-m6-dns \
             --network "${AEGIS_M6_NETWORK}" --ip "${AEGIS_M6_DNS_IP}" \
             --user 0:0 \
@@ -253,7 +253,7 @@ jobs:
           docker run --rm -i \
             --network container:aegis-m6-kali \
             -v "$PWD/artifacts:/artifacts" \
-            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M6_TARGET},172.30.0.0/16" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_M6_TARGET},172.28.0.0/16" \
             -e AEGIS_RECON_PROVIDER=default-kali \
             -e AEGIS_RECON_LEGACY_DISABLED=true \
             -e AEGIS_KALI_RECON_CANARY_BPS=0 \
