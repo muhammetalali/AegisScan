@@ -427,7 +427,7 @@ jobs:
               'fixture':'deterministic-authorized-local-dns-v1',
               'default_provider':'default-kali',
               'capability_id':capability,
-              'parity_approved_capabilities':['recon.dnsenum','recon.fierce','recon.subfinder'],
+              'parity_approved_capabilities':['recon.amass','recon.dnsenum','recon.fierce','recon.subfinder'],
               'held_legacy_capabilities':sorted(boundary['held_legacy']),
               'default_routing_decision':boundary['approved'],
               'dnsenum_routing_decision':boundary['dnsenum'],
