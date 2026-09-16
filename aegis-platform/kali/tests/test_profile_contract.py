@@ -9,9 +9,12 @@ from fastapi_app.services.capability_registry import CAPABILITIES
 from fastapi_app.services.kali_profile_policy import CAPABILITY_PROFILE_MAP, PROFILES
 
 KALI = Path(__file__).resolve().parents[1]
+PLATFORM = KALI.parent
+REPO = PLATFORM.parent
 MANIFEST = json.loads((KALI / 'tool-manifest.json').read_text(encoding='utf-8'))
 DOCKERFILE = (KALI / 'Dockerfile.profiles').read_text(encoding='utf-8')
 RECON_SERVICE = (KALI / 'runner' / 'recon_service.py').read_text(encoding='utf-8')
+AMASS_BUILD = (PLATFORM / 'backend' / 'resources' / 'build-amass-v5-aegis.sh').read_text(encoding='utf-8')
 
 
 def test_manifest_capability_assignments_match_control_plane_exactly():
@@ -62,8 +65,9 @@ def test_recon_service_is_packaged_only_in_recon_profile_and_has_no_shell_dispat
 def test_manifest_has_no_floating_tool_versions_or_duplicate_tool_families():
     forbidden = {'assetfinder', 'findomain', 'chaos', 'shosubgo', 'aquatone', 'hakrawler', 'urlfinder', 'dirsearch', 'sqlmap', 'commix', 'hydra'}
     assert forbidden.isdisjoint(MANIFEST['tools'])
+    allowed_sources = {'kali-apt', 'go', 'go-patched', 'cargo', 'oci-stage', 'release-archive', 'git', 'pypi'}
     for name, tool in MANIFEST['tools'].items():
-        assert tool['source'] in {'kali-apt', 'go', 'cargo', 'oci-stage', 'release-archive', 'git', 'pypi'}
+        assert tool['source'] in allowed_sources
         assert tool.get('profiles'), name
         assert set(tool['profiles']).issubset(PROFILES), name
         assert 'full' not in tool['profiles'], name
@@ -74,8 +78,15 @@ def test_manifest_has_no_floating_tool_versions_or_duplicate_tool_families():
             assert tool.get('package') and tool.get('version'), name
         if tool['source'] == 'release-archive':
             assert len(tool.get('sha256', '')) == 64, name
-        if tool['source'] == 'git':
+        if tool['source'] in {'git', 'go-patched'}:
             assert len(tool.get('commit', '')) == 40, name
+        if tool['source'] == 'go-patched':
+            assert tool.get('module'), name
+            patch = str(tool.get('patch') or '')
+            assert patch, name
+            patch_path = (REPO / patch).resolve()
+            assert REPO.resolve() in patch_path.parents, name
+            assert patch_path.is_file(), name
 
 
 def test_tool_manifest_provenance_is_bound_to_profile_build_inputs():
@@ -85,6 +96,15 @@ def test_tool_manifest_provenance_is_bound_to_profile_build_inputs():
             assert f"{tool['package']}={tool['version']}" in DOCKERFILE, name
         elif source == 'go':
             assert f"{tool['module']}@{tool['version']}" in DOCKERFILE, name
+        elif source == 'go-patched':
+            assert tool['commit'] in AMASS_BUILD, name
+            assert tool['patch'] in DOCKERFILE, name
+            patch_path = (REPO / tool['patch']).resolve()
+            patch = patch_path.read_text(encoding='utf-8')
+            assert 'AEGIS_AMASS_ENGINE_TOKEN' in patch, name
+            assert 'X-Aegis-Amass-Token' in patch, name
+            assert 'git -C "$SOURCE_ROOT" apply --unidiff-zero --check "$PATCH_PATH"' in AMASS_BUILD, name
+            assert 'go build -trimpath -buildvcs=false' in AMASS_BUILD, name
         elif source == 'cargo':
             assert f"--version {tool['version']} {name}" in DOCKERFILE, name
         elif source == 'oci-stage':

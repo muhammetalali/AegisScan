@@ -22,7 +22,7 @@
   "runner_version": "0.1.0",
   "schema_version": 1,
   "tools": {
-    "amass": {"module": "github.com/owasp-amass/amass/v5/cmd/amass", "profiles": ["recon"], "source": "go", "version": "v5.1.1"},
+    "amass": {"commit": "79299dce87b0085db0f2f4ef3e9c52cccb49f514", "module": "github.com/owasp-amass/amass/v5/cmd/amass", "patch": "aegis-platform/backend/resources/patches/amass-v5.1.1-aegis-engine-auth.patch", "profiles": ["recon"], "source": "go-patched", "version": "v5.1.1"},
     "binutils": {"package": "binutils", "profiles": ["binary"], "source": "kali-apt", "version": "2.47-2"},
     "binwalk": {"package": "binwalk", "profiles": ["binary"], "source": "kali-apt", "version": "2.4.3+dfsg1-3"},
     "checkov": {"profiles": ["code"], "source": "pypi", "version": "3.3.16"},

@@ -147,6 +147,8 @@ def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> di
         if value is None or value == '':
             continue
         if definition.kind == 'int':
+            if isinstance(value, bool):
+                raise ValueError(f'{name} must be an integer')
             try:
                 value = int(value)
             except (TypeError, ValueError) as exc:
@@ -218,6 +220,21 @@ def build_native_argv(spec: NativeToolSpec, target: str, options: dict[str, Any]
     normalized = validate_native_options(spec, options)
     if 'wordlist' in normalized and not Path(str(normalized['wordlist'])).is_file():
         raise ValueError('wordlist does not exist on the scanner worker')
+    if spec.capability_id == 'recon.amass':
+        # Amass v5 enum is stateful: it populates an OAM database and does not
+        # emit the discovered-name set as its execution stdout. Always invoke
+        # the managed wrapper so each execution owns/tears down its engine and
+        # exports canonical discovered names through `amass subs`.
+        wrapper = shutil.which('aegis-amass-runtime')
+        if not wrapper:
+            raise RuntimeError('aegis-amass-runtime is not installed on the scanner worker')
+        return [
+            wrapper,
+            '--target',
+            target,
+            '--timeout-minutes',
+            str(normalized['timeout_minutes']),
+        ], target
     command_target = target.rstrip('/') + spec.target_suffix if spec.target_suffix else target
     argv = [executable, *spec.prefix_args]
     if spec.target_flag:
