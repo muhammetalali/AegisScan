@@ -186,7 +186,7 @@ jobs:
           set -euo pipefail
           docker run -d --name aegis-nmap-kali \
             --network container:aegis-nmap-legacy \
-            --user 10001:10001 \
+            --user 0:0 \
             --read-only --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true \
             --pids-limit 128 --memory 512m --cpus 1 \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
@@ -195,9 +195,9 @@ jobs:
             -v "$PWD/aegis-platform/kali/runner/network_nmap_parity_service.py:/opt/aegis-runner/network_nmap_parity_service.py:ro" \
             --entrypoint python3 aegis-kali:network \
             /opt/aegis-runner/network_nmap_parity_service.py
-          # Match the current production Nmap privilege contract exactly enough
-          # to preserve SYN/service-scan semantics: non-root process, every
-          # capability dropped except CAP_NET_RAW. NET_ADMIN is deliberately absent.
+          # Match the current production Nmap raw-scan requirement while narrowing
+          # the parity candidate to root UID with CAP_NET_RAW only. The production
+          # scanner currently also carries SETUID/SETGID/SETPCAP; this candidate does not.
           cap_eff="$(docker exec aegis-nmap-kali python3 -c "import pathlib; print(next(line.split()[1] for line in pathlib.Path('/proc/1/status').read_text().splitlines() if line.startswith('CapEff:')))")"
           test "$cap_eff" = "0000000000002000"
           for _ in $(seq 1 30); do
