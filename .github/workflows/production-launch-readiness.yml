@@ -37,6 +37,7 @@ on:
       - '.github/workflows/production-resilience-acceptance.yml'
       - '.github/workflows/production-final-governance.yml'
       - '.github/workflows/production-governance-reality.yml'
+      - '.github/workflows/internal-production-mode-reality.yml'
   push:
     branches: [main]
   workflow_dispatch:
@@ -159,18 +160,18 @@ jobs:
           grep -qi '^permissions-policy:' /tmp/aegis-headers
           grep -qi '^cross-origin-opener-policy:' /tmp/aegis-headers
           grep -qi '^cross-origin-resource-policy:' /tmp/aegis-headers
-      - name: Prove verified HTTPS public acceptance transport
+      - name: Prove verified HTTPS internal acceptance transport
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/aegis-public
+          mkdir -p /tmp/aegis-internal
           openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 2 \
             -subj '/CN=localhost' \
             -addext 'subjectAltName=DNS:localhost' \
-            -keyout /tmp/aegis-public/privkey.pem \
-            -out /tmp/aegis-public/fullchain.pem
-          chmod 0600 /tmp/aegis-public/privkey.pem
-          cat >/tmp/aegis-public/server.py <<'PY'
+            -keyout /tmp/aegis-internal/privkey.pem \
+            -out /tmp/aegis-internal/enterprise-ca.pem
+          chmod 0600 /tmp/aegis-internal/privkey.pem /tmp/aegis-internal/enterprise-ca.pem
+          cat >/tmp/aegis-internal/server.py <<'PY'
           import json
           import ssl
           from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -198,20 +199,21 @@ jobs:
 
           server = HTTPServer(("127.0.0.1", 9443), Handler)
           context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-          context.load_cert_chain("/tmp/aegis-public/fullchain.pem", "/tmp/aegis-public/privkey.pem")
+          context.load_cert_chain("/tmp/aegis-internal/enterprise-ca.pem", "/tmp/aegis-internal/privkey.pem")
           server.socket = context.wrap_socket(server.socket, server_side=True)
           server.serve_forever()
           PY
-          python /tmp/aegis-public/server.py >/tmp/aegis-public/server.log 2>&1 &
+          python /tmp/aegis-internal/server.py >/tmp/aegis-internal/server.log 2>&1 &
           pid=$!
           trap 'kill "$pid" >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 30); do
-            if curl --cacert /tmp/aegis-public/fullchain.pem -fsS https://localhost:9443/health >/dev/null; then
+            if curl --cacert /tmp/aegis-internal/enterprise-ca.pem -fsS https://localhost:9443/health >/dev/null; then
               break
             fi
             sleep 0.25
           done
-          SSL_CERT_FILE=/tmp/aegis-public/fullchain.pem \
+          AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-internal/enterprise-ca.pem \
+          SSL_CERT_FILE=/tmp/aegis-internal/enterprise-ca.pem \
             python aegis-platform/scripts/public_acceptance.py \
               --origin https://localhost:9443 \
               --allow-loopback-test
