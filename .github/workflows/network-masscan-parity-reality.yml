@@ -6,6 +6,8 @@ name: Network Masscan Parity Reality
     paths: &masscan_paths
       - 'aegis-platform/backend/fastapi_app/services/masscan_semantic_parity.py'
       - 'aegis-platform/backend/fastapi_app/services/test_masscan_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/scanner_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_scanner_adapters_masscan_network.py'
       - 'aegis-platform/kali/runner/network_masscan_parity_service.py'
       - 'aegis-platform/kali/tests/test_network_masscan_parity_contract.py'
       - 'aegis-platform/kali/tool-manifest.json'
@@ -47,13 +49,16 @@ jobs:
             aegis-platform/kali/runner/network_masscan_parity_service.py \
             aegis-platform/backend/fastapi_app/services/masscan_semantic_parity.py \
             aegis-platform/backend/fastapi_app/services/test_masscan_semantic_parity.py \
+            aegis-platform/backend/fastapi_app/services/scanner_adapters.py \
+            aegis-platform/backend/fastapi_app/services/test_scanner_adapters_masscan_network.py \
             aegis-platform/kali/tests/test_network_masscan_parity_contract.py
-      - name: Prove semantic and admission contracts
+      - name: Prove semantic admission and adapter contracts
         env:
           PYTHONPATH: aegis-platform/backend
         run: >-
           python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
           aegis-platform/backend/fastapi_app/services/test_masscan_semantic_parity.py
+          aegis-platform/backend/fastapi_app/services/test_scanner_adapters_masscan_network.py
           aegis-platform/kali/tests/test_network_masscan_parity_contract.py
       - name: Capture exact-head contract evidence
         run: |
@@ -73,6 +78,10 @@ jobs:
               'authorization_binding_required':True,
               'scope_binding_required':True,
               'target_binding_required':True,
+              'link_layer_binding_required':True,
+              'link_layer_fields':['interface','adapter_ip','adapter_mac','router_mac'],
+              'scanner_capabilities':['CAP_NET_RAW'],
+              'trusted_namespace_owner_capabilities':['CAP_NET_ADMIN'],
               'semantic_fields':['ip','protocol','port'],
               'real_dual_run_required':True,
               'public_internet_fixture_allowed':False,
