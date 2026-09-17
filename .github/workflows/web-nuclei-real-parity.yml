@@ -117,7 +117,7 @@ jobs:
           set -euo pipefail
           docker run -d --name aegis-nuclei-kali             --network "${AEGIS_NUCLEI_NETWORK}" --user 10001:10001 --read-only             --cap-drop ALL --security-opt no-new-privileges:true             --pids-limit 128 --memory 512m --cpus 1             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m             -e AEGIS_KALI_NUCLEI_PARITY_MODE=true             -e AEGIS_KALI_NUCLEI_PARITY_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e AEGIS_KALI_NUCLEI_EXPECTED_AUTHORIZATION_REF="${AEGIS_NUCLEI_AUTHORIZATION_REF}"             -e AEGIS_KALI_NUCLEI_EXPECTED_SCOPE_REF="${AEGIS_NUCLEI_SCOPE_REF}"             -e AEGIS_KALI_NUCLEI_EXPECTED_TARGET="${AEGIS_NUCLEI_TARGET}"             -e AEGIS_KALI_NUCLEI_TEMPLATE_PATH=/opt/aegis-parity-templates/nuclei-parity.yaml             -e AEGIS_KALI_NUCLEI_TEMPLATE_SHA256="${AEGIS_NUCLEI_TEMPLATE_SHA256}"             -v "$PWD/parity-templates:/opt/aegis-parity-templates:ro"             -v "$PWD/artifacts:/artifacts"             -v "$PWD/aegis-platform/kali/runner/web_nuclei_parity_service.py:/opt/aegis-runner/web_nuclei_parity_service.py:ro"             --entrypoint python3 aegis-kali:web /opt/aegis-runner/web_nuclei_parity_service.py
           for _ in $(seq 1 30); do
-            if docker exec aegis-nuclei-kali python3 - <<'PY' >/dev/null 2>&1
+            if docker exec -i aegis-nuclei-kali python3 - <<'PY' >/dev/null 2>&1
           import urllib.request
           urllib.request.urlopen('http://127.0.0.1:18768/healthz',timeout=1).read()
           PY
