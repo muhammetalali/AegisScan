@@ -5,7 +5,10 @@ TABLE='aegis_egress'
 CHAIN='egress'
 INGRESS_CHAIN='ingress'
 IFACE="${SCANNER_EGRESS_INTERFACE:-eth0}"
-CONTROL_ENDPOINTS="${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}"
+# An explicitly empty value is meaningful for isolated parity fixtures: those
+# namespaces have no control-plane peers and must not silently fall back to the
+# production defaults.  Use the default only when the variable is absent.
+CONTROL_ENDPOINTS="${SCANNER_CONTROL_ENDPOINTS-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}"
 PRIVATE_TARGETS="${SCANNER_EGRESS_PRIVATE_TARGETS:-}"
 
 log() {
