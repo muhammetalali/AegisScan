@@ -1,0 +1,339 @@
+name: Network Nmap Canary Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/kali_nmap_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nmap_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/security_scan.py'
+      - 'aegis-platform/kali/Dockerfile.network-provider'
+      - 'aegis-platform/kali/runner/network_service.py'
+      - 'aegis-platform/kali/tests/test_network_provider_contract.py'
+      - 'docs/NETWORK_NMAP_CANARY.md'
+      - '.github/workflows/network-nmap-canary-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/kali_nmap_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nmap_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/security_scan.py'
+      - 'aegis-platform/kali/Dockerfile.network-provider'
+      - 'aegis-platform/kali/runner/network_service.py'
+      - 'aegis-platform/kali/tests/test_network_provider_contract.py'
+      - 'docs/NETWORK_NMAP_CANARY.md'
+      - '.github/workflows/network-nmap-canary-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-nmap-canary-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused test dependencies
+        run: python -m pip install pytest defusedxml
+      - name: Compile Nmap canary contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/kali_nmap_provider.py \
+            aegis-platform/backend/fastapi_app/services/nmap_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py \
+            aegis-platform/backend/fastapi_app/tasks/security_scan.py \
+            aegis-platform/kali/runner/network_service.py \
+            aegis-platform/kali/tests/test_network_provider_contract.py
+      - name: Prove deterministic routing and fail-closed provider policy
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py
+          aegis-platform/kali/tests/test_network_provider_contract.py
+      - name: Capture exact-head canary contract
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/network-nmap-canary-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-nmap-canary-contract.v1',
+              'capability_id':'network.nmap',
+              'production_default_provider':'legacy',
+              'active_modes':['legacy','canary'],
+              'assignment':'sha256-stable-scan-id',
+              'max_canary_bps':2500,
+              'selected_provider_failure_fallback':False,
+              'rollback':'AEGIS_KALI_NMAP_CANARY_BPS=0',
+              'provider_scope':['network.nmap'],
+              'provider_capabilities':['CAP_NET_RAW'],
+              'no_new_privileges':True,
+              'default_kali_promoted_in_this_phase':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-canary-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-canary-routing:
+    needs: canary-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_NMAP_NETWORK: aegis-nmap-canary
+      AEGIS_NMAP_TARGET: 172.31.1.10
+      AEGIS_NMAP_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_NMAP_CANARY_BPS: '2500'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact legacy scanner and governed network provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache \
+            --target legacy-parity-reference \
+            -t aegis-nmap-canary:legacy \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-network \
+            -t aegis-kali:network \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+          docker build --no-cache \
+            --build-arg AEGIS_NETWORK_BASE_IMAGE=aegis-kali:network \
+            -t aegis-kali:network-provider \
+            -f aegis-platform/kali/Dockerfile.network-provider \
+            aegis-platform/kali
+      - name: Derive immutable provider trust anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:network-provider --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected network provider image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          assert runtime['profile']=='network', runtime
+          assert runtime['dispatch_enabled'] is True, runtime
+          assert runtime['dispatch_state']=='semantic-network-provider', runtime
+          assert runtime['dispatch_capabilities']==['network.nmap'], runtime
+          print('AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_NETWORK_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+      - name: Start deterministic internal fixture and scanner namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          chmod 0777 artifacts
+          docker network create --internal --subnet 172.31.1.0/24 "${AEGIS_NMAP_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_NMAP_NETWORK}")" = true
+          docker run -d --name aegis-nmap-canary-fixture \
+            --network "${AEGIS_NMAP_NETWORK}" --ip "${AEGIS_NMAP_TARGET}" \
+            --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/nmap_tcp_fixture.py:/fixture.py:ro" \
+            --entrypoint python aegis-nmap-canary:legacy /fixture.py
+          docker run -d --name aegis-nmap-canary-scanner \
+            --network "${AEGIS_NMAP_NETWORK}" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_NMAP_TARGET}/32" \
+            -e AEGIS_NMAP_PROVIDER=canary \
+            -e AEGIS_KALI_NMAP_CANARY_BPS="${AEGIS_NMAP_CANARY_BPS}" \
+            -e AEGIS_KALI_NETWORK_URL=http://127.0.0.1:18766 \
+            -e AEGIS_KALI_NETWORK_AUTH_TOKEN="${AEGIS_NMAP_AUTH_TOKEN}" \
+            -e AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            -v "$PWD/artifacts:/artifacts" \
+            --entrypoint sleep aegis-nmap-canary:legacy infinity
+          for _ in $(seq 1 30); do
+            if docker logs aegis-nmap-canary-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nmap-canary-fixture
+          exit 1
+      - name: Start CAP_NET_RAW-only governed Nmap provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-nmap-canary-provider \
+            --network container:aegis-nmap-canary-scanner \
+            --user 0:0 \
+            --read-only --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            -e AEGIS_KALI_NETWORK_AUTH_TOKEN="${AEGIS_NMAP_AUTH_TOKEN}" \
+            "$AEGIS_KALI_NETWORK_IMAGE"
+          cap_eff="$(docker exec aegis-nmap-canary-provider python3 -c "import pathlib; print(next(line.split()[1] for line in pathlib.Path('/proc/1/status').read_text().splitlines() if line.startswith('CapEff:')))")"
+          test "$cap_eff" = "0000000000002000"
+          for _ in $(seq 1 30); do
+            if docker exec aegis-nmap-canary-scanner python - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nmap-canary-provider
+          exit 1
+      - name: Derive stable selected and holdback cohorts
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nmap-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.kali_nmap_provider import nmap_provider_decision
+          selected=holdback=None
+          for i in range(10000):
+              key=f'real-nmap-canary-{i}'
+              d=nmap_provider_decision(routing_key=key)
+              if d.selected_provider=='kali' and selected is None: selected=(key,d.as_dict())
+              if d.selected_provider=='legacy' and holdback is None: holdback=(key,d.as_dict())
+              if selected and holdback: break
+          assert selected and holdback
+          json.dump({'selected_key':selected[0],'selected':selected[1],'holdback_key':holdback[0],'holdback':holdback[1]},open('/artifacts/cohorts.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Execute real legacy holdback and real governed Kali selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nmap-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+          cohorts=json.load(open('/artifacts/cohorts.json'))
+          common=dict(target='172.31.1.10',timeout_seconds=300,authorization_ref='auth-canary',scope_ref='project:canary:asset:nmap',state_getter=lambda:'running')
+          hold=run_nmap_with_provider(routing_key=cohorts['holdback_key'],execution_ref='nmap-canary-holdback',**common)
+          assert hold.routing['selected_provider']=='legacy', hold.routing
+          assert hold.exit_code==0, hold.stderr
+          open('/artifacts/holdback.xml','w').write(hold.stdout)
+          json.dump({'routing':hold.routing,'runtime':hold.runtime},open('/artifacts/holdback-result.json','w'),sort_keys=True,indent=2)
+          selected=run_nmap_with_provider(routing_key=cohorts['selected_key'],execution_ref='nmap-canary-selected',**common)
+          assert selected.routing['selected_provider']=='kali', selected.routing
+          assert selected.exit_code==0, selected.stderr
+          assert selected.runtime['provider']=='aegis-kali-network', selected.runtime
+          assert selected.runtime['linux_privilege']['allowed_capabilities']==['CAP_NET_RAW'], selected.runtime
+          open('/artifacts/selected.xml','w').write(selected.stdout)
+          json.dump({'routing':selected.routing,'runtime':selected.runtime},open('/artifacts/selected-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove selected and holdback finding semantics are equivalent
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nmap-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.nmap_semantic_parity import compare_nmap_semantics
+          result=compare_nmap_semantics(open('/artifacts/holdback.xml').read(),open('/artifacts/selected.xml').read())
+          assert result['equivalent'] is True, json.dumps(result,indent=2,sort_keys=True)
+          json.dump(result,open('/artifacts/canary-semantic-parity.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove zero-BPS rollback survives provider outage and selected outage never falls back
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker stop aegis-nmap-canary-provider >/dev/null
+          docker exec -i -e AEGIS_KALI_NMAP_CANARY_BPS=0 aegis-nmap-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+          result=run_nmap_with_provider(target='172.31.1.10',timeout_seconds=300,routing_key='rollback-any',execution_ref='nmap-canary-rollback',authorization_ref='auth-canary',scope_ref='project:canary:asset:nmap',state_getter=lambda:'running')
+          assert result.routing['selected_provider']=='legacy', result.routing
+          assert result.routing['reason']=='canary-rollback-zero', result.routing
+          assert result.exit_code==0, result.stderr
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/rollback-result.json','w'),sort_keys=True,indent=2)
+          PY
+          if docker exec -i aegis-nmap-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.kali_nmap_provider import KaliNmapProviderError
+          from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+          cohorts=json.load(open('/artifacts/cohorts.json'))
+          try:
+              run_nmap_with_provider(target='172.31.1.10',timeout_seconds=30,routing_key=cohorts['selected_key'],execution_ref='nmap-canary-outage',authorization_ref='auth-canary',scope_ref='project:canary:asset:nmap',state_getter=lambda:'running')
+          except KaliNmapProviderError as exc:
+              assert 'unavailable' in str(exc).lower(), str(exc)
+              raise SystemExit(0)
+          raise SystemExit('selected Kali outage unexpectedly succeeded or fell back')
+          PY
+          then
+            echo 'selected-provider outage failed closed as required'
+          else
+            exit 1
+          fi
+      - name: Capture immutable canary evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          git rev-parse HEAD > artifacts/head-sha.txt
+          printf '%s\n' "$AEGIS_KALI_NETWORK_IMAGE" > artifacts/network-provider-image-id.txt
+          python - <<'PY' > artifacts/canary-summary.json
+          import json
+          cohorts=json.load(open('artifacts/cohorts.json'))
+          print(json.dumps({
+              'schema':'aegis.network-nmap-canary-evidence.v1',
+              'selected':cohorts['selected'],
+              'holdback':cohorts['holdback'],
+              'max_canary_bps':2500,
+              'rollback_zero_proven':True,
+              'selected_outage_fail_closed':True,
+              'silent_fallback':False,
+              'public_internet_used':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-canary-reality-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-nmap-canary-provider aegis-nmap-canary-scanner aegis-nmap-canary-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_NMAP_NETWORK}" >/dev/null 2>&1 || true

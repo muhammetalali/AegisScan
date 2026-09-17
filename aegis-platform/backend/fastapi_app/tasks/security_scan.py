@@ -25,6 +25,8 @@ from fastapi_app.services.scan_state_machine import runtime_state
 from fastapi_app.services.enterprise_gap_closure import checkpoint_scan
 from fastapi_app.services.tool_abstraction import ToolRequest, get_tool
 from fastapi_app.services.nmap_finding_ingestion import ingest_nmap_findings
+from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+from fastapi_app.services.kali_nmap_provider import KaliNmapProviderCancelled
 from fastapi_app.services.wstg_observation_lineage import attach_wstg_evidence_metadata, attach_wstg_finding_lineage
 
 
@@ -170,13 +172,26 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
     scan.status=Scan.Status.RUNNING; scan.started_at=datetime.now(timezone.utc); scan.current_phase='nmap'; scan.current_engine='nmap'; scan.progress=10; scan.error_message=''; scan.save(update_fields=['status','started_at','current_phase','current_engine','progress','error_message','updated_at']); checkpoint_scan(scan,state=Scan.Status.RUNNING,metadata={'phase':'nmap'})
     execution=_start_execution(scan,engine); execution.result_data=authorization_snapshot(authorization); execution.save(update_fields=['result_data','updated_at'])
     try:
-        started=scan.started_at; timeout=120 if scan.depth==Scan.Depth.QUICK else 300; result=get_tool('nmap').run(ToolRequest(target=target,authorized=True),timeout=timeout,state_getter=lambda:runtime_state(scan_id)); parsed=parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts':[],'host_count':0,'open_ports':0}; ok,reason=revalidate_bound_authorization(scan,authorization)
+        started=scan.started_at
+        timeout=120 if scan.depth==Scan.Depth.QUICK else 300
+        result=run_nmap_with_provider(
+            target=target,
+            timeout_seconds=timeout,
+            routing_key=str(scan.id),
+            execution_ref=f'scan:{scan.id}:nmap',
+            authorization_ref=str(authorization.id),
+            scope_ref=f'project:{scan.project_id}:asset:{scan.asset_id}',
+            state_getter=lambda:runtime_state(scan_id),
+        )
+        parsed=parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts':[],'host_count':0,'open_ports':0}
+        ok,reason=revalidate_bound_authorization(scan,authorization)
         if not ok: return _block_scan(scan_id,reason)
         completed_at=datetime.now(timezone.utc); duration=max(0,(completed_at-started).total_seconds()) if started else 0
+        provider_lineage={'provider_routing':result.routing,'runtime_provenance':result.runtime}
         with transaction.atomic():
-            evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source=result.tool,evidence_type='scanner_output',raw_output=result.stdout,metadata=attach_wstg_evidence_metadata({'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'parsed':parsed,**authorization_snapshot(authorization)}, 'network.nmap'),collected_by=scan.initiated_by); findings=ingest_nmap_findings(scan,evidence,parsed); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.duration=duration; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'parsed':parsed,'evidence_id':str(evidence.id),'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','duration','findings_found','evidences_collected','result_data','logs','updated_at']); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.INFO,message='nmap execution completed',context={'target':result.target,'exit_code':result.exit_code,'host_count':parsed.get('host_count',0),'open_ports':parsed.get('open_ports',0),'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'nmap':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
-        return {'status':scan.status,'scan_id':scan_id,'tool':'nmap','target':result.target,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
-    except ScannerExecutionCancelled as exc:
+            evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source=result.tool,evidence_type='scanner_output',raw_output=result.stdout,metadata=attach_wstg_evidence_metadata({'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'parsed':parsed,**provider_lineage,**authorization_snapshot(authorization)}, 'network.nmap'),collected_by=scan.initiated_by); findings=ingest_nmap_findings(scan,evidence,parsed); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.duration=duration; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'parsed':parsed,'evidence_id':str(evidence.id),'finding_ids':[str(v.id) for v in findings],**provider_lineage,**authorization_snapshot(authorization)}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','duration','findings_found','evidences_collected','result_data','logs','updated_at']); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.INFO,message='nmap execution completed',context={'target':result.target,'exit_code':result.exit_code,'host_count':parsed.get('host_count',0),'open_ports':parsed.get('open_ports',0),'evidence_id':str(evidence.id),**provider_lineage,**authorization_snapshot(authorization)}); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'nmap':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
+        return {'status':scan.status,'scan_id':scan_id,'tool':'nmap','target':result.target,'finding_ids':[str(v.id) for v in findings],'provider_routing':result.routing,**authorization_snapshot(authorization)}
+    except (ScannerExecutionCancelled, KaliNmapProviderCancelled) as exc:
         return _cancelled_scan(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)

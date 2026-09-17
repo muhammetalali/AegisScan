@@ -1,0 +1,34 @@
+ARG AEGIS_NETWORK_BASE_IMAGE=aegis-kali:network
+FROM ${AEGIS_NETWORK_BASE_IMAGE}
+USER root
+COPY runner/network_service.py /opt/aegis-runner/network_service.py
+RUN chmod 0755 /opt/aegis-runner/network_service.py \
+    && python3 -m py_compile /opt/aegis-runner/network_service.py \
+    && python3 - <<'PY'
+import json
+from pathlib import Path
+path=Path('/opt/aegis-runner/runtime-manifest.json')
+runtime=json.loads(path.read_text(encoding='utf-8'))
+assert runtime['profile']=='network', runtime
+assert runtime['dispatch_enabled'] is False, runtime
+assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
+assert 'network.nmap' in runtime['profile_capabilities'], runtime
+assert runtime['profile_tools']['nmap']['version']=='7.99+dfsg-1kali1', runtime
+runtime['dispatch_enabled']=True
+runtime['dispatch_state']='semantic-network-provider'
+runtime['dispatch_capabilities']=['network.nmap']
+runtime['provider_bundle']='aegis-kali-network-nmap-canary-v1'
+path.write_text(json.dumps(runtime,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
+PY
+RUN python3 - <<'PY'
+import json
+from pathlib import Path
+runtime=json.loads(Path('/opt/aegis-runner/runtime-manifest.json').read_text(encoding='utf-8'))
+assert runtime['profile']=='network', runtime
+assert runtime['dispatch_enabled'] is True, runtime
+assert runtime['dispatch_state']=='semantic-network-provider', runtime
+assert runtime['dispatch_capabilities']==['network.nmap'], runtime
+assert runtime['provider_bundle']=='aegis-kali-network-nmap-canary-v1', runtime
+PY
+USER 0:0
+ENTRYPOINT ["/usr/bin/tini", "--", "python3", "/opt/aegis-runner/network_service.py"]

@@ -1,0 +1,102 @@
+name: Network Nmap Canary Deployment Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &canary_deployment_paths
+      - 'aegis-platform/docker-compose.nmap-canary.yml'
+      - 'aegis-platform/kali/Dockerfile.network-provider'
+      - 'aegis-platform/kali/runner/network_service.py'
+      - 'aegis-platform/kali/tests/test_network_provider_contract.py'
+      - 'docs/NETWORK_NMAP_CANARY.md'
+      - '.github/workflows/network-nmap-canary-deployment-reality.yml'
+  push:
+    branches: [main]
+    paths: *canary_deployment_paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-nmap-canary-deployment-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deployment-contract:
+    name: Nmap Canary Deployment Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Prove static execution and deployment contracts
+        run: |
+          python -m pip install pytest
+          PYTHONPATH=aegis-platform/backend python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest aegis-platform/kali/tests/test_network_provider_contract.py
+      - name: Render the opt-in canary deployment with Docker Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.nmap-canary.yml \
+            --profile kali-network \
+            config --format json > artifacts/nmap-canary-compose.json
+      - name: Prove rendered least-privilege and rollback defaults
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path=Path('artifacts/nmap-canary-compose.json')
+          data=json.loads(path.read_text(encoding='utf-8'))
+          services=data['services']
+          scanner=services['scanner_worker']
+          provider=services['kali_network']
+          scanner_env=scanner['environment']
+          provider_env=provider['environment']
+
+          assert scanner_env['AEGIS_NMAP_PROVIDER']=='legacy', scanner_env
+          assert str(scanner_env['AEGIS_KALI_NMAP_CANARY_BPS'])=='0', scanner_env
+          assert scanner_env['AEGIS_KALI_NETWORK_URL']=='http://127.0.0.1:18766', scanner_env
+          for key in (
+              'AEGIS_KALI_NETWORK_AUTH_TOKEN',
+              'AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION',
+              'AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT',
+              'AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST',
+              'AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST',
+              'AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST',
+              'AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST',
+          ):
+              assert key in scanner_env, key
+
+          assert provider['network_mode']=='service:scanner_egress', provider
+          assert provider['read_only'] is True, provider
+          assert provider['cap_drop']==['ALL'], provider
+          assert provider['cap_add']==['NET_RAW'], provider
+          assert provider['security_opt']==['no-new-privileges:true'], provider
+          assert provider['user']=='0:0', provider
+          assert provider_env['AEGIS_NETWORK_LISTEN_HOST']=='127.0.0.1', provider_env
+          assert str(provider_env['AEGIS_NETWORK_LISTEN_PORT'])=='18766', provider_env
+          assert provider['pids_limit']==128, provider
+          assert provider['mem_limit']==536870912, provider
+          assert float(provider['cpus'])==1.0, provider
+          print('NETWORK_NMAP_CANARY_DEPLOYMENT_REALITY_PASS')
+          PY
+      - name: Publish exact-head deployment evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-canary-deployment-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/nmap-canary-compose.json
+          if-no-files-found: error
+          retention-days: 90
