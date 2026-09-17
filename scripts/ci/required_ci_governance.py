@@ -16,6 +16,7 @@ from typing import Any
 
 API_ROOT = "https://api.github.com"
 SUPPORTED_EVENTS = {"pull_request", "push"}
+COMPARE_FILE_CAP = 300
 
 
 class GovernanceError(RuntimeError):
@@ -31,12 +32,15 @@ def _required_env(name: str) -> str:
 
 def _api_json(path: str, token: str) -> Any:
     url = path if path.startswith("https://") else f"{API_ROOT}{path}"
-    request = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "AegisScan-required-ci-governance",
-    })
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "AegisScan-required-ci-governance",
+        },
+    )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
@@ -56,7 +60,7 @@ def _paginate(repo: str, suffix: str, token: str, item_key: str | None = None) -
         page_items = payload[item_key] if item_key else payload
         if not isinstance(page_items, list):
             raise GovernanceError(f"unexpected paginated GitHub response for {suffix}")
-        items.extend(page_items)
+        items.extend(item for item in page_items if isinstance(item, dict))
         if len(page_items) < 100:
             return items
         page += 1
@@ -92,8 +96,8 @@ def _load_policy(path: Path) -> dict[str, Any]:
     if not isinstance(conditional, list):
         raise GovernanceError("conditional_required_workflows must be a list")
     for rule in conditional:
-        if set(rule) != {"name", "events", "paths"}:
-            raise GovernanceError(f"conditional workflow rule has unexpected fields: {sorted(rule)}")
+        if not isinstance(rule, dict) or set(rule) != {"name", "events", "paths"}:
+            raise GovernanceError(f"conditional workflow rule has unexpected fields: {sorted(rule) if isinstance(rule, dict) else type(rule).__name__}")
         if not isinstance(rule["name"], str) or not rule["name"]:
             raise GovernanceError("conditional workflow name must be non-empty")
         if not isinstance(rule["events"], list) or not rule["events"]:
@@ -119,9 +123,56 @@ def _required_workflows(policy: dict[str, Any], event_name: str, changed_paths: 
     return required
 
 
-def _pull_request_changed_paths(repo: str, number: int, token: str) -> list[str]:
-    files = _paginate(repo, f"/pulls/{number}/files", token)
-    return sorted({item["filename"] for item in files if isinstance(item.get("filename"), str)})
+def _pull_request_changed_paths(
+    repo: str,
+    base_ref: str,
+    head_sha: str,
+    token: str,
+) -> tuple[list[str], str]:
+    """Derive the PR diff from the live base branch, never GitHub's stale PR file cache."""
+    if not base_ref:
+        raise GovernanceError("pull_request event is missing base.ref")
+    if not head_sha:
+        raise GovernanceError("pull_request event is missing head.sha")
+
+    encoded_base = urllib.parse.quote(base_ref, safe="")
+    branch_payload = _api_json(f"/repos/{repo}/branches/{encoded_base}", token)
+    if not isinstance(branch_payload, dict):
+        raise GovernanceError(f"GitHub returned an unexpected live base branch response for {base_ref}")
+    live_base_sha = str((branch_payload.get("commit") or {}).get("sha") or "")
+    if not live_base_sha:
+        raise GovernanceError(f"live base branch {base_ref!r} has no commit SHA")
+
+    base_sha_q = urllib.parse.quote(live_base_sha, safe="")
+    head_sha_q = urllib.parse.quote(head_sha, safe="")
+    comparison = _api_json(f"/repos/{repo}/compare/{base_sha_q}...{head_sha_q}", token)
+    if not isinstance(comparison, dict):
+        raise GovernanceError("GitHub returned an unexpected live-base compare response")
+
+    merge_base_sha = str((comparison.get("merge_base_commit") or {}).get("sha") or "")
+    if merge_base_sha != live_base_sha:
+        raise GovernanceError(
+            f"pull request head {head_sha} is stale relative to live {base_ref}@{live_base_sha}; "
+            f"merge base is {merge_base_sha or 'unknown'}"
+        )
+    status = comparison.get("status")
+    if status not in {"ahead", "identical"}:
+        raise GovernanceError(
+            f"pull request head {head_sha} is not a clean descendant of live {base_ref}@{live_base_sha}: {status!r}"
+        )
+
+    files = comparison.get("files")
+    if not isinstance(files, list):
+        raise GovernanceError("live-base compare did not expose changed files")
+    if len(files) >= COMPARE_FILE_CAP:
+        raise GovernanceError(
+            f"live-base compare reached the GitHub {COMPARE_FILE_CAP}-file cap; "
+            "split the pull request or extend the governance verifier before merge"
+        )
+    changed_paths = sorted(
+        {item["filename"] for item in files if isinstance(item, dict) and isinstance(item.get("filename"), str)}
+    )
+    return changed_paths, live_base_sha
 
 
 def _push_changed_paths(repo: str, event: dict[str, Any], token: str) -> list[str]:
@@ -135,7 +186,7 @@ def _push_changed_paths(repo: str, event: dict[str, Any], token: str) -> list[st
     else:
         payload = _api_json(f"/repos/{repo}/commits/{after}", token)
         files = payload.get("files") or []
-    return sorted({item["filename"] for item in files if isinstance(item.get("filename"), str)})
+    return sorted({item["filename"] for item in files if isinstance(item, dict) and isinstance(item.get("filename"), str)})
 
 
 def _workflow_runs(repo: str, sha: str, event_name: str, token: str, head_ref: str) -> dict[str, dict[str, Any]]:
@@ -174,16 +225,19 @@ def main() -> int:
     event = json.loads(Path(_required_env("GITHUB_EVENT_PATH")).read_text(encoding="utf-8"))
     if event_name not in SUPPORTED_EVENTS:
         raise GovernanceError(f"unsupported event for required CI governance: {event_name}")
+
+    live_base_sha: str | None = None
+    changed_path_source = "push-event"
     if event_name == "pull_request":
         pr = event.get("pull_request") or {}
         sha = str((pr.get("head") or {}).get("sha") or sha)
         head_ref = str((pr.get("head") or {}).get("ref") or head_ref)
-        number = int(event.get("number") or 0)
-        if number <= 0:
-            raise GovernanceError("pull_request event is missing a valid PR number")
-        changed_paths = _pull_request_changed_paths(repo, number, token)
+        base_ref = str((pr.get("base") or {}).get("ref") or "")
+        changed_paths, live_base_sha = _pull_request_changed_paths(repo, base_ref, sha, token)
+        changed_path_source = "live-base-compare"
     else:
         changed_paths = _push_changed_paths(repo, event, token)
+
     expected = _required_workflows(policy, event_name, changed_paths)
     self_workflow = policy["governance_workflow"]
     successful = set(policy["successful_conclusions"])
@@ -193,7 +247,24 @@ def main() -> int:
     stable_since: float | None = None
     stable_signature: tuple[tuple[Any, ...], ...] | None = None
     last_log = 0.0
-    print(json.dumps({"event": event_name, "head_sha": sha, "head_ref": head_ref, "changed_paths": changed_paths, "expected_workflows": sorted(expected), "observe_all_triggered_workflows": policy["observe_all_triggered_workflows"]}, indent=2, sort_keys=True))
+
+    print(
+        json.dumps(
+            {
+                "event": event_name,
+                "head_sha": sha,
+                "head_ref": head_ref,
+                "live_base_sha": live_base_sha,
+                "changed_path_source": changed_path_source,
+                "changed_paths": changed_paths,
+                "expected_workflows": sorted(expected),
+                "observe_all_triggered_workflows": policy["observe_all_triggered_workflows"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
     while time.monotonic() < deadline:
         runs = _workflow_runs(repo, sha, event_name, token, head_ref)
         runs.pop(self_workflow, None)
@@ -201,18 +272,38 @@ def main() -> int:
         missing = sorted(expected - observed_names)
         governed_names = observed_names if policy["observe_all_triggered_workflows"] else expected
         pending = sorted(name for name in governed_names if name in runs and runs[name].get("status") != "completed")
-        failed = sorted(name for name in governed_names if name in runs and runs[name].get("status") == "completed" and runs[name].get("conclusion") not in successful)
+        failed = sorted(
+            name
+            for name in governed_names
+            if name in runs and runs[name].get("status") == "completed" and runs[name].get("conclusion") not in successful
+        )
         if failed:
             details = [_run_summary(runs[name]) for name in failed]
-            raise GovernanceError(f"required/triggered CI workflow failure on exact SHA {sha}: {json.dumps(details, sort_keys=True)}")
+            raise GovernanceError(
+                f"required/triggered CI workflow failure on exact SHA {sha}: {json.dumps(details, sort_keys=True)}"
+            )
         if not missing and not pending:
-            signature = tuple(sorted((name, runs[name].get("id"), runs[name].get("run_attempt"), runs[name].get("conclusion")) for name in governed_names if name in runs))
+            signature = tuple(
+                sorted(
+                    (name, runs[name].get("id"), runs[name].get("run_attempt"), runs[name].get("conclusion"))
+                    for name in governed_names
+                    if name in runs
+                )
+            )
             if signature != stable_signature:
                 stable_signature = signature
                 stable_since = time.monotonic()
                 print(f"All governed workflows are successful; entering {settle_seconds}s quiescence window.")
             elif stable_since is not None and time.monotonic() - stable_since >= settle_seconds:
-                proof = {"event": event_name, "head_sha": sha, "required_workflows": sorted(expected), "observed_successful_workflows": sorted(governed_names), "workflow_runs": [_run_summary(runs[name]) for name in sorted(governed_names)]}
+                proof = {
+                    "event": event_name,
+                    "head_sha": sha,
+                    "live_base_sha": live_base_sha,
+                    "changed_path_source": changed_path_source,
+                    "required_workflows": sorted(expected),
+                    "observed_successful_workflows": sorted(governed_names),
+                    "workflow_runs": [_run_summary(runs[name]) for name in sorted(governed_names)],
+                }
                 print("REQUIRED_CI_GOVERNANCE_PASS")
                 print(json.dumps(proof, indent=2, sort_keys=True))
                 return 0
@@ -224,6 +315,7 @@ def main() -> int:
             print(json.dumps({"waiting": True, "missing": missing, "pending": pending, "observed": sorted(observed_names)}, sort_keys=True))
             last_log = now
         time.sleep(poll_seconds)
+
     runs = _workflow_runs(repo, sha, event_name, token, head_ref)
     runs.pop(self_workflow, None)
     missing = sorted(expected - set(runs))
