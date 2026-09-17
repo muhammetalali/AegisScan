@@ -1,0 +1,116 @@
+name: Code Semgrep Parity Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &semgrep_parity_paths
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_semgrep_semantic_parity.py'
+      - 'aegis-platform/kali/runner/code_semgrep_parity_service.py'
+      - 'aegis-platform/kali/tests/test_code_semgrep_parity_contract.py'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity.yml'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity-source/**'
+      - 'aegis-platform/kali/tool-manifest.json'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - '.github/workflows/code-semgrep-parity-reality.yml'
+      - '.github/workflows/code-semgrep-real-parity.yml'
+      - 'docs/CODE_SEMGREP_SEMANTIC_PARITY.md'
+  push:
+    branches: [main]
+    paths: *semgrep_parity_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-semgrep-parity-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Compile parity implementation
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/semgrep_semantic_parity.py             aegis-platform/kali/runner/code_semgrep_parity_service.py             aegis-platform/e2e/fixtures/semgrep-parity-source/app.py
+      - name: Run semantic and governed contract tests
+        run: |
+          python aegis-platform/backend/fastapi_app/services/test_semgrep_semantic_parity.py
+          python aegis-platform/kali/tests/test_code_semgrep_parity_contract.py
+      - name: Verify governed code runtime placement contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest=json.loads(Path('aegis-platform/kali/tool-manifest.json').read_text())
+          code=manifest['profiles']['code']
+          assert code['production_allowed'] is True
+          assert 'code.semgrep' in code['capabilities']
+          semgrep=manifest['tools']['semgrep']
+          assert semgrep['version']=='1.177.0'
+          assert semgrep['source']=='pypi'
+          assert 'code' in semgrep['profiles']
+
+          service=Path('aegis-platform/kali/runner/code_semgrep_parity_service.py').read_text()
+          assert 'LISTEN_HOST = "127.0.0.1"' in service
+          assert 'shell=False' in service
+          assert 'SEMGREP_PATH = "/opt/aegis-code-tools/bin/semgrep"' in service
+          assert 'payload["path"]' not in service
+          assert 'payload["config"]' not in service
+          assert 'payload["argv"]' not in service
+          assert 'no_new_privs' in service
+          assert '0000000000000000' in service
+          assert 'source-tree digest mismatch' in service
+          assert 'rule digest mismatch' in service
+          PY
+      - name: Capture exact-head contract evidence
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          sha256sum             aegis-platform/backend/fastapi_app/services/semgrep_semantic_parity.py             aegis-platform/kali/runner/code_semgrep_parity_service.py             aegis-platform/e2e/fixtures/semgrep-parity.yml             aegis-platform/e2e/fixtures/semgrep-parity-source/app.py             > artifacts/contract-sha256s.txt
+          python - <<'PY' > artifacts/code-semgrep-parity-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.code-semgrep-parity-contract.v1',
+              'capability_id':'code.semgrep',
+              'parity_only':True,
+              'production_cutover':False,
+              'canary_routing':False,
+              'legacy_retirement':False,
+              'caller_binary_authority':False,
+              'caller_argv_authority':False,
+              'caller_path_authority':False,
+              'caller_rule_authority':False,
+              'loopback_provider_required':True,
+              'authorization_binding_required':True,
+              'scope_binding_required':True,
+              'source_ref_binding_required':True,
+              'source_digest_binding_required':True,
+              'rule_digest_binding_required':True,
+              'candidate_capabilities':[],
+              'candidate_non_root':True,
+              'candidate_no_new_privs':True,
+              'semantic_projection':'production-semgrep-finding-fields',
+              'real_dual_run_required':True,
+              'network_required':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-parity-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
