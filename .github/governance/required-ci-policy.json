@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "governance_workflow": "Required CI Governance",
+  "successful_conclusions": ["success"],
+  "observe_all_triggered_workflows": true,
+  "poll_seconds": 15,
+  "settle_seconds": 60,
+  "timeout_seconds": 3600,
+  "always_required_workflows": {
+    "pull_request": [
+      "Domain Contract Reality",
+      "Security Reality Check",
+      "Canonical Source Tree Reality",
+      "Native Capability Reality",
+      "Risk Correlation Acceptance",
+      "Risk Decision Lineage Reality",
+      "Remediation Verification Lineage Reality"
+    ],
+    "push": [
+      "Domain Contract Reality",
+      "Security Reality Check",
+      "Canonical Source Tree Reality",
+      "Native Capability Reality",
+      "Risk Correlation Acceptance",
+      "Risk Decision Lineage Reality",
+      "Remediation Verification Lineage Reality",
+      "Supply Chain Release"
+    ]
+  },
+  "conditional_required_workflows": [
+    {
+      "name": "External Black-Box E2E",
+      "events": ["pull_request", "push"],
+      "paths": [
+        "aegis-platform/e2e/**",
+        "aegis-platform/backend/**",
+        "aegis-platform/frontend/**",
+        "aegis-platform/docker-compose.yml",
+        "aegis-platform/docker/**",
+        "aegis-platform/docker-compose.ci.yml",
+        ".github/workflows/external-black-box-e2e.yml",
+        ".github/workflows/domain-contract-reality.yml",
+        ".github/workflows/frontend-lock-sync.yml",
+        ".github/workflows/production-runtime-reality-gate.yml",
+        "CANONICAL_EXECUTION_BASELINE.md"
+      ]
+    },
+    {
+      "name": "AegisScan Production Runtime Reality Gate",
+      "events": ["pull_request", "push"],
+      "paths": [
+        "aegis-platform/backend/**",
+        "aegis-platform/docker-compose.yml",
+        "aegis-platform/docker-compose.prod.yml",
+        "aegis-platform/docker-compose.backup.yml",
+        "aegis-platform/docker/backup/**",
+        "aegis-platform/docker/scanner-egress/**",
+        "aegis-platform/scripts/production_policy_gate.py",
+        "aegis/**",
+        "tests/test_production_runtime_imports.py",
+        ".github/workflows/production-runtime-reality-gate.yml"
+      ]
+    },
+    {
+      "name": "Supply Chain Release",
+      "events": ["pull_request"],
+      "paths": [
+        ".github/workflows/supply-chain-release.yml",
+        "aegis-platform/backend/**",
+        "aegis-platform/frontend/**",
+        "aegis-platform/scripts/create_slsa_provenance.py",
+        "aegis-platform/scripts/install_cosign_release.sh",
+        "aegis-platform/scripts/verify_image_supply_chain.sh",
+        "tests/test_supply_chain_provenance.py"
+      ]
+    },
+    {
+      "name": "Scanner Crash Recovery Reality",
+      "events": ["pull_request", "push"],
+      "paths": [
+        "aegis-platform/backend/**",
+        "aegis-platform/docker-compose.yml",
+        "aegis-platform/docker-compose.ci.yml",
+        "aegis-platform/docker-compose.prod.yml",
+        ".github/workflows/scanner-crash-recovery-reality.yml"
+      ]
+    }
+  ]
+}
