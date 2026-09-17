@@ -1,0 +1,269 @@
+name: Web Nuclei Real Parity
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &nuclei_real_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/scanner_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/security_scan.py'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/kali/tool-manifest.json'
+      - 'aegis-platform/kali/runner/profile_runtime_manifest.py'
+      - 'aegis-platform/kali/runner/web_nuclei_parity_service.py'
+      - 'aegis-platform/kali/tests/test_web_nuclei_parity_contract.py'
+      - 'aegis-platform/e2e/nuclei_http_fixture.py'
+      - 'aegis-platform/e2e/fixtures/nuclei-parity.yaml'
+      - '.github/workflows/web-nuclei-real-parity.yml'
+  push:
+    branches: [main]
+    paths: *nuclei_real_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-nuclei-real-parity-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-nuclei-dual-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_NUCLEI_NETWORK: aegis-nuclei-parity
+      AEGIS_NUCLEI_TARGET_IP: 172.32.1.10
+      AEGIS_NUCLEI_TARGET: http://172.32.1.10:8080
+      AEGIS_NUCLEI_AUTH_TOKEN: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      AEGIS_NUCLEI_AUTHORIZATION_REF: nuclei-parity-authorization
+      AEGIS_NUCLEI_SCOPE_REF: project:parity:asset:web
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build legacy scanner reference and governed Kali web runtime
+        run: |
+          set -euo pipefail
+          docker build --no-cache --target legacy-parity-reference             -t aegis-nuclei:legacy -f aegis-platform/backend/Dockerfile.django aegis-platform/backend
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache             --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}"             --build-arg AEGIS_RUNNER_VERSION=0.1.0             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             -t aegis-kali:base -f aegis-platform/kali/Dockerfile.base aegis-platform/kali
+          docker build --no-cache             --build-arg AEGIS_BASE_IMAGE=aegis-kali:base             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             --target profile-web -t aegis-kali:web             -f aegis-platform/kali/Dockerfile.profiles .
+          docker run --rm --entrypoint sh aegis-nuclei:legacy -c             'nuclei -version 2>&1 | grep -q "3.11.1" && test -d /opt/nuclei-templates'
+          docker run --rm --entrypoint sh aegis-kali:web -c             'nuclei -version 2>&1 | grep -q "3.11.1" && test -d /opt/nuclei-templates'
+          docker run --rm --entrypoint cat aegis-kali:web             /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY'
+          import json
+          runtime=json.load(open('runtime-manifest.json'))
+          assert runtime['profile']=='web', runtime
+          assert runtime['dispatch_enabled'] is False, runtime
+          assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
+          assert 'web.nuclei' in runtime['profile_capabilities'], runtime
+          assert runtime['profile_tools']['nuclei']['version']=='3.11.1', runtime
+          assert runtime['profile_tools']['nuclei-templates']['commit']=='0cb51d4bfae945e5ec2644fc8c2d2e6ea84bbffe', runtime
+          PY
+      - name: Prepare deterministic template and isolated target network
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts parity-templates
+          chmod 0777 artifacts
+          cp aegis-platform/e2e/fixtures/nuclei-parity.yaml parity-templates/nuclei-parity.yaml
+          template_sha="$(sha256sum parity-templates/nuclei-parity.yaml | awk '{print $1}')"
+          test -n "$template_sha"
+          echo "AEGIS_NUCLEI_TEMPLATE_SHA256=$template_sha" >> "$GITHUB_ENV"
+          docker network create --internal --subnet 172.32.1.0/24 "${AEGIS_NUCLEI_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_NUCLEI_NETWORK}")" = true
+          docker run -d --name aegis-nuclei-fixture             --network "${AEGIS_NUCLEI_NETWORK}" --ip "${AEGIS_NUCLEI_TARGET_IP}"             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m             -v "$PWD/aegis-platform/e2e/nuclei_http_fixture.py:/fixture.py:ro"             --entrypoint python aegis-nuclei:legacy /fixture.py
+          for _ in $(seq 1 30); do
+            if docker logs aegis-nuclei-fixture 2>&1 | grep -Fq AEGIS_NUCLEI_PARITY_FIXTURE_READY; then
+              docker run --rm -i --network "${AEGIS_NUCLEI_NETWORK}" --entrypoint python aegis-nuclei:legacy - <<'PY'
+          import urllib.request
+          body=urllib.request.urlopen('http://172.32.1.10:8080/healthz',timeout=2).read()
+          assert body == b'ok\n', body
+          PY
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs aegis-nuclei-fixture || true
+          exit 1
+      - name: Execute real legacy production adapter
+        run: |
+          set -euo pipefail
+          docker run --rm -i --name aegis-nuclei-legacy-run             --network "${AEGIS_NUCLEI_NETWORK}" --user 10001:10001             --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m             -e AUTHORIZED_SCAN_TARGETS="${AEGIS_NUCLEI_TARGET_IP}/32"             -e NUCLEI_TEMPLATES_DIR=/parity-templates             -e HOME=/tmp/home -e XDG_CONFIG_HOME=/tmp/config -e XDG_CACHE_HOME=/tmp/cache             -v "$PWD/parity-templates:/parity-templates:ro"             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-nuclei:legacy - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.scanner_adapters import run_nuclei
+          for path in ('/tmp/home','/tmp/config','/tmp/cache'):
+              Path(path).mkdir(parents=True,exist_ok=True)
+          result=run_nuclei('http://172.32.1.10:8080',timeout=120)
+          assert result.exit_code == 0, result.stderr
+          assert result.stdout.strip(), 'legacy Nuclei produced no JSONL observation'
+          Path('/artifacts/legacy.jsonl').write_text(result.stdout,encoding='utf-8')
+          Path('/artifacts/legacy-result.json').write_text(json.dumps({
+              'tool':result.tool,
+              'target':result.target,
+              'exit_code':result.exit_code,
+              'stderr':result.stderr,
+          },sort_keys=True,indent=2),encoding='utf-8')
+          PY
+      - name: Start governed parity candidate
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-nuclei-kali             --network "${AEGIS_NUCLEI_NETWORK}" --user 10001:10001 --read-only             --cap-drop ALL --security-opt no-new-privileges:true             --pids-limit 128 --memory 512m --cpus 1             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m             -e AEGIS_KALI_NUCLEI_PARITY_MODE=true             -e AEGIS_KALI_NUCLEI_PARITY_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e AEGIS_KALI_NUCLEI_EXPECTED_AUTHORIZATION_REF="${AEGIS_NUCLEI_AUTHORIZATION_REF}"             -e AEGIS_KALI_NUCLEI_EXPECTED_SCOPE_REF="${AEGIS_NUCLEI_SCOPE_REF}"             -e AEGIS_KALI_NUCLEI_EXPECTED_TARGET="${AEGIS_NUCLEI_TARGET}"             -e AEGIS_KALI_NUCLEI_TEMPLATE_PATH=/opt/aegis-parity-templates/nuclei-parity.yaml             -e AEGIS_KALI_NUCLEI_TEMPLATE_SHA256="${AEGIS_NUCLEI_TEMPLATE_SHA256}"             -v "$PWD/parity-templates:/opt/aegis-parity-templates:ro"             -v "$PWD/artifacts:/artifacts"             -v "$PWD/aegis-platform/kali/runner/web_nuclei_parity_service.py:/opt/aegis-runner/web_nuclei_parity_service.py:ro"             --entrypoint python3 aegis-kali:web /opt/aegis-runner/web_nuclei_parity_service.py
+          for _ in $(seq 1 30); do
+            if docker exec -i aegis-nuclei-kali python3 - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18768/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nuclei-kali
+          exit 1
+      - name: Prove fail-closed binding and real candidate execution
+        run: |
+          set -euo pipefail
+          docker exec -i             -e AEGIS_NUCLEI_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             aegis-nuclei-kali python3 - <<'PY'
+          import copy, json, os, urllib.error, urllib.request
+          from pathlib import Path
+
+          def payload():
+              return {
+                  'schema_version':1,
+                  'execution_ref':'scan:parity:nuclei',
+                  'authorization_ref':'nuclei-parity-authorization',
+                  'scope_ref':'project:parity:asset:web',
+                  'capability_id':'web.nuclei',
+                  'target':'http://172.32.1.10:8080',
+                  'timeout_seconds':120,
+              }
+
+          def send(body, token=None):
+              request=urllib.request.Request(
+                  'http://127.0.0.1:18768/v1/execute',
+                  data=json.dumps(body).encode(),
+                  method='POST',
+                  headers={
+                      'Content-Type':'application/json',
+                      'X-Aegis-Nuclei-Parity-Token':token or os.environ['AEGIS_NUCLEI_AUTH_TOKEN'],
+                  },
+              )
+              return urllib.request.urlopen(request,timeout=135).read()
+
+          try:
+              send(payload(), token='wrong-token')
+          except urllib.error.HTTPError as exc:
+              assert exc.code == 401, exc.code
+          else:
+              raise AssertionError('invalid parity token was not rejected')
+
+          rejected=copy.deepcopy(payload())
+          rejected['target']='http://172.32.1.11:8080'
+          try:
+              send(rejected)
+          except urllib.error.HTTPError as exc:
+              body=json.loads(exc.read())
+              assert exc.code == 400, (exc.code,body)
+              assert 'target does not match' in body['error'], body
+          else:
+              raise AssertionError('target mismatch was not rejected')
+
+          result=json.loads(send(payload()))
+          assert result['status']=='completed' and result['exit_code']==0, result
+          assert result['stdout'].strip(), 'candidate Nuclei produced no JSONL observation'
+          runtime=result['runtime']
+          assert runtime['profile']=='web', runtime
+          assert runtime['linux_privilege']['uid'] != 0, runtime
+          assert runtime['linux_privilege']['effective']=='0000000000000000', runtime
+          assert runtime['linux_privilege']['allowed_capabilities']==[], runtime
+          assert runtime['linux_privilege']['no_new_privs'] is True, runtime
+          assert runtime['binding']['authorization_ref']=='nuclei-parity-authorization', runtime
+          assert runtime['binding']['scope_ref']=='project:parity:asset:web', runtime
+          assert runtime['binding']['target']=='http://172.32.1.10:8080', runtime
+          Path('/artifacts/candidate.jsonl').write_text(result['stdout'],encoding='utf-8')
+          Path('/artifacts/candidate-result.json').write_text(
+              json.dumps(result,sort_keys=True,indent=2),encoding='utf-8'
+          )
+          PY
+      - name: Compare production finding semantics
+        run: |
+          set -euo pipefail
+          docker run --rm -i             --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m             -e SECRET_KEY=aegisscan-nuclei-parity-ci-only-secret-key-not-for-production             -e JWT_SECRET_KEY=aegisscan-nuclei-parity-ci-only-jwt-key-not-for-production             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-nuclei:legacy - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.nuclei_semantic_parity import compare_nuclei_semantics, normalize_nuclei_semantics
+          from fastapi_app.tasks.security_scan import _parse_nuclei_findings
+
+          legacy=Path('/artifacts/legacy.jsonl').read_text(encoding='utf-8')
+          candidate=Path('/artifacts/candidate.jsonl').read_text(encoding='utf-8')
+          comparison=compare_nuclei_semantics(legacy,candidate)
+          assert comparison['equivalent'] is True, comparison
+          assert comparison['legacy']['finding_count']==1, comparison
+          assert comparison['candidate']['finding_count']==1, comparison
+          assert comparison['legacy']['observations'][0]['template_id']=='aegis-nuclei-parity', comparison
+
+          for name,raw in (('legacy',legacy),('candidate',candidate)):
+              production=_parse_nuclei_findings(raw)
+              semantic=normalize_nuclei_semantics(raw)
+              assert len(production)==semantic['finding_count'], (name,production,semantic)
+              assert production[0]['title']==semantic['observations'][0]['title']
+              assert production[0]['severity']==semantic['observations'][0]['severity']
+              assert production[0]['url']==semantic['observations'][0]['url']
+              assert production[0]['method']==semantic['observations'][0]['method']
+              assert production[0]['template_id']==semantic['observations'][0]['template_id']
+              assert production[0]['matcher_name']==semantic['observations'][0]['matcher_name']
+
+          Path('/artifacts/semantic-parity.json').write_text(
+              json.dumps(comparison,sort_keys=True,indent=2),encoding='utf-8'
+          )
+          PY
+      - name: Capture immutable exact-head evidence
+        run: |
+          set -euo pipefail
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          git rev-parse HEAD > artifacts/head-sha.txt
+          docker image inspect aegis-kali:web --format '{{.Id}}' > artifacts/kali-web-image-id.txt
+          docker image inspect aegis-nuclei:legacy --format '{{.Id}}' > artifacts/legacy-image-id.txt
+          cp parity-templates/nuclei-parity.yaml artifacts/nuclei-parity.yaml
+          python - <<'PY' > artifacts/web-boundary.json
+          import json, os
+          print(json.dumps({
+              'schema':'aegis.web-nuclei-real-parity.v1',
+              'target':'http://172.32.1.10:8080',
+              'fixture_network_internal':True,
+              'public_internet_fixture':False,
+              'candidate_loopback_only':True,
+              'candidate_production_dispatch':False,
+              'production_cutover':False,
+              'canary_routing':False,
+              'legacy_retirement':False,
+              'candidate_capabilities':[],
+              'candidate_non_root':True,
+              'candidate_no_new_privs':True,
+              'authorization_binding_required':True,
+              'scope_binding_required':True,
+              'target_binding_required':True,
+              'template_sha256':os.environ['AEGIS_NUCLEI_TEMPLATE_SHA256'],
+              'legacy_adapter_executed':True,
+              'kali_candidate_executed':True,
+              'semantic_projection':'production-finding-fields',
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum             head-sha.txt runtime-manifest.json kali-web-image-id.txt legacy-image-id.txt             nuclei-parity.yaml legacy.jsonl legacy-result.json candidate.jsonl candidate-result.json             semantic-parity.json web-boundary.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-real-parity-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-nuclei-kali aegis-nuclei-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_NUCLEI_NETWORK}" >/dev/null 2>&1 || true
