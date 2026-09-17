@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fail-closed final production governance decision from independently captured AegisScan evidence."""
+"""Fail-closed final production governance decision from internal AegisScan evidence."""
 from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import sys
@@ -28,6 +29,11 @@ EXPECTED_RUNS = {
     },
 }
 COMPONENTS = ("django", "fastapi", "frontend")
+RFC1918_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+IPV6_ULA = ipaddress.ip_network("fc00::/7")
 
 
 class GovernanceError(RuntimeError):
@@ -51,9 +57,7 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
 def _unique(root: Path, name: str, label: str) -> Path:
     matches = [path for path in root.rglob(name) if path.is_file()]
     if len(matches) != 1:
-        raise GovernanceError(
-            f"{label} must contain exactly one {name}; found {len(matches)}"
-        )
+        raise GovernanceError(f"{label} must contain exactly one {name}; found {len(matches)}")
     return matches[0]
 
 
@@ -65,26 +69,40 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _is_enterprise_private(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast:
+        return False
+    if isinstance(address, ipaddress.IPv4Address):
+        return any(address in network for network in RFC1918_NETWORKS)
+    return address in IPV6_ULA
+
+
+def _private_address_evidence(values: Any, label: str) -> list[str]:
+    if not isinstance(values, list) or not values:
+        raise GovernanceError(f"{label} is missing private address evidence")
+    normalized = [str(value).strip() for value in values]
+    if any(not _is_enterprise_private(value) for value in normalized):
+        raise GovernanceError(f"{label} contains an address outside RFC1918/IPv6-ULA")
+    return normalized
+
+
 def _verify_digest_manifest(root: Path, manifest: dict[str, Any], label: str) -> None:
     digests = manifest.get("sha256")
     if not isinstance(digests, dict) or not digests:
         raise GovernanceError(f"{label} is missing SHA-256 evidence map")
     for name, expected in digests.items():
-        if (
-            not isinstance(name, str)
-            or "/" in name
-            or "\\" in name
-            or name in {"", ".", ".."}
-        ):
+        if not isinstance(name, str) or "/" in name or "\\" in name or name in {"", ".", ".."}:
             raise GovernanceError(f"{label} contains unsafe evidence filename")
         if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
             raise GovernanceError(f"{label} contains invalid SHA-256 for {name}")
         evidence = _unique(root, name, label)
         actual = _sha256(evidence)
         if actual != expected:
-            raise GovernanceError(
-                f"{label} evidence digest mismatch for {name}: {actual} != {expected}"
-            )
+            raise GovernanceError(f"{label} evidence digest mismatch for {name}: {actual} != {expected}")
 
 
 def _verify_run_metadata(path: Path, kind: str, release_sha: str) -> dict[str, Any]:
@@ -95,54 +113,33 @@ def _verify_run_metadata(path: Path, kind: str, release_sha: str) -> dict[str, A
     if payload.get("head_sha") != release_sha:
         raise GovernanceError(f"{kind} workflow run is not bound to release SHA")
     if payload.get("path") != expected["path"]:
-        raise GovernanceError(
-            f"{kind} workflow path mismatch: {payload.get('path')!r}"
-        )
+        raise GovernanceError(f"{kind} workflow path mismatch: {payload.get('path')!r}")
     if payload.get("event") != expected["event"]:
-        raise GovernanceError(
-            f"{kind} workflow trigger mismatch: {payload.get('event')!r}"
-        )
+        raise GovernanceError(f"{kind} workflow trigger mismatch: {payload.get('event')!r}")
     run_id = payload.get("id")
     if not isinstance(run_id, int) or run_id <= 0:
         raise GovernanceError(f"{kind} workflow run id is invalid")
     return payload
 
 
-def _verify_go_live(root: Path, release_sha: str) -> dict[str, Any]:
-    manifest_path = _unique(root, "manifest.json", "go-live evidence")
-    manifest = _load_json(manifest_path, "go-live manifest")
-    if manifest.get("schema") != "aegisscan.go-live-evidence.v1":
-        raise GovernanceError("go-live manifest schema is invalid")
-    if manifest.get("status") != "success":
-        raise GovernanceError("go-live manifest is not successful")
-    if manifest.get("release_sha") != release_sha:
-        raise GovernanceError("go-live manifest release SHA mismatch")
-    public_origin = str(manifest.get("public_origin", "")).strip()
-    if not public_origin.startswith("https://"):
-        raise GovernanceError("go-live manifest does not contain an HTTPS public origin")
-    _verify_digest_manifest(root, manifest, "go-live manifest")
-
-    deploy = _load_json(_unique(root, "deploy.json", "go-live evidence"), "deploy evidence")
-    if (
-        deploy.get("schema") != "aegisscan.remote-production-deploy.v1"
-        or deploy.get("status") != "success"
-        or deploy.get("release_sha") != release_sha
-        or deploy.get("origin") != public_origin
-    ):
-        raise GovernanceError("remote deployment evidence is not bound to the approved release/origin")
-
-    public = _load_json(
-        _unique(root, "public-acceptance.json", "go-live evidence"),
-        "public acceptance evidence",
-    )
-    checks = public.get("checks")
+def _verify_internal_acceptance(payload: dict[str, Any], internal_origin: str, label: str) -> dict[str, Any]:
+    checks = payload.get("checks")
     tls = checks.get("tls") if isinstance(checks, dict) else None
+    ca = payload.get("enterprise_ca")
+    addresses = payload.get("resolved_addresses")
+    addresses_after = payload.get("resolved_addresses_after")
     if (
-        public.get("schema") != "aegisscan.public-acceptance.v1"
-        or public.get("status") != "success"
-        or public.get("origin") != public_origin
+        payload.get("schema") != "aegisscan.internal-production-acceptance.v1"
+        or payload.get("status") != "success"
+        or payload.get("deployment_mode") != "internal"
+        or payload.get("network_scope") != "rfc1918-or-ipv6-ula"
+        or payload.get("origin") != internal_origin
+        or not isinstance(ca, dict)
+        or not SHA256_RE.fullmatch(str(ca.get("sha256", "")))
         or not isinstance(checks, dict)
         or checks.get("verified_https") is not True
+        or checks.get("internal_only_resolution") is not True
+        or checks.get("enterprise_ca_verified") is not True
         or checks.get("health_200") is not True
         or checks.get("ready_200") is not True
         or checks.get("frontend_200") is not True
@@ -150,14 +147,61 @@ def _verify_go_live(root: Path, release_sha: str) -> dict[str, Any]:
         or not SHA256_RE.fullmatch(str(tls.get("certificate_sha256", "")))
         or not str(tls.get("version", "")).startswith("TLS")
     ):
-        raise GovernanceError("public HTTPS acceptance evidence is incomplete")
+        raise GovernanceError(f"{label} internal HTTPS acceptance evidence is incomplete")
+    _private_address_evidence(addresses, f"{label} initial resolution")
+    _private_address_evidence(addresses_after, f"{label} final resolution")
+    return payload
 
-    black_box = _unique(root, "external-black-box.log", "go-live evidence")
+
+def _verify_go_live(root: Path, release_sha: str) -> dict[str, Any]:
+    manifest_path = _unique(root, "manifest.json", "go-live evidence")
+    manifest = _load_json(manifest_path, "go-live manifest")
+    if manifest.get("schema") != "aegisscan.go-live-evidence.v2":
+        raise GovernanceError("go-live manifest schema is invalid")
+    if manifest.get("status") != "success" or manifest.get("deployment_mode") != "internal":
+        raise GovernanceError("go-live manifest is not successful internal production evidence")
+    if manifest.get("network_scope") != "rfc1918-or-ipv6-ula":
+        raise GovernanceError("go-live manifest network scope is invalid")
+    if manifest.get("release_sha") != release_sha:
+        raise GovernanceError("go-live manifest release SHA mismatch")
+    internal_origin = str(manifest.get("internal_origin", "")).strip()
+    if not internal_origin.startswith("https://"):
+        raise GovernanceError("go-live manifest does not contain an HTTPS internal origin")
+    manifest_ca = str(manifest.get("enterprise_ca_sha256", ""))
+    if not SHA256_RE.fullmatch(manifest_ca):
+        raise GovernanceError("go-live manifest enterprise CA evidence is invalid")
+    _verify_digest_manifest(root, manifest, "go-live manifest")
+
+    deploy = _load_json(_unique(root, "deploy.json", "go-live evidence"), "deploy evidence")
+    if (
+        deploy.get("schema") != "aegisscan.remote-production-deploy.v1"
+        or deploy.get("status") != "success"
+        or deploy.get("deployment_mode") != "internal"
+        or deploy.get("network_scope") != "rfc1918-or-ipv6-ula"
+        or deploy.get("release_sha") != release_sha
+        or deploy.get("origin") != internal_origin
+    ):
+        raise GovernanceError("remote deployment evidence is not bound to the approved internal release/origin")
+    _private_address_evidence(deploy.get("host_resolved_addresses"), "deployment SSH host")
+    _private_address_evidence(deploy.get("origin_resolved_addresses"), "deployment origin")
+
+    acceptance = _verify_internal_acceptance(
+        _load_json(
+            _unique(root, "internal-acceptance.json", "go-live evidence"),
+            "internal acceptance evidence",
+        ),
+        internal_origin,
+        "go-live",
+    )
+    if acceptance["enterprise_ca"]["sha256"] != manifest_ca:
+        raise GovernanceError("go-live enterprise CA digest does not match internal acceptance")
+
+    black_box = _unique(root, "internal-black-box.log", "go-live evidence")
     if black_box.stat().st_size <= 0:
-        raise GovernanceError("external black-box evidence is empty")
+        raise GovernanceError("internal black-box evidence is empty")
     black_box_text = black_box.read_text(encoding="utf-8", errors="replace")
     if "EXTERNAL_REAL_E2E=PASS" not in black_box_text:
-        raise GovernanceError("external black-box evidence does not contain a PASS marker")
+        raise GovernanceError("internal black-box evidence does not contain the real E2E PASS marker")
 
     cli = _load_json(
         _unique(root, "cli-platform-status.json", "go-live evidence"),
@@ -167,9 +211,10 @@ def _verify_go_live(root: Path, release_sha: str) -> dict[str, Any]:
         raise GovernanceError("CLI production evidence is empty")
 
     return {
-        "public_origin": public_origin,
+        "internal_origin": internal_origin,
+        "enterprise_ca_sha256": manifest_ca,
         "manifest_sha256": _sha256(manifest_path),
-        "tls_certificate_sha256": tls["certificate_sha256"],
+        "tls_certificate_sha256": acceptance["checks"]["tls"]["certificate_sha256"],
     }
 
 
@@ -261,7 +306,7 @@ def _verify_supply_chain(root: Path, release_sha: str) -> dict[str, Any]:
         ):
             raise GovernanceError(f"{component} provenance is not bound to the approved release")
         sbom_payload = _load_json(sbom, f"{component} SBOM")
-        if not str(sbom_payload.get("bomFormat", "")).lower() == "cyclonedx":
+        if str(sbom_payload.get("bomFormat", "")).lower() != "cyclonedx":
             raise GovernanceError(f"{component} SBOM is not CycloneDX")
         evidence[component] = {
             "provenance_sha256": _sha256(provenance),
@@ -270,23 +315,14 @@ def _verify_supply_chain(root: Path, release_sha: str) -> dict[str, Any]:
     return evidence
 
 
-def _verify_current_public(path: Path, public_origin: str) -> dict[str, Any]:
-    payload = _load_json(path, "current public acceptance")
-    checks = payload.get("checks")
-    tls = checks.get("tls") if isinstance(checks, dict) else None
-    if (
-        payload.get("schema") != "aegisscan.public-acceptance.v1"
-        or payload.get("status") != "success"
-        or payload.get("origin") != public_origin
-        or not isinstance(checks, dict)
-        or checks.get("verified_https") is not True
-        or checks.get("health_200") is not True
-        or checks.get("ready_200") is not True
-        or checks.get("frontend_200") is not True
-        or not isinstance(tls, dict)
-        or not SHA256_RE.fullmatch(str(tls.get("certificate_sha256", "")))
-    ):
-        raise GovernanceError("current public production revalidation failed")
+def _verify_current_internal(path: Path, internal_origin: str, enterprise_ca_sha256: str) -> dict[str, Any]:
+    payload = _verify_internal_acceptance(
+        _load_json(path, "current internal acceptance"),
+        internal_origin,
+        "current",
+    )
+    if payload["enterprise_ca"]["sha256"] != enterprise_ca_sha256:
+        raise GovernanceError("enterprise CA changed between go-live and final governance")
     return payload
 
 
@@ -299,11 +335,15 @@ def decide(
     live_run_metadata: Path,
     resilience_run_metadata: Path,
     supply_chain_run_metadata: Path,
-    current_public_acceptance: Path,
+    current_internal_acceptance: Path | None = None,
+    current_public_acceptance: Path | None = None,
     output: Path,
 ) -> dict[str, Any]:
     if not SHA_RE.fullmatch(release_sha):
         raise GovernanceError("release SHA must be exactly 40 lowercase hexadecimal characters")
+    current_path = current_internal_acceptance or current_public_acceptance
+    if current_path is None:
+        raise GovernanceError("current internal acceptance evidence is required")
 
     runs = {
         "live_deploy": _verify_run_metadata(live_run_metadata, "live_deploy", release_sha),
@@ -313,19 +353,27 @@ def decide(
     go_live = _verify_go_live(go_live_root, release_sha)
     resilience = _verify_resilience(resilience_root, release_sha)
     supply_chain = _verify_supply_chain(supply_chain_root, release_sha)
-    current = _verify_current_public(current_public_acceptance, go_live["public_origin"])
+    current = _verify_current_internal(
+        current_path,
+        go_live["internal_origin"],
+        go_live["enterprise_ca_sha256"],
+    )
 
     decision = {
-        "schema": "aegisscan.production-governance-decision.v1",
+        "schema": "aegisscan.production-governance-decision.v2",
         "status": "success",
         "decision": "APPROVED",
+        "deployment_mode": "internal",
+        "network_scope": "rfc1918-or-ipv6-ula",
         "release_sha": release_sha,
-        "public_origin": go_live["public_origin"],
+        "internal_origin": go_live["internal_origin"],
         "decided_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "controls": {
             "exact_release_deployed": True,
-            "public_https_revalidated": True,
-            "external_black_box_evidence": True,
+            "internal_https_revalidated": True,
+            "private_dns_perimeter": True,
+            "enterprise_ca_verified": True,
+            "internal_black_box_evidence": True,
             "remote_encrypted_backup": True,
             "version_pinned_restore": True,
             "disposable_database_restore": True,
@@ -338,11 +386,9 @@ def decide(
             "resilience": resilience,
             "supply_chain": supply_chain,
             "current_tls_certificate_sha256": current["checks"]["tls"]["certificate_sha256"],
+            "current_enterprise_ca_sha256": current["enterprise_ca"]["sha256"],
             "workflow_runs": {
-                key: {
-                    "id": payload["id"],
-                    "html_url": payload.get("html_url"),
-                }
+                key: {"id": payload["id"], "html_url": payload.get("html_url")}
                 for key, payload in runs.items()
             },
         },
@@ -361,9 +407,13 @@ def main() -> int:
     parser.add_argument("--live-run-metadata", type=Path, required=True)
     parser.add_argument("--resilience-run-metadata", type=Path, required=True)
     parser.add_argument("--supply-chain-run-metadata", type=Path, required=True)
-    parser.add_argument("--current-public-acceptance", type=Path, required=True)
+    parser.add_argument("--current-internal-acceptance", type=Path)
+    parser.add_argument("--current-public-acceptance", dest="legacy_current_acceptance", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    current = args.current_internal_acceptance or args.legacy_current_acceptance
+    if current is None:
+        parser.error("--current-internal-acceptance is required")
 
     try:
         decision = decide(
@@ -374,12 +424,12 @@ def main() -> int:
             live_run_metadata=args.live_run_metadata.resolve(),
             resilience_run_metadata=args.resilience_run_metadata.resolve(),
             supply_chain_run_metadata=args.supply_chain_run_metadata.resolve(),
-            current_public_acceptance=args.current_public_acceptance.resolve(),
+            current_internal_acceptance=current.resolve(),
             output=args.output.resolve(),
         )
     except GovernanceError as exc:
         print(json.dumps({
-            "schema": "aegisscan.production-governance-decision.v1",
+            "schema": "aegisscan.production-governance-decision.v2",
             "status": "failed",
             "decision": "REJECTED",
             "error": str(exc),
