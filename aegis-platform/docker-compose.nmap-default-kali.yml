@@ -1,0 +1,45 @@
+services:
+  scanner_worker:
+    environment:
+      AEGIS_NMAP_PROVIDER: ${AEGIS_NMAP_PROVIDER:-default-kali}
+      AEGIS_KALI_NMAP_CANARY_BPS: "0"
+      AEGIS_KALI_NETWORK_URL: ${AEGIS_KALI_NETWORK_URL:-http://127.0.0.1:18766}
+      AEGIS_KALI_NETWORK_AUTH_TOKEN: ${AEGIS_KALI_NETWORK_AUTH_TOKEN:-}
+      AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION: ${AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION:-}
+      AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT: ${AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT:-}
+      AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST:-}
+      AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST:-}
+      AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST:-}
+      AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST:-}
+
+  kali_network:
+    image: ${AEGIS_KALI_NETWORK_IMAGE:-aegis-kali:network-provider}
+    container_name: aegis-kali-network
+    profiles: [kali-network]
+    restart: unless-stopped
+    user: "0:0"
+    entrypoint: ["/usr/bin/tini", "--", "python3", "/opt/aegis-runner/network_service.py"]
+    network_mode: "service:scanner_egress"
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    environment:
+      AEGIS_NETWORK_LISTEN_HOST: 127.0.0.1
+      AEGIS_NETWORK_LISTEN_PORT: "18766"
+      AEGIS_KALI_NETWORK_AUTH_TOKEN: ${AEGIS_KALI_NETWORK_AUTH_TOKEN:-}
+      HOME: /tmp/aegis-home
+      TMPDIR: /tmp
+    depends_on:
+      scanner_egress: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=2)); assert d['status']=='ok' and d['profile']=='network'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s

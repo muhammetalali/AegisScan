@@ -67,25 +67,28 @@ jobs:
           python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
           aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py
           aegis-platform/kali/tests/test_network_provider_contract.py
-      - name: Capture exact-head canary contract
+      - name: Capture exact-head canary regression contract
         run: |
           mkdir -p artifacts
           git rev-parse HEAD > artifacts/head-sha.txt
           python - <<'PY' > artifacts/network-nmap-canary-contract.json
           import json
           print(json.dumps({
-              'schema':'aegis.network-nmap-canary-contract.v1',
+              'schema':'aegis.network-nmap-canary-regression-contract.v2',
               'capability_id':'network.nmap',
-              'production_default_provider':'legacy',
-              'active_modes':['legacy','canary'],
+              'regression_scope':'bounded-canary-and-zero-bps-rollback',
+              'deployment_default_provider':'default-kali',
+              'production_admitted_modes':['legacy','canary','default-kali'],
+              'raw_kali_production_admitted':False,
               'assignment':'sha256-stable-scan-id',
               'max_canary_bps':2500,
               'selected_provider_failure_fallback':False,
-              'rollback':'AEGIS_KALI_NMAP_CANARY_BPS=0',
+              'canary_rollback':'AEGIS_KALI_NMAP_CANARY_BPS=0',
+              'm5_administrative_rollback':'AEGIS_NMAP_PROVIDER=legacy',
               'provider_scope':['network.nmap'],
               'provider_capabilities':['CAP_NET_RAW'],
               'no_new_privileges':True,
-              'default_kali_promoted_in_this_phase':False,
+              'current_promotion_gate':'Network Nmap Default Kali Reality',
           },sort_keys=True,indent=2))
           PY
       - uses: actions/upload-artifact@v4
@@ -316,7 +319,9 @@ jobs:
           import json
           cohorts=json.load(open('artifacts/cohorts.json'))
           print(json.dumps({
-              'schema':'aegis.network-nmap-canary-evidence.v1',
+              'schema':'aegis.network-nmap-canary-evidence.v2',
+              'regression_scope':'bounded-canary-and-zero-bps-rollback',
+              'deployment_default_provider':'default-kali',
               'selected':cohorts['selected'],
               'holdback':cohorts['holdback'],
               'max_canary_bps':2500,

@@ -1,0 +1,387 @@
+name: Network Nmap Default Kali Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &nmap_default_kali_paths
+      - 'aegis-platform/backend/fastapi_app/services/kali_nmap_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nmap_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py'
+      - 'aegis-platform/kali/tests/test_network_provider_contract.py'
+      - 'aegis-platform/docker-compose.nmap-default-kali.yml'
+      - 'docs/NETWORK_NMAP_DEFAULT_KALI.md'
+      - '.github/workflows/network-nmap-default-kali-reality.yml'
+  push:
+    branches: [main]
+    paths: *nmap_default_kali_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-nmap-default-kali-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  default-kali-contract:
+    name: Nmap Default Kali Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused test dependencies
+        run: python -m pip install pytest defusedxml
+      - name: Compile M5 Nmap contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/kali_nmap_provider.py \
+            aegis-platform/backend/fastapi_app/services/nmap_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py \
+            aegis-platform/kali/tests/test_network_provider_contract.py
+      - name: Prove governed default routing and rollback contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py
+          aegis-platform/kali/tests/test_network_provider_contract.py
+      - name: Render default-kali deployment and explicit legacy rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.nmap-default-kali.yml \
+            --profile kali-network \
+            config --format json > artifacts/nmap-default-kali-compose.json
+          AEGIS_NMAP_PROVIDER=legacy docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.nmap-default-kali.yml \
+            --profile kali-network \
+            config --format json > artifacts/nmap-default-kali-rollback-compose.json
+      - name: Prove rendered promotion, rollback, and least privilege
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          default=json.loads(Path('artifacts/nmap-default-kali-compose.json').read_text())
+          rollback=json.loads(Path('artifacts/nmap-default-kali-rollback-compose.json').read_text())
+          scanner=default['services']['scanner_worker']
+          provider=default['services']['kali_network']
+          env=scanner['environment']
+          penv=provider['environment']
+
+          assert env['AEGIS_NMAP_PROVIDER']=='default-kali', env
+          assert str(env['AEGIS_KALI_NMAP_CANARY_BPS'])=='0', env
+          assert env['AEGIS_KALI_NETWORK_URL']=='http://127.0.0.1:18766', env
+          assert rollback['services']['scanner_worker']['environment']['AEGIS_NMAP_PROVIDER']=='legacy'
+          for key in (
+              'AEGIS_KALI_NETWORK_AUTH_TOKEN',
+              'AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION',
+              'AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT',
+              'AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST',
+              'AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST',
+              'AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST',
+              'AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST',
+          ):
+              assert key in env, key
+          assert provider['network_mode']=='service:scanner_egress', provider
+          assert provider['read_only'] is True, provider
+          assert provider['cap_drop']==['ALL'], provider
+          assert provider['cap_add']==['NET_RAW'], provider
+          assert provider['security_opt']==['no-new-privileges:true'], provider
+          assert provider['user']=='0:0', provider
+          assert penv['AEGIS_NETWORK_LISTEN_HOST']=='127.0.0.1', penv
+          assert str(penv['AEGIS_NETWORK_LISTEN_PORT'])=='18766', penv
+          assert provider['pids_limit']==128, provider
+          assert int(provider['mem_limit'])==536870912, provider
+          assert float(provider['cpus'])==1.0, provider
+          print('NETWORK_NMAP_DEFAULT_KALI_DEPLOYMENT_PASS')
+          PY
+      - name: Capture exact-head M5 contract evidence
+        shell: bash
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/network-nmap-default-kali-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-nmap-default-kali-contract.v1',
+              'capability_id':'network.nmap',
+              'deployment_default_provider':'default-kali',
+              'parity_approved':True,
+              'canary_assignment_required':False,
+              'silent_provider_fallback':False,
+              'administrative_rollback':'AEGIS_NMAP_PROVIDER=legacy',
+              'raw_kali_mode_production_admitted':False,
+              'provider_scope':['network.nmap'],
+              'provider_capabilities':['CAP_NET_RAW'],
+              'legacy_retired_in_this_phase':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-default-kali-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-default-kali:
+    name: Real Nmap Default Kali
+    needs: default-kali-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_NMAP_NETWORK: aegis-nmap-default-kali
+      AEGIS_NMAP_TARGET: 172.31.2.10
+      AEGIS_NMAP_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact legacy reference and governed network provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache \
+            --target legacy-parity-reference \
+            -t aegis-nmap-m5:scanner \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-network \
+            -t aegis-kali:network \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+          docker build --no-cache \
+            --build-arg AEGIS_NETWORK_BASE_IMAGE=aegis-kali:network \
+            -t aegis-kali:network-provider \
+            -f aegis-platform/kali/Dockerfile.network-provider \
+            aegis-platform/kali
+      - name: Derive immutable provider trust anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:network-provider --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected network provider image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          assert runtime['profile']=='network', runtime
+          assert runtime['dispatch_enabled'] is True, runtime
+          assert runtime['dispatch_state']=='semantic-network-provider', runtime
+          assert runtime['dispatch_capabilities']==['network.nmap'], runtime
+          print('AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_NETWORK_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+      - name: Start deterministic internal fixture and default-kali scanner namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          chmod 0777 artifacts
+          docker network create --internal --subnet 172.31.2.0/24 "${AEGIS_NMAP_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_NMAP_NETWORK}")" = true
+          docker run -d --name aegis-nmap-m5-fixture \
+            --network "${AEGIS_NMAP_NETWORK}" --ip "${AEGIS_NMAP_TARGET}" \
+            --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/nmap_tcp_fixture.py:/fixture.py:ro" \
+            --entrypoint python aegis-nmap-m5:scanner /fixture.py
+          docker run -d --name aegis-nmap-m5-scanner \
+            --network "${AEGIS_NMAP_NETWORK}" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_NMAP_TARGET}/32" \
+            -e AEGIS_NMAP_PROVIDER=default-kali \
+            -e AEGIS_KALI_NMAP_CANARY_BPS=0 \
+            -e AEGIS_KALI_NETWORK_URL=http://127.0.0.1:18766 \
+            -e AEGIS_KALI_NETWORK_AUTH_TOKEN="${AEGIS_NMAP_AUTH_TOKEN}" \
+            -e AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            -v "$PWD/artifacts:/artifacts" \
+            --entrypoint sleep aegis-nmap-m5:scanner infinity
+          for _ in $(seq 1 30); do
+            if docker logs aegis-nmap-m5-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nmap-m5-fixture
+          exit 1
+      - name: Start CAP_NET_RAW-only governed Nmap provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-nmap-m5-provider \
+            --network container:aegis-nmap-m5-scanner \
+            --user 0:0 \
+            --read-only --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            -e AEGIS_KALI_NETWORK_AUTH_TOKEN="${AEGIS_NMAP_AUTH_TOKEN}" \
+            "$AEGIS_KALI_NETWORK_IMAGE"
+          cap_eff="$(docker exec aegis-nmap-m5-provider python3 -c "import pathlib; print(next(line.split()[1] for line in pathlib.Path('/proc/1/status').read_text().splitlines() if line.startswith('CapEff:')))")"
+          test "$cap_eff" = "0000000000002000"
+          no_new_privs="$(docker exec aegis-nmap-m5-provider python3 -c "import pathlib; print(next(line.split()[1] for line in pathlib.Path('/proc/1/status').read_text().splitlines() if line.startswith('NoNewPrivs:')))")"
+          test "$no_new_privs" = "1"
+          for _ in $(seq 1 30); do
+            if docker exec aegis-nmap-m5-scanner python - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nmap-m5-provider
+          exit 1
+      - name: Execute real default Kali and explicit legacy rollback reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nmap-m5-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.kali_nmap_provider import nmap_provider_decision
+          from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+
+          decision=nmap_provider_decision(routing_key='ignored-in-default')
+          assert decision.mode=='default-kali', decision
+          assert decision.selected_provider=='kali', decision
+          assert decision.parity_approved is True, decision
+          assert decision.canary_bps==0 and decision.bucket is None and decision.routing_key_digest=='', decision
+          assert decision.reason=='default-kali-parity-approved', decision
+          result=run_nmap_with_provider(
+              target='172.31.2.10', timeout_seconds=300, routing_key='scan-default',
+              execution_ref='nmap-m5-default', authorization_ref='auth-m5',
+              scope_ref='project:m5:asset:nmap', state_getter=lambda:'running',
+          )
+          assert result.routing['selected_provider']=='kali', result.routing
+          assert result.exit_code==0, result.stderr
+          assert result.runtime['provider']=='aegis-kali-network', result.runtime
+          assert result.runtime['linux_privilege']['allowed_capabilities']==['CAP_NET_RAW'], result.runtime
+          open('/artifacts/default-kali.xml','w').write(result.stdout)
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/default-kali-result.json','w'),sort_keys=True,indent=2)
+          PY
+          docker exec -i -e AEGIS_NMAP_PROVIDER=legacy aegis-nmap-m5-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+          result=run_nmap_with_provider(
+              target='172.31.2.10', timeout_seconds=300, routing_key='rollback-reference',
+              execution_ref='nmap-m5-legacy-reference', authorization_ref='auth-m5',
+              scope_ref='project:m5:asset:nmap', state_getter=lambda:'running',
+          )
+          assert result.routing['selected_provider']=='legacy', result.routing
+          assert result.exit_code==0, result.stderr
+          open('/artifacts/legacy-reference.xml','w').write(result.stdout)
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/legacy-reference-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove finding-relevant semantics remain equivalent
+        shell: bash
+        run: |
+          docker exec -i aegis-nmap-m5-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.nmap_semantic_parity import compare_nmap_semantics
+          result=compare_nmap_semantics(open('/artifacts/legacy-reference.xml').read(),open('/artifacts/default-kali.xml').read())
+          assert result['equivalent'] is True, json.dumps(result,indent=2,sort_keys=True)
+          json.dump(result,open('/artifacts/default-kali-semantic-parity.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove provider outage fails closed and explicit legacy rollback still works
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker stop aegis-nmap-m5-provider >/dev/null
+          docker exec -i aegis-nmap-m5-scanner python - <<'PY'
+          import json
+          from fastapi_app.services import nmap_execution_provider as provider
+          from fastapi_app.services.kali_nmap_provider import KaliNmapProviderError
+
+          provider.get_tool=lambda name: (_ for _ in ()).throw(AssertionError('silent legacy fallback attempted'))
+          try:
+              provider.run_nmap_with_provider(
+                  target='172.31.2.10', timeout_seconds=30, routing_key='outage-default',
+                  execution_ref='nmap-m5-outage', authorization_ref='auth-m5',
+                  scope_ref='project:m5:asset:nmap', state_getter=lambda:'running',
+              )
+          except KaliNmapProviderError as exc:
+              json.dump({'fail_closed':True,'error':str(exc)},open('/artifacts/default-kali-outage.json','w'),sort_keys=True,indent=2)
+          else:
+              raise AssertionError('default-kali provider outage did not fail closed')
+          PY
+          docker exec -i -e AEGIS_NMAP_PROVIDER=legacy aegis-nmap-m5-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+          result=run_nmap_with_provider(
+              target='172.31.2.10', timeout_seconds=300, routing_key='explicit-rollback',
+              execution_ref='nmap-m5-explicit-rollback', authorization_ref='auth-m5',
+              scope_ref='project:m5:asset:nmap', state_getter=lambda:'running',
+          )
+          assert result.routing['selected_provider']=='legacy', result.routing
+          assert result.exit_code==0, result.stderr
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/explicit-legacy-rollback.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Capture exact-head real M5 evidence
+        shell: bash
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          python - <<'PY' > artifacts/real-default-kali-summary.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-nmap-default-kali-real.v1',
+              'exact_head':'${{ env.AEGIS_EXACT_HEAD }}',
+              'target_scope':'internal-deterministic-fixture',
+              'default_provider':'default-kali',
+              'semantic_parity':True,
+              'provider_outage_fail_closed':True,
+              'explicit_legacy_rollback':True,
+              'silent_legacy_fallback':False,
+              'runtime_capabilities':['CAP_NET_RAW'],
+              'no_new_privileges':True,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-default-kali-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f aegis-nmap-m5-provider aegis-nmap-m5-scanner aegis-nmap-m5-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_NMAP_NETWORK}" >/dev/null 2>&1 || true

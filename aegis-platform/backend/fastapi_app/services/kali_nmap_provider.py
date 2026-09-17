@@ -55,8 +55,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def provider_mode() -> str:
     mode = os.getenv('AEGIS_NMAP_PROVIDER', 'legacy').strip().lower()
-    if mode not in {'legacy', 'canary', 'kali'}:
-        raise KaliNmapProviderError('AEGIS_NMAP_PROVIDER must be legacy, canary, or kali during Nmap canary phase')
+    if mode not in {'legacy', 'canary', 'default-kali', 'kali'}:
+        raise KaliNmapProviderError('AEGIS_NMAP_PROVIDER must be legacy, canary, default-kali, or kali')
     return mode
 
 
@@ -92,6 +92,18 @@ def nmap_provider_decision(*, routing_key: str | None = None) -> NmapProviderDec
             bucket=None,
             routing_key_digest='',
             reason='legacy-default',
+        )
+    if mode == 'default-kali':
+        return NmapProviderDecision(
+            schema=_ROUTING_SCHEMA,
+            mode=mode,
+            capability_id='network.nmap',
+            selected_provider='kali',
+            parity_approved=True,
+            canary_bps=0,
+            bucket=None,
+            routing_key_digest='',
+            reason='default-kali-parity-approved',
         )
     if mode == 'kali':
         return NmapProviderDecision(
