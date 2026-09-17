@@ -1,0 +1,65 @@
+name: Internal Production Mode Reality
+
+'on':
+  pull_request:
+    paths:
+      - '.github/workflows/production-live-deploy.yml'
+      - '.github/workflows/production-final-governance.yml'
+      - '.github/workflows/internal-production-mode-reality.yml'
+      - 'aegis-platform/scripts/public_acceptance.py'
+      - 'aegis-platform/scripts/production_remote_deploy.py'
+      - 'aegis-platform/scripts/production_host_reality.py'
+      - 'aegis-platform/scripts/production_governance_gate.py'
+      - 'tests/test_public_acceptance.py'
+      - 'tests/test_production_remote_deploy.py'
+      - 'tests/test_production_host_reality.py'
+      - 'tests/test_production_live_workflow.py'
+      - 'tests/test_production_governance_gate.py'
+      - 'tests/test_production_final_governance_workflow.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-live-deploy.yml'
+      - '.github/workflows/production-final-governance.yml'
+      - '.github/workflows/internal-production-mode-reality.yml'
+      - 'aegis-platform/scripts/public_acceptance.py'
+      - 'aegis-platform/scripts/production_remote_deploy.py'
+      - 'aegis-platform/scripts/production_host_reality.py'
+      - 'aegis-platform/scripts/production_governance_gate.py'
+      - 'tests/test_public_acceptance.py'
+      - 'tests/test_production_remote_deploy.py'
+      - 'tests/test_production_host_reality.py'
+      - 'tests/test_production_live_workflow.py'
+      - 'tests/test_production_governance_gate.py'
+      - 'tests/test_production_final_governance_workflow.py'
+
+permissions:
+  contents: read
+
+jobs:
+  internal-production-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install contract-test dependencies
+        run: python -m pip install pytest==9.1.1 PyYAML==6.0.3
+      - name: Compile internal production control scripts
+        run: |
+          python -m py_compile \
+            aegis-platform/scripts/public_acceptance.py \
+            aegis-platform/scripts/production_remote_deploy.py \
+            aegis-platform/scripts/production_host_reality.py \
+            aegis-platform/scripts/production_governance_gate.py
+      - name: Prove internal production mode contracts
+        run: |
+          python -m pytest -q \
+            tests/test_public_acceptance.py \
+            tests/test_production_remote_deploy.py \
+            tests/test_production_host_reality.py \
+            tests/test_production_live_workflow.py \
+            tests/test_production_governance_gate.py \
+            tests/test_production_final_governance_workflow.py

@@ -3,7 +3,6 @@ import json
 import os
 import stat
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -72,11 +71,7 @@ def test_secret_initializer_writes_private_distinct_material(tmp_path: Path):
             key, value = line.split("=", 1)
             values[key] = value
     assert values["SECRET_KEY"] != values["JWT_SECRET_KEY"]
-    assert values["POSTGRES_PASSWORD"] not in {
-        "change-me",
-        "password",
-        "secret",
-    }
+    assert values["POSTGRES_PASSWORD"] not in {"change-me", "password", "secret"}
     assert values["ALLOWED_HOSTS"] == "security.example.com"
     assert values["AUTHORIZED_SCAN_TARGETS"] == "203.0.113.10,authorized.example.com"
     assert values["AEGIS_REMOTE_BACKUP_ENABLED"] == "true"
@@ -133,6 +128,21 @@ def test_secret_initializer_rejects_non_private_s3_source(tmp_path: Path):
         )
 
 
+def test_enterprise_ca_must_exist_be_bounded_and_parse_as_trust_anchor(tmp_path: Path, monkeypatch):
+    missing = tmp_path / "missing.pem"
+    with pytest.raises(reality.HostValidationError, match="missing"):
+        reality._enterprise_ca_evidence(missing)
+
+    empty = tmp_path / "empty.pem"
+    empty.write_bytes(b"")
+    with pytest.raises(reality.HostValidationError, match="invalid size"):
+        reality._enterprise_ca_evidence(empty)
+
+    ca = tmp_path / "enterprise-ca.pem"
+    ca.write_text("not-a-ca\n", encoding="utf-8")
+    with pytest.raises(reality.HostValidationError, match="valid TLS trust anchor"):
+        reality._enterprise_ca_evidence(ca)
+
 
 def test_host_reality_requires_four_vcpu_floor(tmp_path: Path, monkeypatch):
     env_file = tmp_path / "production.env"
@@ -144,21 +154,20 @@ def test_host_reality_requires_four_vcpu_floor(tmp_path: Path, monkeypatch):
     with pytest.raises(reality.HostValidationError, match="vCPU"):
         reality.validate(env_file)
 
+
 def test_host_reality_requires_production_resource_floor(tmp_path: Path, monkeypatch):
     env_file = tmp_path / "production.env"
     env_file.write_text("A=B\n", encoding="utf-8")
-
     monkeypatch.setattr(reality.platform, "system", lambda: "Linux")
     monkeypatch.setattr(reality.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
     monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT)
     monkeypatch.setattr(reality, "_memory_bytes", lambda: reality.MIN_MEMORY_BYTES - 1)
-
     with pytest.raises(reality.HostValidationError, match="7 GiB"):
         reality.validate(env_file)
 
 
-def test_host_reality_runs_capability_namespace_and_compose_probes(tmp_path: Path, monkeypatch):
+def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: Path, monkeypatch):
     env_file = tmp_path / "production.env"
     env_file.write_text("A=B\n", encoding="utf-8")
     events = []
@@ -171,6 +180,11 @@ def test_host_reality_runs_capability_namespace_and_compose_probes(tmp_path: Pat
     monkeypatch.setattr(reality, "_memory_bytes", lambda: reality.MIN_MEMORY_BYTES + 1)
     monkeypatch.setattr(reality, "_disk_free_bytes", lambda _: reality.MIN_DISK_BYTES + 1)
     monkeypatch.setattr(reality, "_kernel_ipv4_forward", lambda: True)
+    monkeypatch.setattr(
+        reality,
+        "_enterprise_ca_evidence",
+        lambda: {"path": "/etc/aegisscan/enterprise-ca.pem", "sha256": "a" * 64},
+    )
     monkeypatch.setattr(
         reality,
         "_require_commands",
@@ -189,24 +203,14 @@ def test_host_reality_runs_capability_namespace_and_compose_probes(tmp_path: Pat
             "architecture": "x86_64",
         },
     )
-    monkeypatch.setattr(
-        reality,
-        "_probe_capability",
-        lambda cap, command: events.append(("cap", cap)),
-    )
-    monkeypatch.setattr(
-        reality,
-        "_probe_shared_network_namespace",
-        lambda: events.append(("netns", True)),
-    )
-    monkeypatch.setattr(
-        reality,
-        "_validate_compose",
-        lambda env: events.append(("compose", env)),
-    )
+    monkeypatch.setattr(reality, "_probe_capability", lambda cap, command: events.append(("cap", cap)))
+    monkeypatch.setattr(reality, "_probe_shared_network_namespace", lambda: events.append(("netns", True)))
+    monkeypatch.setattr(reality, "_validate_compose", lambda env: events.append(("compose", env)))
 
     result = reality.validate(env_file)
     assert result["status"] == "success"
+    assert result["deployment_mode"] == "internal"
+    assert result["enterprise_ca"]["sha256"] == "a" * 64
     assert ("cap", "NET_RAW") in events
     assert ("cap", "NET_ADMIN") in events
     assert ("netns", True) in events

@@ -13,7 +13,8 @@ gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 
 RELEASE = "a" * 40
-ORIGIN = "https://security.example.com"
+ORIGIN = "https://security.internal"
+CA_SHA = "e" * 64
 
 
 def _write_json(path: Path, payload: dict) -> Path:
@@ -42,6 +43,36 @@ def _run_metadata(tmp_path: Path, kind: str, run_id: int) -> Path:
     )
 
 
+def _acceptance_payload(cert_sha: str = "b" * 64) -> dict:
+    return {
+        "schema": "aegisscan.internal-production-acceptance.v1",
+        "status": "success",
+        "deployment_mode": "internal",
+        "network_scope": "rfc1918-or-ipv6-ula",
+        "origin": ORIGIN,
+        "resolved_addresses": ["10.20.30.20"],
+        "resolved_addresses_after": ["10.20.30.20"],
+        "enterprise_ca": {
+            "path": "/etc/aegisscan/enterprise-ca.pem",
+            "sha256": CA_SHA,
+        },
+        "checks": {
+            "verified_https": True,
+            "internal_only_resolution": True,
+            "enterprise_ca_verified": True,
+            "health_200": True,
+            "ready_200": True,
+            "frontend_200": True,
+            "tls": {
+                "version": "TLSv1.3",
+                "cipher": "TLS_AES_256_GCM_SHA384",
+                "certificate_sha256": cert_sha,
+                "not_after": "Dec 31 23:59:59 2026 GMT",
+            },
+        },
+    }
+
+
 def _go_live(tmp_path: Path) -> Path:
     root = tmp_path / "go-live" / "artifact"
     root.mkdir(parents=True)
@@ -50,41 +81,29 @@ def _go_live(tmp_path: Path) -> Path:
         {
             "schema": "aegisscan.remote-production-deploy.v1",
             "status": "success",
+            "deployment_mode": "internal",
+            "network_scope": "rfc1918-or-ipv6-ula",
             "release_sha": RELEASE,
             "origin": ORIGIN,
+            "host_resolved_addresses": ["10.20.30.10"],
+            "origin_resolved_addresses": ["10.20.30.20"],
         },
     )
-    _write_json(
-        root / "public-acceptance.json",
-        {
-            "schema": "aegisscan.public-acceptance.v1",
-            "status": "success",
-            "origin": ORIGIN,
-            "checks": {
-                "verified_https": True,
-                "health_200": True,
-                "ready_200": True,
-                "frontend_200": True,
-                "tls": {
-                    "version": "TLSv1.3",
-                    "cipher": "TLS_AES_256_GCM_SHA384",
-                    "certificate_sha256": "b" * 64,
-                    "not_after": "Dec 31 23:59:59 2026 GMT",
-                },
-            },
-        },
-    )
-    (root / "external-black-box.log").write_text("EXTERNAL_REAL_E2E=PASS\n", encoding="utf-8")
+    _write_json(root / "internal-acceptance.json", _acceptance_payload())
+    (root / "internal-black-box.log").write_text("EXTERNAL_REAL_E2E=PASS\n", encoding="utf-8")
     _write_json(root / "cli-platform-status.json", {"status": "ok"})
 
-    evidence = ["deploy.json", "public-acceptance.json", "external-black-box.log", "cli-platform-status.json"]
+    evidence = ["deploy.json", "internal-acceptance.json", "internal-black-box.log", "cli-platform-status.json"]
     _write_json(
         root / "manifest.json",
         {
-            "schema": "aegisscan.go-live-evidence.v1",
+            "schema": "aegisscan.go-live-evidence.v2",
             "status": "success",
+            "deployment_mode": "internal",
+            "network_scope": "rfc1918-or-ipv6-ula",
             "release_sha": RELEASE,
-            "public_origin": ORIGIN,
+            "internal_origin": ORIGIN,
+            "enterprise_ca_sha256": CA_SHA,
             "sha256": {name: _sha(root / name) for name in evidence},
         },
     )
@@ -167,9 +186,7 @@ def _supply_chain(tmp_path: Path) -> Path:
                         "digest": {"sha1": RELEASE},
                         "entryPoint": ".github/workflows/supply-chain-release.yml",
                     },
-                    "parameters": {
-                        "image": f"ghcr.io/example/aegisscan-{component}",
-                    },
+                    "parameters": {"image": f"ghcr.io/example/aegisscan-{component}"},
                 },
                 "materials": [
                     {
@@ -191,27 +208,8 @@ def _supply_chain(tmp_path: Path) -> Path:
     return root
 
 
-def _current_public(tmp_path: Path) -> Path:
-    return _write_json(
-        tmp_path / "current-public.json",
-        {
-            "schema": "aegisscan.public-acceptance.v1",
-            "status": "success",
-            "origin": ORIGIN,
-            "checks": {
-                "verified_https": True,
-                "health_200": True,
-                "ready_200": True,
-                "frontend_200": True,
-                "tls": {
-                    "version": "TLSv1.3",
-                    "cipher": "TLS_AES_256_GCM_SHA384",
-                    "certificate_sha256": "d" * 64,
-                    "not_after": "Dec 31 23:59:59 2026 GMT",
-                },
-            },
-        },
-    )
+def _current_internal(tmp_path: Path) -> Path:
+    return _write_json(tmp_path / "current-internal.json", _acceptance_payload("d" * 64))
 
 
 def _inputs(tmp_path: Path) -> dict:
@@ -223,26 +221,53 @@ def _inputs(tmp_path: Path) -> dict:
         "live_run_metadata": _run_metadata(tmp_path, "live_deploy", 101),
         "resilience_run_metadata": _run_metadata(tmp_path, "resilience", 102),
         "supply_chain_run_metadata": _run_metadata(tmp_path, "supply_chain", 103),
-        "current_public_acceptance": _current_public(tmp_path),
+        "current_internal_acceptance": _current_internal(tmp_path),
         "output": tmp_path / "decision.json",
     }
 
 
-def test_final_governance_approves_only_complete_bound_evidence(tmp_path: Path):
+def test_final_governance_approves_only_complete_internal_bound_evidence(tmp_path: Path):
     decision = gate.decide(**_inputs(tmp_path))
+    assert decision["schema"] == "aegisscan.production-governance-decision.v2"
     assert decision["status"] == "success"
     assert decision["decision"] == "APPROVED"
+    assert decision["deployment_mode"] == "internal"
     assert decision["release_sha"] == RELEASE
-    assert decision["public_origin"] == ORIGIN
+    assert decision["internal_origin"] == ORIGIN
+    assert decision["evidence"]["current_enterprise_ca_sha256"] == CA_SHA
     assert all(decision["controls"].values())
     assert (tmp_path / "decision.json").is_file()
 
 
 def test_final_governance_rejects_tampered_go_live_evidence(tmp_path: Path):
     inputs = _inputs(tmp_path)
-    log = next(inputs["go_live_root"].rglob("external-black-box.log"))
+    log = next(inputs["go_live_root"].rglob("internal-black-box.log"))
     log.write_text("tampered\n", encoding="utf-8")
     with pytest.raises(gate.GovernanceError, match="digest mismatch"):
+        gate.decide(**inputs)
+
+
+def test_final_governance_rejects_public_address_in_deployment_evidence(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    deploy = next(inputs["go_live_root"].rglob("deploy.json"))
+    payload = json.loads(deploy.read_text(encoding="utf-8"))
+    payload["origin_resolved_addresses"] = ["8.8.8.8"]
+    _write_json(deploy, payload)
+    manifest = next(inputs["go_live_root"].rglob("manifest.json"))
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["sha256"]["deploy.json"] = _sha(deploy)
+    _write_json(manifest, manifest_payload)
+    with pytest.raises(gate.GovernanceError, match="outside RFC1918/IPv6-ULA"):
+        gate.decide(**inputs)
+
+
+def test_final_governance_rejects_enterprise_ca_drift(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    current = inputs["current_internal_acceptance"]
+    payload = json.loads(current.read_text(encoding="utf-8"))
+    payload["enterprise_ca"]["sha256"] = "f" * 64
+    _write_json(current, payload)
+    with pytest.raises(gate.GovernanceError, match="enterprise CA changed"):
         gate.decide(**inputs)
 
 
