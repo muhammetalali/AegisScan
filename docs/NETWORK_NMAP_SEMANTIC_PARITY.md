@@ -35,7 +35,7 @@ finding-relevant fields: IP, port, protocol, state, service, product, and versio
 The gate must also prove:
 
 - no public-Internet target is used;
-- the candidate reports the exact source build commit and pinned Nmap provenance;
+- the candidate reports the exact source build commit, pinned Nmap provenance, and Linux capability boundary;
 - production network dispatch is unchanged;
 - artifacts contain exact HEAD, both raw XML outputs, runtime provenance, and the semantic comparison.
 
@@ -44,3 +44,14 @@ The gate must also prove:
 This phase does **not** promote Nmap to Kali by default, add canary routing, remove Nmap from the
 scanner worker, or change Nmap Evidence/finding persistence. Those require a separate promotion
 phase after exact-HEAD and fresh-main parity evidence are green.
+
+## Privilege-boundary rationale
+
+The legacy production scanner does not run Nmap with broad container privilege. Its bootstrap hands the
+scanner process only `CAP_NET_RAW`, which is required for the production adapter's default privileged
+SYN/raw scan semantics. Running the parity candidate with every capability dropped caused Nmap to select
+the same privileged scan path but fail before scanning because raw sockets were unavailable.
+
+The parity harness therefore grants exactly `CAP_NET_RAW` and no other capability, sets
+`no_new_privs`, and the provider verifies `/proc/self/status` before accepting health or execution
+requests. The parity provider remains test-only and is not packaged into the production network profile.
