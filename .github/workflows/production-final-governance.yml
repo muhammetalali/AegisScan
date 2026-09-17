@@ -1,10 +1,10 @@
-name: Final Production Governance
+name: Final Internal Production Governance
 
 'on':
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type APPROVE to evaluate the final production governance decision'
+        description: 'Type APPROVE to evaluate the final internal production governance decision'
         required: true
         type: string
       release_sha:
@@ -12,7 +12,7 @@ name: Final Production Governance
         required: true
         type: string
       live_deploy_run_id:
-        description: 'Successful Live Production Deploy and Acceptance run ID for this SHA'
+        description: 'Successful Internal Production Deploy and Acceptance run ID for this SHA'
         required: true
         type: string
       resilience_run_id:
@@ -29,13 +29,13 @@ permissions:
   actions: read
 
 concurrency:
-  group: aegisscan-final-production-governance
+  group: aegisscan-final-internal-production-governance
   cancel-in-progress: false
 
 jobs:
   final-governance:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aegisscan-production]
     timeout-minutes: 45
     environment: production
     env:
@@ -44,6 +44,7 @@ jobs:
       LIVE_DEPLOY_RUN_ID: ${{ inputs.live_deploy_run_id }}
       RESILIENCE_RUN_ID: ${{ inputs.resilience_run_id }}
       SUPPLY_CHAIN_RUN_ID: ${{ inputs.supply_chain_run_id }}
+      PROD_ENTERPRISE_CA_BUNDLE: ${{ secrets.AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE }}
 
     steps:
       - uses: actions/checkout@v5
@@ -69,26 +70,64 @@ jobs:
             esac
             test "$value" -gt 0
           done
+          test -n "$PROD_ENTERPRISE_CA_BUNDLE"
+          command -v gh >/dev/null
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
           test "$RELEASE_SHA" = "$GITHUB_SHA"
 
+      - name: Materialize enterprise trust anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 /tmp/aegis-governance
+          printf '%s\n' "$PROD_ENTERPRISE_CA_BUNDLE" > /tmp/aegis-governance/enterprise-ca.pem
+          chmod 0600 /tmp/aegis-governance/enterprise-ca.pem
+          test -s /tmp/aegis-governance/enterprise-ca.pem
+          python - <<'PY'
+          import ssl
+          from pathlib import Path
+          path = Path('/tmp/aegis-governance/enterprise-ca.pem')
+          if path.stat().st_size > 2 * 1024 * 1024:
+              raise SystemExit('enterprise CA bundle exceeds 2 MiB')
+          ssl.create_default_context(cafile=str(path))
+          PY
+          {
+            echo 'AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-governance/enterprise-ca.pem'
+            echo 'REQUESTS_CA_BUNDLE=/tmp/aegis-governance/enterprise-ca.pem'
+            echo 'SSL_CERT_FILE=/tmp/aegis-governance/enterprise-ca.pem'
+          } >> "$GITHUB_ENV"
+
       - name: Download independently captured workflow metadata and evidence
         shell: bash
         run: |
           set -euo pipefail
-          install -d -m 0700             /tmp/aegis-governance/live             /tmp/aegis-governance/resilience             /tmp/aegis-governance/supply-chain             /tmp/aegis-governance/metadata
+          install -d -m 0700 \
+            /tmp/aegis-governance/live \
+            /tmp/aegis-governance/resilience \
+            /tmp/aegis-governance/supply-chain \
+            /tmp/aegis-governance/metadata
 
-          gh api             "/repos/$GITHUB_REPOSITORY/actions/runs/$LIVE_DEPLOY_RUN_ID"             > /tmp/aegis-governance/metadata/live-run.json
-          gh api             "/repos/$GITHUB_REPOSITORY/actions/runs/$RESILIENCE_RUN_ID"             > /tmp/aegis-governance/metadata/resilience-run.json
-          gh api             "/repos/$GITHUB_REPOSITORY/actions/runs/$SUPPLY_CHAIN_RUN_ID"             > /tmp/aegis-governance/metadata/supply-chain-run.json
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$LIVE_DEPLOY_RUN_ID" \
+            > /tmp/aegis-governance/metadata/live-run.json
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RESILIENCE_RUN_ID" \
+            > /tmp/aegis-governance/metadata/resilience-run.json
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SUPPLY_CHAIN_RUN_ID" \
+            > /tmp/aegis-governance/metadata/supply-chain-run.json
 
-          gh run download "$LIVE_DEPLOY_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/aegis-governance/live
-          gh run download "$RESILIENCE_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/aegis-governance/resilience
-          gh run download "$SUPPLY_CHAIN_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/aegis-governance/supply-chain
+          gh run download "$LIVE_DEPLOY_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir /tmp/aegis-governance/live
+          gh run download "$RESILIENCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir /tmp/aegis-governance/resilience
+          gh run download "$SUPPLY_CHAIN_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir /tmp/aegis-governance/supply-chain
 
-      - name: Resolve the approved public production origin from immutable go-live evidence
+      - name: Resolve approved internal production origin from immutable go-live evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -103,45 +142,66 @@ jobs:
                   payload = json.loads(path.read_text(encoding='utf-8'))
               except Exception:
                   continue
-              if payload.get('schema') == 'aegisscan.go-live-evidence.v1':
+              if payload.get('schema') == 'aegisscan.go-live-evidence.v2':
                   candidates.append((path, payload))
           if len(candidates) != 1:
-              raise SystemExit(f'expected exactly one go-live manifest, found {len(candidates)}')
+              raise SystemExit(f'expected exactly one internal go-live manifest, found {len(candidates)}')
           payload = candidates[0][1]
-          origin = str(payload.get('public_origin', '')).strip()
+          if payload.get('deployment_mode') != 'internal':
+              raise SystemExit('go-live evidence is not internal production evidence')
+          origin = str(payload.get('internal_origin', '')).strip()
           if not origin.startswith('https://'):
-              raise SystemExit('go-live evidence does not contain a valid HTTPS public origin')
+              raise SystemExit('go-live evidence does not contain a valid HTTPS internal origin')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
-              stream.write(f'AEGIS_APPROVED_PUBLIC_ORIGIN={origin}\n')
+              stream.write(f'AEGIS_APPROVED_INTERNAL_ORIGIN={origin}\n')
           print(origin)
           PY
 
-      - name: Revalidate the public production surface at governance decision time
+      - name: Revalidate internal production surface at governance decision time
         shell: bash
         run: |
           set -euo pipefail
-          python aegis-platform/scripts/public_acceptance.py             --origin "$AEGIS_APPROVED_PUBLIC_ORIGIN"             | tee /tmp/aegis-governance/current-public-acceptance.json
+          python aegis-platform/scripts/public_acceptance.py \
+            --origin "$AEGIS_APPROVED_INTERNAL_ORIGIN" \
+            | tee /tmp/aegis-governance/current-internal-acceptance.json
 
-      - name: Evaluate evidence-driven production governance decision
+      - name: Evaluate evidence-driven internal production governance decision
         shell: bash
         run: |
           set -euo pipefail
-          python aegis-platform/scripts/production_governance_gate.py             --release-sha "$RELEASE_SHA"             --go-live-root /tmp/aegis-governance/live             --resilience-root /tmp/aegis-governance/resilience             --supply-chain-root /tmp/aegis-governance/supply-chain             --live-run-metadata /tmp/aegis-governance/metadata/live-run.json             --resilience-run-metadata /tmp/aegis-governance/metadata/resilience-run.json             --supply-chain-run-metadata /tmp/aegis-governance/metadata/supply-chain-run.json             --current-public-acceptance /tmp/aegis-governance/current-public-acceptance.json             --output /tmp/aegis-governance/decision.json             | tee /tmp/aegis-governance/decision-output.json
+          python aegis-platform/scripts/production_governance_gate.py \
+            --release-sha "$RELEASE_SHA" \
+            --go-live-root /tmp/aegis-governance/live \
+            --resilience-root /tmp/aegis-governance/resilience \
+            --supply-chain-root /tmp/aegis-governance/supply-chain \
+            --live-run-metadata /tmp/aegis-governance/metadata/live-run.json \
+            --resilience-run-metadata /tmp/aegis-governance/metadata/resilience-run.json \
+            --supply-chain-run-metadata /tmp/aegis-governance/metadata/supply-chain-run.json \
+            --current-internal-acceptance /tmp/aegis-governance/current-internal-acceptance.json \
+            --output /tmp/aegis-governance/decision.json \
+            | tee /tmp/aegis-governance/decision-output.json
 
           python - <<'PY'
           import json
           from pathlib import Path
           decision = json.loads(Path('/tmp/aegis-governance/decision.json').read_text())
-          assert decision['schema'] == 'aegisscan.production-governance-decision.v1'
+          assert decision['schema'] == 'aegisscan.production-governance-decision.v2'
           assert decision['status'] == 'success'
           assert decision['decision'] == 'APPROVED'
+          assert decision['deployment_mode'] == 'internal'
           PY
 
       - name: Hash final governance record
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum             /tmp/aegis-governance/decision.json             /tmp/aegis-governance/current-public-acceptance.json             /tmp/aegis-governance/metadata/live-run.json             /tmp/aegis-governance/metadata/resilience-run.json             /tmp/aegis-governance/metadata/supply-chain-run.json             | tee /tmp/aegis-governance/final-evidence.sha256
+          sha256sum \
+            /tmp/aegis-governance/decision.json \
+            /tmp/aegis-governance/current-internal-acceptance.json \
+            /tmp/aegis-governance/metadata/live-run.json \
+            /tmp/aegis-governance/metadata/resilience-run.json \
+            /tmp/aegis-governance/metadata/supply-chain-run.json \
+            | tee /tmp/aegis-governance/final-evidence.sha256
           sha256sum -c /tmp/aegis-governance/final-evidence.sha256
 
       - name: Publish governance decision summary
@@ -153,28 +213,35 @@ jobs:
           import json
           from pathlib import Path
           d = json.loads(Path('/tmp/aegis-governance/decision.json').read_text())
-          print('# AegisScan Final Production Governance')
+          print('# AegisScan Final Internal Production Governance')
           print()
           print(f"**Decision:** {d['decision']}")
           print(f"**Release:** `{d['release_sha']}`")
-          print(f"**Public origin:** {d['public_origin']}")
+          print(f"**Internal origin:** {d['internal_origin']}")
           print(f"**Decision time:** {d['decided_at']}")
           print()
-          print('All required deployment, HTTPS, black-box, resilience, alert, SBOM and provenance controls passed.')
+          print('All required internal HTTPS, private-network, enterprise CA, black-box, resilience, alert, SBOM and provenance controls passed.')
           PY
 
       - name: Upload final governance decision evidence
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: aegisscan-final-governance-${{ inputs.release_sha }}-${{ github.run_id }}
+          name: aegisscan-final-internal-governance-${{ inputs.release_sha }}-${{ github.run_id }}
           path: |
             /tmp/aegis-governance/decision.json
             /tmp/aegis-governance/decision-output.json
-            /tmp/aegis-governance/current-public-acceptance.json
+            /tmp/aegis-governance/current-internal-acceptance.json
             /tmp/aegis-governance/final-evidence.sha256
             /tmp/aegis-governance/metadata/live-run.json
             /tmp/aegis-governance/metadata/resilience-run.json
             /tmp/aegis-governance/metadata/supply-chain-run.json
           if-no-files-found: error
           retention-days: 90
+
+      - name: Destroy local enterprise trust material
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          rm -f /tmp/aegis-governance/enterprise-ca.pem

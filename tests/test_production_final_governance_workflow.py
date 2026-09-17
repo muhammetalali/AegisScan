@@ -12,7 +12,7 @@ def _workflow() -> dict:
     return data
 
 
-def test_final_governance_workflow_is_manual_main_only_and_protected():
+def test_final_governance_workflow_is_manual_main_only_protected_and_internal_runner_bound():
     data = _workflow()
     triggers = data.get("on")
     assert isinstance(triggers, dict)
@@ -20,12 +20,13 @@ def test_final_governance_workflow_is_manual_main_only_and_protected():
     job = data["jobs"]["final-governance"]
     assert job["environment"] == "production"
     assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert job["runs-on"] == ["self-hosted", "linux", "x64", "aegisscan-production"]
     assert data["concurrency"]["cancel-in-progress"] is False
     assert data["permissions"]["contents"] == "read"
     assert data["permissions"]["actions"] == "read"
 
 
-def test_final_governance_requires_exact_main_and_three_independent_run_ids():
+def test_final_governance_requires_exact_main_three_run_ids_and_enterprise_ca():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert 'test "${{ inputs.confirm }}" = "APPROVE"' in text
     assert 'test "$RELEASE_SHA" = "$GITHUB_SHA"' in text
@@ -33,17 +34,34 @@ def test_final_governance_requires_exact_main_and_three_independent_run_ids():
     assert "LIVE_DEPLOY_RUN_ID" in text
     assert "RESILIENCE_RUN_ID" in text
     assert "SUPPLY_CHAIN_RUN_ID" in text
+    assert "AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE" in text
+    assert "AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-governance/enterprise-ca.pem" in text
+    assert "REQUESTS_CA_BUNDLE=/tmp/aegis-governance/enterprise-ca.pem" in text
     assert "gh api" in text
     assert "gh run download" in text
 
 
-def test_final_governance_revalidates_public_surface_and_evidence_gate():
+def test_final_governance_revalidates_internal_surface_and_evidence_gate():
     text = WORKFLOW.read_text(encoding="utf-8")
+    assert "aegisscan.go-live-evidence.v2" in text
+    assert "internal_origin" in text
     assert "public_acceptance.py" in text
+    assert "current-internal-acceptance.json" in text
+    assert "--current-internal-acceptance" in text
     assert "production_governance_gate.py" in text
-    assert "aegisscan.production-governance-decision.v1" in text
+    assert "aegisscan.production-governance-decision.v2" in text
     assert "decision['decision'] == 'APPROVED'" in text
+    assert "decision['deployment_mode'] == 'internal'" in text
     assert "sha256sum -c" in text
+
+
+def test_final_governance_has_no_public_hosted_runner_or_public_origin_contract():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "runs-on: ubuntu-latest" not in text
+    assert "AEGIS_APPROVED_PUBLIC_ORIGIN" not in text
+    assert "current-public-acceptance.json" not in text
+    assert "public_origin" not in text
+    assert "Public origin:" not in text
 
 
 def test_final_governance_cannot_mutate_release_or_repository():

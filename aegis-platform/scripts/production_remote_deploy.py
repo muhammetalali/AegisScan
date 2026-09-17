@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy an exact AegisScan main-branch release to a prepared production host over pinned SSH."""
+"""Deploy an exact AegisScan main-branch release to an internal production host over pinned SSH."""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import stat
 import subprocess
 import sys
@@ -18,6 +19,11 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 HOST_RE = re.compile(r"^[A-Za-z0-9.-]+$")
 SAFE_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
+RFC1918_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+IPV6_ULA = ipaddress.ip_network("fc00::/7")
 
 
 class RemoteDeployError(RuntimeError):
@@ -34,6 +40,45 @@ def _private_file(path: Path, name: str, max_bytes: int) -> None:
         raise RemoteDeployError(f"{name} file has invalid size")
 
 
+def _is_enterprise_private(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast:
+        return False
+    if isinstance(address, ipaddress.IPv4Address):
+        return any(address in network for network in RFC1918_NETWORKS)
+    return address in IPV6_ULA
+
+
+def _resolved_enterprise_addresses(host: str, port: int, label: str) -> list[str]:
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        addresses = {literal}
+    else:
+        try:
+            resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise RemoteDeployError(f"{label} private DNS resolution failed for {host}: {exc}") from exc
+        addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+        for item in resolved:
+            sockaddr = item[4]
+            if not sockaddr:
+                continue
+            try:
+                addresses.add(ipaddress.ip_address(sockaddr[0]))
+            except ValueError as exc:
+                raise RemoteDeployError(f"{label} resolver returned an invalid address: {sockaddr[0]!r}") from exc
+    if not addresses:
+        raise RemoteDeployError(f"{label} private DNS returned no addresses for {host}")
+    invalid = sorted(str(address) for address in addresses if not _is_enterprise_private(address))
+    if invalid:
+        raise RemoteDeployError(
+            f"{label} resolved outside RFC1918/IPv6-ULA perimeter: " + ", ".join(invalid)
+        )
+    return sorted(str(address) for address in addresses)
+
+
 def _host(value: str) -> str:
     host = value.strip().lower().strip("[]")
     if not host:
@@ -44,8 +89,8 @@ def _host(value: str) -> str:
         if not HOST_RE.fullmatch(host) or host.startswith(".") or host.endswith(".") or ".." in host:
             raise RemoteDeployError("SSH host is invalid")
         return host
-    if address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast:
-        raise RemoteDeployError("SSH host must not be loopback, link-local, unspecified, or multicast")
+    if not _is_enterprise_private(address):
+        raise RemoteDeployError("SSH host literal must be inside the RFC1918/IPv6-ULA enterprise perimeter")
     return host
 
 
@@ -72,11 +117,13 @@ def _origin(value: str) -> str:
     except ValueError:
         if not HOST_RE.fullmatch(host) or host.startswith(".") or host.endswith(".") or ".." in host:
             raise RemoteDeployError("origin hostname is invalid")
+        url_host = host
     else:
-        if address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast:
-            raise RemoteDeployError("origin must not use loopback, link-local, unspecified, or multicast addressing")
+        if not _is_enterprise_private(address):
+            raise RemoteDeployError("origin literal must be inside the RFC1918/IPv6-ULA enterprise perimeter")
+        url_host = f"[{host}]" if isinstance(address, ipaddress.IPv6Address) else host
     port_part = f":{port}" if port and port != 443 else ""
-    return f"https://{host}{port_part}"
+    return f"https://{url_host}{port_part}"
 
 
 def _require_known_host(host: str, port: int, known_hosts: Path) -> None:
@@ -92,9 +139,7 @@ def _require_known_host(host: str, port: int, known_hosts: Path) -> None:
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         raise RemoteDeployError(f"unable to validate pinned SSH host key: {exc}") from exc
     if result.returncode != 0 or not result.stdout.strip():
-        raise RemoteDeployError(
-            f"SSH known-hosts does not contain a pinned entry for {lookup}"
-        )
+        raise RemoteDeployError(f"SSH known-hosts does not contain a pinned entry for {lookup}")
 
 
 def _remote_path(value: str, name: str) -> str:
@@ -154,6 +199,11 @@ def deploy(
     if not SHA_RE.fullmatch(release_sha):
         raise RemoteDeployError("release SHA must be exactly 40 lowercase hexadecimal characters")
     origin = _origin(origin)
+    parsed_origin = urlparse(origin)
+    assert parsed_origin.hostname
+    origin_port = parsed_origin.port or 443
+    ssh_addresses = _resolved_enterprise_addresses(host, port, "SSH host")
+    origin_addresses = _resolved_enterprise_addresses(parsed_origin.hostname, origin_port, "production origin")
     repo_path = _remote_path(repo_path, "remote repo path")
     env_path = _remote_path(env_path, "remote env path")
     _private_file(private_key, "SSH private key", 64 * 1024)
@@ -228,10 +278,14 @@ def deploy(
     return {
         "schema": "aegisscan.remote-production-deploy.v1",
         "status": "success",
+        "deployment_mode": "internal",
         "host": host,
+        "host_resolved_addresses": ssh_addresses,
         "port": port,
         "release_sha": release_sha,
         "origin": origin,
+        "origin_resolved_addresses": origin_addresses,
+        "network_scope": "rfc1918-or-ipv6-ula",
         "remote_deployment": deploy_payload,
     }
 
