@@ -10,7 +10,6 @@ DOCKERFILE = (KALI / 'Dockerfile.profiles').read_text(encoding='utf-8')
 SERVICE = (KALI / 'runner' / 'network_nmap_parity_service.py').read_text(encoding='utf-8')
 RUNTIME_BUILDER = (KALI / 'runner' / 'profile_runtime_manifest.py').read_text(encoding='utf-8')
 WORKFLOW = (REPO / '.github' / 'workflows' / 'network-nmap-parity-reality.yml').read_text(encoding='utf-8')
-WORKFLOW = (REPO / '.github' / 'workflows' / 'network-nmap-parity-reality.yml').read_text(encoding='utf-8')
 
 
 def test_network_nmap_is_pinned_but_not_production_dispatched_during_parity():
