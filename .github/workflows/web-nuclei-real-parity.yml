@@ -194,7 +194,7 @@ jobs:
       - name: Compare production finding semantics
         run: |
           set -euo pipefail
-          docker run --rm -i             --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-nuclei:legacy - <<'PY'
+          docker run --rm -i             --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m             -e SECRET_KEY=aegisscan-nuclei-parity-ci-only-secret-key-not-for-production             -e JWT_SECRET_KEY=aegisscan-nuclei-parity-ci-only-jwt-key-not-for-production             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-nuclei:legacy - <<'PY'
           import json
           from pathlib import Path
           from fastapi_app.services.nuclei_semantic_parity import compare_nuclei_semantics, normalize_nuclei_semantics
