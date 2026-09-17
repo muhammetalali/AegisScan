@@ -10,6 +10,7 @@ PROVIDER_DOCKERFILE = (KALI / 'Dockerfile.network-provider').read_text(encoding=
 PROFILE_DOCKERFILE = (KALI / 'Dockerfile.profiles').read_text(encoding='utf-8')
 MANIFEST = json.loads((KALI / 'tool-manifest.json').read_text(encoding='utf-8'))
 CANARY_COMPOSE = (REPO / 'aegis-platform' / 'docker-compose.nmap-canary.yml').read_text(encoding='utf-8')
+DEFAULT_KALI_COMPOSE = (REPO / 'aegis-platform' / 'docker-compose.nmap-default-kali.yml').read_text(encoding='utf-8')
 PROVIDER_CLIENT = (
     REPO / 'aegis-platform' / 'backend' / 'fastapi_app' / 'services' / 'kali_nmap_provider.py'
 ).read_text(encoding='utf-8')
@@ -60,8 +61,8 @@ def test_provider_requires_loopback_auth_provenance_and_net_raw_only():
     assert 'AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST' in PROVIDER_CLIENT
 
 
-def test_canary_execution_has_no_silent_legacy_fallback_or_full_kali_mode():
-    assert "decision.mode not in {'legacy', 'canary'}" in EXECUTION_PROVIDER
+def test_production_execution_admits_default_kali_but_not_raw_kali_and_has_no_silent_fallback():
+    assert "decision.mode not in {'legacy', 'canary', 'default-kali'}" in EXECUTION_PROVIDER
     assert "if decision.selected_provider == 'legacy'" in EXECUTION_PROVIDER
     assert "if decision.selected_provider != 'kali'" in EXECUTION_PROVIDER
     assert 'execute_kali_nmap(' in EXECUTION_PROVIDER
@@ -79,7 +80,7 @@ def test_production_nmap_task_uses_scan_identity_and_persists_provider_lineage()
     assert 'KaliNmapProviderCancelled' in TASK
 
 
-def test_canary_compose_override_is_explicit_least_privilege_and_fail_closed():
+def test_canary_compose_override_remains_explicit_least_privilege_and_fail_closed():
     assert 'AEGIS_NMAP_PROVIDER: ${AEGIS_NMAP_PROVIDER:-legacy}' in CANARY_COMPOSE
     assert 'AEGIS_KALI_NMAP_CANARY_BPS: ${AEGIS_KALI_NMAP_CANARY_BPS:-0}' in CANARY_COMPOSE
     assert 'AEGIS_KALI_NETWORK_URL: ${AEGIS_KALI_NETWORK_URL:-http://127.0.0.1:18766}' in CANARY_COMPOSE
@@ -93,3 +94,17 @@ def test_canary_compose_override_is_explicit_least_privilege_and_fail_closed():
     assert 'security_opt: [no-new-privileges:true]' in CANARY_COMPOSE
     assert 'read_only: true' in CANARY_COMPOSE
     assert 'NET_ADMIN' not in CANARY_COMPOSE
+
+
+def test_default_kali_compose_promotes_nmap_without_broadening_provider_privilege():
+    assert 'AEGIS_NMAP_PROVIDER: ${AEGIS_NMAP_PROVIDER:-default-kali}' in DEFAULT_KALI_COMPOSE
+    assert 'AEGIS_KALI_NMAP_CANARY_BPS: "0"' in DEFAULT_KALI_COMPOSE
+    assert 'AEGIS_KALI_NETWORK_URL: ${AEGIS_KALI_NETWORK_URL:-http://127.0.0.1:18766}' in DEFAULT_KALI_COMPOSE
+    assert 'kali_network:' in DEFAULT_KALI_COMPOSE
+    assert 'profiles: [kali-network]' in DEFAULT_KALI_COMPOSE
+    assert 'network_mode: "service:scanner_egress"' in DEFAULT_KALI_COMPOSE
+    assert 'cap_drop: [ALL]' in DEFAULT_KALI_COMPOSE
+    assert 'cap_add: [NET_RAW]' in DEFAULT_KALI_COMPOSE
+    assert 'security_opt: [no-new-privileges:true]' in DEFAULT_KALI_COMPOSE
+    assert 'read_only: true' in DEFAULT_KALI_COMPOSE
+    assert 'NET_ADMIN' not in DEFAULT_KALI_COMPOSE
