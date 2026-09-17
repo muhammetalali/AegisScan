@@ -218,7 +218,9 @@ jobs:
           assert comparison['equivalent'] is True, comparison
           assert comparison['legacy']['finding_count']==1, comparison
           assert comparison['candidate']['finding_count']==1, comparison
-          assert comparison['legacy']['observations'][0]['check_id']=='aegis.semgrep.parity.eval', comparison
+          check_id=comparison['legacy']['observations'][0]['check_id']
+          assert check_id == comparison['candidate']['observations'][0]['check_id'], comparison
+          assert check_id.endswith('aegis.semgrep.parity.eval'), comparison
 
           for name,raw in (('legacy',legacy),('candidate',candidate)):
               production=_semgrep_findings(raw)
