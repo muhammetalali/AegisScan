@@ -39,6 +39,8 @@ python3 scripts/admin/repository_ruleset_admin.py \
 
 The operation is idempotent: it creates the named ruleset if absent, updates that exact named ruleset if present, refuses duplicate rulesets with the same name, and immediately verifies both the stored ruleset and the effective rules on `main`. A read-only verification can be performed with `--mode verify`. The token must never be committed, echoed into CI logs, or stored in repository fixtures.
 
+The normal GitHub Actions `GITHUB_TOKEN` is intentionally not granted repository-administration permission. GitHub may therefore omit administrator-only fields such as `bypass_actors` from ruleset-detail responses inside CI. The Reality workflow still validates branch protection, the exact active named ruleset, its target, mandatory rule types, pull-request parameters, strict required checks, and effective rules. When `bypass_actors` is visible it must be an empty list; when GitHub redacts it, the workflow records `bypass_actor_visibility=permission_limited` instead of manufacturing a false proof. A-01 closure and any administrative ruleset change additionally require an administrator-scope live verification through the applicator or equivalent GitHub administration evidence. The admin applicator remains fail-closed and requires `bypass_actors=[]`.
+
 ## Required CI policy
 
 AegisScan does not mark every workflow as an unconditional GitHub required check. Several Reality workflows are path-filtered, so doing that would leave unrelated pull requests permanently waiting for checks that GitHub never schedules.
@@ -69,10 +71,10 @@ Critical path-sensitive gates include External Black-Box E2E, Production Runtime
 
 `.github/workflows/repository-governance-reality.yml` has two modes:
 
-- Pull requests validate the proposed ruleset contract and dry-run the administrative payload without pretending the currently unprotected branch is already compliant.
+- Pull requests validate the proposed ruleset contract, permission-regression behavior, and dry-run the administrative payload without pretending the currently protected branch's administrator-only fields are visible to Actions.
 - Every push to `main`, plus manual dispatch, queries GitHub for the live branch and applicable repository rules and fails closed unless protection, PR-only integration, force-push protection, deletion protection, strict status checks, and the required governance context are active.
 
-A repository-governance phase is not closed merely because these files exist. Closure requires a live active ruleset and a green `Repository Governance Reality` run against the exact protected `main` SHA.
+A repository-governance phase is not closed merely because these files exist. Closure requires a live active ruleset, administrator-scope proof that no bypass actors exist, and a green `Repository Governance Reality` run against the exact protected `main` SHA.
 
 ## Change ownership and collision control
 
