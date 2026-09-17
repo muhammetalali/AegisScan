@@ -7,6 +7,10 @@ name: Internal Production Deploy and Acceptance
         description: 'Type DEPLOY to run the protected internal production rollout from main'
         required: true
         type: string
+  push:
+    branches: [main]
+    paths:
+      - '.github/deployment-requests/internal-production.json'
 
 permissions:
   contents: read
@@ -41,11 +45,21 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Require explicit production dispatch and exact main release
+      - name: Require explicit bounded production authorization and exact main release
         shell: bash
+        env:
+          AEGIS_DEPLOY_CONFIRM: ${{ inputs.confirm }}
+          AEGIS_EVENT_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          test "${{ inputs.confirm }}" = "DEPLOY"
+          python aegis-platform/scripts/production_deploy_request.py \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --ref "$GITHUB_REF" \
+            --current-sha "$GITHUB_SHA" \
+            --event-before "${AEGIS_EVENT_BEFORE:-}" \
+            --confirm "${AEGIS_DEPLOY_CONFIRM:-}" \
+            --request-file .github/deployment-requests/internal-production.json \
+            | tee /tmp/aegis-production-authorization.json
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
@@ -136,6 +150,19 @@ jobs:
             --origin "$AEGIS_LIVE_ORIGIN" \
             | tee /tmp/aegis-production/deploy.json
 
+      - name: Prove Alertmanager and committed encrypted remote backup on production host
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/production_remote_operational_acceptance.py \
+            --host "$PROD_SSH_HOST" \
+            --port "$PROD_SSH_PORT" \
+            --user "$PROD_SSH_USER" \
+            --private-key /tmp/aegis-production/id \
+            --known-hosts /tmp/aegis-production/known_hosts \
+            --release-sha "$GITHUB_SHA" \
+            | tee /tmp/aegis-production/operational-acceptance.json
+
       - name: Verify internal HTTPS, private resolution, enterprise CA and security headers
         shell: bash
         run: |
@@ -193,6 +220,7 @@ jobs:
           root = Path('/tmp/aegis-production')
           evidence_files = [
               'deploy.json',
+              'operational-acceptance.json',
               'internal-acceptance.json',
               'internal-black-box.log',
               'cli-platform-status.json',
@@ -203,6 +231,27 @@ jobs:
               if not path.is_file() or path.stat().st_size == 0:
                   raise SystemExit(f'missing required internal go-live evidence: {name}')
               digests[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+          deployment = json.loads((root / 'deploy.json').read_text(encoding='utf-8'))
+          if deployment.get('schema') != 'aegisscan.remote-production-deploy.v1' or deployment.get('status') != 'success':
+              raise SystemExit('remote deployment evidence mismatch')
+          if deployment.get('release_sha') != os.environ['AEGIS_RELEASE_SHA']:
+              raise SystemExit('remote deployment release SHA mismatch')
+
+          operational = json.loads((root / 'operational-acceptance.json').read_text(encoding='utf-8'))
+          if operational.get('schema') != 'aegisscan.remote-production-operational-acceptance.v1' or operational.get('status') != 'success':
+              raise SystemExit('remote operational acceptance evidence mismatch')
+          if operational.get('release_sha') != os.environ['AEGIS_RELEASE_SHA']:
+              raise SystemExit('remote operational acceptance release SHA mismatch')
+          host_acceptance = operational.get('operational_acceptance') or {}
+          if host_acceptance.get('schema') != 'aegisscan.production-operational-acceptance.v1':
+              raise SystemExit('production-host operational acceptance schema mismatch')
+          alertmanager = host_acceptance.get('alertmanager') or {}
+          backup = host_acceptance.get('backup') or {}
+          if alertmanager.get('status') != 'ready':
+              raise SystemExit('Alertmanager readiness evidence is missing')
+          if backup.get('status') != 'healthy' or not backup.get('backup_id'):
+              raise SystemExit('committed encrypted remote backup evidence is missing')
 
           acceptance = json.loads((root / 'internal-acceptance.json').read_text(encoding='utf-8'))
           if acceptance.get('schema') != 'aegisscan.internal-production-acceptance.v1':
@@ -215,7 +264,7 @@ jobs:
               raise SystemExit('internal acceptance enterprise CA evidence is missing')
 
           manifest = {
-              'schema': 'aegisscan.go-live-evidence.v2',
+              'schema': 'aegisscan.go-live-evidence.v3',
               'status': 'success',
               'deployment_mode': 'internal',
               'network_scope': 'rfc1918-or-ipv6-ula',
@@ -224,6 +273,9 @@ jobs:
               'run_attempt': os.environ['AEGIS_RUN_ATTEMPT'],
               'internal_origin': os.environ['AEGIS_INTERNAL_ORIGIN'],
               'enterprise_ca_sha256': ca_sha256,
+              'alertmanager_status': alertmanager['status'],
+              'backup_status': backup['status'],
+              'backup_id': backup['backup_id'],
               'completed_at': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
               'sha256': digests,
           }
@@ -241,6 +293,7 @@ jobs:
           name: aegisscan-internal-go-live-${{ github.sha }}-${{ github.run_id }}
           path: |
             /tmp/aegis-production/deploy.json
+            /tmp/aegis-production/operational-acceptance.json
             /tmp/aegis-production/internal-acceptance.json
             /tmp/aegis-production/internal-black-box.log
             /tmp/aegis-production/cli-platform-status.json
@@ -253,6 +306,7 @@ jobs:
         shell: bash
         run: |
           set +e
+          rm -f /tmp/aegis-production-authorization.json
           if [ -d /tmp/aegis-production ]; then
             rm -f \
               /tmp/aegis-production/id \
