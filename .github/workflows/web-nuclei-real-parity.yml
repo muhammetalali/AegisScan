@@ -81,7 +81,7 @@ jobs:
           docker run -d --name aegis-nuclei-fixture             --network "${AEGIS_NUCLEI_NETWORK}" --ip "${AEGIS_NUCLEI_TARGET_IP}"             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m             -v "$PWD/aegis-platform/e2e/nuclei_http_fixture.py:/fixture.py:ro"             --entrypoint python aegis-nuclei:legacy /fixture.py
           for _ in $(seq 1 30); do
             if docker logs aegis-nuclei-fixture 2>&1 | grep -Fq AEGIS_NUCLEI_PARITY_FIXTURE_READY; then
-              docker run --rm --network "${AEGIS_NUCLEI_NETWORK}" --entrypoint python aegis-nuclei:legacy - <<'PY'
+              docker run --rm -i --network "${AEGIS_NUCLEI_NETWORK}" --entrypoint python aegis-nuclei:legacy - <<'PY'
           import urllib.request
           body=urllib.request.urlopen('http://172.32.1.10:8080/healthz',timeout=2).read()
           assert body == b'ok\n', body
