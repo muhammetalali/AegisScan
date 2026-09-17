@@ -16,6 +16,13 @@ if ! command -v setpriv >/dev/null 2>&1; then
     exit 126
 fi
 
+# M6 Nmap retirement is fail-closed at worker startup. Historical parity/reference
+# containers omit AEGIS_NMAP_LEGACY_DISABLED and therefore pass without imposing
+# production-only trust pins. Production sets the retirement lock and must satisfy
+# the governed provider, loopback, authentication, provenance, and image contracts
+# before any scanner task process is started.
+python -m fastapi_app.services.nmap_retirement_preflight
+
 # Docker starts this bootstrap with only NET_RAW + SETUID/SETGID/SETPCAP.
 # SETPCAP must remain available until CAP_NET_RAW has been moved into the
 # ambient set and the temporary bootstrap caps have been removed from the

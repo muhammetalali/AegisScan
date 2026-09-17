@@ -112,6 +112,14 @@ jobs:
           AEGIS_KALI_RECON_IMAGE: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           COMPOSE_PROFILES: kali-recon
+          AEGIS_KALI_NETWORK_AUTH_TOKEN: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          AEGIS_KALI_NETWORK_IMAGE: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION: 0.1.0
+          AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT: dddddddddddddddddddddddddddddddddddddddd
+          AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+          AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
         run: |
           set -euo pipefail
           : > aegis-platform/backend/.env

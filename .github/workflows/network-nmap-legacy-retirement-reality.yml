@@ -1,0 +1,353 @@
+name: Network Nmap Legacy Retirement Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &nmap_m6_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/scanner-worker-entrypoint.sh'
+      - 'aegis-platform/backend/fastapi_app/services/nmap_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nmap_retirement_preflight.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_m6_legacy_nmap_retirement.py'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - '.github/workflows/network-nmap-legacy-retirement-reality.yml'
+  push:
+    branches: [main]
+    paths: *nmap_m6_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-nmap-m6-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  retirement-contract:
+    name: Nmap Retirement Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AUTHORIZED_SCAN_TARGETS: 198.51.100.10
+      POSTGRES_PASSWORD: ci-production-policy-password
+      AEGIS_KALI_NETWORK_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_NETWORK_IMAGE: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION: 0.1.0
+      AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT: cccccccccccccccccccccccccccccccccccccccc
+      AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused dependencies
+        run: python -m pip install pytest defusedxml
+      - name: Compile M6 contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/nmap_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/nmap_retirement_preflight.py \
+            aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_m6_legacy_nmap_retirement.py
+      - name: Prove retirement routing startup preflight and M5 regression contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest \
+            aegis-platform/backend/fastapi_app/services/test_nmap_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_m6_legacy_nmap_retirement.py
+          grep -Fq 'python -m fastapi_app.services.nmap_retirement_preflight' \
+            aegis-platform/backend/scanner-worker-entrypoint.sh
+      - name: Render immutable M6 production contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.prod.yml \
+            config --format json > artifacts/nmap-m6-production-compose.json
+          AEGIS_NMAP_PROVIDER=legacy AEGIS_KALI_NMAP_CANARY_BPS=2500 docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.prod.yml \
+            config --format json > artifacts/nmap-m6-production-override-attempt.json
+      - name: Prove no production Legacy or Canary route survives
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for name in ('nmap-m6-production-compose.json','nmap-m6-production-override-attempt.json'):
+              model=json.loads((Path('artifacts')/name).read_text())
+              scanner=model['services']['scanner_worker']
+              provider=model['services']['kali_network']
+              env=scanner['environment']
+              build=scanner['build']
+              assert build['target']=='production-no-legacy-recon', build
+              assert str(build['args']['AEGIS_RETIRE_NMAP'])=='1', build
+              assert env['AEGIS_NMAP_PROVIDER']=='default-kali', env
+              assert env['AEGIS_NMAP_LEGACY_DISABLED']=='true', env
+              assert str(env['AEGIS_KALI_NMAP_CANARY_BPS'])=='0', env
+              assert env['AEGIS_KALI_NETWORK_URL']=='http://127.0.0.1:18766', env
+              assert provider['network_mode']=='service:scanner_egress', provider
+              assert provider['read_only'] is True, provider
+              assert provider['cap_drop']==['ALL'], provider
+              assert provider['cap_add']==['NET_RAW'], provider
+              assert provider['security_opt']==['no-new-privileges:true'], provider
+              assert provider['user']=='0:0', provider
+              assert provider['pids_limit']==128, provider
+              assert int(provider['mem_limit'])==536870912, provider
+              assert float(provider['cpus'])==1.0, provider
+          print('NETWORK_NMAP_M6_PRODUCTION_CONTRACT_PASS')
+          PY
+      - name: Prove rollback is previous release never hidden same-release fallback
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_BASE_SHA:-}" ]; then previous_release="$PR_BASE_SHA"; else previous_release="$(git rev-parse HEAD^1)"; fi
+          git cat-file -e "${previous_release}^{commit}"
+          git show "${previous_release}:aegis-platform/backend/Dockerfile.django" > artifacts/previous-release-Dockerfile.django
+          git show "${previous_release}:aegis-platform/docker-compose.prod.yml" > artifacts/previous-release-compose.prod.yml
+          grep -Fq 'target: production-no-legacy-recon' artifacts/previous-release-compose.prod.yml
+          ! grep -Fq 'AEGIS_NMAP_LEGACY_DISABLED' artifacts/previous-release-compose.prod.yml
+          grep -Fq 'command -v nmap >/dev/null' artifacts/previous-release-Dockerfile.django
+          python - <<'PY'
+          from pathlib import Path
+          source=Path('aegis-platform/scripts/production_host_deploy.py').read_text()
+          block=source[source.index('def _rollback_application('):source.index('\ndef deploy(')]
+          assert block.index('_checkout(previous_sha)') < block.index('_deploy_stack('), block
+          assert 'previous_sha=previous_sha' in source, source
+          PY
+          printf '%s\n' "$previous_release" > artifacts/previous-release-sha.txt
+      - name: Capture exact-head contract evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/network-nmap-m6-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-nmap-legacy-retirement.v1',
+              'capability_id':'network.nmap',
+              'production_provider':'default-kali',
+              'legacy_production_routing':False,
+              'canary_production_routing':False,
+              'local_nmap_expected':False,
+              'startup_preflight':True,
+              'silent_provider_fallback':False,
+              'rollback_strategy':'previous-release-deployment',
+              'provider_capabilities':['CAP_NET_RAW'],
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-m6-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-retired-runtime:
+    name: Real Retired Nmap Runtime
+    needs: retirement-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_NMAP_NETWORK: aegis-nmap-m6-retired
+      AEGIS_NMAP_TARGET: 172.31.6.10
+      AEGIS_NMAP_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build production scanner with Nmap physically retired
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache \
+            --build-arg AEGIS_RETIRE_NMAP=1 \
+            --target production-no-legacy-recon \
+            -t aegis-nmap-m6:scanner \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+          docker run --rm --entrypoint sh aegis-nmap-m6:scanner -c \
+            '! command -v nmap && test ! -e /usr/bin/nmap && command -v masscan >/dev/null && command -v nuclei >/dev/null && command -v semgrep >/dev/null'
+      - name: Build exact governed Kali network provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base \
+            -f aegis-platform/kali/Dockerfile.base \
+            aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-network \
+            -t aegis-kali:network \
+            -f aegis-platform/kali/Dockerfile.profiles \
+            .
+          docker build --no-cache \
+            --build-arg AEGIS_NETWORK_BASE_IMAGE=aegis-kali:network \
+            -t aegis-kali:network-provider \
+            -f aegis-platform/kali/Dockerfile.network-provider \
+            aegis-platform/kali
+      - name: Derive immutable provider trust anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:network-provider --format '{{.Id}}')"
+          case "$IMAGE_ID" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib,json
+          raw=open('runtime-manifest.json','rb').read(); runtime=json.loads(raw)
+          assert runtime['profile']=='network' and runtime['dispatch_capabilities']==['network.nmap'], runtime
+          print('AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_NETWORK_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+      - name: Start deterministic fixture and retired scanner namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts && chmod 0777 artifacts
+          docker network create --internal --subnet 172.31.6.0/24 "${AEGIS_NMAP_NETWORK}"
+          docker run -d --name aegis-nmap-m6-fixture \
+            --network "${AEGIS_NMAP_NETWORK}" --ip "${AEGIS_NMAP_TARGET}" \
+            --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/nmap_tcp_fixture.py:/fixture.py:ro" \
+            --entrypoint python aegis-nmap-m6:scanner /fixture.py
+          docker run -d --name aegis-nmap-m6-scanner \
+            --network "${AEGIS_NMAP_NETWORK}" \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_NMAP_TARGET}/32" \
+            -e AEGIS_NMAP_PROVIDER=default-kali \
+            -e AEGIS_NMAP_LEGACY_DISABLED=true \
+            -e AEGIS_KALI_NMAP_CANARY_BPS=0 \
+            -e AEGIS_KALI_NETWORK_URL=http://127.0.0.1:18766 \
+            -e AEGIS_KALI_NETWORK_AUTH_TOKEN="${AEGIS_NMAP_AUTH_TOKEN}" \
+            -e AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            -v "$PWD/artifacts:/artifacts" \
+            --entrypoint sleep aegis-nmap-m6:scanner infinity
+          for _ in $(seq 1 30); do
+            logs="$(docker logs aegis-nmap-m6-fixture 2>&1 || true)"
+            if [[ "$logs" == *AEGIS_NMAP_PARITY_FIXTURE_READY* ]]; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nmap-m6-fixture; exit 1
+      - name: Start CAP_NET_RAW-only governed provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-nmap-m6-provider \
+            --network container:aegis-nmap-m6-scanner \
+            --user 0:0 --read-only --cap-drop ALL --cap-add NET_RAW \
+            --security-opt no-new-privileges:true --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            -e AEGIS_KALI_NETWORK_AUTH_TOKEN="${AEGIS_NMAP_AUTH_TOKEN}" \
+            "$AEGIS_KALI_NETWORK_IMAGE"
+          test "$(docker exec aegis-nmap-m6-provider python3 -c "import pathlib; print(next(x.split()[1] for x in pathlib.Path('/proc/1/status').read_text().splitlines() if x.startswith('CapEff:')))")" = 0000000000002000
+          test "$(docker exec aegis-nmap-m6-provider python3 -c "import pathlib; print(next(x.split()[1] for x in pathlib.Path('/proc/1/status').read_text().splitlines() if x.startswith('NoNewPrivs:')))")" = 1
+          for _ in $(seq 1 30); do
+            if docker exec aegis-nmap-m6-scanner python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=1).read()" >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nmap-m6-provider; exit 1
+      - name: Execute real Nmap only through retired production scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nmap-m6-scanner python - <<'PY'
+          import json,shutil
+          from fastapi_app.services.nmap_execution_provider import legacy_nmap_disabled,run_nmap_with_provider
+          assert shutil.which('nmap') is None
+          assert legacy_nmap_disabled() is True
+          result=run_nmap_with_provider(
+              target='172.31.6.10',timeout_seconds=300,routing_key='m6-real',
+              execution_ref='nmap-m6-real',authorization_ref='auth-m6',
+              scope_ref='project:m6:asset:nmap',state_getter=lambda:'running')
+          assert result.exit_code==0,result.stderr
+          assert result.routing['mode']=='default-kali' and result.routing['selected_provider']=='kali',result.routing
+          assert result.runtime['provider']=='aegis-kali-network',result.runtime
+          assert result.runtime['linux_privilege']['allowed_capabilities']==['CAP_NET_RAW'],result.runtime
+          open('/artifacts/retired-default-kali.xml','w').write(result.stdout)
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/retired-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove Legacy and Canary production routing are impossible
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in legacy canary; do
+            docker exec -i -e AEGIS_NMAP_PROVIDER="$mode" -e AEGIS_KALI_NMAP_CANARY_BPS=0 aegis-nmap-m6-scanner python - <<'PY'
+          from fastapi_app.services.kali_nmap_provider import KaliNmapProviderError
+          from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+          try:
+              run_nmap_with_provider(target='172.31.6.10',timeout_seconds=30,routing_key='retired',execution_ref='retired',authorization_ref='auth',scope_ref='scope',state_getter=lambda:'running')
+          except KaliNmapProviderError as exc:
+              assert 'previous release' in str(exc),exc
+          else:
+              raise AssertionError('retired provider route unexpectedly executed')
+          PY
+          done
+          docker exec aegis-nmap-m6-scanner sh -c '! command -v nmap && test ! -e /usr/bin/nmap'
+      - name: Prove provider outage fails closed without hidden local fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker stop aegis-nmap-m6-provider >/dev/null
+          docker exec -i aegis-nmap-m6-scanner python - <<'PY'
+          import shutil
+          from fastapi_app.services.kali_nmap_provider import KaliNmapProviderError
+          from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
+          assert shutil.which('nmap') is None
+          try:
+              run_nmap_with_provider(target='172.31.6.10',timeout_seconds=10,routing_key='outage',execution_ref='outage',authorization_ref='auth',scope_ref='scope',state_getter=lambda:'running')
+          except KaliNmapProviderError as exc:
+              assert 'unavailable' in str(exc).lower() or 'refused' in str(exc).lower(),exc
+          else:
+              raise AssertionError('provider outage silently fell back')
+          PY
+      - name: Capture exact-head runtime evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          docker inspect aegis-nmap-m6-scanner > artifacts/retired-scanner-inspect.json
+          docker inspect aegis-nmap-m6-provider > artifacts/governed-provider-inspect.json || true
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-nmap-m6-runtime-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-nmap-m6-provider aegis-nmap-m6-scanner aegis-nmap-m6-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_NMAP_NETWORK}" >/dev/null 2>&1 || true
