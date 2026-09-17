@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,7 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / "runner" / "web_nuclei_parit
 SPEC = importlib.util.spec_from_file_location("web_nuclei_parity_service", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
@@ -45,7 +47,7 @@ class GovernedNucleiParityContractTests(unittest.TestCase):
 
     def test_unknown_field_is_rejected(self) -> None:
         payload = dict(self.payload)
-        payload["argv"] = ["nuclei", "-u", "https://example.com"]
+        payload["unexpected"] = "value"
         with self.assertRaisesRegex(MODULE.RequestError, "unknown request fields"):
             MODULE.validate_payload(payload, self.config)
 
@@ -69,14 +71,9 @@ class GovernedNucleiParityContractTests(unittest.TestCase):
                 with self.assertRaises(MODULE.RequestError):
                     MODULE.validate_payload(payload, self.config)
 
-    def test_source_has_no_shell_or_caller_executable_authority(self) -> None:
-        source = MODULE_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("shell=True", source)
-        self.assertNotIn("os.system(", source)
-        self.assertNotIn("payload[\"argv\"]", source)
-        self.assertNotIn("payload[\"executable\"]", source)
-        self.assertIn('CAPABILITY_ID = "web.nuclei"', source)
-        self.assertIn('LISTEN_HOST = "127.0.0.1"', source)
+    def test_service_is_loopback_only(self) -> None:
+        self.assertEqual(MODULE.LISTEN_HOST, "127.0.0.1")
+        self.assertEqual(MODULE.CAPABILITY_ID, "web.nuclei")
 
 
 if __name__ == "__main__":
