@@ -207,10 +207,11 @@ USER 10001:10001
 
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
 
-# Production scanner target: the control-plane worker remains, but all legacy
-# Recon executables are physically absent. Recon can execute only through the
-# authenticated, attested Kali provider in the shared loopback namespace.
+# Production scanner target: legacy Recon is always absent. AEGIS_RETIRE_NMAP is
+# intentionally default-off only for historical Recon/parity reference builds.
+# Production Compose hard-codes AEGIS_RETIRE_NMAP=1, physically removing Nmap.
 FROM runtime AS production-no-legacy-recon
+ARG AEGIS_RETIRE_NMAP=0
 USER root
 RUN rm -f \
         /usr/local/bin/amass \
@@ -222,11 +223,22 @@ RUN rm -f \
     && ! command -v aegis-amass-runtime \
     && ! command -v subfinder \
     && ! command -v dnsenum \
-    && ! command -v fierce
+    && ! command -v fierce \
+    && if [ "$AEGIS_RETIRE_NMAP" = "1" ]; then \
+         rm -f /usr/bin/nmap /usr/bin/nping /usr/bin/ncat /usr/bin/ndiff; \
+         rm -rf /usr/share/nmap; \
+         ! command -v nmap; \
+       else \
+         test "$AEGIS_RETIRE_NMAP" = "0"; \
+         command -v nmap >/dev/null; \
+       fi \
+    && command -v masscan >/dev/null \
+    && command -v nuclei >/dev/null \
+    && command -v semgrep >/dev/null
 USER 10001:10001
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
 
-# Keep the default target suitable for independent parity and rollback-reference
-# workflows. Production Compose explicitly selects production-no-legacy-recon.
+# Keep the default target suitable for independent parity and previous-release
+# reference workflows. Production Compose hard-codes the retirement build arg.
 FROM runtime AS legacy-parity-reference
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]

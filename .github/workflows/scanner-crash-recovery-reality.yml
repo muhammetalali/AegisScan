@@ -7,7 +7,6 @@ name: Scanner Crash Recovery Reality
       - 'aegis-platform/backend/**'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.ci.yml'
-      - 'aegis-platform/docker-compose.prod.yml'
       - '.github/workflows/scanner-crash-recovery-reality.yml'
   push:
     branches: [main]
@@ -15,7 +14,6 @@ name: Scanner Crash Recovery Reality
       - 'aegis-platform/backend/**'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.ci.yml'
-      - 'aegis-platform/docker-compose.prod.yml'
       - '.github/workflows/scanner-crash-recovery-reality.yml'
   workflow_dispatch:
 
@@ -31,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
+      COMPOSE_PROFILES: ci-only
       POSTGRES_DB: aegisdb
       POSTGRES_USER: aegis
       POSTGRES_PASSWORD: scanner-recovery-ci
@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Prepare environment
+      - name: Prepare bounded crash-recovery reference environment
         working-directory: aegis-platform
         shell: bash
         run: |
@@ -87,23 +87,23 @@ jobs:
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
           EOF
 
-      - name: Build production scanner runtime
+      - name: Build crash-recovery scanner reference runtime
         working-directory: aegis-platform
-        run: docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml build django scanner_egress scanner_worker
+        run: docker compose build django scanner_egress scanner_worker
 
       - name: Start durable services and scanner worker
         working-directory: aegis-platform
         shell: bash
         run: |
           set -euo pipefail
-          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml up -d --no-build postgres redis scan_target django scanner_egress scanner_worker
+          docker compose up -d --no-build postgres redis scan_target django scanner_egress scanner_worker
           for _ in $(seq 1 90); do
             if [ "$(docker inspect -f '{{.State.Health.Status}}' aegis-django 2>/dev/null || true)" = healthy ] && [ "$(docker inspect -f '{{.State.Running}}' aegis-scanner-worker 2>/dev/null || true)" = true ]; then
               exit 0
             fi
             sleep 2
           done
-          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml logs --tail=250 django scanner_worker postgres redis scanner_egress
+          docker compose logs --tail=250 django scanner_worker postgres redis scanner_egress
           exit 1
 
       - name: Seed durable reliability scan
@@ -113,7 +113,7 @@ jobs:
         run: |
           set -euo pipefail
           scan_id="$(
-            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<'PY' | tail -n 1
+            docker compose exec -T django python - <<'PY' | tail -n 1
           import os
           os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
           import django
@@ -138,7 +138,7 @@ jobs:
           set -euo pipefail
           scan_id='${{ steps.seed.outputs.scan_id }}'
           task_id="$(
-            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<PY | tail -n 1
+            docker compose exec -T django python - <<PY | tail -n 1
           from fastapi_app.tasks.reliability_probe import scanner_worker_loss_probe
           result = scanner_worker_loss_probe.delay("$scan_id")
           print(result.id)
@@ -147,7 +147,7 @@ jobs:
           echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
           observed=0
           for _ in $(seq 1 60); do
-            state="$(docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status || ':' || coalesce(result_data->>'probe_attempts','0') from scans_scanengineexecution where scan_id='$scan_id';" | tr -d '\r')"
+            state="$(docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status || ':' || coalesce(result_data->>'probe_attempts','0') from scans_scanengineexecution where scan_id='$scan_id';" | tr -d '\r')"
             if [ "$state" = "running:1" ]; then observed=1; break; fi
             sleep 1
           done
@@ -161,7 +161,7 @@ jobs:
         run: |
           set -euo pipefail
           before="$(docker inspect -f '{{.State.StartedAt}}' aegis-scanner-worker)"
-          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml restart -t 0 scanner_worker
+          docker compose restart -t 0 scanner_worker
           after="$(docker inspect -f '{{.State.StartedAt}}' aegis-scanner-worker)"
           test "$before" != "$after"
           test "$(docker inspect -f '{{.State.Running}}' aegis-scanner-worker)" = true
@@ -176,13 +176,13 @@ jobs:
           scan_id='${{ steps.seed.outputs.scan_id }}'
           completed=0
           for _ in $(seq 1 180); do
-            state="$(docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select s.status || ':' || e.status || ':' || coalesce(e.result_data->>'probe_attempts','0') from scans_scan s join scans_scanengineexecution e on e.scan_id=s.id where s.id='$scan_id';" | tr -d '\r')"
+            state="$(docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select s.status || ':' || e.status || ':' || coalesce(e.result_data->>'probe_attempts','0') from scans_scan s join scans_scanengineexecution e on e.scan_id=s.id where s.id='$scan_id';" | tr -d '\r')"
             if [ "$state" = "completed:completed:2" ]; then completed=1; break; fi
             sleep 1
           done
           test "$completed" -eq 1
 
-          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<PY
+          docker compose exec -T django python - <<PY
           import os
           os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
           import django
@@ -210,20 +210,20 @@ jobs:
           print('DURABLE_OPERATION_IDEMPOTENCY=PASS')
           PY
 
-      - name: Restore normal visibility and prove real Nmap execution
+      - name: Restore normal visibility and prove reference Nmap execution
         working-directory: aegis-platform
         shell: bash
         run: |
           set -euo pipefail
           sed -i 's/^CELERY_VISIBILITY_TIMEOUT_SECONDS=.*/CELERY_VISIBILITY_TIMEOUT_SECONDS=3600/' backend/.env
           sed -i 's/^AEGIS_RELIABILITY_PROBE_ENABLED=.*/AEGIS_RELIABILITY_PROBE_ENABLED=0/' backend/.env
-          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml up -d --force-recreate django scanner_worker
+          docker compose up -d --force-recreate django scanner_worker
           for _ in $(seq 1 60); do
             if [ "$(docker inspect -f '{{.State.Health.Status}}' aegis-django 2>/dev/null || true)" = healthy ] && [ "$(docker inspect -f '{{.State.Running}}' aegis-scanner-worker 2>/dev/null || true)" = true ]; then break; fi
             sleep 2
           done
           scan_id="$(
-            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<'PY' | tail -n 1
+            docker compose exec -T django python - <<'PY' | tail -n 1
           import os
           os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
           import django
@@ -236,8 +236,8 @@ jobs:
           user = User.objects.get(email='scanner-recovery@aegisscan.local')
           project = Project.objects.get(slug='scanner-recovery-reality')
           asset = Asset.objects.create(project=project, owner=user, name='Nmap target', slug='recovered-worker-nmap', type=Asset.Type.IP_ADDRESS, configuration={'host':'aegis-scan-target'})
-          decision = AssetAuthorization.objects.create(asset=asset, actor=user, authorized=True, target_snapshot='aegis-scan-target', reason='recovery reality')
-          scan = Scan.objects.create(project=project, name='Recovered worker Nmap', scan_type=Scan.Type.IP, depth=Scan.Depth.QUICK, asset=asset, authorization_decision=decision, engines=['nmap'], config={'target':'aegis-scan-target'}, initiated_by=user, status=Scan.Status.QUEUED)
+          decision = AssetAuthorization.objects.create(asset=asset, actor=user, authorized=True, target_snapshot='aegis-scan-target', reason='crash-recovery reference reality')
+          scan = Scan.objects.create(project=project, name='Recovered worker Nmap reference', scan_type=Scan.Type.IP, depth=Scan.Depth.QUICK, asset=asset, authorization_decision=decision, engines=['nmap'], config={'target':'aegis-scan-target'}, initiated_by=user, status=Scan.Status.QUEUED)
           result = run_nmap_scan.delay(str(scan.id))
           scan.celery_task_id = result.id
           scan.save(update_fields=['celery_task_id','updated_at'])
@@ -246,13 +246,13 @@ jobs:
           )"
           completed=0
           for _ in $(seq 1 180); do
-            status="$(docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status from scans_scan where id='$scan_id';" | tr -d '\r')"
+            status="$(docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status from scans_scan where id='$scan_id';" | tr -d '\r')"
             if [ "$status" = completed ]; then completed=1; break; fi
             if [ "$status" = failed ] || [ "$status" = partial ] || [ "$status" = cancelled ]; then exit 1; fi
             sleep 2
           done
           test "$completed" -eq 1
-          docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml exec -T django python - <<PY
+          docker compose exec -T django python - <<PY
           import os
           os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
           import django
@@ -265,7 +265,8 @@ jobs:
           assert execution.status == ScanEngineExecution.ExecutionStatus.COMPLETED
           assert ScanEngineExecution.objects.filter(scan=scan, engine__name='nmap').count() == 1
           assert Evidence.objects.filter(scan=scan, source='nmap', evidence_type='scanner_output').count() == 1
-          print('POST_RECOVERY_REAL_NMAP=PASS')
+          assert execution.result_data['provider_routing']['selected_provider'] == 'legacy'
+          print('POST_RECOVERY_REFERENCE_NMAP=PASS')
           PY
 
       - name: Capture diagnostics
@@ -276,11 +277,12 @@ jobs:
           set +e
           {
             echo "sha=${GITHUB_SHA}"
+            echo "runtime_scope=ci-reference-not-production"
             echo "probe_scan_id=${{ steps.seed.outputs.scan_id }}"
             echo "probe_task_id=${{ steps.publish.outputs.task_id }}"
             echo "scanner_started_at=${{ steps.restart.outputs.started_at }}"
-            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml ps
-            docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml logs --tail=300 scanner_worker
+            docker compose ps
+            docker compose logs --tail=300 scanner_worker
           } > /tmp/scanner-crash-recovery-evidence.txt 2>&1
 
       - uses: actions/upload-artifact@v4
@@ -293,4 +295,4 @@ jobs:
       - name: Cleanup
         if: always()
         working-directory: aegis-platform
-        run: docker compose --profile ci-only -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.prod.yml down -v --remove-orphans
+        run: docker compose down -v --remove-orphans
