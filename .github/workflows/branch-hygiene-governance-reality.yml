@@ -1,0 +1,104 @@
+name: Branch Hygiene Governance Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &hygiene_paths
+      - 'scripts/admin/branch_hygiene_admin.py'
+      - 'tests/test_branch_hygiene_admin.py'
+      - '.github/workflows/branch-hygiene-governance-reality.yml'
+      - 'docs/BRANCH_HYGIENE_GOVERNANCE.md'
+  push:
+    branches: [main]
+    paths: *hygiene_paths
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Plan is read-only; apply deletes only live revalidated safe merged candidates.'
+        required: true
+        default: plan
+        type: choice
+        options: [plan, apply]
+      min_age_hours:
+        description: 'Minimum age of a merged branch tip before it can become a deletion candidate.'
+        required: true
+        default: '24'
+        type: string
+      include_chatgpt_b:
+        description: 'Explicitly allow aged merged chatgpt-b/* refs to become deletion candidates.'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: branch-hygiene-governance-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  branch-hygiene-governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Compile branch hygiene controller
+        run: python -m py_compile scripts/admin/branch_hygiene_admin.py tests/test_branch_hygiene_admin.py
+      - name: Prove fail-closed classification contract
+        run: python -m unittest -v tests.test_branch_hygiene_admin
+      - name: Build live branch hygiene plan for pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/admin/branch_hygiene_admin.py
+          --repo "${GITHUB_REPOSITORY}"
+          --mode plan
+          --min-age-hours 24
+          --output artifacts/branch-hygiene-plan.json
+      - name: Apply proven stale merged cleanup on main
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/admin/branch_hygiene_admin.py
+          --repo "${GITHUB_REPOSITORY}"
+          --mode apply
+          --min-age-hours 24
+          --output artifacts/branch-hygiene-plan.json
+      - name: Execute explicitly requested live hygiene mode
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --repo "${GITHUB_REPOSITORY}"
+            --mode "${{ inputs.mode }}"
+            --min-age-hours "${{ inputs.min_age_hours }}"
+            --output artifacts/branch-hygiene-plan.json
+          )
+          if [[ "${{ inputs.include_chatgpt_b }}" == "true" ]]; then
+            args+=(--include-chatgpt-b)
+          fi
+          python scripts/admin/branch_hygiene_admin.py "${args[@]}"
+      - name: Publish branch hygiene evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: branch-hygiene-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/branch-hygiene-plan.json
+          if-no-files-found: error
+          retention-days: 90
