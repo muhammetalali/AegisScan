@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "a03-live-20260917",
+  "request_id": "a03-live-pythonfix-20260917",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "bcb2c789c0b368dce99c27428d3c8ce9c4be166d",
-  "requested_at": "2026-09-17T14:30:00Z",
-  "expires_at": "2026-09-18T02:30:00Z"
+  "requested_base_sha": "fad3035519a65500c79616c0b81618d7e25f1827",
+  "requested_at": "2026-09-17T16:20:00Z",
+  "expires_at": "2026-09-18T04:20:00Z"
 }
