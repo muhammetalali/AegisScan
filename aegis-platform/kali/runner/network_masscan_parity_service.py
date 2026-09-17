@@ -3,7 +3,7 @@
 
 This provider is deliberately isolated from production dispatch. It accepts only a
 bound semantic Masscan intent and fails closed on authorization, scope, target,
-option, runtime-manifest, or privilege drift.
+option, runtime-manifest, link metadata, or privilege drift.
 """
 from __future__ import annotations
 
@@ -30,6 +30,8 @@ _LISTEN_PORT = int(os.environ.get('AEGIS_MASSCAN_PARITY_LISTEN_PORT', '18767'))
 _TOKEN_RE = re.compile(r'^[a-f0-9]{64}$')
 _REF_RE = re.compile(r'^[A-Za-z0-9:._-]{1,255}$')
 _PORT_TOKEN_RE = re.compile(r'^[0-9]{1,5}(?:-[0-9]{1,5})?$')
+_IFACE_RE = re.compile(r'^[A-Za-z0-9_.:-]{1,15}$')
+_MAC_RE = re.compile(r'^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$')
 _NET_RAW_MASK = 1 << 13
 
 
@@ -109,6 +111,30 @@ def _canonical_ports(value: Any) -> str:
                 raise ProtocolError('port is outside 1-65535')
             normalized.append(str(port))
     return ','.join(normalized)
+
+
+def _canonical_interface(value: Any) -> str:
+    interface = str(value or '').strip()
+    if not _IFACE_RE.fullmatch(interface):
+        raise ProtocolError('interface is missing or invalid')
+    return interface
+
+
+def _canonical_ipv4(value: Any) -> str:
+    try:
+        address = ipaddress.ip_address(str(value or '').strip())
+    except ValueError as exc:
+        raise ProtocolError('adapter_ip is missing or invalid') from exc
+    if address.version != 4:
+        raise ProtocolError('adapter_ip must be IPv4')
+    return str(address)
+
+
+def _canonical_mac(name: str, value: Any) -> str:
+    mac = str(value or '').strip()
+    if not _MAC_RE.fullmatch(mac):
+        raise ProtocolError(f'{name} is missing or invalid')
+    return mac.replace('-', ':').lower()
 
 
 def _positive_int(name: str, value: Any, *, minimum: int, maximum: int) -> int:
@@ -196,6 +222,10 @@ def _expected_binding() -> dict[str, Any]:
         'target': target,
         'ports': ports,
         'rate': rate,
+        'interface': _canonical_interface(os.environ.get('AEGIS_KALI_MASSCAN_EXPECTED_INTERFACE')),
+        'adapter_ip': _canonical_ipv4(os.environ.get('AEGIS_KALI_MASSCAN_EXPECTED_ADAPTER_IP')),
+        'adapter_mac': _canonical_mac('adapter_mac', os.environ.get('AEGIS_KALI_MASSCAN_EXPECTED_ADAPTER_MAC')),
+        'router_mac': _canonical_mac('router_mac', os.environ.get('AEGIS_KALI_MASSCAN_EXPECTED_ROUTER_MAC')),
     }
 
 
@@ -246,33 +276,38 @@ def _validate_request(payload: dict[str, Any], runtime: dict[str, Any]) -> dict[
     options = payload.get('options')
     if not isinstance(options, dict):
         raise ProtocolError('options must be a JSON object')
-    unknown_options = sorted(set(options) - {'ports', 'rate'})
+    allowed_options = {'ports', 'rate', 'interface', 'adapter_ip', 'adapter_mac', 'router_mac'}
+    unknown_options = sorted(set(options) - allowed_options)
     if unknown_options:
         raise ProtocolError(f'unsupported Masscan options: {unknown_options}')
     ports = _canonical_ports(options.get('ports'))
     rate = _positive_int('rate', options.get('rate'), minimum=1, maximum=100000)
+    interface = _canonical_interface(options.get('interface'))
+    adapter_ip = _canonical_ipv4(options.get('adapter_ip'))
+    adapter_mac = _canonical_mac('adapter_mac', options.get('adapter_mac'))
+    router_mac = _canonical_mac('router_mac', options.get('router_mac'))
     timeout = _positive_int('timeout_seconds', payload.get('timeout_seconds'), minimum=5, maximum=300)
 
     expected = _expected_binding()
-    if authorization_ref != expected['authorization_ref']:
-        raise ProtocolError('authorization_ref does not match the bound parity authorization')
-    if scope_ref != expected['scope_ref']:
-        raise ProtocolError('scope_ref does not match the bound parity scope')
-    if target != expected['target']:
-        raise ProtocolError('target does not match the bound parity target')
-    if ports != expected['ports']:
-        raise ProtocolError('ports do not match the bound parity intent')
-    if rate != expected['rate']:
-        raise ProtocolError('rate does not match the bound parity intent')
-
-    return {
-        'execution_ref': execution_ref,
+    actual = {
         'authorization_ref': authorization_ref,
         'scope_ref': scope_ref,
-        'capability_id': 'network.masscan',
         'target': target,
         'ports': ports,
         'rate': rate,
+        'interface': interface,
+        'adapter_ip': adapter_ip,
+        'adapter_mac': adapter_mac,
+        'router_mac': router_mac,
+    }
+    for field, value in actual.items():
+        if value != expected[field]:
+            raise ProtocolError(f'{field} does not match the bound parity intent')
+
+    return {
+        'execution_ref': execution_ref,
+        'capability_id': 'network.masscan',
+        **actual,
         'timeout_seconds': timeout,
     }
 
@@ -295,6 +330,10 @@ def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]
         request['target'],
         '-p', request['ports'],
         '--rate', str(request['rate']),
+        '--adapter', request['interface'],
+        '--adapter-ip', request['adapter_ip'],
+        '--adapter-mac', request['adapter_mac'],
+        '--router-mac', request['router_mac'],
         '--output-format', 'json',
         '--output-filename', '-',
     ]
@@ -316,6 +355,14 @@ def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]
     if len(completed.stdout) > MAX_OUTPUT_BYTES or len(completed.stderr) > MAX_OUTPUT_BYTES:
         raise RuntimeError('Masscan parity output exceeded the 8 MiB limit')
     tool = runtime['profile_tools']['masscan']
+    bound_options = {
+        'ports': request['ports'],
+        'rate': request['rate'],
+        'interface': request['interface'],
+        'adapter_ip': request['adapter_ip'],
+        'adapter_mac': request['adapter_mac'],
+        'router_mac': request['router_mac'],
+    }
     return {
         'schema_version': 1,
         'status': 'completed',
@@ -324,7 +371,7 @@ def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]
         'scope_ref': request['scope_ref'],
         'capability_id': request['capability_id'],
         'target': request['target'],
-        'options': {'ports': request['ports'], 'rate': request['rate']},
+        'options': bound_options,
         'tool': 'masscan',
         'exit_code': int(completed.returncode),
         'stdout': completed.stdout.decode('utf-8', errors='replace'),
@@ -347,8 +394,7 @@ def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]
                 'authorization_ref': request['authorization_ref'],
                 'scope_ref': request['scope_ref'],
                 'target': request['target'],
-                'ports': request['ports'],
-                'rate': request['rate'],
+                **bound_options,
             },
         },
     }
