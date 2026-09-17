@@ -1,10 +1,10 @@
-name: Live Production Deploy and Acceptance
+name: Internal Production Deploy and Acceptance
 
 'on':
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type DEPLOY to run the protected production rollout from main'
+        description: 'Type DEPLOY to run the protected internal production rollout from main'
         required: true
         type: string
 
@@ -12,13 +12,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: aegisscan-live-production
+  group: aegisscan-internal-production
   cancel-in-progress: false
 
 jobs:
   deploy-and-accept:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aegisscan-production]
     timeout-minutes: 360
     environment: production
     env:
@@ -28,6 +28,7 @@ jobs:
       PROD_SSH_PRIVATE_KEY: ${{ secrets.AEGIS_PRODUCTION_SSH_PRIVATE_KEY }}
       PROD_SSH_KNOWN_HOSTS: ${{ secrets.AEGIS_PRODUCTION_SSH_KNOWN_HOSTS }}
       PROD_ORIGIN: ${{ secrets.AEGIS_PRODUCTION_ORIGIN }}
+      PROD_ENTERPRISE_CA_BUNDLE: ${{ secrets.AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE }}
       PROD_E2E_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
       PROD_E2E_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
       PROD_E2E_TARGET: ${{ secrets.AEGIS_PRODUCTION_E2E_TARGET }}
@@ -51,14 +52,24 @@ jobs:
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
           printf 'production_release_sha=%s\n' "$GITHUB_SHA"
 
-      - name: Validate required protected production material
+      - name: Validate protected internal production material
         shell: bash
         run: |
           set -euo pipefail
-          for name in             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             PROD_ORIGIN             PROD_E2E_EMAIL             PROD_E2E_PASSWORD             PROD_E2E_TARGET; do
+          for name in \
+            PROD_SSH_HOST \
+            PROD_SSH_PORT \
+            PROD_SSH_USER \
+            PROD_SSH_PRIVATE_KEY \
+            PROD_SSH_KNOWN_HOSTS \
+            PROD_ORIGIN \
+            PROD_ENTERPRISE_CA_BUNDLE \
+            PROD_E2E_EMAIL \
+            PROD_E2E_PASSWORD \
+            PROD_E2E_TARGET; do
             value="${!name:-}"
             if [ -z "$value" ]; then
-              echo "Required production secret/variable is missing: $name" >&2
+              echo "Required internal production secret/variable is missing: $name" >&2
               exit 1
             fi
           done
@@ -75,7 +86,7 @@ jobs:
           test -n "$LIVE_ORIGIN"
           printf 'AEGIS_LIVE_ORIGIN=%s\n' "$LIVE_ORIGIN" >> "$GITHUB_ENV"
 
-      - name: Materialize pinned SSH transport
+      - name: Materialize pinned SSH and enterprise trust material
         shell: bash
         run: |
           set -euo pipefail
@@ -83,26 +94,57 @@ jobs:
           install -d -m 0700 /tmp/aegis-production
           printf '%s' "$PROD_SSH_PRIVATE_KEY" > /tmp/aegis-production/id
           printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > /tmp/aegis-production/known_hosts
-          chmod 0600 /tmp/aegis-production/id /tmp/aegis-production/known_hosts
+          printf '%s\n' "$PROD_ENTERPRISE_CA_BUNDLE" > /tmp/aegis-production/enterprise-ca.pem
+          chmod 0600 \
+            /tmp/aegis-production/id \
+            /tmp/aegis-production/known_hosts \
+            /tmp/aegis-production/enterprise-ca.pem
           test -s /tmp/aegis-production/id
           test -s /tmp/aegis-production/known_hosts
+          test -s /tmp/aegis-production/enterprise-ca.pem
+          python - <<'PY'
+          import hashlib
+          import ssl
+          from pathlib import Path
+          path = Path('/tmp/aegis-production/enterprise-ca.pem')
+          if path.stat().st_size > 2 * 1024 * 1024:
+              raise SystemExit('enterprise CA bundle exceeds 2 MiB')
+          ssl.create_default_context(cafile=str(path))
+          digest = hashlib.sha256(path.read_bytes()).hexdigest()
+          print(f'enterprise_ca_sha256={digest}')
+          PY
+          {
+            echo 'AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-production/enterprise-ca.pem'
+            echo 'REQUESTS_CA_BUNDLE=/tmp/aegis-production/enterprise-ca.pem'
+            echo 'SSL_CERT_FILE=/tmp/aegis-production/enterprise-ca.pem'
+          } >> "$GITHUB_ENV"
 
-      - name: Install live acceptance client dependency
+      - name: Install internal acceptance client dependency
         run: python -m pip install requests==2.32.5
 
-      - name: Deploy exact main SHA to production host
+      - name: Deploy exact main SHA through private enterprise perimeter
         shell: bash
         run: |
           set -euo pipefail
-          python aegis-platform/scripts/production_remote_deploy.py             --host "$PROD_SSH_HOST"             --port "$PROD_SSH_PORT"             --user "$PROD_SSH_USER"             --private-key /tmp/aegis-production/id             --known-hosts /tmp/aegis-production/known_hosts             --release-sha "$GITHUB_SHA"             --origin "$AEGIS_LIVE_ORIGIN"             | tee /tmp/aegis-production/deploy.json
+          python aegis-platform/scripts/production_remote_deploy.py \
+            --host "$PROD_SSH_HOST" \
+            --port "$PROD_SSH_PORT" \
+            --user "$PROD_SSH_USER" \
+            --private-key /tmp/aegis-production/id \
+            --known-hosts /tmp/aegis-production/known_hosts \
+            --release-sha "$GITHUB_SHA" \
+            --origin "$AEGIS_LIVE_ORIGIN" \
+            | tee /tmp/aegis-production/deploy.json
 
-      - name: Verify public HTTPS, security headers and TLS evidence
+      - name: Verify internal HTTPS, private resolution, enterprise CA and security headers
         shell: bash
         run: |
           set -euo pipefail
-          python aegis-platform/scripts/public_acceptance.py             --origin "$AEGIS_LIVE_ORIGIN"             | tee /tmp/aegis-production/public-acceptance.json
+          python aegis-platform/scripts/public_acceptance.py \
+            --origin "$AEGIS_LIVE_ORIGIN" \
+            | tee /tmp/aegis-production/internal-acceptance.json
 
-      - name: Run real external black-box production E2E
+      - name: Run real internal-network black-box production E2E
         shell: bash
         env:
           AEGIS_E2E_TARGET: ${{ secrets.AEGIS_PRODUCTION_E2E_TARGET }}
@@ -116,9 +158,10 @@ jobs:
           export AEGIS_DJANGO_URL="$AEGIS_LIVE_ORIGIN/api/v1"
           export AEGIS_FASTAPI_URL="$AEGIS_LIVE_ORIGIN"
           export AEGIS_API_URL="$AEGIS_LIVE_ORIGIN/api/v1"
-          python aegis-platform/e2e/external_black_box_e2e.py             2>&1 | tee /tmp/aegis-production/external-black-box.log
+          python aegis-platform/e2e/external_black_box_e2e.py \
+            2>&1 | tee /tmp/aegis-production/internal-black-box.log
 
-      - name: Prove installed CLI against public production
+      - name: Prove installed CLI against internal production
         shell: bash
         env:
           AEGIS_PLATFORM_URL: ${{ env.AEGIS_LIVE_ORIGIN }}
@@ -127,16 +170,17 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -e .
-          aegis platform-status --json             | tee /tmp/aegis-production/cli-platform-status.json
+          aegis platform-status --json \
+            | tee /tmp/aegis-production/cli-platform-status.json
 
-      - name: Build go-live evidence manifest
+      - name: Build internal go-live evidence manifest
         if: success()
         shell: bash
         env:
           AEGIS_RELEASE_SHA: ${{ github.sha }}
           AEGIS_RUN_ID: ${{ github.run_id }}
           AEGIS_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AEGIS_PUBLIC_ORIGIN: ${{ env.AEGIS_LIVE_ORIGIN }}
+          AEGIS_INTERNAL_ORIGIN: ${{ env.AEGIS_LIVE_ORIGIN }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -149,24 +193,37 @@ jobs:
           root = Path('/tmp/aegis-production')
           evidence_files = [
               'deploy.json',
-              'public-acceptance.json',
-              'external-black-box.log',
+              'internal-acceptance.json',
+              'internal-black-box.log',
               'cli-platform-status.json',
           ]
           digests = {}
           for name in evidence_files:
               path = root / name
               if not path.is_file() or path.stat().st_size == 0:
-                  raise SystemExit(f'missing required go-live evidence: {name}')
+                  raise SystemExit(f'missing required internal go-live evidence: {name}')
               digests[name] = hashlib.sha256(path.read_bytes()).hexdigest()
 
+          acceptance = json.loads((root / 'internal-acceptance.json').read_text(encoding='utf-8'))
+          if acceptance.get('schema') != 'aegisscan.internal-production-acceptance.v1':
+              raise SystemExit('internal acceptance schema mismatch')
+          if acceptance.get('deployment_mode') != 'internal':
+              raise SystemExit('internal acceptance mode mismatch')
+          enterprise_ca = acceptance.get('enterprise_ca') or {}
+          ca_sha256 = str(enterprise_ca.get('sha256', ''))
+          if len(ca_sha256) != 64:
+              raise SystemExit('internal acceptance enterprise CA evidence is missing')
+
           manifest = {
-              'schema': 'aegisscan.go-live-evidence.v1',
+              'schema': 'aegisscan.go-live-evidence.v2',
               'status': 'success',
+              'deployment_mode': 'internal',
+              'network_scope': 'rfc1918-or-ipv6-ula',
               'release_sha': os.environ['AEGIS_RELEASE_SHA'],
               'run_id': os.environ['AEGIS_RUN_ID'],
               'run_attempt': os.environ['AEGIS_RUN_ATTEMPT'],
-              'public_origin': os.environ['AEGIS_PUBLIC_ORIGIN'],
+              'internal_origin': os.environ['AEGIS_INTERNAL_ORIGIN'],
+              'enterprise_ca_sha256': ca_sha256,
               'completed_at': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
               'sha256': digests,
           }
@@ -177,25 +234,28 @@ jobs:
           print(json.dumps(manifest, sort_keys=True))
           PY
 
-      - name: Upload go-live evidence
+      - name: Upload internal go-live evidence
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: aegisscan-go-live-${{ github.sha }}-${{ github.run_id }}
+          name: aegisscan-internal-go-live-${{ github.sha }}-${{ github.run_id }}
           path: |
             /tmp/aegis-production/deploy.json
-            /tmp/aegis-production/public-acceptance.json
-            /tmp/aegis-production/external-black-box.log
+            /tmp/aegis-production/internal-acceptance.json
+            /tmp/aegis-production/internal-black-box.log
             /tmp/aegis-production/cli-platform-status.json
             /tmp/aegis-production/manifest.json
           if-no-files-found: error
           retention-days: 90
 
-      - name: Destroy local SSH material
+      - name: Destroy local protected transport and trust material
         if: always()
         shell: bash
         run: |
           set +e
           if [ -d /tmp/aegis-production ]; then
-            rm -f /tmp/aegis-production/id /tmp/aegis-production/known_hosts
+            rm -f \
+              /tmp/aegis-production/id \
+              /tmp/aegis-production/known_hosts \
+              /tmp/aegis-production/enterprise-ca.pem
           fi
