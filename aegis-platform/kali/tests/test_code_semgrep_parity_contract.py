@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "runner" / "code_semgrep_parity_service.py"
 SPEC = importlib.util.spec_from_file_location("code_semgrep_parity_service", MODULE_PATH)
@@ -89,6 +90,31 @@ class GovernedSemgrepParityContractTests(unittest.TestCase):
         (self.config.source_root / "linked.py").symlink_to(outside)
         with self.assertRaisesRegex(SystemExit, "cannot contain symlinks"):
             MODULE._tree_sha256(self.config.source_root)
+
+    def test_runtime_version_probe_uses_writable_temporary_home(self) -> None:
+        class Completed:
+            returncode = 0
+            stdout = "1.177.0\n"
+            stderr = ""
+
+        with patch.object(
+            MODULE,
+            "_read_proc_status",
+            return_value={
+                "Uid": "10001 10001 10001 10001",
+                "CapEff": "0000000000000000",
+                "NoNewPrivs": "1",
+            },
+        ), patch.object(MODULE.subprocess, "run", return_value=Completed()) as run:
+            runtime = MODULE._runtime_identity(self.config)
+
+        env = run.call_args.kwargs["env"]
+        self.assertTrue(env["HOME"].startswith("/tmp/aegis-semgrep-version-"))
+        self.assertTrue(env["XDG_CONFIG_HOME"].startswith("/tmp/aegis-semgrep-version-"))
+        self.assertTrue(env["XDG_CACHE_HOME"].startswith("/tmp/aegis-semgrep-version-"))
+        self.assertEqual(env["SEMGREP_SEND_METRICS"], "off")
+        self.assertEqual(env["SEMGREP_ENABLE_VERSION_CHECK"], "0")
+        self.assertEqual(runtime["tool_version"], "1.177.0")
 
     def test_service_is_loopback_only(self) -> None:
         self.assertEqual(MODULE.LISTEN_HOST, "127.0.0.1")
