@@ -22,6 +22,14 @@ service = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(service)
 
 
+LINK_BINDING = {
+    'interface': 'eth0',
+    'adapter_ip': '172.31.1.2',
+    'adapter_mac': '02:42:ac:1f:01:02',
+    'router_mac': '02:42:ac:1f:01:0a',
+}
+
+
 def _bound_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('AEGIS_KALI_MASSCAN_PARITY_AUTH_TOKEN', 'a' * 64)
     monkeypatch.setenv('AEGIS_KALI_MASSCAN_EXPECTED_AUTHORIZATION_REF', 'masscan-parity-authorization')
@@ -29,6 +37,10 @@ def _bound_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('AEGIS_KALI_MASSCAN_EXPECTED_TARGET', '172.31.1.10')
     monkeypatch.setenv('AEGIS_KALI_MASSCAN_EXPECTED_PORTS', '22,80')
     monkeypatch.setenv('AEGIS_KALI_MASSCAN_EXPECTED_RATE', '1000')
+    monkeypatch.setenv('AEGIS_KALI_MASSCAN_EXPECTED_INTERFACE', LINK_BINDING['interface'])
+    monkeypatch.setenv('AEGIS_KALI_MASSCAN_EXPECTED_ADAPTER_IP', LINK_BINDING['adapter_ip'])
+    monkeypatch.setenv('AEGIS_KALI_MASSCAN_EXPECTED_ADAPTER_MAC', LINK_BINDING['adapter_mac'])
+    monkeypatch.setenv('AEGIS_KALI_MASSCAN_EXPECTED_ROUTER_MAC', LINK_BINDING['router_mac'])
 
 
 def _request() -> dict:
@@ -39,7 +51,7 @@ def _request() -> dict:
         'scope_ref': 'project:parity:asset:masscan',
         'capability_id': 'network.masscan',
         'target': '172.31.1.10',
-        'options': {'ports': '22,80', 'rate': 1000},
+        'options': {'ports': '22,80', 'rate': 1000, **LINK_BINDING},
         'timeout_seconds': 120,
     }
 
@@ -67,7 +79,7 @@ def test_parity_service_is_explicitly_non_production_loopback_and_semantic_only(
     assert "'NoNewPrivs'" in SERVICE
 
 
-def test_request_is_bound_to_authorization_scope_target_and_scan_intent(monkeypatch: pytest.MonkeyPatch):
+def test_request_is_bound_to_authorization_scope_target_scan_intent_and_link(monkeypatch: pytest.MonkeyPatch):
     _bound_env(monkeypatch)
     runtime = {'profile_capabilities': ['network.masscan']}
     accepted = service._validate_request(_request(), runtime)
@@ -76,6 +88,8 @@ def test_request_is_bound_to_authorization_scope_target_and_scan_intent(monkeypa
     assert accepted['target'] == '172.31.1.10'
     assert accepted['ports'] == '22,80'
     assert accepted['rate'] == 1000
+    for field, value in LINK_BINDING.items():
+        assert accepted[field] == value
 
     mutations = [
         ('authorization_ref', 'wrong-authorization'),
@@ -88,15 +102,19 @@ def test_request_is_bound_to_authorization_scope_target_and_scan_intent(monkeypa
         with pytest.raises(service.ProtocolError):
             service._validate_request(request, runtime)
 
-    request = _request()
-    request['options'] = {'ports': '22,443', 'rate': 1000}
-    with pytest.raises(service.ProtocolError, match='ports do not match'):
-        service._validate_request(request, runtime)
-
-    request = _request()
-    request['options'] = {'ports': '22,80', 'rate': 2000}
-    with pytest.raises(service.ProtocolError, match='rate does not match'):
-        service._validate_request(request, runtime)
+    option_mutations = {
+        'ports': '22,443',
+        'rate': 2000,
+        'interface': 'eth1',
+        'adapter_ip': '172.31.1.3',
+        'adapter_mac': '02:42:ac:1f:01:03',
+        'router_mac': '02:42:ac:1f:01:0b',
+    }
+    for field, value in option_mutations.items():
+        request = _request()
+        request['options'][field] = value
+        with pytest.raises(service.ProtocolError, match=f'{field} does not match'):
+            service._validate_request(request, runtime)
 
 
 def test_request_rejects_raw_or_unsafe_command_surface(monkeypatch: pytest.MonkeyPatch):
@@ -111,12 +129,17 @@ def test_request_rejects_raw_or_unsafe_command_surface(monkeypatch: pytest.Monke
             service._canonical_ports(bad_ports)
 
 
-def test_real_parity_runtime_uses_only_net_raw_and_no_new_privileges():
-    assert '--cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true' in REAL_WORKFLOW
-    assert '--cap-add NET_ADMIN' not in REAL_WORKFLOW
+def test_real_parity_runtime_preserves_sidecar_privilege_boundary():
+    assert 'aegis-masscan-egress' in REAL_WORKFLOW
+    assert REAL_WORKFLOW.count('--cap-add NET_ADMIN') == 1
+    assert '--name aegis-masscan-egress' in REAL_WORKFLOW
+    assert '--cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges:true' in REAL_WORKFLOW
+    assert REAL_WORKFLOW.count('--cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true') == 2
+    assert '--network container:aegis-masscan-egress' in REAL_WORKFLOW
     assert "privilege['effective']=='0000000000002000'" in REAL_WORKFLOW
     assert "privilege['allowed_capabilities']==['CAP_NET_RAW']" in REAL_WORKFLOW
     assert 'docker network create --internal' in REAL_WORKFLOW
+    assert 'SCANNER_EGRESS_PRIVATE_TARGETS' in REAL_WORKFLOW
 
 
 def test_parity_service_is_not_packaged_or_selected_as_production_provider():
