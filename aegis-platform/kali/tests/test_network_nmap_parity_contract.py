@@ -10,6 +10,7 @@ DOCKERFILE = (KALI / 'Dockerfile.profiles').read_text(encoding='utf-8')
 SERVICE = (KALI / 'runner' / 'network_nmap_parity_service.py').read_text(encoding='utf-8')
 RUNTIME_BUILDER = (KALI / 'runner' / 'profile_runtime_manifest.py').read_text(encoding='utf-8')
 WORKFLOW = (REPO / '.github' / 'workflows' / 'network-nmap-parity-reality.yml').read_text(encoding='utf-8')
+WORKFLOW = (REPO / '.github' / 'workflows' / 'network-nmap-parity-reality.yml').read_text(encoding='utf-8')
 
 
 def test_network_nmap_is_pinned_but_not_production_dispatched_during_parity():
@@ -31,6 +32,17 @@ def test_parity_service_is_explicitly_non_production_and_loopback_only():
     assert 'shell=True' not in SERVICE
     assert "payload.get('argv')" not in SERVICE
     assert "payload.get('binary')" not in SERVICE
+    assert "'NoNewPrivs'" in SERVICE
+    assert "'CapEff'" in SERVICE
+    assert "_NET_RAW_MASK = 1 << 13" in SERVICE
+
+
+def test_parity_runtime_uses_only_net_raw_and_no_new_privileges():
+    assert '--cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true' in WORKFLOW
+    assert '--cap-add NET_ADMIN' not in WORKFLOW
+    assert '--user 0:0' in WORKFLOW
+    assert "privilege['effective']=='0000000000002000'" in WORKFLOW
+    assert "privilege['allowed_capabilities']==['CAP_NET_RAW']" in WORKFLOW
 
 
 def test_parity_service_is_not_packaged_into_production_network_profile():
