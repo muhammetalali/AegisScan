@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Validate that a Linux host can run the complete AegisScan production execution plane."""
+"""Validate that a Linux host can run the complete AegisScan internal production plane."""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
 import shutil
+import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +23,8 @@ COMPOSE_FILES = (
 MIN_MEMORY_BYTES = 7 * 1024**3
 MIN_DISK_BYTES = 60 * 1024**3
 MIN_CPU_COUNT = 4
+ENTERPRISE_CA_BUNDLE = Path("/etc/aegisscan/enterprise-ca.pem")
+MAX_CA_BUNDLE = 2 * 1024 * 1024
 
 
 class HostValidationError(RuntimeError):
@@ -63,6 +67,23 @@ def _disk_free_bytes(path: Path) -> int:
 def _kernel_ipv4_forward() -> bool:
     path = Path("/proc/sys/net/ipv4/ip_forward")
     return path.is_file() and path.read_text(encoding="utf-8").strip() == "1"
+
+
+def _enterprise_ca_evidence(path: Path = ENTERPRISE_CA_BUNDLE) -> dict[str, str]:
+    if not path.is_file():
+        raise HostValidationError(f"enterprise CA bundle is missing: {path}")
+    size = path.stat().st_size
+    if size <= 0 or size > MAX_CA_BUNDLE:
+        raise HostValidationError("enterprise CA bundle has invalid size")
+    try:
+        context = ssl.create_default_context(cafile=str(path))
+    except (OSError, ssl.SSLError) as exc:
+        raise HostValidationError(f"enterprise CA bundle is not a valid TLS trust anchor: {exc}") from exc
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return {
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
 
 
 def _require_commands() -> dict[str, str]:
@@ -183,17 +204,14 @@ def validate(env_file: Path) -> dict[str, object]:
 
     memory = _memory_bytes()
     if memory < MIN_MEMORY_BYTES:
-        raise HostValidationError(
-            f"host memory is below the 7 GiB production minimum: {memory}"
-        )
+        raise HostValidationError(f"host memory is below the 7 GiB production minimum: {memory}")
     disk = _disk_free_bytes(PLATFORM_DIR)
     if disk < MIN_DISK_BYTES:
-        raise HostValidationError(
-            f"host free disk is below the 60 GiB production minimum: {disk}"
-        )
+        raise HostValidationError(f"host free disk is below the 60 GiB production minimum: {disk}")
     if not _kernel_ipv4_forward():
         raise HostValidationError("net.ipv4.ip_forward must be enabled for scanner egress isolation")
 
+    enterprise_ca = _enterprise_ca_evidence()
     versions = _require_commands()
     docker = _docker_info()
     if docker["os_type"] != "linux":
@@ -206,9 +224,11 @@ def validate(env_file: Path) -> dict[str, object]:
     _probe_shared_network_namespace()
     _validate_compose(env_file)
 
-    result = {
+    return {
         "schema": "aegisscan.production-host-reality.v1",
         "status": "success",
+        "deployment_mode": "internal",
+        "enterprise_ca": enterprise_ca,
         "host": {
             "kernel": platform.release(),
             "machine": platform.machine(),
@@ -226,7 +246,6 @@ def validate(env_file: Path) -> dict[str, object]:
             "compose_contract": True,
         },
     }
-    return result
 
 
 def main() -> int:
