@@ -8,6 +8,7 @@ from django_project.projects.models import Project
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability
+from fastapi_app.services import nmap_execution_provider
 from fastapi_app.services.scanner_adapters import ScanResult
 from fastapi_app.tasks import advanced_scans, security_scan
 
@@ -41,7 +42,11 @@ def test_nmap_redelivery_does_not_rerun_or_duplicate_durable_state(monkeypatch):
             self.calls += 1
             return ScanResult('nmap', request.target, 0, NMAP_XML, '')
 
-    stub = StubNmap(); monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'aegis-scan-target'); monkeypatch.setattr(security_scan, 'get_tool', lambda name: stub)
+    stub = StubNmap()
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'aegis-scan-target')
+    # Redelivery must traverse the authoritative provider-routing layer while
+    # replacing only its legacy tool adapter for deterministic test execution.
+    monkeypatch.setattr(nmap_execution_provider, 'get_tool', lambda name: stub)
     first = security_scan.run_nmap_scan.run(str(scan.id)); second = security_scan.run_nmap_scan.run(str(scan.id))
     scan.refresh_from_db()
     assert first['status'] == Scan.Status.COMPLETED; assert second['status'] == Scan.Status.COMPLETED; assert second['redelivered'] is True; assert stub.calls == 1
@@ -104,6 +109,7 @@ def test_terminal_redelivery_is_read_only_before_authorization_or_engine_executi
 
     if engine_name == 'nmap':
         monkeypatch.setattr(security_scan, 'get_tool', must_not_run)
+        monkeypatch.setattr(nmap_execution_provider, 'get_tool', must_not_run)
         task = security_scan.run_nmap_scan
     elif engine_name == 'nuclei':
         monkeypatch.setattr(security_scan, 'run_nuclei', must_not_run)
