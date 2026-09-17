@@ -1,0 +1,206 @@
+name: Network Masscan Real Parity
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &masscan_real_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/fastapi_app/services/masscan_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/scanner_adapters.py'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/kali/tool-manifest.json'
+      - 'aegis-platform/kali/runner/profile_runtime_manifest.py'
+      - 'aegis-platform/kali/runner/network_masscan_parity_service.py'
+      - 'aegis-platform/e2e/nmap_tcp_fixture.py'
+      - '.github/workflows/network-masscan-real-parity.yml'
+  push:
+    branches: [main]
+    paths: *masscan_real_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-masscan-real-parity-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-masscan-dual-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_MASSCAN_NETWORK: aegis-masscan-parity
+      AEGIS_MASSCAN_TARGET: 172.31.1.10
+      AEGIS_MASSCAN_PORTS: 22,80
+      AEGIS_MASSCAN_RATE: '1000'
+      AEGIS_MASSCAN_AUTH_TOKEN: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_MASSCAN_AUTHORIZATION_REF: masscan-parity-authorization
+      AEGIS_MASSCAN_SCOPE_REF: project:parity:asset:masscan
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build legacy and governed network runtimes
+        run: |
+          set -euo pipefail
+          docker build --no-cache --target legacy-parity-reference \
+            -t aegis-masscan:legacy -f aegis-platform/backend/Dockerfile.django aegis-platform/backend
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base -f aegis-platform/kali/Dockerfile.base aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-network -t aegis-kali:network \
+            -f aegis-platform/kali/Dockerfile.profiles .
+          docker run --rm --entrypoint sh aegis-kali:network -c \
+            'masscan --version 2>&1 | grep -q "1.3.2" && command -v masscan >/dev/null'
+          docker run --rm --entrypoint cat aegis-kali:network \
+            /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY'
+          import json
+          runtime=json.load(open('runtime-manifest.json'))
+          assert runtime['profile']=='network', runtime
+          assert runtime['dispatch_enabled'] is False, runtime
+          assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
+          assert 'network.masscan' in runtime['profile_capabilities'], runtime
+          assert runtime['profile_tools']['masscan']['version']=='2:1.3.2+ds1-2', runtime
+          PY
+      - name: Start internal target and legacy scanner
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts && chmod 0777 artifacts
+          docker network create --internal --subnet 172.31.1.0/24 "${AEGIS_MASSCAN_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_MASSCAN_NETWORK}")" = true
+          docker run -d --name aegis-masscan-fixture \
+            --network "${AEGIS_MASSCAN_NETWORK}" --ip "${AEGIS_MASSCAN_TARGET}" --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/nmap_tcp_fixture.py:/fixture.py:ro" \
+            --entrypoint python aegis-masscan:legacy /fixture.py
+          docker run -d --name aegis-masscan-legacy \
+            --network "${AEGIS_MASSCAN_NETWORK}" --user 0:0 \
+            --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_MASSCAN_TARGET}/32" \
+            -v "$PWD/artifacts:/artifacts" --entrypoint sleep aegis-masscan:legacy infinity
+          for _ in $(seq 1 30); do
+            docker logs aegis-masscan-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY && exit 0
+            sleep 1
+          done
+          docker logs aegis-masscan-fixture
+          exit 1
+      - name: Execute legacy production adapter
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-masscan-legacy python - <<'PY'
+          import json
+          from fastapi_app.services.scanner_adapters import run_masscan
+          result=run_masscan('172.31.1.10',ports='22,80',rate=1000,timeout=120)
+          assert result.exit_code == 0, result.stderr
+          open('/artifacts/legacy.json','w',encoding='utf-8').write(result.stdout)
+          json.dump({'tool':result.tool,'target':result.target,'exit_code':result.exit_code},open('/artifacts/legacy-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Start governed parity candidate with minimum privilege
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-masscan-kali \
+            --network container:aegis-masscan-legacy --user 0:0 --read-only \
+            --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            -e AEGIS_KALI_MASSCAN_PARITY_MODE=true \
+            -e AEGIS_KALI_MASSCAN_PARITY_AUTH_TOKEN="${AEGIS_MASSCAN_AUTH_TOKEN}" \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_AUTHORIZATION_REF="${AEGIS_MASSCAN_AUTHORIZATION_REF}" \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_SCOPE_REF="${AEGIS_MASSCAN_SCOPE_REF}" \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_TARGET="${AEGIS_MASSCAN_TARGET}" \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_PORTS="${AEGIS_MASSCAN_PORTS}" \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_RATE="${AEGIS_MASSCAN_RATE}" \
+            -v "$PWD/aegis-platform/kali/runner/network_masscan_parity_service.py:/opt/aegis-runner/network_masscan_parity_service.py:ro" \
+            --entrypoint python3 aegis-kali:network /opt/aegis-runner/network_masscan_parity_service.py
+          for _ in $(seq 1 30); do
+            if docker exec aegis-masscan-legacy python - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18767/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-masscan-kali
+          exit 1
+      - name: Execute candidate and prove semantic parity
+        run: |
+          set -euo pipefail
+          docker exec -i -e AEGIS_MASSCAN_AUTH_TOKEN="${AEGIS_MASSCAN_AUTH_TOKEN}" aegis-masscan-legacy python - <<'PY'
+          import json, os, urllib.request
+          payload={
+              'schema_version':1,
+              'execution_ref':'masscan-parity-execution',
+              'authorization_ref':'masscan-parity-authorization',
+              'scope_ref':'project:parity:asset:masscan',
+              'capability_id':'network.masscan',
+              'target':'172.31.1.10',
+              'options':{'ports':'22,80','rate':1000},
+              'timeout_seconds':120,
+          }
+          req=urllib.request.Request(
+              'http://127.0.0.1:18767/v1/execute',data=json.dumps(payload).encode(),method='POST',
+              headers={'Content-Type':'application/json','X-Aegis-Masscan-Parity-Token':os.environ['AEGIS_MASSCAN_AUTH_TOKEN']},
+          )
+          result=json.loads(urllib.request.urlopen(req,timeout=135).read())
+          assert result['status']=='completed' and result['exit_code']==0, result
+          privilege=result['runtime']['linux_privilege']
+          assert privilege['effective']=='0000000000002000', privilege
+          assert privilege['allowed_capabilities']==['CAP_NET_RAW'], privilege
+          assert result['runtime']['binding']['authorization_ref']=='masscan-parity-authorization', result
+          open('/artifacts/candidate.json','w',encoding='utf-8').write(result['stdout'])
+          json.dump(result,open('/artifacts/candidate-result.json','w'),sort_keys=True,indent=2)
+          from fastapi_app.services.masscan_semantic_parity import compare_masscan_semantics
+          legacy=open('/artifacts/legacy.json',encoding='utf-8').read()
+          comparison=compare_masscan_semantics(legacy,result['stdout'])
+          expected=[
+              {'ip':'172.31.1.10','protocol':'tcp','port':22},
+              {'ip':'172.31.1.10','protocol':'tcp','port':80},
+          ]
+          assert comparison['equivalent'] is True, comparison
+          assert comparison['legacy']['observations']==expected, comparison
+          assert comparison['candidate']['observations']==expected, comparison
+          json.dump(comparison,open('/artifacts/semantic-parity.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Capture immutable exact-head evidence
+        run: |
+          set -euo pipefail
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          git rev-parse HEAD > artifacts/head-sha.txt
+          docker image inspect aegis-kali:network --format '{{.Id}}' > artifacts/kali-network-image-id.txt
+          docker image inspect aegis-masscan:legacy --format '{{.Id}}' > artifacts/legacy-image-id.txt
+          python - <<'PY' > artifacts/network-boundary.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-masscan-real-parity.v1',
+              'target':'172.31.1.10','ports':'22,80','rate':1000,
+              'fixture_network_internal':True,'public_internet_fixture':False,
+              'candidate_loopback_only':True,'candidate_production_dispatch':False,
+              'production_cutover':False,'legacy_retirement':False,
+              'candidate_capabilities':['CAP_NET_RAW'],'candidate_no_new_privs':True,
+              'authorization_binding_required':True,'scope_binding_required':True,'target_binding_required':True,
+              'legacy_adapter_executed':True,'kali_candidate_executed':True,
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum head-sha.txt runtime-manifest.json kali-network-image-id.txt legacy-image-id.txt legacy.json legacy-result.json candidate.json candidate-result.json semantic-parity.json network-boundary.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-masscan-real-parity-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-masscan-kali aegis-masscan-legacy aegis-masscan-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_MASSCAN_NETWORK}" >/dev/null 2>&1 || true
