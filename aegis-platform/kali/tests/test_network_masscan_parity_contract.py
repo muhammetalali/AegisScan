@@ -15,6 +15,9 @@ SERVICE = SERVICE_PATH.read_text(encoding='utf-8')
 RUNTIME_BUILDER = (KALI / 'runner' / 'profile_runtime_manifest.py').read_text(encoding='utf-8')
 CONTRACT_WORKFLOW = (REPO / '.github' / 'workflows' / 'network-masscan-parity-reality.yml').read_text(encoding='utf-8')
 REAL_WORKFLOW = (REPO / '.github' / 'workflows' / 'network-masscan-real-parity.yml').read_text(encoding='utf-8')
+SCANNER_EGRESS = (
+    REPO / 'aegis-platform' / 'docker' / 'scanner-egress' / 'entrypoint.sh'
+).read_text(encoding='utf-8')
 
 spec = importlib.util.spec_from_file_location('network_masscan_parity_service', SERVICE_PATH)
 assert spec and spec.loader
@@ -140,6 +143,15 @@ def test_real_parity_runtime_preserves_sidecar_privilege_boundary():
     assert "privilege['allowed_capabilities']==['CAP_NET_RAW']" in REAL_WORKFLOW
     assert 'docker network create --internal' in REAL_WORKFLOW
     assert 'SCANNER_EGRESS_PRIVATE_TARGETS' in REAL_WORKFLOW
+
+
+def test_real_parity_can_explicitly_disable_control_plane_resolution():
+    assert "-e SCANNER_CONTROL_ENDPOINTS=''" in REAL_WORKFLOW
+    assert (
+        'CONTROL_ENDPOINTS="${SCANNER_CONTROL_ENDPOINTS-'
+        'postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}"'
+    ) in SCANNER_EGRESS
+    assert 'CONTROL_ENDPOINTS="${SCANNER_CONTROL_ENDPOINTS:-' not in SCANNER_EGRESS
 
 
 def test_parity_service_is_not_packaged_or_selected_as_production_provider():
