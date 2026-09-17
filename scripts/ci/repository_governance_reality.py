@@ -102,6 +102,35 @@ def _load_spec(path: Path) -> dict[str, Any]:
     return spec
 
 
+def _bypass_evidence(detail: dict[str, Any]) -> dict[str, Any]:
+    """Validate bypass data when GitHub exposes it and classify permission redaction safely."""
+    current_user_can_bypass = detail.get("current_user_can_bypass")
+    if current_user_can_bypass not in (None, False, "never"):
+        raise GovernanceError(
+            f"workflow identity can bypass the live ruleset: {current_user_can_bypass!r}"
+        )
+
+    if "bypass_actors" not in detail:
+        return {
+            "visibility": "permission_limited",
+            "count": None,
+            "admin_verification_required": True,
+            "workflow_identity_can_bypass": current_user_can_bypass,
+        }
+
+    bypass_actors = detail.get("bypass_actors")
+    if not isinstance(bypass_actors, list):
+        raise GovernanceError("live main ruleset exposed malformed bypass_actors")
+    if bypass_actors:
+        raise GovernanceError(f"live main ruleset has forbidden bypass actors: {bypass_actors}")
+    return {
+        "visibility": "visible",
+        "count": 0,
+        "admin_verification_required": False,
+        "workflow_identity_can_bypass": current_user_can_bypass,
+    }
+
+
 def _select_live_ruleset(spec: dict[str, Any], token: str, repo: str) -> dict[str, Any]:
     expected = spec["ruleset"]
     summaries = _api_json(f"/repos/{repo}/rulesets", token)
@@ -134,11 +163,7 @@ def _select_live_ruleset(spec: dict[str, Any], token: str, repo: str) -> dict[st
     if detail.get("target") != "branch" or detail.get("enforcement") != "active":
         raise GovernanceError("live main ruleset is not an active branch ruleset")
 
-    bypass_actors = detail.get("bypass_actors")
-    if not isinstance(bypass_actors, list):
-        raise GovernanceError("live main ruleset did not expose bypass_actors for verification")
-    if bypass_actors:
-        raise GovernanceError(f"live main ruleset has forbidden bypass actors: {bypass_actors}")
+    bypass_evidence = _bypass_evidence(detail)
 
     conditions = detail.get("conditions") or {}
     live_includes = ((conditions.get("ref_name") or {}).get("include") or [])
@@ -178,7 +203,9 @@ def _select_live_ruleset(spec: dict[str, Any], token: str, repo: str) -> dict[st
     if not live_status_match:
         raise GovernanceError("live named ruleset does not enforce the strict governed status context")
 
-    return detail
+    result = dict(detail)
+    result["_aegis_bypass_evidence"] = bypass_evidence
+    return result
 
 
 def _validate_live(spec: dict[str, Any], token: str, repo: str) -> dict[str, Any]:
@@ -217,6 +244,7 @@ def _validate_live(spec: dict[str, Any], token: str, repo: str) -> dict[str, Any
     if not strict_ok:
         raise GovernanceError("active required-status-check rule is not strict/up-to-date")
 
+    bypass_evidence = live_ruleset.get("_aegis_bypass_evidence") or {}
     return {
         "repository": repo,
         "branch": branch,
@@ -225,7 +253,10 @@ def _validate_live(spec: dict[str, Any], token: str, repo: str) -> dict[str, Any
         "ruleset_id": live_ruleset.get("id"),
         "ruleset_name": live_ruleset.get("name"),
         "ruleset_enforcement": live_ruleset.get("enforcement"),
-        "bypass_actor_count": len(live_ruleset.get("bypass_actors") or []),
+        "bypass_actor_count": bypass_evidence.get("count"),
+        "bypass_actor_visibility": bypass_evidence.get("visibility"),
+        "bypass_admin_verification_required": bypass_evidence.get("admin_verification_required"),
+        "workflow_identity_can_bypass": bypass_evidence.get("workflow_identity_can_bypass"),
         "active_rule_types": sorted(by_type),
         "required_status_context": required_context,
         "strict_status_checks": True,
