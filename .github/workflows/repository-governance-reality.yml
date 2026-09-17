@@ -11,6 +11,7 @@ name: Repository Governance Reality
       - 'scripts/ci/required_ci_governance.py'
       - 'scripts/ci/repository_governance_reality.py'
       - 'tests/test_required_ci_governance.py'
+      - 'tests/test_repository_governance_reality.py'
       - 'docs/REPOSITORY_GOVERNANCE.md'
   push:
     branches: [main]
@@ -37,9 +38,13 @@ jobs:
           scripts/ci/required_ci_governance.py
           scripts/ci/repository_governance_reality.py
           tests/test_required_ci_governance.py
+          tests/test_repository_governance_reality.py
       - name: Validate live-base required-CI regression contract
         if: github.event_name == 'pull_request'
         run: python3 tests/test_required_ci_governance.py -v
+      - name: Validate repository-governance permission regression contract
+        if: github.event_name == 'pull_request'
+        run: python3 tests/test_repository_governance_reality.py -v
       - name: Validate governance policy contract
         if: github.event_name == 'pull_request'
         run: |
