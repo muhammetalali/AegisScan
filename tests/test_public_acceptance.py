@@ -82,6 +82,31 @@ def test_enterprise_ca_bundle_is_required_absolute_and_bounded(tmp_path: Path, m
         acceptance._ca_bundle_path()
 
 
+def test_ssl_cert_file_bridge_is_scoped_to_explicit_loopback_test(tmp_path: Path, monkeypatch):
+    ca = tmp_path / "ci-ca.pem"
+    ca.write_text("test-ca")
+    monkeypatch.delenv("AEGIS_ENTERPRISE_CA_BUNDLE", raising=False)
+    monkeypatch.setenv("SSL_CERT_FILE", str(ca))
+
+    acceptance._configure_loopback_test_ca(allow_loopback_test=False)
+    assert "AEGIS_ENTERPRISE_CA_BUNDLE" not in acceptance.os.environ
+
+    acceptance._configure_loopback_test_ca(allow_loopback_test=True)
+    assert acceptance.os.environ["AEGIS_ENTERPRISE_CA_BUNDLE"] == str(ca)
+
+
+def test_loopback_test_ca_bridge_does_not_override_explicit_enterprise_ca(tmp_path: Path, monkeypatch):
+    explicit = tmp_path / "explicit-ca.pem"
+    legacy = tmp_path / "legacy-ca.pem"
+    explicit.write_text("explicit")
+    legacy.write_text("legacy")
+    monkeypatch.setenv("AEGIS_ENTERPRISE_CA_BUNDLE", str(explicit))
+    monkeypatch.setenv("SSL_CERT_FILE", str(legacy))
+
+    acceptance._configure_loopback_test_ca(allow_loopback_test=True)
+    assert acceptance.os.environ["AEGIS_ENTERPRISE_CA_BUNDLE"] == str(explicit)
+
+
 def _success_dependencies(monkeypatch):
     headers = {name: "present" for name in acceptance.REQUIRED_SECURITY_HEADERS}
     headers["strict-transport-security"] = "max-age=31536000; includeSubDomains"
