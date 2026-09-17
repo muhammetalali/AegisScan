@@ -13,7 +13,8 @@ DOCKERFILE = (KALI / 'Dockerfile.profiles').read_text(encoding='utf-8')
 SERVICE_PATH = KALI / 'runner' / 'network_masscan_parity_service.py'
 SERVICE = SERVICE_PATH.read_text(encoding='utf-8')
 RUNTIME_BUILDER = (KALI / 'runner' / 'profile_runtime_manifest.py').read_text(encoding='utf-8')
-WORKFLOW = (REPO / '.github' / 'workflows' / 'network-masscan-parity-reality.yml').read_text(encoding='utf-8')
+CONTRACT_WORKFLOW = (REPO / '.github' / 'workflows' / 'network-masscan-parity-reality.yml').read_text(encoding='utf-8')
+REAL_WORKFLOW = (REPO / '.github' / 'workflows' / 'network-masscan-real-parity.yml').read_text(encoding='utf-8')
 
 spec = importlib.util.spec_from_file_location('network_masscan_parity_service', SERVICE_PATH)
 assert spec and spec.loader
@@ -102,7 +103,7 @@ def test_request_rejects_raw_or_unsafe_command_surface(monkeypatch: pytest.Monke
     _bound_env(monkeypatch)
     runtime = {'profile_capabilities': ['network.masscan']}
     request = _request()
-    request['argv'] = ['masscan', '0.0.0.0/0']
+    request['argv'] = ['masscan', 'unbound-target']
     with pytest.raises(service.ProtocolError, match='unsupported request fields'):
         service._validate_request(request, runtime)
     for bad_ports in ('22 80', '22;id', '0', '65536', '100-22'):
@@ -110,15 +111,18 @@ def test_request_rejects_raw_or_unsafe_command_surface(monkeypatch: pytest.Monke
             service._canonical_ports(bad_ports)
 
 
-def test_parity_runtime_uses_only_net_raw_and_no_new_privileges():
-    assert '--cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true' in WORKFLOW
-    assert '--cap-add NET_ADMIN' not in WORKFLOW
-    assert "privilege['effective']=='0000000000002000'" in WORKFLOW
-    assert "privilege['allowed_capabilities']==['CAP_NET_RAW']" in WORKFLOW
+def test_real_parity_runtime_uses_only_net_raw_and_no_new_privileges():
+    assert '--cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true' in REAL_WORKFLOW
+    assert '--cap-add NET_ADMIN' not in REAL_WORKFLOW
+    assert "privilege['effective']=='0000000000002000'" in REAL_WORKFLOW
+    assert "privilege['allowed_capabilities']==['CAP_NET_RAW']" in REAL_WORKFLOW
+    assert 'docker network create --internal' in REAL_WORKFLOW
 
 
 def test_parity_service_is_not_packaged_or_selected_as_production_provider():
     assert 'network_masscan_parity_service.py' not in DOCKERFILE
     assert 'AEGIS_MASSCAN_PROVIDER' not in SERVICE
-    assert 'production_cutover' in WORKFLOW
-    assert "'production_cutover':False" in WORKFLOW
+    assert 'production_cutover' in CONTRACT_WORKFLOW
+    assert "'production_cutover':False" in CONTRACT_WORKFLOW
+    assert "'legacy_retirement':False" in CONTRACT_WORKFLOW
+    assert "'candidate_production_dispatch':False" in REAL_WORKFLOW
