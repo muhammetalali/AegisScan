@@ -193,18 +193,33 @@ def _runtime_identity(config: Config) -> dict[str, Any]:
     if no_new_privs != "1":
         raise SystemExit("Governed Semgrep parity service requires no_new_privs")
 
-    version = subprocess.run(
-        [config.semgrep_path, "--version"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-        shell=False,
-        env={
-            "PATH": "/opt/aegis-code-tools/bin:/usr/local/bin:/usr/bin:/bin",
-            "SEMGREP_SEND_METRICS": "off",
-        },
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="aegis-semgrep-version-",
+        dir="/tmp",
+    ) as temp_dir:
+        home = Path(temp_dir) / "home"
+        config_dir = Path(temp_dir) / "config"
+        cache_dir = Path(temp_dir) / "cache"
+        home.mkdir()
+        config_dir.mkdir()
+        cache_dir.mkdir()
+        version = subprocess.run(
+            [config.semgrep_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            shell=False,
+            env={
+                "PATH": "/opt/aegis-code-tools/bin:/usr/local/bin:/usr/bin:/bin",
+                "HOME": str(home),
+                "XDG_CONFIG_HOME": str(config_dir),
+                "XDG_CACHE_HOME": str(cache_dir),
+                "TMPDIR": temp_dir,
+                "SEMGREP_SEND_METRICS": "off",
+                "SEMGREP_ENABLE_VERSION_CHECK": "0",
+            },
+        )
     version_text = (version.stdout + version.stderr).strip()
     if version.returncode != 0 or "1.177.0" not in version_text:
         raise SystemExit(f"Unexpected Semgrep runtime version: {version_text}")
