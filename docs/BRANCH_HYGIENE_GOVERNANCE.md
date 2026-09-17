@@ -52,10 +52,13 @@ This behavior was proven on the former PR #151 head after merge: the merged bran
 
 `.github/workflows/branch-hygiene-governance-reality.yml` provides:
 
-- exact-head compilation and unit tests;
+- exact-head compilation and standard-library unit tests;
 - a live read-only inventory on pull requests;
+- automatic apply on a qualifying push to `main` after the controller/workflow policy changes, with `chatgpt-b/*` still excluded;
 - a retained JSON evidence artifact;
 - manual `plan` or `apply` execution;
 - explicit `include_chatgpt_b` opt-in for cross-workstream stale merged refs.
+
+The automatic `main` apply is deliberately narrow: it only considers the default approved namespaces and reruns the complete live plan plus exact-SHA validation immediately before each deletion. It therefore cannot delete archives, backups, open-PR heads, diverged refs, recent merged refs, unapproved namespaces, or Chat B branches.
 
 A branch must never be deleted merely because its name looks old. An ancestor proof, open-PR proof, retention check, and exact-SHA revalidation are mandatory.
