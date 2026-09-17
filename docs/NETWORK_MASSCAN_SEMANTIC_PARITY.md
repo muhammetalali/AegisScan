@@ -14,10 +14,14 @@ The candidate service:
 - requires an explicit parity-mode flag and a 64-hex authentication token;
 - accepts only capability `network.masscan` and never accepts raw argv, binary paths, or shell input;
 - validates the Kali runtime/tool-manifest digest and requires the `network` profile to remain `accepted-no-dispatch`;
-- requires the request to match pre-bound `authorization_ref`, `scope_ref`, target, ports, and rate values;
+- requires the request to match pre-bound `authorization_ref`, `scope_ref`, target, ports, rate, interface, adapter IP, adapter MAC, and next-hop/router MAC values;
 - accepts only IP/network targets and strictly bounded TCP port/range syntax;
 - runs with `CAP_NET_RAW` as the sole effective/permitted/bounding Linux capability plus `no_new_privs`;
-- fails closed on authorization, scope, target, intent, manifest, capability, token, or privilege drift.
+- fails closed on authorization, scope, target, intent, link identity, manifest, capability, token, or privilege drift.
+
+Masscan's raw-packet receive path also needs the shared network device prepared for packet capture. The Reality proof preserves the production privilege split instead of widening scanner privilege: the existing `scanner-egress` runtime is the trusted network-namespace owner and alone receives `CAP_NET_ADMIN` to put the interface in promiscuous mode and install the egress policy. Both the legacy reference scanner and governed Kali candidate join that namespace with only `CAP_NET_RAW`; neither receives `CAP_NET_ADMIN` or `--privileged`.
+
+The link-layer identity is derived from the deterministic internal Docker namespace and bound identically to both executions. For the same-subnet fixture, the fixture MAC is the explicit next-hop/router MAC. A mutated link identity is rejected by the candidate before Masscan execution.
 
 ## Semantic parity contract
 
@@ -33,17 +37,20 @@ A change to any of those fields is parity-significant. Ordering, duplicate recor
 
 ## Reality proof
 
-`.github/workflows/network-masscan-parity-reality.yml` proves the phase on the exact PR/head SHA by:
+`.github/workflows/network-masscan-parity-reality.yml` proves the exact-head admission and semantic contracts, including the production adapter's validated explicit link arguments and fail-closed candidate binding.
 
-1. compiling and testing the comparator and provider contract;
-2. building the exact legacy scanner reference and exact governed Kali network image;
-3. creating an internal Docker network with no public-internet fixture;
-4. executing real legacy Masscan through `scanner_adapters.run_masscan` with `AUTHORIZED_SCAN_TARGETS` bound to the deterministic target;
-5. starting the Kali parity candidate in the same scanner network namespace with only `CAP_NET_RAW`;
-6. proving rejection of an invalid token and mismatched authorization/scope/target/ports intents;
-7. executing the bound Kali Masscan intent and verifying runtime/tool provenance;
-8. proving semantic equality and the expected open-port observations;
-9. uploading exact-head artifacts plus SHA-256 checksums.
+`.github/workflows/network-masscan-real-parity.yml` proves the real dual-run on the exact PR/head SHA by:
+
+1. building the exact legacy scanner reference, exact governed Kali network image, and the existing trusted `scanner-egress` runtime;
+2. creating an internal Docker network with no public-internet fixture;
+3. starting the deterministic fixture plus the trusted network-namespace owner with `CAP_NET_ADMIN` only at that boundary;
+4. deriving and validating the shared interface, adapter IPv4, adapter MAC, and fixture next-hop MAC;
+5. executing real legacy Masscan through `scanner_adapters.run_masscan` with `AUTHORIZED_SCAN_TARGETS` and explicit link identity bound to the deterministic target;
+6. starting the Kali parity candidate in the same network namespace with only `CAP_NET_RAW` and `no_new_privs`;
+7. proving a link-identity mismatch is rejected before scanner execution;
+8. executing the bound Kali Masscan intent and verifying authorization, link, runtime, capability, and tool provenance;
+9. proving semantic equality and the expected open-port observations;
+10. uploading exact-head artifacts, image identities, link-binding evidence, and SHA-256 checksums.
 
 ## Explicitly deferred
 
