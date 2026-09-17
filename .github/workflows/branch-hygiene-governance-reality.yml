@@ -53,7 +53,7 @@ jobs:
       - name: Compile branch hygiene controller
         run: python -m py_compile scripts/admin/branch_hygiene_admin.py tests/test_branch_hygiene_admin.py
       - name: Prove fail-closed classification contract
-        run: python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest tests/test_branch_hygiene_admin.py
+        run: python -m unittest -v tests.test_branch_hygiene_admin
       - name: Build live branch hygiene plan for pull request
         if: github.event_name == 'pull_request'
         env:
@@ -82,7 +82,7 @@ jobs:
           fi
           python scripts/admin/branch_hygiene_admin.py "${args[@]}"
       - name: Publish branch hygiene evidence
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: branch-hygiene-${{ env.AEGIS_EXACT_HEAD }}
