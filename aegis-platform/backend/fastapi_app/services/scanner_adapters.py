@@ -29,6 +29,8 @@ class ScannerExecutionCancelled(RuntimeError):
 
 
 _HOST_RE = re.compile(r'^[A-Za-z0-9.-]+$')
+_INTERFACE_RE = re.compile(r'^[A-Za-z0-9_.:-]{1,15}$')
+_MAC_RE = re.compile(r'^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$')
 _URL_SCHEMES = {'http', 'https'}
 _DEFAULT_NUCLEI_TEMPLATES = '/opt/nuclei-templates'
 
@@ -73,6 +75,30 @@ def validate_code_target(target: str) -> str:
     if not path.is_dir():
         raise ValueError('Code scan target must be a directory')
     return str(path)
+
+
+def _validate_masscan_interface(value: str) -> str:
+    interface = value.strip()
+    if not _INTERFACE_RE.fullmatch(interface):
+        raise ValueError('Invalid Masscan network interface')
+    return interface
+
+
+def _validate_masscan_ipv4(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        raise ValueError('Invalid Masscan adapter IPv4 address') from None
+    if address.version != 4:
+        raise ValueError('Masscan adapter address must be IPv4')
+    return str(address)
+
+
+def _validate_masscan_mac(value: str, *, field: str) -> str:
+    mac = value.strip()
+    if not _MAC_RE.fullmatch(mac):
+        raise ValueError(f'Invalid Masscan {field} MAC address')
+    return mac.replace('-', ':').lower()
 
 
 def _terminate_process_group(process: subprocess.Popen[str]) -> None:
@@ -156,7 +182,18 @@ def run_nmap(target: str, timeout: int = 300, state_getter: Callable[[], str] | 
     return ScanResult('nmap', host, completed.returncode, completed.stdout, completed.stderr)
 
 
-def run_masscan(target: str, ports: str = '1-65535', rate: int = 1000, timeout: int = 300, state_getter: Callable[[], str] | None = None) -> ScanResult:
+def run_masscan(
+    target: str,
+    ports: str = '1-65535',
+    rate: int = 1000,
+    timeout: int = 300,
+    state_getter: Callable[[], str] | None = None,
+    *,
+    interface: str | None = None,
+    adapter_ip: str | None = None,
+    adapter_mac: str | None = None,
+    router_mac: str | None = None,
+) -> ScanResult:
     host = validate_authorized_target(target)
     require_authorized_target(host, resolve_dns=True)
     if rate <= 0:
@@ -164,7 +201,16 @@ def run_masscan(target: str, ports: str = '1-65535', rate: int = 1000, timeout: 
     executable = shutil.which('masscan')
     if not executable:
         raise RuntimeError('Masscan is not installed on the worker')
-    argv = [executable, host, '-p', ports, '--rate', str(rate), '--output-format', 'json', '--output-filename', '-']
+    argv = [executable, host, '-p', ports, '--rate', str(rate)]
+    if interface is not None:
+        argv.extend(['--adapter', _validate_masscan_interface(interface)])
+    if adapter_ip is not None:
+        argv.extend(['--adapter-ip', _validate_masscan_ipv4(adapter_ip)])
+    if adapter_mac is not None:
+        argv.extend(['--adapter-mac', _validate_masscan_mac(adapter_mac, field='adapter')])
+    if router_mac is not None:
+        argv.extend(['--router-mac', _validate_masscan_mac(router_mac, field='router')])
+    argv.extend(['--output-format', 'json', '--output-filename', '-'])
     if state_getter is not None:
         return _run_controlled(argv, tool='masscan', target=host, timeout=timeout, state_getter=state_getter)
     completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
