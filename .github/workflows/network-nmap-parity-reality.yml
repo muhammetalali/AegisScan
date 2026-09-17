@@ -246,6 +246,12 @@ jobs:
           assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
           assert runtime['tool']=='nmap', runtime
           assert runtime['tool_version']=='7.99+dfsg-1kali1', runtime
+          privilege=runtime['linux_privilege']
+          assert privilege['effective']=='0000000000002000', privilege
+          assert privilege['permitted']=='0000000000002000', privilege
+          assert privilege['bounding']=='0000000000002000', privilege
+          assert privilege['no_new_privs'] is True, privilege
+          assert privilege['allowed_capabilities']==['CAP_NET_RAW'], privilege
           open('/artifacts/candidate.xml','w',encoding='utf-8').write(result['stdout'])
           json.dump(result,open('/artifacts/candidate-result.json','w'),sort_keys=True,indent=2)
           PY
@@ -277,6 +283,8 @@ jobs:
               'public_internet_fixture':False,
               'candidate_loopback_only':True,
               'candidate_production_dispatch':False,
+              'candidate_capabilities':['CAP_NET_RAW'],
+              'candidate_no_new_privs':True,
               'legacy_adapter_executed':True,
               'kali_candidate_executed':True,
           },sort_keys=True,indent=2))
