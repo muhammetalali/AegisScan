@@ -1,0 +1,24 @@
+id: aegis-nuclei-parity
+
+info:
+  name: Aegis Nuclei Parity Fixture
+  author: aegisscan
+  severity: info
+  description: Deterministic internal fixture used only to prove legacy and governed Nuclei semantic parity.
+  remediation: No remediation required; this is a parity fixture.
+  reference:
+    - https://example.invalid/aegisscan/nuclei-parity
+  classification:
+    cwe-id:
+      - CWE-200
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/aegis-nuclei-parity"
+    matchers:
+      - type: word
+        name: fixture
+        part: body
+        words:
+          - AEGIS_NUCLEI_PARITY_OK
