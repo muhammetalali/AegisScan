@@ -143,6 +143,19 @@ def _resolved_internal_addresses(origin: str, allow_loopback_test: bool = False)
     return sorted(str(address) for address in addresses)
 
 
+def _configure_loopback_test_ca(*, allow_loopback_test: bool) -> None:
+    """Bridge legacy CI SSL_CERT_FILE only inside the explicit loopback-test boundary."""
+    if not allow_loopback_test or os.getenv("AEGIS_ENTERPRISE_CA_BUNDLE", "").strip():
+        return
+    raw = os.getenv("SSL_CERT_FILE", "").strip()
+    if not raw:
+        return
+    path = Path(raw)
+    if not path.is_absolute():
+        raise AcceptanceError("loopback-test SSL_CERT_FILE must be an absolute path")
+    os.environ["AEGIS_ENTERPRISE_CA_BUNDLE"] = str(path)
+
+
 def _ca_bundle_path() -> Path:
     raw = os.getenv("AEGIS_ENTERPRISE_CA_BUNDLE", "").strip()
     path = Path(raw) if raw else DEFAULT_ENTERPRISE_CA_BUNDLE
@@ -291,6 +304,7 @@ def main() -> int:
     parser.add_argument("--allow-loopback-test", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
+        _configure_loopback_test_ca(allow_loopback_test=args.allow_loopback_test)
         result = validate(args.origin, allow_loopback_test=args.allow_loopback_test)
     except AcceptanceError as exc:
         print(json.dumps({
