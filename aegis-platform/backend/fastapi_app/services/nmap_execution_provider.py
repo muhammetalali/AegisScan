@@ -29,17 +29,19 @@ def run_nmap_with_provider(
     scope_ref: str,
     state_getter: Callable[[], str] | None,
 ) -> NmapExecutionResult:
-    """Execute Nmap through the authoritative deterministic provider decision.
+    """Execute Nmap through the authoritative governed provider decision.
 
-    Canary selection is stable on ``routing_key``.  A selected Kali execution is
-    fail-closed: provider/provenance errors are propagated and never retried via
-    the legacy adapter in the same delivery. During M4 only ``legacy`` and
-    ``canary`` modes are admitted by this production-facing execution layer;
-    full Kali routing is reserved for the later default-provider phase.
+    The M5 production deployment selects ``default-kali``. Legacy remains an
+    explicit administrative rollback mode until the separate retirement phase,
+    and canary remains available for rollback diagnostics. A Kali-selected
+    execution is always fail-closed: provider/provenance failures are propagated
+    and are never retried through the legacy adapter in the same delivery.
+    Raw ``kali`` mode is intentionally not admitted by this production-facing
+    layer so callers cannot bypass the governed promotion policy.
     """
     decision = nmap_provider_decision(routing_key=routing_key)
-    if decision.mode not in {'legacy', 'canary'}:
-        raise RuntimeError(f'Nmap provider mode {decision.mode!r} is not admitted during the canary phase')
+    if decision.mode not in {'legacy', 'canary', 'default-kali'}:
+        raise RuntimeError(f'Nmap provider mode {decision.mode!r} is not admitted by the governed production execution layer')
     routing = decision.as_dict()
 
     if decision.selected_provider == 'legacy':
