@@ -10,6 +10,7 @@ name: Repository Governance Reality
       - 'scripts/admin/repository_ruleset_admin.py'
       - 'scripts/ci/required_ci_governance.py'
       - 'scripts/ci/repository_governance_reality.py'
+      - 'tests/test_required_ci_governance.py'
       - 'docs/REPOSITORY_GOVERNANCE.md'
   push:
     branches: [main]
@@ -29,12 +30,16 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - name: Compile governance scripts
+      - name: Compile governance scripts and regressions
         run: >-
           python3 -m py_compile
           scripts/admin/repository_ruleset_admin.py
           scripts/ci/required_ci_governance.py
           scripts/ci/repository_governance_reality.py
+          tests/test_required_ci_governance.py
+      - name: Validate live-base required-CI regression contract
+        if: github.event_name == 'pull_request'
+        run: python3 tests/test_required_ci_governance.py -v
       - name: Validate governance policy contract
         if: github.event_name == 'pull_request'
         run: |
