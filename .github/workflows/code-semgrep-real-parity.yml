@@ -1,0 +1,279 @@
+name: Code Semgrep Real Parity
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &semgrep_real_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/requirements.txt'
+      - 'aegis-platform/backend/fastapi_app/services/scanner_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/advanced_scans.py'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/kali/tool-manifest.json'
+      - 'aegis-platform/kali/runner/profile_runtime_manifest.py'
+      - 'aegis-platform/kali/runner/code_semgrep_parity_service.py'
+      - 'aegis-platform/kali/tests/test_code_semgrep_parity_contract.py'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity.yml'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity-source/**'
+      - '.github/workflows/code-semgrep-real-parity.yml'
+  push:
+    branches: [main]
+    paths: *semgrep_real_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-semgrep-real-parity-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-semgrep-dual-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_SEMGREP_AUTH_TOKEN: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_SEMGREP_AUTHORIZATION_REF: semgrep-parity-authorization
+      AEGIS_SEMGREP_SCOPE_REF: project:parity:asset:code
+      AEGIS_SEMGREP_SOURCE_REF: fixture:semgrep-parity:v1
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build legacy scanner reference and governed Kali code runtime
+        run: |
+          set -euo pipefail
+          docker build --no-cache --target legacy-parity-reference             -t aegis-semgrep:legacy -f aegis-platform/backend/Dockerfile.django aegis-platform/backend
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache             --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}"             --build-arg AEGIS_RUNNER_VERSION=0.1.0             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             -t aegis-kali:base -f aegis-platform/kali/Dockerfile.base aegis-platform/kali
+          docker build --no-cache             --build-arg AEGIS_BASE_IMAGE=aegis-kali:base             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             --target profile-code -t aegis-kali:code             -f aegis-platform/kali/Dockerfile.profiles .
+          docker run --rm --entrypoint sh aegis-semgrep:legacy -c             'semgrep --version 2>&1 | grep -q "1.177.0"'
+          docker run --rm --entrypoint sh aegis-kali:code -c             'semgrep --version 2>&1 | grep -q "1.177.0"'
+          docker run --rm --entrypoint cat aegis-kali:code             /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY'
+          import json
+          runtime=json.load(open('runtime-manifest.json'))
+          assert runtime['profile']=='code', runtime
+          assert runtime['dispatch_enabled'] is False, runtime
+          assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
+          assert 'code.semgrep' in runtime['profile_capabilities'], runtime
+          assert runtime['profile_tools']['semgrep']['version']=='1.177.0', runtime
+          PY
+      - name: Prepare immutable rule and source fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/source parity-rules parity-source
+          chmod 0777 artifacts
+          cp aegis-platform/e2e/fixtures/semgrep-parity.yml parity-rules/semgrep-parity.yml
+          cp aegis-platform/e2e/fixtures/semgrep-parity-source/app.py parity-source/app.py
+          rule_sha="$(sha256sum parity-rules/semgrep-parity.yml | awk '{print $1}')"
+          source_sha="$(python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          root=Path('parity-source')
+          digest=hashlib.sha256()
+          files=sorted(path for path in root.rglob('*') if path.is_file())
+          for path in files:
+              relative=path.relative_to(root).as_posix().encode('utf-8')
+              data=path.read_bytes()
+              digest.update(len(relative).to_bytes(4,'big'))
+              digest.update(relative)
+              digest.update(len(data).to_bytes(8,'big'))
+              digest.update(data)
+          print(digest.hexdigest())
+          PY
+          )"
+          test -n "$rule_sha"
+          test -n "$source_sha"
+          echo "AEGIS_SEMGREP_RULE_SHA256=$rule_sha" >> "$GITHUB_ENV"
+          echo "AEGIS_SEMGREP_SOURCE_SHA256=$source_sha" >> "$GITHUB_ENV"
+      - name: Execute real legacy production adapter offline
+        run: |
+          set -euo pipefail
+          docker run --rm -i --name aegis-semgrep-legacy-run             --network none --user 10001:10001             --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m             -e SEMGREP_CONFIG=/opt/aegis-parity-rules/semgrep-parity.yml             -e SEMGREP_SEND_METRICS=off             -e SEMGREP_ENABLE_VERSION_CHECK=0             -e HOME=/tmp/home -e XDG_CONFIG_HOME=/tmp/config -e XDG_CACHE_HOME=/tmp/cache             -v "$PWD/parity-rules:/opt/aegis-parity-rules:ro"             -v "$PWD/parity-source:/workspace/source:ro"             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-semgrep:legacy - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.scanner_adapters import run_semgrep
+
+          for path in ('/tmp/home','/tmp/config','/tmp/cache'):
+              Path(path).mkdir(parents=True,exist_ok=True)
+          result=run_semgrep('/workspace/source',timeout=120)
+          assert result.exit_code in {0,1}, (result.exit_code,result.stderr)
+          assert result.stdout.strip(), 'legacy Semgrep produced no JSON output'
+          payload=json.loads(result.stdout)
+          assert isinstance(payload,dict), payload
+          assert len(payload.get('results',[])) == 1, payload
+          Path('/artifacts/legacy.json').write_text(result.stdout,encoding='utf-8')
+          Path('/artifacts/legacy-result.json').write_text(json.dumps({
+              'tool':result.tool,
+              'target':result.target,
+              'exit_code':result.exit_code,
+              'stderr':result.stderr,
+          },sort_keys=True,indent=2),encoding='utf-8')
+          PY
+      - name: Start governed offline parity candidate
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-semgrep-kali             --network none --user 10001:10001 --read-only             --cap-drop ALL --security-opt no-new-privileges:true             --pids-limit 128 --memory 768m --cpus 1             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m             -e AEGIS_KALI_SEMGREP_PARITY_MODE=true             -e AEGIS_KALI_SEMGREP_PARITY_AUTH_TOKEN="${AEGIS_SEMGREP_AUTH_TOKEN}"             -e AEGIS_KALI_SEMGREP_EXPECTED_AUTHORIZATION_REF="${AEGIS_SEMGREP_AUTHORIZATION_REF}"             -e AEGIS_KALI_SEMGREP_EXPECTED_SCOPE_REF="${AEGIS_SEMGREP_SCOPE_REF}"             -e AEGIS_KALI_SEMGREP_EXPECTED_SOURCE_REF="${AEGIS_SEMGREP_SOURCE_REF}"             -e AEGIS_KALI_SEMGREP_SOURCE_ROOT=/workspace/source             -e AEGIS_KALI_SEMGREP_SOURCE_SHA256="${AEGIS_SEMGREP_SOURCE_SHA256}"             -e AEGIS_KALI_SEMGREP_RULE_PATH=/opt/aegis-parity-rules/semgrep-parity.yml             -e AEGIS_KALI_SEMGREP_RULE_SHA256="${AEGIS_SEMGREP_RULE_SHA256}"             -v "$PWD/parity-rules:/opt/aegis-parity-rules:ro"             -v "$PWD/parity-source:/workspace/source:ro"             -v "$PWD/artifacts:/artifacts"             -v "$PWD/aegis-platform/kali/runner/code_semgrep_parity_service.py:/opt/aegis-runner/code_semgrep_parity_service.py:ro"             --entrypoint python3 aegis-kali:code /opt/aegis-runner/code_semgrep_parity_service.py
+          for _ in $(seq 1 30); do
+            if docker exec -i aegis-semgrep-kali python3 - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18769/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-semgrep-kali
+          exit 1
+      - name: Prove fail-closed binding and real candidate execution
+        run: |
+          set -euo pipefail
+          docker exec -i             -e AEGIS_SEMGREP_AUTH_TOKEN="${AEGIS_SEMGREP_AUTH_TOKEN}"             aegis-semgrep-kali python3 - <<'PY'
+          import copy, json, os, urllib.error, urllib.request
+          from pathlib import Path
+
+          def payload():
+              return {
+                  'schema_version':1,
+                  'execution_ref':'scan:parity:semgrep',
+                  'authorization_ref':'semgrep-parity-authorization',
+                  'scope_ref':'project:parity:asset:code',
+                  'capability_id':'code.semgrep',
+                  'source_ref':'fixture:semgrep-parity:v1',
+                  'timeout_seconds':120,
+              }
+
+          def send(body, token=None):
+              request=urllib.request.Request(
+                  'http://127.0.0.1:18769/v1/execute',
+                  data=json.dumps(body).encode(),
+                  method='POST',
+                  headers={
+                      'Content-Type':'application/json',
+                      'X-Aegis-Semgrep-Parity-Token':token or os.environ['AEGIS_SEMGREP_AUTH_TOKEN'],
+                  },
+              )
+              return urllib.request.urlopen(request,timeout=135).read()
+
+          try:
+              send(payload(), token='wrong-token')
+          except urllib.error.HTTPError as exc:
+              assert exc.code == 401, exc.code
+          else:
+              raise AssertionError('invalid parity token was not rejected')
+
+          rejected=copy.deepcopy(payload())
+          rejected['source_ref']='fixture:other'
+          try:
+              send(rejected)
+          except urllib.error.HTTPError as exc:
+              body=json.loads(exc.read())
+              assert exc.code == 400, (exc.code,body)
+              assert 'source_ref does not match' in body['error'], body
+          else:
+              raise AssertionError('source binding mismatch was not rejected')
+
+          result=json.loads(send(payload()))
+          assert result['status']=='completed', result
+          assert result['exit_code'] in {0,1}, result
+          assert result['stdout'].strip(), 'candidate Semgrep produced no JSON output'
+          payload_json=json.loads(result['stdout'])
+          assert len(payload_json.get('results',[])) == 1, payload_json
+          runtime=result['runtime']
+          assert runtime['profile']=='code', runtime
+          assert runtime['linux_privilege']['uid'] != 0, runtime
+          assert runtime['linux_privilege']['effective']=='0000000000000000', runtime
+          assert runtime['linux_privilege']['allowed_capabilities']==[], runtime
+          assert runtime['linux_privilege']['no_new_privs'] is True, runtime
+          assert runtime['binding']['authorization_ref']=='semgrep-parity-authorization', runtime
+          assert runtime['binding']['scope_ref']=='project:parity:asset:code', runtime
+          assert runtime['binding']['source_ref']=='fixture:semgrep-parity:v1', runtime
+          Path('/artifacts/candidate.json').write_text(result['stdout'],encoding='utf-8')
+          Path('/artifacts/candidate-result.json').write_text(
+              json.dumps(result,sort_keys=True,indent=2),encoding='utf-8'
+          )
+          PY
+      - name: Compare production finding semantics
+        run: |
+          set -euo pipefail
+          docker run --rm -i             --network none --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m             -e SECRET_KEY=aegisscan-semgrep-parity-ci-only-secret-key-not-for-production             -e JWT_SECRET_KEY=aegisscan-semgrep-parity-ci-only-jwt-key-not-for-production             -v "$PWD/artifacts:/artifacts"             --entrypoint python aegis-semgrep:legacy - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.semgrep_semantic_parity import compare_semgrep_semantics, normalize_semgrep_semantics
+          from fastapi_app.tasks.advanced_scans import _semgrep_findings
+
+          legacy=Path('/artifacts/legacy.json').read_text(encoding='utf-8')
+          candidate=Path('/artifacts/candidate.json').read_text(encoding='utf-8')
+          legacy_result=json.loads(Path('/artifacts/legacy-result.json').read_text())
+          candidate_result=json.loads(Path('/artifacts/candidate-result.json').read_text())
+          assert legacy_result['exit_code']==candidate_result['exit_code'], (legacy_result,candidate_result)
+
+          comparison=compare_semgrep_semantics(legacy,candidate)
+          assert comparison['equivalent'] is True, comparison
+          assert comparison['legacy']['finding_count']==1, comparison
+          assert comparison['candidate']['finding_count']==1, comparison
+          assert comparison['legacy']['observations'][0]['check_id']=='aegis.semgrep.parity.eval', comparison
+
+          for name,raw in (('legacy',legacy),('candidate',candidate)):
+              production=_semgrep_findings(raw)
+              semantic=normalize_semgrep_semantics(raw)
+              assert len(production)==semantic['finding_count'], (name,production,semantic)
+              assert production[0]['check_id']==semantic['observations'][0]['check_id']
+              assert production[0]['message']==semantic['observations'][0]['message']
+              assert production[0]['severity']==semantic['observations'][0]['severity']
+              assert production[0]['path']==semantic['observations'][0]['path']
+              assert production[0]['line']==semantic['observations'][0]['line']
+
+          Path('/artifacts/semantic-parity.json').write_text(
+              json.dumps(comparison,sort_keys=True,indent=2),encoding='utf-8'
+          )
+          PY
+      - name: Capture immutable exact-head evidence
+        run: |
+          set -euo pipefail
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          git rev-parse HEAD > artifacts/head-sha.txt
+          docker image inspect aegis-kali:code --format '{{.Id}}' > artifacts/kali-code-image-id.txt
+          docker image inspect aegis-semgrep:legacy --format '{{.Id}}' > artifacts/legacy-image-id.txt
+          cp parity-rules/semgrep-parity.yml artifacts/semgrep-parity.yml
+          cp parity-source/app.py artifacts/source/app.py
+          python - <<'PY' > artifacts/code-boundary.json
+          import json, os
+          print(json.dumps({
+              'schema':'aegis.code-semgrep-real-parity.v1',
+              'network_mode':'none',
+              'candidate_loopback_only':True,
+              'candidate_production_dispatch':False,
+              'production_cutover':False,
+              'canary_routing':False,
+              'legacy_retirement':False,
+              'candidate_capabilities':[],
+              'candidate_non_root':True,
+              'candidate_no_new_privs':True,
+              'authorization_binding_required':True,
+              'scope_binding_required':True,
+              'source_ref_binding_required':True,
+              'source_sha256':os.environ['AEGIS_SEMGREP_SOURCE_SHA256'],
+              'rule_sha256':os.environ['AEGIS_SEMGREP_RULE_SHA256'],
+              'legacy_adapter_executed':True,
+              'kali_candidate_executed':True,
+              'semantic_projection':'production-semgrep-finding-fields',
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum             head-sha.txt runtime-manifest.json kali-code-image-id.txt legacy-image-id.txt             semgrep-parity.yml source/app.py legacy.json legacy-result.json candidate.json candidate-result.json             semantic-parity.json code-boundary.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-real-parity-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-semgrep-kali >/dev/null 2>&1 || true
