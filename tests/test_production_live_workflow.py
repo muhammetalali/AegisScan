@@ -12,11 +12,13 @@ def _workflow() -> dict:
     return data
 
 
-def test_live_production_workflow_is_manual_only_protected_and_internal_runner_bound():
+def test_live_production_workflow_has_only_manual_or_one_time_main_request_triggers():
     data = _workflow()
     triggers = data.get("on")
     assert isinstance(triggers, dict)
-    assert set(triggers) == {"workflow_dispatch"}
+    assert set(triggers) == {"workflow_dispatch", "push"}
+    assert triggers["push"]["branches"] == ["main"]
+    assert triggers["push"]["paths"] == [".github/deployment-requests/internal-production.json"]
 
     jobs = data["jobs"]
     deploy = jobs["deploy-and-accept"]
@@ -26,8 +28,11 @@ def test_live_production_workflow_is_manual_only_protected_and_internal_runner_b
     assert data["concurrency"]["cancel-in-progress"] is False
 
 
-def test_live_production_workflow_requires_pinned_ssh_enterprise_ca_and_exact_main():
+def test_live_production_workflow_requires_bounded_authorization_pinned_ssh_enterprise_ca_and_exact_main():
     text = WORKFLOW.read_text(encoding="utf-8")
+    assert "production_deploy_request.py" in text
+    assert "--event-before" in text
+    assert ".github/deployment-requests/internal-production.json" in text
     assert "AEGIS_PRODUCTION_SSH_PRIVATE_KEY" in text
     assert "AEGIS_PRODUCTION_SSH_KNOWN_HOSTS" in text
     assert "AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE" in text
@@ -40,8 +45,12 @@ def test_live_production_workflow_requires_pinned_ssh_enterprise_ca_and_exact_ma
     assert "PasswordAuthentication=yes" not in text
 
 
-def test_live_production_workflow_runs_internal_black_box_and_cli_acceptance():
+def test_live_production_workflow_requires_operational_backup_alertmanager_black_box_and_cli_acceptance():
     text = WORKFLOW.read_text(encoding="utf-8")
+    assert "production_remote_operational_acceptance.py" in text
+    assert "operational-acceptance.json" in text
+    assert "Alertmanager" in text
+    assert "committed encrypted remote backup" in text
     assert "Verify internal HTTPS, private resolution, enterprise CA and security headers" in text
     assert "public_acceptance.py" in text
     assert "internal-acceptance.json" in text
@@ -50,11 +59,14 @@ def test_live_production_workflow_runs_internal_black_box_and_cli_acceptance():
     assert "internal-black-box.log" in text
     assert "Prove installed CLI against internal production" in text
     assert "AEGIS_VERIFY_TLS: 'true'" in text
-    assert "aegisscan.go-live-evidence.v2" in text
+    assert "aegisscan.go-live-evidence.v3" in text
     assert "'deployment_mode': 'internal'" in text
     assert "'network_scope': 'rfc1918-or-ipv6-ula'" in text
     assert "'internal_origin':" in text
     assert "'enterprise_ca_sha256':" in text
+    assert "'alertmanager_status':" in text
+    assert "'backup_status':" in text
+    assert "'backup_id':" in text
     assert "retention-days: 90" in text
 
 

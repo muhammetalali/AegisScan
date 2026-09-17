@@ -1,0 +1,78 @@
+name: Production Live Deploy Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-live-deploy.yml'
+      - '.github/workflows/production-live-deploy-reality.yml'
+      - '.github/deployment-requests/internal-production.json'
+      - 'aegis-platform/scripts/production_deploy_request.py'
+      - 'aegis-platform/scripts/production_operational_acceptance.py'
+      - 'aegis-platform/scripts/production_remote_operational_acceptance.py'
+      - 'tests/test_production_deploy_request.py'
+      - 'tests/test_production_operational_acceptance.py'
+      - 'tests/test_production_remote_operational_acceptance.py'
+      - 'tests/test_production_live_workflow.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-live-deploy.yml'
+      - '.github/workflows/production-live-deploy-reality.yml'
+      - '.github/deployment-requests/internal-production.json'
+      - 'aegis-platform/scripts/production_deploy_request.py'
+      - 'aegis-platform/scripts/production_operational_acceptance.py'
+      - 'aegis-platform/scripts/production_remote_operational_acceptance.py'
+      - 'tests/test_production_deploy_request.py'
+      - 'tests/test_production_operational_acceptance.py'
+      - 'tests/test_production_remote_operational_acceptance.py'
+      - 'tests/test_production_live_workflow.py'
+
+permissions: {contents: read}
+
+concurrency:
+  group: production-live-deploy-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-live-deploy-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install contract-test dependencies
+        run: python -m pip install pytest==9.1.1 pyyaml==6.0.2
+
+      - name: Compile production deployment authorization and operational acceptance
+        run: |
+          python -m py_compile \
+            aegis-platform/scripts/production_deploy_request.py \
+            aegis-platform/scripts/production_operational_acceptance.py \
+            aegis-platform/scripts/production_remote_operational_acceptance.py
+
+      - name: Prove fail-closed live deployment contracts
+        run: |
+          python -m pytest -q \
+            tests/test_production_deploy_request.py \
+            tests/test_production_operational_acceptance.py \
+            tests/test_production_remote_operational_acceptance.py \
+            tests/test_production_live_workflow.py
+
+      - name: Reject insecure transport or broad automatic deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/production-live-deploy.yml
+          grep -q "runs-on: \[self-hosted, linux, x64, aegisscan-production\]" "$workflow"
+          grep -q "environment: production" "$workflow"
+          grep -q "production_deploy_request.py" "$workflow"
+          grep -q "production_remote_operational_acceptance.py" "$workflow"
+          ! grep -q "StrictHostKeyChecking=no" "$workflow"
+          ! grep -q "PasswordAuthentication=yes" "$workflow"
+          ! grep -qE 'curl .*(-k|--insecure)' "$workflow"
+          echo "production-live-deploy-contract=PASS"
