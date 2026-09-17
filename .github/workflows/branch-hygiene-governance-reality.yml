@@ -3,11 +3,14 @@ name: Branch Hygiene Governance Reality
 'on':
   pull_request:
     branches: [main]
-    paths:
+    paths: &hygiene_paths
       - 'scripts/admin/branch_hygiene_admin.py'
       - 'tests/test_branch_hygiene_admin.py'
       - '.github/workflows/branch-hygiene-governance-reality.yml'
       - 'docs/BRANCH_HYGIENE_GOVERNANCE.md'
+  push:
+    branches: [main]
+    paths: *hygiene_paths
   workflow_dispatch:
     inputs:
       mode:
@@ -62,6 +65,16 @@ jobs:
           python scripts/admin/branch_hygiene_admin.py
           --repo "${GITHUB_REPOSITORY}"
           --mode plan
+          --min-age-hours 24
+          --output artifacts/branch-hygiene-plan.json
+      - name: Apply proven stale merged cleanup on main
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/admin/branch_hygiene_admin.py
+          --repo "${GITHUB_REPOSITORY}"
+          --mode apply
           --min-age-hours 24
           --output artifacts/branch-hygiene-plan.json
       - name: Execute explicitly requested live hygiene mode
