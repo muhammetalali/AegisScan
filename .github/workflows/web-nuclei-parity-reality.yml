@@ -1,0 +1,112 @@
+name: Web Nuclei Parity Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &nuclei_parity_paths
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nuclei_semantic_parity.py'
+      - 'aegis-platform/kali/runner/web_nuclei_parity_service.py'
+      - 'aegis-platform/kali/tests/test_web_nuclei_parity_contract.py'
+      - 'aegis-platform/e2e/nuclei_http_fixture.py'
+      - 'aegis-platform/e2e/fixtures/nuclei-parity.yaml'
+      - 'aegis-platform/kali/tool-manifest.json'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - '.github/workflows/web-nuclei-parity-reality.yml'
+      - '.github/workflows/web-nuclei-real-parity.yml'
+      - 'docs/WEB_NUCLEI_SEMANTIC_PARITY.md'
+  push:
+    branches: [main]
+    paths: *nuclei_parity_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-nuclei-parity-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Compile parity implementation
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/nuclei_semantic_parity.py             aegis-platform/kali/runner/web_nuclei_parity_service.py             aegis-platform/e2e/nuclei_http_fixture.py
+      - name: Run semantic and governed contract tests
+        run: |
+          python aegis-platform/backend/fastapi_app/services/test_nuclei_semantic_parity.py
+          python aegis-platform/kali/tests/test_web_nuclei_parity_contract.py
+      - name: Verify governed web runtime placement contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest=json.loads(Path('aegis-platform/kali/tool-manifest.json').read_text())
+          web=manifest['profiles']['web']
+          assert web['production_allowed'] is True
+          assert 'web.nuclei' in web['capabilities']
+          nuclei=manifest['tools']['nuclei']
+          templates=manifest['tools']['nuclei-templates']
+          assert nuclei['version']=='3.11.1'
+          assert nuclei['source']=='oci-stage'
+          assert 'web' in nuclei['profiles']
+          assert templates['commit']=='0cb51d4bfae945e5ec2644fc8c2d2e6ea84bbffe'
+          assert 'web' in templates['profiles']
+
+          service=Path('aegis-platform/kali/runner/web_nuclei_parity_service.py').read_text()
+          assert 'LISTEN_HOST = "127.0.0.1"' in service
+          assert 'shell=False' in service
+          assert '"argv"' not in service
+          assert '"executable"' not in service
+          assert 'no_new_privs' in service
+          assert '0000000000000000' in service
+          PY
+      - name: Capture exact-head contract evidence
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          sha256sum             aegis-platform/backend/fastapi_app/services/nuclei_semantic_parity.py             aegis-platform/kali/runner/web_nuclei_parity_service.py             aegis-platform/e2e/fixtures/nuclei-parity.yaml             > artifacts/contract-sha256s.txt
+          python - <<'PY' > artifacts/web-nuclei-parity-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.web-nuclei-parity-contract.v1',
+              'capability_id':'web.nuclei',
+              'parity_only':True,
+              'production_cutover':False,
+              'canary_routing':False,
+              'legacy_retirement':False,
+              'caller_binary_authority':False,
+              'caller_argv_authority':False,
+              'loopback_provider_required':True,
+              'authorization_binding_required':True,
+              'scope_binding_required':True,
+              'target_binding_required':True,
+              'template_digest_binding_required':True,
+              'candidate_capabilities':[],
+              'candidate_non_root':True,
+              'candidate_no_new_privs':True,
+              'semantic_projection':'production-finding-fields',
+              'real_dual_run_required':True,
+              'public_internet_fixture_allowed':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-parity-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
