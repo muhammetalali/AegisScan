@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""Verify the externally reachable AegisScan production surface over verified HTTPS."""
+"""Verify the internal-only AegisScan production surface over enterprise-trusted HTTPS.
+
+The filename and v1 evidence schema are retained as a compatibility boundary for
+existing production-governance consumers. The accepted perimeter is no longer
+public: every resolved origin address must be RFC1918 IPv4 or IPv6 ULA, and TLS
+must chain to the explicitly configured enterprise CA bundle.
+"""
 from __future__ import annotations
 
 import argparse
 import hashlib
 import ipaddress
 import json
+import os
 import socket
 import ssl
 import sys
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -22,6 +30,13 @@ REQUIRED_SECURITY_HEADERS = {
     "x-content-type-options",
 }
 MAX_BODY = 1024 * 1024
+MAX_CA_BUNDLE = 2 * 1024 * 1024
+DEFAULT_ENTERPRISE_CA_BUNDLE = Path("/etc/aegisscan/enterprise-ca.pem")
+RFC1918_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+IPV6_ULA = ipaddress.ip_network("fc00::/7")
 
 
 class AcceptanceError(RuntimeError):
@@ -57,8 +72,89 @@ def _origin(value: str, allow_loopback_test: bool) -> str:
         raise AcceptanceError("origin must not use loopback, link-local, unspecified or multicast addressing")
     if host == "localhost" and not allow_loopback_test:
         raise AcceptanceError("localhost is not a valid production origin")
-    port = f":{parsed.port}" if parsed.port and parsed.port != 443 else ""
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise AcceptanceError("origin port is invalid") from exc
+    port = f":{parsed_port}" if parsed_port and parsed_port != 443 else ""
     return f"https://{parsed.hostname}{port}"
+
+
+def _is_enterprise_private(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast:
+        return False
+    if isinstance(address, ipaddress.IPv4Address):
+        return any(address in network for network in RFC1918_NETWORKS)
+    return address in IPV6_ULA
+
+
+def _resolved_internal_addresses(origin: str, allow_loopback_test: bool = False) -> list[str]:
+    parsed = urlparse(origin)
+    host = parsed.hostname
+    if not host:
+        raise AcceptanceError("production origin hostname is missing")
+    port = parsed.port or 443
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        addresses = {literal}
+    else:
+        try:
+            resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise AcceptanceError(f"internal production DNS resolution failed for {host}: {exc}") from exc
+        addresses = set()
+        for item in resolved:
+            sockaddr = item[4]
+            if not sockaddr:
+                continue
+            try:
+                addresses.add(ipaddress.ip_address(sockaddr[0]))
+            except ValueError as exc:
+                raise AcceptanceError(f"resolver returned an invalid address for {host}: {sockaddr[0]!r}") from exc
+    if not addresses:
+        raise AcceptanceError(f"internal production DNS returned no addresses for {host}")
+    invalid = sorted(
+        str(address)
+        for address in addresses
+        if not (_is_enterprise_private(address) or (allow_loopback_test and address.is_loopback))
+    )
+    if invalid:
+        raise AcceptanceError(
+            "internal-only production origin resolved outside RFC1918/IPv6-ULA perimeter: "
+            + ", ".join(invalid)
+        )
+    return sorted(str(address) for address in addresses)
+
+
+def _ca_bundle_path() -> Path:
+    raw = os.getenv("AEGIS_ENTERPRISE_CA_BUNDLE", "").strip()
+    path = Path(raw) if raw else DEFAULT_ENTERPRISE_CA_BUNDLE
+    if not path.is_absolute():
+        raise AcceptanceError("AEGIS_ENTERPRISE_CA_BUNDLE must be an absolute path")
+    if not path.is_file():
+        raise AcceptanceError(f"enterprise CA bundle does not exist: {path}")
+    size = path.stat().st_size
+    if size <= 0 or size > MAX_CA_BUNDLE:
+        raise AcceptanceError("enterprise CA bundle has invalid size")
+    return path
+
+
+def _ca_bundle_evidence() -> tuple[Path, str]:
+    path = _ca_bundle_path()
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _tls_context() -> ssl.SSLContext:
+    path = _ca_bundle_path()
+    try:
+        context = ssl.create_default_context(cafile=str(path))
+    except (OSError, ssl.SSLError) as exc:
+        raise AcceptanceError(f"enterprise CA bundle is not a valid TLS trust anchor: {exc}") from exc
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
 
 
 def _tls_evidence(origin: str) -> dict[str, str]:
@@ -67,7 +163,7 @@ def _tls_evidence(origin: str) -> dict[str, str]:
     if not host:
         raise AcceptanceError("verified TLS origin hostname is missing")
     port = parsed.port or 443
-    context = ssl.create_default_context()
+    context = _tls_context()
     try:
         with socket.create_connection((host, port), timeout=15) as raw:
             with context.wrap_socket(raw, server_hostname=host) as tls:
@@ -76,7 +172,7 @@ def _tls_evidence(origin: str) -> dict[str, str]:
                 cipher = tls.cipher()
                 version = tls.version()
     except (OSError, ssl.SSLError, TimeoutError) as exc:
-        raise AcceptanceError(f"verified TLS handshake failed: {exc}") from exc
+        raise AcceptanceError(f"enterprise-verified TLS handshake failed: {exc}") from exc
     if not der or not certificate or not version or not cipher:
         raise AcceptanceError("verified TLS handshake did not expose certificate/session evidence")
     not_after = str(certificate.get("notAfter", "")).strip()
@@ -94,12 +190,12 @@ def _request(origin: str, path: str) -> tuple[int, dict[str, str], bytes]:
     request = Request(
         origin + path,
         headers={
-            "User-Agent": "AegisScan-Production-Acceptance/1.0",
+            "User-Agent": "AegisScan-Internal-Production-Acceptance/2.0",
             "Accept": "application/json,text/html;q=0.9,*/*;q=0.1",
         },
         method="GET",
     )
-    context = ssl.create_default_context()
+    context = _tls_context()
     try:
         with urlopen(request, timeout=15, context=context) as response:
             body = response.read(MAX_BODY + 1)
@@ -113,15 +209,20 @@ def _request(origin: str, path: str) -> tuple[int, dict[str, str], bytes]:
     except HTTPError as exc:
         raise AcceptanceError(f"{path} returned HTTP {exc.code}") from exc
     except (URLError, TimeoutError, ssl.SSLError) as exc:
-        raise AcceptanceError(f"{path} HTTPS request failed: {exc}") from exc
+        raise AcceptanceError(f"{path} enterprise HTTPS request failed: {exc}") from exc
 
 
 def validate(origin: str, *, allow_loopback_test: bool = False) -> dict[str, object]:
     canonical = _origin(origin, allow_loopback_test)
+    resolved_addresses = _resolved_internal_addresses(canonical, allow_loopback_test)
+    ca_path, ca_before = _ca_bundle_evidence()
     tls_evidence = _tls_evidence(canonical)
     health_status, health_headers, health_body = _request(canonical, "/health")
     ready_status, ready_headers, ready_body = _request(canonical, "/ready")
     root_status, root_headers, _ = _request(canonical, "/")
+    _, ca_after = _ca_bundle_evidence()
+    if ca_before != ca_after:
+        raise AcceptanceError("enterprise CA bundle changed during production acceptance")
 
     for path, status in (("/health", health_status), ("/ready", ready_status), ("/", root_status)):
         if status != 200:
@@ -141,16 +242,24 @@ def validate(origin: str, *, allow_loopback_test: bool = False) -> dict[str, obj
         try:
             json.loads(body)
         except json.JSONDecodeError:
-            # Some deployments may expose a concise plaintext readiness response.
             if len(body.strip()) > 4096:
                 raise AcceptanceError(f"{path} returned a non-JSON oversized readiness body")
 
-    result = {
+    return {
         "schema": "aegisscan.public-acceptance.v1",
         "status": "success",
         "origin": canonical,
+        "deployment_mode": "internal",
+        "network_scope": "rfc1918-or-ipv6-ula",
+        "resolved_addresses": resolved_addresses,
+        "enterprise_ca": {
+            "path": str(ca_path),
+            "sha256": ca_before,
+        },
         "checks": {
             "verified_https": True,
+            "internal_only_resolution": True,
+            "enterprise_ca_verified": True,
             "tls": tls_evidence,
             "health_200": True,
             "ready_200": True,
@@ -158,7 +267,6 @@ def validate(origin: str, *, allow_loopback_test: bool = False) -> dict[str, obj
             "security_headers": sorted(REQUIRED_SECURITY_HEADERS),
         },
     }
-    return result
 
 
 def main() -> int:
@@ -172,6 +280,7 @@ def main() -> int:
         print(json.dumps({
             "schema": "aegisscan.public-acceptance.v1",
             "status": "failed",
+            "deployment_mode": "internal",
             "error": str(exc),
         }, sort_keys=True), file=sys.stderr)
         return 1
