@@ -89,7 +89,7 @@ jobs:
           assert provider_env['AEGIS_NETWORK_LISTEN_HOST']=='127.0.0.1', provider_env
           assert str(provider_env['AEGIS_NETWORK_LISTEN_PORT'])=='18766', provider_env
           assert provider['pids_limit']==128, provider
-          assert provider['mem_limit']==536870912, provider
+          assert int(str(provider['mem_limit']))==536870912, provider
           assert float(provider['cpus'])==1.0, provider
           print('NETWORK_NMAP_CANARY_DEPLOYMENT_REALITY_PASS')
           PY
