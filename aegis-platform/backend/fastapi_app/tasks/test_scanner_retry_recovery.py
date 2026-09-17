@@ -8,6 +8,7 @@ from django_project.projects.models import Project
 from django_project.scans.models import Scan, ScanEngineExecution
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability
+from fastapi_app.services import nmap_execution_provider
 from fastapi_app.services.scanner_adapters import ScanResult
 from fastapi_app.tasks import security_scan
 
@@ -73,7 +74,10 @@ def test_transient_failure_recovery_preserves_one_durable_operation(monkeypatch)
 
     scanner = FlakyNmap()
     monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'aegis-scan-target')
-    monkeypatch.setattr(security_scan, 'get_tool', lambda name: scanner)
+    # Nmap execution now resolves the legacy adapter inside the authoritative
+    # provider module. Patch that boundary so retry recovery still exercises
+    # the complete provider-routing path rather than bypassing it.
+    monkeypatch.setattr(nmap_execution_provider, 'get_tool', lambda name: scanner)
 
     # Direct task invocation has no broker to schedule the retry, so Celery
     # raises the injected error. The important contract is that the attempt
