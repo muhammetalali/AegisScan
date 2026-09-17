@@ -44,12 +44,25 @@ def _selected_key() -> str:
     )
 
 
-def test_default_provider_is_legacy_and_preserves_current_adapter(monkeypatch):
+def _kali_result() -> dict:
+    runtime = {
+        'provider': 'aegis-kali-network',
+        'profile': 'network',
+        'tool': 'nmap',
+        'provenance_authority': 'control-plane-deployment-pins',
+    }
+    return {
+        'tool': 'nmap', 'target': '192.0.2.10', 'exit_code': 0,
+        'stdout': '<nmaprun/>', 'stderr': '', 'runtime': runtime,
+    }
+
+
+def test_library_fallback_remains_legacy_without_deployment_policy(monkeypatch):
     monkeypatch.delenv('AEGIS_NMAP_PROVIDER', raising=False)
     monkeypatch.delenv('AEGIS_KALI_NMAP_CANARY_BPS', raising=False)
     tool = _LegacyTool()
     monkeypatch.setattr(provider, 'get_tool', lambda name: tool)
-    monkeypatch.setattr(provider, 'execute_kali_nmap', lambda **kwargs: pytest.fail('Kali must not run by default'))
+    monkeypatch.setattr(provider, 'execute_kali_nmap', lambda **kwargs: pytest.fail('Kali must not run without deployment policy'))
 
     result = provider.run_nmap_with_provider(**_kwargs())
 
@@ -58,6 +71,52 @@ def test_default_provider_is_legacy_and_preserves_current_adapter(monkeypatch):
     assert result.routing['reason'] == 'legacy-default'
     assert result.runtime['provider'] == 'legacy-native-worker'
     assert result.stdout == '<nmaprun/>'
+
+
+def test_default_kali_routes_without_canary_assignment(monkeypatch):
+    monkeypatch.setenv('AEGIS_NMAP_PROVIDER', 'default-kali')
+    monkeypatch.setenv('AEGIS_KALI_NMAP_CANARY_BPS', '0')
+    monkeypatch.setattr(provider, 'get_tool', lambda name: pytest.fail('legacy must not run under default-kali'))
+    monkeypatch.setattr(provider, 'execute_kali_nmap', lambda **kwargs: _kali_result())
+
+    first = provider.run_nmap_with_provider(**_kwargs('scan-a'))
+    second = provider.run_nmap_with_provider(**_kwargs('scan-b'))
+
+    for result in (first, second):
+        assert result.routing['mode'] == 'default-kali'
+        assert result.routing['selected_provider'] == 'kali'
+        assert result.routing['parity_approved'] is True
+        assert result.routing['canary_bps'] == 0
+        assert result.routing['bucket'] is None
+        assert result.routing['routing_key_digest'] == ''
+        assert result.routing['reason'] == 'default-kali-parity-approved'
+        assert result.runtime['provider'] == 'aegis-kali-network'
+
+
+def test_default_kali_failure_never_falls_back_to_legacy(monkeypatch):
+    monkeypatch.setenv('AEGIS_NMAP_PROVIDER', 'default-kali')
+    monkeypatch.setattr(provider, 'get_tool', lambda name: pytest.fail('legacy fallback is forbidden'))
+
+    def _failed_kali(**kwargs):
+        raise KaliNmapProviderError('provider unavailable')
+
+    monkeypatch.setattr(provider, 'execute_kali_nmap', _failed_kali)
+    with pytest.raises(KaliNmapProviderError, match='provider unavailable'):
+        provider.run_nmap_with_provider(**_kwargs())
+
+
+def test_explicit_legacy_mode_remains_administrative_rollback(monkeypatch):
+    monkeypatch.setenv('AEGIS_NMAP_PROVIDER', 'legacy')
+    tool = _LegacyTool()
+    monkeypatch.setattr(provider, 'get_tool', lambda name: tool)
+    monkeypatch.setattr(provider, 'execute_kali_nmap', lambda **kwargs: pytest.fail('Kali must not run during explicit rollback'))
+
+    result = provider.run_nmap_with_provider(**_kwargs())
+
+    assert tool.calls == 1
+    assert result.routing['mode'] == 'legacy'
+    assert result.routing['selected_provider'] == 'legacy'
+    assert result.routing['reason'] == 'legacy-default'
 
 
 def test_canary_assignment_is_stable_and_has_selected_and_holdback_cohorts(monkeypatch):
@@ -115,29 +174,16 @@ def test_selected_kali_result_preserves_runtime_provenance(monkeypatch):
     monkeypatch.setenv('AEGIS_KALI_NMAP_CANARY_BPS', '2500')
     selected_key = _selected_key()
     monkeypatch.setattr(provider, 'get_tool', lambda name: pytest.fail('legacy must not run'))
-    runtime = {
-        'provider': 'aegis-kali-network',
-        'profile': 'network',
-        'tool': 'nmap',
-        'provenance_authority': 'control-plane-deployment-pins',
-    }
-    monkeypatch.setattr(
-        provider,
-        'execute_kali_nmap',
-        lambda **kwargs: {
-            'tool': 'nmap', 'target': '192.0.2.10', 'exit_code': 0,
-            'stdout': '<nmaprun/>', 'stderr': '', 'runtime': runtime,
-        },
-    )
+    monkeypatch.setattr(provider, 'execute_kali_nmap', lambda **kwargs: _kali_result())
     result = provider.run_nmap_with_provider(**_kwargs(selected_key))
     assert result.routing['mode'] == 'canary'
     assert result.routing['selected_provider'] == 'kali'
-    assert result.runtime == runtime
+    assert result.runtime == _kali_result()['runtime']
 
 
-def test_full_kali_mode_is_rejected_by_production_execution_layer(monkeypatch):
+def test_raw_kali_mode_is_rejected_by_production_execution_layer(monkeypatch):
     monkeypatch.setenv('AEGIS_NMAP_PROVIDER', 'kali')
     monkeypatch.setattr(provider, 'get_tool', lambda name: pytest.fail('legacy must not run'))
-    monkeypatch.setattr(provider, 'execute_kali_nmap', lambda **kwargs: pytest.fail('full Kali mode must not run'))
-    with pytest.raises(RuntimeError, match='not admitted during the canary phase'):
+    monkeypatch.setattr(provider, 'execute_kali_nmap', lambda **kwargs: pytest.fail('raw Kali mode must not run'))
+    with pytest.raises(RuntimeError, match='not admitted by the governed production execution layer'):
         provider.run_nmap_with_provider(**_kwargs())
