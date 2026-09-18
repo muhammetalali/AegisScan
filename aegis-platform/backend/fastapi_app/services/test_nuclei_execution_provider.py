@@ -85,6 +85,64 @@ def test_library_fallback_remains_legacy_without_deployment_policy(monkeypatch):
     assert result.runtime['provider'] == 'legacy-native-worker'
 
 
+def test_default_kali_routes_without_canary_assignment(monkeypatch):
+    monkeypatch.setenv('AEGIS_NUCLEI_PROVIDER', 'default-kali')
+    monkeypatch.setenv('AEGIS_KALI_NUCLEI_CANARY_BPS', '0')
+    monkeypatch.setattr(
+        provider,
+        'run_nuclei',
+        lambda *args, **kwargs: pytest.fail('legacy must not run under default-kali'),
+    )
+    monkeypatch.setattr(provider, 'execute_kali_nuclei', lambda **kwargs: _kali_result())
+
+    first = provider.run_nuclei_with_provider(**_kwargs('scan-a'))
+    second = provider.run_nuclei_with_provider(**_kwargs('scan-b'))
+
+    for result in (first, second):
+        assert result.routing['mode'] == 'default-kali'
+        assert result.routing['selected_provider'] == 'kali'
+        assert result.routing['parity_approved'] is True
+        assert result.routing['canary_bps'] == 0
+        assert result.routing['bucket'] is None
+        assert result.routing['routing_key_digest'] == ''
+        assert result.routing['reason'] == 'default-kali-parity-approved'
+        assert result.runtime['provider'] == 'aegis-kali-web'
+
+
+def test_default_kali_failure_never_falls_back_to_legacy(monkeypatch):
+    monkeypatch.setenv('AEGIS_NUCLEI_PROVIDER', 'default-kali')
+    monkeypatch.setattr(
+        provider,
+        'run_nuclei',
+        lambda *args, **kwargs: pytest.fail('legacy fallback is forbidden'),
+    )
+
+    def _failed_kali(**kwargs):
+        raise KaliNucleiProviderError('provider unavailable')
+
+    monkeypatch.setattr(provider, 'execute_kali_nuclei', _failed_kali)
+    with pytest.raises(KaliNucleiProviderError, match='provider unavailable'):
+        provider.run_nuclei_with_provider(**_kwargs())
+
+
+def test_explicit_legacy_mode_remains_administrative_rollback(monkeypatch):
+    monkeypatch.setenv('AEGIS_NUCLEI_PROVIDER', 'legacy')
+    legacy = _LegacyNuclei()
+    monkeypatch.setattr(provider, 'run_nuclei', legacy)
+    monkeypatch.setattr(
+        provider,
+        'execute_kali_nuclei',
+        lambda **kwargs: pytest.fail('Kali must not run during explicit rollback'),
+    )
+
+    result = provider.run_nuclei_with_provider(**_kwargs())
+
+    assert legacy.calls == 1
+    assert result.routing['mode'] == 'legacy'
+    assert result.routing['selected_provider'] == 'legacy'
+    assert result.routing['reason'] == 'legacy-default'
+
+
 def test_canary_assignment_is_stable_and_has_selected_and_holdback_cohorts(monkeypatch):
     monkeypatch.setenv('AEGIS_NUCLEI_PROVIDER', 'canary')
     monkeypatch.setenv('AEGIS_KALI_NUCLEI_CANARY_BPS', '2500')
