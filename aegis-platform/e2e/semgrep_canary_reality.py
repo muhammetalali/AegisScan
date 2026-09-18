@@ -6,6 +6,11 @@ import os
 import sys
 from pathlib import Path
 
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_project.settings")
+import django
+
+django.setup()
+
 from fastapi_app.services.kali_semgrep_provider import (
     KaliSemgrepProviderError,
     semgrep_provider_decision,
