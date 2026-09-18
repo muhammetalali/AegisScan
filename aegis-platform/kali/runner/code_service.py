@@ -146,7 +146,7 @@ def _runtime_contract() -> dict[str, Any]:
 
 def _semgrep_config() -> str:
     config = os.environ.get('AEGIS_CODE_SEMGREP_CONFIG', 'auto').strip()
-    if not _CONFIG_RE.fullmatch(config):
+    if not config or any(ch in config for ch in '\r\n\x00'):
         raise RuntimeError('AEGIS_CODE_SEMGREP_CONFIG is missing or invalid')
     if config.startswith('/'):
         allowed = Path('/opt/aegis-semgrep-rules').resolve()
@@ -159,6 +159,8 @@ def _semgrep_config() -> str:
         if resolved.is_symlink() or not resolved.is_file():
             raise RuntimeError('Semgrep config file is invalid')
         return str(resolved)
+    if not _CONFIG_RE.fullmatch(config):
+        raise RuntimeError('AEGIS_CODE_SEMGREP_CONFIG is missing or invalid')
     return config
 
 
