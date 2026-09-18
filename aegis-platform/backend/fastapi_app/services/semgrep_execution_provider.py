@@ -244,6 +244,7 @@ def run_semgrep_with_provider(
         result = execute_kali_semgrep(
             snapshot_id=snapshot.snapshot_id,
             source_sha256=snapshot.source_sha256,
+            source_entry=snapshot.source_entry,
             timeout_seconds=timeout_seconds,
             execution_ref=execution_ref,
             authorization_ref=authorization_ref,
