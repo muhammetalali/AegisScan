@@ -303,6 +303,7 @@ def execute_kali_semgrep(
     *,
     snapshot_id: str,
     source_sha256: str,
+    source_entry: str,
     timeout_seconds: int,
     execution_ref: str,
     authorization_ref: str,
@@ -314,6 +315,15 @@ def execute_kali_semgrep(
         raise KaliSemgrepProviderError('snapshot_id must be a 64-character lowercase hexadecimal digest')
     if not _HEX64_RE.fullmatch(source_sha256):
         raise KaliSemgrepProviderError('source_sha256 must be a 64-character lowercase hexadecimal digest')
+    entry = str(source_entry or '').strip()
+    entry_parts = [part for part in entry.split('/') if part not in {'', '.'}]
+    if entry != '.' and (
+        not entry
+        or entry.startswith('/')
+        or any(part == '..' for part in entry_parts)
+        or len(entry) > 255
+    ):
+        raise KaliSemgrepProviderError('source_entry must be a bounded relative path within the snapshot')
     for name, value in (
         ('execution_ref', execution_ref),
         ('authorization_ref', authorization_ref),
@@ -334,6 +344,7 @@ def execute_kali_semgrep(
         'capability_id': 'code.semgrep',
         'source_snapshot': snapshot_id,
         'source_sha256': source_sha256,
+        'source_entry': entry,
         'options': {},
         'timeout_seconds': int(timeout_seconds),
     }
@@ -402,7 +413,11 @@ def execute_kali_semgrep(
         raise KaliSemgrepProviderError('Kali code provider capability binding mismatch')
     if result.get('execution_ref') != execution_ref:
         raise KaliSemgrepProviderError('Kali code provider execution_ref mismatch')
-    if result.get('source_snapshot') != snapshot_id or result.get('source_sha256') != source_sha256:
+    if (
+        result.get('source_snapshot') != snapshot_id
+        or result.get('source_sha256') != source_sha256
+        or result.get('source_entry') != entry
+    ):
         raise KaliSemgrepProviderError('Kali code provider source binding mismatch')
     exit_code = result.get('exit_code')
     if isinstance(exit_code, bool) or not isinstance(exit_code, int):
