@@ -19,16 +19,23 @@ def _private(path: Path, content: str) -> Path:
     return path
 
 
-def test_remote_command_binds_checkout_release_and_root_operational_acceptance():
+def test_remote_command_binds_release_to_installed_privileged_acceptance_gate():
     command = remote_ops._remote_command(
         repo_path="/opt/aegisscan/AegisScan",
         env_path="/etc/aegisscan/production.env",
         release_sha="a" * 40,
     )
-    assert 'git rev-parse HEAD' in command
-    assert "aegis-platform/scripts/production_operational_acceptance.py" in command
+    assert command.startswith("sudo -n /usr/local/sbin/aegisscan-production-gate accept ")
     assert "--release-sha " + "a" * 40 in command
-    assert "sudo -n" in command
+    assert "sudo -n python3" not in command
+    assert "git rev-parse HEAD" not in command
+
+    with pytest.raises(remote_ops.RemoteOperationalAcceptanceError, match="repository path"):
+        remote_ops._remote_command(
+            repo_path="/tmp/aegis",
+            env_path="/etc/aegisscan/production.env",
+            release_sha="a" * 40,
+        )
 
 
 def test_remote_acceptance_uses_private_dns_and_strict_pinned_ssh(tmp_path: Path, monkeypatch):
