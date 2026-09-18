@@ -1,0 +1,101 @@
+name: Web Nuclei Canary Deployment Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &canary_deployment_paths
+      - 'aegis-platform/docker-compose.nuclei-canary.yml'
+      - 'aegis-platform/kali/Dockerfile.web-provider'
+      - 'aegis-platform/kali/runner/web_service.py'
+      - 'aegis-platform/kali/tests/test_web_provider_contract.py'
+      - 'aegis-platform/backend/fastapi_app/services/kali_nuclei_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/security_scan.py'
+      - 'docs/WEB_NUCLEI_CANARY.md'
+      - '.github/workflows/web-nuclei-canary-deployment-reality.yml'
+  push:
+    branches: [main]
+    paths: *canary_deployment_paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-nuclei-canary-deployment-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deployment-contract:
+    name: Nuclei Canary Deployment Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Prove static execution and deployment contracts
+        run: |
+          python -m pip install pytest
+          PYTHONPATH=aegis-platform/backend python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest             aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py             aegis-platform/kali/tests/test_web_provider_contract.py
+      - name: Render opt-in Nuclei canary deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.nuclei-canary.yml             --profile kali-web             config --format json > artifacts/nuclei-canary-compose.json
+      - name: Prove rendered least-privilege and rollback defaults
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data=json.loads(Path('artifacts/nuclei-canary-compose.json').read_text(encoding='utf-8'))
+          services=data['services']
+          scanner=services['scanner_worker']
+          provider=services['kali_web']
+          scanner_env=scanner['environment']
+          provider_env=provider['environment']
+
+          assert scanner_env['AEGIS_NUCLEI_PROVIDER']=='legacy', scanner_env
+          assert str(scanner_env['AEGIS_KALI_NUCLEI_CANARY_BPS'])=='0', scanner_env
+          assert scanner_env['AEGIS_KALI_WEB_URL']=='http://127.0.0.1:18770', scanner_env
+          for key in (
+              'AEGIS_KALI_WEB_AUTH_TOKEN',
+              'AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION',
+              'AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT',
+              'AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST',
+              'AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST',
+              'AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST',
+              'AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST',
+          ):
+              assert key in scanner_env, key
+
+          assert provider['network_mode']=='service:scanner_egress', provider
+          assert provider['read_only'] is True, provider
+          assert provider['cap_drop']==['ALL'], provider
+          assert not provider.get('cap_add'), provider
+          assert provider['security_opt']==['no-new-privileges:true'], provider
+          assert provider['user']=='10001:10001', provider
+          assert provider_env['AEGIS_WEB_LISTEN_HOST']=='127.0.0.1', provider_env
+          assert str(provider_env['AEGIS_WEB_LISTEN_PORT'])=='18770', provider_env
+          assert provider['pids_limit']==128, provider
+          assert int(str(provider['mem_limit']))==805306368, provider
+          assert float(provider['cpus'])==1.0, provider
+          print('WEB_NUCLEI_CANARY_DEPLOYMENT_REALITY_PASS')
+          PY
+      - name: Publish exact-head deployment evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-canary-deployment-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/nuclei-canary-compose.json
+          if-no-files-found: error
+          retention-days: 90
