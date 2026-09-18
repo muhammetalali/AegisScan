@@ -23,6 +23,11 @@ fi
 # before any scanner task process is started.
 python -m fastapi_app.services.nmap_retirement_preflight
 
+# M6 Nuclei retirement uses the same startup boundary. Historical parity/reference
+# containers omit AEGIS_NUCLEI_LEGACY_DISABLED. Production sets the retirement
+# lock and must pin the loopback governed web provider before the worker starts.
+python -m fastapi_app.services.nuclei_retirement_preflight
+
 # Docker starts this bootstrap with only NET_RAW + SETUID/SETGID/SETPCAP.
 # SETPCAP must remain available until CAP_NET_RAW has been moved into the
 # ambient set and the temporary bootstrap caps have been removed from the

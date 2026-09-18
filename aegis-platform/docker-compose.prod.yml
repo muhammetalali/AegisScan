@@ -67,6 +67,7 @@ services:
       target: production-no-legacy-recon
       args:
         AEGIS_RETIRE_NMAP: "1"
+        AEGIS_RETIRE_NUCLEI: "1"
     env_file: !reset []
     volumes: !reset []
     read_only: true
@@ -98,9 +99,22 @@ services:
       AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST:-}
       AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST:-}
       AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST:-}
+      AEGIS_NUCLEI_PROVIDER: "default-kali"
+      AEGIS_NUCLEI_LEGACY_DISABLED: "true"
+      AEGIS_KALI_NUCLEI_CANARY_BPS: "0"
+      AEGIS_KALI_WEB_URL: "http://127.0.0.1:18770"
+      AEGIS_KALI_WEB_AUTH_TOKEN: ${AEGIS_KALI_WEB_AUTH_TOKEN:-}
+      AEGIS_KALI_WEB_IMAGE: ${AEGIS_KALI_WEB_IMAGE:-aegis-kali:web-provider}
+      AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION: ${AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION:-}
+      AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT: ${AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT:-}
+      AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST: ${AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST:-}
+      AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST: ${AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST:-}
+      AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST: ${AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST:-}
+      AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST: ${AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST:-}
     depends_on: !override
       scanner_egress: {condition: service_healthy}
       kali_network: {condition: service_healthy}
+      kali_web: {condition: service_healthy}
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
       django: {condition: service_started}
@@ -132,6 +146,36 @@ services:
       scanner_egress: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python3", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=2)); assert d['status']=='ok' and d['profile']=='network'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  kali_web:
+    image: ${AEGIS_KALI_WEB_IMAGE:-aegis-kali:web-provider}
+    restart: unless-stopped
+    user: "10001:10001"
+    entrypoint: ["/usr/bin/tini", "--", "python3", "/opt/aegis-runner/web_service.py"]
+    network_mode: "service:scanner_egress"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=192m
+    environment:
+      AEGIS_WEB_LISTEN_HOST: "127.0.0.1"
+      AEGIS_WEB_LISTEN_PORT: "18770"
+      AEGIS_KALI_WEB_AUTH_TOKEN: ${AEGIS_KALI_WEB_AUTH_TOKEN:-}
+      NUCLEI_TEMPLATES_DIR: /opt/nuclei-templates
+      HOME: /tmp/aegis-home
+      TMPDIR: /tmp
+    depends_on: !override
+      scanner_egress: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18770/healthz',timeout=2)); assert d['status']=='ok' and d['profile']=='web'"]
       interval: 5s
       timeout: 3s
       retries: 12
