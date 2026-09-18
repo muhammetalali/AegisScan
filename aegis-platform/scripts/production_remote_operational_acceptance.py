@@ -24,16 +24,18 @@ class RemoteOperationalAcceptanceError(RuntimeError):
 
 
 def _remote_command(*, repo_path: str, env_path: str, release_sha: str) -> str:
+    if repo_path != remote.PRODUCTION_REPO_PATH:
+        raise RemoteOperationalAcceptanceError(
+            f"production repository path must be {remote.PRODUCTION_REPO_PATH}"
+        )
+    if env_path != remote.PRODUCTION_ENV_PATH:
+        raise RemoteOperationalAcceptanceError(
+            f"production environment path must be {remote.PRODUCTION_ENV_PATH}"
+        )
     q = shlex.quote
-    return " && ".join(
-        [
-            f"cd {q(repo_path)}",
-            f"test \"$(git rev-parse HEAD)\" = {q(release_sha)}",
-            (
-                "sudo -n python3 aegis-platform/scripts/production_operational_acceptance.py "
-                f"--env-file {q(env_path)} --release-sha {q(release_sha)}"
-            ),
-        ]
+    return (
+        f"sudo -n {q(remote.PRIVILEGED_GATE)} accept "
+        f"--release-sha {q(release_sha)}"
     )
 
 
