@@ -51,6 +51,118 @@ def _selected_key() -> str:
     )
 
 
+def _fake_snapshot() -> SimpleNamespace:
+    root = Path('/var/lib/aegis-semgrep') / ('a' * 64)
+    return SimpleNamespace(
+        snapshot_id='a' * 64,
+        source_sha256='b' * 64,
+        source_entry='.',
+        root=root,
+        original_root=Path('/workspace/source'),
+        cleanup=lambda: None,
+    )
+
+
+def _kali_result(snapshot: SimpleNamespace) -> dict:
+    return {
+        'tool': 'semgrep',
+        'exit_code': 1,
+        'stdout': json.dumps({
+            'results': [{
+                'check_id': 'aegis.semgrep.parity.eval',
+                'path': str(snapshot.root / 'app.py'),
+                'start': {'line': 4},
+                'extra': {'message': 'Aegis Semgrep parity fixture', 'severity': 'WARNING'},
+            }],
+            'errors': [],
+        }),
+        'stderr': '',
+        'runtime': {'provider': 'aegis-kali-code'},
+    }
+
+
+def test_library_fallback_remains_legacy_without_deployment_policy(monkeypatch):
+    monkeypatch.delenv('AEGIS_SEMGREP_PROVIDER', raising=False)
+    monkeypatch.delenv('AEGIS_KALI_SEMGREP_CANARY_BPS', raising=False)
+    monkeypatch.setattr(execution, 'validate_code_target', lambda source: source)
+    monkeypatch.setattr(execution, 'run_semgrep', lambda *args, **kwargs: _legacy_result())
+    monkeypatch.setattr(
+        execution,
+        'execute_kali_semgrep',
+        lambda **kwargs: pytest.fail('Kali must not run without deployment policy'),
+    )
+
+    result = execution.run_semgrep_with_provider(**_kwargs())
+
+    assert result.routing['mode'] == 'legacy'
+    assert result.routing['selected_provider'] == 'legacy'
+    assert result.routing['reason'] == 'legacy-default'
+    assert result.runtime['provider'] == 'legacy-native-worker'
+
+
+def test_default_kali_routes_without_canary_assignment(monkeypatch):
+    monkeypatch.setenv('AEGIS_SEMGREP_PROVIDER', 'default-kali')
+    monkeypatch.setenv('AEGIS_KALI_SEMGREP_CANARY_BPS', '0')
+    monkeypatch.setattr(execution, 'validate_code_target', lambda source: source)
+    snapshot = _fake_snapshot()
+    monkeypatch.setattr(execution, '_stage_source', lambda source: snapshot)
+    monkeypatch.setattr(
+        execution,
+        'run_semgrep',
+        lambda *args, **kwargs: pytest.fail('legacy must not run under default-kali'),
+    )
+    monkeypatch.setattr(execution, 'execute_kali_semgrep', lambda **kwargs: _kali_result(snapshot))
+
+    first = execution.run_semgrep_with_provider(**_kwargs('scan-default-a'))
+    second = execution.run_semgrep_with_provider(**_kwargs('scan-default-b'))
+
+    for result in (first, second):
+        assert result.routing['mode'] == 'default-kali'
+        assert result.routing['selected_provider'] == 'kali'
+        assert result.routing['parity_approved'] is True
+        assert result.routing['canary_bps'] == 0
+        assert result.routing['bucket'] is None
+        assert result.routing['routing_key_digest'] == ''
+        assert result.routing['reason'] == 'default-kali-parity-approved'
+        assert result.runtime['provider'] == 'aegis-kali-code'
+        assert json.loads(result.stdout)['results'][0]['path'] == '/workspace/source/app.py'
+
+
+def test_default_kali_failure_never_falls_back_to_legacy(monkeypatch):
+    monkeypatch.setenv('AEGIS_SEMGREP_PROVIDER', 'default-kali')
+    monkeypatch.setattr(execution, 'validate_code_target', lambda source: source)
+    monkeypatch.setattr(execution, '_stage_source', lambda source: _fake_snapshot())
+    monkeypatch.setattr(
+        execution,
+        'run_semgrep',
+        lambda *args, **kwargs: pytest.fail('legacy fallback is forbidden'),
+    )
+
+    def _failed(**kwargs):
+        raise KaliSemgrepProviderError('provider unavailable')
+
+    monkeypatch.setattr(execution, 'execute_kali_semgrep', _failed)
+    with pytest.raises(KaliSemgrepProviderError, match='provider unavailable'):
+        execution.run_semgrep_with_provider(**_kwargs())
+
+
+def test_explicit_legacy_mode_remains_m5_administrative_rollback(monkeypatch):
+    monkeypatch.setenv('AEGIS_SEMGREP_PROVIDER', 'legacy')
+    monkeypatch.setattr(execution, 'validate_code_target', lambda source: source)
+    monkeypatch.setattr(execution, 'run_semgrep', lambda *args, **kwargs: _legacy_result())
+    monkeypatch.setattr(
+        execution,
+        'execute_kali_semgrep',
+        lambda **kwargs: pytest.fail('Kali must not run during explicit rollback'),
+    )
+
+    result = execution.run_semgrep_with_provider(**_kwargs())
+
+    assert result.routing['mode'] == 'legacy'
+    assert result.routing['selected_provider'] == 'legacy'
+    assert result.routing['reason'] == 'legacy-default'
+
+
 def test_canary_assignment_is_stable_and_has_selected_and_holdback(monkeypatch):
     monkeypatch.setenv('AEGIS_SEMGREP_PROVIDER', 'canary')
     monkeypatch.setenv('AEGIS_KALI_SEMGREP_CANARY_BPS', '2500')

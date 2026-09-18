@@ -206,16 +206,17 @@ def run_semgrep_with_provider(
     scope_ref: str,
     state_getter: Callable[[], str] | None,
 ) -> SemgrepExecutionResult:
-    """Execute Semgrep through the bounded M4 provider decision.
+    """Execute Semgrep through the governed production provider decision.
 
-    M4 admits Legacy and Canary production modes only. Raw Kali remains a
-    provider-library diagnostic mode and is rejected by this execution layer.
-    Selected Kali executions stage a bounded immutable source snapshot in the
-    shared workspace and fail closed on any provider/provenance/runtime error.
+    M5 admits Legacy, Canary, and parity-approved default-kali production modes.
+    Raw Kali remains provider-library diagnostic behavior and is rejected by
+    this execution layer. Any Kali-selected execution stages the same bounded
+    immutable source snapshot proven in M4 and fails closed on provider,
+    provenance, control, or runtime error without silent Legacy fallback.
     """
     canonical_source = validate_code_target(source)
     decision = semgrep_provider_decision(routing_key=routing_key)
-    if decision.mode not in {'legacy', 'canary'}:
+    if decision.mode not in {'legacy', 'canary', 'default-kali'}:
         raise RuntimeError(
             f'Semgrep provider mode {decision.mode!r} is not admitted by the governed production execution layer'
         )
