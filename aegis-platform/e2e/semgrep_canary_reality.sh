@@ -64,7 +64,7 @@ for key,value in values.items():
 PY
 )"
 
-docker run -d --name aegis-semgrep-m4-scanner   --network none   --user 10001:10001   --cap-drop ALL --security-opt no-new-privileges:true   --read-only   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m   -e AEGIS_SEMGREP_PROVIDER=canary   -e AEGIS_KALI_SEMGREP_CANARY_BPS=2500   -e AEGIS_KALI_CODE_URL=http://127.0.0.1:18771   -e AEGIS_KALI_CODE_AUTH_TOKEN="$AUTH_TOKEN"   -e AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION="$RUNNER_VERSION"   -e AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT="$BUILD_COMMIT"   -e AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST="$BASE_IMAGE_DIGEST"   -e AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST="$TOOL_MANIFEST_DIGEST"   -e AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST="$IMAGE_ID"   -e AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST="$RUNTIME_MANIFEST_DIGEST"   -e AEGIS_SEMGREP_WORKSPACE_ROOT=/var/lib/aegis-semgrep   -e SEMGREP_CONFIG=/opt/aegis-semgrep-rules/semgrep-parity.yml   -e SEMGREP_SEND_METRICS=off   -e SEMGREP_ENABLE_VERSION_CHECK=0   -e DJANGO_SETTINGS_MODULE=django_project.settings   -e SECRET_KEY=aegisscan-semgrep-canary-ci-secret-key-not-for-production   -e JWT_SECRET_KEY=aegisscan-semgrep-canary-ci-jwt-key-not-for-production   -v "$SOURCE_DIR:/workspace/source:ro"   -v "$RULE_DIR:/opt/aegis-semgrep-rules:ro"   -v "$WORKSPACE_DIR:/var/lib/aegis-semgrep"   -v "$ARTIFACTS:/artifacts"   -v "$ROOT/aegis-platform/e2e/semgrep_canary_reality.py:/semgrep_canary_reality.py:ro"   --entrypoint sleep aegis-semgrep-m4:scanner infinity
+docker run -d --name aegis-semgrep-m4-scanner   --network none   --user 10001:10001   --cap-drop ALL --security-opt no-new-privileges:true   --read-only   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m   -e AEGIS_SEMGREP_PROVIDER=canary   -e AEGIS_KALI_SEMGREP_CANARY_BPS=2500   -e AEGIS_KALI_CODE_URL=http://127.0.0.1:18771   -e AEGIS_KALI_CODE_AUTH_TOKEN="$AUTH_TOKEN"   -e AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION="$RUNNER_VERSION"   -e AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT="$BUILD_COMMIT"   -e AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST="$BASE_IMAGE_DIGEST"   -e AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST="$TOOL_MANIFEST_DIGEST"   -e AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST="$IMAGE_ID"   -e AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST="$RUNTIME_MANIFEST_DIGEST"   -e AEGIS_SEMGREP_WORKSPACE_ROOT=/var/lib/aegis-semgrep   -e SEMGREP_CONFIG=/opt/aegis-semgrep-rules/semgrep-parity.yml   -e SEMGREP_SEND_METRICS=off   -e SEMGREP_ENABLE_VERSION_CHECK=0   -e HOME=/tmp/home   -e XDG_CONFIG_HOME=/tmp/config   -e XDG_CACHE_HOME=/tmp/cache   -e TMPDIR=/tmp   -e DJANGO_SETTINGS_MODULE=django_project.settings   -e SECRET_KEY=aegisscan-semgrep-canary-ci-secret-key-not-for-production   -e JWT_SECRET_KEY=aegisscan-semgrep-canary-ci-jwt-key-not-for-production   -v "$SOURCE_DIR:/workspace/source:ro"   -v "$RULE_DIR:/opt/aegis-semgrep-rules:ro"   -v "$WORKSPACE_DIR:/var/lib/aegis-semgrep"   -v "$ARTIFACTS:/artifacts"   -v "$ROOT/aegis-platform/e2e/semgrep_canary_reality.py:/semgrep_canary_reality.py:ro"   --entrypoint sleep aegis-semgrep-m4:scanner infinity
 
 docker run -d --name aegis-semgrep-m4-provider   --network container:aegis-semgrep-m4-scanner   --user 10001:10001   --read-only --cap-drop ALL --security-opt no-new-privileges:true   --pids-limit 128 --memory 768m --cpus 1   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m   -e AEGIS_CODE_LISTEN_HOST=127.0.0.1   -e AEGIS_CODE_LISTEN_PORT=18771   -e AEGIS_KALI_CODE_AUTH_TOKEN="$AUTH_TOKEN"   -e AEGIS_CODE_WORKSPACE_ROOT=/var/lib/aegis-semgrep   -e AEGIS_CODE_SEMGREP_CONFIG=/opt/aegis-semgrep-rules/semgrep-parity.yml   -v "$RULE_DIR:/opt/aegis-semgrep-rules:ro"   -v "$WORKSPACE_DIR:/var/lib/aegis-semgrep:ro"   "$IMAGE_ID"
 
@@ -80,6 +80,23 @@ assert os.geteuid()==10001,os.geteuid()
 for key in ('CapEff','CapPrm','CapBnd','CapInh','CapAmb'):
     assert values[key]=='0000000000000000',(key,values[key])
 assert values['NoNewPrivs']=='1',values['NoNewPrivs']
+PY
+
+docker exec aegis-semgrep-m4-scanner sh -c 'mkdir -p /tmp/home /tmp/config /tmp/cache && test -r /opt/aegis-semgrep-rules/semgrep-parity.yml && test -r /workspace/source/app.py'
+
+docker exec -i aegis-semgrep-m4-scanner python - <<'PY'
+import json
+from fastapi_app.services.scanner_adapters import run_semgrep
+result=run_semgrep('/workspace/source',timeout=120)
+payload=json.loads(result.stdout)
+assert result.exit_code in {0,1}, (result.exit_code,result.stderr)
+assert len(payload.get('results',[])) == 1, {
+    'exit_code': result.exit_code,
+    'stderr': result.stderr,
+    'stdout': result.stdout,
+}
+finding=payload['results'][0]
+assert str(finding.get('check_id','')).endswith('aegis.semgrep.parity.eval'), finding
 PY
 
 for _ in $(seq 1 30); do
