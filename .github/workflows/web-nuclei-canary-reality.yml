@@ -163,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name aegis-nuclei-canary-provider             --network container:aegis-nuclei-canary-scanner             --user 10001:10001             --read-only --cap-drop ALL --security-opt no-new-privileges:true             --pids-limit 128 --memory 768m --cpus 1             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m             -e AEGIS_WEB_LISTEN_HOST=127.0.0.1             -e AEGIS_WEB_LISTEN_PORT=18770             -e AEGIS_KALI_WEB_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates             -v "$PWD/parity-templates:/opt/nuclei-templates:ro"             "$AEGIS_KALI_WEB_IMAGE"
-          docker exec aegis-nuclei-canary-provider python3 - <<'PY'
+          docker exec -i aegis-nuclei-canary-provider python3 - <<'PY'
           import os
           from pathlib import Path
           values={}
