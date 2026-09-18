@@ -1,0 +1,183 @@
+name: Code Semgrep Default Kali Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &semgrep_m5_paths
+      - 'aegis-platform/backend/fastapi_app/services/kali_semgrep_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_semgrep_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/advanced_scans.py'
+      - 'aegis-platform/backend/scanner-worker-entrypoint.sh'
+      - 'aegis-platform/docker-compose.semgrep-default-kali.yml'
+      - 'aegis-platform/kali/Dockerfile.code-provider'
+      - 'aegis-platform/kali/runner/code_service.py'
+      - 'aegis-platform/kali/tests/test_code_provider_contract.py'
+      - 'aegis-platform/e2e/semgrep_default_kali_reality.py'
+      - 'aegis-platform/e2e/semgrep_default_kali_reality.sh'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity.yml'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity-source/**'
+      - '.github/workflows/code-semgrep-default-kali-reality.yml'
+      - 'docs/CODE_SEMGREP_DEFAULT_KALI.md'
+  push:
+    branches: [main]
+    paths: *semgrep_m5_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-semgrep-m5-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  promotion-contract:
+    name: Semgrep Default Kali Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_SEMGREP_PROVIDER: default-kali
+      AEGIS_KALI_SEMGREP_CANARY_BPS: '0'
+      AEGIS_KALI_CODE_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION: 0.1.0
+      AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused dependencies
+        run: python -m pip install pytest
+      - name: Compile M5 implementation
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/kali_semgrep_provider.py             aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py             aegis-platform/backend/fastapi_app/services/test_semgrep_execution_provider.py             aegis-platform/e2e/semgrep_default_kali_reality.py             aegis-platform/kali/runner/code_service.py
+      - name: Prove default Kali routing and M4 regression contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest             aegis-platform/backend/fastapi_app/services/test_semgrep_execution_provider.py
+          python aegis-platform/kali/tests/test_code_provider_contract.py
+      - name: Render default and explicit rollback deployments
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.semgrep-default-kali.yml             --profile kali-code             config --format json > artifacts/semgrep-default-kali-compose.json
+          AEGIS_SEMGREP_PROVIDER=legacy docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.semgrep-default-kali.yml             --profile kali-code             config --format json > artifacts/semgrep-explicit-legacy-rollback-compose.json
+      - name: Prove M5 deployment and least-privilege boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          default=json.loads(Path('artifacts/semgrep-default-kali-compose.json').read_text())
+          rollback=json.loads(Path('artifacts/semgrep-explicit-legacy-rollback-compose.json').read_text())
+
+          for model, expected_provider in ((default,'default-kali'),(rollback,'legacy')):
+              scanner=model['services']['scanner_worker']
+              provider=model['services']['kali_code']
+              env=scanner['environment']
+              penv=provider['environment']
+              assert env['AEGIS_SEMGREP_PROVIDER']==expected_provider, env
+              assert str(env['AEGIS_KALI_SEMGREP_CANARY_BPS'])=='0', env
+              assert env['AEGIS_KALI_CODE_URL']=='http://127.0.0.1:18771', env
+              assert env['AEGIS_SEMGREP_WORKSPACE_ROOT']=='/var/lib/aegis-semgrep', env
+              for key in (
+                  'AEGIS_KALI_CODE_AUTH_TOKEN',
+                  'AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION',
+                  'AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT',
+                  'AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST',
+                  'AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST',
+                  'AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST',
+                  'AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST',
+              ):
+                  assert key in env, key
+
+              def volume(service,target):
+                  matches=[item for item in service.get('volumes',[]) if item.get('target')==target]
+                  assert len(matches)==1,(target,matches)
+                  return matches[0]
+
+              scanner_workspace=volume(scanner,'/var/lib/aegis-semgrep')
+              provider_workspace=volume(provider,'/var/lib/aegis-semgrep')
+              assert scanner_workspace.get('read_only') in (False,None), scanner_workspace
+              assert provider_workspace.get('read_only') is True, provider_workspace
+              assert scanner_workspace['source']==provider_workspace['source'], (scanner_workspace,provider_workspace)
+
+              assert provider['network_mode']=='service:scanner_egress', provider
+              assert provider['read_only'] is True, provider
+              assert provider['cap_drop']==['ALL'], provider
+              assert provider.get('cap_add') in (None,[]), provider
+              assert provider['security_opt']==['no-new-privileges:true'], provider
+              assert provider['user']=='10001:10001', provider
+              assert provider['pids_limit']==128, provider
+              assert int(provider['mem_limit'])==805306368, provider
+              assert float(provider['cpus'])==1.0, provider
+              assert provider.get('ports') in (None,[]), provider
+              assert penv['AEGIS_CODE_LISTEN_HOST']=='127.0.0.1', penv
+              assert str(penv['AEGIS_CODE_LISTEN_PORT'])=='18771', penv
+              assert penv['AEGIS_CODE_WORKSPACE_ROOT']=='/var/lib/aegis-semgrep', penv
+              assert penv['AEGIS_KALI_CODE_AUTH_TOKEN']==env['AEGIS_KALI_CODE_AUTH_TOKEN'], (penv,env)
+          print('CODE_SEMGREP_DEFAULT_KALI_DEPLOYMENT_PASS')
+          PY
+      - name: Capture exact-head M5 contract evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/code-semgrep-default-kali-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.code-semgrep-default-kali-contract.v1',
+              'capability_id':'code.semgrep',
+              'deployment_default':'default-kali',
+              'canary_bps':0,
+              'explicit_legacy_rollback':True,
+              'raw_kali_production_admitted':False,
+              'selected_failure_fallback':False,
+              'source_snapshot_max_files':20000,
+              'source_snapshot_max_bytes':268435456,
+              'source_symlinks_allowed':False,
+              'provider_capabilities':[],
+              'provider_non_root':True,
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum             head-sha.txt semgrep-default-kali-compose.json semgrep-explicit-legacy-rollback-compose.json             code-semgrep-default-kali-contract.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-default-kali-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-default-kali:
+    name: Real Semgrep Default Kali
+    needs: promotion-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Execute real default rollback equivalence and outage proof
+        run: bash aegis-platform/e2e/semgrep_default_kali_reality.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-default-kali-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
