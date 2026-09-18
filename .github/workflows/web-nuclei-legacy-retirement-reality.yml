@@ -1,0 +1,350 @@
+name: Web Nuclei Legacy Retirement Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &nuclei_m6_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/scanner-worker-entrypoint.sh'
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_retirement_preflight.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_m6_legacy_nuclei_retirement.py'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/kali/Dockerfile.web-provider'
+      - 'aegis-platform/kali/runner/web_service.py'
+      - 'aegis-platform/e2e/nuclei_http_fixture.py'
+      - 'aegis-platform/e2e/fixtures/nuclei-parity.yaml'
+      - 'docs/WEB_NUCLEI_LEGACY_RETIREMENT.md'
+      - '.github/workflows/web-nuclei-legacy-retirement-reality.yml'
+  push:
+    branches: [main]
+    paths: *nuclei_m6_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-nuclei-m6-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  retirement-contract:
+    name: Nuclei Retirement Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AUTHORIZED_SCAN_TARGETS: 198.51.100.20
+      POSTGRES_PASSWORD: ci-production-policy-password
+      AEGIS_KALI_WEB_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_WEB_IMAGE: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION: 0.1.0
+      AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT: cccccccccccccccccccccccccccccccccccccccc
+      AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused dependencies
+        run: python -m pip install pytest
+      - name: Compile M6 contracts
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/nuclei_execution_provider.py             aegis-platform/backend/fastapi_app/services/nuclei_retirement_preflight.py             aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py             aegis-platform/backend/fastapi_app/services/test_m6_legacy_nuclei_retirement.py
+      - name: Prove retirement routing startup preflight and M5 regression contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest             aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py             aegis-platform/backend/fastapi_app/services/test_m6_legacy_nuclei_retirement.py
+          grep -Fq 'python -m fastapi_app.services.nuclei_retirement_preflight'             aegis-platform/backend/scanner-worker-entrypoint.sh
+      - name: Render immutable M6 production contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.prod.yml             config --format json > artifacts/nuclei-m6-production-compose.json
+          AEGIS_NUCLEI_PROVIDER=legacy AEGIS_KALI_NUCLEI_CANARY_BPS=2500 docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.prod.yml             config --format json > artifacts/nuclei-m6-production-override-attempt.json
+      - name: Prove no production Legacy or Canary route survives
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for name in ('nuclei-m6-production-compose.json','nuclei-m6-production-override-attempt.json'):
+              model=json.loads((Path('artifacts')/name).read_text())
+              scanner=model['services']['scanner_worker']
+              provider=model['services']['kali_web']
+              env=scanner['environment']
+              build=scanner['build']
+              assert build['target']=='production-no-legacy-recon', build
+              assert str(build['args']['AEGIS_RETIRE_NMAP'])=='1', build
+              assert str(build['args']['AEGIS_RETIRE_NUCLEI'])=='1', build
+              assert env['AEGIS_NUCLEI_PROVIDER']=='default-kali', env
+              assert env['AEGIS_NUCLEI_LEGACY_DISABLED']=='true', env
+              assert str(env['AEGIS_KALI_NUCLEI_CANARY_BPS'])=='0', env
+              assert env['AEGIS_KALI_WEB_URL']=='http://127.0.0.1:18770', env
+              assert provider['network_mode']=='service:scanner_egress', provider
+              assert provider['read_only'] is True, provider
+              assert provider['cap_drop']==['ALL'], provider
+              assert provider.get('cap_add') in (None, []), provider
+              assert provider['security_opt']==['no-new-privileges:true'], provider
+              assert provider['user']=='10001:10001', provider
+              assert provider['pids_limit']==128, provider
+              assert int(provider['mem_limit'])==805306368, provider
+              assert float(provider['cpus'])==1.0, provider
+              assert provider['environment']['AEGIS_WEB_LISTEN_HOST']=='127.0.0.1', provider
+              assert str(provider['environment']['AEGIS_WEB_LISTEN_PORT'])=='18770', provider
+          print('WEB_NUCLEI_M6_PRODUCTION_CONTRACT_PASS')
+          PY
+      - name: Prove rollback is previous release never hidden same-release fallback
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_BASE_SHA:-}" ]; then previous_release="$PR_BASE_SHA"; else previous_release="$(git rev-parse HEAD^1)"; fi
+          git cat-file -e "${previous_release}^{commit}"
+          git show "${previous_release}:aegis-platform/backend/Dockerfile.django" > artifacts/previous-release-Dockerfile.django
+          git show "${previous_release}:aegis-platform/docker-compose.prod.yml" > artifacts/previous-release-compose.prod.yml
+          grep -Fq 'command -v nuclei >/dev/null' artifacts/previous-release-Dockerfile.django
+          ! grep -Fq 'AEGIS_NUCLEI_LEGACY_DISABLED' artifacts/previous-release-compose.prod.yml
+          python - <<'PY'
+          from pathlib import Path
+          source=Path('aegis-platform/scripts/production_host_deploy.py').read_text()
+          block=source[source.index('def _rollback_application('):source.index('\ndef deploy(')]
+          assert block.index('_checkout(previous_sha)') < block.index('_deploy_stack('), block
+          assert 'previous_sha=previous_sha' in source, source
+          PY
+          printf '%s\n' "$previous_release" > artifacts/previous-release-sha.txt
+      - name: Capture exact-head contract evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/web-nuclei-m6-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.web-nuclei-legacy-retirement.v1',
+              'capability_id':'web.nuclei',
+              'production_provider':'default-kali',
+              'legacy_production_routing':False,
+              'canary_production_routing':False,
+              'local_nuclei_expected':False,
+              'local_templates_expected':False,
+              'startup_preflight':True,
+              'silent_provider_fallback':False,
+              'rollback_strategy':'previous-release-deployment',
+              'provider_capabilities':[],
+              'provider_non_root':True,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-m6-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-retired-runtime:
+    name: Real Retired Nuclei Runtime
+    needs: retirement-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_NUCLEI_NETWORK: aegis-nuclei-m6-retired
+      AEGIS_NUCLEI_TARGET_IP: 172.35.1.10
+      AEGIS_NUCLEI_TARGET: http://172.35.1.10:8080
+      AEGIS_NUCLEI_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build production scanner with Nuclei physically retired
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache             --build-arg AEGIS_RETIRE_NMAP=1             --build-arg AEGIS_RETIRE_NUCLEI=1             --target production-no-legacy-recon             -t aegis-nuclei-m6:scanner             -f aegis-platform/backend/Dockerfile.django             aegis-platform/backend
+          docker run --rm --entrypoint sh aegis-nuclei-m6:scanner -c             '! command -v nuclei && test ! -e /usr/local/bin/nuclei && test ! -e /opt/nuclei-templates && ! command -v nmap && command -v masscan >/dev/null && command -v semgrep >/dev/null'
+      - name: Build exact governed Kali web provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache             --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}"             --build-arg AEGIS_RUNNER_VERSION=0.1.0             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             -t aegis-kali:base             -f aegis-platform/kali/Dockerfile.base             aegis-platform/kali
+          docker build --no-cache             --build-arg AEGIS_BASE_IMAGE=aegis-kali:base             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             --target profile-web             -t aegis-kali:web             -f aegis-platform/kali/Dockerfile.profiles             .
+          docker build --no-cache             --build-arg AEGIS_WEB_BASE_IMAGE=aegis-kali:web             -t aegis-kali:web-provider             -f aegis-platform/kali/Dockerfile.web-provider             aegis-platform/kali
+      - name: Derive immutable provider trust anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:web-provider --format '{{.Id}}')"
+          case "$IMAGE_ID" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib,json
+          raw=open('runtime-manifest.json','rb').read(); runtime=json.loads(raw)
+          assert runtime['profile']=='web' and runtime['dispatch_capabilities']==['web.nuclei'], runtime
+          assert runtime['profile_tools']['nuclei']['version']=='3.11.1', runtime
+          assert runtime['profile_tools']['nuclei-templates']['commit']=='0cb51d4bfae945e5ec2644fc8c2d2e6ea84bbffe', runtime
+          print('AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_WEB_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+      - name: Start deterministic fixture and retired scanner namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts parity-templates
+          chmod 0777 artifacts
+          cp aegis-platform/e2e/fixtures/nuclei-parity.yaml parity-templates/nuclei-parity.yaml
+          docker network create --internal --subnet 172.35.1.0/24 "${AEGIS_NUCLEI_NETWORK}"
+          docker run -d --name aegis-nuclei-m6-fixture             --network "${AEGIS_NUCLEI_NETWORK}" --ip "${AEGIS_NUCLEI_TARGET_IP}"             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m             -v "$PWD/aegis-platform/e2e/nuclei_http_fixture.py:/fixture.py:ro"             --entrypoint python aegis-nuclei-m6:scanner /fixture.py
+          docker run -d --name aegis-nuclei-m6-scanner             --network "${AEGIS_NUCLEI_NETWORK}"             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m             -e AUTHORIZED_SCAN_TARGETS="${AEGIS_NUCLEI_TARGET_IP}/32"             -e AEGIS_NUCLEI_PROVIDER=default-kali             -e AEGIS_NUCLEI_LEGACY_DISABLED=true             -e AEGIS_KALI_NUCLEI_CANARY_BPS=0             -e AEGIS_KALI_WEB_URL=http://127.0.0.1:18770             -e AEGIS_KALI_WEB_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e AEGIS_KALI_WEB_IMAGE             -e AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION             -e AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT             -e AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST             -v "$PWD/artifacts:/artifacts"             --entrypoint sleep aegis-nuclei-m6:scanner infinity
+          for _ in $(seq 1 30); do
+            if docker logs aegis-nuclei-m6-fixture 2>&1 | grep -Fq AEGIS_NUCLEI_PARITY_FIXTURE_READY; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nuclei-m6-fixture; exit 1
+      - name: Start zero-capability governed provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-nuclei-m6-provider             --network container:aegis-nuclei-m6-scanner             --user 10001:10001 --read-only --cap-drop ALL             --security-opt no-new-privileges:true --pids-limit 128 --memory 768m --cpus 1             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m             -e AEGIS_WEB_LISTEN_HOST=127.0.0.1             -e AEGIS_WEB_LISTEN_PORT=18770             -e AEGIS_KALI_WEB_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates             -v "$PWD/parity-templates:/opt/nuclei-templates:ro"             "$AEGIS_KALI_WEB_IMAGE"
+          docker exec -i aegis-nuclei-m6-provider python3 - <<'PY'
+          import os
+          from pathlib import Path
+          values={}
+          for line in Path('/proc/1/status').read_text().splitlines():
+              if ':' in line:
+                  k,v=line.split(':',1); values[k]=v.strip()
+          assert os.geteuid()==10001, os.geteuid()
+          for key in ('CapEff','CapPrm','CapBnd','CapInh','CapAmb'):
+              assert values[key]=='0000000000000000', (key,values[key])
+          assert values['NoNewPrivs']=='1', values['NoNewPrivs']
+          PY
+          for _ in $(seq 1 30); do
+            if docker exec -i aegis-nuclei-m6-scanner python - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18770/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nuclei-m6-provider; exit 1
+      - name: Execute real Nuclei only through retired production scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nuclei-m6-scanner python - <<'PY'
+          import json,shutil
+          from pathlib import Path
+          from fastapi_app.services.nuclei_execution_provider import legacy_nuclei_disabled,run_nuclei_with_provider
+
+          assert shutil.which('nuclei') is None
+          assert not Path('/usr/local/bin/nuclei').exists()
+          assert not Path('/opt/nuclei-templates').exists()
+          assert legacy_nuclei_disabled() is True
+          result=run_nuclei_with_provider(
+              target='http://172.35.1.10:8080',timeout_seconds=120,routing_key='m6-real',
+              execution_ref='nuclei-m6-real',authorization_ref='auth-m6',
+              scope_ref='project:m6:asset:nuclei',state_getter=lambda:'running')
+          assert result.exit_code==0,result.stderr
+          assert result.routing['mode']=='default-kali' and result.routing['selected_provider']=='kali',result.routing
+          assert result.runtime['provider']=='aegis-kali-web',result.runtime
+          assert result.runtime['linux_privilege']['allowed_capabilities']==[],result.runtime
+          assert result.stdout.strip(), result
+          open('/artifacts/retired-default-kali.jsonl','w').write(result.stdout)
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/retired-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove Legacy and Canary production routing are impossible
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in legacy canary; do
+            docker exec -i -e AEGIS_NUCLEI_PROVIDER="$mode" -e AEGIS_KALI_NUCLEI_CANARY_BPS=0 aegis-nuclei-m6-scanner python - <<'PY'
+          from fastapi_app.services.kali_nuclei_provider import KaliNucleiProviderError
+          from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+          try:
+              run_nuclei_with_provider(
+                  target='http://172.35.1.10:8080',timeout_seconds=30,routing_key='retired',
+                  execution_ref='retired',authorization_ref='auth',scope_ref='scope',
+                  state_getter=lambda:'running')
+          except KaliNucleiProviderError as exc:
+              assert 'previous release' in str(exc),exc
+          else:
+              raise AssertionError('retired provider route unexpectedly executed')
+          PY
+          done
+          docker exec aegis-nuclei-m6-scanner sh -c '! command -v nuclei && test ! -e /usr/local/bin/nuclei && test ! -e /opt/nuclei-templates'
+      - name: Prove provider outage fails closed without hidden local fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker stop aegis-nuclei-m6-provider >/dev/null
+          docker exec -i aegis-nuclei-m6-scanner python - <<'PY'
+          import shutil
+          from pathlib import Path
+          from fastapi_app.services.kali_nuclei_provider import KaliNucleiProviderError
+          from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+          assert shutil.which('nuclei') is None
+          assert not Path('/opt/nuclei-templates').exists()
+          try:
+              run_nuclei_with_provider(
+                  target='http://172.35.1.10:8080',timeout_seconds=10,routing_key='outage',
+                  execution_ref='outage',authorization_ref='auth',scope_ref='scope',
+                  state_getter=lambda:'running')
+          except KaliNucleiProviderError as exc:
+              assert 'unavailable' in str(exc).lower() or 'refused' in str(exc).lower(),exc
+          else:
+              raise AssertionError('provider outage silently fell back')
+          PY
+      - name: Capture exact-head runtime evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          docker inspect aegis-nuclei-m6-scanner > artifacts/retired-scanner-inspect.json
+          docker inspect aegis-nuclei-m6-provider > artifacts/governed-provider-inspect.json || true
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          python - <<'PY' > artifacts/web-nuclei-m6-runtime.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.web-nuclei-legacy-retirement-runtime.v1',
+              'local_nuclei_present':False,
+              'local_templates_present':False,
+              'production_provider':'default-kali',
+              'legacy_route_admitted':False,
+              'canary_route_admitted':False,
+              'provider_outage_fail_closed':True,
+              'provider_capabilities':[],
+              'provider_non_root':True,
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum             head-sha.txt runtime-manifest.json retired-default-kali.jsonl retired-result.json             web-nuclei-m6-runtime.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-m6-runtime-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-nuclei-m6-provider aegis-nuclei-m6-scanner aegis-nuclei-m6-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_NUCLEI_NETWORK}" >/dev/null 2>&1 || true
