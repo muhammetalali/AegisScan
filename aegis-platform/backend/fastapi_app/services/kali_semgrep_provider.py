@@ -56,8 +56,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def provider_mode() -> str:
     mode = os.getenv('AEGIS_SEMGREP_PROVIDER', 'legacy').strip().lower()
-    if mode not in {'legacy', 'canary', 'kali'}:
-        raise KaliSemgrepProviderError('AEGIS_SEMGREP_PROVIDER must be legacy, canary, or kali')
+    if mode not in {'legacy', 'canary', 'default-kali', 'kali'}:
+        raise KaliSemgrepProviderError('AEGIS_SEMGREP_PROVIDER must be legacy, canary, default-kali, or kali')
     return mode
 
 
@@ -93,6 +93,18 @@ def semgrep_provider_decision(*, routing_key: str | None = None) -> SemgrepProvi
             bucket=None,
             routing_key_digest='',
             reason='legacy-default',
+        )
+    if mode == 'default-kali':
+        return SemgrepProviderDecision(
+            schema=_ROUTING_SCHEMA,
+            mode=mode,
+            capability_id='code.semgrep',
+            selected_provider='kali',
+            parity_approved=True,
+            canary_bps=0,
+            bucket=None,
+            routing_key_digest='',
+            reason='default-kali-parity-approved',
         )
     if mode == 'kali':
         return SemgrepProviderDecision(
