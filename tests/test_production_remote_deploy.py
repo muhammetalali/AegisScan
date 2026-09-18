@@ -106,20 +106,33 @@ def test_known_host_lookup_requires_exact_host_and_port(tmp_path: Path, monkeypa
         remote._require_known_host("deploy.internal", 22, known)
 
 
-def test_remote_command_is_fail_closed_and_quotes_values():
+def test_remote_command_is_fail_closed_and_uses_installed_privileged_gate():
     command = remote._remote_command(
         repo_path="/opt/aegisscan/AegisScan",
         env_path="/etc/aegisscan/production.env",
         release_sha="a" * 40,
         origin="https://security.internal",
     )
-    assert 'test -z "$(git status --porcelain --untracked-files=no)"' in command
-    assert "git fetch --no-tags origin main" in command
-    assert "git merge-base --is-ancestor" in command
-    assert "sudo -n python3 aegis-platform/scripts/production_host_reality.py" in command
-    assert "sudo -n python3 aegis-platform/scripts/production_host_deploy.py" in command
+    assert command.startswith("sudo -n /usr/local/sbin/aegisscan-production-gate deploy ")
     assert "--release-sha " + "a" * 40 in command
     assert "--origin https://security.internal" in command
+    assert "sudo -n python3" not in command
+    assert "git fetch" not in command
+
+    with pytest.raises(remote.RemoteDeployError, match="repository path"):
+        remote._remote_command(
+            repo_path="/tmp/aegis",
+            env_path="/etc/aegisscan/production.env",
+            release_sha="a" * 40,
+            origin="https://security.internal",
+        )
+    with pytest.raises(remote.RemoteDeployError, match="environment path"):
+        remote._remote_command(
+            repo_path="/opt/aegisscan/AegisScan",
+            env_path="/tmp/production.env",
+            release_sha="a" * 40,
+            origin="https://security.internal",
+        )
 
 
 def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(tmp_path: Path, monkeypatch):
