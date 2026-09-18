@@ -29,14 +29,16 @@ def run_nuclei_with_provider(
     scope_ref: str,
     state_getter: Callable[[], str] | None,
 ) -> NucleiExecutionResult:
-    """Execute Nuclei through the bounded M4 canary provider decision.
+    """Execute Nuclei through the authoritative governed provider decision.
 
-    This phase admits only legacy and canary production modes. Raw kali is
-    provider-library diagnostic behavior and is rejected here. A selected
-    Kali execution is fail-closed and never falls back to the legacy scanner.
+    M5 admits legacy, canary, and parity-approved default-kali production
+    modes. Raw kali remains provider-library diagnostic behavior and is
+    rejected here. Any Kali execution is fail-closed and never falls back to
+    the legacy scanner on provider, provenance, authorization, or runtime
+    failure.
     """
     decision = nuclei_provider_decision(routing_key=routing_key)
-    if decision.mode not in {'legacy', 'canary'}:
+    if decision.mode not in {'legacy', 'canary', 'default-kali'}:
         raise RuntimeError(
             f'Nuclei provider mode {decision.mode!r} is not admitted by the governed production execution layer'
         )
