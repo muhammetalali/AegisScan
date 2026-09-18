@@ -1,0 +1,125 @@
+name: Code Semgrep Legacy Retirement Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &semgrep_m6_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/scanner-worker-entrypoint.sh'
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_retirement_preflight.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_semgrep_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_m6_legacy_semgrep_retirement.py'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/kali/Dockerfile.base'
+      - 'aegis-platform/kali/Dockerfile.profiles'
+      - 'aegis-platform/kali/Dockerfile.code-provider'
+      - 'aegis-platform/kali/runner/code_service.py'
+      - 'aegis-platform/e2e/semgrep_m6_contract_reality.py'
+      - 'aegis-platform/e2e/semgrep_m6_retirement_reality.py'
+      - 'aegis-platform/e2e/semgrep_m6_retirement_reality.sh'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity.yml'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity-source/**'
+      - 'docs/CODE_SEMGREP_LEGACY_RETIREMENT.md'
+      - '.github/workflows/code-semgrep-legacy-retirement-reality.yml'
+  push:
+    branches: [main]
+    paths: *semgrep_m6_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-semgrep-m6-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  retirement-contract:
+    name: Semgrep Retirement Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AUTHORIZED_SCAN_TARGETS: 198.51.100.30
+      POSTGRES_PASSWORD: ci-production-policy-password
+      AEGIS_KALI_CODE_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_CODE_IMAGE: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION: 0.1.0
+      AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT: cccccccccccccccccccccccccccccccccccccccc
+      AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Compile and test M6 contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pip install pytest
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py             aegis-platform/backend/fastapi_app/services/semgrep_retirement_preflight.py             aegis-platform/backend/fastapi_app/services/test_m6_legacy_semgrep_retirement.py             aegis-platform/e2e/semgrep_m6_contract_reality.py             aegis-platform/e2e/semgrep_m6_retirement_reality.py
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest             aegis-platform/backend/fastapi_app/services/test_semgrep_execution_provider.py             aegis-platform/backend/fastapi_app/services/test_m6_legacy_semgrep_retirement.py
+          grep -Fq 'python -m fastapi_app.services.semgrep_retirement_preflight'             aegis-platform/backend/scanner-worker-entrypoint.sh
+      - name: Render and validate immutable production contract
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose -f aegis-platform/docker-compose.yml -f aegis-platform/docker-compose.prod.yml             config --format json > artifacts/semgrep-m6-production-compose.json
+          AEGIS_SEMGREP_PROVIDER=legacy AEGIS_KALI_SEMGREP_CANARY_BPS=2500             docker compose -f aegis-platform/docker-compose.yml -f aegis-platform/docker-compose.prod.yml             config --format json > artifacts/semgrep-m6-production-override-attempt.json
+          python aegis-platform/e2e/semgrep_m6_contract_reality.py             artifacts/semgrep-m6-production-compose.json             artifacts/semgrep-m6-production-override-attempt.json
+      - name: Prove previous-release rollback boundary
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          previous_release="${PR_BASE_SHA:-$(git rev-parse HEAD^1)}"
+          git cat-file -e "${previous_release}^{commit}"
+          git show "${previous_release}:aegis-platform/backend/Dockerfile.django" > artifacts/previous-release-Dockerfile.django
+          git show "${previous_release}:aegis-platform/docker-compose.prod.yml" > artifacts/previous-release-compose.prod.yml
+          grep -Fq 'command -v semgrep >/dev/null' artifacts/previous-release-Dockerfile.django
+          ! grep -Fq 'AEGIS_RETIRE_SEMGREP' artifacts/previous-release-Dockerfile.django
+          ! grep -Fq 'AEGIS_SEMGREP_LEGACY_DISABLED' artifacts/previous-release-compose.prod.yml
+          printf '%s\n' "$previous_release" > artifacts/previous-release-sha.txt
+      - name: Capture M6 contract evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          printf '%s\n' '{"schema":"aegis.code-semgrep-legacy-retirement.v1","production_provider":"default-kali","legacy_route":false,"canary_route":false,"local_semgrep":false,"rollback":"previous-release"}'             > artifacts/code-semgrep-m6-contract.json
+          (cd artifacts && sha256sum head-sha.txt semgrep-m6-production-compose.json             semgrep-m6-production-override-attempt.json previous-release-sha.txt             previous-release-Dockerfile.django previous-release-compose.prod.yml             code-semgrep-m6-contract.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-m6-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-retired-runtime:
+    name: Real Retired Semgrep Runtime
+    needs: retirement-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Execute real retired Semgrep runtime
+        run: bash aegis-platform/e2e/semgrep_m6_retirement_reality.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-m6-runtime-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
