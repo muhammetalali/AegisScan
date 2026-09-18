@@ -16,6 +16,16 @@ if ! command -v setpriv >/dev/null 2>&1; then
     exit 126
 fi
 
+if [ -n "${AEGIS_SEMGREP_WORKSPACE_ROOT:-}" ]; then
+    if [ "${AEGIS_SEMGREP_WORKSPACE_ROOT}" != "/var/lib/aegis-semgrep" ]; then
+        echo "AEGIS_SEMGREP_WORKSPACE_ROOT must be /var/lib/aegis-semgrep" >&2
+        exit 126
+    fi
+    mkdir -p /var/lib/aegis-semgrep
+    chown 10001:10001 /var/lib/aegis-semgrep
+    chmod 0700 /var/lib/aegis-semgrep
+fi
+
 # M6 Nmap retirement is fail-closed at worker startup. Historical parity/reference
 # containers omit AEGIS_NMAP_LEGACY_DISABLED and therefore pass without imposing
 # production-only trust pins. Production sets the retirement lock and must satisfy

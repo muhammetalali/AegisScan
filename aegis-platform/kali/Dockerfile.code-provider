@@ -1,0 +1,37 @@
+ARG AEGIS_CODE_BASE_IMAGE=aegis-kali:code
+FROM ${AEGIS_CODE_BASE_IMAGE}
+USER root
+COPY runner/code_service.py /opt/aegis-runner/code_service.py
+RUN mkdir -p /var/lib/aegis-semgrep \
+    && chown 10001:10001 /var/lib/aegis-semgrep \
+    && chmod 0700 /var/lib/aegis-semgrep
+RUN chmod 0755 /opt/aegis-runner/code_service.py \
+    && python3 -m py_compile /opt/aegis-runner/code_service.py \
+    && python3 - <<'PY'
+import json
+from pathlib import Path
+path=Path('/opt/aegis-runner/runtime-manifest.json')
+runtime=json.loads(path.read_text(encoding='utf-8'))
+assert runtime['profile']=='code', runtime
+assert runtime['dispatch_enabled'] is False, runtime
+assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
+assert 'code.semgrep' in runtime['profile_capabilities'], runtime
+assert runtime['profile_tools']['semgrep']['version']=='1.177.0', runtime
+runtime['dispatch_enabled']=True
+runtime['dispatch_state']='semantic-code-provider'
+runtime['dispatch_capabilities']=['code.semgrep']
+runtime['provider_bundle']='aegis-kali-code-semgrep-canary-v1'
+path.write_text(json.dumps(runtime,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
+PY
+RUN python3 - <<'PY'
+import json
+from pathlib import Path
+runtime=json.loads(Path('/opt/aegis-runner/runtime-manifest.json').read_text(encoding='utf-8'))
+assert runtime['profile']=='code', runtime
+assert runtime['dispatch_enabled'] is True, runtime
+assert runtime['dispatch_state']=='semantic-code-provider', runtime
+assert runtime['dispatch_capabilities']==['code.semgrep'], runtime
+assert runtime['provider_bundle']=='aegis-kali-code-semgrep-canary-v1', runtime
+PY
+USER 10001:10001
+ENTRYPOINT ["/usr/bin/tini", "--", "python3", "/opt/aegis-runner/code_service.py"]

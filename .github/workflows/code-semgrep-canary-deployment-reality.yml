@@ -1,0 +1,150 @@
+name: Code Semgrep Canary Deployment Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &semgrep_canary_deploy_paths
+      - 'aegis-platform/backend/scanner-worker-entrypoint.sh'
+      - 'aegis-platform/backend/fastapi_app/services/kali_semgrep_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/advanced_scans.py'
+      - 'aegis-platform/docker-compose.semgrep-canary.yml'
+      - 'aegis-platform/kali/Dockerfile.code-provider'
+      - 'aegis-platform/kali/runner/code_service.py'
+      - 'aegis-platform/kali/tests/test_code_provider_contract.py'
+      - '.github/workflows/code-semgrep-canary-deployment-reality.yml'
+      - 'docs/CODE_SEMGREP_CANARY.md'
+  push:
+    branches: [main]
+    paths: *semgrep_canary_deploy_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-semgrep-canary-deployment-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deployment-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_SEMGREP_PROVIDER: canary
+      AEGIS_KALI_SEMGREP_CANARY_BPS: '2500'
+      AEGIS_KALI_CODE_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION: 0.1.0
+      AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Compile provider deployment surface
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/kali_semgrep_provider.py             aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py             aegis-platform/backend/fastapi_app/tasks/advanced_scans.py             aegis-platform/kali/runner/code_service.py             aegis-platform/kali/tests/test_code_provider_contract.py
+      - name: Run governed code provider contract tests
+        run: python aegis-platform/kali/tests/test_code_provider_contract.py
+      - name: Render bounded Semgrep canary deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.semgrep-canary.yml             --profile kali-code             config --format json > artifacts/semgrep-canary-compose.json
+      - name: Prove shared snapshot and least-privilege boundaries
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          model=json.loads(Path('artifacts/semgrep-canary-compose.json').read_text())
+          scanner=model['services']['scanner_worker']
+          provider=model['services']['kali_code']
+          env=scanner['environment']
+          penv=provider['environment']
+
+          assert env['AEGIS_SEMGREP_PROVIDER']=='canary', env
+          assert str(env['AEGIS_KALI_SEMGREP_CANARY_BPS'])=='2500', env
+          assert env['AEGIS_KALI_CODE_URL']=='http://127.0.0.1:18771', env
+          assert env['AEGIS_SEMGREP_WORKSPACE_ROOT']=='/var/lib/aegis-semgrep', env
+          for key in (
+              'AEGIS_KALI_CODE_AUTH_TOKEN',
+              'AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION',
+              'AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT',
+              'AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST',
+              'AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST',
+              'AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST',
+              'AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST',
+          ):
+              assert key in env, key
+
+          def volume(service, target):
+              matches=[item for item in service.get('volumes',[]) if item.get('target')==target]
+              assert len(matches)==1, (target,matches)
+              return matches[0]
+
+          scanner_workspace=volume(scanner,'/var/lib/aegis-semgrep')
+          provider_workspace=volume(provider,'/var/lib/aegis-semgrep')
+          assert scanner_workspace.get('read_only') in (False,None), scanner_workspace
+          assert provider_workspace.get('read_only') is True, provider_workspace
+          assert scanner_workspace['source']==provider_workspace['source'], (scanner_workspace,provider_workspace)
+
+          assert provider['network_mode']=='service:scanner_egress', provider
+          assert provider['read_only'] is True, provider
+          assert provider['cap_drop']==['ALL'], provider
+          assert provider.get('cap_add') in (None,[]), provider
+          assert provider['security_opt']==['no-new-privileges:true'], provider
+          assert provider['user']=='10001:10001', provider
+          assert provider['pids_limit']==128, provider
+          assert int(provider['mem_limit'])==805306368, provider
+          assert float(provider['cpus'])==1.0, provider
+          assert provider.get('ports') in (None,[]), provider
+          assert penv['AEGIS_CODE_LISTEN_HOST']=='127.0.0.1', penv
+          assert str(penv['AEGIS_CODE_LISTEN_PORT'])=='18771', penv
+          assert penv['AEGIS_CODE_WORKSPACE_ROOT']=='/var/lib/aegis-semgrep', penv
+          assert penv['AEGIS_KALI_CODE_AUTH_TOKEN']==env['AEGIS_KALI_CODE_AUTH_TOKEN'], (penv,env)
+          print('CODE_SEMGREP_CANARY_DEPLOYMENT_PASS')
+          PY
+      - name: Prove workspace bootstrap is fixed-path only
+        run: |
+          grep -Fq 'AEGIS_SEMGREP_WORKSPACE_ROOT must be /var/lib/aegis-semgrep'             aegis-platform/backend/scanner-worker-entrypoint.sh
+          grep -Fq 'chown 10001:10001 /var/lib/aegis-semgrep'             aegis-platform/backend/scanner-worker-entrypoint.sh
+          ! grep -Fq 'chown -R' aegis-platform/backend/scanner-worker-entrypoint.sh
+      - name: Capture deployment evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/code-semgrep-canary-deployment.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.code-semgrep-canary-deployment.v1',
+              'capability_id':'code.semgrep',
+              'mode':'canary',
+              'max_canary_bps':2500,
+              'scanner_workspace':'rw',
+              'provider_workspace':'ro',
+              'provider_loopback_only':True,
+              'provider_capabilities':[],
+              'provider_non_root':True,
+              'provider_no_new_privs':True,
+              'caller_path_authority':False,
+              'caller_config_authority':False,
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum             head-sha.txt semgrep-canary-compose.json code-semgrep-canary-deployment.json             > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-canary-deployment-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90

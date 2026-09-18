@@ -118,7 +118,7 @@ def test_terminal_redelivery_is_read_only_before_authorization_or_engine_executi
         monkeypatch.setattr(advanced_scans, 'run_masscan', must_not_run)
         task = advanced_scans.run_masscan_scan
     else:
-        monkeypatch.setattr(advanced_scans, 'run_semgrep', must_not_run)
+        monkeypatch.setattr(advanced_scans, 'run_semgrep_with_provider', must_not_run)
         task = advanced_scans.run_semgrep_scan
 
     before = {
