@@ -19,7 +19,7 @@ from fastapi_app.services.authorization_guard import authorization_snapshot, req
 from fastapi_app.services.scope_authorization import is_target_authorized
 from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.nmap_parser import parse_nmap_xml
-from fastapi_app.services.scanner_adapters import ScannerExecutionCancelled, run_nuclei
+from fastapi_app.services.scanner_adapters import ScannerExecutionCancelled
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 from fastapi_app.services.scan_state_machine import runtime_state
 from fastapi_app.services.enterprise_gap_closure import checkpoint_scan
@@ -27,6 +27,8 @@ from fastapi_app.services.tool_abstraction import ToolRequest, get_tool
 from fastapi_app.services.nmap_finding_ingestion import ingest_nmap_findings
 from fastapi_app.services.nmap_execution_provider import run_nmap_with_provider
 from fastapi_app.services.kali_nmap_provider import KaliNmapProviderCancelled
+from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+from fastapi_app.services.kali_nuclei_provider import KaliNucleiProviderCancelled
 from fastapi_app.services.wstg_observation_lineage import attach_wstg_evidence_metadata, attach_wstg_finding_lineage
 
 
@@ -208,16 +210,107 @@ def run_nuclei_scan(self,scan_id:str)->dict[str,Any]:
     engine=_ensure_engine('nuclei','Nuclei',ScanEngine.EngineCategory.ANALYSIS,600)
     completed=_completed_delivery(scan,engine)
     if completed: return completed
-    scan.status=Scan.Status.RUNNING; scan.started_at=datetime.now(timezone.utc); scan.current_phase='nuclei'; scan.current_engine='nuclei'; scan.progress=10; scan.error_message=''; scan.save(update_fields=['status','started_at','current_phase','current_engine','progress','error_message','updated_at']); checkpoint_scan(scan,state=Scan.Status.RUNNING,metadata={'phase':'nuclei'})
-    execution=_start_execution(scan,engine); execution.result_data=authorization_snapshot(authorization); execution.save(update_fields=['result_data','updated_at'])
+    scan.status=Scan.Status.RUNNING
+    scan.started_at=datetime.now(timezone.utc)
+    scan.current_phase='nuclei'
+    scan.current_engine='nuclei'
+    scan.progress=10
+    scan.error_message=''
+    scan.save(update_fields=['status','started_at','current_phase','current_engine','progress','error_message','updated_at'])
+    checkpoint_scan(scan,state=Scan.Status.RUNNING,metadata={'phase':'nuclei'})
+    execution=_start_execution(scan,engine)
+    execution.result_data=authorization_snapshot(authorization)
+    execution.save(update_fields=['result_data','updated_at'])
     try:
-        started=scan.started_at; result=run_nuclei(target,timeout=600,state_getter=lambda:runtime_state(scan_id)); ok,reason=revalidate_bound_authorization(scan,authorization)
+        started=scan.started_at
+        result=run_nuclei_with_provider(
+            target=target,
+            timeout_seconds=600,
+            routing_key=str(scan.id),
+            execution_ref=f'scan:{scan.id}:nuclei',
+            authorization_ref=str(authorization.id),
+            scope_ref=f'project:{scan.project_id}:asset:{scan.asset_id}',
+            state_getter=lambda:runtime_state(scan_id),
+        )
+        ok,reason=revalidate_bound_authorization(scan,authorization)
         if not ok: return _block_scan(scan_id,reason)
-        completed_at=datetime.now(timezone.utc); duration=max(0,(completed_at-started).total_seconds()) if started else 0
+        completed_at=datetime.now(timezone.utc)
+        duration=max(0,(completed_at-started).total_seconds()) if started else 0
+        provider_lineage={'provider_routing':result.routing,'runtime_provenance':result.runtime}
         with transaction.atomic():
-            evidence=Evidence.objects.create(scan=scan,asset=scan.asset,source=result.tool,evidence_type='scanner_output',raw_output=result.stdout,metadata=attach_wstg_evidence_metadata({'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'jsonl',**authorization_snapshot(authorization)}, 'web.nuclei'),collected_by=scan.initiated_by); findings=_ingest_nuclei_findings(scan,evidence,result.stdout); raw_result_count=len(findings); unique_findings=_unique_findings_by_id(findings); execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=completed_at; execution.duration=duration; execution.findings_found=len(unique_findings); execution.evidences_collected=1; execution.result_data={'tool':result.tool,'target':result.target,'exit_code':result.exit_code,'raw_result_count':raw_result_count,'result_count':len(unique_findings),'finding_ids':[str(v.id) for v in unique_findings],'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}; execution.logs=result.stderr or ''; execution.save(update_fields=['status','progress','completed_at','duration','findings_found','evidences_collected','result_data','logs','updated_at']); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.INFO,message='nuclei execution completed',context={'target':result.target,'exit_code':result.exit_code,'result_count':len(findings),'evidence_id':str(evidence.id),**authorization_snapshot(authorization)}); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=completed_at; scan.engine_results={**(scan.engine_results or {}),'nuclei':execution.result_data}; scan.findings_count=Vulnerability.objects.filter(scan=scan).count(); scan.save(update_fields=['status','progress','completed_at','engine_results','findings_count','updated_at'])
-        return {'status':scan.status,'scan_id':scan_id,'tool':'nuclei','target':result.target,'raw_result_count':raw_result_count,'finding_count':len(unique_findings),'finding_ids':[str(v.id) for v in unique_findings],**authorization_snapshot(authorization)}
-    except ScannerExecutionCancelled as exc:
+            evidence=Evidence.objects.create(
+                scan=scan,
+                asset=scan.asset,
+                source=result.tool,
+                evidence_type='scanner_output',
+                raw_output=result.stdout,
+                metadata=attach_wstg_evidence_metadata(
+                    {
+                        'stderr':result.stderr,
+                        'exit_code':result.exit_code,
+                        'target':result.target,
+                        'format':'jsonl',
+                        **provider_lineage,
+                        **authorization_snapshot(authorization),
+                    },
+                    'web.nuclei',
+                ),
+                collected_by=scan.initiated_by,
+            )
+            findings=_ingest_nuclei_findings(scan,evidence,result.stdout)
+            raw_result_count=len(findings)
+            unique_findings=_unique_findings_by_id(findings)
+            execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED
+            execution.progress=100
+            execution.completed_at=completed_at
+            execution.duration=duration
+            execution.findings_found=len(unique_findings)
+            execution.evidences_collected=1
+            execution.result_data={
+                'tool':result.tool,
+                'target':result.target,
+                'exit_code':result.exit_code,
+                'raw_result_count':raw_result_count,
+                'result_count':len(unique_findings),
+                'finding_ids':[str(v.id) for v in unique_findings],
+                'evidence_id':str(evidence.id),
+                **provider_lineage,
+                **authorization_snapshot(authorization),
+            }
+            execution.logs=result.stderr or ''
+            execution.save(update_fields=['status','progress','completed_at','duration','findings_found','evidences_collected','result_data','logs','updated_at'])
+            ScanLog.objects.create(
+                scan=scan,
+                engine_execution=execution,
+                level=ScanLog.Level.INFO,
+                message='nuclei execution completed',
+                context={
+                    'target':result.target,
+                    'exit_code':result.exit_code,
+                    'result_count':len(findings),
+                    'evidence_id':str(evidence.id),
+                    **provider_lineage,
+                    **authorization_snapshot(authorization),
+                },
+            )
+            scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL
+            scan.progress=100
+            scan.completed_at=completed_at
+            scan.engine_results={**(scan.engine_results or {}),'nuclei':execution.result_data}
+            scan.findings_count=Vulnerability.objects.filter(scan=scan).count()
+            scan.save(update_fields=['status','progress','completed_at','engine_results','findings_count','updated_at'])
+        return {
+            'status':scan.status,
+            'scan_id':scan_id,
+            'tool':'nuclei',
+            'target':result.target,
+            'raw_result_count':raw_result_count,
+            'finding_count':len(unique_findings),
+            'finding_ids':[str(v.id) for v in unique_findings],
+            'provider_routing':result.routing,
+            **authorization_snapshot(authorization),
+        }
+    except (ScannerExecutionCancelled, KaliNucleiProviderCancelled) as exc:
         return _cancelled_scan(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)

@@ -1,0 +1,35 @@
+ARG AEGIS_WEB_BASE_IMAGE=aegis-kali:web
+FROM ${AEGIS_WEB_BASE_IMAGE}
+USER root
+COPY runner/web_service.py /opt/aegis-runner/web_service.py
+RUN chmod 0755 /opt/aegis-runner/web_service.py \
+    && python3 -m py_compile /opt/aegis-runner/web_service.py \
+    && python3 - <<'PY'
+import json
+from pathlib import Path
+path=Path('/opt/aegis-runner/runtime-manifest.json')
+runtime=json.loads(path.read_text(encoding='utf-8'))
+assert runtime['profile']=='web', runtime
+assert runtime['dispatch_enabled'] is False, runtime
+assert runtime['dispatch_state']=='accepted-no-dispatch', runtime
+assert 'web.nuclei' in runtime['profile_capabilities'], runtime
+assert runtime['profile_tools']['nuclei']['version']=='3.11.1', runtime
+assert runtime['profile_tools']['nuclei-templates']['commit']=='0cb51d4bfae945e5ec2644fc8c2d2e6ea84bbffe', runtime
+runtime['dispatch_enabled']=True
+runtime['dispatch_state']='semantic-web-provider'
+runtime['dispatch_capabilities']=['web.nuclei']
+runtime['provider_bundle']='aegis-kali-web-nuclei-canary-v1'
+path.write_text(json.dumps(runtime,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
+PY
+RUN python3 - <<'PY'
+import json
+from pathlib import Path
+runtime=json.loads(Path('/opt/aegis-runner/runtime-manifest.json').read_text(encoding='utf-8'))
+assert runtime['profile']=='web', runtime
+assert runtime['dispatch_enabled'] is True, runtime
+assert runtime['dispatch_state']=='semantic-web-provider', runtime
+assert runtime['dispatch_capabilities']==['web.nuclei'], runtime
+assert runtime['provider_bundle']=='aegis-kali-web-nuclei-canary-v1', runtime
+PY
+USER 10001:10001
+ENTRYPOINT ["/usr/bin/tini", "--", "python3", "/opt/aegis-runner/web_service.py"]

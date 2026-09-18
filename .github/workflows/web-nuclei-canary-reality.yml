@@ -1,0 +1,352 @@
+name: Web Nuclei Canary Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &canary_paths
+      - 'aegis-platform/backend/fastapi_app/services/kali_nuclei_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/security_scan.py'
+      - 'aegis-platform/kali/Dockerfile.web-provider'
+      - 'aegis-platform/kali/runner/web_service.py'
+      - 'aegis-platform/kali/tests/test_web_provider_contract.py'
+      - 'aegis-platform/e2e/nuclei_http_fixture.py'
+      - 'aegis-platform/e2e/fixtures/nuclei-parity.yaml'
+      - 'docs/WEB_NUCLEI_CANARY.md'
+      - '.github/workflows/web-nuclei-canary-reality.yml'
+  push:
+    branches: [main]
+    paths: *canary_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-nuclei-canary-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused test dependencies
+        run: python -m pip install pytest
+      - name: Compile Nuclei canary contracts
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/kali_nuclei_provider.py             aegis-platform/backend/fastapi_app/services/nuclei_execution_provider.py             aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py             aegis-platform/backend/fastapi_app/tasks/security_scan.py             aegis-platform/kali/runner/web_service.py             aegis-platform/kali/tests/test_web_provider_contract.py
+      - name: Prove deterministic routing and fail-closed provider policy
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py
+          aegis-platform/kali/tests/test_web_provider_contract.py
+      - name: Capture exact-head canary contract
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/web-nuclei-canary-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.web-nuclei-canary-contract.v1',
+              'capability_id':'web.nuclei',
+              'scope':'bounded-canary-and-zero-bps-rollback',
+              'production_admitted_modes':['legacy','canary'],
+              'raw_kali_production_admitted':False,
+              'assignment':'sha256-stable-scan-id',
+              'max_canary_bps':2500,
+              'selected_provider_failure_fallback':False,
+              'canary_rollback':'AEGIS_KALI_NUCLEI_CANARY_BPS=0',
+              'provider_scope':['web.nuclei'],
+              'provider_capabilities':[],
+              'provider_non_root':True,
+              'no_new_privileges':True,
+              'default_kali_promotion':False,
+              'legacy_retirement':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-canary-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-canary-routing:
+    needs: canary-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_NUCLEI_NETWORK: aegis-nuclei-canary
+      AEGIS_NUCLEI_TARGET_IP: 172.33.1.10
+      AEGIS_NUCLEI_TARGET: http://172.33.1.10:8080
+      AEGIS_NUCLEI_AUTH_TOKEN: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_NUCLEI_CANARY_BPS: '2500'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact legacy scanner and governed web provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache             --target legacy-parity-reference             -t aegis-nuclei-canary:legacy             -f aegis-platform/backend/Dockerfile.django             aegis-platform/backend
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache             --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}"             --build-arg AEGIS_RUNNER_VERSION=0.1.0             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             -t aegis-kali:base             -f aegis-platform/kali/Dockerfile.base             aegis-platform/kali
+          docker build --no-cache             --build-arg AEGIS_BASE_IMAGE=aegis-kali:base             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             --target profile-web             -t aegis-kali:web             -f aegis-platform/kali/Dockerfile.profiles             .
+          docker build --no-cache             --build-arg AEGIS_WEB_BASE_IMAGE=aegis-kali:web             -t aegis-kali:web-provider             -f aegis-platform/kali/Dockerfile.web-provider             aegis-platform/kali
+      - name: Derive immutable provider trust anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:web-provider --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected web provider image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          assert runtime['profile']=='web', runtime
+          assert runtime['dispatch_enabled'] is True, runtime
+          assert runtime['dispatch_state']=='semantic-web-provider', runtime
+          assert runtime['dispatch_capabilities']==['web.nuclei'], runtime
+          assert runtime['profile_tools']['nuclei']['version']=='3.11.1', runtime
+          assert runtime['profile_tools']['nuclei-templates']['commit']=='0cb51d4bfae945e5ec2644fc8c2d2e6ea84bbffe', runtime
+          print('AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_WEB_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+      - name: Start deterministic internal target and scanner namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts parity-templates
+          chmod 0777 artifacts
+          cp aegis-platform/e2e/fixtures/nuclei-parity.yaml parity-templates/nuclei-parity.yaml
+          sha256sum parity-templates/nuclei-parity.yaml > artifacts/test-template-sha256.txt
+          docker network create --internal --subnet 172.33.1.0/24 "${AEGIS_NUCLEI_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_NUCLEI_NETWORK}")" = true
+          docker run -d --name aegis-nuclei-canary-fixture             --network "${AEGIS_NUCLEI_NETWORK}" --ip "${AEGIS_NUCLEI_TARGET_IP}"             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m             -v "$PWD/aegis-platform/e2e/nuclei_http_fixture.py:/fixture.py:ro"             --entrypoint python aegis-nuclei-canary:legacy /fixture.py
+          docker run -d --name aegis-nuclei-canary-scanner             --network "${AEGIS_NUCLEI_NETWORK}"             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m             -e AUTHORIZED_SCAN_TARGETS="${AEGIS_NUCLEI_TARGET_IP}/32"             -e AEGIS_NUCLEI_PROVIDER=canary             -e AEGIS_KALI_NUCLEI_CANARY_BPS="${AEGIS_NUCLEI_CANARY_BPS}"             -e AEGIS_KALI_WEB_URL=http://127.0.0.1:18770             -e AEGIS_KALI_WEB_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION             -e AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT             -e AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST             -e NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates             -e HOME=/tmp/home -e XDG_CONFIG_HOME=/tmp/config -e XDG_CACHE_HOME=/tmp/cache             -v "$PWD/parity-templates:/opt/nuclei-templates:ro"             -v "$PWD/artifacts:/artifacts"             --entrypoint sleep aegis-nuclei-canary:legacy infinity
+          for _ in $(seq 1 30); do
+            if docker logs aegis-nuclei-canary-fixture 2>&1 | grep -Fq AEGIS_NUCLEI_PARITY_FIXTURE_READY; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nuclei-canary-fixture
+          exit 1
+      - name: Start zero-capability governed Nuclei provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-nuclei-canary-provider             --network container:aegis-nuclei-canary-scanner             --user 10001:10001             --read-only --cap-drop ALL --security-opt no-new-privileges:true             --pids-limit 128 --memory 768m --cpus 1             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m             -e AEGIS_WEB_LISTEN_HOST=127.0.0.1             -e AEGIS_WEB_LISTEN_PORT=18770             -e AEGIS_KALI_WEB_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates             -v "$PWD/parity-templates:/opt/nuclei-templates:ro"             "$AEGIS_KALI_WEB_IMAGE"
+          docker exec -i aegis-nuclei-canary-provider python3 - <<'PY'
+          import os
+          from pathlib import Path
+          values={}
+          for line in Path('/proc/1/status').read_text().splitlines():
+              if ':' in line:
+                  k,v=line.split(':',1); values[k]=v.strip()
+          assert os.geteuid()==10001, os.geteuid()
+          for key in ('CapEff','CapPrm','CapBnd','CapInh','CapAmb'):
+              assert values[key]=='0000000000000000', (key,values[key])
+          assert values['NoNewPrivs']=='1', values['NoNewPrivs']
+          PY
+          for _ in $(seq 1 30); do
+            if docker exec -i aegis-nuclei-canary-scanner python - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18770/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nuclei-canary-provider
+          exit 1
+      - name: Derive stable selected and holdback cohorts
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nuclei-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.kali_nuclei_provider import nuclei_provider_decision
+          selected=holdback=None
+          for i in range(10000):
+              key=f'real-nuclei-canary-{i}'
+              d=nuclei_provider_decision(routing_key=key)
+              if d.selected_provider=='kali' and selected is None: selected=(key,d.as_dict())
+              if d.selected_provider=='legacy' and holdback is None: holdback=(key,d.as_dict())
+              if selected and holdback: break
+          assert selected and holdback
+          json.dump({'selected_key':selected[0],'selected':selected[1],'holdback_key':holdback[0],'holdback':holdback[1]},open('/artifacts/cohorts.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Execute real legacy holdback and real governed Kali selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nuclei-canary-scanner python - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+          for path in ('/tmp/home','/tmp/config','/tmp/cache'):
+              Path(path).mkdir(parents=True,exist_ok=True)
+          cohorts=json.load(open('/artifacts/cohorts.json'))
+          common=dict(
+              target='http://172.33.1.10:8080',
+              timeout_seconds=120,
+              authorization_ref='auth-canary',
+              scope_ref='project:canary:asset:nuclei',
+              state_getter=lambda:'running',
+          )
+          hold=run_nuclei_with_provider(
+              routing_key=cohorts['holdback_key'],
+              execution_ref='nuclei-canary-holdback',
+              **common,
+          )
+          assert hold.routing['selected_provider']=='legacy', hold.routing
+          assert hold.exit_code==0, hold.stderr
+          assert hold.stdout.strip(), hold
+          open('/artifacts/holdback.jsonl','w').write(hold.stdout)
+          json.dump({'routing':hold.routing,'runtime':hold.runtime},open('/artifacts/holdback-result.json','w'),sort_keys=True,indent=2)
+
+          selected=run_nuclei_with_provider(
+              routing_key=cohorts['selected_key'],
+              execution_ref='nuclei-canary-selected',
+              **common,
+          )
+          assert selected.routing['selected_provider']=='kali', selected.routing
+          assert selected.exit_code==0, selected.stderr
+          assert selected.stdout.strip(), selected
+          assert selected.runtime['provider']=='aegis-kali-web', selected.runtime
+          assert selected.runtime['linux_privilege']['uid']==10001, selected.runtime
+          assert selected.runtime['linux_privilege']['allowed_capabilities']==[], selected.runtime
+          open('/artifacts/selected.jsonl','w').write(selected.stdout)
+          json.dump({'routing':selected.routing,'runtime':selected.runtime},open('/artifacts/selected-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove selected and holdback finding semantics are equivalent
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nuclei-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.nuclei_semantic_parity import compare_nuclei_semantics
+          result=compare_nuclei_semantics(
+              open('/artifacts/holdback.jsonl').read(),
+              open('/artifacts/selected.jsonl').read(),
+          )
+          assert result['equivalent'] is True, json.dumps(result,indent=2,sort_keys=True)
+          assert result['legacy']['finding_count']==1, result
+          assert result['candidate']['finding_count']==1, result
+          json.dump(result,open('/artifacts/canary-semantic-parity.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove zero-BPS rollback survives provider outage and selected outage never falls back
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker stop aegis-nuclei-canary-provider >/dev/null
+          docker exec -i -e AEGIS_KALI_NUCLEI_CANARY_BPS=0 aegis-nuclei-canary-scanner python - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+          for path in ('/tmp/home','/tmp/config','/tmp/cache'):
+              Path(path).mkdir(parents=True,exist_ok=True)
+          result=run_nuclei_with_provider(
+              target='http://172.33.1.10:8080',
+              timeout_seconds=120,
+              routing_key='rollback-any',
+              execution_ref='nuclei-canary-rollback',
+              authorization_ref='auth-canary',
+              scope_ref='project:canary:asset:nuclei',
+              state_getter=lambda:'running',
+          )
+          assert result.routing['selected_provider']=='legacy', result.routing
+          assert result.routing['reason']=='canary-rollback-zero', result.routing
+          assert result.exit_code==0, result.stderr
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/rollback-result.json','w'),sort_keys=True,indent=2)
+          PY
+          if docker exec -i aegis-nuclei-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.kali_nuclei_provider import KaliNucleiProviderError
+          from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+          cohorts=json.load(open('/artifacts/cohorts.json'))
+          try:
+              run_nuclei_with_provider(
+                  target='http://172.33.1.10:8080',
+                  timeout_seconds=30,
+                  routing_key=cohorts['selected_key'],
+                  execution_ref='nuclei-canary-outage',
+                  authorization_ref='auth-canary',
+                  scope_ref='project:canary:asset:nuclei',
+                  state_getter=lambda:'running',
+              )
+          except KaliNucleiProviderError as exc:
+              assert 'unavailable' in str(exc).lower(), str(exc)
+              raise SystemExit(0)
+          raise SystemExit('selected Kali outage unexpectedly succeeded or fell back')
+          PY
+          then
+            echo 'selected-provider outage failed closed as required'
+          else
+            exit 1
+          fi
+      - name: Capture immutable canary evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          git rev-parse HEAD > artifacts/head-sha.txt
+          printf '%s\n' "$AEGIS_KALI_WEB_IMAGE" > artifacts/web-provider-image-id.txt
+          python - <<'PY' > artifacts/canary-summary.json
+          import json
+          cohorts=json.load(open('artifacts/cohorts.json'))
+          print(json.dumps({
+              'schema':'aegis.web-nuclei-canary-evidence.v1',
+              'scope':'bounded-canary-and-zero-bps-rollback',
+              'selected':cohorts['selected'],
+              'holdback':cohorts['holdback'],
+              'max_canary_bps':2500,
+              'rollback_zero_proven':True,
+              'selected_outage_fail_closed':True,
+              'silent_fallback':False,
+              'provider_non_root':True,
+              'provider_capabilities':[],
+              'test_template_override':True,
+              'public_internet_used':False,
+              'default_kali_promotion':False,
+              'legacy_retirement':False,
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum             head-sha.txt runtime-manifest.json web-provider-image-id.txt test-template-sha256.txt             cohorts.json holdback.jsonl holdback-result.json selected.jsonl selected-result.json             canary-semantic-parity.json rollback-result.json canary-summary.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-canary-reality-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-nuclei-canary-provider aegis-nuclei-canary-scanner aegis-nuclei-canary-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_NUCLEI_NETWORK}" >/dev/null 2>&1 || true
