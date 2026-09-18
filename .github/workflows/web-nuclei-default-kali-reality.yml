@@ -1,0 +1,373 @@
+name: Web Nuclei Default Kali Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &default_kali_paths
+      - 'aegis-platform/backend/fastapi_app/services/kali_nuclei_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/nuclei_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py'
+      - 'aegis-platform/kali/Dockerfile.web-provider'
+      - 'aegis-platform/kali/runner/web_service.py'
+      - 'aegis-platform/kali/tests/test_web_provider_contract.py'
+      - 'aegis-platform/e2e/nuclei_http_fixture.py'
+      - 'aegis-platform/e2e/fixtures/nuclei-parity.yaml'
+      - 'aegis-platform/docker-compose.nuclei-default-kali.yml'
+      - 'docs/WEB_NUCLEI_DEFAULT_KALI.md'
+      - '.github/workflows/web-nuclei-default-kali-reality.yml'
+  push:
+    branches: [main]
+    paths: *default_kali_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-nuclei-default-kali-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  default-kali-contract:
+    name: Nuclei Default Kali Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused test dependencies
+        run: python -m pip install pytest
+      - name: Compile M5 Nuclei contracts
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/kali_nuclei_provider.py             aegis-platform/backend/fastapi_app/services/nuclei_execution_provider.py             aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py             aegis-platform/kali/runner/web_service.py             aegis-platform/kali/tests/test_web_provider_contract.py
+      - name: Prove governed default routing and rollback contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: >-
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest
+          aegis-platform/backend/fastapi_app/services/test_nuclei_execution_provider.py
+          aegis-platform/kali/tests/test_web_provider_contract.py
+      - name: Render default-kali deployment and explicit legacy rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.nuclei-default-kali.yml             --profile kali-web             config --format json > artifacts/nuclei-default-kali-compose.json
+          AEGIS_NUCLEI_PROVIDER=legacy docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.nuclei-default-kali.yml             --profile kali-web             config --format json > artifacts/nuclei-default-kali-rollback-compose.json
+      - name: Prove rendered promotion, rollback, and least privilege
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          default=json.loads(Path('artifacts/nuclei-default-kali-compose.json').read_text())
+          rollback=json.loads(Path('artifacts/nuclei-default-kali-rollback-compose.json').read_text())
+          scanner=default['services']['scanner_worker']
+          provider=default['services']['kali_web']
+          env=scanner['environment']
+          penv=provider['environment']
+
+          assert env['AEGIS_NUCLEI_PROVIDER']=='default-kali', env
+          assert str(env['AEGIS_KALI_NUCLEI_CANARY_BPS'])=='0', env
+          assert env['AEGIS_KALI_WEB_URL']=='http://127.0.0.1:18770', env
+          assert rollback['services']['scanner_worker']['environment']['AEGIS_NUCLEI_PROVIDER']=='legacy'
+          for key in (
+              'AEGIS_KALI_WEB_AUTH_TOKEN',
+              'AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION',
+              'AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT',
+              'AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST',
+              'AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST',
+              'AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST',
+              'AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST',
+          ):
+              assert key in env, key
+          assert provider['network_mode']=='service:scanner_egress', provider
+          assert provider['read_only'] is True, provider
+          assert provider['cap_drop']==['ALL'], provider
+          assert provider.get('cap_add') in (None, []), provider
+          assert provider['security_opt']==['no-new-privileges:true'], provider
+          assert provider['user']=='10001:10001', provider
+          assert penv['AEGIS_WEB_LISTEN_HOST']=='127.0.0.1', penv
+          assert str(penv['AEGIS_WEB_LISTEN_PORT'])=='18770', penv
+          assert provider['pids_limit']==128, provider
+          assert int(provider['mem_limit'])==805306368, provider
+          assert float(provider['cpus'])==1.0, provider
+          print('WEB_NUCLEI_DEFAULT_KALI_DEPLOYMENT_PASS')
+          PY
+      - name: Capture exact-head M5 contract evidence
+        shell: bash
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/web-nuclei-default-kali-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.web-nuclei-default-kali-contract.v1',
+              'capability_id':'web.nuclei',
+              'deployment_default_provider':'default-kali',
+              'parity_approved':True,
+              'canary_assignment_required':False,
+              'silent_provider_fallback':False,
+              'administrative_rollback':'AEGIS_NUCLEI_PROVIDER=legacy',
+              'raw_kali_mode_production_admitted':False,
+              'provider_scope':['web.nuclei'],
+              'provider_capabilities':[],
+              'provider_non_root':True,
+              'legacy_retired_in_this_phase':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-default-kali-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-default-kali:
+    name: Real Nuclei Default Kali
+    needs: default-kali-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_NUCLEI_NETWORK: aegis-nuclei-default-kali
+      AEGIS_NUCLEI_TARGET_IP: 172.34.1.10
+      AEGIS_NUCLEI_TARGET: http://172.34.1.10:8080
+      AEGIS_NUCLEI_AUTH_TOKEN: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact legacy reference and governed web provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache             --target legacy-parity-reference             -t aegis-nuclei-m5:scanner             -f aegis-platform/backend/Dockerfile.django             aegis-platform/backend
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache             --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}"             --build-arg AEGIS_RUNNER_VERSION=0.1.0             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             -t aegis-kali:base             -f aegis-platform/kali/Dockerfile.base             aegis-platform/kali
+          docker build --no-cache             --build-arg AEGIS_BASE_IMAGE=aegis-kali:base             --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"             --target profile-web             -t aegis-kali:web             -f aegis-platform/kali/Dockerfile.profiles             .
+          docker build --no-cache             --build-arg AEGIS_WEB_BASE_IMAGE=aegis-kali:web             -t aegis-kali:web-provider             -f aegis-platform/kali/Dockerfile.web-provider             aegis-platform/kali
+      - name: Derive immutable provider trust anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:web-provider --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected web provider image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json
+          raw=open('runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          assert runtime['profile']=='web', runtime
+          assert runtime['dispatch_enabled'] is True, runtime
+          assert runtime['dispatch_state']=='semantic-web-provider', runtime
+          assert runtime['dispatch_capabilities']==['web.nuclei'], runtime
+          assert runtime['profile_tools']['nuclei']['version']=='3.11.1', runtime
+          assert runtime['profile_tools']['nuclei-templates']['commit']=='0cb51d4bfae945e5ec2644fc8c2d2e6ea84bbffe', runtime
+          print('AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_WEB_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+      - name: Start deterministic internal target and default-kali scanner namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts parity-templates
+          chmod 0777 artifacts
+          cp aegis-platform/e2e/fixtures/nuclei-parity.yaml parity-templates/nuclei-parity.yaml
+          sha256sum parity-templates/nuclei-parity.yaml > artifacts/test-template-sha256.txt
+          docker network create --internal --subnet 172.34.1.0/24 "${AEGIS_NUCLEI_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_NUCLEI_NETWORK}")" = true
+          docker run -d --name aegis-nuclei-m5-fixture             --network "${AEGIS_NUCLEI_NETWORK}" --ip "${AEGIS_NUCLEI_TARGET_IP}"             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m             -v "$PWD/aegis-platform/e2e/nuclei_http_fixture.py:/fixture.py:ro"             --entrypoint python aegis-nuclei-m5:scanner /fixture.py
+          docker run -d --name aegis-nuclei-m5-scanner             --network "${AEGIS_NUCLEI_NETWORK}"             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges:true             --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m             -e AUTHORIZED_SCAN_TARGETS="${AEGIS_NUCLEI_TARGET_IP}/32"             -e AEGIS_NUCLEI_PROVIDER=default-kali             -e AEGIS_KALI_NUCLEI_CANARY_BPS=0             -e AEGIS_KALI_WEB_URL=http://127.0.0.1:18770             -e AEGIS_KALI_WEB_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e AEGIS_KALI_WEB_EXPECTED_RUNNER_VERSION             -e AEGIS_KALI_WEB_EXPECTED_BUILD_COMMIT             -e AEGIS_KALI_WEB_EXPECTED_BASE_IMAGE_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST             -e AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST             -e NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates             -e HOME=/tmp/home -e XDG_CONFIG_HOME=/tmp/config -e XDG_CACHE_HOME=/tmp/cache             -v "$PWD/parity-templates:/opt/nuclei-templates:ro"             -v "$PWD/artifacts:/artifacts"             --entrypoint sleep aegis-nuclei-m5:scanner infinity
+          for _ in $(seq 1 30); do
+            if docker logs aegis-nuclei-m5-fixture 2>&1 | grep -Fq AEGIS_NUCLEI_PARITY_FIXTURE_READY; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nuclei-m5-fixture
+          exit 1
+      - name: Start zero-capability governed Nuclei provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-nuclei-m5-provider             --network container:aegis-nuclei-m5-scanner             --user 10001:10001             --read-only --cap-drop ALL --security-opt no-new-privileges:true             --pids-limit 128 --memory 768m --cpus 1             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m             -e AEGIS_WEB_LISTEN_HOST=127.0.0.1             -e AEGIS_WEB_LISTEN_PORT=18770             -e AEGIS_KALI_WEB_AUTH_TOKEN="${AEGIS_NUCLEI_AUTH_TOKEN}"             -e NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates             -v "$PWD/parity-templates:/opt/nuclei-templates:ro"             "$AEGIS_KALI_WEB_IMAGE"
+          docker exec -i aegis-nuclei-m5-provider python3 - <<'PY'
+          import os
+          from pathlib import Path
+          values={}
+          for line in Path('/proc/1/status').read_text().splitlines():
+              if ':' in line:
+                  k,v=line.split(':',1); values[k]=v.strip()
+          assert os.geteuid()==10001, os.geteuid()
+          for key in ('CapEff','CapPrm','CapBnd','CapInh','CapAmb'):
+              assert values[key]=='0000000000000000', (key,values[key])
+          assert values['NoNewPrivs']=='1', values['NoNewPrivs']
+          PY
+          for _ in $(seq 1 30); do
+            if docker exec -i aegis-nuclei-m5-scanner python - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18770/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-nuclei-m5-provider
+          exit 1
+      - name: Execute real default Kali and explicit legacy rollback reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-nuclei-m5-scanner python - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.kali_nuclei_provider import nuclei_provider_decision
+          from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+
+          for path in ('/tmp/home','/tmp/config','/tmp/cache'):
+              Path(path).mkdir(parents=True,exist_ok=True)
+          for key in ('scan-default-a','scan-default-b'):
+              decision=nuclei_provider_decision(routing_key=key)
+              assert decision.mode=='default-kali', decision
+              assert decision.selected_provider=='kali', decision
+              assert decision.parity_approved is True, decision
+              assert decision.canary_bps==0 and decision.bucket is None and decision.routing_key_digest=='', decision
+              assert decision.reason=='default-kali-parity-approved', decision
+
+          result=run_nuclei_with_provider(
+              target='http://172.34.1.10:8080', timeout_seconds=120, routing_key='scan-default-a',
+              execution_ref='nuclei-m5-default', authorization_ref='auth-m5',
+              scope_ref='project:m5:asset:nuclei', state_getter=lambda:'running',
+          )
+          assert result.routing['selected_provider']=='kali', result.routing
+          assert result.exit_code==0, result.stderr
+          assert result.stdout.strip(), result
+          assert result.runtime['provider']=='aegis-kali-web', result.runtime
+          assert result.runtime['linux_privilege']['uid']==10001, result.runtime
+          assert result.runtime['linux_privilege']['allowed_capabilities']==[], result.runtime
+          open('/artifacts/default-kali.jsonl','w').write(result.stdout)
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/default-kali-result.json','w'),sort_keys=True,indent=2)
+          PY
+          docker exec -i -e AEGIS_NUCLEI_PROVIDER=legacy aegis-nuclei-m5-scanner python - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+
+          for path in ('/tmp/home','/tmp/config','/tmp/cache'):
+              Path(path).mkdir(parents=True,exist_ok=True)
+          result=run_nuclei_with_provider(
+              target='http://172.34.1.10:8080', timeout_seconds=120, routing_key='rollback-reference',
+              execution_ref='nuclei-m5-legacy-reference', authorization_ref='auth-m5',
+              scope_ref='project:m5:asset:nuclei', state_getter=lambda:'running',
+          )
+          assert result.routing['selected_provider']=='legacy', result.routing
+          assert result.exit_code==0, result.stderr
+          assert result.stdout.strip(), result
+          open('/artifacts/legacy-reference.jsonl','w').write(result.stdout)
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/legacy-reference-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove finding-relevant semantics remain equivalent
+        shell: bash
+        run: |
+          docker exec -i aegis-nuclei-m5-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.nuclei_semantic_parity import compare_nuclei_semantics
+          result=compare_nuclei_semantics(
+              open('/artifacts/legacy-reference.jsonl').read(),
+              open('/artifacts/default-kali.jsonl').read(),
+          )
+          assert result['equivalent'] is True, json.dumps(result,indent=2,sort_keys=True)
+          assert result['legacy']['finding_count']==1, result
+          assert result['candidate']['finding_count']==1, result
+          json.dump(result,open('/artifacts/default-kali-semantic-parity.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove provider outage fails closed and explicit legacy rollback still works
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker stop aegis-nuclei-m5-provider >/dev/null
+          docker exec -i aegis-nuclei-m5-scanner python - <<'PY'
+          import json
+          from fastapi_app.services import nuclei_execution_provider as provider
+          from fastapi_app.services.kali_nuclei_provider import KaliNucleiProviderError
+
+          provider.run_nuclei=lambda *args,**kwargs: (_ for _ in ()).throw(AssertionError('silent legacy fallback attempted'))
+          try:
+              provider.run_nuclei_with_provider(
+                  target='http://172.34.1.10:8080', timeout_seconds=30, routing_key='outage-default',
+                  execution_ref='nuclei-m5-outage', authorization_ref='auth-m5',
+                  scope_ref='project:m5:asset:nuclei', state_getter=lambda:'running',
+              )
+          except KaliNucleiProviderError as exc:
+              json.dump({'fail_closed':True,'error':str(exc)},open('/artifacts/default-kali-outage.json','w'),sort_keys=True,indent=2)
+          else:
+              raise AssertionError('default-kali provider outage did not fail closed')
+          PY
+          docker exec -i -e AEGIS_NUCLEI_PROVIDER=legacy aegis-nuclei-m5-scanner python - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.nuclei_execution_provider import run_nuclei_with_provider
+
+          for path in ('/tmp/home','/tmp/config','/tmp/cache'):
+              Path(path).mkdir(parents=True,exist_ok=True)
+          result=run_nuclei_with_provider(
+              target='http://172.34.1.10:8080', timeout_seconds=120, routing_key='explicit-rollback',
+              execution_ref='nuclei-m5-explicit-rollback', authorization_ref='auth-m5',
+              scope_ref='project:m5:asset:nuclei', state_getter=lambda:'running',
+          )
+          assert result.routing['selected_provider']=='legacy', result.routing
+          assert result.exit_code==0, result.stderr
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/explicit-legacy-rollback.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Capture exact-head real M5 evidence
+        shell: bash
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          printf '%s\n' "$AEGIS_KALI_WEB_IMAGE" > artifacts/web-provider-image-id.txt
+          python - <<'PY' > artifacts/real-default-kali-summary.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.web-nuclei-default-kali-real.v1',
+              'exact_head':'${{ env.AEGIS_EXACT_HEAD }}',
+              'target_scope':'internal-deterministic-fixture',
+              'default_provider':'default-kali',
+              'semantic_parity':True,
+              'provider_outage_fail_closed':True,
+              'explicit_legacy_rollback':True,
+              'silent_legacy_fallback':False,
+              'runtime_capabilities':[],
+              'provider_non_root':True,
+              'no_new_privileges':True,
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum             head-sha.txt runtime-manifest.json web-provider-image-id.txt test-template-sha256.txt             default-kali.jsonl default-kali-result.json legacy-reference.jsonl legacy-reference-result.json             default-kali-semantic-parity.json default-kali-outage.json explicit-legacy-rollback.json             real-default-kali-summary.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-nuclei-default-kali-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f aegis-nuclei-m5-provider aegis-nuclei-m5-scanner aegis-nuclei-m5-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_NUCLEI_NETWORK}" >/dev/null 2>&1 || true
