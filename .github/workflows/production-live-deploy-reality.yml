@@ -85,7 +85,7 @@ jobs:
           grep -q "production_deploy_request.py" "$workflow"
           grep -q "production_remote_operational_acceptance.py" "$workflow"
           grep -q "aegisscan-production-gate" aegis-platform/scripts/production_remote_deploy.py
-          grep -q "aegisscan-production-gate" aegis-platform/scripts/production_remote_operational_acceptance.py
+          grep -q "remote.PRIVILEGED_GATE" aegis-platform/scripts/production_remote_operational_acceptance.py
           ! grep -q "sudo -n python3" aegis-platform/scripts/production_remote_deploy.py
           ! grep -q "sudo -n python3" aegis-platform/scripts/production_remote_operational_acceptance.py
           ! grep -q "StrictHostKeyChecking=no" "$workflow"
