@@ -47,6 +47,10 @@ def _iter_source_files(source: Path) -> list[tuple[Path, Path]]:
     if source.is_symlink():
         raise KaliSemgrepProviderError('Semgrep canary source cannot be a symlink')
     if source.is_file():
+        if source.stat().st_size > _MAX_SNAPSHOT_BYTES:
+            raise KaliSemgrepProviderError(
+                f'Semgrep canary source exceeds {_MAX_SNAPSHOT_BYTES} bytes'
+            )
         return [(source, Path(source.name))]
     if not source.is_dir():
         raise KaliSemgrepProviderError('Semgrep canary source must be a regular file or directory')
