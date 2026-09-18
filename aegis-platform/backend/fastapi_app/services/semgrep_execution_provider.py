@@ -20,6 +20,7 @@ from fastapi_app.services.scanner_adapters import run_semgrep, validate_code_tar
 
 _MAX_SNAPSHOT_FILES = 20_000
 _MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
+_TRUTHY = {'1', 'true', 'yes', 'on'}
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,21 @@ class SemgrepExecutionResult:
     stderr: str
     routing: dict[str, Any]
     runtime: dict[str, Any]
+
+
+def legacy_semgrep_disabled() -> bool:
+    """Return whether this release has retired the local Semgrep execution path."""
+    return os.getenv('AEGIS_SEMGREP_LEGACY_DISABLED', '').strip().lower() in _TRUTHY
+
+
+def _enforce_retirement_lock(decision: Any) -> None:
+    """Fail closed when M6 policy forbids same-release Legacy/Canary rollback."""
+    if not legacy_semgrep_disabled():
+        return
+    if decision.mode != 'default-kali' or decision.selected_provider != 'kali':
+        raise KaliSemgrepProviderError(
+            'Legacy/Canary Semgrep production routing is retired; rollback requires the previous release'
+        )
 
 
 def _workspace_root() -> Path:
@@ -208,11 +224,12 @@ def run_semgrep_with_provider(
 ) -> SemgrepExecutionResult:
     """Execute Semgrep through the governed production provider decision.
 
-    M5 admits Legacy, Canary, and parity-approved default-kali production modes.
-    Raw Kali remains provider-library diagnostic behavior and is rejected by
-    this execution layer. Any Kali-selected execution stages the same bounded
+    M6 production sets AEGIS_SEMGREP_LEGACY_DISABLED=true and therefore
+    admits only default-kali. Legacy and Canary remain reference-only when that
+    retirement lock is absent. Raw Kali remains diagnostic-only and is rejected
+    by this execution layer. Any Kali-selected execution stages the same bounded
     immutable source snapshot proven in M4 and fails closed on provider,
-    provenance, control, or runtime error without silent Legacy fallback.
+    provenance, control, or runtime error without local fallback.
     """
     canonical_source = validate_code_target(source)
     decision = semgrep_provider_decision(routing_key=routing_key)
@@ -220,6 +237,7 @@ def run_semgrep_with_provider(
         raise RuntimeError(
             f'Semgrep provider mode {decision.mode!r} is not admitted by the governed production execution layer'
         )
+    _enforce_retirement_lock(decision)
     routing = decision.as_dict()
 
     if decision.selected_provider == 'legacy':
