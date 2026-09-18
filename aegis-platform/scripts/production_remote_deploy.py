@@ -149,6 +149,11 @@ def _remote_path(value: str, name: str) -> str:
     return path.rstrip("/") or "/"
 
 
+PRIVILEGED_GATE = "/usr/local/sbin/aegisscan-production-gate"
+PRODUCTION_REPO_PATH = "/opt/aegisscan/AegisScan"
+PRODUCTION_ENV_PATH = "/etc/aegisscan/production.env"
+
+
 def _remote_command(
     *,
     repo_path: str,
@@ -156,25 +161,15 @@ def _remote_command(
     release_sha: str,
     origin: str,
 ) -> str:
+    if repo_path != PRODUCTION_REPO_PATH:
+        raise RemoteDeployError(f"production repository path must be {PRODUCTION_REPO_PATH}")
+    if env_path != PRODUCTION_ENV_PATH:
+        raise RemoteDeployError(f"production environment path must be {PRODUCTION_ENV_PATH}")
     q = shlex.quote
-    return " && ".join(
-        [
-            f"cd {q(repo_path)}",
-            "test -z \"$(git status --porcelain --untracked-files=no)\"",
-            "git fetch --no-tags origin main",
-            f"git cat-file -e {q(release_sha + '^{commit}')}",
-            f"git merge-base --is-ancestor {q(release_sha)} origin/main",
-            (
-                "sudo -n python3 aegis-platform/scripts/production_host_reality.py "
-                f"--env-file {q(env_path)}"
-            ),
-            (
-                "sudo -n python3 aegis-platform/scripts/production_host_deploy.py "
-                f"--release-sha {q(release_sha)} "
-                f"--env-file {q(env_path)} "
-                f"--origin {q(origin)}"
-            ),
-        ]
+    return (
+        f"sudo -n {q(PRIVILEGED_GATE)} deploy "
+        f"--release-sha {q(release_sha)} "
+        f"--origin {q(origin)}"
     )
 
 
