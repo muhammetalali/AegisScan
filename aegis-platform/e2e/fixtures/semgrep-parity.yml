@@ -1,0 +1,7 @@
+rules:
+  - id: aegis.semgrep.parity.eval
+    languages:
+      - python
+    message: Aegis Semgrep parity fixture
+    severity: WARNING
+    pattern: eval(...)
