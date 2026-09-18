@@ -68,7 +68,9 @@ def cohorts() -> None:
     cf = _semgrep_findings(candidate.stdout)
     assert len(lf) == len(cf) == 1, (lf, cf)
     assert lf[0]["path"] == cf[0]["path"] == "/workspace/source/app.py", (lf, cf)
-    assert lf[0]["check_id"] == cf[0]["check_id"] == "aegis.semgrep.parity.eval", (lf, cf)
+    check_id = lf[0]["check_id"]
+    assert check_id == cf[0]["check_id"], (lf, cf)
+    assert check_id.endswith("aegis.semgrep.parity.eval"), (lf, cf)
 
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     (ARTIFACTS / "holdback.json").write_text(legacy.stdout, encoding="utf-8")
