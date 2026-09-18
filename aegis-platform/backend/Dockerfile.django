@@ -207,11 +207,12 @@ USER 10001:10001
 
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
 
-# Production scanner target: legacy Recon is always absent. AEGIS_RETIRE_NMAP is
-# intentionally default-off only for historical Recon/parity reference builds.
-# Production Compose hard-codes AEGIS_RETIRE_NMAP=1, physically removing Nmap.
+# Production scanner target: legacy Recon is always absent. Nmap and Nuclei
+# retirement toggles stay default-off only for historical parity/reference builds.
+# Production Compose hard-codes both toggles to 1, physically removing local paths.
 FROM runtime AS production-no-legacy-recon
 ARG AEGIS_RETIRE_NMAP=0
+ARG AEGIS_RETIRE_NUCLEI=0
 USER root
 RUN rm -f \
         /usr/local/bin/amass \
@@ -232,8 +233,18 @@ RUN rm -f \
          test "$AEGIS_RETIRE_NMAP" = "0"; \
          command -v nmap >/dev/null; \
        fi \
+    && if [ "$AEGIS_RETIRE_NUCLEI" = "1" ]; then \
+         rm -f /usr/local/bin/nuclei; \
+         rm -rf /opt/nuclei-templates; \
+         ! command -v nuclei; \
+         test ! -e /usr/local/bin/nuclei; \
+         test ! -e /opt/nuclei-templates; \
+       else \
+         test "$AEGIS_RETIRE_NUCLEI" = "0"; \
+         command -v nuclei >/dev/null; \
+         test -d /opt/nuclei-templates; \
+       fi \
     && command -v masscan >/dev/null \
-    && command -v nuclei >/dev/null \
     && command -v semgrep >/dev/null
 USER 10001:10001
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
