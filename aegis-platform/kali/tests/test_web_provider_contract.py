@@ -61,8 +61,8 @@ def test_provider_requires_loopback_auth_provenance_and_zero_capabilities():
     assert 'AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST' in PROVIDER_CLIENT
 
 
-def test_production_execution_admits_only_legacy_and_canary_and_has_no_silent_fallback():
-    assert "decision.mode not in {'legacy', 'canary'}" in EXECUTION_PROVIDER
+def test_production_execution_admits_governed_modes_and_rejects_raw_kali_without_silent_fallback():
+    assert "decision.mode not in {'legacy', 'canary', 'default-kali'}" in EXECUTION_PROVIDER
     assert "if decision.selected_provider == 'legacy'" in EXECUTION_PROVIDER
     assert "if decision.selected_provider != 'kali'" in EXECUTION_PROVIDER
     assert 'execute_kali_nuclei(' in EXECUTION_PROVIDER
