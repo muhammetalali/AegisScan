@@ -1,0 +1,110 @@
+name: Code Semgrep Canary Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &semgrep_canary_paths
+      - 'aegis-platform/backend/fastapi_app/services/kali_semgrep_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/semgrep_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_semgrep_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/advanced_scans.py'
+      - 'aegis-platform/backend/scanner-worker-entrypoint.sh'
+      - 'aegis-platform/kali/Dockerfile.code-provider'
+      - 'aegis-platform/kali/runner/code_service.py'
+      - 'aegis-platform/kali/tests/test_code_provider_contract.py'
+      - 'aegis-platform/e2e/semgrep_canary_reality.py'
+      - 'aegis-platform/e2e/semgrep_canary_reality.sh'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity.yml'
+      - 'aegis-platform/e2e/fixtures/semgrep-parity-source/**'
+      - 'aegis-platform/docker-compose.semgrep-canary.yml'
+      - '.github/workflows/code-semgrep-canary-reality.yml'
+      - '.github/workflows/code-semgrep-canary-deployment-reality.yml'
+      - 'docs/CODE_SEMGREP_CANARY.md'
+  push:
+    branches: [main]
+    paths: *semgrep_canary_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-semgrep-canary-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused dependencies
+        run: python -m pip install pytest
+      - name: Compile canary implementation
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/kali_semgrep_provider.py             aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py             aegis-platform/backend/fastapi_app/tasks/advanced_scans.py             aegis-platform/kali/runner/code_service.py             aegis-platform/e2e/semgrep_canary_reality.py
+      - name: Run bounded canary contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest             aegis-platform/backend/fastapi_app/services/test_semgrep_execution_provider.py
+          python aegis-platform/kali/tests/test_code_provider_contract.py
+      - name: Capture exact-head contract evidence
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          sha256sum             aegis-platform/backend/fastapi_app/services/kali_semgrep_provider.py             aegis-platform/backend/fastapi_app/services/semgrep_execution_provider.py             aegis-platform/kali/runner/code_service.py             aegis-platform/kali/Dockerfile.code-provider             aegis-platform/e2e/semgrep_canary_reality.sh             > artifacts/contract-sha256s.txt
+          python - <<'PY' > artifacts/code-semgrep-canary-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.code-semgrep-canary-contract.v1',
+              'capability_id':'code.semgrep',
+              'mode':'canary',
+              'max_canary_bps':2500,
+              'deterministic_assignment':True,
+              'zero_bps_rollback':'legacy',
+              'selected_failure_fallback':False,
+              'source_snapshot_max_files':20000,
+              'source_snapshot_max_bytes':268435456,
+              'source_symlinks_allowed':False,
+              'provider_capabilities':[],
+              'provider_non_root':True,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-canary-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-canary-routing:
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Execute real selected holdback rollback and outage proof
+        run: bash aegis-platform/e2e/semgrep_canary_reality.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-semgrep-real-canary-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
