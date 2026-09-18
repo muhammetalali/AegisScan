@@ -2,6 +2,9 @@ ARG AEGIS_CODE_BASE_IMAGE=aegis-kali:code
 FROM ${AEGIS_CODE_BASE_IMAGE}
 USER root
 COPY runner/code_service.py /opt/aegis-runner/code_service.py
+RUN mkdir -p /var/lib/aegis-semgrep \
+    && chown 10001:10001 /var/lib/aegis-semgrep \
+    && chmod 0700 /var/lib/aegis-semgrep
 RUN chmod 0755 /opt/aegis-runner/code_service.py \
     && python3 -m py_compile /opt/aegis-runner/code_service.py \
     && python3 - <<'PY'
