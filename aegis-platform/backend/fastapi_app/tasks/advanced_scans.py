@@ -16,7 +16,9 @@ from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, S
 from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.services.authorization_guard import authorization_snapshot, require_bound_scan_authorization, revalidate_bound_authorization
 from fastapi_app.services.evidence_identity import evidence_id
-from fastapi_app.services.scanner_adapters import ScannerExecutionCancelled, run_masscan, run_semgrep, validate_code_target
+from fastapi_app.services.scanner_adapters import ScannerExecutionCancelled, run_masscan, validate_code_target
+from fastapi_app.services.semgrep_execution_provider import run_semgrep_with_provider
+from fastapi_app.services.kali_semgrep_provider import KaliSemgrepProviderCancelled
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 from fastapi_app.services.scan_state_machine import runtime_state
 from fastapi_app.services.enterprise_gap_closure import checkpoint_scan
@@ -135,42 +137,172 @@ def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
 @shared_task(bind=True,name='fastapi_app.tasks.advanced_scans.run_semgrep_scan',max_retries=1,default_retry_delay=30)
 def run_semgrep_scan(self,scan_id:str)->dict[str,Any]:
     terminal=terminal_scan_delivery(scan_id,'semgrep')
-    if terminal: return terminal
+    if terminal:
+        return terminal
     scan,target,authorization=require_bound_scan_authorization(scan_id)
     engine=_ensure_engine('semgrep','Semgrep',ScanEngine.EngineCategory.ANALYSIS,900)
     if scan is None:
         persisted_scan=Scan.objects.select_related('asset','initiated_by','project').get(pk=scan_id)
         execution=_execution(persisted_scan,engine)
         return _finish_failed(persisted_scan,execution,target)
-    if scan.scan_type != Scan.Type.CODE: return _finish_failed(scan, _execution(scan,engine), 'Execution blocked: Semgrep requires a code scan type.')
+    if scan.scan_type != Scan.Type.CODE:
+        return _finish_failed(scan,_execution(scan,engine),'Execution blocked: Semgrep requires a code scan type.')
     completed=_completed_delivery(scan,engine)
-    if completed: return completed
+    if completed:
+        return completed
     execution=_execution(scan,engine)
     execution.result_data=authorization_snapshot(authorization)
     execution.save(update_fields=['result_data','updated_at'])
     holder=None
     try:
         config=scan.asset.configuration or {}
-        if config.get('repo_url'): source,holder=_git_checkout(config)
-        else: source=validate_code_target(str(config.get('path') or (scan.config or {}).get('path') or target))
-        result=run_semgrep(source,timeout=900,state_getter=lambda:runtime_state(scan_id)); observations=_semgrep_findings(result.stdout); ok,reason=revalidate_bound_authorization(scan,authorization)
-        if not ok: return _finish_failed(scan,execution,reason,authorization_snapshot(authorization))
+        if config.get('repo_url'):
+            source,holder=_git_checkout(config)
+        else:
+            source=validate_code_target(str(config.get('path') or (scan.config or {}).get('path') or target))
+
+        result=run_semgrep_with_provider(
+            source=source,
+            timeout_seconds=900,
+            routing_key=str(scan.id),
+            execution_ref=f'scan:{scan.id}:semgrep',
+            authorization_ref=str(authorization.id),
+            scope_ref=f'project:{scan.project_id}:asset:{scan.asset_id}',
+            state_getter=lambda:runtime_state(scan_id),
+        )
+        observations=_semgrep_findings(result.stdout)
+        provider_lineage={
+            'provider_routing':result.routing,
+            'runtime_provenance':result.runtime,
+        }
+        ok,reason=revalidate_bound_authorization(scan,authorization)
+        if not ok:
+            return _finish_failed(scan,execution,reason,authorization_snapshot(authorization))
         now=datetime.now(timezone.utc)
         with transaction.atomic():
-            scanner_evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':'semgrep','evidence_type':'scanner_output','raw_output':result.stdout,'metadata':attach_wstg_evidence_metadata({'stderr':result.stderr,'exit_code':result.exit_code,'source':source,'format':'json',**authorization_snapshot(authorization)}, 'code.semgrep'),'collected_by':scan.initiated_by}); findings=[]
+            scanner_evidence,_=Evidence.objects.update_or_create(
+                id=evidence_id('scan',scan_id,'semgrep','scanner_output'),
+                defaults={
+                    'scan':scan,
+                    'asset':scan.asset,
+                    'source':'semgrep',
+                    'evidence_type':'scanner_output',
+                    'raw_output':result.stdout,
+                    'metadata':attach_wstg_evidence_metadata({
+                        'stderr':result.stderr,
+                        'exit_code':result.exit_code,
+                        'source':source,
+                        'format':'json',
+                        **provider_lineage,
+                        **authorization_snapshot(authorization),
+                    },'code.semgrep'),
+                    'collected_by':scan.initiated_by,
+                },
+            )
+            findings=[]
             for obs in observations:
-                finding=Vulnerability.objects.filter(scan=scan,asset=scan.asset,source_engine='semgrep',file_path=obs['path'],line_start=obs['line'],title=obs['message'][:300]).first()
-                if finding is None: finding=Vulnerability.objects.create(scan=scan,project=scan.project,asset=scan.asset,title=obs['message'][:300],description=obs['message'],severity=obs['severity'],status=Vulnerability.Status.OPEN,confidence=Vulnerability.Confidence.HIGH,category='code',file_path=obs['path'][:500],line_start=max(0,obs['line']) or None,risk_score={Vulnerability.Severity.HIGH:80.0,Vulnerability.Severity.MEDIUM:60.0,Vulnerability.Severity.INFO:10.0}[obs['severity']],validation_status='unverified',source_engine='semgrep',raw_data=attach_wstg_finding_lineage(obs['record'], 'code.semgrep'))
+                finding=Vulnerability.objects.filter(
+                    scan=scan,
+                    asset=scan.asset,
+                    source_engine='semgrep',
+                    file_path=obs['path'],
+                    line_start=obs['line'],
+                    title=obs['message'][:300],
+                ).first()
+                if finding is None:
+                    finding=Vulnerability.objects.create(
+                        scan=scan,
+                        project=scan.project,
+                        asset=scan.asset,
+                        title=obs['message'][:300],
+                        description=obs['message'],
+                        severity=obs['severity'],
+                        status=Vulnerability.Status.OPEN,
+                        confidence=Vulnerability.Confidence.HIGH,
+                        category='code',
+                        file_path=obs['path'][:500],
+                        line_start=max(0,obs['line']) or None,
+                        risk_score={
+                            Vulnerability.Severity.HIGH:80.0,
+                            Vulnerability.Severity.MEDIUM:60.0,
+                            Vulnerability.Severity.INFO:10.0,
+                        }[obs['severity']],
+                        validation_status='unverified',
+                        source_engine='semgrep',
+                        raw_data=attach_wstg_finding_lineage(obs['record'],'code.semgrep'),
+                    )
                 else:
-                    finding.raw_data=attach_wstg_finding_lineage(obs['record'], 'code.semgrep')
+                    finding.raw_data=attach_wstg_finding_lineage(obs['record'],'code.semgrep')
                     finding.save(update_fields=['raw_data','updated_at'])
-                Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'semgrep','scanner_output',str(finding.id)),defaults={'scan':scan,'asset':scan.asset,'finding':finding,'source':'semgrep','evidence_type':'scanner_output','raw_output':scanner_evidence.raw_output,'metadata':attach_wstg_evidence_metadata({'scanner_evidence_id':str(scanner_evidence.id),'check_id':obs['check_id'],'path':obs['path'],'line':obs['line'],**authorization_snapshot(authorization)}, 'code.semgrep'),'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
-            execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.findings_found=len(findings); execution.evidences_collected=1; execution.result_data={'tool':'semgrep','source':source,'exit_code':result.exit_code,'finding_ids':[str(v.id) for v in findings],'scanner_evidence_id':str(scanner_evidence.id),**authorization_snapshot(authorization)}; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','result_data','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=now; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'semgrep':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
-        return {'status':scan.status,'scan_id':scan_id,'tool':'semgrep','target':source,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
-    except ScannerExecutionCancelled as exc:
+                Evidence.objects.update_or_create(
+                    id=evidence_id('scan',scan_id,'semgrep','scanner_output',str(finding.id)),
+                    defaults={
+                        'scan':scan,
+                        'asset':scan.asset,
+                        'finding':finding,
+                        'source':'semgrep',
+                        'evidence_type':'scanner_output',
+                        'raw_output':scanner_evidence.raw_output,
+                        'metadata':attach_wstg_evidence_metadata({
+                            'scanner_evidence_id':str(scanner_evidence.id),
+                            'check_id':obs['check_id'],
+                            'path':obs['path'],
+                            'line':obs['line'],
+                            **provider_lineage,
+                            **authorization_snapshot(authorization),
+                        },'code.semgrep'),
+                        'collected_by':scan.initiated_by,
+                    },
+                )
+                finding.evidence_count=finding.evidence_records.count()
+                finding.save(update_fields=['evidence_count','updated_at'])
+                findings.append(finding)
+
+            execution.status=(
+                ScanEngineExecution.ExecutionStatus.COMPLETED
+                if result.exit_code==0
+                else ScanEngineExecution.ExecutionStatus.FAILED
+            )
+            execution.progress=100
+            execution.completed_at=now
+            execution.findings_found=len(findings)
+            execution.evidences_collected=1
+            execution.result_data={
+                'tool':'semgrep',
+                'source':source,
+                'exit_code':result.exit_code,
+                'finding_ids':[str(v.id) for v in findings],
+                'scanner_evidence_id':str(scanner_evidence.id),
+                **provider_lineage,
+                **authorization_snapshot(authorization),
+            }
+            execution.save(update_fields=[
+                'status','progress','completed_at','findings_found',
+                'evidences_collected','result_data','updated_at',
+            ])
+            scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL
+            scan.progress=100
+            scan.completed_at=now
+            scan.findings_count=len(findings)
+            scan.engine_results={**(scan.engine_results or {}),'semgrep':execution.result_data}
+            scan.save(update_fields=[
+                'status','progress','completed_at','findings_count','engine_results','updated_at',
+            ])
+        return {
+            'status':scan.status,
+            'scan_id':scan_id,
+            'tool':'semgrep',
+            'target':source,
+            'finding_ids':[str(v.id) for v in findings],
+            'provider_routing':result.routing,
+            **authorization_snapshot(authorization),
+        }
+    except (ScannerExecutionCancelled,KaliSemgrepProviderCancelled) as exc:
         return _finish_cancelled(scan,execution,str(exc))
     except Exception as exc:
-        if self.request.retries < self.max_retries: raise self.retry(exc=exc)
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
         return _finish_failed(scan,execution,str(exc),authorization_snapshot(authorization))
     finally:
-        if holder: holder.cleanup()
+        if holder:
+            holder.cleanup()
