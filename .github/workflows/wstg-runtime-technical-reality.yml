@@ -66,6 +66,7 @@ jobs:
               'aegis-platform/backend/fastapi_app/main.py',
               'aegis-platform/backend/fastapi_app/routers/oast.py',
               'aegis-platform/backend/fastapi_app/services/governed_oast.py',
+              'aegis-platform/backend/fastapi_app/services/oast_proof.py',
               'aegis-platform/backend/fastapi_app/services/oast_dns_collector.py',
               'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
               'aegis-platform/backend/scripts/governed_oast_reality.py',
