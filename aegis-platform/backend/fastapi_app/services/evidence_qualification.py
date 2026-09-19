@@ -13,7 +13,7 @@ from django.utils.dateparse import parse_datetime
 from django_project.assets.models import AssetAuthorization
 from django_project.evidence.models import Evidence
 from enterprise.governed_action_models import EvidenceQualificationEvaluation
-from enterprise.models import TenantProject
+from enterprise.models import Organization, TenantProject
 
 
 DEFAULT_POLICY_VERSION = 'agom-evidence-qualification.v1'
@@ -348,14 +348,39 @@ def qualify_evidence(
         raise EvidenceQualificationError('project_id, subject_type, and subject_id are required.')
 
     with transaction.atomic():
+        # Follow the AGOM serialization order: Organization -> TenantProject.
+        # A qualification record carries tenant/project foreign keys, so locking
+        # TenantProject first can deadlock against the governed executor, which
+        # correctly locks the organization root before the tenant link.
+        link_identity = (
+            TenantProject.objects.filter(
+                project_id=project_id,
+                organization__is_active=True,
+            )
+            .values('id', 'organization_id')
+            .first()
+        )
+        if link_identity is None:
+            raise EvidenceQualificationError('Project is not bound to an active enterprise tenant.')
+        locked_organization = (
+            Organization.objects.select_for_update()
+            .filter(pk=link_identity['organization_id'], is_active=True)
+            .first()
+        )
+        if locked_organization is None:
+            raise EvidenceQualificationError('Project tenant is no longer active.')
         link = (
             TenantProject.objects.select_for_update(of=('self',))
             .select_related('organization', 'project')
-            .filter(project_id=project_id, organization__is_active=True)
+            .filter(
+                pk=link_identity['id'],
+                project_id=project_id,
+                organization_id=locked_organization.id,
+            )
             .first()
         )
         if link is None:
-            raise EvidenceQualificationError('Project is not bound to an active enterprise tenant.')
+            raise EvidenceQualificationError('Project tenant binding changed during qualification.')
         if organization_id and organization_id != str(link.organization_id):
             raise EvidenceQualificationError('Organization does not own the requested project.')
         rows = list(
