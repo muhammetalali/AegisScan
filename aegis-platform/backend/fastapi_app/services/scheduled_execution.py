@@ -361,6 +361,144 @@ def create_canonical_schedule(
     return schedule
 
 
+@transaction.atomic
+def update_canonical_schedule(
+    *,
+    actor_id: str,
+    schedule_id: str,
+    expected_version: int,
+    name: str | None = None,
+    asset_id: str | None = None,
+    capability_id: str | None = None,
+    depth: str | None = None,
+    options: Mapping[str, Any] | None = None,
+    credential_refs: list[str] | tuple[str, ...] | None = None,
+    frequency: str | None = None,
+    cron_expression: str | None = None,
+    timezone_name: str | None = None,
+    next_run_at: datetime | None = None,
+    is_active: bool | None = None,
+) -> ScheduledScan:
+    schedule = (
+        ScheduledScan.objects.select_for_update()
+        .select_related('project', 'asset', 'created_by')
+        .filter(pk=schedule_id)
+        .first()
+    )
+    if schedule is None:
+        raise ScheduledExecutionError('schedule_not_found', 'Scheduled scan not found.', 404)
+    actor, project = _actor_project(actor_id, str(schedule.project_id), lock=True)
+    if project.id != schedule.project_id:
+        raise ScheduledExecutionError('schedule_not_found', 'Scheduled scan not found.', 404)
+    if int(expected_version) != int(schedule.version):
+        raise ScheduledExecutionError(
+            'schedule_version_conflict',
+            'Scheduled scan was modified by another request.',
+            409,
+        )
+
+    desired_active = schedule.is_active if is_active is None else bool(is_active)
+    desired_name = str(name if name is not None else schedule.name).strip()
+    if not desired_name or len(desired_name) > 200:
+        raise ScheduledExecutionError('invalid_name', 'Schedule name must be 1-200 characters.', 422)
+
+    if not desired_active:
+        schedule.name = desired_name
+        schedule.is_active = False
+        schedule.disabled_reason = 'Disabled by an authorized schedule update.'
+        schedule.version += 1
+        schedule.created_by = actor
+        schedule.save(update_fields=[
+            'name', 'is_active', 'disabled_reason', 'version', 'created_by', 'updated_at',
+        ])
+        append_audit(
+            user=actor,
+            action=AuditLog.Action.SCAN_SCHEDULE,
+            result=AuditLog.Result.SUCCESS,
+            resource_type='ScheduledScan',
+            resource_id=str(schedule.id),
+            resource_repr=schedule.name,
+            changes={'is_active': False, 'version': schedule.version},
+            metadata={
+                'event': 'scheduled_scan_disabled',
+                'project_id': str(schedule.project_id),
+                'schedule_version': schedule.version,
+            },
+            ip_address='0.0.0.0',
+        )
+        return schedule
+
+    desired_asset_id = str(asset_id or schedule.asset_id or '')
+    desired_capability_id = str(capability_id or schedule.capability_id)
+    desired_depth = str(depth or schedule.depth)
+    desired_options = dict(schedule.options or {}) if options is None else dict(options)
+    desired_refs = list(schedule.credential_refs or []) if credential_refs is None else list(credential_refs)
+    desired_frequency = str(frequency or schedule.frequency)
+    desired_cron = schedule.cron_expression if cron_expression is None else str(cron_expression)
+    desired_timezone = str(timezone_name or schedule.timezone)
+    desired_next = next_run_at or schedule.next_run
+
+    desired_frequency, desired_cron, desired_timezone, desired_next = validate_schedule_timing(
+        frequency=desired_frequency,
+        cron_expression=desired_cron,
+        timezone_name=desired_timezone,
+        first_run_at=desired_next,
+    )
+    binding = _normalize_binding(
+        actor_id=str(actor.id),
+        project_id=str(project.id),
+        asset_id=desired_asset_id,
+        capability_id=desired_capability_id,
+        depth=desired_depth,
+        options=desired_options,
+        credential_refs=desired_refs,
+        purpose=f'scheduled-scan:update:{schedule.id}',
+    )
+
+    schedule.name = desired_name
+    schedule.asset = binding['asset']
+    schedule.template = None
+    schedule.capability_id = binding['capability'].id
+    schedule.depth = desired_depth
+    schedule.options = binding['options']
+    schedule.credential_refs = binding['credential_refs']
+    schedule.policy_version = SCHEDULE_POLICY_VERSION
+    schedule.timezone = desired_timezone
+    schedule.frequency = desired_frequency
+    schedule.cron_expression = desired_cron
+    schedule.next_run = desired_next
+    schedule.is_active = True
+    schedule.disabled_reason = ''
+    schedule.version += 1
+    schedule.created_by = actor
+    schedule.save(update_fields=[
+        'name', 'asset', 'template', 'capability_id', 'depth', 'options',
+        'credential_refs', 'policy_version', 'timezone', 'frequency',
+        'cron_expression', 'next_run', 'is_active', 'disabled_reason',
+        'version', 'created_by', 'updated_at',
+    ])
+    append_audit(
+        user=actor,
+        action=AuditLog.Action.SCAN_SCHEDULE,
+        result=AuditLog.Result.SUCCESS,
+        resource_type='ScheduledScan',
+        resource_id=str(schedule.id),
+        resource_repr=schedule.name,
+        changes={'updated': True, 'version': schedule.version, 'is_active': True},
+        metadata={
+            'event': 'scheduled_scan_updated',
+            'project_id': str(schedule.project_id),
+            'asset_id': str(schedule.asset_id),
+            'capability_id': schedule.capability_id,
+            'schedule_version': schedule.version,
+            'next_run': schedule.next_run.isoformat(),
+            'policy_version': schedule.policy_version,
+        },
+        ip_address='0.0.0.0',
+    )
+    return schedule
+
+
 def _occurrence_payload(schedule: ScheduledScan, scheduled_for: datetime) -> dict[str, Any]:
     return {
         'schedule_id': str(schedule.id),
@@ -750,5 +888,6 @@ __all__ = [
     'execute_scheduled_occurrence',
     'next_schedule_run',
     'retryable_execution_ids',
+    'update_canonical_schedule',
     'validate_schedule_timing',
 ]
