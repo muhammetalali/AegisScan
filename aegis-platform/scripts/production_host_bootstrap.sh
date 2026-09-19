@@ -12,10 +12,10 @@ if [ ! -r /etc/os-release ]; then
 fi
 . /etc/os-release
 
-case "\${ID:-}" in
+case "${ID:-}" in
   ubuntu|debian) ;;
   *)
-    echo "supported distributions are Ubuntu and Debian; got: \${ID:-unknown}" >&2
+    echo "supported distributions are Ubuntu and Debian; got: ${ID:-unknown}" >&2
     exit 1
     ;;
 esac
@@ -26,11 +26,11 @@ if [ "$ARCH" != "amd64" ]; then
   exit 1
 fi
 
-SSH_PORT="\${AEGIS_SSH_PORT:-22}"
-INTERFACE="\${AEGIS_PRODUCTION_INTERFACE:-ens33}"
-INTERNAL_CIDR="\${AEGIS_INTERNAL_CIDR:-192.168.49.0/24}"
-DNS_SERVICE_IP="\${AEGIS_DNS_SERVICE_IP:-192.168.49.53}"
-CONFIGURE_INTERNAL_DNS="\${AEGIS_CONFIGURE_INTERNAL_DNS:-0}"
+SSH_PORT="${AEGIS_SSH_PORT:-22}"
+INTERFACE="${AEGIS_PRODUCTION_INTERFACE:-ens33}"
+INTERNAL_CIDR="${AEGIS_INTERNAL_CIDR:-192.168.49.0/24}"
+DNS_SERVICE_IP="${AEGIS_DNS_SERVICE_IP:-192.168.49.53}"
+CONFIGURE_INTERNAL_DNS="${AEGIS_CONFIGURE_INTERNAL_DNS:-0}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$SSH_PORT" in
@@ -62,7 +62,7 @@ if [ ! -f /etc/apt/keyrings/docker.asc ]; then
 fi
 chmod a+r /etc/apt/keyrings/docker.asc
 
-CODENAME="\${VERSION_CODENAME:-}"
+CODENAME="${VERSION_CODENAME:-}"
 if [ -z "$CODENAME" ]; then
   echo "VERSION_CODENAME is required for Docker repository setup" >&2
   exit 1
