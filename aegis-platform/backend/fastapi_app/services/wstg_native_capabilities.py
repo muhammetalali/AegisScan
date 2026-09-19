@@ -10,7 +10,7 @@ import time
 from typing import Any, Callable, Mapping
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from .governed_oast import resolve_ssrf_oast_evidence, verify_ssrf_oast_proof
+from .oast_proof import OASTProofConfigurationError, verify_ssrf_oast_proof
 from .native_tool_runtime import NativeExecutionCancelled
 from .pinned_http import PinnedHTTPResponse, pinned_http_operation, request_pinned
 from .scanner_adapters import ScanResult, validate_authorized_web_target
@@ -261,6 +261,8 @@ def _ssrf_canary_validation(
             'ssrf_confirmed': False,
         }
 
+    from .governed_oast import resolve_ssrf_oast_evidence
+
     proof = resolve_ssrf_oast_evidence(
         session_id=session_id,
         execution_id=execution_id,
@@ -464,7 +466,10 @@ def normalize_wstg_internal_output(capability_id: str, raw: str) -> dict[str, An
                         and safe.get('callback_observed')
                         and safe.get('authoritative_oast_evidence')
                     )
-                    verified = claimed and verify_ssrf_oast_proof(safe)
+                    try:
+                        verified = claimed and verify_ssrf_oast_proof(safe)
+                    except OASTProofConfigurationError:
+                        verified = False
                     if not verified:
                         safe['abstained'] = True
                         safe['callback_observed'] = False
