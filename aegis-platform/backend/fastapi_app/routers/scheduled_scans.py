@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import ScheduledScan, ScheduledScanExecution
+from django_project.users.models import Permission
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, require_permission
 from ..services.scheduled_execution import (
     ScheduledExecutionError,
     create_canonical_schedule,
@@ -198,7 +199,7 @@ def _executions(schedule_id: str, user_id: str, limit: int):
 @router.post('/', status_code=201)
 async def create_scheduled_scan(
     payload: ScheduledScanCreate,
-    user=Depends(get_current_user),
+    user=Depends(require_permission(Permission.SCAN_CREATE)),
 ):
     try:
         item = await _create(payload, str(user.get('user_id')))
@@ -234,7 +235,7 @@ async def get_scheduled_scan(
 async def update_scheduled_scan(
     schedule_id: str,
     payload: ScheduledScanUpdate,
-    user=Depends(get_current_user),
+    user=Depends(require_permission(Permission.SCAN_CREATE)),
 ):
     try:
         item = await _update(schedule_id, payload, str(user.get('user_id')))
