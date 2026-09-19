@@ -56,7 +56,7 @@ def _tenant_membership(*, project_id: str, user_id: str, mutation: bool = True):
     link = TenantProject.objects.select_related('organization', 'project').filter(project_id=project_id).first()
     if link is None or not link.organization.is_active:
         raise AssuranceObligationError('Project is not bound to an active enterprise tenant.')
-    membership = OrganizationMembership.objects.filter(organization=link.organization, user_id=user_id, is_active=True, user__is_active=True).first()
+    membership = OrganizationMembership.objects.select_related('user').filter(organization=link.organization, user_id=user_id, is_active=True, user__is_active=True).first()
     if membership is None:
         raise PermissionError('Active tenant membership is required for assurance obligation access.')
     if mutation and membership.role not in GOVERNANCE_ROLES:
@@ -370,7 +370,7 @@ def materialize_assurance_obligation(*, project_id: str, finding_id: str, user_i
             raise AssuranceObligationError('Finding was not found in project scope.')
         disposition = _latest_disposition_locked(finding)
         schedule = _select_schedule(organization_id=link.organization_id, project_id=project_id, asset_id=finding.asset_id, schedule_id=schedule_id)
-        existing = AssuranceObligation.objects.select_related('disposition', 'source_disposition', 'source_observation').select_for_update(of=('self',)).filter(disposition=disposition).first()
+        existing = AssuranceObligation.objects.select_related('disposition', 'source_disposition', 'source_observation', 'assigned_to', 'assigned_to__user', 'assigned_by', 'acknowledged_by').select_for_update(of=('self',)).filter(disposition=disposition).first()
         if existing is not None:
             if existing.schedule_id != schedule.id:
                 raise AssuranceObligationError('Existing immutable disposition obligation is bound to a different assurance schedule.')
@@ -452,7 +452,7 @@ def materialize_recurrence_obligation(*, project_id: str, observation_id: str, u
         schedule = observation.execution.schedule
         if schedule.organization_id != link.organization_id or str(schedule.project_id) != str(project_id) or schedule.asset_id != observation.asset_id:
             raise AssuranceObligationError('Recurrence observation schedule lineage is outside tenant/project/asset scope.')
-        existing = AssuranceObligation.objects.select_related('source_observation').select_for_update(of=('self',)).filter(source_observation=observation).first()
+        existing = AssuranceObligation.objects.select_related('source_observation', 'assigned_to', 'assigned_to__user', 'assigned_by', 'acknowledged_by').select_for_update(of=('self',)).filter(source_observation=observation).first()
         if existing is not None:
             _configure_existing_work_queue_locked(
                 obligation=existing,
@@ -533,7 +533,7 @@ def refresh_assurance_obligation(*, project_id: str, obligation_id: str, user_id
     link, membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=True)
     with transaction.atomic():
         link = _lock_scope(link)
-        obligation = AssuranceObligation.objects.select_related('disposition', 'source_disposition', 'source_observation', 'finding').select_for_update(of=('self',)).filter(pk=obligation_id, project_id=project_id, organization=link.organization).first()
+        obligation = AssuranceObligation.objects.select_related('disposition', 'source_disposition', 'source_observation', 'finding', 'assigned_to', 'assigned_to__user', 'assigned_by', 'acknowledged_by').select_for_update(of=('self',)).filter(pk=obligation_id, project_id=project_id, organization=link.organization).first()
         if obligation is None:
             raise AssuranceObligationError('Assurance obligation not found in tenant/project.')
         _configure_existing_work_queue_locked(
