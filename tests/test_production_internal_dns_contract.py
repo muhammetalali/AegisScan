@@ -67,7 +67,7 @@ def test_internal_dns_bootstrap_fails_closed_on_tsig_split_brain_and_keeps_backu
 
 def test_internal_dns_bootstrap_emits_runtime_environment_and_zone_coherently():
     script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
-    assert 'RUNTIME_ENV_FILE="${AEGIS_DDNS_ENV_FILE:-/etc/aegisscan/ddns-reconcile.env}"' in script
+    assert 'RUNTIME_ENV_FILE="/etc/aegisscan/ddns-reconcile.env"' in script
     assert 'AEGIS_DDNS_INTERFACE=$INTERFACE' in script
     assert 'AEGIS_DDNS_SERVER=$DNS_SERVICE_IP' in script
     assert 'AEGIS_DNS_SERVICE_IP=$DNS_SERVICE_IP' in script
@@ -80,3 +80,4 @@ def test_internal_dns_bootstrap_emits_runtime_environment_and_zone_coherently():
     assert 'grant $TSIG_NAME name $FQDN_ABS A;' in script
     assert 'ns1.$ZONE_NAME.' in script
     assert '$HOST_LABEL IN  A   $APP_IP' in script
+    assert '-e "s|^IPAddressAllow=.*$|IPAddressAllow=$DNS_SERVICE_IP/32|"' in script
