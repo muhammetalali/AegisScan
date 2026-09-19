@@ -117,6 +117,16 @@ class GovernedTemporalException(models.Model):
                 condition=Q(renewal_of__isnull=True) | Q(supersedes__isnull=True),
                 name='govtemp_exception_single_lineage_mode',
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(review_at__isnull=True)
+                    | (
+                        Q(review_at__gt=models.F('effective_from'))
+                        & Q(review_at__lt=models.F('expires_at'))
+                    )
+                ),
+                name='govtemp_exception_review_window',
+            ),
         ]
 
     def save(self, *args, **kwargs):
