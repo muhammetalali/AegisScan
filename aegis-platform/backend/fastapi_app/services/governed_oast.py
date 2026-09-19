@@ -302,6 +302,12 @@ def create_oast_session(
         if scan.status == Scan.Status.CANCELLED:
             raise OASTRuntimeError('scan_cancelled', 'Cancelled scan cannot create OAST callbacks.', 409)
 
+    idempotency_identity = _sha256_text(_canonical_json({
+        'actor_id': str(user_id),
+        'project_id': str(project.id),
+        'idempotency_key': str(idempotency_key),
+        'policy_version': OAST_POLICY_VERSION,
+    }))
     fingerprint_payload = {
         'actor_id': str(user_id),
         'project_id': str(project.id),
@@ -311,10 +317,12 @@ def create_oast_session(
         'execution_id': execution,
         'target': decision.target_snapshot,
         'idempotency_key': str(idempotency_key),
+        'ttl_seconds': ttl,
+        'max_interactions': interaction_limit,
         'policy_version': OAST_POLICY_VERSION,
     }
     request_fingerprint = _sha256_text(_canonical_json(fingerprint_payload))
-    session_id = uuid5(OAST_NAMESPACE, f'session:{request_fingerprint}')
+    session_id = uuid5(OAST_NAMESPACE, f'session:{idempotency_identity}')
     token = _session_token(session_id, request_fingerprint)
     token_sha256 = _sha256_text(token)
 
@@ -322,8 +330,8 @@ def create_oast_session(
     if existing is not None:
         if existing.request_fingerprint != request_fingerprint:
             raise OASTRuntimeError(
-                'session_identity_collision',
-                'OAST session identity collision detected.',
+                'idempotency_conflict',
+                'idempotency_key was already used with different OAST session parameters.',
                 409,
             )
         return _session_payload(existing)
@@ -347,13 +355,17 @@ def create_oast_session(
                 policy_version=OAST_POLICY_VERSION,
             )
     except IntegrityError as exc:
-        concurrent = GovernedOASTSession.objects.filter(
-            request_fingerprint=request_fingerprint,
-        ).first()
+        concurrent = GovernedOASTSession.objects.filter(pk=session_id).first()
         if concurrent is None:
             raise OASTRuntimeError(
                 'session_commit_conflict',
                 'OAST session could not be committed idempotently.',
+                409,
+            ) from exc
+        if concurrent.request_fingerprint != request_fingerprint:
+            raise OASTRuntimeError(
+                'idempotency_conflict',
+                'idempotency_key was concurrently reused with different OAST session parameters.',
                 409,
             ) from exc
         session = concurrent
@@ -746,6 +758,8 @@ def resolve_ssrf_oast_evidence(
     )
     if session is None:
         return {'confirmed': False, 'reason': 'oast_session_not_found'}
+    if session.scan_id is None:
+        return {'confirmed': False, 'reason': 'oast_scan_binding_required'}
     if session.execution_id != str(execution_id or '').strip():
         return {'confirmed': False, 'reason': 'oast_execution_mismatch'}
     if session.target_snapshot != str(target or '').strip():
