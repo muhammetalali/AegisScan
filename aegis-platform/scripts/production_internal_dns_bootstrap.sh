@@ -7,18 +7,18 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 PLATFORM_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-INTERFACE="\${AEGIS_DDNS_INTERFACE:-ens33}"
-INTERNAL_CIDR="\${AEGIS_DDNS_NETWORK:-192.168.49.0/24}"
-DNS_SERVICE_IP="\${AEGIS_DNS_SERVICE_IP:-192.168.49.53}"
-FQDN="\${AEGIS_DDNS_FQDN:-aegis-prod.aegis.internal.}"
-ZONE="\${AEGIS_DDNS_ZONE:-aegis.internal.}"
-TSIG_NAME="\${AEGIS_DDNS_TSIG_NAME:-aegis-prod-ddns}"
-NETPLAN_FILE="\${AEGIS_DNS_NETPLAN_FILE:-/etc/netplan/90-aegisscan-dns-service.yaml}"
-BIND_KEY_FILE="\${AEGIS_BIND_DDNS_KEY:-/etc/bind/keys/aegis-prod-ddns.key}"
-RUNTIME_KEY_FILE="\${AEGIS_DDNS_KEY:-/etc/aegisscan/ddns.key}"
-ZONE_FILE="\${AEGIS_DNS_ZONE_FILE:-/var/lib/bind/db.aegis.internal}"
-BIND_INCLUDE="\${AEGIS_BIND_INCLUDE:-/etc/bind/named.conf.aegisscan}"
-APPLY_NETWORK="\${AEGIS_NETPLAN_APPLY:-0}"
+INTERFACE="${AEGIS_DDNS_INTERFACE:-ens33}"
+INTERNAL_CIDR="${AEGIS_DDNS_NETWORK:-192.168.49.0/24}"
+DNS_SERVICE_IP="${AEGIS_DNS_SERVICE_IP:-192.168.49.53}"
+FQDN="${AEGIS_DDNS_FQDN:-aegis-prod.aegis.internal.}"
+ZONE="${AEGIS_DDNS_ZONE:-aegis.internal.}"
+TSIG_NAME="${AEGIS_DDNS_TSIG_NAME:-aegis-prod-ddns}"
+NETPLAN_FILE="${AEGIS_DNS_NETPLAN_FILE:-/etc/netplan/90-aegisscan-dns-service.yaml}"
+BIND_KEY_FILE="${AEGIS_BIND_DDNS_KEY:-/etc/bind/keys/aegis-prod-ddns.key}"
+RUNTIME_KEY_FILE="${AEGIS_DDNS_KEY:-/etc/aegisscan/ddns.key}"
+ZONE_FILE="${AEGIS_DNS_ZONE_FILE:-/var/lib/bind/db.aegis.internal}"
+BIND_INCLUDE="${AEGIS_BIND_INCLUDE:-/etc/bind/named.conf.aegisscan}"
+APPLY_NETWORK="${AEGIS_NETPLAN_APPLY:-0}"
 
 case "$APPLY_NETWORK" in
   0|1) ;;
@@ -69,6 +69,10 @@ PY
 install -d -m 0750 /etc/bind/keys
 install -d -m 0700 /etc/aegisscan
 install -d -o bind -g bind -m 0775 /var/lib/bind
+
+if [ ! -f "$BIND_KEY_FILE" ] && [ -f "$RUNTIME_KEY_FILE" ]; then
+  install -o root -g bind -m 0640 "$RUNTIME_KEY_FILE" "$BIND_KEY_FILE"
+fi
 
 if [ ! -f "$BIND_KEY_FILE" ] && [ ! -f "$RUNTIME_KEY_FILE" ]; then
   umask 077
@@ -126,7 +130,7 @@ EOF
 cat >"$BIND_INCLUDE" <<EOF
 include "$BIND_KEY_FILE";
 
-zone "\${ZONE%.}" {
+zone "${ZONE%.}" {
     type primary;
     file "$ZONE_FILE";
     allow-query { aegis_lan; };
@@ -164,7 +168,7 @@ EOF
 fi
 
 named-checkconf
-named-checkzone "\${ZONE%.}" "$ZONE_FILE"
+named-checkzone "${ZONE%.}" "$ZONE_FILE"
 
 cat >"$NETPLAN_FILE" <<EOF
 network:
