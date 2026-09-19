@@ -278,7 +278,8 @@ class GovernedOASTRuntimeTests(TestCase):
             type(evidence).objects.filter(pk=evidence.pk).delete()
 
     def test_wstg_confirmation_requires_signed_authoritative_proof(self):
-        payload = self._session(execution='exec-wstg-oast-1')
+        scan = self._scan(execution='exec-wstg-oast-1')
+        payload = self._session(execution='exec-wstg-oast-1', scan=scan)
         session_id, token = self._identity(payload)
         ingest_http_callback(
             session_id=session_id,
