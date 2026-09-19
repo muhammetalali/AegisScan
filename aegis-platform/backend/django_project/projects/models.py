@@ -127,14 +127,41 @@ class ScheduledScan(models.Model):
         MONTHLY = 'monthly', _('Monthly')
         CUSTOM = 'custom', _('Custom Cron')
 
+    class Depth(models.TextChoices):
+        QUICK = 'quick', _('Quick')
+        STANDARD = 'standard', _('Standard')
+        DEEP = 'deep', _('Deep')
+        COMPREHENSIVE = 'comprehensive', _('Comprehensive')
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(_('name'), max_length=200)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='scheduled_scans')
-    template = models.ForeignKey(ScanTemplate, on_delete=models.CASCADE, related_name='scheduled_scans')
+    template = models.ForeignKey(
+        ScanTemplate,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='scheduled_scans',
+    )
+    asset = models.ForeignKey(
+        'assets.Asset',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='scheduled_scans',
+    )
+    capability_id = models.CharField(max_length=120, blank=True)
+    depth = models.CharField(max_length=20, choices=Depth.choices, default=Depth.STANDARD)
+    options = models.JSONField(default=dict, blank=True)
+    credential_refs = models.JSONField(default=list, blank=True)
+    policy_version = models.CharField(max_length=64, default='scheduled-capability.v1')
+    timezone = models.CharField(max_length=64, default='UTC')
     frequency = models.CharField(_('frequency'), max_length=20, choices=Frequency.choices, default=Frequency.WEEKLY)
     cron_expression = models.CharField(_('cron expression'), max_length=100, blank=True)
     next_run = models.DateTimeField(_('next run'))
     is_active = models.BooleanField(_('active'), default=True)
+    disabled_reason = models.TextField(blank=True)
+    version = models.PositiveIntegerField(default=1)
     last_run = models.DateTimeField(_('last run'), blank=True, null=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='created_scheduled_scans')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -144,3 +171,76 @@ class ScheduledScan(models.Model):
         verbose_name = _('Scheduled Scan')
         verbose_name_plural = _('Scheduled Scans')
         ordering = ['next_run']
+        indexes = [
+            models.Index(fields=['is_active', 'next_run'], name='idx_schedscan_due'),
+            models.Index(fields=['project', 'capability_id'], name='idx_schedscan_cap'),
+        ]
+
+
+class ScheduledScanExecution(models.Model):
+    class Status(models.TextChoices):
+        CLAIMED = 'claimed', _('Claimed')
+        RUNNING = 'running', _('Running')
+        DISPATCHED = 'dispatched', _('Dispatched')
+        BLOCKED = 'blocked', _('Blocked')
+        FAILED = 'failed', _('Failed')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    schedule = models.ForeignKey(
+        ScheduledScan,
+        on_delete=models.PROTECT,
+        related_name='executions',
+    )
+    scheduled_for = models.DateTimeField()
+    schedule_version = models.PositiveIntegerField()
+    actor_id_snapshot = models.CharField(max_length=64)
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name='scheduled_scan_executions')
+    asset = models.ForeignKey('assets.Asset', on_delete=models.PROTECT, related_name='scheduled_scan_executions')
+    authorization_decision = models.ForeignKey(
+        'assets.AssetAuthorization',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='scheduled_scan_executions',
+    )
+    scan = models.OneToOneField(
+        'scans.Scan',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='scheduled_execution',
+    )
+    capability_id = models.CharField(max_length=120)
+    depth_snapshot = models.CharField(max_length=20)
+    options_snapshot = models.JSONField(default=dict)
+    credential_refs_snapshot = models.JSONField(default=list)
+    policy_version_snapshot = models.CharField(max_length=64)
+    target_snapshot = models.CharField(max_length=500, blank=True)
+    request_fingerprint = models.CharField(max_length=64)
+    policy_fingerprint = models.CharField(max_length=64, blank=True)
+    execution_contract_fingerprint = models.CharField(max_length=64, blank=True)
+    idempotency_key = models.CharField(max_length=128)
+    correlation_id = models.CharField(max_length=128)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.CLAIMED)
+    attempts = models.PositiveIntegerField(default=0)
+    celery_task_id = models.CharField(max_length=255, blank=True)
+    scanner_task_id = models.CharField(max_length=255, blank=True)
+    reason = models.TextField(blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-scheduled_for', '-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['schedule', 'scheduled_for'],
+                name='uniq_schedscan_occurrence',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['status', 'created_at'], name='idx_schedexec_status'),
+            models.Index(fields=['schedule', 'scheduled_for'], name='idx_schedexec_occurrence'),
+            models.Index(fields=['project', 'correlation_id'], name='idx_schedexec_corr'),
+        ]
