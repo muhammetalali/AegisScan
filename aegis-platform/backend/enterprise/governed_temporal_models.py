@@ -152,6 +152,33 @@ class GovernedTemporalException(models.Model):
                 raise ValidationError('Revoked temporal exceptions cannot be renewed or superseded.')
             if type(self).objects.filter(supersedes_id=parent.pk).exclude(pk=self.pk).exists():
                 raise ValidationError('Already-superseded temporal exceptions cannot be renewed or superseded.')
+
+            renewal_child_ids = list(
+                type(self).objects.filter(renewal_of_id=parent.pk)
+                .exclude(pk=self.pk)
+                .values_list('id', flat=True)
+            )
+            if renewal_child_ids:
+                revoked_child_ids = set(
+                    GovernedTemporalExceptionRevocation.objects.filter(
+                        exception_id__in=renewal_child_ids,
+                    ).values_list('exception_id', flat=True)
+                )
+                superseded_child_ids = set(
+                    type(self).objects.filter(
+                        supersedes_id__in=renewal_child_ids,
+                    ).values_list('supersedes_id', flat=True)
+                )
+                active_renewal_exists = any(
+                    child_id not in revoked_child_ids and child_id not in superseded_child_ids
+                    for child_id in renewal_child_ids
+                )
+                if active_renewal_exists:
+                    if self.renewal_of_id == parent.pk:
+                        raise ValidationError('Temporal exception already has a current renewal.')
+                    raise ValidationError(
+                        'Temporal exception has a current renewal; supersede the current renewal leaf instead.'
+                    )
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
