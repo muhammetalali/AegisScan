@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_systemd_ddns_contract_is_hardened_and_periodic():
+def test_systemd_ddns_contract_is_hardened_periodic_and_environment_bound():
     service = (ROOT / "aegis-platform/systemd/aegisscan-ddns-reconcile.service").read_text()
     timer = (ROOT / "aegis-platform/systemd/aegisscan-ddns-reconcile.timer").read_text()
     assert "NoNewPrivileges=yes" in service
@@ -11,6 +11,7 @@ def test_systemd_ddns_contract_is_hardened_and_periodic():
     assert "IPAddressDeny=any" in service
     assert "IPAddressAllow=192.168.49.53/32" in service
     assert "RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK" in service
+    assert "EnvironmentFile=-/etc/aegisscan/ddns-reconcile.env" in service
     assert "OnBootSec=20s" in timer
     assert "OnUnitInactiveSec=60s" in timer
     assert "RandomizedDelaySec=5s" in timer
@@ -59,4 +60,23 @@ def test_internal_dns_bootstrap_fails_closed_on_tsig_split_brain_and_keeps_backu
     assert 'backup_file "$NETPLAN_FILE"' in script
     assert "backup_file /etc/bind/named.conf.options" in script
     assert "backup_file /etc/bind/named.conf.local" in script
+    assert 'backup_file "$BIND_INCLUDE"' in script
+    assert 'backup_file "$RUNTIME_ENV_FILE"' in script
     assert 'secret "' not in script
+
+
+def test_internal_dns_bootstrap_emits_runtime_environment_and_zone_coherently():
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    assert 'RUNTIME_ENV_FILE="${AEGIS_DDNS_ENV_FILE:-/etc/aegisscan/ddns-reconcile.env}"' in script
+    assert 'AEGIS_DDNS_INTERFACE=$INTERFACE' in script
+    assert 'AEGIS_DDNS_SERVER=$DNS_SERVICE_IP' in script
+    assert 'AEGIS_DNS_SERVICE_IP=$DNS_SERVICE_IP' in script
+    assert 'AEGIS_DDNS_NETWORK=$INTERNAL_CIDR' in script
+    assert 'AEGIS_DDNS_FQDN=$FQDN_ABS' in script
+    assert 'AEGIS_DDNS_ZONE=$ZONE_NAME.' in script
+    assert 'AEGIS_DDNS_KEY=$RUNTIME_KEY_FILE' in script
+    assert 'chmod 0600 "$RUNTIME_ENV_FILE"' in script
+    assert 'zone "$ZONE_NAME"' in script
+    assert 'grant $TSIG_NAME name $FQDN_ABS A;' in script
+    assert 'ns1.$ZONE_NAME.' in script
+    assert '$HOST_LABEL IN  A   $APP_IP' in script
