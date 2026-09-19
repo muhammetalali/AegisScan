@@ -29,7 +29,7 @@ case "$APPLY_NETWORK" in
     ;;
 esac
 
-for command in python3 ip netplan systemctl systemd-analyze named-checkconf named-checkzone tsig-keygen dig nsupdate cmp grep awk date cp; do
+for command in python3 ip netplan systemctl systemd-analyze named-checkconf named-checkzone tsig-keygen dig nsupdate cmp grep awk date cp tr; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "required command is missing: $command" >&2
     exit 1
