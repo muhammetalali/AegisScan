@@ -29,22 +29,23 @@ def test_host_bootstrap_scopes_internal_ingress_and_preserves_dns():
     assert 'ufw allow "$SSH_PORT/tcp"' not in script
 
 
-def test_internal_dns_bootstrap_applies_network_before_bind_restart_when_opted_in():
+def test_internal_dns_bootstrap_activates_and_verifies_address_before_bind_mutation():
     script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    netplan_render = 'cat >"$NETPLAN_FILE" <<EOF'
     apply_guard = 'if [ "$APPLY_NETWORK" -eq 1 ]; then'
     apply_call = "netplan apply"
     address_gate = 'grep -Fxq "$DNS_SERVICE_IP"'
+    bind_mutation = "cat >/etc/bind/named.conf.options <<EOF"
     bind_restart = "systemctl restart named"
 
     assert 'APPLY_NETWORK="${AEGIS_NETPLAN_APPLY:-0}"' in script
-    assert apply_guard in script
-    assert apply_call in script
-    assert address_gate in script
-    assert bind_restart in script
+    assert "AEGISSCAN_INTERNAL_DNS_BOOTSTRAP=PENDING_NETWORK_APPLY" in script
 
+    assert script.index(netplan_render) < script.index(apply_guard)
     assert script.index(apply_guard) < script.index(apply_call)
     assert script.index(apply_call) < script.index(address_gate)
-    assert script.index(address_gate) < script.index(bind_restart)
+    assert script.index(address_gate) < script.index(bind_mutation)
+    assert script.index(bind_mutation) < script.index(bind_restart)
 
 
 def test_internal_dns_bootstrap_fails_closed_on_tsig_split_brain_and_keeps_backups():
@@ -55,4 +56,7 @@ def test_internal_dns_bootstrap_fails_closed_on_tsig_split_brain_and_keeps_backu
     assert "refusing split-brain DDNS configuration" in script
     assert 'BACKUP_ROOT="${AEGIS_DNS_BACKUP_DIR:-/var/lib/aegisscan/backups/dns-config}"' in script
     assert 'cp -a "$candidate" "$BACKUP_ROOT/$safe_name.$STAMP"' in script
+    assert 'backup_file "$NETPLAN_FILE"' in script
+    assert "backup_file /etc/bind/named.conf.options" in script
+    assert "backup_file /etc/bind/named.conf.local" in script
     assert 'secret "' not in script
