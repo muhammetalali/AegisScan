@@ -1,0 +1,145 @@
+name: Network Masscan Legacy Retirement Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &masscan_m6_paths
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/scanner-worker-entrypoint.sh'
+      - 'aegis-platform/backend/fastapi_app/services/masscan_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/masscan_retirement_preflight.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_masscan_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_m6_legacy_masscan_retirement.py'
+      - 'aegis-platform/docker-compose.prod.yml'
+      - 'aegis-platform/kali/Dockerfile.masscan-provider'
+      - 'aegis-platform/kali/runner/network_masscan_service.py'
+      - 'aegis-platform/e2e/masscan_m6_contract_reality.py'
+      - 'aegis-platform/e2e/masscan_m6_retirement_reality.py'
+      - 'aegis-platform/e2e/masscan_m6_retirement_reality.sh'
+      - 'docs/NETWORK_MASSCAN_LEGACY_RETIREMENT.md'
+      - '.github/workflows/network-masscan-legacy-retirement-reality.yml'
+  push:
+    branches: [main]
+    paths: *masscan_m6_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-masscan-m6-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  retirement-contract:
+    name: Masscan Retirement Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AUTHORIZED_SCAN_TARGETS: 198.51.100.40
+      POSTGRES_PASSWORD: ci-production-policy-password
+      AEGIS_KALI_MASSCAN_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_MASSCAN_IMAGE: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_MASSCAN_EXPECTED_RUNNER_VERSION: 0.1.0
+      AEGIS_KALI_MASSCAN_EXPECTED_BUILD_COMMIT: cccccccccccccccccccccccccccccccccccccccc
+      AEGIS_KALI_MASSCAN_EXPECTED_BASE_IMAGE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_KALI_MASSCAN_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_KALI_MASSCAN_EXPECTED_IMAGE_DIGEST: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_MASSCAN_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Compile and test M6 contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pip install pytest
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/masscan_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/masscan_retirement_preflight.py \
+            aegis-platform/backend/fastapi_app/services/test_m6_legacy_masscan_retirement.py \
+            aegis-platform/e2e/masscan_m6_contract_reality.py \
+            aegis-platform/e2e/masscan_m6_retirement_reality.py
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest \
+            aegis-platform/backend/fastapi_app/services/test_masscan_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_m6_legacy_masscan_retirement.py
+          grep -Fq 'python -m fastapi_app.services.masscan_retirement_preflight' \
+            aegis-platform/backend/scanner-worker-entrypoint.sh
+      - name: Render and validate immutable production contract
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose -f aegis-platform/docker-compose.yml -f aegis-platform/docker-compose.prod.yml \
+            config --format json > artifacts/masscan-m6-production-compose.json
+          AEGIS_MASSCAN_PROVIDER=legacy AEGIS_KALI_MASSCAN_CANARY_BPS=2500 \
+            docker compose -f aegis-platform/docker-compose.yml -f aegis-platform/docker-compose.prod.yml \
+            config --format json > artifacts/masscan-m6-production-override-attempt.json
+          python aegis-platform/e2e/masscan_m6_contract_reality.py \
+            artifacts/masscan-m6-production-compose.json \
+            artifacts/masscan-m6-production-override-attempt.json
+      - name: Prove previous-release rollback boundary
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          previous_release="${PR_BASE_SHA:-$(git rev-parse HEAD^1)}"
+          git cat-file -e "${previous_release}^{commit}"
+          git show "${previous_release}:aegis-platform/backend/Dockerfile.django" > artifacts/previous-release-Dockerfile.django
+          git show "${previous_release}:aegis-platform/docker-compose.prod.yml" > artifacts/previous-release-compose.prod.yml
+          grep -Fq 'command -v masscan >/dev/null' artifacts/previous-release-Dockerfile.django
+          ! grep -Fq 'AEGIS_RETIRE_MASSCAN' artifacts/previous-release-Dockerfile.django
+          ! grep -Fq 'AEGIS_MASSCAN_LEGACY_DISABLED' artifacts/previous-release-compose.prod.yml
+          python - <<'PY'
+          from pathlib import Path
+          source=Path('aegis-platform/scripts/production_host_deploy.py').read_text()
+          block=source[source.index('def _rollback_application('):source.index('\ndef deploy(')]
+          assert block.index('_checkout(previous_sha)') < block.index('_deploy_stack('), block
+          assert 'previous_sha=previous_sha' in source, source
+          PY
+          printf '%s\n' "$previous_release" > artifacts/previous-release-sha.txt
+      - name: Capture M6 contract evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          printf '%s\n' '{"schema":"aegis.network-masscan-legacy-retirement.v1","production_provider":"default-kali","legacy_route":false,"canary_route":false,"local_masscan":false,"rollback":"previous-release"}' \
+            > artifacts/network-masscan-m6-contract.json
+          (cd artifacts && sha256sum head-sha.txt masscan-m6-production-compose.json \
+            masscan-m6-production-override-attempt.json previous-release-sha.txt \
+            previous-release-Dockerfile.django previous-release-compose.prod.yml \
+            network-masscan-m6-contract.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-masscan-m6-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-retired-runtime:
+    name: Real Retired Masscan Runtime
+    needs: retirement-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Execute real retired Masscan runtime
+        run: bash aegis-platform/e2e/masscan_m6_retirement_reality.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-masscan-m6-runtime-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
