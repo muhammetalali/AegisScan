@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import GovernedOASTInteraction, GovernedOASTSession
 from django_project.projects.models import Project
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 
 from fastapi_app.core.dependencies import get_current_user
 from fastapi_app.routers import oast
@@ -49,6 +49,7 @@ def main() -> int:
         password='unused',
         first_name='OAST',
         last_name='Reality',
+        role=UserRole.SECURITY_ANALYST,
     )
     project = Project.objects.create(
         name='OAST Reality',
