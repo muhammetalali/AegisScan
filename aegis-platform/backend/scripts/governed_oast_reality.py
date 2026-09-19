@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import GovernedOASTInteraction, GovernedOASTSession
 from django_project.projects.models import Project
+from django_project.scans.models import Scan
 from django_project.users.models import User, UserRole
 
 from fastapi_app.core.dependencies import get_current_user
@@ -74,6 +75,17 @@ def main() -> int:
         expires_at=timezone.now() + timedelta(minutes=30),
     )
 
+    scan = Scan.objects.create(
+        project=project,
+        name='OAST Reality Bound Scan',
+        scan_type=Scan.Type.URL,
+        status=Scan.Status.RUNNING,
+        asset=asset,
+        authorization_decision=authorization,
+        execution_correlation_id='reality-execution-1',
+        initiated_by=user,
+    )
+
     app = FastAPI()
     app.include_router(oast.router, prefix='/api/v1/oast')
     app.dependency_overrides[get_current_user] = lambda: {
@@ -91,6 +103,7 @@ def main() -> int:
             'execution_id': 'reality-execution-1',
             'idempotency_key': 'governed-oast-reality-0001',
             'target': target,
+            'scan_id': str(scan.id),
             'ttl_seconds': 300,
             'max_interactions': 8,
         },
@@ -183,6 +196,7 @@ def main() -> int:
         'project_id': str(project.id),
         'asset_id': str(asset.id),
         'authorization_decision_id': str(authorization.id),
+        'scan_id': str(scan.id),
         'execution_id': session.execution_id,
         'session_token_persisted_raw': False,
         'http_callback': 'proven',
