@@ -107,16 +107,24 @@ docker run -d --name aegis-masscan-m6-egress \
   -e SCANNER_EGRESS_PRIVATE_TARGETS="$TARGET/32" \
   aegis-scanner-egress:masscan-m6
 
+container_log_contains() {
+  local container="$1"
+  local needle="$2"
+  local logs
+  logs="$(docker logs "$container" 2>&1)" || return 1
+  grep -Fq -- "$needle" <<<"$logs"
+}
+
 for _ in $(seq 1 30); do
   fixture_ready=false
   egress_ready=false
-  docker logs aegis-masscan-m6-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY && fixture_ready=true || true
-  docker logs aegis-masscan-m6-egress 2>&1 | grep -Fq 'kernel egress policy installed' && egress_ready=true || true
+  container_log_contains aegis-masscan-m6-fixture AEGIS_NMAP_PARITY_FIXTURE_READY && fixture_ready=true || true
+  container_log_contains aegis-masscan-m6-egress 'kernel egress policy installed' && egress_ready=true || true
   if "$fixture_ready" && "$egress_ready"; then break; fi
   sleep 1
 done
-docker logs aegis-masscan-m6-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY
-docker logs aegis-masscan-m6-egress 2>&1 | grep -Fq 'kernel egress policy installed'
+container_log_contains aegis-masscan-m6-fixture AEGIS_NMAP_PARITY_FIXTURE_READY
+container_log_contains aegis-masscan-m6-egress 'kernel egress policy installed'
 
 INTERFACE=eth0
 ADAPTER_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-masscan-m6-egress)"
