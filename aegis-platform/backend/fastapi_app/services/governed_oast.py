@@ -29,6 +29,7 @@ from django_project.scans.models import Scan
 
 from .authorization_guard import asset_target
 from .evidence_identity import evidence_id
+from .oast_proof import OASTProofConfigurationError, sign_ssrf_oast_proof
 
 
 OAST_NAMESPACE = UUID('997c4411-6714-4d21-b1a4-4556c1dc8404')
@@ -770,11 +771,10 @@ def resolve_ssrf_oast_evidence(
         'protocols': sorted({item.protocol for item in interactions}),
         'callback_count': len(interactions),
     }
-    proof_hmac = hmac.new(
-        _signing_key(),
-        ('ssrf-oast-proof:' + _canonical_json(proof_payload)).encode('utf-8'),
-        hashlib.sha256,
-    ).hexdigest()
+    try:
+        proof_hmac = sign_ssrf_oast_proof(proof_payload)
+    except OASTProofConfigurationError as exc:
+        raise OASTRuntimeError('oast_not_configured', str(exc), 503) from exc
     return {
         'confirmed': True,
         'reason': 'authoritative_oast_callback_observed',
@@ -782,39 +782,6 @@ def resolve_ssrf_oast_evidence(
         'proof_hmac': proof_hmac,
     }
 
-
-def verify_ssrf_oast_proof(payload: Mapping[str, Any]) -> bool:
-    try:
-        proof_payload = {
-            'session_id': str(payload['session_id']),
-            'execution_id': str(payload['execution_id']),
-            'target_sha256': str(payload['target_sha256']),
-            'interaction_ids': [str(item) for item in payload['interaction_ids']],
-            'evidence_ids': [str(item) for item in payload['evidence_ids']],
-            'protocols': sorted(str(item) for item in payload['protocols']),
-            'callback_count': int(payload['callback_count']),
-        }
-        supplied = str(payload['proof_hmac'])
-    except (KeyError, TypeError, ValueError):
-        return False
-    if (
-        not proof_payload['session_id']
-        or not proof_payload['execution_id']
-        or len(proof_payload['target_sha256']) != 64
-        or not proof_payload['interaction_ids']
-        or not proof_payload['evidence_ids']
-        or len(proof_payload['interaction_ids']) != len(proof_payload['evidence_ids'])
-        or proof_payload['callback_count'] != len(proof_payload['interaction_ids'])
-        or any(protocol not in {'dns', 'http'} for protocol in proof_payload['protocols'])
-        or len(supplied) != 64
-    ):
-        return False
-    expected = hmac.new(
-        _signing_key(),
-        ('ssrf-oast-proof:' + _canonical_json(proof_payload)).encode('utf-8'),
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(supplied, expected)
 
 
 __all__ = [
@@ -824,5 +791,4 @@ __all__ = [
     'ingest_dns_callback',
     'ingest_http_callback',
     'resolve_ssrf_oast_evidence',
-    'verify_ssrf_oast_proof',
 ]
