@@ -77,3 +77,41 @@ def test_web_message_assessment_canonicalizes_same_origin_peer():
     assert record['peer_origin'] == 'https://app.example.test'
     assert record['same_origin_peer'] is True
     assert result['cross_origin_receive_count'] == 0
+
+
+
+def test_web_message_origin_canonicalization_preserves_ipv6_authority():
+    safe = normalize_web_message_record(
+        {
+            'direction': 'receive',
+            'peer_origin': 'https://[2001:DB8::1]:8443/',
+            'data_type': 'string',
+            'data_keys': [],
+        },
+        target_origin='https://[2001:db8::1]:8443',
+    )
+
+    assert safe is not None
+    assert safe['peer_origin'] == 'https://[2001:db8::1]:8443'
+    assert safe['same_origin_peer'] is True
+
+
+def test_web_message_origin_rejects_userinfo_paths_queries_and_fragments():
+    for peer_origin in (
+        'https://user:pass@example.test',
+        'https://example.test/path',
+        'https://example.test/?q=1',
+        'https://example.test/#fragment',
+    ):
+        safe = normalize_web_message_record(
+            {
+                'direction': 'receive',
+                'peer_origin': peer_origin,
+                'data_type': 'string',
+                'data_keys': [],
+            },
+            target_origin='https://example.test',
+        )
+        assert safe is not None
+        assert safe['peer_origin'] == 'null'
+        assert safe['same_origin_peer'] is False

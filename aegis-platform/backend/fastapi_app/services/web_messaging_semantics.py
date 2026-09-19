@@ -22,11 +22,16 @@ def _canonical_origin(value: Any) -> str:
         host = (parsed.hostname or '').lower().rstrip('.')
         if scheme not in {'http', 'https'} or not host:
             return ''
+        if parsed.username is not None or parsed.password is not None:
+            return ''
+        if parsed.query or parsed.fragment or parsed.path not in {'', '/'}:
+            return ''
         port = parsed.port
     except (TypeError, ValueError):
         return ''
     default_port = 80 if scheme == 'http' else 443
-    authority = host if port in {None, default_port} else f'{host}:{port}'
+    authority_host = f'[{host}]' if ':' in host else host
+    authority = authority_host if port in {None, default_port} else f'{authority_host}:{port}'
     return urlunsplit((scheme, authority, '', '', ''))
 
 
