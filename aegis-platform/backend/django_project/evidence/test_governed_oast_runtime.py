@@ -227,12 +227,23 @@ class GovernedOASTRuntimeTests(TestCase):
             source_ip='198.51.100.10',
             method='GET',
         )
-        interaction = GovernedOASTInteraction.objects.get(pk=result['interaction_id'])
+        interaction = GovernedOASTInteraction.objects.select_related('evidence').get(
+            pk=result['interaction_id']
+        )
         interaction.request_method = 'POST'
         with self.assertRaises(ValidationError):
             interaction.save()
         with self.assertRaises(ValidationError):
             GovernedOASTInteraction.objects.filter(pk=interaction.pk).delete()
+
+        evidence = interaction.evidence
+        evidence.raw_output = '{"changed":true}'
+        with self.assertRaises(ValidationError):
+            evidence.save()
+        with self.assertRaises(ValidationError):
+            type(evidence).objects.filter(pk=evidence.pk).update(raw_output='changed')
+        with self.assertRaises(ValidationError):
+            type(evidence).objects.filter(pk=evidence.pk).delete()
 
     def test_wstg_confirmation_requires_signed_authoritative_proof(self):
         payload = self._session(execution='exec-wstg-oast-1')
