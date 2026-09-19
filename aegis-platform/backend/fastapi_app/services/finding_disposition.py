@@ -15,6 +15,7 @@ from django_project.vulnerabilities.models import Vulnerability, VulnerabilitySt
 from enterprise.models import OrganizationMembership, RiskCorrelationSnapshot, TenantProject
 
 from .audit_writer import add_audit_entry
+from .governed_temporal_policy import GovernedTemporalError, validate_review_deadline
 
 
 POLICY_VERSION = 'finding-disposition.v1'
@@ -97,14 +98,19 @@ def _resolve_latest_risk(*, finding: Vulnerability, risk_correlation_id: UUID | 
 def _validate_review_at(review_at: datetime | None) -> datetime:
     if review_at is None:
         raise FindingDispositionError('Risk dispositions require review_at.')
-    if review_at.tzinfo is None:
-        review_at = review_at.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-    if review_at <= now:
-        raise FindingDispositionError('review_at must be in the future.')
-    if review_at > now + timedelta(days=MAX_REVIEW_DAYS):
-        raise FindingDispositionError(f'review_at cannot exceed {MAX_REVIEW_DAYS} days.')
-    return review_at
+    try:
+        return validate_review_deadline(
+            review_at,
+            now=datetime.now(timezone.utc),
+            max_horizon=timedelta(days=MAX_REVIEW_DAYS),
+        )
+    except GovernedTemporalError as exc:
+        message = str(exc)
+        if 'future' in message:
+            raise FindingDispositionError('review_at must be in the future.') from exc
+        if 'maximum policy horizon' in message:
+            raise FindingDispositionError(f'review_at cannot exceed {MAX_REVIEW_DAYS} days.') from exc
+        raise FindingDispositionError(message) from exc
 
 
 def _canonical_duplicate(*, finding: Vulnerability, duplicate_of_id: UUID | str) -> Vulnerability:

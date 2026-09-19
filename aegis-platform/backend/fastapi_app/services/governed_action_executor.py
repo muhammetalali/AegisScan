@@ -20,6 +20,10 @@ from fastapi_app.services.finding_closure import close_finding
 from fastapi_app.services.finding_confirmation import confirm_finding
 from fastapi_app.services.evidence_qualification import EvidenceQualificationPolicy, qualify_evidence
 from fastapi_app.services.governed_capability_manifest import build_governed_capability_manifest
+from fastapi_app.services.governed_temporal_policy import (
+    TemporalEnvelope,
+    evaluate_governed_temporal_policy,
+)
 from fastapi_app.services.governed_operations import get_action_contract
 
 
@@ -126,6 +130,110 @@ def _qualification_view(result) -> dict[str, Any]:
         'evaluated_at': evaluation.evaluated_at.isoformat(),
         'replayed': bool(result.replayed),
     }
+
+
+def _temporal_view(result) -> dict[str, Any]:
+    evaluation = result.evaluation
+    return {
+        'evaluation_id': str(evaluation.id),
+        'decision': evaluation.decision,
+        'allowed': bool(evaluation.allowed),
+        'reason_codes': list(evaluation.reason_codes or []),
+        'policy_version': evaluation.policy_version,
+        'effective_from': evaluation.effective_from.isoformat() if evaluation.effective_from else None,
+        'expires_at': evaluation.expires_at.isoformat() if evaluation.expires_at else None,
+        'review_at': evaluation.review_at.isoformat() if evaluation.review_at else None,
+        'grace_period_seconds': int(evaluation.grace_period_seconds),
+        'escalation_level': int(evaluation.escalation_level),
+        'exception_id': str(evaluation.exception_id) if evaluation.exception_id else None,
+        'evaluation_fingerprint': evaluation.evaluation_fingerprint,
+        'evaluated_at': evaluation.evaluated_at.isoformat(),
+        'replayed': bool(result.replayed),
+    }
+
+
+def _temporal_envelope_for_action(
+    *,
+    action_id: str,
+    entity_id: str,
+    parameters: dict[str, Any],
+) -> TemporalEnvelope:
+    validation = None
+    if action_id == 'finding.confirm':
+        validation_id = str(parameters.get('validation_id') or '').strip()
+        if validation_id:
+            validation = (
+                ValidationRun.objects.select_related('authorization_decision')
+                .filter(pk=validation_id, finding_id=entity_id)
+                .first()
+            )
+    elif action_id == 'finding.close':
+        validation = (
+            ValidationRun.objects.select_related('authorization_decision')
+            .filter(finding_id=entity_id)
+            .order_by('-created_at', '-id')
+            .first()
+        )
+    decision = validation.authorization_decision if validation is not None else None
+    if decision is None:
+        return TemporalEnvelope()
+    return TemporalEnvelope(
+        effective_from=decision.valid_from,
+        expires_at=decision.expires_at,
+        renewal_ref=str(decision.id),
+        recurrence={
+            'source': 'asset_authorization',
+            'authorization_decision_id': str(decision.id),
+        },
+    )
+
+
+def _preflight_temporal_policy(
+    *,
+    action_id: str,
+    project_id: str,
+    actor_id: str,
+    entity_type: str,
+    entity_id: str,
+    parameters: dict[str, Any],
+    evaluated_at=None,
+):
+    manifest = build_governed_capability_manifest(
+        project_id=project_id,
+        user_id=actor_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+    )
+    capability = _capability_for(manifest, action_id)
+    if capability.mode is ActionMode.HIDDEN:
+        raise PermissionError('Governed action is not available to this actor.')
+    if capability.mode is not ActionMode.ENABLED:
+        raise GovernedActionBlocked(
+            capability.reason_code,
+            capability.reason,
+            capability.missing_requirements,
+        )
+    result = evaluate_governed_temporal_policy(
+        project_id=project_id,
+        action_id=action_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        requested_by_id=actor_id,
+        envelope=_temporal_envelope_for_action(
+            action_id=action_id,
+            entity_id=entity_id,
+            parameters=parameters,
+        ),
+        evaluated_at=evaluated_at,
+    )
+    if not result.allowed:
+        evaluation = result.evaluation
+        raise GovernedActionBlocked(
+            'TEMPORAL_POLICY_BLOCKED',
+            f'Governed temporal policy rejected the action: {evaluation.decision}.',
+            list(evaluation.reason_codes or [evaluation.decision]),
+        )
+    return result
 
 
 def _finding_confirmation_qualification(
@@ -436,6 +544,14 @@ def execute_governed_action(
         entity_id=normalized_entity_id,
         parameters=payload,
     )
+    pretemporal = _preflight_temporal_policy(
+        action_id=normalized_action,
+        project_id=normalized_project_id,
+        actor_id=normalized_actor_id,
+        entity_type=normalized_entity_type,
+        entity_id=normalized_entity_id,
+        parameters=payload,
+    )
 
     with transaction.atomic():
         # Resolve the immutable tenant link only to discover the serialization
@@ -521,6 +637,16 @@ def execute_governed_action(
             )
             _require_qualified_evidence(qualification)
 
+        temporal = _preflight_temporal_policy(
+            action_id=normalized_action,
+            project_id=normalized_project_id,
+            actor_id=normalized_actor_id,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+            parameters=payload,
+            evaluated_at=pretemporal.evaluation.evaluated_at,
+        )
+
         dispatcher = _DISPATCH[normalized_action]
         result_payload = dispatcher(
             project_id=normalized_project_id,
@@ -534,6 +660,10 @@ def execute_governed_action(
                 **result_payload,
                 'evidence_qualification': _qualification_view(qualification),
             }
+        result_payload = {
+            **result_payload,
+            'temporal_policy': _temporal_view(temporal),
+        }
 
         after_manifest = build_governed_capability_manifest(
             project_id=normalized_project_id,

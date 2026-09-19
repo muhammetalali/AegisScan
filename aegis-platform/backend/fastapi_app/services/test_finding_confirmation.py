@@ -16,10 +16,13 @@ from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityStatusHistory
+from enterprise.governed_responsibility_models import GovernedResponsibilityAssignment
+from enterprise.models import Organization, OrganizationMembership, TenantProject
 from fastapi_app.core import dependencies as core_dependencies
 from fastapi_app.main import app
 from fastapi_app.services import finding_confirmation as confirmation_service
 from fastapi_app.services.finding_confirmation import FindingConfirmationError, confirm_finding
+from fastapi_app.services.governed_responsibility_authority import grant_responsibility
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -31,16 +34,16 @@ async def _close_django_connections_for_testclient() -> None:
 
 @pytest.fixture
 def confirmation_fixture(transactional_db, monkeypatch):
-    user = User.objects.create_user(
-        email='finding-confirmation@example.invalid',
+    owner = User.objects.create_user(
+        email='finding-confirmation-owner@example.invalid',
         password='Strong-Test-Password-123!',
         first_name='Finding',
-        last_name='Confirmation',
+        last_name='Owner',
     )
     project = Project.objects.create(
         name='Finding Confirmation Reality',
         slug='finding-confirmation-reality',
-        owner=user,
+        owner=owner,
     )
     asset = Asset.objects.create(
         project=project,
@@ -50,11 +53,11 @@ def confirmation_fixture(transactional_db, monkeypatch):
         environment=Asset.Environment.PRODUCTION,
         criticality=Asset.Criticality.HIGH,
         configuration={'host': 'aegis-confirmation-target', 'authorized': True},
-        owner=user,
+        owner=owner,
     )
     authorization = AssetAuthorization.objects.create(
         asset=asset,
-        actor=user,
+        actor=owner,
         authorized=True,
         target_snapshot='aegis-confirmation-target',
         reason='Governed finding confirmation reality grant',
@@ -67,7 +70,7 @@ def confirmation_fixture(transactional_db, monkeypatch):
         asset=asset,
         engines=['nmap'],
         config={'target': 'aegis-confirmation-target'},
-        initiated_by=user,
+        initiated_by=owner,
         authorization_decision=authorization,
     )
     finding = Vulnerability.objects.create(
@@ -82,6 +85,46 @@ def confirmation_fixture(transactional_db, monkeypatch):
         source_engine='nmap',
         raw_data={'port': 443, 'state': 'open', 'protocol': 'tcp', 'service': 'https'},
     )
+    organization = Organization.objects.create(
+        name='Finding Confirmation Tenant',
+        slug='finding-confirmation-tenant',
+        owner=owner,
+        is_active=True,
+    )
+    owner_membership = OrganizationMembership.objects.create(
+        organization=organization,
+        user=owner,
+        role=OrganizationMembership.Role.OWNER,
+        is_active=True,
+    )
+    TenantProject.objects.create(organization=organization, project=project)
+
+    # Confirmation is an independent governance action. The source finding was
+    # created through the owner's scan, so use a distinct analyst actor to prove
+    # separation of duties instead of weakening AGOM for legacy route tests.
+    confirmer = User.objects.create_user(
+        email='finding-confirmation@example.invalid',
+        password='Strong-Test-Password-123!',
+        first_name='Finding',
+        last_name='Confirmer',
+    )
+    project.members.add(confirmer)
+    confirmer_membership = OrganizationMembership.objects.create(
+        organization=organization,
+        user=confirmer,
+        role=OrganizationMembership.Role.ANALYST,
+        is_active=True,
+    )
+    grant_responsibility(
+        organization_id=str(organization.id),
+        actor_id=str(owner.id),
+        membership_id=str(confirmer_membership.id),
+        responsibility=GovernedResponsibilityAssignment.Responsibility.FINDING_CONFIRMER,
+        scope_kind=GovernedResponsibilityAssignment.ScopeKind.PROJECT,
+        project_id=str(project.id),
+        reason='Independent finding confirmation compatibility route authority.',
+        idempotency_key=f'finding-confirmation-responsibility-{confirmer.id}',
+    )
 
     monkeypatch.setattr(
         confirmation_service,
@@ -90,13 +133,13 @@ def confirmation_fixture(transactional_db, monkeypatch):
     )
 
     app.dependency_overrides[core_dependencies.get_current_user] = lambda: {
-        'user_id': str(user.id),
+        'user_id': str(confirmer.id),
         'is_staff': True,
     }
     client = TestClient(app)
     with client:
         try:
-            yield client, user, project, asset, authorization, scan, finding
+            yield client, confirmer, project, asset, authorization, scan, finding
         finally:
             if client.portal is not None:
                 client.portal.call(_close_django_connections_for_testclient)
@@ -155,10 +198,13 @@ def _completed_validation(
 
 
 def _confirmation_body(validation: ValidationRun, verdict: str, rationale: str = 'Independent authorized re-validation evidence.') -> dict:
+    normalized_rationale = ' '.join(str(rationale or '').split())
     return {
         'validation_id': str(validation.id),
         'verdict': verdict,
-        'rationale': rationale,
+        'rationale': normalized_rationale,
+        'expected_version': int(validation.finding.version),
+        'idempotency_key': f'finding-confirmation-{validation.id}',
     }
 
 
@@ -206,7 +252,7 @@ def test_positive_validation_creates_confirmed_verdict_and_lineage(confirmation_
     assert audit.metadata['evidence_sha256'] == evidence.sha256
 
 
-def test_negative_validation_can_govern_open_finding_as_false_positive(confirmation_fixture):
+def test_negative_validation_false_positive_route_remains_fail_closed(confirmation_fixture):
     client, user, _project, _asset, authorization, _scan, finding = confirmation_fixture
     validation, _ = _completed_validation(
         user=user,
@@ -220,15 +266,16 @@ def test_negative_validation_can_govern_open_finding_as_false_positive(confirmat
         json=_confirmation_body(validation, 'false_positive', 'Exact re-validation did not reproduce the source finding.'),
     )
 
-    assert response.status_code == 201
-    assert response.json()['finding_present'] is False
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'FALSE_POSITIVE_GOVERNED_ACTION_NOT_IMPLEMENTED'
     finding.refresh_from_db()
-    assert finding.status == Vulnerability.Status.FALSE_POSITIVE
-    assert finding.validation_status == 'false_positive'
+    assert finding.status == Vulnerability.Status.OPEN
+    assert finding.validation_status != 'false_positive'
+    assert FindingConfirmation.objects.filter(finding=finding).count() == 0
 
 
-def test_verdict_must_match_validation_and_evidence_polarity(confirmation_fixture):
-    client, user, _project, _asset, authorization, _scan, finding = confirmation_fixture
+def test_domain_verdict_must_match_validation_and_evidence_polarity(confirmation_fixture):
+    _client, user, _project, _asset, authorization, _scan, finding = confirmation_fixture
     validation, _ = _completed_validation(
         user=user,
         finding=finding,
@@ -236,13 +283,15 @@ def test_verdict_must_match_validation_and_evidence_polarity(confirmation_fixtur
         finding_present=True,
     )
 
-    response = client.post(
-        f'/api/v1/vulnerabilities/{finding.id}/confirmations',
-        json=_confirmation_body(validation, 'false_positive'),
-    )
+    with pytest.raises(FindingConfirmationError, match='conflicts with validation'):
+        confirm_finding(
+            finding_id=finding.id,
+            validation_id=validation.id,
+            verdict='false_positive',
+            rationale='Polarity mismatch must fail at the domain boundary.',
+            actor_id=user.id,
+        )
 
-    assert response.status_code == 409
-    assert 'conflicts with validation' in response.json()['detail']
     assert FindingConfirmation.objects.count() == 0
 
 
@@ -343,7 +392,7 @@ def test_validation_cannot_be_reused_with_different_confirmation_semantics(confi
 
     assert first.status_code == 201
     assert second.status_code == 409
-    assert 'different semantics' in second.json()['detail']
+    assert 'Idempotency key was already used' in second.json()['detail']
     assert FindingConfirmation.objects.filter(finding=finding).count() == 1
 
 

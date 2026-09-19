@@ -181,26 +181,31 @@ def _risk_body(risk: RiskCorrelationSnapshot, disposition: str = 'accepted_risk'
     }
 
 
-def test_accepted_risk_creates_immutable_lineage_history_and_audit(disposition_fixture):
-    client, user, project, _asset, _authorization, _scan, finding, organization, membership = disposition_fixture
+def test_accepted_risk_domain_service_creates_immutable_lineage_history_and_audit(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, finding, organization, membership = disposition_fixture
     risk = _risk_snapshot(user=user, project=project, finding=finding, marker='accepted-risk')
 
-    response = client.post(f'/api/v1/vulnerabilities/{finding.id}/dispositions', json=_risk_body(risk))
+    result = govern_finding_disposition(
+        finding_id=finding.id,
+        disposition='accepted_risk',
+        rationale='Documented tenant risk decision.',
+        actor_id=user.id,
+        risk_correlation_id=risk.id,
+        review_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
 
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload['disposition'] == 'accepted_risk'
-    assert payload['organization_id'] == str(organization.id)
-    assert payload['risk_correlation_id'] == str(risk.id)
-    assert payload['approving_role'] == membership.role
-    assert payload['policy_version'] == 'finding-disposition.v1'
-    assert len(payload['risk_correlation_sha256']) == 64
-    assert payload['replayed'] is False
+    assert result.replayed is False
+    assert result.status_changed is True
+    record = result.disposition
+    assert record.disposition == 'accepted_risk'
+    assert record.organization_id == organization.id
+    assert record.risk_correlation_id == risk.id
+    assert record.approving_role == membership.role
+    assert record.policy_version == 'finding-disposition.v1'
+    assert len(record.risk_correlation_sha256) == 64
 
     finding.refresh_from_db()
     assert finding.status == Vulnerability.Status.ACCEPTED_RISK
-    record = FindingDisposition.objects.get(pk=payload['id'])
-    assert record.risk_correlation_id == risk.id
     assert record.review_at > datetime.now(timezone.utc)
     history = VulnerabilityStatusHistory.objects.get(vulnerability=finding)
     assert history.old_status == Vulnerability.Status.OPEN
@@ -210,7 +215,7 @@ def test_accepted_risk_creates_immutable_lineage_history_and_audit(disposition_f
         resource_id=str(finding.id),
         metadata__operation='finding_disposition',
     ).get()
-    assert audit.metadata['disposition_id'] == payload['id']
+    assert audit.metadata['disposition_id'] == str(record.id)
     assert audit.metadata['risk_correlation_id'] == str(risk.id)
     assert audit.metadata['organization_id'] == str(organization.id)
 
