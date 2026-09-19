@@ -587,6 +587,28 @@ def issue_temporal_exception(
             if hasattr(parent, 'superseded_by'):
                 raise GovernedTemporalError(f'{label} temporal exception has already been superseded.')
 
+        def _current_renewal_ids(parent: GovernedTemporalException) -> list:
+            child_ids = list(
+                GovernedTemporalException.objects.filter(renewal_of=parent)
+                .values_list('id', flat=True)
+            )
+            if not child_ids:
+                return []
+            revoked_child_ids = set(
+                GovernedTemporalExceptionRevocation.objects.filter(
+                    exception_id__in=child_ids,
+                ).values_list('exception_id', flat=True)
+            )
+            superseded_child_ids = set(
+                GovernedTemporalException.objects.filter(
+                    supersedes_id__in=child_ids,
+                ).values_list('supersedes_id', flat=True)
+            )
+            return [
+                child_id for child_id in child_ids
+                if child_id not in revoked_child_ids and child_id not in superseded_child_ids
+            ]
+
         if renewal_of_id:
             renewal = GovernedTemporalException.objects.select_for_update(of=('self',)).filter(
                 pk=renewal_of_id,
@@ -599,25 +621,7 @@ def issue_temporal_exception(
             # Organization + renewal parent are already row-locked above, which
             # serializes concurrent renewal issuance. Avoid SELECT FOR UPDATE
             # across nullable reverse OneToOne joins (unsupported by PostgreSQL).
-            renewal_child_ids = list(
-                GovernedTemporalException.objects.filter(renewal_of=renewal)
-                .values_list('id', flat=True)
-            )
-            revoked_child_ids = set(
-                GovernedTemporalExceptionRevocation.objects.filter(
-                    exception_id__in=renewal_child_ids,
-                ).values_list('exception_id', flat=True)
-            )
-            superseded_child_ids = set(
-                GovernedTemporalException.objects.filter(
-                    supersedes_id__in=renewal_child_ids,
-                ).values_list('supersedes_id', flat=True)
-            )
-            active_renewal_exists = any(
-                child_id not in revoked_child_ids and child_id not in superseded_child_ids
-                for child_id in renewal_child_ids
-            )
-            if active_renewal_exists:
+            if _current_renewal_ids(renewal):
                 raise GovernedTemporalConflict('renewal_of temporal exception already has a current renewal.')
         if supersedes_id:
             supersedes = GovernedTemporalException.objects.select_for_update(of=('self',)).filter(
@@ -628,6 +632,10 @@ def issue_temporal_exception(
             if supersedes is None:
                 raise GovernedTemporalError('supersedes temporal exception is outside tenant/project scope.')
             _require_compatible_lineage(supersedes, 'supersedes')
+            if _current_renewal_ids(supersedes):
+                raise GovernedTemporalConflict(
+                    'supersedes temporal exception has a current renewal; supersede the current renewal leaf instead.'
+                )
 
         grant_fingerprint = _sha({
             **request_material,
