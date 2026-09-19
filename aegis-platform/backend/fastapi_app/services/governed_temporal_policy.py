@@ -227,6 +227,7 @@ def _select_exception_locked(
             revocation__isnull=True,
             superseded_by__isnull=True,
         )
+        .filter(Q(review_at__isnull=True) | Q(review_at__gt=evaluated_at))
         .order_by('-issued_at', '-id')
     )
     matching = [
