@@ -16,6 +16,9 @@ from fastapi_app.services.scheduled_execution import (
 @shared_task(
     bind=True,
     name='fastapi_app.tasks.scheduled_scans.run_scheduled_scan_execution',
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_jitter=True,
     max_retries=2,
     default_retry_delay=30,
 )
