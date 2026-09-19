@@ -14,6 +14,7 @@ class EnterpriseConfig(AppConfig):
         from . import campaign_models  # noqa: F401
         from . import governed_responsibility_models  # noqa: F401
         from . import governed_action_models  # noqa: F401
+        from . import governed_temporal_models  # noqa: F401
 
     def ready(self):
         from . import signals  # noqa: F401

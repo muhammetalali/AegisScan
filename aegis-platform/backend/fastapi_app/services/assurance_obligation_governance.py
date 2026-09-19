@@ -15,6 +15,7 @@ from enterprise.assurance_models import AssuranceObservation
 from enterprise.assurance_obligation_models import AssuranceObligation, AssuranceObligationEvent
 from enterprise.models import ContinuousAssuranceSchedule, OrganizationMembership, TenantProject
 from fastapi_app.services.policy_engine import evaluate_policy
+from fastapi_app.services.governed_temporal_policy import classify_deadline
 
 POLICY_VERSION = 'assurance-obligation.v2'
 DUE_WINDOW = timedelta(hours=24)
@@ -112,9 +113,10 @@ def _latest_disposition_locked(finding: Vulnerability):
 
 
 def _target_status(*, due_at, now):
-    if now >= due_at:
+    temporal = classify_deadline(due_at=due_at, now=now, warning_window=DUE_WINDOW)
+    if temporal.state == 'overdue':
         return AssuranceObligation.Status.OVERDUE
-    if due_at <= now + DUE_WINDOW:
+    if temporal.state == 'due':
         return AssuranceObligation.Status.DUE
     return AssuranceObligation.Status.OPEN
 
