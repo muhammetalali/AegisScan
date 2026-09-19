@@ -228,3 +228,119 @@ class FindingDisposition(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError('Finding disposition records are immutable and cannot be deleted.')
+
+
+class ImmutableOASTQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Governed OAST records are append-only and cannot be updated.')
+
+    def delete(self):
+        raise ValidationError('Governed OAST records are append-only and cannot be deleted.')
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('Governed OAST records must be created through the OAST runtime service.')
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise ValidationError('Governed OAST records are append-only and cannot be updated.')
+
+
+class GovernedOASTSession(models.Model):
+    """Immutable callback capability bound to one authorized execution."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.PROTECT, related_name='oast_sessions',
+    )
+    asset = models.ForeignKey(
+        'assets.Asset', on_delete=models.PROTECT, related_name='oast_sessions',
+    )
+    scan = models.ForeignKey(
+        'scans.Scan', on_delete=models.PROTECT, null=True, blank=True,
+        related_name='oast_sessions',
+    )
+    authorization_decision = models.ForeignKey(
+        'assets.AssetAuthorization', on_delete=models.PROTECT,
+        related_name='oast_sessions',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name='created_oast_sessions',
+    )
+    target_snapshot = models.CharField(max_length=500)
+    execution_id = models.CharField(max_length=128)
+    request_fingerprint = models.CharField(max_length=64, unique=True)
+    token_sha256 = models.CharField(max_length=64)
+    expires_at = models.DateTimeField()
+    max_interactions = models.PositiveSmallIntegerField(default=8)
+    policy_version = models.CharField(max_length=64, default='governed-oast.v1')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableOASTQuerySet.as_manager()
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['project', '-created_at'], name='idx_oast_session_project'),
+            models.Index(fields=['asset', '-created_at'], name='idx_oast_session_asset'),
+            models.Index(fields=['execution_id'], name='idx_oast_session_execution'),
+            models.Index(fields=['expires_at'], name='idx_oast_session_expiry'),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(max_interactions__gte=1) & models.Q(max_interactions__lte=64),
+                name='evidence_oast_max_interactions',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('Governed OAST sessions are immutable and cannot be updated.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Governed OAST sessions are immutable and cannot be deleted.')
+
+
+class GovernedOASTInteraction(models.Model):
+    class Protocol(models.TextChoices):
+        HTTP = 'http', 'HTTP'
+        DNS = 'dns', 'DNS'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        GovernedOASTSession, on_delete=models.PROTECT, related_name='interactions',
+    )
+    evidence = models.OneToOneField(
+        Evidence, on_delete=models.PROTECT, related_name='oast_interaction',
+    )
+    protocol = models.CharField(max_length=8, choices=Protocol.choices)
+    fingerprint = models.CharField(max_length=64)
+    source_ip = models.GenericIPAddressField(null=True, blank=True)
+    request_method = models.CharField(max_length=16, blank=True)
+    payload_sha256 = models.CharField(max_length=64, blank=True)
+    payload_size = models.PositiveIntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+    observed_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableOASTQuerySet.as_manager()
+
+    class Meta:
+        ordering = ['observed_at', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['session', 'fingerprint'],
+                name='evidence_oast_session_fingerprint_uq',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['session', 'protocol', 'observed_at'], name='idx_oast_interaction_session'),
+            models.Index(fields=['fingerprint'], name='idx_oast_interaction_fp'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('Governed OAST interactions are immutable and cannot be updated.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Governed OAST interactions are immutable and cannot be deleted.')
