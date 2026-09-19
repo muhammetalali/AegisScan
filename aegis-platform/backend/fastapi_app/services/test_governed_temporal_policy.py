@@ -306,6 +306,35 @@ def test_renewal_lineage_is_single_current_branch(disposition_fixture):
         )
 
 
+def test_supersession_must_target_current_renewal_leaf(disposition_fixture):
+    ctx = _ctx(disposition_fixture)
+    now = timezone.now()
+    parent, _ = _issue(ctx, now=now, key='lineage-leaf-parent')
+    renewal, _ = _issue(
+        ctx,
+        now=now + timedelta(seconds=1),
+        key='lineage-leaf-renewal',
+        renewal_of_id=str(parent.id),
+    )
+
+    with pytest.raises(GovernedTemporalConflict, match='current renewal'):
+        _issue(
+            ctx,
+            now=now + timedelta(seconds=2),
+            key='lineage-branching-supersede-parent',
+            supersedes_id=str(parent.id),
+        )
+
+    successor, replayed = _issue(
+        ctx,
+        now=now + timedelta(seconds=3),
+        key='lineage-supersede-current-leaf',
+        supersedes_id=str(renewal.id),
+    )
+    assert replayed is False
+    assert successor.supersedes_id == renewal.id
+
+
 def test_exception_idempotency_conflict_is_fail_closed(disposition_fixture):
     ctx = _ctx(disposition_fixture)
     now = timezone.now()
