@@ -19,6 +19,7 @@ RUNTIME_KEY_FILE="${AEGIS_DDNS_KEY:-/etc/aegisscan/ddns.key}"
 ZONE_FILE="${AEGIS_DNS_ZONE_FILE:-/var/lib/bind/db.aegis.internal}"
 BIND_INCLUDE="${AEGIS_BIND_INCLUDE:-/etc/bind/named.conf.aegisscan}"
 APPLY_NETWORK="${AEGIS_NETPLAN_APPLY:-0}"
+BACKUP_ROOT="${AEGIS_DNS_BACKUP_DIR:-/var/lib/aegisscan/backups/dns-config}"
 
 case "$APPLY_NETWORK" in
   0|1) ;;
@@ -28,7 +29,7 @@ case "$APPLY_NETWORK" in
     ;;
 esac
 
-for command in python3 ip netplan systemctl systemd-analyze named-checkconf named-checkzone tsig-keygen dig nsupdate; do
+for command in python3 ip netplan systemctl systemd-analyze named-checkconf named-checkzone tsig-keygen dig nsupdate cmp grep awk date cp; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "required command is missing: $command" >&2
     exit 1
@@ -69,6 +70,17 @@ PY
 install -d -m 0750 /etc/bind/keys
 install -d -m 0700 /etc/aegisscan
 install -d -o bind -g bind -m 0775 /var/lib/bind
+install -d -m 0700 /var/lib/aegisscan
+install -d -m 0700 /var/lib/aegisscan/backups
+install -d -m 0700 "$BACKUP_ROOT"
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+for candidate in /etc/bind/named.conf.options /etc/bind/named.conf.local "$NETPLAN_FILE"; do
+  if [ -f "$candidate" ]; then
+    safe_name="$(printf '%s' "$candidate" | tr '/' '_')"
+    cp -a "$candidate" "$BACKUP_ROOT/$safe_name.$STAMP"
+  fi
+done
 
 if [ ! -f "$BIND_KEY_FILE" ] && [ -f "$RUNTIME_KEY_FILE" ]; then
   install -o root -g bind -m 0640 "$RUNTIME_KEY_FILE" "$BIND_KEY_FILE"
@@ -93,6 +105,11 @@ if [ ! -f "$RUNTIME_KEY_FILE" ]; then
 else
   chown root:root "$RUNTIME_KEY_FILE"
   chmod 0600 "$RUNTIME_KEY_FILE"
+fi
+
+if ! cmp -s "$BIND_KEY_FILE" "$RUNTIME_KEY_FILE"; then
+  echo "BIND and runtime TSIG key material differ; refusing split-brain DDNS configuration" >&2
+  exit 1
 fi
 
 cat >/etc/bind/named.conf.options <<EOF
@@ -203,19 +220,27 @@ systemd-analyze verify \
   /etc/systemd/system/aegisscan-ddns-reconcile.timer
 
 systemctl daemon-reload
-systemctl enable named
-systemctl restart named
-systemctl enable --now aegisscan-ddns-reconcile.timer
-systemctl start aegisscan-ddns-reconcile.service
 
 if [ "$APPLY_NETWORK" -eq 1 ]; then
   netplan apply
   if command -v resolvectl >/dev/null 2>&1; then
     resolvectl flush-caches
   fi
-else
-  echo "NETPLAN_APPLY=PENDING (set AEGIS_NETPLAN_APPLY=1 only after console-safe review)"
 fi
+
+if ! ip -4 -o addr show dev "$INTERFACE" |
+  awk '$3 == "inet" {split($4, value, "/"); print value[1]}' |
+  grep -Fxq "$DNS_SERVICE_IP"
+then
+  echo "DNS service IP $DNS_SERVICE_IP is not active on $INTERFACE" >&2
+  echo "review the generated Netplan and rerun with AEGIS_NETPLAN_APPLY=1 from a console-safe session" >&2
+  exit 1
+fi
+
+systemctl enable named
+systemctl restart named
+systemctl enable --now aegisscan-ddns-reconcile.timer
+systemctl start aegisscan-ddns-reconcile.service
 
 dig @"$DNS_SERVICE_IP" "$FQDN" A +short
 dig +tcp @"$DNS_SERVICE_IP" "$FQDN" A +short
