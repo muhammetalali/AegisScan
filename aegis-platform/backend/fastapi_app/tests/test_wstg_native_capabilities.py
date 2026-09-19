@@ -157,7 +157,7 @@ def test_internal_capabilities_reject_options_and_credentials():
 
 def test_runtime_cancellation_is_rechecked_between_http_requests(monkeypatch):
     requested = []
-    states = iter(['running', 'running', 'running', 'cancelled'])
+    states = iter(['running', 'running', 'running', 'running', 'cancelled'])
 
     def state_getter():
         return next(states, 'cancelled')
