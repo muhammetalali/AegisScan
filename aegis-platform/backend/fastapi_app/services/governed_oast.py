@@ -329,21 +329,22 @@ def create_oast_session(
 
     expires_at = timezone.now() + timedelta(seconds=ttl)
     try:
-        session = GovernedOASTSession.objects.create(
-            id=session_id,
-            project=project,
-            asset=asset,
-            scan=scan,
-            authorization_decision=decision,
-            created_by_id=user_id,
-            target_snapshot=decision.target_snapshot,
-            execution_id=execution,
-            request_fingerprint=request_fingerprint,
-            token_sha256=token_sha256,
-            expires_at=expires_at,
-            max_interactions=interaction_limit,
-            policy_version=OAST_POLICY_VERSION,
-        )
+        with transaction.atomic():
+            session = GovernedOASTSession.objects.create(
+                id=session_id,
+                project=project,
+                asset=asset,
+                scan=scan,
+                authorization_decision=decision,
+                created_by_id=user_id,
+                target_snapshot=decision.target_snapshot,
+                execution_id=execution,
+                request_fingerprint=request_fingerprint,
+                token_sha256=token_sha256,
+                expires_at=expires_at,
+                max_interactions=interaction_limit,
+                policy_version=OAST_POLICY_VERSION,
+            )
     except IntegrityError as exc:
         concurrent = GovernedOASTSession.objects.filter(
             request_fingerprint=request_fingerprint,
@@ -543,37 +544,38 @@ def _persist_interaction(
     raw_output = _canonical_json(observation)
 
     try:
-        evidence = Evidence.objects.create(
-            id=evidence_uuid,
-            scan=locked.scan,
-            asset=locked.asset,
-            source='oast',
-            evidence_type=f'oast_{protocol}_callback',
-            raw_output=raw_output,
-            metadata={
-                'oast_session_id': str(locked.id),
-                'oast_interaction_id': str(interaction_id),
-                'project_id': str(locked.project_id),
-                'authorization_decision_id': str(locked.authorization_decision_id),
-                'execution_id': locked.execution_id,
-                'protocol': protocol,
-                'policy_version': locked.policy_version,
-                'authoritative_oast_evidence': True,
-            },
-            collected_by=locked.created_by,
-        )
-        interaction = GovernedOASTInteraction.objects.create(
-            id=interaction_id,
-            session=locked,
-            evidence=evidence,
-            protocol=protocol,
-            fingerprint=fingerprint,
-            source_ip=source,
-            request_method=request_method,
-            payload_sha256=payload_sha256,
-            payload_size=len(payload_bytes),
-            metadata=safe_metadata,
-        )
+        with transaction.atomic():
+            evidence = Evidence.objects.create(
+                id=evidence_uuid,
+                scan=locked.scan,
+                asset=locked.asset,
+                source='oast',
+                evidence_type=f'oast_{protocol}_callback',
+                raw_output=raw_output,
+                metadata={
+                    'oast_session_id': str(locked.id),
+                    'oast_interaction_id': str(interaction_id),
+                    'project_id': str(locked.project_id),
+                    'authorization_decision_id': str(locked.authorization_decision_id),
+                    'execution_id': locked.execution_id,
+                    'protocol': protocol,
+                    'policy_version': locked.policy_version,
+                    'authoritative_oast_evidence': True,
+                },
+                collected_by=locked.created_by,
+            )
+            interaction = GovernedOASTInteraction.objects.create(
+                id=interaction_id,
+                session=locked,
+                evidence=evidence,
+                protocol=protocol,
+                fingerprint=fingerprint,
+                source_ip=source,
+                request_method=request_method,
+                payload_sha256=payload_sha256,
+                payload_size=len(payload_bytes),
+                metadata=safe_metadata,
+            )
     except IntegrityError as exc:
         concurrent = (
             GovernedOASTInteraction.objects.select_related('evidence')
