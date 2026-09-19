@@ -68,8 +68,10 @@ services:
       args:
         AEGIS_RETIRE_NMAP: "1"
         AEGIS_RETIRE_NUCLEI: "1"
+        AEGIS_RETIRE_SEMGREP: "1"
     env_file: !reset []
-    volumes: !reset []
+    volumes: !override
+      - semgrep_workspace:/var/lib/aegis-semgrep
     read_only: true
     tmpfs: [/tmp]
     environment:
@@ -111,10 +113,24 @@ services:
       AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST: ${AEGIS_KALI_WEB_EXPECTED_TOOL_MANIFEST_DIGEST:-}
       AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST: ${AEGIS_KALI_WEB_EXPECTED_IMAGE_DIGEST:-}
       AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST: ${AEGIS_KALI_WEB_EXPECTED_RUNTIME_MANIFEST_DIGEST:-}
+      AEGIS_SEMGREP_PROVIDER: "default-kali"
+      AEGIS_SEMGREP_LEGACY_DISABLED: "true"
+      AEGIS_KALI_SEMGREP_CANARY_BPS: "0"
+      AEGIS_KALI_CODE_URL: "http://127.0.0.1:18771"
+      AEGIS_KALI_CODE_AUTH_TOKEN: ${AEGIS_KALI_CODE_AUTH_TOKEN:-}
+      AEGIS_KALI_CODE_IMAGE: ${AEGIS_KALI_CODE_IMAGE:-aegis-kali:code-provider}
+      AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION: ${AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION:-}
+      AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT: ${AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT:-}
+      AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST: ${AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST:-}
+      AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST: ${AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST:-}
+      AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST: ${AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST:-}
+      AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST: ${AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST:-}
+      AEGIS_SEMGREP_WORKSPACE_ROOT: /var/lib/aegis-semgrep
     depends_on: !override
       scanner_egress: {condition: service_healthy}
       kali_network: {condition: service_healthy}
       kali_web: {condition: service_healthy}
+      kali_code: {condition: service_healthy}
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
       django: {condition: service_started}
@@ -181,6 +197,42 @@ services:
       retries: 12
       start_period: 5s
 
+
+  kali_code:
+    image: ${AEGIS_KALI_CODE_IMAGE:-aegis-kali:code-provider}
+    restart: unless-stopped
+    user: "10001:10001"
+    entrypoint: ["/usr/bin/tini", "--", "python3", "/opt/aegis-runner/code_service.py"]
+    network_mode: "service:scanner_egress"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=192m
+    volumes:
+      - semgrep_workspace:/var/lib/aegis-semgrep:ro
+    environment:
+      AEGIS_CODE_LISTEN_HOST: "127.0.0.1"
+      AEGIS_CODE_LISTEN_PORT: "18771"
+      AEGIS_KALI_CODE_AUTH_TOKEN: ${AEGIS_KALI_CODE_AUTH_TOKEN:-}
+      AEGIS_CODE_WORKSPACE_ROOT: /var/lib/aegis-semgrep
+      AEGIS_CODE_SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      HOME: /tmp/aegis-home
+      TMPDIR: /tmp
+      XDG_CACHE_HOME: /tmp/aegis-home/.cache
+      XDG_CONFIG_HOME: /tmp/aegis-home/.config
+    depends_on: !override
+      scanner_egress: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18771/healthz',timeout=2)); assert d['status']=='ok' and d['profile']=='code'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
   browser_worker:
     env_file: !reset []
     volumes: !reset []
@@ -235,3 +287,4 @@ services:
 volumes:
   static_data:
   media_data:
+  semgrep_workspace:
