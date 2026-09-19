@@ -115,7 +115,7 @@ def _dns_domain() -> str:
 def _session_token(session_id: UUID, request_fingerprint: str) -> str:
     payload = f'{session_id}:{request_fingerprint}:{OAST_POLICY_VERSION}'.encode('ascii')
     digest = hmac.new(_signing_key(), payload, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode('ascii').rstrip('=')
+    return base64.b32encode(digest).decode('ascii').rstrip('=').lower()
 
 
 def _callback_contract(session: GovernedOASTSession) -> dict[str, str]:
@@ -668,7 +668,7 @@ def _parse_dns_callback_name(qname: str) -> tuple[str, str]:
     if len(labels) != 2:
         raise OASTRuntimeError('invalid_callback', 'DNS callback identity is malformed.', 404)
     token, session_hex = labels
-    if len(token) != 43 or not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+    if len(token) != 52 or not re.fullmatch(r'[a-z2-7]{52}', token):
         raise OASTRuntimeError('invalid_callback', 'DNS callback token is malformed.', 404)
     if not re.fullmatch(r'[0-9a-f]{32}', session_hex):
         raise OASTRuntimeError('invalid_callback', 'DNS callback session identity is malformed.', 404)
