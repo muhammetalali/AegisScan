@@ -8,15 +8,17 @@ on:
       - 'aegis-platform/backend/enterprise/assurance_obligation_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0026_assurance_obligation_expiry_governance.py'
       - 'aegis-platform/backend/enterprise/migrations/0028_assurance_recurrence_obligation_governance.py'
+      - 'aegis-platform/backend/enterprise/migrations/0032_review_obligation_work_queue.py'
       - 'aegis-platform/backend/fastapi_app/services/assurance_drift_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_assurance_recurrence_obligation_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_review_work_queue_governance.py'
       - 'aegis-platform/backend/fastapi_app/routers/assurance.py'
       - 'aegis-platform/backend/fastapi_app/routers/assurance_obligations.py'
       - '.github/workflows/assurance-obligation-expiry-reality.yml'
   push:
-    branches: [main, codex/assurance-obligation-expiry-governance-2026-09-13, codex/assurance-recurrence-obligation-port-2026-09-13]
+    branches: [main, codex/assurance-obligation-expiry-governance-2026-09-13, codex/assurance-recurrence-obligation-port-2026-09-13, chatgpt-a/review-obligations-work-queue-2026-09-19]
     paths:
       - 'aegis-platform/backend/enterprise/apps.py'
       - 'aegis-platform/backend/enterprise/assurance_obligation_models.py'
@@ -90,12 +92,14 @@ jobs:
             aegis-platform/backend/enterprise/assurance_obligation_models.py \
             aegis-platform/backend/enterprise/migrations/0026_assurance_obligation_expiry_governance.py \
             aegis-platform/backend/enterprise/migrations/0028_assurance_recurrence_obligation_governance.py \
+            aegis-platform/backend/enterprise/migrations/0032_review_obligation_work_queue.py \
             aegis-platform/backend/fastapi_app/services/assurance_drift_governance.py \
             aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py \
             aegis-platform/backend/fastapi_app/routers/assurance.py \
             aegis-platform/backend/fastapi_app/routers/assurance_obligations.py \
             aegis-platform/backend/fastapi_app/services/test_assurance_obligation_governance.py \
-            aegis-platform/backend/fastapi_app/services/test_assurance_recurrence_obligation_governance.py
+            aegis-platform/backend/fastapi_app/services/test_assurance_recurrence_obligation_governance.py \
+            aegis-platform/backend/fastapi_app/services/test_review_work_queue_governance.py
       - name: Django schema reality
         working-directory: aegis-platform/backend
         env:
@@ -120,6 +124,16 @@ jobs:
           assert any(c.name == 'uniq_aobl_event_sequence' for c in AssuranceObligationEvent._meta.constraints)
           assert any(c.name == 'assurance_obligation_terminal_shape' for c in AssuranceObligation._meta.constraints)
           assert any(c.name == 'assurance_obligation_source_shape' for c in AssuranceObligation._meta.constraints)
+          assert any(c.name == 'assurance_obligation_assignment_shape' for c in AssuranceObligation._meta.constraints)
+          assert any(c.name == 'assurance_obligation_ack_shape' for c in AssuranceObligation._meta.constraints)
+          required = {
+              'assigned_to', 'assigned_by', 'assigned_at', 'acknowledged_by', 'acknowledged_at',
+              'priority', 'sla_status', 'escalation_level', 'escalation_targets',
+              'last_escalated_at', 'policy_id', 'policy_version',
+          }
+          fields = {field.name for field in AssuranceObligation._meta.fields}
+          assert required <= fields, sorted(required - fields)
+          assert {'assigned', 'acknowledged', 'sla_at_risk', 'sla_breached', 'sla_closed'} <= set(AssuranceObligationEvent.EventType.values)
           print('ASSURANCE_OBLIGATION_DATABASE=POSTGRESQL')
           print('ASSURANCE_RECURRENCE_DB_INVARIANTS=PASS')
           PY
@@ -131,7 +145,11 @@ jobs:
         run: |
           python - <<'PY'
           from fastapi_app.main import app
-          from fastapi_app.routers.assurance_obligations import AssuranceObligationRequest
+          from fastapi_app.routers.assurance_obligations import (
+              AssuranceObligationAcknowledgeRequest,
+              AssuranceObligationAssignmentRequest,
+              AssuranceObligationRequest,
+          )
           paths = app.openapi()['paths']
           base = '/api/v1/assurance/drift/projects/{project_id}'
           assert base + '/findings/{finding_id}/obligations' in paths
@@ -139,7 +157,12 @@ jobs:
           assert base + '/obligations/reconcile' in paths
           assert base + '/obligations/{obligation_id}/refresh' in paths
           assert base + '/obligations' in paths
+          assert base + '/obligations/{obligation_id}/assign' in paths
+          assert base + '/obligations/{obligation_id}/acknowledge' in paths
+          assert base + '/work-queue' in paths
           assert AssuranceObligationRequest.model_config.get('extra') == 'forbid'
+          assert AssuranceObligationAssignmentRequest.model_config.get('extra') == 'forbid'
+          assert AssuranceObligationAcknowledgeRequest.model_config.get('extra') == 'forbid'
           print('ASSURANCE_OBLIGATION_API=PASS')
           PY
       - name: Run obligation expiry and recurrence PostgreSQL reality
@@ -151,6 +174,7 @@ jobs:
           pytest -q \
             fastapi_app/services/test_assurance_obligation_governance.py \
             fastapi_app/services/test_assurance_recurrence_obligation_governance.py \
+            fastapi_app/services/test_review_work_queue_governance.py \
             --junitxml=/tmp/assurance-obligation-junit.xml
       - name: Run assurance governance regressions
         working-directory: aegis-platform/backend
