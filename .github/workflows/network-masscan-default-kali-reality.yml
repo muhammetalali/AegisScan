@@ -1,0 +1,123 @@
+name: Network Masscan Default Kali Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &masscan_m5_paths
+      - 'aegis-platform/backend/fastapi_app/services/kali_masscan_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/masscan_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/masscan_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_masscan_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/advanced_scans.py'
+      - 'aegis-platform/docker/scanner-egress/entrypoint.sh'
+      - 'aegis-platform/docker-compose.masscan-default-kali.yml'
+      - 'aegis-platform/kali/Dockerfile.masscan-provider'
+      - 'aegis-platform/kali/runner/network_masscan_service.py'
+      - 'aegis-platform/kali/tests/test_network_masscan_provider_contract.py'
+      - 'aegis-platform/e2e/masscan_default_kali_contract.py'
+      - 'aegis-platform/e2e/masscan_default_kali_reality.py'
+      - 'aegis-platform/e2e/masscan_default_kali_reality.sh'
+      - '.github/workflows/network-masscan-canary-reality.yml'
+      - '.github/workflows/network-masscan-default-kali-reality.yml'
+      - 'docs/NETWORK_MASSCAN_CANARY.md'
+      - 'docs/NETWORK_MASSCAN_DEFAULT_KALI.md'
+  push:
+    branches: [main]
+    paths: *masscan_m5_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-masscan-m5-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  default-kali-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_KALI_MASSCAN_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_MASSCAN_EXPECTED_RUNNER_VERSION: 0.1.0
+      AEGIS_KALI_MASSCAN_EXPECTED_BUILD_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_MASSCAN_EXPECTED_BASE_IMAGE_DIGEST: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      AEGIS_KALI_MASSCAN_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_KALI_MASSCAN_EXPECTED_IMAGE_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_KALI_MASSCAN_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Compile and test M5 contracts
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pip install pytest
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/kali_masscan_provider.py             aegis-platform/backend/fastapi_app/services/masscan_execution_provider.py             aegis-platform/backend/fastapi_app/services/test_masscan_execution_provider.py             aegis-platform/kali/runner/network_masscan_service.py             aegis-platform/kali/tests/test_network_masscan_provider_contract.py             aegis-platform/e2e/masscan_default_kali_contract.py             aegis-platform/e2e/masscan_default_kali_reality.py
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest             aegis-platform/backend/fastapi_app/services/test_masscan_execution_provider.py             aegis-platform/backend/fastapi_app/services/test_masscan_semantic_parity.py             aegis-platform/backend/fastapi_app/services/test_scanner_adapters_masscan_network.py
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest             aegis-platform/kali/tests/test_network_masscan_provider_contract.py
+      - name: Render default Kali and explicit legacy rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.masscan-default-kali.yml             --profile kali-masscan config --format json > artifacts/masscan-m5-default.json
+          AEGIS_MASSCAN_PROVIDER=legacy docker compose             -f aegis-platform/docker-compose.yml             -f aegis-platform/docker-compose.masscan-default-kali.yml             --profile kali-masscan config --format json > artifacts/masscan-m5-legacy-rollback.json
+          python aegis-platform/e2e/masscan_default_kali_contract.py             artifacts/masscan-m5-default.json artifacts/masscan-m5-legacy-rollback.json
+      - name: Capture exact-head M5 contract
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/network-masscan-m5-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-masscan-default-kali.v1',
+              'capability_id':'network.masscan',
+              'deployment_default':'default-kali',
+              'library_default':'legacy',
+              'production_admitted_modes':['legacy','canary','default-kali'],
+              'raw_kali_production_admitted':False,
+              'canary_bps':0,
+              'explicit_legacy_rollback':True,
+              'provider_failure_fallback':False,
+              'provider_capabilities':['CAP_NET_RAW'],
+              'provider_dispatch':['network.masscan'],
+              'legacy_retirement':False,
+              'next_gate':'M6 Legacy Masscan Retirement',
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum head-sha.txt masscan-m5-default.json             masscan-m5-legacy-rollback.json network-masscan-m5-contract.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-masscan-m5-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-default-kali:
+    needs: default-kali-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Execute real default Kali Masscan promotion
+        run: bash aegis-platform/e2e/masscan_default_kali_reality.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-masscan-default-kali-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
