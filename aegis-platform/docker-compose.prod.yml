@@ -69,6 +69,7 @@ services:
         AEGIS_RETIRE_NMAP: "1"
         AEGIS_RETIRE_NUCLEI: "1"
         AEGIS_RETIRE_SEMGREP: "1"
+        AEGIS_RETIRE_MASSCAN: "1"
     env_file: !reset []
     volumes: !override
       - semgrep_workspace:/var/lib/aegis-semgrep
@@ -101,6 +102,22 @@ services:
       AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST:-}
       AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST:-}
       AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST: ${AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST:-}
+      AEGIS_MASSCAN_PROVIDER: "default-kali"
+      AEGIS_MASSCAN_LEGACY_DISABLED: "true"
+      AEGIS_KALI_MASSCAN_CANARY_BPS: "0"
+      AEGIS_KALI_MASSCAN_URL: "http://127.0.0.1:18767"
+      AEGIS_KALI_MASSCAN_AUTH_TOKEN: ${AEGIS_KALI_MASSCAN_AUTH_TOKEN:-}
+      AEGIS_KALI_MASSCAN_IMAGE: ${AEGIS_KALI_MASSCAN_IMAGE:-aegis-kali:masscan-provider}
+      AEGIS_KALI_MASSCAN_EXPECTED_RUNNER_VERSION: ${AEGIS_KALI_MASSCAN_EXPECTED_RUNNER_VERSION:-}
+      AEGIS_KALI_MASSCAN_EXPECTED_BUILD_COMMIT: ${AEGIS_KALI_MASSCAN_EXPECTED_BUILD_COMMIT:-}
+      AEGIS_KALI_MASSCAN_EXPECTED_BASE_IMAGE_DIGEST: ${AEGIS_KALI_MASSCAN_EXPECTED_BASE_IMAGE_DIGEST:-}
+      AEGIS_KALI_MASSCAN_EXPECTED_TOOL_MANIFEST_DIGEST: ${AEGIS_KALI_MASSCAN_EXPECTED_TOOL_MANIFEST_DIGEST:-}
+      AEGIS_KALI_MASSCAN_EXPECTED_IMAGE_DIGEST: ${AEGIS_KALI_MASSCAN_EXPECTED_IMAGE_DIGEST:-}
+      AEGIS_KALI_MASSCAN_EXPECTED_RUNTIME_MANIFEST_DIGEST: ${AEGIS_KALI_MASSCAN_EXPECTED_RUNTIME_MANIFEST_DIGEST:-}
+      AEGIS_MASSCAN_INTERFACE: ${AEGIS_MASSCAN_INTERFACE:-}
+      AEGIS_MASSCAN_ADAPTER_IP: ${AEGIS_MASSCAN_ADAPTER_IP:-}
+      AEGIS_MASSCAN_ADAPTER_MAC: ${AEGIS_MASSCAN_ADAPTER_MAC:-}
+      AEGIS_MASSCAN_ROUTER_MAC: ${AEGIS_MASSCAN_ROUTER_MAC:-}
       AEGIS_NUCLEI_PROVIDER: "default-kali"
       AEGIS_NUCLEI_LEGACY_DISABLED: "true"
       AEGIS_KALI_NUCLEI_CANARY_BPS: "0"
@@ -129,6 +146,7 @@ services:
     depends_on: !override
       scanner_egress: {condition: service_healthy}
       kali_network: {condition: service_healthy}
+      kali_masscan: {condition: service_healthy}
       kali_web: {condition: service_healthy}
       kali_code: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -162,6 +180,36 @@ services:
       scanner_egress: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python3", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=2)); assert d['status']=='ok' and d['profile']=='network'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  kali_masscan:
+    image: ${AEGIS_KALI_MASSCAN_IMAGE:-aegis-kali:masscan-provider}
+    restart: unless-stopped
+    user: "0:0"
+    entrypoint: ["/usr/bin/tini", "--", "python3", "/opt/aegis-runner/network_masscan_service.py"]
+    network_mode: "service:scanner_egress"
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    environment:
+      AEGIS_MASSCAN_LISTEN_HOST: "127.0.0.1"
+      AEGIS_MASSCAN_LISTEN_PORT: "18767"
+      AEGIS_KALI_MASSCAN_AUTH_TOKEN: ${AEGIS_KALI_MASSCAN_AUTH_TOKEN:-}
+      HOME: /tmp/aegis-home
+      TMPDIR: /tmp
+    depends_on: !override
+      scanner_egress: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18767/healthz',timeout=2)); assert d['status']=='ok' and d['capability_id']=='network.masscan'"]
       interval: 5s
       timeout: 3s
       retries: 12
