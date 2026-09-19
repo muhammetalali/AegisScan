@@ -422,3 +422,37 @@ def test_postgresql_concurrent_assignment_cas_allows_one_winner(disposition_fixt
     assert [item[0] for item in results].count('conflict') == 1
     obligation.refresh_from_db()
     assert obligation.assigned_to_id in {membership_one.id, membership_two.id}
+
+def test_review_work_queue_http_contract_uses_governed_projection(disposition_fixture):
+    client, owner, project, _asset, _authorization, _scan, _finding, organization, _membership = disposition_fixture
+    _owner, _project, _finding_row, _organization, _owner_membership, _disposition_row, obligation = _materialized(
+        disposition_fixture,
+        marker='http-contract',
+    )
+    reviewer, reviewer_membership = _reviewer(
+        owner=owner,
+        project=project,
+        organization=organization,
+        email='http-queue-reviewer@example.invalid',
+    )
+    base = f'/api/v1/assurance/drift/projects/{project.id}'
+
+    assigned = client.post(
+        f'{base}/obligations/{obligation.id}/assign',
+        json={
+            'assignee_membership_id': str(reviewer_membership.id),
+            'expected_version': obligation.version,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    payload = assigned.json()
+    assert payload['assigned_to']['membership_id'] == str(reviewer_membership.id)
+    assert payload['assigned_to']['user_id'] == str(reviewer.id)
+    assert payload['queue_item_id'] == f'assurance-obligation:{obligation.id}'
+
+    queue = client.get(f'{base}/work-queue')
+    assert queue.status_code == 200, queue.text
+    items = queue.json()['items']
+    assert [item['id'] for item in items] == [str(obligation.id)]
+    assert items[0]['assigned_to']['membership_id'] == str(reviewer_membership.id)
+
