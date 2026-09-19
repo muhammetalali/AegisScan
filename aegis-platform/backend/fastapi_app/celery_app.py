@@ -55,10 +55,15 @@ celery_app.conf.update(
         "fastapi_app.tasks.offensive_validation_tasks",
         "fastapi_app.tasks.reliability_probe",
         "fastapi_app.tasks.security_scan",
+        "fastapi_app.tasks.scheduled_scans",
         "fastapi_app.tasks.workflow_tasks",
         "enterprise.tasks",
     ),
     beat_schedule={
+        "dispatch-due-scheduled-scans-every-minute": {
+            "task": "fastapi_app.tasks.scheduled_scans.dispatch_due_scheduled_scans",
+            "schedule": 60.0,
+        },
         "evaluate-action-slas-every-minute": {
             "task": "fastapi_app.tasks.workflow_tasks.evaluate_action_slas",
             "schedule": 60.0,
