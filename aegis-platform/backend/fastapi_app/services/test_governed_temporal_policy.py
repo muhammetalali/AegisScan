@@ -179,6 +179,28 @@ def test_waiver_can_cover_review_due_but_not_security_boundaries(disposition_fix
         assert f'HARD_BLOCK:{hard_block}' in result.evaluation.reason_codes
 
 
+def test_authorization_expiry_is_derived_hard_block_not_waivable(disposition_fixture):
+    ctx = _ctx(disposition_fixture)
+    now = timezone.now()
+    _issue(ctx, kind='waiver', now=now, key='auth-expiry-waiver')
+    result = _evaluate(
+        ctx,
+        envelope=TemporalEnvelope(
+            effective_from=now - timedelta(days=1),
+            expires_at=now - timedelta(seconds=1),
+            recurrence={
+                'source': 'asset_authorization',
+                'authorization_decision_id': str(ctx['authorization'].id),
+            },
+        ),
+        evaluated_at=now,
+    )
+    assert result.allowed is False
+    assert result.evaluation.decision == GovernedTemporalEvaluation.Decision.HARD_BLOCKED
+    assert 'HARD_BLOCK:expired_authorization' in result.evaluation.reason_codes
+    assert result.evaluation.exception_id is None
+
+
 def test_revocation_supersession_and_renewal_are_explicit(disposition_fixture):
     ctx = _ctx(disposition_fixture)
     now = timezone.now()
