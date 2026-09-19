@@ -302,7 +302,19 @@ def evaluate_governed_temporal_policy(
 
     current = _aware(evaluated_at or timezone.now())
     envelope = envelope or TemporalEnvelope()
-    normalized_blocks = sorted({str(item or '').strip().lower() for item in hard_blocks if str(item or '').strip()})
+    derived_blocks = {
+        str(item or '').strip().lower()
+        for item in hard_blocks
+        if str(item or '').strip()
+    }
+    recurrence = dict(envelope.recurrence or {})
+    if (
+        recurrence.get('source') == 'asset_authorization'
+        and envelope.expires_at is not None
+        and current >= _aware(envelope.expires_at)
+    ):
+        derived_blocks.add('expired_authorization')
+    normalized_blocks = sorted(derived_blocks)
     unknown_blocks = sorted(set(normalized_blocks) - HARD_BLOCKS)
     if unknown_blocks:
         raise GovernedTemporalError(f'Unknown hard block(s): {unknown_blocks}.')
