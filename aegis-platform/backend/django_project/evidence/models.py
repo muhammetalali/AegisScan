@@ -5,6 +5,29 @@ from django.db import models
 from django.core.exceptions import ValidationError
 
 
+class EvidenceQuerySet(models.QuerySet):
+    def _contains_oast(self) -> bool:
+        return self.filter(source='oast').exists()
+
+    def update(self, **kwargs):
+        if self._contains_oast() or str(kwargs.get('source') or '').lower() == 'oast':
+            raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
+        return super().update(**kwargs)
+
+    def delete(self):
+        if self._contains_oast():
+            raise ValidationError('Governed OAST evidence is immutable and cannot be deleted.')
+        return super().delete()
+
+    def bulk_update(self, objs, fields, **kwargs):
+        ids = [obj.pk for obj in objs if getattr(obj, 'pk', None)]
+        if any(str(getattr(obj, 'source', '')).lower() == 'oast' for obj in objs):
+            raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
+        if ids and self.model.objects.filter(pk__in=ids, source='oast').exists():
+            raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
+        return super().bulk_update(objs, fields, **kwargs)
+
+
 class Evidence(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     scan = models.ForeignKey('scans.Scan', on_delete=models.CASCADE, null=True, blank=True, related_name='evidence')
@@ -18,13 +41,24 @@ class Evidence(models.Model):
     collected_at = models.DateTimeField(auto_now_add=True)
     collected_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
 
+    objects = EvidenceQuerySet.as_manager()
+
     class Meta:
         ordering = ['-collected_at']
         indexes = [models.Index(fields=['scan', 'source']), models.Index(fields=['asset', 'collected_at']), models.Index(fields=['finding', 'collected_at'])]
 
     def save(self, *args, **kwargs):
+        if not self._state.adding:
+            existing_source = type(self).objects.filter(pk=self.pk).values_list('source', flat=True).first()
+            if str(existing_source or '').lower() == 'oast' or str(self.source or '').lower() == 'oast':
+                raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
         self.sha256 = hashlib.sha256(self.raw_output.encode('utf-8', errors='replace')).hexdigest()
         super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if str(self.source or '').lower() == 'oast':
+            raise ValidationError('Governed OAST evidence is immutable and cannot be deleted.')
+        return super().delete(*args, **kwargs)
 
 
 class ValidationRun(models.Model):
