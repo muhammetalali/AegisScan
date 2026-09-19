@@ -67,7 +67,11 @@ PY
 )"
 
 docker volume create "$WORKSPACE_VOLUME" >/dev/null
-docker run --rm   -v "$WORKSPACE_VOLUME:/var/lib/aegis-semgrep"   --entrypoint sh aegis-semgrep-m6:scanner -c   'chown 10001:10001 /var/lib/aegis-semgrep && chmod 0700 /var/lib/aegis-semgrep'
+# Initialize the Docker-managed workspace as root in a one-shot helper only.
+# The production scanner and governed provider still run as UID 10001; this
+# mirrors the root bootstrap performed by scanner-worker-entrypoint before its
+# bounded capability/user handoff without weakening the runtime containers.
+docker run --rm   --user 0:0   -v "$WORKSPACE_VOLUME:/var/lib/aegis-semgrep"   --entrypoint sh aegis-semgrep-m6:scanner -c   'chown 10001:10001 /var/lib/aegis-semgrep && chmod 0700 /var/lib/aegis-semgrep'
 
 docker run -d --name aegis-semgrep-m6-scanner   --network none   --user 10001:10001   --cap-drop ALL --security-opt no-new-privileges:true   --read-only   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=192m   -e AEGIS_SEMGREP_PROVIDER=default-kali   -e AEGIS_SEMGREP_LEGACY_DISABLED=true   -e AEGIS_KALI_SEMGREP_CANARY_BPS=0   -e AEGIS_KALI_CODE_URL=http://127.0.0.1:18771   -e AEGIS_KALI_CODE_AUTH_TOKEN="$AUTH_TOKEN"   -e AEGIS_KALI_CODE_IMAGE="$IMAGE_ID"   -e AEGIS_KALI_CODE_EXPECTED_RUNNER_VERSION="$RUNNER_VERSION"   -e AEGIS_KALI_CODE_EXPECTED_BUILD_COMMIT="$BUILD_COMMIT"   -e AEGIS_KALI_CODE_EXPECTED_BASE_IMAGE_DIGEST="$BASE_IMAGE_DIGEST"   -e AEGIS_KALI_CODE_EXPECTED_TOOL_MANIFEST_DIGEST="$TOOL_MANIFEST_DIGEST"   -e AEGIS_KALI_CODE_EXPECTED_IMAGE_DIGEST="$IMAGE_ID"   -e AEGIS_KALI_CODE_EXPECTED_RUNTIME_MANIFEST_DIGEST="$RUNTIME_MANIFEST_DIGEST"   -e AEGIS_SEMGREP_WORKSPACE_ROOT=/var/lib/aegis-semgrep   -e DJANGO_SETTINGS_MODULE=django_project.settings   -e SECRET_KEY=aegisscan-semgrep-m6-ci-secret-key-not-for-production   -e JWT_SECRET_KEY=aegisscan-semgrep-m6-ci-jwt-key-not-for-production   -e HOME=/tmp/home   -e XDG_CONFIG_HOME=/tmp/config   -e XDG_CACHE_HOME=/tmp/cache   -e TMPDIR=/tmp   -v "$SOURCE_DIR:/workspace/source:ro"   -v "$WORKSPACE_VOLUME:/var/lib/aegis-semgrep"   -v "$ARTIFACTS:/artifacts"   -v "$ROOT/aegis-platform/e2e/semgrep_m6_retirement_reality.py:/semgrep_m6_retirement_reality.py:ro"   --entrypoint sleep aegis-semgrep-m6:scanner infinity
 
