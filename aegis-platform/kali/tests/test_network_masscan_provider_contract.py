@@ -12,6 +12,7 @@ SERVICE_PATH = KALI / 'runner' / 'network_masscan_service.py'
 SERVICE = SERVICE_PATH.read_text(encoding='utf-8')
 DOCKERFILE = (KALI / 'Dockerfile.masscan-provider').read_text(encoding='utf-8')
 COMPOSE = (REPO / 'aegis-platform' / 'docker-compose.masscan-canary.yml').read_text(encoding='utf-8')
+DEFAULT_COMPOSE = (REPO / 'aegis-platform' / 'docker-compose.masscan-default-kali.yml').read_text(encoding='utf-8')
 
 spec = importlib.util.spec_from_file_location('network_masscan_service', SERVICE_PATH)
 assert spec and spec.loader
@@ -93,3 +94,15 @@ def test_canary_compose_is_opt_in_and_keeps_legacy_default():
     assert 'cap_add: [NET_RAW]' in COMPOSE
     assert 'no-new-privileges:true' in COMPOSE
     assert 'read_only: true' in COMPOSE
+
+
+def test_default_kali_compose_promotes_governed_provider_without_retirement():
+    assert 'AEGIS_MASSCAN_PROVIDER: ${AEGIS_MASSCAN_PROVIDER:-default-kali}' in DEFAULT_COMPOSE
+    assert 'AEGIS_KALI_MASSCAN_CANARY_BPS: "0"' in DEFAULT_COMPOSE
+    assert 'profiles: [kali-masscan]' in DEFAULT_COMPOSE
+    assert 'network_mode: "service:scanner_egress"' in DEFAULT_COMPOSE
+    assert 'cap_drop: [ALL]' in DEFAULT_COMPOSE
+    assert 'cap_add: [NET_RAW]' in DEFAULT_COMPOSE
+    assert 'no-new-privileges:true' in DEFAULT_COMPOSE
+    assert 'read_only: true' in DEFAULT_COMPOSE
+    assert 'AEGIS_MASSCAN_LEGACY_DISABLED' not in DEFAULT_COMPOSE

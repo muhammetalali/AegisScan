@@ -55,8 +55,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def provider_mode() -> str:
     mode = os.getenv('AEGIS_MASSCAN_PROVIDER', 'legacy').strip().lower()
-    if mode not in {'legacy', 'canary', 'kali'}:
-        raise KaliMasscanProviderError('AEGIS_MASSCAN_PROVIDER must be legacy, canary, or kali')
+    if mode not in {'legacy', 'canary', 'default-kali', 'kali'}:
+        raise KaliMasscanProviderError(
+            'AEGIS_MASSCAN_PROVIDER must be legacy, canary, default-kali, or kali'
+        )
     return mode
 
 
@@ -86,6 +88,12 @@ def masscan_provider_decision(*, routing_key: str | None = None) -> MasscanProvi
             schema=_ROUTING_SCHEMA, mode=mode, capability_id='network.masscan',
             selected_provider='legacy', parity_approved=True, canary_bps=0,
             bucket=None, routing_key_digest='', reason='legacy-default',
+        )
+    if mode == 'default-kali':
+        return MasscanProviderDecision(
+            schema=_ROUTING_SCHEMA, mode=mode, capability_id='network.masscan',
+            selected_provider='kali', parity_approved=True, canary_bps=0,
+            bucket=None, routing_key_digest='', reason='default-kali-parity-approved',
         )
     if mode == 'kali':
         return MasscanProviderDecision(

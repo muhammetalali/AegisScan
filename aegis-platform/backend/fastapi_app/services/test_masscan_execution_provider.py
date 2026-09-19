@@ -67,6 +67,51 @@ def test_library_default_remains_legacy(monkeypatch):
     assert result.runtime['provider'] == 'legacy-native-worker'
 
 
+def test_default_kali_routes_without_canary_assignment(monkeypatch):
+    monkeypatch.setenv('AEGIS_MASSCAN_PROVIDER', 'default-kali')
+    monkeypatch.setenv('AEGIS_KALI_MASSCAN_CANARY_BPS', '0')
+    monkeypatch.setattr(provider, 'run_masscan', lambda *args, **kwargs: pytest.fail('legacy must not run'))
+    monkeypatch.setattr(provider, 'execute_kali_masscan', lambda **kwargs: _kali_result())
+
+    first = provider.run_masscan_with_provider(**_kwargs('scan-default-a'))
+    second = provider.run_masscan_with_provider(**_kwargs('scan-default-b'))
+
+    for result in (first, second):
+        assert result.routing['mode'] == 'default-kali'
+        assert result.routing['selected_provider'] == 'kali'
+        assert result.routing['parity_approved'] is True
+        assert result.routing['canary_bps'] == 0
+        assert result.routing['bucket'] is None
+        assert result.routing['routing_key_digest'] == ''
+        assert result.routing['reason'] == 'default-kali-parity-approved'
+        assert result.runtime['provider'] == 'aegis-kali-network-masscan'
+
+
+def test_default_kali_failure_never_falls_back_to_legacy(monkeypatch):
+    monkeypatch.setenv('AEGIS_MASSCAN_PROVIDER', 'default-kali')
+    monkeypatch.setattr(provider, 'run_masscan', lambda *args, **kwargs: pytest.fail('legacy fallback forbidden'))
+
+    def fail(**kwargs):
+        raise KaliMasscanProviderError('provider unavailable')
+
+    monkeypatch.setattr(provider, 'execute_kali_masscan', fail)
+    with pytest.raises(KaliMasscanProviderError, match='provider unavailable'):
+        provider.run_masscan_with_provider(**_kwargs('scan-default-outage'))
+
+
+def test_explicit_legacy_mode_remains_m5_administrative_rollback(monkeypatch):
+    monkeypatch.setenv('AEGIS_MASSCAN_PROVIDER', 'legacy')
+    monkeypatch.setattr(provider, 'run_masscan', _legacy_result)
+    monkeypatch.setattr(provider, 'execute_kali_masscan', lambda **kwargs: pytest.fail('Kali must not run'))
+
+    result = provider.run_masscan_with_provider(**_kwargs('scan-rollback'))
+
+    assert result.routing['mode'] == 'legacy'
+    assert result.routing['selected_provider'] == 'legacy'
+    assert result.routing['reason'] == 'legacy-default'
+    assert result.runtime['provider'] == 'legacy-native-worker'
+
+
 def test_canary_assignment_is_stable_and_has_selected_and_holdback(monkeypatch):
     monkeypatch.setenv('AEGIS_MASSCAN_PROVIDER', 'canary')
     monkeypatch.setenv('AEGIS_KALI_MASSCAN_CANARY_BPS', '2500')

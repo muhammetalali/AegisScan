@@ -76,19 +76,21 @@ jobs:
           python - <<'PY' > artifacts/network-masscan-canary-contract.json
           import json
           print(json.dumps({
-              'schema':'aegis.network-masscan-canary-contract.v1',
+              'schema':'aegis.network-masscan-canary-regression-contract.v2',
               'capability_id':'network.masscan',
-              'deployment_default':'legacy',
-              'production_admitted_modes':['legacy','canary'],
+              'deployment_default':'default-kali',
+              'production_admitted_modes':['legacy','canary','default-kali'],
               'raw_kali_production_admitted':False,
               'assignment':'sha256-stable-scan-id',
               'max_canary_bps':2500,
-              'zero_bps_rollback':True,
+              'zero_bps_canary_rollback':True,
+              'm5_administrative_rollback':'AEGIS_MASSCAN_PROVIDER=legacy',
               'selected_failure_fallback':False,
               'provider_capabilities':['CAP_NET_RAW'],
               'provider_dispatch':['network.masscan'],
               'provider_no_new_privileges':True,
               'legacy_retirement':False,
+              'current_promotion_gate':'Network Masscan Default Kali Reality',
           },sort_keys=True,indent=2))
           PY
       - uses: actions/upload-artifact@v4
@@ -335,7 +337,9 @@ jobs:
           import json
           cohorts=json.load(open('artifacts/cohorts.json'))
           print(json.dumps({
-              'schema':'aegis.network-masscan-canary-evidence.v1',
+              'schema':'aegis.network-masscan-canary-evidence.v2',
+              'regression_scope':'bounded-canary-and-zero-bps-rollback',
+              'deployment_default':'default-kali',
               'selected':cohorts['selected'],
               'holdback':cohorts['holdback'],
               'max_canary_bps':2500,

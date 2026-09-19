@@ -1,81 +1,71 @@
 # Governed Kali Masscan — Bounded Canary (M4)
 
+## Status
+
+This document records the completed M4 bounded-canary design. After M5 promotion, the authoritative deployment default is `AEGIS_MASSCAN_PROVIDER=default-kali`; the Canary path remains supported as a regression, diagnostic, and controlled rollback-analysis mode until legacy retirement. The current promotion contract is documented in `docs/NETWORK_MASSCAN_DEFAULT_KALI.md`.
+
 ## Scope
 
-This phase advances `network.masscan` from proven M3 semantic parity to a bounded, opt-in production canary. It does **not** promote Governed Kali to the default Masscan provider and does **not** retire the local Masscan runtime.
+M4 admitted `network.masscan` to a bounded, deterministic governed-Kali canary without making Kali the default provider and without retiring the local Masscan path. M5 subsequently promotes the parity-proven capability to Governed Kali by default while preserving these Canary semantics as regression evidence.
 
-The authoritative production path becomes:
+The authoritative execution path remains:
 
-`run_masscan_scan → masscan_execution_provider → stable provider decision → legacy or governed Kali`.
+`run_masscan_scan → masscan_execution_provider → provider decision → legacy or governed Kali`.
 
-## Routing policy
+## Routing contract
 
-- library/deployment default remains `legacy`;
-- `AEGIS_MASSCAN_PROVIDER=canary` enables cohort routing;
-- `AEGIS_KALI_MASSCAN_CANARY_BPS` is bounded to 0–2500 basis points;
-- cohort assignment is SHA-256 stable on the persisted Scan UUID;
-- 0 BPS is the immediate rollback to Legacy;
-- raw `AEGIS_MASSCAN_PROVIDER=kali` is a provider-library diagnostic decision and is rejected by the production execution layer;
-- once a scan is assigned to governed Kali, provider/auth/provenance/runtime/control failure propagates; there is no hidden Legacy retry.
+- Current M5 deployment default: `AEGIS_MASSCAN_PROVIDER=default-kali`.
+- Canary mode remains explicit: `AEGIS_MASSCAN_PROVIDER=canary`.
+- `AEGIS_KALI_MASSCAN_CANARY_BPS` is bounded to 0–2500 basis points.
+- Cohort assignment is SHA-256 stable on the persisted Scan UUID.
+- In Canary mode, 0 BPS routes to legacy and remains the bounded-canary rollback invariant while legacy exists.
+- M5 also retains explicit administrative rollback with `AEGIS_MASSCAN_PROVIDER=legacy`.
+- Raw `AEGIS_MASSCAN_PROVIDER=kali` remains rejected by the production execution wrapper.
+- A Kali-selected execution never silently falls back to legacy when provider/auth/provenance/runtime/control execution fails.
 
 ## Governed provider boundary
 
-The M4 provider is a dedicated image and process for `network.masscan`. It is not the M3 parity service and it does not widen the existing Nmap provider.
+The provider is a dedicated image and process for `network.masscan`; it is separate from the historical M3 parity service and from the Nmap provider.
 
-The sidecar:
+It:
 
-- binds only to loopback port 18767 in the scanner-egress namespace;
-- accepts only semantic Masscan fields: target, ports, rate and optional deployment-controlled link identity;
-- never accepts binary paths, argv, or shell strings;
-- executes with exactly `CAP_NET_RAW`, all other capabilities dropped, and `no_new_privs`;
-- is read-only, resource bounded and has no published ports;
-- verifies the exact runner/build/base/tool/runtime/image provenance pinned by the control plane;
-- exposes authenticated runtime attestation and pause/resume/cancel control;
-- caps Masscan rate at 100,000 packets/second and timeout at 300 seconds.
+- binds only to `127.0.0.1:18767` in the scanner-egress namespace;
+- accepts bounded target, ports, rate, and deployment-controlled link identity;
+- never accepts raw binary paths, argv, or shell strings;
+- runs with exactly `CAP_NET_RAW`, all other capabilities dropped, and `no_new_privs`;
+- is read-only, resource bounded, and exposes no published port;
+- verifies immutable runner/build/base/tool/runtime/image provenance;
+- supports pause/resume/cancel control;
+- caps rate at 100,000 packets/second and timeout at 300 seconds.
 
-The scanner-egress namespace owner remains the only component allowed `CAP_NET_ADMIN` for deterministic link preparation. The scanner worker and Masscan provider receive only `CAP_NET_RAW`.
+The scanner-egress namespace owner remains the only component with `CAP_NET_ADMIN`.
+
+## Canary deployment boundary
+
+`aegis-platform/docker-compose.masscan-canary.yml` is retained as the explicit M4 Canary overlay. It is **not** the current M5 default deployment overlay. M5 uses `aegis-platform/docker-compose.masscan-default-kali.yml`.
+
+The Canary overlay itself intentionally renders legacy + 0 BPS by default, and a controlled rollout explicitly sets `AEGIS_MASSCAN_PROVIDER=canary` with a value no greater than 2500. A selected provider failure remains fail-closed.
 
 ## Lineage
 
-Every Masscan execution persists:
+Every Masscan execution persists provider routing and trusted runtime provenance through scanner Evidence, per-finding Evidence, `ScanEngineExecution.result_data`, `ScanLog`, and `scan.engine_results`.
 
-- provider routing decision;
-- stable routing-key digest and bucket for a canary cohort;
-- runtime/image provenance for governed execution;
-- provider lineage in scanner Evidence;
-- provider lineage in per-finding Evidence;
-- provider lineage in `ScanEngineExecution.result_data`;
-- completion telemetry in `ScanLog`;
-- the same lineage through `scan.engine_results`.
+## Regression reality proof
 
-## Deployment
+`Network Masscan Canary Reality` remains an exact-head regression gate and proves:
 
-`aegis-platform/docker-compose.masscan-canary.yml` is opt-in and leaves base/prod Compose unchanged.
+1. stable selected and holdback cohorts;
+2. real legacy holdback and real governed selected execution against the same deterministic internal fixture;
+3. semantic equality on persisted Masscan identity `(ip, protocol, port)`;
+4. exact `CAP_NET_RAW` + `no_new_privs` provider runtime;
+5. immutable runtime/image provenance;
+6. zero-BPS Canary rollback while the provider is unavailable;
+7. a selected-provider outage fails closed without a hidden legacy retry;
+8. evidence identifies `default-kali` as the current deployment default after M5;
+9. no public Internet target is used.
 
-Default render:
+`Network Masscan Canary Deployment Reality` continues to validate the explicit M4 overlay itself as loopback-only, capability-minimal, resource-bounded, and rollback-safe.
 
-- `AEGIS_MASSCAN_PROVIDER=legacy`;
-- `AEGIS_KALI_MASSCAN_CANARY_BPS=0`;
-- governed provider available only under profile `kali-masscan`.
+## Promotion and retirement boundary
 
-A controlled rollout can set `AEGIS_MASSCAN_PROVIDER=canary` and a BPS value up to 2500. Rollback is BPS zero and does not require the provider to remain healthy.
-
-## Reality gates
-
-`Network Masscan Canary Reality` proves:
-
-1. deterministic selected and holdback cohorts;
-2. 25% hard rollout ceiling and zero-BPS rollback;
-3. a real legacy holdback and real governed selected run against the same internal target;
-4. semantic equality on persisted Masscan identity `(ip, protocol, port)`;
-5. exact `CAP_NET_RAW` + `no_new_privs` provider runtime;
-6. immutable runtime/image provenance;
-7. selected-provider outage fails closed;
-8. zero-BPS rollback still executes Legacy while the provider is unavailable;
-9. exact-head evidence and checksums.
-
-`Network Masscan Canary Deployment Reality` independently renders the Compose overlay and proves that it is opt-in, loopback-only, capability-minimal and rollback-safe.
-
-## Next gate
-
-M5 default-Kali promotion is separate. It may begin only after M4 is exact-head terminal green, merged, and the exact merged `main` SHA receives fresh-main terminal-green verification.
+M5 is governed by `Network Masscan Default Kali Reality`. Legacy retirement is a separate M6 phase and may begin only after M5 is exact-head terminal green, merged through `main`, and fresh-main terminal green on the exact merged SHA.
