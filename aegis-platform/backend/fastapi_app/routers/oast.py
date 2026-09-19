@@ -4,7 +4,9 @@ from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from ..core.dependencies import get_current_user
+from django_project.users.models import Permission
+
+from ..core.dependencies import get_current_user, require_permission
 from ..services.governed_oast import (
     OASTRuntimeError,
     create_oast_session,
@@ -39,7 +41,7 @@ def _translate(exc: OASTRuntimeError) -> HTTPException:
 @router.post('/sessions')
 async def create_session(
     payload: OASTSessionCreate,
-    user=Depends(get_current_user),
+    user=Depends(require_permission(Permission.SCAN_CREATE)),
 ):
     try:
         return await sync_to_async(create_oast_session)(
