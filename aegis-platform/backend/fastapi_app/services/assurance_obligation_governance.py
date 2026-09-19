@@ -13,13 +13,19 @@ from django_project.evidence.models import FindingDisposition
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.assurance_models import AssuranceObservation
 from enterprise.assurance_obligation_models import AssuranceObligation, AssuranceObligationEvent
-from enterprise.models import ContinuousAssuranceSchedule, OrganizationMembership, TenantProject
+from enterprise.models import ContinuousAssuranceSchedule, Organization, OrganizationMembership, TenantProject
 from fastapi_app.services.policy_engine import evaluate_policy
 
-POLICY_VERSION = 'assurance-obligation.v2'
+POLICY_VERSION = 'assurance-obligation.v3'
 DUE_WINDOW = timedelta(hours=24)
 RISK_DISPOSITIONS = {FindingDisposition.Disposition.ACCEPTED_RISK, FindingDisposition.Disposition.WONT_FIX}
 GOVERNANCE_ROLES = {OrganizationMembership.Role.OWNER, OrganizationMembership.Role.ADMIN, OrganizationMembership.Role.MANAGER}
+REVIEWER_ROLES = {
+    OrganizationMembership.Role.OWNER,
+    OrganizationMembership.Role.ADMIN,
+    OrganizationMembership.Role.MANAGER,
+    OrganizationMembership.Role.ANALYST,
+}
 
 
 class AssuranceObligationError(ValueError):
@@ -56,6 +62,25 @@ def _tenant_membership(*, project_id: str, user_id: str, mutation: bool = True):
     if mutation and membership.role not in GOVERNANCE_ROLES:
         raise PermissionError('Tenant role does not permit assurance obligation governance mutation.')
     return link, membership
+
+
+def _lock_scope(link: TenantProject) -> TenantProject:
+    organization = (
+        Organization.objects.select_for_update(of=('self',))
+        .filter(pk=link.organization_id, is_active=True)
+        .first()
+    )
+    if organization is None:
+        raise AssuranceObligationError('Project tenant is no longer active.')
+    locked = (
+        TenantProject.objects.select_for_update(of=('self',))
+        .select_related('organization', 'project')
+        .filter(pk=link.pk, project_id=link.project_id, organization=organization)
+        .first()
+    )
+    if locked is None:
+        raise AssuranceObligationError('Project tenant binding changed during obligation governance.')
+    return locked
 
 
 def _select_schedule(*, organization_id, project_id, asset_id, schedule_id: str | None):
@@ -127,6 +152,81 @@ def _policy_for_finding(finding: Vulnerability) -> dict[str, Any]:
     })
 
 
+def _priority_for_policy(policy: dict[str, Any]) -> str:
+    policy_id = str(policy.get('policyId') or '').strip().lower()
+    if policy_id in {'critical-production', 'critical'}:
+        return AssuranceObligation.Priority.P0_CRITICAL
+    if policy_id == 'high':
+        return AssuranceObligation.Priority.P1_HIGH
+    if policy_id == 'medium':
+        return AssuranceObligation.Priority.P2_MEDIUM
+    return AssuranceObligation.Priority.P3_LOW
+
+
+def _sla_target(obligation: AssuranceObligation, now) -> str:
+    if obligation.status in {AssuranceObligation.Status.SATISFIED, AssuranceObligation.Status.SUPERSEDED}:
+        return AssuranceObligation.SLAStatus.CLOSED
+    if now >= obligation.due_at or obligation.status == AssuranceObligation.Status.OVERDUE:
+        return AssuranceObligation.SLAStatus.BREACHED
+    if obligation.due_at <= now + DUE_WINDOW or obligation.status == AssuranceObligation.Status.DUE:
+        return AssuranceObligation.SLAStatus.AT_RISK
+    return AssuranceObligation.SLAStatus.ON_TRACK
+
+
+def _sync_sla_locked(*, obligation: AssuranceObligation, actor_id: str, now) -> AssuranceObligation:
+    desired = _sla_target(obligation, now)
+    current = obligation.sla_status
+    level = int(obligation.escalation_level or 0)
+    desired_level = level
+    if desired == AssuranceObligation.SLAStatus.AT_RISK:
+        desired_level = max(level, 1)
+    elif desired == AssuranceObligation.SLAStatus.BREACHED:
+        desired_level = max(level, 2)
+
+    if current == desired and desired_level == level:
+        return obligation
+
+    level_increased = desired_level > level
+    obligation.sla_status = desired
+    obligation.escalation_level = desired_level
+    if level_increased:
+        obligation.last_escalated_at = now
+    obligation.version += 1
+    update_fields = ['sla_status', 'escalation_level', 'version', 'updated_at']
+    if level_increased:
+        update_fields.append('last_escalated_at')
+    obligation.save(update_fields=update_fields)
+
+    event_type = None
+    if current != desired:
+        event_type = {
+            AssuranceObligation.SLAStatus.AT_RISK: AssuranceObligationEvent.EventType.SLA_AT_RISK,
+            AssuranceObligation.SLAStatus.BREACHED: AssuranceObligationEvent.EventType.SLA_BREACHED,
+            AssuranceObligation.SLAStatus.CLOSED: AssuranceObligationEvent.EventType.SLA_CLOSED,
+        }.get(desired)
+    if event_type is not None:
+        _append_event(
+            obligation=obligation,
+            event_type=event_type,
+            actor_id=actor_id,
+            payload={
+                'previous_sla_status': current,
+                'sla_status': desired,
+                'escalation_level': desired_level,
+                'escalation_targets': list(obligation.escalation_targets or []),
+                'due_at': obligation.due_at.isoformat(),
+                'evaluated_at': now.isoformat(),
+            },
+        )
+    return obligation
+
+
+def _default_assignment(membership: OrganizationMembership | None):
+    if membership is None or membership.role not in REVIEWER_ROLES:
+        return None
+    return membership
+
+
 def _supersede_active_locked(*, finding_id, actor_id: str, now, reason: str, except_id=None):
     rows = AssuranceObligation.objects.select_for_update().filter(
         finding_id=finding_id,
@@ -140,6 +240,7 @@ def _supersede_active_locked(*, finding_id, actor_id: str, now, reason: str, exc
         item.superseded_at = now
         item.save(update_fields=['status', 'version', 'superseded_at', 'updated_at'])
         _append_event(obligation=item, event_type=AssuranceObligationEvent.EventType.SUPERSEDED, actor_id=actor_id, payload={'reason': reason})
+        _sync_sla_locked(obligation=item, actor_id=actor_id, now=now)
 
 
 def _record_observation_locked(*, obligation: AssuranceObligation, observation: AssuranceObservation, actor_id: str):
@@ -160,6 +261,7 @@ def _record_observation_locked(*, obligation: AssuranceObligation, observation: 
             observation_id=observation.id,
             payload={'classification': observation.classification, 'finding_present': observation.finding_present},
         )
+        _sync_sla_locked(obligation=obligation, actor_id=actor_id, now=observation.observed_at)
         return obligation
     obligation.save(update_fields=['last_observation', 'last_execution', 'version', 'updated_at'])
     _append_event(
@@ -170,12 +272,13 @@ def _record_observation_locked(*, obligation: AssuranceObligation, observation: 
         observation_id=observation.id,
         payload={'classification': observation.classification, 'finding_present': observation.finding_present},
     )
+    _sync_sla_locked(obligation=obligation, actor_id=actor_id, now=observation.observed_at)
     return obligation
 
 
 def _refresh_locked(*, obligation: AssuranceObligation, actor_id: str, now):
     if obligation.status in {AssuranceObligation.Status.SATISFIED, AssuranceObligation.Status.SUPERSEDED}:
-        return obligation
+        return _sync_sla_locked(obligation=obligation, actor_id=actor_id, now=now)
 
     if obligation.kind == AssuranceObligation.Kind.DISPOSITION_REVIEW:
         latest = FindingDisposition.objects.select_for_update().filter(finding_id=obligation.finding_id).order_by('-created_at', '-id').first()
@@ -185,6 +288,7 @@ def _refresh_locked(*, obligation: AssuranceObligation, actor_id: str, now):
             obligation.superseded_at = now
             obligation.save(update_fields=['status', 'version', 'superseded_at', 'updated_at'])
             _append_event(obligation=obligation, event_type=AssuranceObligationEvent.EventType.SUPERSEDED, actor_id=actor_id, payload={'superseded_by_disposition_id': str(latest.id) if latest else None})
+            _sync_sla_locked(obligation=obligation, actor_id=actor_id, now=now)
             return obligation
         observed_after = obligation.disposition.created_at
     elif obligation.kind == AssuranceObligation.Kind.RECURRENCE_REVIEW:
@@ -212,7 +316,7 @@ def _refresh_locked(*, obligation: AssuranceObligation, actor_id: str, now):
         obligation.save(update_fields=['status', 'version', 'updated_at'])
         event_type = AssuranceObligationEvent.EventType.OVERDUE if target == AssuranceObligation.Status.OVERDUE else AssuranceObligationEvent.EventType.DUE
         _append_event(obligation=obligation, event_type=event_type, actor_id=actor_id, payload={'due_at': obligation.due_at.isoformat(), 'evaluated_at': now.isoformat()})
-    return obligation
+    return _sync_sla_locked(obligation=obligation, actor_id=actor_id, now=now)
 
 
 def materialize_assurance_obligation(*, project_id: str, finding_id: str, user_id: str, schedule_id: str | None = None, now=None) -> AssuranceObligationResult:
