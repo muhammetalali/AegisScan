@@ -11,6 +11,7 @@ import re
 import secrets
 import shutil
 import stat
+import sys
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
