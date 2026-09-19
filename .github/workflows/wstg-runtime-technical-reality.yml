@@ -1,0 +1,118 @@
+name: WSTG Runtime Technical Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_messaging_semantics.py'
+      - 'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py'
+      - 'aegis-platform/backend/scripts/wstg_runtime_technical_reality.py'
+      - '.github/workflows/wstg-runtime-technical-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_messaging_semantics.py'
+      - 'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py'
+      - 'aegis-platform/backend/scripts/wstg_runtime_technical_reality.py'
+      - '.github/workflows/wstg-runtime-technical-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wstg-runtime-technical-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-technical-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Enforce Chat B runtime-only lockset
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+
+          allowed = {
+              '.github/workflows/wstg-runtime-technical-reality.yml',
+              'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
+              'aegis-platform/backend/fastapi_app/services/web_messaging_semantics.py',
+              'aegis-platform/backend/fastapi_app/tests/test_wstg_native_capabilities.py',
+              'aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py',
+              'aegis-platform/backend/scripts/wstg_runtime_technical_reality.py',
+          }
+          base = os.environ.get('BASE_SHA', '').strip()
+          if not base or set(base) == {'0'}:
+              raise SystemExit('runtime-only lockset requires a concrete base SHA')
+          changed = subprocess.check_output(
+              ['git', 'diff', '--name-only', base, 'HEAD'],
+              text=True,
+          ).splitlines()
+          unexpected = sorted(set(changed) - allowed)
+          if unexpected:
+              raise SystemExit(f'Chat B runtime-only lockset violation: {unexpected}')
+          forbidden = [
+              path for path in changed
+              if (
+                  '/resources/methodologies/' in path
+                  or path.endswith('/wstg_capability_mapping.py')
+                  or path.endswith('/wstg_catalog.py')
+                  or path.endswith('/wstg_execution_planner.py')
+                  or 'reporting' in path.lower()
+              )
+          ]
+          if forbidden:
+              raise SystemExit(f'WSTG methodology ownership violation: {forbidden}')
+          print('WSTG_RUNTIME_LOCKSET=PASS')
+          PY
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile runtime-only implementation
+        run: |
+          python -m py_compile             aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py             aegis-platform/backend/fastapi_app/services/web_messaging_semantics.py             aegis-platform/backend/scripts/wstg_runtime_technical_reality.py
+
+      - name: Run runtime hardening regressions
+        working-directory: aegis-platform/backend
+        env:
+          PYTHONPATH: .
+        run: |
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -c /dev/null --rootdir=. --confcutdir=fastapi_app             fastapi_app/tests/test_wstg_native_capabilities.py             fastapi_app/services/test_web_messaging_semantics.py
+
+      - name: Execute real local WSTG runtime reality
+        working-directory: aegis-platform/backend
+        env:
+          PYTHONPATH: .
+        run: |
+          mkdir -p ../../artifacts
+          python scripts/wstg_runtime_technical_reality.py             | tee ../../artifacts/wstg-runtime-technical-reality.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wstg-runtime-technical-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/wstg-runtime-technical-reality.json
+          if-no-files-found: error
+          retention-days: 30
