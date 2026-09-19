@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from asgiref.sync import sync_to_async
 from django.db.models import Q
-from django.utils import timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -120,12 +119,6 @@ def _serialize_execution(item: ScheduledScanExecution) -> dict:
 
 @sync_to_async
 def _create(payload: ScheduledScanCreate, user_id: str):
-    if payload.first_run_at < timezone.now() - timedelta(minutes=1):
-        raise ScheduledExecutionError(
-            'first_run_in_past',
-            'first_run_at cannot be more than one minute in the past.',
-            422,
-        )
     return create_canonical_schedule(
         actor_id=user_id,
         project_id=payload.project_id,
@@ -144,12 +137,6 @@ def _create(payload: ScheduledScanCreate, user_id: str):
 
 @sync_to_async
 def _update(schedule_id: str, payload: ScheduledScanUpdate, user_id: str):
-    if payload.next_run_at is not None and payload.next_run_at < timezone.now() - timedelta(minutes=1):
-        raise ScheduledExecutionError(
-            'next_run_in_past',
-            'next_run_at cannot be more than one minute in the past.',
-            422,
-        )
     return update_canonical_schedule(
         actor_id=user_id,
         schedule_id=schedule_id,
