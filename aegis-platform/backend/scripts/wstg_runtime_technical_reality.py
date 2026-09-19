@@ -102,7 +102,7 @@ def _issue_local_tls_material(directory: Path) -> tuple[Path, Path, Path]:
         )
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
-            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
             critical=False,
         )
         .sign(ca_key, hashes.SHA256())
