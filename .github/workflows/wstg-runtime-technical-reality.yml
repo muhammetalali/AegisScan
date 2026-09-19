@@ -49,7 +49,7 @@ jobs:
           import os
           import subprocess
 
-          allowed = {
+          b1_allowed = {
               '.github/workflows/wstg-runtime-technical-reality.yml',
               'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
               'aegis-platform/backend/fastapi_app/services/web_messaging_semantics.py',
@@ -57,16 +57,40 @@ jobs:
               'aegis-platform/backend/fastapi_app/services/test_web_messaging_semantics.py',
               'aegis-platform/backend/scripts/wstg_runtime_technical_reality.py',
           }
+          b2_oast_allowed = {
+              '.github/workflows/wstg-runtime-technical-reality.yml',
+              '.github/workflows/governed-oast-runtime-reality.yml',
+              'aegis-platform/backend/django_project/evidence/models.py',
+              'aegis-platform/backend/django_project/evidence/migrations/0008_governed_oast_runtime.py',
+              'aegis-platform/backend/django_project/evidence/test_governed_oast_runtime.py',
+              'aegis-platform/backend/fastapi_app/main.py',
+              'aegis-platform/backend/fastapi_app/routers/oast.py',
+              'aegis-platform/backend/fastapi_app/services/governed_oast.py',
+              'aegis-platform/backend/fastapi_app/services/oast_proof.py',
+              'aegis-platform/backend/fastapi_app/services/oast_dns_collector.py',
+              'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
+              'aegis-platform/backend/scripts/governed_oast_reality.py',
+              'aegis-platform/backend/scripts/oast_dns_collector.py',
+          }
           base = os.environ.get('BASE_SHA', '').strip()
           if not base or set(base) == {'0'}:
               raise SystemExit('runtime-only lockset requires a concrete base SHA')
-          changed = subprocess.check_output(
+          changed = set(subprocess.check_output(
               ['git', 'diff', '--name-only', base, 'HEAD'],
               text=True,
-          ).splitlines()
-          unexpected = sorted(set(changed) - allowed)
-          if unexpected:
-              raise SystemExit(f'Chat B runtime-only lockset violation: {unexpected}')
+          ).splitlines())
+          if changed <= b1_allowed:
+              lockset = 'B1_RUNTIME'
+          elif (
+              '.github/workflows/governed-oast-runtime-reality.yml' in changed
+              and changed <= b2_oast_allowed
+          ):
+              lockset = 'B2_GOVERNED_OAST'
+          else:
+              unexpected = sorted(changed - (b1_allowed | b2_oast_allowed))
+              raise SystemExit(
+                  f'Chat B runtime-only lockset violation: unexpected={unexpected} changed={sorted(changed)}'
+              )
           forbidden = [
               path for path in changed
               if (
@@ -79,7 +103,7 @@ jobs:
           ]
           if forbidden:
               raise SystemExit(f'WSTG methodology ownership violation: {forbidden}')
-          print('WSTG_RUNTIME_LOCKSET=PASS')
+          print(f'WSTG_RUNTIME_LOCKSET=PASS:{lockset}')
           PY
 
       - uses: actions/setup-python@v6

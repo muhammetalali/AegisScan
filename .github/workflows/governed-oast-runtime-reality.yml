@@ -1,0 +1,229 @@
+name: Governed OAST Runtime Reality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/django_project/evidence/models.py'
+      - 'aegis-platform/backend/django_project/evidence/migrations/0008_governed_oast_runtime.py'
+      - 'aegis-platform/backend/django_project/evidence/test_governed_oast_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_oast.py'
+      - 'aegis-platform/backend/fastapi_app/services/oast_proof.py'
+      - 'aegis-platform/backend/fastapi_app/services/oast_dns_collector.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/routers/oast.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - 'aegis-platform/backend/scripts/oast_dns_collector.py'
+      - 'aegis-platform/backend/scripts/governed_oast_reality.py'
+      - '.github/workflows/governed-oast-runtime-reality.yml'
+      - '.github/workflows/wstg-runtime-technical-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/django_project/evidence/models.py'
+      - 'aegis-platform/backend/django_project/evidence/migrations/0008_governed_oast_runtime.py'
+      - 'aegis-platform/backend/django_project/evidence/test_governed_oast_runtime.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_oast.py'
+      - 'aegis-platform/backend/fastapi_app/services/oast_proof.py'
+      - 'aegis-platform/backend/fastapi_app/services/oast_dns_collector.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/routers/oast.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - 'aegis-platform/backend/scripts/oast_dns_collector.py'
+      - 'aegis-platform/backend/scripts/governed_oast_reality.py'
+      - '.github/workflows/governed-oast-runtime-reality.yml'
+      - '.github/workflows/wstg-runtime-technical-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governed-oast-runtime-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governed-oast-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-governed-oast-django-secret-0123456789abcdef
+      JWT_SECRET_KEY: ci-governed-oast-jwt-secret-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-governed-oast-fingerprint-0123456789
+      OAST_TOKEN_SIGNING_KEY: ci-governed-oast-signing-key-0123456789abcdef0123456789abcdef
+      OAST_PUBLIC_HTTP_BASE: http://localhost/api/v1/oast/callback
+      OAST_PUBLIC_DNS_DOMAIN: callbacks.oast.test
+      OAST_ALLOW_INSECURE_LOCAL: 'true'
+      AUTHORIZED_SCAN_TARGETS: 127.0.0.1/32
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Enforce Chat B governed OAST lockset
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+
+          allowed = {
+              '.github/workflows/governed-oast-runtime-reality.yml',
+              '.github/workflows/wstg-runtime-technical-reality.yml',
+              'aegis-platform/backend/django_project/evidence/models.py',
+              'aegis-platform/backend/django_project/evidence/migrations/0008_governed_oast_runtime.py',
+              'aegis-platform/backend/django_project/evidence/test_governed_oast_runtime.py',
+              'aegis-platform/backend/fastapi_app/services/governed_oast.py',
+              'aegis-platform/backend/fastapi_app/services/oast_proof.py',
+              'aegis-platform/backend/fastapi_app/services/oast_dns_collector.py',
+              'aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py',
+              'aegis-platform/backend/fastapi_app/routers/oast.py',
+              'aegis-platform/backend/fastapi_app/main.py',
+              'aegis-platform/backend/scripts/oast_dns_collector.py',
+              'aegis-platform/backend/scripts/governed_oast_reality.py',
+          }
+          base = os.environ.get('BASE_SHA', '').strip()
+          if not base or set(base) == {'0'}:
+              raise SystemExit('Governed OAST lockset requires a concrete base SHA')
+          changed = subprocess.check_output(
+              ['git', 'diff', '--name-only', base, 'HEAD'],
+              text=True,
+          ).splitlines()
+          unexpected = sorted(set(changed) - allowed)
+          if unexpected:
+              raise SystemExit(f'CHAT_B_OAST_LOCKSET_VIOLATION={unexpected}')
+          forbidden = [
+              path for path in changed
+              if (
+                  '/resources/methodologies/' in path
+                  or path.endswith('/wstg_capability_mapping.py')
+                  or path.endswith('/wstg_catalog.py')
+                  or path.endswith('/wstg_execution_planner.py')
+                  or 'agom' in path.lower()
+                  or 'governed_temporal' in path.lower()
+              )
+          ]
+          if forbidden:
+              raise SystemExit(f'CHAT_A_OWNERSHIP_VIOLATION={forbidden}')
+          print('GOVERNED_OAST_LOCKSET=PASS')
+          PY
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile governed OAST runtime
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/django_project/evidence/models.py \
+            aegis-platform/backend/django_project/evidence/migrations/0008_governed_oast_runtime.py \
+            aegis-platform/backend/django_project/evidence/test_governed_oast_runtime.py \
+            aegis-platform/backend/fastapi_app/services/governed_oast.py \
+            aegis-platform/backend/fastapi_app/services/oast_proof.py \
+            aegis-platform/backend/fastapi_app/services/oast_dns_collector.py \
+            aegis-platform/backend/fastapi_app/services/wstg_native_capabilities.py \
+            aegis-platform/backend/fastapi_app/routers/oast.py \
+            aegis-platform/backend/scripts/oast_dns_collector.py \
+            aegis-platform/backend/scripts/governed_oast_reality.py
+
+      - name: Verify migration and PostgreSQL schema reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from django_project.evidence.models import GovernedOASTInteraction, GovernedOASTSession
+
+          assert connection.vendor == 'postgresql', connection.vendor
+          assert GovernedOASTSession._meta.db_table in connection.introspection.table_names()
+          assert GovernedOASTInteraction._meta.db_table in connection.introspection.table_names()
+          print('GOVERNED_OAST_POSTGRESQL_SCHEMA=WIRED')
+          PY
+
+      - name: Run governed OAST domain tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py test django_project.evidence.test_governed_oast_runtime -v 2
+
+      - name: Execute real HTTP DNS OAST Reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          mkdir -p ../../artifacts
+          python scripts/governed_oast_reality.py \
+            | tee ../../artifacts/governed-oast-runtime-reality.json
+
+      - name: Assert Reality artifact is secret-free
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('artifacts/governed-oast-runtime-reality.json')
+          payload = json.loads(path.read_text())
+          assert payload['http_callback'] == 'proven'
+          assert payload['dns_callback'] == 'proven'
+          assert payload['duplicate_http_persisted_count'] == 1
+          assert payload['interaction_count'] == 2
+          assert payload['session_token_persisted_raw'] is False
+          assert payload['wstg_inpv_19_runtime'] == 'authoritative-oast-evidence-proven'
+          assert payload['methodology_cutover_performed'] is False
+          print('GOVERNED_OAST_RUNTIME_REALITY=PASS')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: governed-oast-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/governed-oast-runtime-reality.json
+          if-no-files-found: error
+          retention-days: 30
