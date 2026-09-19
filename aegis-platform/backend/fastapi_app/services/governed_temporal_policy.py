@@ -329,6 +329,15 @@ def evaluate_governed_temporal_policy(
         )
         if link is None:
             raise GovernedTemporalError('Project enterprise scope changed during temporal evaluation.')
+        if requested_by_id:
+            membership_exists = OrganizationMembership.objects.filter(
+                organization=organization,
+                user_id=requested_by_id,
+                is_active=True,
+                user__is_active=True,
+            ).exists()
+            if not membership_exists:
+                raise PermissionError('Active tenant membership is required for governed temporal evaluation.')
 
         selected = _select_exception_locked(
             organization=organization,
