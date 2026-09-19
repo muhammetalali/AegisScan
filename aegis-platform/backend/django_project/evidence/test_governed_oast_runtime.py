@@ -80,7 +80,27 @@ class GovernedOASTRuntimeTests(TestCase):
             expires_at=timezone.now() + timedelta(hours=1),
         )
 
-    def _session(self, *, key='oast-test-idempotency-0001', execution='exec-oast-1'):
+    def _scan(self, execution='exec-oast-1'):
+        return Scan.objects.create(
+            project=self.project,
+            name=f'OAST bound scan {execution}',
+            scan_type=Scan.Type.URL,
+            status=Scan.Status.RUNNING,
+            asset=self.asset,
+            authorization_decision=self.authorization,
+            execution_correlation_id=execution,
+            initiated_by=self.user,
+        )
+
+    def _session(
+        self,
+        *,
+        key='oast-test-idempotency-0001',
+        execution='exec-oast-1',
+        scan=None,
+        ttl_seconds=300,
+        max_interactions=8,
+    ):
         return create_oast_session(
             user_id=str(self.user.id),
             project_id=str(self.project.id),
@@ -89,8 +109,9 @@ class GovernedOASTRuntimeTests(TestCase):
             execution_id=execution,
             idempotency_key=key,
             target='https://target.example.test/',
-            ttl_seconds=300,
-            max_interactions=8,
+            scan_id=str(scan.id) if scan is not None else None,
+            ttl_seconds=ttl_seconds,
+            max_interactions=max_interactions,
         )
 
     @staticmethod
