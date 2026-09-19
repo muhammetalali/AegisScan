@@ -43,6 +43,11 @@ python -m fastapi_app.services.nuclei_retirement_preflight
 # Production must pin the governed code provider and retirement workspace.
 python -m fastapi_app.services.semgrep_retirement_preflight
 
+# M6 Masscan retirement is fail-closed at worker startup. Historical
+# parity/reference containers omit AEGIS_MASSCAN_LEGACY_DISABLED. Production
+# must pin the loopback governed Masscan provider before the worker starts.
+python -m fastapi_app.services.masscan_retirement_preflight
+
 # Docker starts this bootstrap with only NET_RAW + SETUID/SETGID/SETPCAP.
 # SETPCAP must remain available until CAP_NET_RAW has been moved into the
 # ambient set and the temporary bootstrap caps have been removed from the
