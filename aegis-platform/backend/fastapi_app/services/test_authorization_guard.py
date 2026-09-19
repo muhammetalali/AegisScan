@@ -84,7 +84,7 @@ def test_masscan_requires_authoritative_decision(monkeypatch):
     project = Project.objects.create(name='Guard Masscan', slug='guard-masscan', owner=user)
     asset = Asset.objects.create(project=project, owner=user, name='Network target', slug='network-target', type=Asset.Type.NETWORK_RANGE, configuration={'cidr': 'aegis-scan-target', 'authorized': True})
     scan = Scan.objects.create(project=project, name='Masscan', scan_type=Scan.Type.NETWORK, asset=asset, engines=['masscan'], config={'host': 'aegis-scan-target'}, initiated_by=user, status=Scan.Status.QUEUED)
-    tool = Mock(); monkeypatch.setattr(advanced_scans, 'run_masscan', tool)
+    tool = Mock(); monkeypatch.setattr(advanced_scans, 'run_masscan_with_provider', tool)
 
     result = advanced_scans.run_masscan_scan.run(str(scan.id))
     scan.refresh_from_db()
