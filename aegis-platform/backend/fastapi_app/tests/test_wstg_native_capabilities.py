@@ -134,7 +134,7 @@ def test_runtime_dispatch_keeps_authorization_pinning(monkeypatch):
 
     monkeypatch.setattr(wstg, 'validate_authorized_web_target', lambda target: target)
     monkeypatch.setattr(wstg, 'pinned_http_operation', fake_operation)
-    monkeypatch.setattr(wstg, '_method_policy', lambda target: {**wstg._base('web.http-method-policy'), 'unsafe_methods_sent': False})
+    monkeypatch.setattr(wstg, '_method_policy', lambda target, checkpoint=lambda: None: {**wstg._base('web.http-method-policy'), 'unsafe_methods_sent': False})
 
     result = wstg.run_wstg_internal_capability('web.http-method-policy', 'https://example.test/', {})
     assert events == [('pin', 'https://example.test/')]
