@@ -649,6 +649,17 @@ def execute_scheduled_occurrence(execution_id: str) -> dict[str, Any]:
                 'reason': execution.reason,
                 'replayed': True,
             }
+        lease_cutoff = timezone.now() - timedelta(minutes=2)
+        if (
+            execution.status == ScheduledScanExecution.Status.RUNNING
+            and execution.updated_at >= lease_cutoff
+        ):
+            return {
+                'status': 'running',
+                'execution_id': str(execution.id),
+                'scan_id': str(execution.scan_id) if execution.scan_id else None,
+                'replayed': True,
+            }
         if execution.attempts >= _MAX_EXECUTION_ATTEMPTS:
             return _block_execution(execution, 'Scheduled execution retry limit reached.')
 
@@ -657,6 +668,11 @@ def execute_scheduled_occurrence(execution_id: str) -> dict[str, Any]:
             return _block_execution(execution, schedule.disabled_reason or 'Schedule is disabled.', disable_schedule=False)
         if schedule.version != execution.schedule_version:
             return _block_execution(execution, 'Schedule changed after this occurrence was claimed.', disable_schedule=False)
+        if execution.policy_version_snapshot != SCHEDULE_POLICY_VERSION:
+            return _block_execution(
+                execution,
+                'Scheduled execution policy version is stale and requires an explicit schedule update.',
+            )
 
         execution.status = ScheduledScanExecution.Status.RUNNING
         execution.attempts += 1
@@ -873,11 +889,24 @@ def due_schedule_ids(*, now: datetime | None = None, limit: int = 100) -> list[s
 
 
 def retryable_execution_ids(*, limit: int = 100) -> list[str]:
-    stale_before = timezone.now() - timedelta(minutes=15)
+    stale_before = timezone.now() - timedelta(minutes=2)
     retry_state = (
-        Q(status=ScheduledScanExecution.Status.CLAIMED)
-        | Q(status=ScheduledScanExecution.Status.FAILED)
-        | Q(status=ScheduledScanExecution.Status.RUNNING, updated_at__lt=stale_before)
+        Q(
+            status=ScheduledScanExecution.Status.CLAIMED,
+            celery_task_id='',
+        )
+        | Q(
+            status=ScheduledScanExecution.Status.CLAIMED,
+            updated_at__lt=stale_before,
+        )
+        | Q(
+            status=ScheduledScanExecution.Status.FAILED,
+            updated_at__lt=stale_before,
+        )
+        | Q(
+            status=ScheduledScanExecution.Status.RUNNING,
+            updated_at__lt=stale_before,
+        )
     )
     return [
         str(value)
