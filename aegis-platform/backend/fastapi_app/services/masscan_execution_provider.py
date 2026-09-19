@@ -13,6 +13,9 @@ from fastapi_app.services.kali_masscan_provider import (
 from fastapi_app.services.scanner_adapters import run_masscan
 
 
+_TRUTHY = {'1', 'true', 'yes', 'on'}
+
+
 @dataclass(frozen=True)
 class MasscanExecutionResult:
     tool: str
@@ -22,6 +25,21 @@ class MasscanExecutionResult:
     stderr: str
     routing: dict[str, Any]
     runtime: dict[str, Any]
+
+
+def legacy_masscan_disabled() -> bool:
+    """Return whether this release has retired the local Masscan execution path."""
+    return os.getenv('AEGIS_MASSCAN_LEGACY_DISABLED', '').strip().lower() in _TRUTHY
+
+
+def _enforce_retirement_lock(decision: Any) -> None:
+    """Fail closed when M6 production policy forbids same-release rollback."""
+    if not legacy_masscan_disabled():
+        return
+    if decision.mode != 'default-kali' or decision.selected_provider != 'kali':
+        raise KaliMasscanProviderError(
+            'Legacy/Canary Masscan production routing is retired; rollback requires the previous release'
+        )
 
 
 def _deployment_option(value: str | None, env_name: str) -> str | None:
@@ -50,16 +68,17 @@ def run_masscan_with_provider(
 ) -> MasscanExecutionResult:
     """Execute Masscan through the authoritative governed provider decision.
 
-    Legacy remains the deployment/library default. Canary selection is stable
-    on the caller's persisted routing key and is capped by the provider policy.
-    A selected governed execution fails closed; it is never silently retried
-    through the local Masscan binary.
+    M6 production sets AEGIS_MASSCAN_LEGACY_DISABLED=true and admits only
+    default-kali. Legacy and Canary remain reference-only when the retirement
+    lock is absent. Any selected governed execution fails closed and is never
+    silently retried through the local Masscan binary.
     """
     decision = masscan_provider_decision(routing_key=routing_key)
     if decision.mode not in {'legacy', 'canary', 'default-kali'}:
         raise RuntimeError(
             f'Masscan provider mode {decision.mode!r} is not admitted by the governed production execution layer'
         )
+    _enforce_retirement_lock(decision)
     routing = decision.as_dict()
     options = {
         'interface': _deployment_option(interface, 'AEGIS_MASSCAN_INTERFACE'),
