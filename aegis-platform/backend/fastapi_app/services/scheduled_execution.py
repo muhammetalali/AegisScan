@@ -386,7 +386,7 @@ def update_canonical_schedule(
     is_active: bool | None = None,
 ) -> ScheduledScan:
     schedule = (
-        ScheduledScan.objects.select_for_update()
+        ScheduledScan.objects.select_for_update(of=('self',))
         .select_related('project', 'asset', 'created_by')
         .filter(pk=schedule_id)
         .first()
@@ -531,7 +531,7 @@ def _occurrence_payload(schedule: ScheduledScan, scheduled_for: datetime) -> dic
 def claim_due_schedule(schedule_id: str, *, now: datetime | None = None) -> tuple[ScheduledScanExecution | None, bool]:
     current_time = (now or timezone.now()).astimezone(dt_timezone.utc)
     schedule = (
-        ScheduledScan.objects.select_for_update()
+        ScheduledScan.objects.select_for_update(of=('self',))
         .select_related('project', 'asset', 'created_by')
         .filter(pk=schedule_id)
         .first()
@@ -595,7 +595,7 @@ def _block_execution(execution: ScheduledScanExecution, reason: str, *, disable_
     now = timezone.now()
     with transaction.atomic():
         current = (
-            ScheduledScanExecution.objects.select_for_update()
+            ScheduledScanExecution.objects.select_for_update(of=('self',))
             .select_related('schedule')
             .get(pk=execution.pk)
         )
@@ -630,7 +630,7 @@ def _block_execution(execution: ScheduledScanExecution, reason: str, *, disable_
 def execute_scheduled_occurrence(execution_id: str) -> dict[str, Any]:
     with transaction.atomic():
         execution = (
-            ScheduledScanExecution.objects.select_for_update()
+            ScheduledScanExecution.objects.select_for_update(of=('self',))
             .select_related('schedule', 'project', 'asset', 'scan')
             .get(pk=execution_id)
         )
@@ -663,7 +663,7 @@ def execute_scheduled_occurrence(execution_id: str) -> dict[str, Any]:
         if execution.attempts >= _MAX_EXECUTION_ATTEMPTS:
             return _block_execution(execution, 'Scheduled execution retry limit reached.')
 
-        schedule = ScheduledScan.objects.select_for_update().get(pk=execution.schedule_id)
+        schedule = ScheduledScan.objects.select_for_update(of=('self',)).get(pk=execution.schedule_id)
         if not schedule.is_active:
             return _block_execution(execution, schedule.disabled_reason or 'Schedule is disabled.', disable_schedule=False)
         if schedule.version != execution.schedule_version:
@@ -730,7 +730,7 @@ def execute_scheduled_occurrence(execution_id: str) -> dict[str, Any]:
             return _block_execution(execution, 'Scheduled execution snapshot integrity check failed.')
 
         with transaction.atomic():
-            locked = ScheduledScanExecution.objects.select_for_update().get(pk=execution.id)
+            locked = ScheduledScanExecution.objects.select_for_update(of=('self',)).get(pk=execution.id)
             if locked.scan_id:
                 scan = Scan.objects.select_for_update().get(pk=locked.scan_id)
                 if scan.execution_contract_fingerprint != contract_fingerprint:
@@ -822,7 +822,7 @@ def execute_scheduled_occurrence(execution_id: str) -> dict[str, Any]:
 
         now = timezone.now()
         with transaction.atomic():
-            locked = ScheduledScanExecution.objects.select_for_update().get(pk=execution.id)
+            locked = ScheduledScanExecution.objects.select_for_update(of=('self',)).get(pk=execution.id)
             scan = Scan.objects.select_for_update().get(pk=locked.scan_id)
             scan.celery_task_id = result.id
             scan.save(update_fields=['celery_task_id', 'updated_at'])
@@ -868,7 +868,7 @@ def execute_scheduled_occurrence(execution_id: str) -> dict[str, Any]:
         return _block_execution(execution, str(exc))
     except Exception as exc:
         with transaction.atomic():
-            failed = ScheduledScanExecution.objects.select_for_update().get(pk=execution.id)
+            failed = ScheduledScanExecution.objects.select_for_update(of=('self',)).get(pk=execution.id)
             failed.status = ScheduledScanExecution.Status.FAILED
             failed.reason = str(exc)[:4000]
             failed.save(update_fields=['status', 'reason', 'updated_at'])
