@@ -567,25 +567,256 @@ def reconcile_project_assurance_obligations(*, project_id: str, user_id: str, no
     return AssuranceReconcileResult(materialized=materialized, refreshed=refreshed, satisfied=current.filter(status=AssuranceObligation.Status.SATISFIED).count(), overdue=current.filter(status=AssuranceObligation.Status.OVERDUE).count(), superseded=current.filter(status=AssuranceObligation.Status.SUPERSEDED).count())
 
 
-def list_assurance_obligations(*, project_id: str, user_id: str):
-    link, _membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=False)
-    rows = AssuranceObligation.objects.filter(project_id=project_id, organization=link.organization).select_related('disposition', 'source_disposition', 'source_observation', 'schedule').order_by('due_at', 'created_at')
-    return [
-        {
-            'id': str(row.id),
-            'finding_id': str(row.finding_id),
-            'kind': row.kind,
-            'disposition_id': str(row.disposition_id) if row.disposition_id else None,
-            'source_disposition_id': str(row.source_disposition_id) if row.source_disposition_id else None,
-            'source_observation_id': str(row.source_observation_id) if row.source_observation_id else None,
-            'disposition': row.disposition.disposition if row.disposition_id else None,
-            'schedule_id': str(row.schedule_id),
-            'status': row.status,
-            'due_at': row.due_at.isoformat(),
-            'generation': row.generation,
-            'version': row.version,
-            'last_execution_id': str(row.last_execution_id) if row.last_execution_id else None,
-            'last_observation_id': str(row.last_observation_id) if row.last_observation_id else None,
+def _require_obligation_version(obligation: AssuranceObligation, expected_version: int) -> None:
+    if int(expected_version) < 1:
+        raise AssuranceObligationError('expected_version must be at least one.')
+    if int(obligation.version) != int(expected_version):
+        raise AssuranceObligationError(
+            f'Expected obligation version {expected_version}, current version is {obligation.version}.'
+        )
+
+
+def _locked_obligation(*, link: TenantProject, project_id: str, obligation_id: str):
+    return (
+        AssuranceObligation.objects
+        .select_related(
+            'finding',
+            'disposition',
+            'source_disposition',
+            'source_observation',
+            'schedule',
+            'assigned_to',
+            'assigned_to__user',
+            'assigned_by',
+            'acknowledged_by',
+        )
+        .select_for_update(of=('self',))
+        .filter(pk=obligation_id, project_id=project_id, organization=link.organization)
+        .first()
+    )
+
+
+def assign_assurance_obligation(
+    *,
+    project_id: str,
+    obligation_id: str,
+    user_id: str,
+    assignee_membership_id: str,
+    expected_version: int,
+    now=None,
+):
+    now = now or timezone.now()
+    link, _actor_membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=True)
+    with transaction.atomic():
+        link = _lock_scope(link)
+        obligation = _locked_obligation(link=link, project_id=project_id, obligation_id=obligation_id)
+        if obligation is None:
+            raise AssuranceObligationError('Assurance obligation not found in tenant/project.')
+        assignee = (
+            OrganizationMembership.objects.select_for_update(of=('self',))
+            .select_related('user')
+            .filter(
+                pk=assignee_membership_id,
+                organization=link.organization,
+                is_active=True,
+                user__is_active=True,
+                role__in=REVIEWER_ROLES,
+            )
+            .first()
+        )
+        if assignee is None:
+            raise AssuranceObligationError('Assignee is not an active reviewer in this tenant.')
+        is_project_member = (
+            str(link.project.owner_id) == str(assignee.user_id)
+            or link.project.members.filter(pk=assignee.user_id).exists()
+        )
+        if not is_project_member:
+            raise AssuranceObligationError('Assignee is not a member of the governed project.')
+        if obligation.assigned_to_id == assignee.id:
+            return obligation
+        if obligation.status in {AssuranceObligation.Status.SATISFIED, AssuranceObligation.Status.SUPERSEDED}:
+            raise AssuranceObligationError('Terminal assurance obligations cannot be reassigned.')
+        _require_obligation_version(obligation, expected_version)
+
+        previous_membership_id = obligation.assigned_to_id
+        previous_user_id = obligation.assigned_to.user_id if obligation.assigned_to_id else None
+        obligation.assigned_to = assignee
+        obligation.assigned_by_id = user_id
+        obligation.assigned_at = now
+        obligation.acknowledged_by = None
+        obligation.acknowledged_at = None
+        obligation.version += 1
+        obligation.save(update_fields=[
+            'assigned_to', 'assigned_by', 'assigned_at',
+            'acknowledged_by', 'acknowledged_at', 'version', 'updated_at',
+        ])
+        _append_event(
+            obligation=obligation,
+            event_type=AssuranceObligationEvent.EventType.ASSIGNED,
+            actor_id=user_id,
+            payload={
+                'previous_assignee_membership_id': str(previous_membership_id) if previous_membership_id else None,
+                'previous_assignee_user_id': str(previous_user_id) if previous_user_id else None,
+                'assignee_membership_id': str(assignee.id),
+                'assignee_user_id': str(assignee.user_id),
+                'expected_version': int(expected_version),
+            },
+        )
+        return _sync_sla_locked(obligation=obligation, actor_id=user_id, now=now)
+
+
+def acknowledge_assurance_obligation(
+    *,
+    project_id: str,
+    obligation_id: str,
+    user_id: str,
+    expected_version: int,
+    now=None,
+):
+    now = now or timezone.now()
+    link, membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=False)
+    with transaction.atomic():
+        link = _lock_scope(link)
+        obligation = _locked_obligation(link=link, project_id=project_id, obligation_id=obligation_id)
+        if obligation is None:
+            raise AssuranceObligationError('Assurance obligation not found in tenant/project.')
+        if obligation.acknowledged_by_id == membership.user_id and obligation.acknowledged_at is not None:
+            return obligation
+        if obligation.status in {AssuranceObligation.Status.SATISFIED, AssuranceObligation.Status.SUPERSEDED}:
+            raise AssuranceObligationError('Terminal assurance obligations cannot be acknowledged.')
+        if obligation.assigned_to_id is None or obligation.assigned_to.user_id != membership.user_id:
+            raise PermissionError('Only the currently assigned reviewer may acknowledge this obligation.')
+        _require_obligation_version(obligation, expected_version)
+
+        obligation.acknowledged_by_id = membership.user_id
+        obligation.acknowledged_at = now
+        obligation.version += 1
+        obligation.save(update_fields=['acknowledged_by', 'acknowledged_at', 'version', 'updated_at'])
+        _append_event(
+            obligation=obligation,
+            event_type=AssuranceObligationEvent.EventType.ACKNOWLEDGED,
+            actor_id=user_id,
+            payload={
+                'assignee_membership_id': str(obligation.assigned_to_id),
+                'acknowledged_by_user_id': str(membership.user_id),
+                'expected_version': int(expected_version),
+                'acknowledged_at': now.isoformat(),
+            },
+        )
+        return _sync_sla_locked(obligation=obligation, actor_id=user_id, now=now)
+
+
+def _obligation_view(row: AssuranceObligation, *, viewer_user_id: str | None = None) -> dict[str, Any]:
+    assigned = None
+    if row.assigned_to_id:
+        assigned = {
+            'membership_id': str(row.assigned_to_id),
+            'user_id': str(row.assigned_to.user_id),
+            'role': row.assigned_to.role,
+            'email': str(row.assigned_to.user.email),
         }
-        for row in rows
-    ]
+    return {
+        'id': str(row.id),
+        'queue_item_id': f'assurance-obligation:{row.id}',
+        'finding_id': str(row.finding_id),
+        'kind': row.kind,
+        'disposition_id': str(row.disposition_id) if row.disposition_id else None,
+        'source_disposition_id': str(row.source_disposition_id) if row.source_disposition_id else None,
+        'source_observation_id': str(row.source_observation_id) if row.source_observation_id else None,
+        'disposition': row.disposition.disposition if row.disposition_id else None,
+        'schedule_id': str(row.schedule_id),
+        'status': row.status,
+        'priority': row.priority,
+        'sla_status': row.sla_status,
+        'escalation_level': row.escalation_level,
+        'escalation_targets': list(row.escalation_targets or []),
+        'last_escalated_at': row.last_escalated_at.isoformat() if row.last_escalated_at else None,
+        'policy_id': row.policy_id,
+        'policy_version': row.policy_version,
+        'due_at': row.due_at.isoformat(),
+        'assigned_to': assigned,
+        'assigned_at': row.assigned_at.isoformat() if row.assigned_at else None,
+        'assigned_by_user_id': str(row.assigned_by_id) if row.assigned_by_id else None,
+        'acknowledged_at': row.acknowledged_at.isoformat() if row.acknowledged_at else None,
+        'acknowledged_by_user_id': str(row.acknowledged_by_id) if row.acknowledged_by_id else None,
+        'acknowledged': row.acknowledged_at is not None,
+        'assigned_to_me': bool(viewer_user_id and row.assigned_to_id and str(row.assigned_to.user_id) == str(viewer_user_id)),
+        'generation': row.generation,
+        'version': row.version,
+        'last_execution_id': str(row.last_execution_id) if row.last_execution_id else None,
+        'last_observation_id': str(row.last_observation_id) if row.last_observation_id else None,
+        'satisfied_at': row.satisfied_at.isoformat() if row.satisfied_at else None,
+        'superseded_at': row.superseded_at.isoformat() if row.superseded_at else None,
+    }
+
+
+def _obligation_rows(*, project_id: str, organization, include_terminal: bool = True):
+    rows = (
+        AssuranceObligation.objects
+        .filter(project_id=project_id, organization=organization)
+        .select_related(
+            'disposition',
+            'source_disposition',
+            'source_observation',
+            'schedule',
+            'assigned_to',
+            'assigned_to__user',
+            'assigned_by',
+            'acknowledged_by',
+        )
+    )
+    if not include_terminal:
+        rows = rows.exclude(status__in=[
+            AssuranceObligation.Status.SATISFIED,
+            AssuranceObligation.Status.SUPERSEDED,
+        ])
+    return rows
+
+
+def list_review_work_queue(
+    *,
+    project_id: str,
+    user_id: str,
+    mine: bool = False,
+    include_terminal: bool = False,
+):
+    link, membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=False)
+    rows = _obligation_rows(
+        project_id=project_id,
+        organization=link.organization,
+        include_terminal=include_terminal,
+    )
+    if mine:
+        rows = rows.filter(assigned_to=membership)
+    items = list(rows)
+    priority_rank = {
+        AssuranceObligation.Priority.P0_CRITICAL: 0,
+        AssuranceObligation.Priority.P1_HIGH: 1,
+        AssuranceObligation.Priority.P2_MEDIUM: 2,
+        AssuranceObligation.Priority.P3_LOW: 3,
+    }
+    status_rank = {
+        AssuranceObligation.Status.OVERDUE: 0,
+        AssuranceObligation.Status.DUE: 1,
+        AssuranceObligation.Status.OPEN: 2,
+        AssuranceObligation.Status.SATISFIED: 3,
+        AssuranceObligation.Status.SUPERSEDED: 4,
+    }
+    items.sort(key=lambda row: (
+        status_rank.get(row.status, 9),
+        priority_rank.get(row.priority, 9),
+        row.due_at,
+        row.created_at,
+        str(row.id),
+    ))
+    return [_obligation_view(row, viewer_user_id=str(membership.user_id)) for row in items]
+
+
+def list_assurance_obligations(*, project_id: str, user_id: str):
+    link, membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=False)
+    rows = _obligation_rows(
+        project_id=project_id,
+        organization=link.organization,
+        include_terminal=True,
+    ).order_by('due_at', 'created_at')
+    return [_obligation_view(row, viewer_user_id=str(membership.user_id)) for row in rows]
