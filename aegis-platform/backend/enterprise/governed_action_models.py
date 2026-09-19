@@ -92,3 +92,103 @@ class GovernedActionExecution(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError('Governed action execution records are immutable and cannot be deleted.')
+
+class _ImmutableEvidenceQualificationQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Evidence qualification evaluations are immutable and cannot be updated.')
+
+    def delete(self):
+        raise ValidationError('Evidence qualification evaluations are immutable and cannot be deleted.')
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('Evidence qualification evaluations must be created through the qualification authority.')
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise ValidationError('Evidence qualification evaluations are immutable and cannot be updated.')
+
+
+class EvidenceQualificationEvaluation(models.Model):
+    """Immutable, reproducible AGOM decision over an explicit evidence set."""
+
+    class Decision(models.TextChoices):
+        QUALIFIED = 'qualified', 'Qualified'
+        NOT_AUTHORIZED = 'not_authorized', 'Not Authorized'
+        STALE = 'stale', 'Stale'
+        EXPIRED = 'expired', 'Expired'
+        REVOKED = 'revoked', 'Revoked'
+        CONTRADICTED = 'contradicted', 'Contradicted'
+        SUPERSEDED = 'superseded', 'Superseded'
+        WRONG_SUBJECT = 'wrong_subject', 'Wrong Subject'
+        WRONG_TENANT = 'wrong_tenant', 'Wrong Tenant'
+        WRONG_PROJECT = 'wrong_project', 'Wrong Project'
+        WRONG_EXECUTION = 'wrong_execution', 'Wrong Execution'
+        WRONG_TARGET = 'wrong_target', 'Wrong Target'
+        MISSING_PROVENANCE = 'missing_provenance', 'Missing Provenance'
+        INSUFFICIENT_EVIDENCE = 'insufficient_evidence', 'Insufficient Evidence'
+        INTEGRITY_MISMATCH = 'integrity_mismatch', 'Integrity Mismatch'
+        REPLAYED_EVIDENCE = 'replayed_evidence', 'Replayed Evidence'
+
+    objects = _ImmutableEvidenceQualificationQuerySet.as_manager()
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        'enterprise.Organization',
+        on_delete=models.PROTECT,
+        related_name='evidence_qualification_evaluations',
+    )
+    project = models.ForeignKey(
+        'projects.Project',
+        on_delete=models.PROTECT,
+        related_name='evidence_qualification_evaluations',
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='evidence_qualification_evaluations',
+    )
+    subject_type = models.CharField(max_length=80)
+    subject_id = models.CharField(max_length=128)
+    target = models.CharField(max_length=500, blank=True)
+    authorization_ref = models.CharField(max_length=128, blank=True)
+    execution_ref = models.CharField(max_length=128, blank=True)
+    policy_version = models.CharField(max_length=64)
+    policy_snapshot = models.JSONField(default=dict)
+    requested_evidence_ids = models.JSONField(default=list)
+    evidence_snapshot = models.JSONField(default=list)
+    evidence_set_hash = models.CharField(max_length=64, db_index=True)
+    decision = models.CharField(max_length=40, choices=Decision.choices)
+    qualified = models.BooleanField(default=False)
+    reason_codes = models.JSONField(default=list)
+    reasons = models.JSONField(default=list)
+    evaluation_context = models.JSONField(default=dict)
+    evaluation_fingerprint = models.CharField(max_length=64, unique=True, editable=False)
+    evaluated_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-evaluated_at', '-id']
+        indexes = [
+            models.Index(fields=['organization', 'decision', '-evaluated_at'], name='idx_evidqual_org_decision'),
+            models.Index(fields=['project', 'subject_type', 'subject_id'], name='idx_evidqual_project_subject'),
+            models.Index(fields=['policy_version', '-evaluated_at'], name='idx_evidqual_policy_time'),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(decision='qualified', qualified=True)
+                    | (~models.Q(decision='qualified') & models.Q(qualified=False))
+                ),
+                name='evidqual_decision_matches_bool',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Evidence qualification evaluations are immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Evidence qualification evaluations are immutable and cannot be deleted.')
+
