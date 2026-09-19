@@ -6,7 +6,7 @@ import pytest
 
 from fastapi_app.services import wstg_native_capabilities as wstg
 from fastapi_app.services.capability_registry import get_capability
-from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS
+from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS, NativeExecutionCancelled
 from fastapi_app.services.pinned_http import PinnedHTTPResponse
 
 
@@ -152,3 +152,87 @@ def test_internal_capabilities_reject_options_and_credentials():
             {},
             credential_materials=({'kind': 'token', 'secret': 'x'},),
         )
+
+
+
+def test_runtime_cancellation_is_rechecked_between_http_requests(monkeypatch):
+    requested = []
+    states = iter(['running', 'running', 'running', 'cancelled'])
+
+    def state_getter():
+        return next(states, 'cancelled')
+
+    @contextmanager
+    def fake_operation(target):
+        class Destination:
+            resolved_ips = ('203.0.113.10',)
+            port = 443
+            host = 'example.test'
+        yield Destination()
+
+    def fake_request(method, target, **kwargs):
+        requested.append(method)
+        return _response()
+
+    monkeypatch.setattr(wstg, 'validate_authorized_web_target', lambda target: target)
+    monkeypatch.setattr(wstg, 'pinned_http_operation', fake_operation)
+    monkeypatch.setattr(wstg, 'request_pinned', fake_request)
+
+    with pytest.raises(NativeExecutionCancelled):
+        wstg.run_wstg_internal_capability(
+            'web.http-method-policy',
+            'https://example.test/',
+            {},
+            state_getter=state_getter,
+            poll_interval=0.01,
+        )
+
+    assert requested == ['OPTIONS']
+
+
+def test_runtime_pause_is_bounded_and_resumes(monkeypatch):
+    sleeps = []
+    states = iter(['paused', 'running'])
+
+    monkeypatch.setattr(wstg.time, 'sleep', lambda value: sleeps.append(value))
+    checkpoint = wstg._make_execution_checkpoint(
+        wstg.WSTG_INTERNAL_SPECS['web.http-method-policy'],
+        lambda: next(states, 'running'),
+        10.0,
+    )
+
+    checkpoint()
+
+    assert sleeps == [1.0]
+
+
+def test_normalizer_drops_unknown_fields_and_forces_pre_oast_ssrf_abstention():
+    raw = (
+        '{"observations":[{'
+        '"capability_id":"web.ssrf-canary-validation",'
+        '"wstg_id":"forged","final_decision":true,"observation_only":false,'
+        '"abstained":false,"callback_attempted":true,"ssrf_confirmed":true,'
+        '"secret":"must-not-survive"}]}'
+    )
+    normalized = wstg.normalize_wstg_internal_output('web.ssrf-canary-validation', raw)
+
+    assert normalized['count'] == 1
+    row = normalized['observations'][0]
+    assert row['wstg_id'] == 'WSTG-INPV-19'
+    assert row['observation_only'] is True
+    assert row['final_decision'] is False
+    assert row['abstained'] is True
+    assert row['callback_attempted'] is False
+    assert row['ssrf_confirmed'] is False
+    assert 'secret' not in row
+
+
+def test_method_policy_normalizer_never_claims_unsafe_method_execution():
+    raw = (
+        '{"observations":[{'
+        '"capability_id":"web.http-method-policy",'
+        '"unsafe_methods_sent":true,"statuses":{"GET":200}}]}'
+    )
+    normalized = wstg.normalize_wstg_internal_output('web.http-method-policy', raw)
+
+    assert normalized['observations'][0]['unsafe_methods_sent'] is False
