@@ -10,6 +10,7 @@ from django.db import transaction
 
 from django_project.audit.models import AuditLog
 from django_project.audit.services import append_audit
+from django_project.evidence.models import ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.governed_action_models import GovernedActionExecution
 from enterprise.models import Organization, TenantProject
@@ -17,8 +18,21 @@ from fastapi_app.contracts.governed_operations import AGOM_CONTRACT_VERSION, Act
 from fastapi_app.services.campaign_objective_assurance import assess_objective, complete_campaign
 from fastapi_app.services.finding_closure import close_finding
 from fastapi_app.services.finding_confirmation import confirm_finding
+from fastapi_app.services.evidence_qualification import EvidenceQualificationPolicy, qualify_evidence
 from fastapi_app.services.governed_capability_manifest import build_governed_capability_manifest
 from fastapi_app.services.governed_operations import get_action_contract
+
+
+_FINDING_CONFIRM_EVIDENCE_POLICY = EvidenceQualificationPolicy(
+    policy_version='finding-confirmation-evidence.v1',
+    min_count=1,
+    evidence_types=('validation_output',),
+    require_subject=True,
+    require_target=True,
+    require_authorization=True,
+    require_execution=True,
+    require_producer=True,
+)
 
 
 _IMPLEMENTED_ACTIONS = {
@@ -97,6 +111,109 @@ def _require_parameters(parameters: dict[str, Any], *, required: set[str], allow
         raise GovernedActionError(f'Unsupported governed action parameters: {extras}.')
     if missing:
         raise GovernedActionError(f'Missing governed action parameters: {missing}.')
+
+
+def _qualification_view(result) -> dict[str, Any]:
+    evaluation = result.evaluation
+    return {
+        'evaluation_id': str(evaluation.id),
+        'decision': evaluation.decision,
+        'qualified': bool(evaluation.qualified),
+        'reason_codes': list(evaluation.reason_codes or []),
+        'policy_version': evaluation.policy_version,
+        'evidence_set_hash': evaluation.evidence_set_hash,
+        'evaluation_fingerprint': evaluation.evaluation_fingerprint,
+        'evaluated_at': evaluation.evaluated_at.isoformat(),
+        'replayed': bool(result.replayed),
+    }
+
+
+def _finding_confirmation_qualification(
+    *,
+    project_id: str,
+    actor_id: str,
+    entity_id: str,
+    parameters: dict[str, Any],
+    evaluated_at=None,
+):
+    validation_id = str(parameters.get('validation_id') or '').strip()
+    if not validation_id:
+        return None
+    validation = (
+        ValidationRun.objects.select_related('finding', 'authorization_decision')
+        .filter(pk=validation_id, finding_id=entity_id)
+        .first()
+    )
+    if validation is None:
+        return None
+    result = validation.result if isinstance(validation.result, dict) else {}
+    evidence_id = str(result.get('evidence_id') or '').strip()
+    if not evidence_id:
+        return None
+    return qualify_evidence(
+        project_id=project_id,
+        evidence_ids=[evidence_id],
+        subject_type='finding',
+        subject_id=entity_id,
+        target=str(validation.target_value or ''),
+        authorization_ref=str(validation.authorization_decision_id or ''),
+        execution_ref=str(validation.id),
+        requested_by_id=actor_id,
+        policy=_FINDING_CONFIRM_EVIDENCE_POLICY,
+        evaluated_at=evaluated_at,
+    )
+
+
+def _require_qualified_evidence(result) -> None:
+    if result is None:
+        raise GovernedActionBlocked(
+            'EVIDENCE_QUALIFICATION_REQUIRED',
+            'Evidence qualification could not resolve the governed action evidence set.',
+            ['qualified_evidence'],
+        )
+    if not result.qualified:
+        evaluation = result.evaluation
+        raise GovernedActionBlocked(
+            'EVIDENCE_NOT_QUALIFIED',
+            f'Evidence qualification rejected: {evaluation.decision}.',
+            list(evaluation.reason_codes or [evaluation.decision]),
+        )
+
+
+def _preflight_evidence_qualification(
+    *,
+    action_id: str,
+    project_id: str,
+    actor_id: str,
+    entity_type: str,
+    entity_id: str,
+    parameters: dict[str, Any],
+):
+    if action_id != 'finding.confirm':
+        return None
+    manifest = build_governed_capability_manifest(
+        project_id=project_id,
+        user_id=actor_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+    )
+    capability = _capability_for(manifest, action_id)
+    if capability.mode is ActionMode.HIDDEN:
+        raise PermissionError('Governed action is not available to this actor.')
+    if capability.mode is not ActionMode.ENABLED:
+        raise GovernedActionBlocked(
+            capability.reason_code,
+            capability.reason,
+            capability.missing_requirements,
+        )
+    result = _finding_confirmation_qualification(
+        project_id=project_id,
+        actor_id=actor_id,
+        entity_id=entity_id,
+        parameters=parameters,
+    )
+    _require_qualified_evidence(result)
+    return result
 
 
 def _execute_objective_assessment(
@@ -294,6 +411,32 @@ def execute_governed_action(
     }
     request_fingerprint = _sha(request_material)
 
+    # Preserve exact idempotent replay semantics before fresh-state preflight.
+    outer_organization_id, _outer_project = _project_scope(normalized_project_id)
+    prior_execution = (
+        GovernedActionExecution.objects.select_related('audit_log')
+        .filter(organization_id=outer_organization_id, idempotency_key=key)
+        .first()
+    )
+    if prior_execution is not None:
+        if prior_execution.request_fingerprint != request_fingerprint:
+            raise GovernedActionConflict(
+                'Idempotency key was already used for a different governed action request in this organization.'
+            )
+        return GovernedActionResult(execution=prior_execution, replayed=True)
+
+    # Persist qualification before mutation so rejected evidence decisions remain
+    # auditable. Capability authority is checked first to avoid evidence-state
+    # disclosure to an ineligible actor.
+    prequalification = _preflight_evidence_qualification(
+        action_id=normalized_action,
+        project_id=normalized_project_id,
+        actor_id=normalized_actor_id,
+        entity_type=normalized_entity_type,
+        entity_id=normalized_entity_id,
+        parameters=payload,
+    )
+
     with transaction.atomic():
         # Resolve the immutable tenant link only to discover the serialization
         # root, then lock Organization first. Responsibility grant/revoke uses
@@ -367,6 +510,17 @@ def execute_governed_action(
         policy_fingerprint = _sha(policy_material)
         before_projection = _projection_dict(manifest)
 
+        qualification = None
+        if normalized_action == 'finding.confirm':
+            qualification = _finding_confirmation_qualification(
+                project_id=normalized_project_id,
+                actor_id=normalized_actor_id,
+                entity_id=normalized_entity_id,
+                parameters=payload,
+                evaluated_at=prequalification.evaluation.evaluated_at if prequalification else None,
+            )
+            _require_qualified_evidence(qualification)
+
         dispatcher = _DISPATCH[normalized_action]
         result_payload = dispatcher(
             project_id=normalized_project_id,
@@ -375,6 +529,11 @@ def execute_governed_action(
             expected_version=int(expected_version),
             parameters=payload,
         )
+        if qualification is not None:
+            result_payload = {
+                **result_payload,
+                'evidence_qualification': _qualification_view(qualification),
+            }
 
         after_manifest = build_governed_capability_manifest(
             project_id=normalized_project_id,
