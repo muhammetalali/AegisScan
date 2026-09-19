@@ -128,14 +128,14 @@ def get_wstg_internal_spec(capability_id: str) -> WSTGInternalSpec:
 
 def validate_wstg_internal_options(capability_id: str, options: Mapping[str, Any]) -> dict[str, Any]:
     spec = get_wstg_internal_spec(capability_id)
-    unknown = sorted(set(options) - set(spec.allowed_options))
-    if unknown:
-        raise ValueError(f'Unsupported options for {capability_id}: {unknown}')
     if capability_id != 'web.ssrf-canary-validation':
         if options:
             raise ValueError(f'{capability_id} does not accept runtime options')
         return {}
 
+    unknown = sorted(set(options) - set(spec.allowed_options))
+    if unknown:
+        raise ValueError(f'Unsupported options for {capability_id}: {unknown}')
     session_id = str(options.get('oast_session_id') or '').strip()
     execution_id = str(options.get('execution_id') or '').strip()
     if bool(session_id) != bool(execution_id):
