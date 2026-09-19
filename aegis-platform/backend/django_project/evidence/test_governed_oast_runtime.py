@@ -314,6 +314,26 @@ class GovernedOASTRuntimeTests(TestCase):
         self.assertFalse(normalized_forged['observations'][0]['ssrf_confirmed'])
         self.assertTrue(normalized_forged['observations'][0]['abstained'])
 
+    def test_wstg_confirmation_rejects_unbound_oast_session(self):
+        payload = self._session(execution='exec-unbound-oast-1')
+        session_id, token = self._identity(payload)
+        ingest_http_callback(
+            session_id=session_id,
+            token=token,
+            source_ip='198.51.100.13',
+            method='GET',
+        )
+        observation = wstg._ssrf_canary_validation(
+            'https://target.example.test/',
+            {
+                'oast_session_id': session_id,
+                'execution_id': 'exec-unbound-oast-1',
+            },
+        )
+        self.assertFalse(observation['ssrf_confirmed'])
+        self.assertTrue(observation['abstained'])
+        self.assertEqual(observation['abstention_reason'], 'oast_scan_binding_required')
+
     def test_runtime_options_do_not_accept_callback_locations(self):
         with self.assertRaises(ValueError):
             wstg.validate_wstg_internal_options(
