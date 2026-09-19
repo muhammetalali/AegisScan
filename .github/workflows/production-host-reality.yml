@@ -9,11 +9,17 @@ on:
       - 'aegis-platform/scripts/production_secret_init.py'
       - 'aegis-platform/scripts/production_tls_acme.sh'
       - 'aegis-platform/scripts/production_preflight.py'
+      - 'aegis-platform/scripts/production_ddns_reconcile.py'
+      - 'aegis-platform/scripts/production_internal_dns_bootstrap.sh'
+      - 'aegis-platform/systemd/aegisscan-ddns-reconcile.service'
+      - 'aegis-platform/systemd/aegisscan-ddns-reconcile.timer'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.prod.yml'
       - 'aegis-platform/docker-compose.monitoring.yml'
       - 'aegis-platform/docker-compose.backup.yml'
       - 'tests/test_production_host_reality.py'
+      - 'tests/test_production_ddns_reconcile.py'
+      - 'tests/test_production_internal_dns_contract.py'
       - '.github/workflows/production-host-reality.yml'
   push:
     branches: [main]
@@ -39,15 +45,21 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install pytest==9.1.1
 
-      - name: Validate production shell syntax
+      - name: Validate production shell and Python syntax
         shell: bash
         run: |
           set -euo pipefail
           sh -n aegis-platform/scripts/production_host_bootstrap.sh
+          sh -n aegis-platform/scripts/production_internal_dns_bootstrap.sh
           sh -n aegis-platform/scripts/production_tls_acme.sh
+          python -m py_compile aegis-platform/scripts/production_ddns_reconcile.py
 
-      - name: Unit-test host, secret and safety contracts
-        run: python -m pytest -q tests/test_production_host_reality.py
+      - name: Unit-test host, secret, DNS and safety contracts
+        run: |
+          python -m pytest -q \
+            tests/test_production_host_reality.py \
+            tests/test_production_ddns_reconcile.py \
+            tests/test_production_internal_dns_contract.py
 
       - name: Generate private production secret material
         shell: bash

@@ -1,0 +1,12 @@
+[Unit]
+Description=AegisScan Production DDNS Reconciliation Timer
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+RandomizedDelaySec=5s
+Unit=aegisscan-ddns-reconcile.service
+
+[Install]
+WantedBy=timers.target

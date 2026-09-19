@@ -1,0 +1,31 @@
+[Unit]
+Description=AegisScan Production DDNS Reconciliation
+Documentation=https://github.com/muhammetalali/AegisScan
+Wants=network-online.target
+After=network-online.target named.service
+Requires=named.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=-/etc/aegisscan/ddns-reconcile.env
+ExecStart=/usr/local/sbin/aegisscan-ddns-reconcile
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+SystemCallArchitectures=native
+IPAddressDeny=any
+IPAddressAllow=192.168.49.53/32
