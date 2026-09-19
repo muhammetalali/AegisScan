@@ -67,3 +67,36 @@ def test_secret_init_generates_private_vault_material(tmp_path: Path):
     assert values["AUTHORIZED_SCAN_TARGETS"] == "authorized.example.com"
     assert Path(result["s3_credentials_file"]).is_file()
     assert Path(result["backup_encryption_key_file"]).is_file()
+
+def test_secret_init_main_emits_structured_failure(monkeypatch, capsys, tmp_path: Path):
+    def fail_initialize(**_kwargs):
+        raise MODULE.SecretInitError("synthetic-secret-init-failure")
+
+    monkeypatch.setattr(MODULE, "initialize", fail_initialize)
+    monkeypatch.setattr(
+        MODULE.sys,
+        "argv",
+        [
+            str(PATH),
+            "--domain",
+            "security.example.com",
+            "--authorized-target",
+            "authorized.example.com",
+            "--alert-webhook",
+            "https://alerts.example.com/aegis",
+            "--backup-endpoint",
+            "https://backups.example.com",
+            "--backup-bucket",
+            "aegisscan-production-backups",
+            "--s3-credentials-source",
+            str(tmp_path / "missing-s3.json"),
+        ],
+    )
+
+    assert MODULE.main() == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert '"schema": "aegisscan.production-secret-init.v1"' in captured.err
+    assert '"status": "failed"' in captured.err
+    assert '"error": "synthetic-secret-init-failure"' in captured.err

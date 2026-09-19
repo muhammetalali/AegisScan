@@ -18,6 +18,7 @@ on:
       - 'aegis-platform/docker-compose.monitoring.yml'
       - 'aegis-platform/docker-compose.backup.yml'
       - 'tests/test_production_host_reality.py'
+      - 'tests/test_production_secret_init.py'
       - 'tests/test_production_ddns_reconcile.py'
       - 'tests/test_production_internal_dns_contract.py'
       - '.github/workflows/production-host-reality.yml'
@@ -59,7 +60,8 @@ jobs:
           python -m pytest -q \
             tests/test_production_host_reality.py \
             tests/test_production_ddns_reconcile.py \
-            tests/test_production_internal_dns_contract.py
+            tests/test_production_internal_dns_contract.py \
+            tests/test_production_secret_init.py
 
       - name: Generate private production secret material
         shell: bash
