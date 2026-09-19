@@ -131,6 +131,16 @@ class GovernedOASTRuntimeTests(TestCase):
         self.assertNotEqual(session.token_sha256, token)
         self.assertTrue(first['callbacks']['dns_name'].endswith('.callbacks.oast.test'))
 
+    def test_idempotency_key_reuse_with_different_parameters_is_rejected(self):
+        self._session(key='oast-test-idempotency-conflict-0001')
+        with self.assertRaises(OASTRuntimeError) as caught:
+            self._session(
+                key='oast-test-idempotency-conflict-0001',
+                ttl_seconds=600,
+            )
+        self.assertEqual(caught.exception.code, 'idempotency_conflict')
+        self.assertEqual(GovernedOASTSession.objects.count(), 1)
+
     def test_http_callback_is_deduplicated_redacted_and_projected(self):
         payload = self._session()
         session_id, token = self._identity(payload)
