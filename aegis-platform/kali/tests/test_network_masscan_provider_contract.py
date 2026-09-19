@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ COMPOSE = (REPO / 'aegis-platform' / 'docker-compose.masscan-canary.yml').read_t
 spec = importlib.util.spec_from_file_location('network_masscan_service', SERVICE_PATH)
 assert spec and spec.loader
 service = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = service
 spec.loader.exec_module(service)
 
 
