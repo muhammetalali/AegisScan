@@ -1,0 +1,360 @@
+name: Network Masscan Canary Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &masscan_m4_paths
+      - 'aegis-platform/backend/fastapi_app/services/kali_masscan_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/masscan_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/services/masscan_semantic_parity.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_masscan_execution_provider.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/advanced_scans.py'
+      - 'aegis-platform/docker/scanner-egress/entrypoint.sh'
+      - 'aegis-platform/kali/Dockerfile.masscan-provider'
+      - 'aegis-platform/kali/runner/network_masscan_service.py'
+      - 'aegis-platform/kali/tests/test_network_masscan_provider_contract.py'
+      - 'aegis-platform/docker-compose.masscan-canary.yml'
+      - 'docs/NETWORK_MASSCAN_CANARY.md'
+      - '.github/workflows/network-masscan-canary-reality.yml'
+  push:
+    branches: [main]
+    paths: *masscan_m4_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-masscan-m4-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Install focused dependencies
+        run: python -m pip install pytest
+      - name: Compile Masscan M4 contracts
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/fastapi_app/services/kali_masscan_provider.py \
+            aegis-platform/backend/fastapi_app/services/masscan_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_masscan_execution_provider.py \
+            aegis-platform/backend/fastapi_app/tasks/advanced_scans.py \
+            aegis-platform/kali/runner/network_masscan_service.py \
+            aegis-platform/kali/tests/test_network_masscan_provider_contract.py
+      - name: Prove deterministic routing provider and parity regressions
+        env:
+          PYTHONPATH: aegis-platform/backend
+        run: |
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest \
+            aegis-platform/backend/fastapi_app/services/test_masscan_execution_provider.py \
+            aegis-platform/backend/fastapi_app/services/test_masscan_semantic_parity.py \
+            aegis-platform/backend/fastapi_app/services/test_scanner_adapters_masscan_network.py
+          python -m pytest -q -c /dev/null -p no:cacheprovider --noconftest \
+            aegis-platform/kali/tests/test_network_masscan_provider_contract.py
+      - name: Prove task lineage integration
+        run: |
+          grep -Fq 'run_masscan_with_provider' aegis-platform/backend/fastapi_app/tasks/advanced_scans.py
+          grep -Fq "'provider_routing':result.routing" aegis-platform/backend/fastapi_app/tasks/advanced_scans.py
+          grep -Fq "'runtime_provenance':result.runtime" aegis-platform/backend/fastapi_app/tasks/advanced_scans.py
+      - name: Capture exact-head M4 contract
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/network-masscan-canary-contract.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-masscan-canary-contract.v1',
+              'capability_id':'network.masscan',
+              'deployment_default':'legacy',
+              'production_admitted_modes':['legacy','canary'],
+              'raw_kali_production_admitted':False,
+              'assignment':'sha256-stable-scan-id',
+              'max_canary_bps':2500,
+              'zero_bps_rollback':True,
+              'selected_failure_fallback':False,
+              'provider_capabilities':['CAP_NET_RAW'],
+              'provider_dispatch':['network.masscan'],
+              'provider_no_new_privileges':True,
+              'legacy_retirement':False,
+          },sort_keys=True,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-masscan-canary-contract-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  real-canary-routing:
+    needs: canary-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_MASSCAN_NETWORK: aegis-masscan-canary
+      AEGIS_MASSCAN_TARGET: 172.31.1.10
+      AEGIS_MASSCAN_EGRESS_IP: 172.31.1.2
+      AEGIS_MASSCAN_PORTS: 22,80
+      AEGIS_MASSCAN_RATE: '1000'
+      AEGIS_MASSCAN_CANARY_BPS: '2500'
+      AEGIS_MASSCAN_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Build exact legacy scanner egress and governed Masscan provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --no-cache --target legacy-parity-reference \
+            -t aegis-masscan-canary:legacy -f aegis-platform/backend/Dockerfile.django aegis-platform/backend
+          docker build --no-cache \
+            -t aegis-scanner-egress:masscan-canary \
+            -f aegis-platform/docker/scanner-egress/Dockerfile aegis-platform/docker/scanner-egress
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --no-cache \
+            --build-arg BUILD_COMMIT="${AEGIS_EXACT_HEAD}" \
+            --build-arg AEGIS_RUNNER_VERSION=0.1.0 \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            -t aegis-kali:base -f aegis-platform/kali/Dockerfile.base aegis-platform/kali
+          docker build --no-cache \
+            --build-arg AEGIS_BASE_IMAGE=aegis-kali:base \
+            --build-arg SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --target profile-network -t aegis-kali:network \
+            -f aegis-platform/kali/Dockerfile.profiles .
+          docker build --no-cache \
+            --build-arg AEGIS_MASSCAN_BASE_IMAGE=aegis-kali:network \
+            -t aegis-kali:masscan-provider \
+            -f aegis-platform/kali/Dockerfile.masscan-provider aegis-platform/kali
+      - name: Derive immutable provider trust anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$(docker image inspect aegis-kali:masscan-provider --format '{{.Id}}')"
+          case "$IMAGE_ID" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json > runtime-manifest.json
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib,json
+          raw=open('runtime-manifest.json','rb').read()
+          runtime=json.loads(raw)
+          assert runtime['profile']=='network',runtime
+          assert runtime['dispatch_enabled'] is True,runtime
+          assert runtime['dispatch_state']=='semantic-masscan-provider',runtime
+          assert runtime['dispatch_capabilities']==['network.masscan'],runtime
+          assert runtime['profile_tools']['masscan']['version']=='2:1.3.2+ds1-2',runtime
+          print('AEGIS_KALI_MASSCAN_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_MASSCAN_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_MASSCAN_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_MASSCAN_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_MASSCAN_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "AEGIS_KALI_MASSCAN_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_MASSCAN_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+      - name: Start deterministic target and trusted namespace owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts && chmod 0777 artifacts
+          docker network create --internal --subnet 172.31.1.0/24 "${AEGIS_MASSCAN_NETWORK}"
+          test "$(docker network inspect -f '{{.Internal}}' "${AEGIS_MASSCAN_NETWORK}")" = true
+          docker run -d --name aegis-masscan-canary-fixture \
+            --network "${AEGIS_MASSCAN_NETWORK}" --ip "${AEGIS_MASSCAN_TARGET}" --user 0:0 \
+            -v "$PWD/aegis-platform/e2e/nmap_tcp_fixture.py:/fixture.py:ro" \
+            --entrypoint python aegis-masscan-canary:legacy /fixture.py
+          docker run -d --name aegis-masscan-canary-egress \
+            --network "${AEGIS_MASSCAN_NETWORK}" --ip "${AEGIS_MASSCAN_EGRESS_IP}" --user 0:0 \
+            --cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges:true \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+            -e SCANNER_CONTROL_ENDPOINTS='' \
+            -e SCANNER_EGRESS_PRIVATE_TARGETS="${AEGIS_MASSCAN_TARGET}/32" \
+            aegis-scanner-egress:masscan-canary
+          for _ in $(seq 1 30); do
+            fixture_ready=false; egress_ready=false
+            docker logs aegis-masscan-canary-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY && fixture_ready=true || true
+            docker logs aegis-masscan-canary-egress 2>&1 | grep -Fq 'kernel egress policy installed' && egress_ready=true || true
+            if "$fixture_ready" && "$egress_ready"; then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-masscan-canary-fixture || true
+          docker logs aegis-masscan-canary-egress || true
+          exit 1
+      - name: Derive deterministic link identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          interface=eth0
+          adapter_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-masscan-canary-egress)"
+          adapter_mac="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.MacAddress}}{{end}}' aegis-masscan-canary-egress)"
+          router_mac="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.MacAddress}}{{end}}' aegis-masscan-canary-fixture)"
+          test "$adapter_ip" = "${AEGIS_MASSCAN_EGRESS_IP}"
+          {
+            echo "AEGIS_MASSCAN_INTERFACE=$interface"
+            echo "AEGIS_MASSCAN_ADAPTER_IP=$adapter_ip"
+            echo "AEGIS_MASSCAN_ADAPTER_MAC=${adapter_mac,,}"
+            echo "AEGIS_MASSCAN_ROUTER_MAC=${router_mac,,}"
+          } >> "$GITHUB_ENV"
+          python - "$interface" "$adapter_ip" "$adapter_mac" "$router_mac" <<'PY' > artifacts/link-binding.json
+          import ipaddress,json,re,sys
+          interface,ip,mac,router=sys.argv[1:]
+          assert ipaddress.ip_address(ip).version==4
+          m=re.compile(r'^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
+          assert m.fullmatch(mac) and m.fullmatch(router)
+          print(json.dumps({'interface':interface,'adapter_ip':ip,'adapter_mac':mac.lower(),'router_mac':router.lower()},sort_keys=True,indent=2))
+          PY
+      - name: Start legacy-capable scanner and CAP_NET_RAW-only provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name aegis-masscan-canary-scanner \
+            --network container:aegis-masscan-canary-egress --user 0:0 \
+            --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true \
+            -e AUTHORIZED_SCAN_TARGETS="${AEGIS_MASSCAN_TARGET}/32" \
+            -e AEGIS_MASSCAN_PROVIDER=canary \
+            -e AEGIS_KALI_MASSCAN_CANARY_BPS="${AEGIS_MASSCAN_CANARY_BPS}" \
+            -e AEGIS_KALI_MASSCAN_URL=http://127.0.0.1:18767 \
+            -e AEGIS_KALI_MASSCAN_AUTH_TOKEN="${AEGIS_MASSCAN_AUTH_TOKEN}" \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_RUNNER_VERSION \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_BUILD_COMMIT \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_BASE_IMAGE_DIGEST \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_TOOL_MANIFEST_DIGEST \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_IMAGE_DIGEST \
+            -e AEGIS_KALI_MASSCAN_EXPECTED_RUNTIME_MANIFEST_DIGEST \
+            -e AEGIS_MASSCAN_INTERFACE -e AEGIS_MASSCAN_ADAPTER_IP \
+            -e AEGIS_MASSCAN_ADAPTER_MAC -e AEGIS_MASSCAN_ROUTER_MAC \
+            -v "$PWD/artifacts:/artifacts" \
+            --entrypoint sleep aegis-masscan-canary:legacy infinity
+          docker exec aegis-masscan-canary-scanner sh -c \
+            "grep -Eq '^CapEff:[[:space:]]+0000000000002000$' /proc/self/status && grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/self/status"
+          docker run -d --name aegis-masscan-canary-provider \
+            --network container:aegis-masscan-canary-egress --user 0:0 --read-only \
+            --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            -e AEGIS_KALI_MASSCAN_AUTH_TOKEN="${AEGIS_MASSCAN_AUTH_TOKEN}" \
+            "$AEGIS_KALI_MASSCAN_IMAGE"
+          for _ in $(seq 1 30); do
+            if docker exec aegis-masscan-canary-scanner python - <<'PY' >/dev/null 2>&1
+          import urllib.request
+          urllib.request.urlopen('http://127.0.0.1:18767/healthz',timeout=1).read()
+          PY
+            then exit 0; fi
+            sleep 1
+          done
+          docker logs aegis-masscan-canary-provider
+          exit 1
+      - name: Derive stable selected and holdback cohorts
+        run: |
+          docker exec -i aegis-masscan-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.kali_masscan_provider import masscan_provider_decision
+          selected=holdback=None
+          for i in range(10000):
+              key=f'real-masscan-canary-{i}'
+              d=masscan_provider_decision(routing_key=key)
+              if d.selected_provider=='kali' and selected is None: selected=(key,d.as_dict())
+              if d.selected_provider=='legacy' and holdback is None: holdback=(key,d.as_dict())
+              if selected and holdback: break
+          assert selected and holdback
+          json.dump({'selected_key':selected[0],'selected':selected[1],'holdback_key':holdback[0],'holdback':holdback[1]},open('/artifacts/cohorts.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Execute real holdback and selected provider paths
+        run: |
+          docker exec -i aegis-masscan-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.masscan_execution_provider import run_masscan_with_provider
+          cohorts=json.load(open('/artifacts/cohorts.json'))
+          common=dict(target='172.31.1.10',ports='22,80',rate=1000,timeout_seconds=120,authorization_ref='auth-m4',scope_ref='project:m4:asset:masscan',state_getter=lambda:'running')
+          hold=run_masscan_with_provider(routing_key=cohorts['holdback_key'],execution_ref='masscan-m4-holdback',**common)
+          assert hold.routing['selected_provider']=='legacy',hold.routing
+          assert hold.exit_code==0,hold.stderr
+          open('/artifacts/holdback.json','w').write(hold.stdout)
+          json.dump({'routing':hold.routing,'runtime':hold.runtime},open('/artifacts/holdback-result.json','w'),sort_keys=True,indent=2)
+          selected=run_masscan_with_provider(routing_key=cohorts['selected_key'],execution_ref='masscan-m4-selected',**common)
+          assert selected.routing['selected_provider']=='kali',selected.routing
+          assert selected.exit_code==0,selected.stderr
+          assert selected.runtime['provider']=='aegis-kali-network-masscan',selected.runtime
+          assert selected.runtime['linux_privilege']['allowed_capabilities']==['CAP_NET_RAW'],selected.runtime
+          open('/artifacts/selected.json','w').write(selected.stdout)
+          json.dump({'routing':selected.routing,'runtime':selected.runtime},open('/artifacts/selected-result.json','w'),sort_keys=True,indent=2)
+          PY
+      - name: Prove finding semantics and outage behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec -i aegis-masscan-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.masscan_semantic_parity import compare_masscan_semantics
+          result=compare_masscan_semantics(open('/artifacts/holdback.json').read(),open('/artifacts/selected.json').read())
+          expected=[{'ip':'172.31.1.10','protocol':'tcp','port':22},{'ip':'172.31.1.10','protocol':'tcp','port':80}]
+          assert result['equivalent'] is True,result
+          assert result['legacy']['observations']==expected,result
+          assert result['candidate']['observations']==expected,result
+          json.dump(result,open('/artifacts/canary-semantic-parity.json','w'),sort_keys=True,indent=2)
+          PY
+          docker stop aegis-masscan-canary-provider >/dev/null
+          docker exec -i -e AEGIS_KALI_MASSCAN_CANARY_BPS=0 aegis-masscan-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.masscan_execution_provider import run_masscan_with_provider
+          result=run_masscan_with_provider(target='172.31.1.10',ports='22,80',rate=1000,timeout_seconds=120,routing_key='rollback',execution_ref='masscan-m4-rollback',authorization_ref='auth-m4',scope_ref='project:m4:asset:masscan',state_getter=lambda:'running')
+          assert result.routing['selected_provider']=='legacy' and result.routing['reason']=='canary-rollback-zero',result.routing
+          assert result.exit_code==0,result.stderr
+          json.dump({'routing':result.routing,'runtime':result.runtime},open('/artifacts/rollback-result.json','w'),sort_keys=True,indent=2)
+          PY
+          docker exec -i aegis-masscan-canary-scanner python - <<'PY'
+          import json
+          from fastapi_app.services.kali_masscan_provider import KaliMasscanProviderError
+          from fastapi_app.services.masscan_execution_provider import run_masscan_with_provider
+          key=json.load(open('/artifacts/cohorts.json'))['selected_key']
+          try:
+              run_masscan_with_provider(target='172.31.1.10',ports='22,80',rate=1000,timeout_seconds=30,routing_key=key,execution_ref='masscan-m4-outage',authorization_ref='auth-m4',scope_ref='project:m4:asset:masscan',state_getter=lambda:'running')
+          except KaliMasscanProviderError:
+              raise SystemExit(0)
+          raise AssertionError('selected provider outage silently fell back')
+          PY
+      - name: Capture immutable evidence
+        run: |
+          cp runtime-manifest.json artifacts/runtime-manifest.json
+          git rev-parse HEAD > artifacts/head-sha.txt
+          printf '%s\n' "$AEGIS_KALI_MASSCAN_IMAGE" > artifacts/masscan-provider-image-id.txt
+          python - <<'PY' > artifacts/network-masscan-canary-summary.json
+          import json
+          cohorts=json.load(open('artifacts/cohorts.json'))
+          print(json.dumps({
+              'schema':'aegis.network-masscan-canary-evidence.v1',
+              'selected':cohorts['selected'],
+              'holdback':cohorts['holdback'],
+              'max_canary_bps':2500,
+              'semantic_equivalence':True,
+              'rollback_zero_proven':True,
+              'selected_outage_fail_closed':True,
+              'silent_fallback':False,
+              'public_internet_used':False,
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum head-sha.txt runtime-manifest.json masscan-provider-image-id.txt link-binding.json cohorts.json holdback.json selected.json canary-semantic-parity.json rollback-result.json network-masscan-canary-summary.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-masscan-canary-real-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f aegis-masscan-canary-provider aegis-masscan-canary-scanner aegis-masscan-canary-egress aegis-masscan-canary-fixture >/dev/null 2>&1 || true
+          docker network rm "${AEGIS_MASSCAN_NETWORK}" >/dev/null 2>&1 || true

@@ -1,0 +1,108 @@
+name: Network Masscan Canary Deployment Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths: &masscan_deploy_paths
+      - 'aegis-platform/docker-compose.masscan-canary.yml'
+      - 'aegis-platform/kali/Dockerfile.masscan-provider'
+      - 'aegis-platform/kali/runner/network_masscan_service.py'
+      - 'aegis-platform/backend/fastapi_app/services/kali_masscan_provider.py'
+      - '.github/workflows/network-masscan-canary-deployment-reality.yml'
+  push:
+    branches: [main]
+    paths: *masscan_deploy_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-masscan-m4-deploy-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deployment-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      AEGIS_KALI_MASSCAN_AUTH_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AEGIS_KALI_MASSCAN_EXPECTED_RUNNER_VERSION: 0.1.0
+      AEGIS_KALI_MASSCAN_EXPECTED_BUILD_COMMIT: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      AEGIS_KALI_MASSCAN_EXPECTED_BASE_IMAGE_DIGEST: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      AEGIS_KALI_MASSCAN_EXPECTED_TOOL_MANIFEST_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      AEGIS_KALI_MASSCAN_EXPECTED_IMAGE_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      AEGIS_KALI_MASSCAN_EXPECTED_RUNTIME_MANIFEST_DIGEST: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "${AEGIS_EXACT_HEAD}"
+      - name: Render default and bounded canary deployments
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > aegis-platform/backend/.env
+          mkdir -p artifacts
+          docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.masscan-canary.yml \
+            --profile kali-masscan config --format json > artifacts/masscan-canary-default.json
+          AEGIS_MASSCAN_PROVIDER=canary AEGIS_KALI_MASSCAN_CANARY_BPS=2500 docker compose \
+            -f aegis-platform/docker-compose.yml \
+            -f aegis-platform/docker-compose.masscan-canary.yml \
+            --profile kali-masscan config --format json > artifacts/masscan-canary-rollout.json
+      - name: Prove opt-in least-privilege deployment boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          default=json.loads(Path('artifacts/masscan-canary-default.json').read_text())
+          rollout=json.loads(Path('artifacts/masscan-canary-rollout.json').read_text())
+          for model,mode,bps in ((default,'legacy','0'),(rollout,'canary','2500')):
+              scanner=model['services']['scanner_worker']
+              provider=model['services']['kali_masscan']
+              env=scanner['environment']
+              assert env['AEGIS_MASSCAN_PROVIDER']==mode,env
+              assert str(env['AEGIS_KALI_MASSCAN_CANARY_BPS'])==bps,env
+              assert env['AEGIS_KALI_MASSCAN_URL']=='http://127.0.0.1:18767',env
+              assert provider['network_mode']=='service:scanner_egress',provider
+              assert provider['read_only'] is True,provider
+              assert provider['cap_drop']==['ALL'],provider
+              assert provider['cap_add']==['NET_RAW'],provider
+              assert provider['security_opt']==['no-new-privileges:true'],provider
+              assert provider['user']=='0:0',provider
+              assert provider['pids_limit']==128,provider
+              assert int(provider['mem_limit'])==536870912,provider
+              assert float(provider['cpus'])==1.0,provider
+              assert provider.get('ports') in (None,[]),provider
+              assert provider['environment']['AEGIS_MASSCAN_LISTEN_HOST']=='127.0.0.1',provider
+              assert str(provider['environment']['AEGIS_MASSCAN_LISTEN_PORT'])=='18767',provider
+          print('NETWORK_MASSCAN_M4_DEPLOYMENT_PASS')
+          PY
+      - name: Capture deployment evidence
+        run: |
+          git rev-parse HEAD > artifacts/head-sha.txt
+          python - <<'PY' > artifacts/network-masscan-canary-deployment.json
+          import json
+          print(json.dumps({
+              'schema':'aegis.network-masscan-canary-deployment.v1',
+              'default_provider':'legacy',
+              'default_canary_bps':0,
+              'max_canary_bps':2500,
+              'profile':'kali-masscan',
+              'provider_capabilities':['CAP_NET_RAW'],
+              'loopback_only':True,
+              'published_ports':False,
+              'base_prod_compose_unchanged':True,
+          },sort_keys=True,indent=2))
+          PY
+          (cd artifacts && sha256sum head-sha.txt masscan-canary-default.json masscan-canary-rollout.json network-masscan-canary-deployment.json > sha256sums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-masscan-canary-deployment-${{ env.AEGIS_EXACT_HEAD }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
