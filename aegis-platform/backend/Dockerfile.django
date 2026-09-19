@@ -207,13 +207,14 @@ USER 10001:10001
 
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
 
-# Production scanner target: legacy Recon is always absent. Nmap, Nuclei, and
-# Semgrep retirement toggles stay default-off only for historical parity/reference
-# builds. Production Compose hard-codes all retirement toggles to 1.
+# Production scanner target: legacy Recon is always absent. Nmap, Nuclei,
+# Semgrep, and Masscan retirement toggles stay default-off only for historical
+# parity/reference builds. Production Compose hard-codes all retirement toggles to 1.
 FROM runtime AS production-no-legacy-recon
 ARG AEGIS_RETIRE_NMAP=0
 ARG AEGIS_RETIRE_NUCLEI=0
 ARG AEGIS_RETIRE_SEMGREP=0
+ARG AEGIS_RETIRE_MASSCAN=0
 USER root
 RUN rm -f \
         /usr/local/bin/amass \
@@ -256,7 +257,15 @@ RUN rm -f \
          command -v semgrep >/dev/null; \
          python -c 'import importlib.util; assert importlib.util.find_spec("semgrep") is not None'; \
        fi \
-    && command -v masscan >/dev/null
+    && if [ "$AEGIS_RETIRE_MASSCAN" = "1" ]; then \
+         rm -f /usr/bin/masscan; \
+         rm -rf /usr/share/doc/masscan; \
+         ! command -v masscan; \
+         test ! -e /usr/bin/masscan; \
+       else \
+         test "$AEGIS_RETIRE_MASSCAN" = "0"; \
+         command -v masscan >/dev/null; \
+       fi
 USER 10001:10001
 CMD ["gunicorn", "django_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
 
