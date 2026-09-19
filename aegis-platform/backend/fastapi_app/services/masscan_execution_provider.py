@@ -48,7 +48,7 @@ def run_masscan_with_provider(
     adapter_mac: str | None = None,
     router_mac: str | None = None,
 ) -> MasscanExecutionResult:
-    """Execute Masscan through the M4 bounded canary provider decision.
+    """Execute Masscan through the authoritative governed provider decision.
 
     Legacy remains the deployment/library default. Canary selection is stable
     on the caller's persisted routing key and is capped by the provider policy.
@@ -56,7 +56,7 @@ def run_masscan_with_provider(
     through the local Masscan binary.
     """
     decision = masscan_provider_decision(routing_key=routing_key)
-    if decision.mode not in {'legacy', 'canary'}:
+    if decision.mode not in {'legacy', 'canary', 'default-kali'}:
         raise RuntimeError(
             f'Masscan provider mode {decision.mode!r} is not admitted by the governed production execution layer'
         )
