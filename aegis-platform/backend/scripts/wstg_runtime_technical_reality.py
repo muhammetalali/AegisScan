@@ -13,7 +13,7 @@ from threading import Thread
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from fastapi_app.services.web_messaging_semantics import assess_web_messaging
 from fastapi_app.services.wstg_native_capabilities import run_wstg_internal_capability
