@@ -244,12 +244,17 @@ def test_positive_validation_creates_confirmed_verdict_and_lineage(confirmation_
     assert history.old_status == Vulnerability.Status.OPEN
     assert history.new_status == Vulnerability.Status.CONFIRMED
     audit = AuditLog.objects.filter(
-        action=AuditLog.Action.VULN_STATUS_CHANGE,
+        action=AuditLog.Action.API_REQUEST,
+        resource_id=str(finding.id),
+        metadata__governed_action_id='finding.confirm',
+    ).get()
+    assert audit.metadata['result_payload']['confirmation_id'] == payload['id']
+    assert audit.metadata['result_payload']['evidence_id'] == str(evidence.id)
+    assert audit.metadata['result_payload']['evidence_qualification']['qualified'] is True
+    assert AuditLog.objects.filter(
         resource_id=str(finding.id),
         metadata__operation='finding_confirmation',
-    ).get()
-    assert audit.metadata['confirmation_id'] == payload['id']
-    assert audit.metadata['evidence_sha256'] == evidence.sha256
+    ).count() == 0
 
 
 def test_negative_validation_false_positive_route_remains_fail_closed(confirmation_fixture):
@@ -311,8 +316,19 @@ def test_authorization_lineage_mismatch_is_rejected(confirmation_fixture):
     )
 
     assert response.status_code == 409
-    assert 'authorization lineage' in response.json()['detail']
+    detail = response.json()['detail']
+    assert detail['code'] == 'EVIDENCE_NOT_READY'
+    assert 'finding_confirmation_evidence' in detail['missing_requirements']
     assert FindingConfirmation.objects.count() == 0
+
+    with pytest.raises(FindingConfirmationError, match='authorization lineage'):
+        confirm_finding(
+            finding_id=finding.id,
+            validation_id=validation.id,
+            verdict='confirmed',
+            rationale='Domain authorization lineage proof.',
+            actor_id=user.id,
+        )
 
 
 def test_validation_from_another_finding_is_rejected(confirmation_fixture):
@@ -341,7 +357,18 @@ def test_validation_from_another_finding_is_rejected(confirmation_fixture):
     )
 
     assert response.status_code == 409
-    assert 'not found for this finding' in response.json()['detail']
+    detail = response.json()['detail']
+    assert detail['code'] == 'EVIDENCE_NOT_READY'
+    assert 'latest_finding_present_validation' in detail['missing_requirements']
+
+    with pytest.raises(FindingConfirmationError, match='not found for this finding'):
+        confirm_finding(
+            finding_id=finding.id,
+            validation_id=validation.id,
+            verdict='confirmed',
+            rationale='Domain cross-finding lineage proof.',
+            actor_id=user.id,
+        )
 
 
 def test_exact_replay_returns_same_record_without_duplicate_history_or_audit(confirmation_fixture):
@@ -367,10 +394,14 @@ def test_exact_replay_returns_same_record_without_duplicate_history_or_audit(con
     assert FindingConfirmation.objects.filter(finding=finding).count() == 1
     assert VulnerabilityStatusHistory.objects.filter(vulnerability=finding).count() == 1
     assert AuditLog.objects.filter(
-        action=AuditLog.Action.VULN_STATUS_CHANGE,
+        action=AuditLog.Action.API_REQUEST,
+        resource_id=str(finding.id),
+        metadata__governed_action_id='finding.confirm',
+    ).count() == 1
+    assert AuditLog.objects.filter(
         resource_id=str(finding.id),
         metadata__operation='finding_confirmation',
-    ).count() == 1
+    ).count() == 0
 
 
 def test_validation_cannot_be_reused_with_different_confirmation_semantics(confirmation_fixture):
