@@ -15,6 +15,7 @@ on:
       - 'aegis-platform/backend/scripts/oast_dns_collector.py'
       - 'aegis-platform/backend/scripts/governed_oast_reality.py'
       - '.github/workflows/governed-oast-runtime-reality.yml'
+      - '.github/workflows/wstg-runtime-technical-reality.yml'
   push:
     branches: [main]
     paths:
@@ -29,6 +30,7 @@ on:
       - 'aegis-platform/backend/scripts/oast_dns_collector.py'
       - 'aegis-platform/backend/scripts/governed_oast_reality.py'
       - '.github/workflows/governed-oast-runtime-reality.yml'
+      - '.github/workflows/wstg-runtime-technical-reality.yml'
   workflow_dispatch:
 
 permissions:
@@ -97,6 +99,7 @@ jobs:
 
           allowed = {
               '.github/workflows/governed-oast-runtime-reality.yml',
+              '.github/workflows/wstg-runtime-technical-reality.yml',
               'aegis-platform/backend/django_project/evidence/models.py',
               'aegis-platform/backend/django_project/evidence/migrations/0008_governed_oast_runtime.py',
               'aegis-platform/backend/django_project/evidence/test_governed_oast_runtime.py',
