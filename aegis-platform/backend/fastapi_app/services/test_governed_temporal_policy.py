@@ -4,6 +4,7 @@ from datetime import timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from enterprise.governed_temporal_models import (
@@ -228,6 +229,27 @@ def test_revocation_supersession_and_renewal_are_explicit(disposition_fixture):
     )
     assert replayed is False
     assert revocation.exception_id == renewal.id
+
+
+def test_database_rejects_review_outside_exception_window(disposition_fixture):
+    ctx = _ctx(disposition_fixture)
+    now = timezone.now()
+    with transaction.atomic():
+        with pytest.raises(IntegrityError):
+            GovernedTemporalException.objects.create(
+                organization=ctx['organization'],
+                project=ctx['project'],
+                kind=GovernedTemporalException.Kind.EXCEPTION,
+                scope_kind=GovernedTemporalException.ScopeKind.PROJECT,
+                effective_from=now,
+                expires_at=now + timedelta(hours=1),
+                review_at=now + timedelta(hours=2),
+                reason='Invalid review window must fail at the database boundary.',
+                idempotency_key='invalid-review-window-db',
+                request_fingerprint='a' * 64,
+                grant_fingerprint='b' * 64,
+                issued_by=ctx['user'],
+            )
 
 
 def test_action_scope_cannot_bind_entity_id_without_entity_type(disposition_fixture):
