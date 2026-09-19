@@ -12,10 +12,10 @@ if [ ! -r /etc/os-release ]; then
 fi
 . /etc/os-release
 
-case "${ID:-}" in
+case "\${ID:-}" in
   ubuntu|debian) ;;
   *)
-    echo "supported distributions are Ubuntu and Debian; got: ${ID:-unknown}" >&2
+    echo "supported distributions are Ubuntu and Debian; got: \${ID:-unknown}" >&2
     exit 1
     ;;
 esac
@@ -26,7 +26,13 @@ if [ "$ARCH" != "amd64" ]; then
   exit 1
 fi
 
-SSH_PORT="${AEGIS_SSH_PORT:-22}"
+SSH_PORT="\${AEGIS_SSH_PORT:-22}"
+INTERFACE="\${AEGIS_PRODUCTION_INTERFACE:-ens33}"
+INTERNAL_CIDR="\${AEGIS_INTERNAL_CIDR:-192.168.49.0/24}"
+DNS_SERVICE_IP="\${AEGIS_DNS_SERVICE_IP:-192.168.49.53}"
+CONFIGURE_INTERNAL_DNS="\${AEGIS_CONFIGURE_INTERNAL_DNS:-0}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
 case "$SSH_PORT" in
   ''|*[!0-9]*) echo "AEGIS_SSH_PORT must be numeric" >&2; exit 1 ;;
 esac
@@ -35,11 +41,19 @@ if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
   exit 1
 fi
 
+case "$CONFIGURE_INTERNAL_DNS" in
+  0|1) ;;
+  *)
+    echo "AEGIS_CONFIGURE_INTERNAL_DNS must be 0 or 1" >&2
+    exit 1
+    ;;
+esac
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl gnupg git openssl ufw fail2ban jq \
-  postgresql-client certbot
+  postgresql-client certbot bind9 bind9-utils dnsutils
 
 install -m 0755 -d /etc/apt/keyrings
 if [ ! -f /etc/apt/keyrings/docker.asc ]; then
@@ -48,7 +62,7 @@ if [ ! -f /etc/apt/keyrings/docker.asc ]; then
 fi
 chmod a+r /etc/apt/keyrings/docker.asc
 
-CODENAME="${VERSION_CODENAME:-}"
+CODENAME="\${VERSION_CODENAME:-}"
 if [ -z "$CODENAME" ]; then
   echo "VERSION_CODENAME is required for Docker repository setup" >&2
   exit 1
@@ -68,6 +82,7 @@ apt-get install -y --no-install-recommends \
 
 systemctl enable --now docker
 systemctl enable --now fail2ban
+systemctl enable named
 
 cat >/etc/sysctl.d/99-aegisscan-production.conf <<'EOF'
 net.ipv4.ip_forward=1
@@ -87,9 +102,16 @@ sysctl --system >/dev/null
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow "$SSH_PORT/tcp" comment 'AegisScan SSH'
-ufw allow 80/tcp comment 'AegisScan HTTP ACME redirect'
-ufw allow 443/tcp comment 'AegisScan HTTPS'
+ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to any port "$SSH_PORT" proto tcp \
+  comment 'Aegis internal SSH'
+ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to "$DNS_SERVICE_IP" port 53 proto udp \
+  comment 'Aegis internal DNS UDP'
+ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to "$DNS_SERVICE_IP" port 53 proto tcp \
+  comment 'Aegis internal DNS TCP'
+ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to any port 80 proto tcp \
+  comment 'Aegis internal HTTP'
+ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to any port 443 proto tcp \
+  comment 'Aegis internal HTTPS'
 ufw --force enable
 
 install -d -m 0750 /opt/aegisscan
@@ -98,11 +120,19 @@ install -d -m 0700 /etc/aegisscan/secrets
 install -d -m 0700 /var/lib/aegisscan
 install -d -m 0700 /var/lib/aegisscan/backups
 
+if [ "$CONFIGURE_INTERNAL_DNS" -eq 1 ]; then
+  AEGIS_DDNS_INTERFACE="$INTERFACE" \
+  AEGIS_DDNS_NETWORK="$INTERNAL_CIDR" \
+  AEGIS_DNS_SERVICE_IP="$DNS_SERVICE_IP" \
+    sh "$SCRIPT_DIR/production_internal_dns_bootstrap.sh"
+fi
+
 docker --version
 docker compose version
 git --version
 openssl version
 certbot --version
+named -V | head -n 1
 ufw status verbose
 sysctl net.ipv4.ip_forward
 
