@@ -16,7 +16,7 @@ TSIG_NAME="${AEGIS_DDNS_TSIG_NAME:-aegis-prod-ddns}"
 NETPLAN_FILE="${AEGIS_DNS_NETPLAN_FILE:-/etc/netplan/90-aegisscan-dns-service.yaml}"
 BIND_KEY_FILE="${AEGIS_BIND_DDNS_KEY:-/etc/bind/keys/aegis-prod-ddns.key}"
 RUNTIME_KEY_FILE="${AEGIS_DDNS_KEY:-/etc/aegisscan/ddns.key}"
-RUNTIME_ENV_FILE="${AEGIS_DDNS_ENV_FILE:-/etc/aegisscan/ddns-reconcile.env}"
+RUNTIME_ENV_FILE="/etc/aegisscan/ddns-reconcile.env"
 ZONE_FILE="${AEGIS_DNS_ZONE_FILE:-/var/lib/bind/db.aegis.internal}"
 BIND_INCLUDE="${AEGIS_BIND_INCLUDE:-/etc/bind/named.conf.aegisscan}"
 APPLY_NETWORK="${AEGIS_NETPLAN_APPLY:-0}"
@@ -30,7 +30,7 @@ case "$APPLY_NETWORK" in
     ;;
 esac
 
-for command in python3 ip netplan systemctl systemd-analyze named-checkconf named-checkzone tsig-keygen dig nsupdate cmp grep awk date cp tr; do
+for command in python3 ip netplan systemctl systemd-analyze named-checkconf named-checkzone tsig-keygen dig nsupdate cmp grep awk date cp tr sed; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "required command is missing: $command" >&2
     exit 1
@@ -277,9 +277,12 @@ named-checkzone "$ZONE_NAME" "$ZONE_FILE"
 install -o root -g root -m 0750 \
   "$PLATFORM_DIR/scripts/production_ddns_reconcile.py" \
   /usr/local/sbin/aegisscan-ddns-reconcile
-install -o root -g root -m 0644 \
+sed \
+  -e "s|^IPAddressAllow=.*$|IPAddressAllow=$DNS_SERVICE_IP/32|" \
   "$PLATFORM_DIR/systemd/aegisscan-ddns-reconcile.service" \
-  /etc/systemd/system/aegisscan-ddns-reconcile.service
+  >/etc/systemd/system/aegisscan-ddns-reconcile.service
+chown root:root /etc/systemd/system/aegisscan-ddns-reconcile.service
+chmod 0644 /etc/systemd/system/aegisscan-ddns-reconcile.service
 install -o root -g root -m 0644 \
   "$PLATFORM_DIR/systemd/aegisscan-ddns-reconcile.timer" \
   /etc/systemd/system/aegisscan-ddns-reconcile.timer
