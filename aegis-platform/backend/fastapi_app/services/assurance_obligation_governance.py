@@ -227,6 +227,47 @@ def _default_assignment(membership: OrganizationMembership | None):
     return membership
 
 
+def _configure_existing_work_queue_locked(
+    *,
+    obligation: AssuranceObligation,
+    finding: Vulnerability,
+    membership: OrganizationMembership | None,
+    actor_id: str,
+    now,
+) -> None:
+    policy = _policy_for_finding(finding)
+    updates: list[str] = []
+    assigned_now = False
+    if not obligation.policy_id:
+        obligation.policy_id = str(policy['policyId'])
+        obligation.policy_version = int(policy['policyVersion'])
+        obligation.priority = _priority_for_policy(policy)
+        obligation.escalation_targets = list(policy.get('escalationTargets') or [])
+        updates.extend(['policy_id', 'policy_version', 'priority', 'escalation_targets'])
+    assignee = _default_assignment(membership)
+    if obligation.assigned_to_id is None and assignee is not None:
+        obligation.assigned_to = assignee
+        obligation.assigned_by_id = actor_id
+        obligation.assigned_at = now
+        updates.extend(['assigned_to', 'assigned_by', 'assigned_at'])
+        assigned_now = True
+    if updates:
+        obligation.version += 1
+        updates.extend(['version', 'updated_at'])
+        obligation.save(update_fields=list(dict.fromkeys(updates)))
+    if assigned_now:
+        _append_event(
+            obligation=obligation,
+            event_type=AssuranceObligationEvent.EventType.ASSIGNED,
+            actor_id=actor_id,
+            payload={
+                'assignee_membership_id': str(obligation.assigned_to_id),
+                'assignee_user_id': str(obligation.assigned_to.user_id),
+                'assignment_reason': 'materialization_default_reviewer',
+            },
+        )
+
+
 def _supersede_active_locked(*, finding_id, actor_id: str, now, reason: str, except_id=None):
     rows = AssuranceObligation.objects.select_for_update().filter(
         finding_id=finding_id,
@@ -321,9 +362,9 @@ def _refresh_locked(*, obligation: AssuranceObligation, actor_id: str, now):
 
 def materialize_assurance_obligation(*, project_id: str, finding_id: str, user_id: str, schedule_id: str | None = None, now=None) -> AssuranceObligationResult:
     now = now or timezone.now()
-    link, _membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=True)
+    link, membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=True)
     with transaction.atomic():
-        TenantProject.objects.select_for_update().get(pk=link.pk)
+        link = _lock_scope(link)
         finding = Vulnerability.objects.select_for_update().filter(pk=finding_id, project_id=project_id).first()
         if finding is None:
             raise AssuranceObligationError('Finding was not found in project scope.')
@@ -333,8 +374,17 @@ def materialize_assurance_obligation(*, project_id: str, finding_id: str, user_i
         if existing is not None:
             if existing.schedule_id != schedule.id:
                 raise AssuranceObligationError('Existing immutable disposition obligation is bound to a different assurance schedule.')
+            _configure_existing_work_queue_locked(
+                obligation=existing,
+                finding=finding,
+                membership=membership,
+                actor_id=user_id,
+                now=now,
+            )
             _refresh_locked(obligation=existing, actor_id=user_id, now=now)
             return AssuranceObligationResult(existing, True)
+        policy = _policy_for_finding(finding)
+        assignee = _default_assignment(membership)
         generation = (AssuranceObligation.objects.filter(finding=finding).order_by('-generation').values_list('generation', flat=True).first() or 0) + 1
         _supersede_active_locked(finding_id=finding.id, actor_id=user_id, now=now, reason='A newer governed risk disposition became authoritative.')
         obligation = AssuranceObligation.objects.create(
@@ -348,17 +398,48 @@ def materialize_assurance_obligation(*, project_id: str, finding_id: str, user_i
             due_at=disposition.review_at,
             generation=generation,
             created_by_id=user_id,
+            assigned_to=assignee,
+            assigned_by_id=user_id if assignee is not None else None,
+            assigned_at=now if assignee is not None else None,
+            priority=_priority_for_policy(policy),
+            policy_id=str(policy['policyId']),
+            policy_version=int(policy['policyVersion']),
+            escalation_targets=list(policy.get('escalationTargets') or []),
         )
-        _append_event(obligation=obligation, event_type=AssuranceObligationEvent.EventType.CREATED, actor_id=user_id, payload={'disposition': disposition.disposition, 'due_at': disposition.review_at.isoformat(), 'risk_correlation_id': str(disposition.risk_correlation_id)})
+        _append_event(
+            obligation=obligation,
+            event_type=AssuranceObligationEvent.EventType.CREATED,
+            actor_id=user_id,
+            payload={
+                'disposition': disposition.disposition,
+                'due_at': disposition.review_at.isoformat(),
+                'risk_correlation_id': str(disposition.risk_correlation_id),
+                'policy_id': policy['policyId'],
+                'policy_version_selected': policy['policyVersion'],
+                'priority': obligation.priority,
+                'escalation_targets': list(obligation.escalation_targets or []),
+            },
+        )
+        if assignee is not None:
+            _append_event(
+                obligation=obligation,
+                event_type=AssuranceObligationEvent.EventType.ASSIGNED,
+                actor_id=user_id,
+                payload={
+                    'assignee_membership_id': str(assignee.id),
+                    'assignee_user_id': str(assignee.user_id),
+                    'assignment_reason': 'materialization_default_reviewer',
+                },
+            )
         _refresh_locked(obligation=obligation, actor_id=user_id, now=now)
         return AssuranceObligationResult(obligation, False)
 
 
 def materialize_recurrence_obligation(*, project_id: str, observation_id: str, user_id: str, now=None) -> AssuranceObligationResult:
     now = now or timezone.now()
-    link, _membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=False)
+    link, membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=False)
     with transaction.atomic():
-        TenantProject.objects.select_for_update().get(pk=link.pk)
+        link = _lock_scope(link)
         observation = AssuranceObservation.objects.select_related('finding', 'execution__schedule', 'prior_disposition').select_for_update(of=('self',)).filter(
             pk=observation_id,
             project_id=project_id,
@@ -373,8 +454,17 @@ def materialize_recurrence_obligation(*, project_id: str, observation_id: str, u
             raise AssuranceObligationError('Recurrence observation schedule lineage is outside tenant/project/asset scope.')
         existing = AssuranceObligation.objects.select_related('source_observation').select_for_update(of=('self',)).filter(source_observation=observation).first()
         if existing is not None:
+            _configure_existing_work_queue_locked(
+                obligation=existing,
+                finding=observation.finding,
+                membership=membership,
+                actor_id=user_id,
+                now=now,
+            )
+            _refresh_locked(obligation=existing, actor_id=user_id, now=now)
             return AssuranceObligationResult(existing, True)
         policy = _policy_for_finding(observation.finding)
+        assignee = _default_assignment(membership)
         generation = (AssuranceObligation.objects.filter(finding=observation.finding).order_by('-generation').values_list('generation', flat=True).first() or 0) + 1
         _supersede_active_locked(
             finding_id=observation.finding_id,
@@ -396,6 +486,13 @@ def materialize_recurrence_obligation(*, project_id: str, observation_id: str, u
             due_at=due_at,
             generation=generation,
             created_by_id=user_id,
+            assigned_to=assignee,
+            assigned_by_id=user_id if assignee is not None else None,
+            assigned_at=now if assignee is not None else None,
+            priority=_priority_for_policy(policy),
+            policy_id=str(policy['policyId']),
+            policy_version=int(policy['policyVersion']),
+            escalation_targets=list(policy.get('escalationTargets') or []),
         )
         _append_event(
             obligation=obligation,
@@ -414,18 +511,38 @@ def materialize_recurrence_obligation(*, project_id: str, observation_id: str, u
                 'prior_closure_id': str(observation.prior_closure_id) if observation.prior_closure_id else None,
             },
         )
+        if assignee is not None:
+            _append_event(
+                obligation=obligation,
+                event_type=AssuranceObligationEvent.EventType.ASSIGNED,
+                actor_id=user_id,
+                execution_id=observation.execution_id,
+                observation_id=observation.id,
+                payload={
+                    'assignee_membership_id': str(assignee.id),
+                    'assignee_user_id': str(assignee.user_id),
+                    'assignment_reason': 'recurrence_default_reviewer',
+                },
+            )
         _refresh_locked(obligation=obligation, actor_id=user_id, now=now)
         return AssuranceObligationResult(obligation, False)
 
 
 def refresh_assurance_obligation(*, project_id: str, obligation_id: str, user_id: str, now=None):
     now = now or timezone.now()
-    link, _membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=True)
+    link, membership = _tenant_membership(project_id=project_id, user_id=user_id, mutation=True)
     with transaction.atomic():
-        TenantProject.objects.select_for_update().get(pk=link.pk)
-        obligation = AssuranceObligation.objects.select_related('disposition', 'source_disposition', 'source_observation').select_for_update(of=('self',)).filter(pk=obligation_id, project_id=project_id, organization=link.organization).first()
+        link = _lock_scope(link)
+        obligation = AssuranceObligation.objects.select_related('disposition', 'source_disposition', 'source_observation', 'finding').select_for_update(of=('self',)).filter(pk=obligation_id, project_id=project_id, organization=link.organization).first()
         if obligation is None:
             raise AssuranceObligationError('Assurance obligation not found in tenant/project.')
+        _configure_existing_work_queue_locked(
+            obligation=obligation,
+            finding=obligation.finding,
+            membership=membership,
+            actor_id=user_id,
+            now=now,
+        )
         return _refresh_locked(obligation=obligation, actor_id=user_id, now=now)
 
 
