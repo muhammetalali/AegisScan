@@ -310,6 +310,12 @@ def create_canonical_schedule(
         timezone_name=timezone_name,
         first_run_at=first_run_at,
     )
+    if first_run < timezone.now() - timedelta(minutes=1):
+        raise ScheduledExecutionError(
+            'first_run_in_past',
+            'first_run_at cannot be more than one minute in the past.',
+            422,
+        )
     binding = _normalize_binding(
         actor_id=actor_id,
         project_id=project_id,
@@ -444,6 +450,12 @@ def update_canonical_schedule(
         timezone_name=desired_timezone,
         first_run_at=desired_next,
     )
+    if desired_next < timezone.now() - timedelta(minutes=1):
+        raise ScheduledExecutionError(
+            'next_run_in_past',
+            'next_run_at cannot be more than one minute in the past.',
+            422,
+        )
     binding = _normalize_binding(
         actor_id=str(actor.id),
         project_id=str(project.id),
