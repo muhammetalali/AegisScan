@@ -16,7 +16,9 @@ from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, S
 from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.services.authorization_guard import authorization_snapshot, require_bound_scan_authorization, revalidate_bound_authorization
 from fastapi_app.services.evidence_identity import evidence_id
-from fastapi_app.services.scanner_adapters import ScannerExecutionCancelled, run_masscan, validate_code_target
+from fastapi_app.services.scanner_adapters import ScannerExecutionCancelled, validate_code_target
+from fastapi_app.services.masscan_execution_provider import run_masscan_with_provider
+from fastapi_app.services.kali_masscan_provider import KaliMasscanProviderCancelled
 from fastapi_app.services.semgrep_execution_provider import run_semgrep_with_provider
 from fastapi_app.services.kali_semgrep_provider import KaliSemgrepProviderCancelled
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
@@ -113,21 +115,34 @@ def run_masscan_scan(self,scan_id:str)->dict[str,Any]:
     if completed: return completed
     execution=_execution(scan,engine); execution.result_data=authorization_snapshot(authorization); execution.save(update_fields=['result_data','updated_at'])
     try:
-        result=run_masscan(str(target),ports=str((scan.config or {}).get('ports') or '1-65535'),rate=int((scan.config or {}).get('rate') or 1000),timeout=300,state_getter=lambda:runtime_state(scan_id)); observations=_masscan_findings(result.stdout); ok,reason=revalidate_bound_authorization(scan,authorization)
+        result=run_masscan_with_provider(
+            target=str(target),
+            ports=str((scan.config or {}).get('ports') or '1-65535'),
+            rate=int((scan.config or {}).get('rate') or 1000),
+            timeout_seconds=300,
+            routing_key=str(scan.id),
+            execution_ref=f'scan:{scan.id}:masscan',
+            authorization_ref=str(authorization.id),
+            scope_ref=f'project:{scan.project_id}:asset:{scan.asset_id}',
+            state_getter=lambda:runtime_state(scan_id),
+        )
+        observations=_masscan_findings(result.stdout)
+        ok,reason=revalidate_bound_authorization(scan,authorization)
         if not ok: return _finish_failed(scan,execution,reason,authorization_snapshot(authorization))
         now=datetime.now(timezone.utc)
+        provider_lineage={'provider_routing':result.routing,'runtime_provenance':result.runtime}
         with transaction.atomic():
-            scanner_evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'masscan','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':'masscan','evidence_type':'scanner_output','raw_output':result.stdout,'metadata':attach_wstg_evidence_metadata({'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'json',**authorization_snapshot(authorization)}, 'network.masscan'),'collected_by':scan.initiated_by}); findings=[]
+            scanner_evidence,_=Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'masscan','scanner_output'),defaults={'scan':scan,'asset':scan.asset,'source':'masscan','evidence_type':'scanner_output','raw_output':result.stdout,'metadata':attach_wstg_evidence_metadata({'stderr':result.stderr,'exit_code':result.exit_code,'target':result.target,'format':'json',**provider_lineage,**authorization_snapshot(authorization)}, 'network.masscan'),'collected_by':scan.initiated_by}); findings=[]
             for obs in observations:
                 finding=Vulnerability.objects.filter(scan=scan,asset=scan.asset,source_engine='masscan',raw_data__port=obs['port'],raw_data__protocol=obs['protocol'],raw_data__ip=obs['ip']).first()
                 if finding is None: finding=Vulnerability.objects.create(scan=scan,project=scan.project,asset=scan.asset,title=f"Open {obs['protocol'].upper()} port {obs['port']}",description=f"Masscan detected an open {obs['protocol'].upper()} port {obs['port']} on {obs['ip'] or target}.",severity=Vulnerability.Severity.INFO,status=Vulnerability.Status.OPEN,confidence=Vulnerability.Confidence.HIGH,category='network',tags=['masscan',obs['protocol']],risk_score=10.0,validation_status='unverified',source_engine='masscan',raw_data=attach_wstg_finding_lineage({**obs['record'],'observation_ip':obs['ip'],'observation_port':obs['port'],'observation_protocol':obs['protocol']}, 'network.masscan'))
                 else:
                     finding.raw_data=attach_wstg_finding_lineage({**obs['record'],'observation_ip':obs['ip'],'observation_port':obs['port'],'observation_protocol':obs['protocol']}, 'network.masscan')
                     finding.save(update_fields=['raw_data','updated_at'])
-                Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'masscan','scanner_output',str(finding.id)),defaults={'scan':scan,'asset':scan.asset,'finding':finding,'source':'masscan','evidence_type':'scanner_output','raw_output':scanner_evidence.raw_output,'metadata':attach_wstg_evidence_metadata({'scanner_evidence_id':str(scanner_evidence.id),'observation_ip':obs['ip'],'observation_port':obs['port'],'observation_protocol':obs['protocol'],**authorization_snapshot(authorization)}, 'network.masscan'),'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
-            execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.findings_found=len(findings); execution.evidences_collected=1; execution.error_message=result.stderr if result.exit_code!=0 else ''; execution.result_data={'tool':'masscan','target':result.target,'exit_code':result.exit_code,'finding_ids':[str(v.id) for v in findings],'scanner_evidence_id':str(scanner_evidence.id),**authorization_snapshot(authorization)}; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','error_message','result_data','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=now; scan.findings_count=len(findings); scan.engine_results={**(scan.engine_results or {}),'masscan':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
-        return {'status':scan.status,'scan_id':scan_id,'tool':'masscan','target':result.target,'finding_ids':[str(v.id) for v in findings],**authorization_snapshot(authorization)}
-    except ScannerExecutionCancelled as exc:
+                Evidence.objects.update_or_create(id=evidence_id('scan',scan_id,'masscan','scanner_output',str(finding.id)),defaults={'scan':scan,'asset':scan.asset,'finding':finding,'source':'masscan','evidence_type':'scanner_output','raw_output':scanner_evidence.raw_output,'metadata':attach_wstg_evidence_metadata({'scanner_evidence_id':str(scanner_evidence.id),'observation_ip':obs['ip'],'observation_port':obs['port'],'observation_protocol':obs['protocol'],**provider_lineage,**authorization_snapshot(authorization)}, 'network.masscan'),'collected_by':scan.initiated_by}); finding.evidence_count=finding.evidence_records.count(); finding.save(update_fields=['evidence_count','updated_at']); findings.append(finding)
+            execution.status=ScanEngineExecution.ExecutionStatus.COMPLETED if result.exit_code==0 else ScanEngineExecution.ExecutionStatus.FAILED; execution.progress=100; execution.completed_at=now; execution.findings_found=len(findings); execution.evidences_collected=1; execution.error_message=result.stderr if result.exit_code!=0 else ''; execution.result_data={'tool':'masscan','target':result.target,'exit_code':result.exit_code,'finding_ids':[str(v.id) for v in findings],'scanner_evidence_id':str(scanner_evidence.id),**provider_lineage,**authorization_snapshot(authorization)}; execution.save(update_fields=['status','progress','completed_at','findings_found','evidences_collected','error_message','result_data','updated_at']); scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL; scan.progress=100; scan.completed_at=now; scan.findings_count=len(findings); ScanLog.objects.create(scan=scan,engine_execution=execution,level=ScanLog.Level.INFO,message='masscan execution completed',context={'target':result.target,'exit_code':result.exit_code,'finding_count':len(findings),**provider_lineage,**authorization_snapshot(authorization)}); scan.engine_results={**(scan.engine_results or {}),'masscan':execution.result_data}; scan.save(update_fields=['status','progress','completed_at','findings_count','engine_results','updated_at'])
+        return {'status':scan.status,'scan_id':scan_id,'tool':'masscan','target':result.target,'finding_ids':[str(v.id) for v in findings],'provider_routing':result.routing,**authorization_snapshot(authorization)}
+    except (ScannerExecutionCancelled, KaliMasscanProviderCancelled) as exc:
         return _finish_cancelled(scan,execution,str(exc))
     except Exception as exc:
         if self.request.retries < self.max_retries: raise self.retry(exc=exc)
