@@ -10,6 +10,7 @@ import time
 from typing import Any, Callable, Mapping
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+from .governed_oast import resolve_ssrf_oast_evidence, verify_ssrf_oast_proof
 from .native_tool_runtime import NativeExecutionCancelled
 from .pinned_http import PinnedHTTPResponse, pinned_http_operation, request_pinned
 from .scanner_adapters import ScanResult, validate_authorized_web_target
@@ -28,10 +29,11 @@ class WSTGInternalSpec:
     credential_mode: str = 'none'
     credential_kinds: tuple[str, ...] = ()
     credential_required: bool = False
+    runtime_options: tuple[str, ...] = ()
 
     @property
     def allowed_options(self) -> tuple[str, ...]:
-        return ()
+        return self.runtime_options
 
 
 WSTG_INTERNAL_SPECS: dict[str, WSTGInternalSpec] = {
@@ -68,6 +70,7 @@ WSTG_INTERNAL_SPECS: dict[str, WSTGInternalSpec] = {
         asset_types=('website', 'api_endpoint'),
         risk='active-low',
         timeout=60,
+        runtime_options=('oast_session_id', 'execution_id'),
     ),
     'tls.posture': WSTGInternalSpec(
         capability_id='tls.posture',
@@ -101,7 +104,9 @@ _OBSERVATION_ALLOWED_FIELDS: dict[str, frozenset[str]] = {
         'synthetic_parameter', 'statuses', 'body_sha256', 'order_sensitive_observed', 'request_method',
     }),
     'web.ssrf-canary-validation': _COMMON_OBSERVATION_FIELDS | frozenset({
-        'abstention_reason', 'callback_attempted', 'ssrf_confirmed',
+        'abstention_reason', 'callback_attempted', 'callback_observed', 'ssrf_confirmed',
+        'authoritative_oast_evidence', 'session_id', 'execution_id', 'target_sha256',
+        'interaction_ids', 'evidence_ids', 'protocols', 'callback_count', 'proof_hmac',
     }),
     'tls.posture': _COMMON_OBSERVATION_FIELDS | frozenset({
         'abstention_reason', 'resolved_ip', 'tls_version', 'cipher', 'cipher_bits',
@@ -122,10 +127,29 @@ def get_wstg_internal_spec(capability_id: str) -> WSTGInternalSpec:
 
 
 def validate_wstg_internal_options(capability_id: str, options: Mapping[str, Any]) -> dict[str, Any]:
-    get_wstg_internal_spec(capability_id)
-    if options:
-        raise ValueError(f'{capability_id} does not accept runtime options')
-    return {}
+    spec = get_wstg_internal_spec(capability_id)
+    unknown = sorted(set(options) - set(spec.allowed_options))
+    if unknown:
+        raise ValueError(f'Unsupported options for {capability_id}: {unknown}')
+    if capability_id != 'web.ssrf-canary-validation':
+        if options:
+            raise ValueError(f'{capability_id} does not accept runtime options')
+        return {}
+
+    session_id = str(options.get('oast_session_id') or '').strip()
+    execution_id = str(options.get('execution_id') or '').strip()
+    if bool(session_id) != bool(execution_id):
+        raise ValueError('web.ssrf-canary-validation requires oast_session_id and execution_id together')
+    if not session_id:
+        return {}
+    try:
+        from uuid import UUID
+        session_id = str(UUID(session_id))
+    except ValueError as exc:
+        raise ValueError('oast_session_id must be a valid UUID') from exc
+    if len(execution_id) > 128 or any(ch in execution_id for ch in '\r\n\x00'):
+        raise ValueError('execution_id must be a bounded identifier')
+    return {'oast_session_id': session_id, 'execution_id': execution_id}
 
 
 def _base(capability_id: str) -> dict[str, Any]:
@@ -216,19 +240,57 @@ def _duplicate_parameter_semantics(
 
 def _ssrf_canary_validation(
     target: str,
+    options: Mapping[str, Any] | None = None,
     checkpoint: Callable[[], None] = lambda: None,
 ) -> dict[str, Any]:
-    del target
     checkpoint()
+    runtime_options = dict(options or {})
+    session_id = str(runtime_options.get('oast_session_id') or '').strip()
+    execution_id = str(runtime_options.get('execution_id') or '').strip()
+    if not session_id or not execution_id:
+        return {
+            **_base('web.ssrf-canary-validation'),
+            'abstained': True,
+            'abstention_reason': (
+                'No governed OAST session is bound to this execution. '
+                'SSRF proof is not inferred from reachability and no user-controlled callback URL is contacted.'
+            ),
+            'callback_attempted': False,
+            'callback_observed': False,
+            'authoritative_oast_evidence': False,
+            'ssrf_confirmed': False,
+        }
+
+    proof = resolve_ssrf_oast_evidence(
+        session_id=session_id,
+        execution_id=execution_id,
+        target=target,
+    )
+    checkpoint()
+    if not proof.get('confirmed'):
+        return {
+            **_base('web.ssrf-canary-validation'),
+            'abstained': True,
+            'abstention_reason': str(proof.get('reason') or 'authoritative_oast_callback_not_observed')[:512],
+            'callback_attempted': False,
+            'callback_observed': False,
+            'authoritative_oast_evidence': False,
+            'ssrf_confirmed': False,
+        }
     return {
         **_base('web.ssrf-canary-validation'),
-        'abstained': True,
-        'abstention_reason': (
-            'Aegis has no governed first-class OAST/canary callback provider bound to this scan. '
-            'SSRF proof is not inferred from reachability and no user-controlled callback URL is contacted.'
-        ),
         'callback_attempted': False,
-        'ssrf_confirmed': False,
+        'callback_observed': True,
+        'authoritative_oast_evidence': True,
+        'ssrf_confirmed': True,
+        'session_id': proof['session_id'],
+        'execution_id': proof['execution_id'],
+        'target_sha256': proof['target_sha256'],
+        'interaction_ids': proof['interaction_ids'],
+        'evidence_ids': proof['evidence_ids'],
+        'protocols': proof['protocols'],
+        'callback_count': proof['callback_count'],
+        'proof_hmac': proof['proof_hmac'],
     }
 
 
@@ -322,7 +384,7 @@ def run_wstg_internal_capability(
     credential_materials: tuple[Mapping[str, Any], ...] | None = None,
 ) -> ScanResult:
     spec = get_wstg_internal_spec(capability_id)
-    validate_wstg_internal_options(capability_id, options or {})
+    normalized_options = validate_wstg_internal_options(capability_id, options or {})
     if credential_materials:
         raise ValueError(f'{capability_id} does not accept credential material')
     checkpoint = _make_execution_checkpoint(spec, state_getter, poll_interval)
@@ -336,7 +398,7 @@ def run_wstg_internal_capability(
         elif capability_id == 'web.duplicate-parameter-semantics':
             observation = _duplicate_parameter_semantics(canonical, checkpoint)
         elif capability_id == 'web.ssrf-canary-validation':
-            observation = _ssrf_canary_validation(canonical, checkpoint)
+            observation = _ssrf_canary_validation(canonical, normalized_options, checkpoint)
         else:
             observation = _tls_posture(canonical, destination, checkpoint)
         checkpoint()
@@ -396,9 +458,27 @@ def normalize_wstg_internal_output(capability_id: str, raw: str) -> dict[str, An
                 if capability_id == 'web.http-method-policy':
                     safe['unsafe_methods_sent'] = False
                 elif capability_id == 'web.ssrf-canary-validation':
-                    safe['abstained'] = True
                     safe['callback_attempted'] = False
-                    safe['ssrf_confirmed'] = False
+                    claimed = bool(
+                        safe.get('ssrf_confirmed')
+                        and safe.get('callback_observed')
+                        and safe.get('authoritative_oast_evidence')
+                    )
+                    verified = claimed and verify_ssrf_oast_proof(safe)
+                    if not verified:
+                        safe['abstained'] = True
+                        safe['callback_observed'] = False
+                        safe['authoritative_oast_evidence'] = False
+                        safe['ssrf_confirmed'] = False
+                        for key in (
+                            'session_id', 'execution_id', 'target_sha256',
+                            'interaction_ids', 'evidence_ids', 'protocols',
+                            'callback_count', 'proof_hmac',
+                        ):
+                            safe.pop(key, None)
+                    else:
+                        safe['abstained'] = False
+                        safe['ssrf_confirmed'] = True
                 observations.append(safe)
     return {
         'schema': 'aegis.native-observations.v1',
