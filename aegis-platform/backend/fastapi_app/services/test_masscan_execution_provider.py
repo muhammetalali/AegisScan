@@ -33,8 +33,8 @@ def _selected_key() -> str:
     )
 
 
-def _legacy_result(**kwargs):
-    assert kwargs['target'] == '192.0.2.0/24'
+def _legacy_result(target, **kwargs):
+    assert target == '192.0.2.0/24'
     assert kwargs['ports'] == '22,80'
     assert kwargs['rate'] == 1000
     assert kwargs['timeout'] == 120
