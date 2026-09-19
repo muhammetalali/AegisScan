@@ -723,10 +723,16 @@ def due_schedule_ids(*, now: datetime | None = None, limit: int = 100) -> list[s
 
 
 def retryable_execution_ids(*, limit: int = 100) -> list[str]:
+    stale_before = timezone.now() - timedelta(minutes=15)
+    retry_state = (
+        Q(status=ScheduledScanExecution.Status.CLAIMED)
+        | Q(status=ScheduledScanExecution.Status.FAILED)
+        | Q(status=ScheduledScanExecution.Status.RUNNING, updated_at__lt=stale_before)
+    )
     return [
         str(value)
         for value in ScheduledScanExecution.objects.filter(
-            status=ScheduledScanExecution.Status.FAILED,
+            retry_state,
             attempts__lt=_MAX_EXECUTION_ATTEMPTS,
             schedule__is_active=True,
         )
