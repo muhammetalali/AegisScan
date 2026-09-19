@@ -115,6 +115,19 @@ class Migration(migrations.Migration):
             model_name='governedtemporalexception',
             constraint=models.CheckConstraint(condition=models.Q(('renewal_of__isnull', True)) | models.Q(('supersedes__isnull', True)), name='govtemp_exception_single_lineage_mode'),
         ),
+        migrations.AddConstraint(
+            model_name='governedtemporalexception',
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(('review_at__isnull', True))
+                    | (
+                        models.Q(('review_at__gt', models.F('effective_from')))
+                        & models.Q(('review_at__lt', models.F('expires_at')))
+                    )
+                ),
+                name='govtemp_exception_review_window',
+            ),
+        ),
         migrations.AddIndex(
             model_name='governedtemporalexception',
             index=models.Index(fields=['organization', 'project', 'expires_at'], name='idx_govtemp_scope_expiry'),
