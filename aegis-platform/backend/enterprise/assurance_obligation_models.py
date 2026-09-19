@@ -33,6 +33,18 @@ class AssuranceObligation(models.Model):
         SATISFIED = 'satisfied', 'Satisfied'
         SUPERSEDED = 'superseded', 'Superseded'
 
+    class Priority(models.TextChoices):
+        P0_CRITICAL = 'p0_critical', 'P0 Critical'
+        P1_HIGH = 'p1_high', 'P1 High'
+        P2_MEDIUM = 'p2_medium', 'P2 Medium'
+        P3_LOW = 'p3_low', 'P3 Low'
+
+    class SLAStatus(models.TextChoices):
+        ON_TRACK = 'on_track', 'On Track'
+        AT_RISK = 'at_risk', 'At Risk'
+        BREACHED = 'breached', 'Breached'
+        CLOSED = 'closed', 'Closed'
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey('enterprise.Organization', on_delete=models.PROTECT, related_name='assurance_obligations')
     project = models.ForeignKey('projects.Project', on_delete=models.PROTECT, related_name='assurance_obligations')
@@ -52,6 +64,36 @@ class AssuranceObligation(models.Model):
     satisfied_at = models.DateTimeField(null=True, blank=True)
     superseded_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_assurance_obligations')
+    assigned_to = models.ForeignKey(
+        'enterprise.OrganizationMembership',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='assigned_assurance_obligations',
+    )
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='assigned_assurance_obligations',
+    )
+    assigned_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='acknowledged_assurance_obligations',
+    )
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    priority = models.CharField(max_length=24, choices=Priority.choices, default=Priority.P2_MEDIUM)
+    sla_status = models.CharField(max_length=20, choices=SLAStatus.choices, default=SLAStatus.ON_TRACK)
+    escalation_level = models.PositiveIntegerField(default=0)
+    escalation_targets = models.JSONField(default=list)
+    last_escalated_at = models.DateTimeField(null=True, blank=True)
+    policy_id = models.CharField(max_length=128, blank=True)
+    policy_version = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -60,6 +102,8 @@ class AssuranceObligation(models.Model):
         indexes = [
             models.Index(fields=['project', 'status', 'due_at'], name='idx_aobl_proj_status_due'),
             models.Index(fields=['finding', 'status'], name='idx_aobl_find_status'),
+            models.Index(fields=['project', 'priority', 'due_at'], name='idx_aobl_proj_prio_due'),
+            models.Index(fields=['assigned_to', 'sla_status', 'due_at'], name='idx_aobl_assignee_sla'),
         ]
         constraints = [
             models.CheckConstraint(
@@ -77,6 +121,20 @@ class AssuranceObligation(models.Model):
                 ),
                 name='assurance_obligation_source_shape',
             ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(assigned_to__isnull=True, assigned_by__isnull=True, assigned_at__isnull=True)
+                    | models.Q(assigned_to__isnull=False, assigned_by__isnull=False, assigned_at__isnull=False)
+                ),
+                name='assurance_obligation_assignment_shape',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(acknowledged_by__isnull=True, acknowledged_at__isnull=True)
+                    | models.Q(acknowledged_by__isnull=False, acknowledged_at__isnull=False)
+                ),
+                name='assurance_obligation_ack_shape',
+            ),
         ]
 
 
@@ -88,6 +146,11 @@ class AssuranceObligationEvent(models.Model):
         SATISFIED = 'satisfied', 'Satisfied'
         SUPERSEDED = 'superseded', 'Superseded'
         REVALIDATED_PRESENT = 'revalidated_present', 'Revalidated Present'
+        ASSIGNED = 'assigned', 'Assigned'
+        ACKNOWLEDGED = 'acknowledged', 'Acknowledged'
+        SLA_AT_RISK = 'sla_at_risk', 'SLA At Risk'
+        SLA_BREACHED = 'sla_breached', 'SLA Breached'
+        SLA_CLOSED = 'sla_closed', 'SLA Closed'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     obligation = models.ForeignKey(AssuranceObligation, on_delete=models.PROTECT, related_name='events')
