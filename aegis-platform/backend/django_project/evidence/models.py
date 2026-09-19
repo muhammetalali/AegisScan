@@ -20,6 +20,7 @@ class EvidenceQuerySet(models.QuerySet):
         return super().delete()
 
     def bulk_update(self, objs, fields, **kwargs):
+        objs = tuple(objs)
         ids = [obj.pk for obj in objs if getattr(obj, 'pk', None)]
         if any(str(getattr(obj, 'source', '')).lower() == 'oast' for obj in objs):
             raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
