@@ -14,6 +14,7 @@ from django.utils import timezone
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import GovernedOASTInteraction, GovernedOASTSession
 from django_project.projects.models import Project
+from django_project.scans.models import Scan
 from django_project.users.models import User
 
 from fastapi_app.services import wstg_native_capabilities as wstg
