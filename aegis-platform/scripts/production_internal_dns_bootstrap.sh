@@ -67,20 +67,63 @@ if not app.is_private or not dns.is_private:
     raise SystemExit("internal production addresses must be private")
 PY
 
-install -d -m 0750 /etc/bind/keys
 install -d -m 0700 /etc/aegisscan
-install -d -o bind -g bind -m 0775 /var/lib/bind
 install -d -m 0700 /var/lib/aegisscan
 install -d -m 0700 /var/lib/aegisscan/backups
 install -d -m 0700 "$BACKUP_ROOT"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-for candidate in /etc/bind/named.conf.options /etc/bind/named.conf.local "$NETPLAN_FILE"; do
+
+backup_file() {
+  candidate="$1"
   if [ -f "$candidate" ]; then
     safe_name="$(printf '%s' "$candidate" | tr '/' '_')"
     cp -a "$candidate" "$BACKUP_ROOT/$safe_name.$STAMP"
   fi
-done
+}
+
+backup_file "$NETPLAN_FILE"
+
+cat >"$NETPLAN_FILE" <<EOF
+network:
+  version: 2
+  ethernets:
+    $INTERFACE:
+      addresses:
+        - $DNS_SERVICE_IP/32
+      nameservers:
+        addresses:
+          - $DNS_SERVICE_IP
+      dhcp4-overrides:
+        use-dns: false
+      dhcp6-overrides:
+        use-dns: false
+EOF
+chmod 0600 "$NETPLAN_FILE"
+netplan generate
+
+if [ "$APPLY_NETWORK" -eq 1 ]; then
+  netplan apply
+  if command -v resolvectl >/dev/null 2>&1; then
+    resolvectl flush-caches
+  fi
+fi
+
+if ! ip -4 -o addr show dev "$INTERFACE" |
+  awk '$3 == "inet" {split($4, value, "/"); print value[1]}' |
+  grep -Fxq "$DNS_SERVICE_IP"
+then
+  echo "DNS service IP $DNS_SERVICE_IP is not active on $INTERFACE" >&2
+  echo "generated Netplan was not activated; review it and rerun with AEGIS_NETPLAN_APPLY=1 from a console-safe session" >&2
+  echo "AEGISSCAN_INTERNAL_DNS_BOOTSTRAP=PENDING_NETWORK_APPLY" >&2
+  exit 1
+fi
+
+install -d -m 0750 /etc/bind/keys
+install -d -o bind -g bind -m 0775 /var/lib/bind
+
+backup_file /etc/bind/named.conf.options
+backup_file /etc/bind/named.conf.local
 
 if [ ! -f "$BIND_KEY_FILE" ] && [ -f "$RUNTIME_KEY_FILE" ]; then
   install -o root -g bind -m 0640 "$RUNTIME_KEY_FILE" "$BIND_KEY_FILE"
@@ -187,24 +230,6 @@ fi
 named-checkconf
 named-checkzone "${ZONE%.}" "$ZONE_FILE"
 
-cat >"$NETPLAN_FILE" <<EOF
-network:
-  version: 2
-  ethernets:
-    $INTERFACE:
-      addresses:
-        - $DNS_SERVICE_IP/32
-      nameservers:
-        addresses:
-          - $DNS_SERVICE_IP
-      dhcp4-overrides:
-        use-dns: false
-      dhcp6-overrides:
-        use-dns: false
-EOF
-chmod 0600 "$NETPLAN_FILE"
-netplan generate
-
 install -o root -g root -m 0750 \
   "$PLATFORM_DIR/scripts/production_ddns_reconcile.py" \
   /usr/local/sbin/aegisscan-ddns-reconcile
@@ -220,23 +245,6 @@ systemd-analyze verify \
   /etc/systemd/system/aegisscan-ddns-reconcile.timer
 
 systemctl daemon-reload
-
-if [ "$APPLY_NETWORK" -eq 1 ]; then
-  netplan apply
-  if command -v resolvectl >/dev/null 2>&1; then
-    resolvectl flush-caches
-  fi
-fi
-
-if ! ip -4 -o addr show dev "$INTERFACE" |
-  awk '$3 == "inet" {split($4, value, "/"); print value[1]}' |
-  grep -Fxq "$DNS_SERVICE_IP"
-then
-  echo "DNS service IP $DNS_SERVICE_IP is not active on $INTERFACE" >&2
-  echo "review the generated Netplan and rerun with AEGIS_NETPLAN_APPLY=1 from a console-safe session" >&2
-  exit 1
-fi
-
 systemctl enable named
 systemctl restart named
 systemctl enable --now aegisscan-ddns-reconcile.timer
