@@ -331,8 +331,9 @@ def test_unimplemented_governance_domains_fail_closed_with_explicit_reasons(disp
         project_id=str(project.id), user_id=str(user.id), entity_type='integration', entity_id=str(integration.id),
     )
     integration_action = _action(integration_manifest, 'integration.live_accept')
+    assert integration_manifest.projection.lifecycle == 'untested'
     assert integration_action.mode is ActionMode.BLOCKED
-    assert integration_action.reason_code == 'LIVE_ACCEPTANCE_DOMAIN_NOT_IMPLEMENTED'
+    assert integration_action.reason_code == 'STATE_PRECONDITION_UNMET'
 
     schedule = _schedule(user, project, asset, authorization, organization)
     risk = _risk_snapshot(user=user, project=project, finding=finding, marker='cap-assurance')
