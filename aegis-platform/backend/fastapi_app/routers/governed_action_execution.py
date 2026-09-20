@@ -10,6 +10,11 @@ from ..contracts.governed_actions import (
     GovernedActionRequestView,
 )
 from ..core.dependencies import get_current_user
+from ..services.asset_authorization_governance import (
+    AssetAuthorizationConflict,
+    AssetAuthorizationGovernanceError,
+    StaleAssetAuthorizationVersion,
+)
 from ..services.campaign_objective_assurance import CampaignAssuranceError, StaleCampaignVersion, StaleObjectiveVersion
 from ..services.entity_capability_adapters import EntityCapabilityError, EntityCapabilityNotFound
 from ..services.finding_closure import FindingClosureError, StaleFindingClosureVersion
@@ -49,6 +54,8 @@ def translate_governed_action_error(exc: Exception) -> None:
         raise HTTPException(status_code=409, detail={'code': exc.reason_code, 'reason': exc.reason, 'missing_requirements': exc.missing_requirements}) from exc
     if isinstance(exc, (
         GovernedActionConflict,
+        AssetAuthorizationConflict,
+        StaleAssetAuthorizationVersion,
         GovernedActionRequestConflict,
         StaleCampaignVersion,
         StaleObjectiveVersion,
@@ -60,6 +67,7 @@ def translate_governed_action_error(exc: Exception) -> None:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, (
         GovernedActionError,
+        AssetAuthorizationGovernanceError,
         GovernedActionRequestError,
         EntityCapabilityError,
         CampaignAssuranceError,
