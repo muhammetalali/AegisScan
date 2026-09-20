@@ -1216,15 +1216,22 @@ def build_entity_capability_manifest(
                 'integration.live_accept',
             } else None,
         )
+        request_bound_sod_rules = {
+            'actor_must_not_be_disposition_proposer',
+            'actor_must_not_be_request_proposer',
+        }
+        contract_sod_rules = set(contract.sod_rules)
+        request_bound_sod = bool(contract_sod_rules & request_bound_sod_rules)
+        non_request_sod_rules = contract_sod_rules - request_bound_sod_rules
+        # Request-proposer SoD cannot be evaluated before an immutable request
+        # exists. Preserve domain-derived SoD checks, then bind proposer SoD
+        # only when execution supplies the authoritative request proposer.
         sod_eligible = (
-            contract.action_id in context.sod_eligible_actions
-            or not contract.sod_rules
+            not non_request_sod_rules
+            or contract.action_id in context.sod_eligible_actions
         )
-        if request_proposer_id and (
-            'actor_must_not_be_disposition_proposer' in contract.sod_rules
-            or 'actor_must_not_be_request_proposer' in contract.sod_rules
-        ):
-            sod_eligible = str(user_id) != str(request_proposer_id)
+        if request_bound_sod and request_proposer_id:
+            sod_eligible = sod_eligible and str(user_id) != str(request_proposer_id)
 
         item = evaluate_action(
             contract,
@@ -1239,6 +1246,17 @@ def build_entity_capability_manifest(
             sod_eligible=sod_eligible,
             gate_results=gate_results,
         ).model_copy(update={'evaluated_actor_layer': evaluated_layer})
+        if request_bound_sod and not request_proposer_id and item.mode is ActionMode.ENABLED:
+            item = CapabilityItem(
+                action_id=contract.action_id,
+                mode=ActionMode.BLOCKED,
+                intent=contract.intent,
+                evaluated_actor_layer=evaluated_layer,
+                reason_code='GOVERNED_REQUEST_REQUIRED',
+                reason='This action requires an immutable governed request before proposer separation-of-duties can be evaluated.',
+                missing_requirements=['immutable_governed_request'],
+                gate_results=gate_results,
+            )
         hard_block = context.hard_blocks.get(contract.action_id)
         if hard_block is not None and item.mode is not ActionMode.HIDDEN:
             item = CapabilityItem(
