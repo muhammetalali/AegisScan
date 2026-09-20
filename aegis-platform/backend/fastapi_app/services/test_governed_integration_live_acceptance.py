@@ -301,3 +301,44 @@ def test_live_acceptance_rejects_unbound_evidence_hash(disposition_fixture):
     with pytest.raises(GovernedActionBlocked):
         _execute(project,integration,approver,request,parameters,'evidence-mismatch')
     assert not IntegrationLiveAcceptance.objects.filter(integration=integration).exists()
+
+
+def test_configuration_drift_invalidates_test_and_pending_acceptance_request(disposition_fixture):
+    _client,owner,project,_asset,_authorization,_scan,_finding,organization,membership=disposition_fixture
+    _ownerize(membership)
+    integration=_integration(organization,owner,'config-drift')
+    test=_test(integration,project,owner,'config-drift')
+    proposer=_proposer(project,organization,'config-drift')
+    approver=_approver(owner,project,organization,'config-drift')
+    parameters=_parameters(test)
+    request=_request(project,integration,proposer,parameters,'config-drift')
+
+    integration.base_url='https://replacement-siem.example.invalid'
+    integration.save(update_fields=['base_url','updated_at'])
+
+    manifest=build_entity_capability_manifest(
+        project_id=str(project.id),user_id=str(approver.id),entity_type='integration',entity_id=str(integration.id),
+    )
+    assert manifest.projection.lifecycle=='configuration_changed'
+    with pytest.raises(GovernedActionBlocked):
+        _execute(project,integration,approver,request,parameters,'config-drift')
+    assert not IntegrationLiveAcceptance.objects.filter(integration=integration).exists()
+
+    replay=record_integration_acceptance_test(
+        integration_id=str(integration.id),project_id=str(project.id),actor_id=str(owner.id),
+        outcome='passed',source_ref='reality:config-drift',evidence_sha256='a'*64,
+        evidence_summary={'http_status':202},test_type='live_transport_probe',
+    )
+    assert replay.replayed is True
+    assert replay.test.id==test.id
+
+    new_test=record_integration_acceptance_test(
+        integration_id=str(integration.id),project_id=str(project.id),actor_id=str(owner.id),
+        outcome='passed',source_ref='reality:config-drift-new',evidence_sha256='9'*64,
+        evidence_summary={'http_status':202},test_type='live_transport_probe',
+    ).test
+    refreshed=build_entity_capability_manifest(
+        project_id=str(project.id),user_id=str(approver.id),entity_type='integration',entity_id=str(integration.id),
+    )
+    assert refreshed.projection.lifecycle=='tested'
+    assert new_test.configuration_fingerprint!=test.configuration_fingerprint
