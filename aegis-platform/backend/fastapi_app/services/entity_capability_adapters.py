@@ -15,7 +15,7 @@ from enterprise.assurance_obligation_models import AssuranceObligation
 from enterprise.governed_action_models import GovernedActionExecution
 from enterprise.campaign_models import AdversaryCampaign, CampaignObjective
 from enterprise.detection_models import DetectionRevision, DetectionValidation
-from enterprise.models import AttackPath, ExternalIntegration, InvestigationCase, RiskCorrelationSnapshot, TenantProject
+from enterprise.models import AttackPath, ExternalIntegration, IntegrationAcceptanceTest, IntegrationLiveAcceptance, InvestigationCase, RiskCorrelationSnapshot, TenantProject
 from enterprise.soc_models import InvestigationCaseState, InvestigationClosure
 from fastapi_app.contracts.governed_operations import (
     ActionMode,
@@ -667,33 +667,69 @@ def _integration_context(*, entity_id: str, link: TenantProject, actor_id: str) 
     integration = ExternalIntegration.objects.filter(pk=entity_id, organization=link.organization).first()
     if integration is None:
         raise EntityCapabilityNotFound('Entity capability target not found.')
+
+    tests = IntegrationAcceptanceTest.objects.filter(
+        organization=link.organization,
+        project_id=link.project_id,
+        integration=integration,
+    )
+    acceptances = IntegrationLiveAcceptance.objects.filter(
+        organization=link.organization,
+        project_id=link.project_id,
+        integration=integration,
+    )
+    latest_test = tests.order_by('-tested_at', '-id').first()
+    latest_acceptance = acceptances.order_by('-accepted_at', '-id').first()
+    version = tests.count() + acceptances.count() + 1
+    now = django_timezone.now()
+
+    if not integration.enabled:
+        lifecycle = 'disabled'
+    elif latest_test is None:
+        lifecycle = 'untested'
+    elif latest_test.outcome != IntegrationAcceptanceTest.Outcome.PASSED:
+        lifecycle = 'test_failed'
+    else:
+        accepted_latest = (
+            latest_acceptance is not None
+            and str(latest_acceptance.acceptance_test_id) == str(latest_test.id)
+        )
+        acceptance_current = (
+            accepted_latest
+            and latest_acceptance.review_at > now
+            and (latest_acceptance.expires_at is None or latest_acceptance.expires_at > now)
+        )
+        if acceptance_current:
+            lifecycle = 'live_accepted'
+        elif latest_acceptance is not None and latest_test.tested_at <= latest_acceptance.accepted_at:
+            lifecycle = 'acceptance_expired'
+        else:
+            lifecycle = 'tested'
+
     action = 'integration.live_accept'
+    test_ready = lifecycle == 'tested'
+    test_refs = [str(latest_test.id), latest_test.evidence_sha256] if latest_test is not None else []
     live_gate = _gate(
         GateType.LIVE_ACCEPTANCE,
-        GateState.BLOCKED,
-        'LIVE_ACCEPTANCE_RECORD_NOT_IMPLEMENTED',
-        'The integration domain has no authoritative tested/live-acceptance record yet; capability is fail-closed.',
-        missing=['integration_acceptance_test', 'vendor_ack', 'acceptance_test_evidence'],
+        GateState.PASS if test_ready else GateState.BLOCKED,
+        'LATEST_INTEGRATION_TEST_READY' if test_ready else 'LATEST_INTEGRATION_TEST_REQUIRED',
+        'The latest immutable integration acceptance test passed and is newer than the last live acceptance.' if test_ready else 'Live acceptance requires an enabled connector with a newer passed immutable acceptance test.',
+        missing=[] if test_ready else ['newer_passed_integration_acceptance_test'],
+        evidence_refs=test_refs,
     )
     evidence_gate = _gate(
         GateType.EVIDENCE,
         GateState.BLOCKED,
-        'ACCEPTANCE_EVIDENCE_NOT_MODELED',
-        'No durable integration acceptance-evidence entity exists yet.',
-        missing=['vendor_ack', 'acceptance_test_evidence'],
+        'LIVE_ACCEPTANCE_REQUEST_EVIDENCE_REQUIRED',
+        'Execution must bind vendor acknowledgement, acceptance evidence hash, and review timing through an immutable governed request.',
+        missing=['vendor_ack', 'acceptance_test_evidence', 'review_at'],
+        evidence_refs=test_refs,
     )
     return EntityCapabilityContext(
         organization_id=str(link.organization_id),
         entity=_entity_ref(entity_type='integration', entity_id=integration.id, link=link),
-        projection=ProjectionSnapshot(lifecycle='enabled' if integration.enabled else 'disabled'),
+        projection=ProjectionSnapshot(lifecycle=lifecycle, posture=integration.kind, version=version),
         gate_results_by_action={action: [live_gate, evidence_gate]},
-        hard_blocks={
-            action: HardBlock(
-                reason_code='LIVE_ACCEPTANCE_DOMAIN_NOT_IMPLEMENTED',
-                reason='A durable tested/live-acceptance aggregate and evidence lineage must exist before this governed action can be enabled.',
-                missing_requirements=('integration_acceptance_test', 'vendor_ack', 'acceptance_test_evidence'),
-            )
-        },
     )
 
 
@@ -811,6 +847,75 @@ def _execution_context_for_action(
             evidence_refs=list(base_gate.evidence_refs) if base_gate else [],
         )]
         return gates, valid
+
+    if action_id == 'integration.live_accept':
+        base_live_gate = next((item for item in gates if item.gate is GateType.LIVE_ACCEPTANCE), None)
+        latest_test_id = (
+            str(base_live_gate.evidence_refs[0])
+            if base_live_gate is not None and base_live_gate.evidence_refs
+            else ''
+        )
+        requested_test_id = str(payload.get('acceptance_test_id') or '').strip()
+        vendor_ack = ' '.join(str(payload.get('vendor_ack') or '').split())
+        evidence_hash = str(payload.get('acceptance_evidence_sha256') or '').strip().lower()
+        digest_valid = len(evidence_hash) == 64 and all(ch in '0123456789abcdef' for ch in evidence_hash)
+        review_raw = payload.get('review_at')
+        expires_raw = payload.get('expires_at')
+        review_at = None
+        expires_at = None
+        try:
+            if review_raw:
+                review_at = (
+                    review_raw if isinstance(review_raw, datetime)
+                    else datetime.fromisoformat(str(review_raw).replace('Z', '+00:00'))
+                )
+            if expires_raw:
+                expires_at = (
+                    expires_raw if isinstance(expires_raw, datetime)
+                    else datetime.fromisoformat(str(expires_raw).replace('Z', '+00:00'))
+                )
+        except (TypeError, ValueError):
+            review_at = None
+            expires_at = None
+        now = datetime.now(timezone.utc)
+        time_valid = bool(
+            review_at is not None
+            and review_at.tzinfo is not None
+            and review_at > now
+            and (
+                expires_at is None
+                or (
+                    expires_at.tzinfo is not None
+                    and expires_at > review_at
+                )
+            )
+        )
+        valid = bool(
+            base_live_gate is not None
+            and base_live_gate.state is GateState.PASS
+            and latest_test_id
+            and requested_test_id == latest_test_id
+            and 3 <= len(vendor_ack) <= 500
+            and digest_valid
+            and time_valid
+        )
+        live_gate = _gate(
+            GateType.LIVE_ACCEPTANCE,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'LIVE_ACCEPTANCE_REQUEST_VALID' if valid else 'LIVE_ACCEPTANCE_REQUEST_INVALID',
+            'Immutable request parameters bind the latest passed connector test and valid review window.' if valid else 'Live acceptance must bind the latest passed test, vendor acknowledgement, acceptance evidence SHA-256, and a valid future review window.',
+            missing=[] if valid else ['latest_acceptance_test', 'vendor_ack', 'acceptance_evidence_sha256', 'review_at'],
+            evidence_refs=list(base_live_gate.evidence_refs) if base_live_gate else [],
+        )
+        evidence_gate = _gate(
+            GateType.EVIDENCE,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'LIVE_ACCEPTANCE_EVIDENCE_BOUND' if valid else 'LIVE_ACCEPTANCE_EVIDENCE_INVALID',
+            'Vendor acknowledgement and acceptance evidence are bound to the immutable governed request.' if valid else 'Acceptance evidence is incomplete or not bound to the latest tested connector state.',
+            missing=[] if valid else ['vendor_ack', 'acceptance_test_evidence'],
+            evidence_refs=[requested_test_id] if requested_test_id else [],
+        )
+        return [live_gate, evidence_gate], valid
 
     if action_id in _RISK_DISPOSITION_ACTIONS:
         risk_ref = str(payload.get('risk_correlation_id') or '').strip()
@@ -1021,6 +1126,7 @@ def build_entity_capability_manifest(
                 'finding.disposition.wont_fix',
                 'finding.disposition.duplicate',
                 'investigation.close',
+                'integration.live_accept',
             } else None,
         )
         sod_eligible = (
