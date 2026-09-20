@@ -314,5 +314,6 @@ def test_investigation_remediated_closure_rejects_non_latest_validation(disposit
             request_id=str(request.id),
             parameters=parameters,
         )
-    assert blocked.value.reason_code == 'LATEST_REMEDIATION_VALIDATION_REQUIRED'
+    assert blocked.value.reason_code == 'EVIDENCE_NOT_READY'
+    assert 'response_evidence' in blocked.value.missing_requirements
     assert InvestigationClosure.objects.filter(case=case).count() == 0
