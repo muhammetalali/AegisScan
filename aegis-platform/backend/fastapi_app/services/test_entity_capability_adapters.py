@@ -284,8 +284,12 @@ def test_soc_closure_uses_real_investigating_state_and_governed_disposition(disp
     )
     close = _action(manifest, 'investigation.close')
     assert manifest.projection.lifecycle == 'investigating'
-    assert close.mode is ActionMode.ENABLED
-    assert {result.gate.value for result in close.gate_results} == {'closure', 'evidence'}
+    # A3 makes investigation closure request-bound. A general capability
+    # projection must not enable the mutation without an immutable proposer
+    # context, even when a legacy disposition exists.
+    assert close.mode is ActionMode.BLOCKED
+    assert close.reason_code == 'SOD_VIOLATION'
+    assert 'actor_must_not_be_request_proposer' in close.missing_requirements
 
 
 def django_future_review():
