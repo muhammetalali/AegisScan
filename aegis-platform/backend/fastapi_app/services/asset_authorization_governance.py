@@ -59,6 +59,31 @@ def asset_authorization_version(asset: Asset) -> int:
     return AssetAuthorization.objects.filter(asset=asset).count() + 1
 
 
+def initialize_asset_configuration(configuration: dict | None) -> dict:
+    """Create a new asset configuration without accepting client authority state."""
+    normalized = dict(configuration or {})
+    if 'authorized' in normalized:
+        raise AssetAuthorizationGovernanceError(
+            'Asset configuration authorized is server-owned; use the governed asset authorization workflow.'
+        )
+    normalized['authorized'] = False
+    return normalized
+
+
+def replace_asset_configuration_preserving_authorization(
+    current_configuration: dict | None,
+    replacement: dict | None,
+) -> dict:
+    """Replace mutable asset configuration while preserving the governed authorization projection."""
+    normalized = dict(replacement or {})
+    if 'authorized' in normalized:
+        raise AssetAuthorizationGovernanceError(
+            'Asset configuration authorized is server-owned; use the governed asset authorization workflow.'
+        )
+    normalized['authorized'] = bool(dict(current_configuration or {}).get('authorized', False))
+    return normalized
+
+
 def govern_asset_authorization(
     *,
     asset_id: str,

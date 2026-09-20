@@ -10,7 +10,13 @@ from django_project.audit.models import AuditLog
 from django_project.users.models import User
 from enterprise.governed_action_models import GovernedActionExecution, GovernedActionRequest
 from enterprise.models import OrganizationMembership
-from fastapi_app.services.asset_authorization_governance import asset_authorization_version
+from fastapi_app.routers.assets import _normalize_import_row
+from fastapi_app.services.asset_authorization_governance import (
+    AssetAuthorizationGovernanceError,
+    asset_authorization_version,
+    initialize_asset_configuration,
+    replace_asset_configuration_preserving_authorization,
+)
 from fastapi_app.services.governed_action_executor import GovernedActionBlocked, execute_governed_action
 from fastapi_app.services.governed_action_requests import create_governed_action_request
 from fastapi_app.services.test_finding_disposition import disposition_fixture  # noqa: F401
@@ -274,3 +280,36 @@ def test_asset_authorization_rolls_back_when_agom_audit_fails(disposition_fixtur
     assert asset.configuration == before_configuration
     assert AssetAuthorization.objects.filter(asset=asset).count() == before_count
     assert GovernedActionExecution.objects.filter(request=request).count() == 0
+
+
+
+def test_asset_configuration_projection_is_server_owned_and_preserved(disposition_fixture):
+    _client, _owner, project, asset, _initial, _scan, _finding, _organization, _membership = disposition_fixture
+    before_count = AssetAuthorization.objects.filter(asset=asset).count()
+
+    with pytest.raises(AssetAuthorizationGovernanceError, match='server-owned'):
+        initialize_asset_configuration({'host': 'example.invalid', 'authorized': True})
+    with pytest.raises(AssetAuthorizationGovernanceError, match='server-owned'):
+        replace_asset_configuration_preserving_authorization(
+            asset.configuration,
+            {'host': 'replacement.invalid', 'authorized': False},
+        )
+
+    replacement = replace_asset_configuration_preserving_authorization(
+        asset.configuration,
+        {'host': 'replacement.invalid'},
+    )
+    assert replacement['host'] == 'replacement.invalid'
+    assert replacement['authorized'] is True
+    assert AssetAuthorization.objects.filter(asset=asset).count() == before_count
+
+    with pytest.raises(ValueError, match='server-owned authorization'):
+        _normalize_import_row(
+            {
+                'name': 'Bypass import',
+                'type': 'ip_address',
+                'host': '192.0.2.10',
+                'authorized': True,
+            },
+            str(project.id),
+        )

@@ -19,6 +19,13 @@ from django_project.evidence.models import ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
 from ..services.audit_writer import add_audit_entry
+from ..services.finding_closure import FindingClosureError, StaleFindingClosureVersion
+from ..services.governed_action_executor import (
+    GovernedActionBlocked,
+    GovernedActionConflict,
+    GovernedActionError,
+    execute_governed_action,
+)
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 from ..services.remediation_lifecycle import RemediationState, get_state, transition, verify_validation
 from ..tasks.finding_validation import validate_finding_e2e
@@ -33,6 +40,11 @@ class RemediationValidationRequest(BaseModel):
     duration_minutes: int = Field(default=5, ge=1, le=60)
     rate_limit: int = Field(default=5, ge=1, le=100)
     reason: str = ''
+
+
+class RemediationCloseRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=128)
 
 
 class RemediationValidationConflict(Exception):
@@ -339,7 +351,13 @@ async def verify_remediation(vuln_id: UUID, request: Request, user=Depends(get_c
 
 
 @router.post('/vulnerabilities/{vuln_id}/remediation/close')
-async def close_remediation(vuln_id: UUID, request: Request, user=Depends(get_current_user)):
+async def close_remediation(
+    vuln_id: UUID,
+    body: RemediationCloseRequest,
+    request: Request,
+    user=Depends(get_current_user),
+):
+    """Compatibility facade: terminal finding closure is owned exclusively by AGOM."""
     user_id = str(user.get('user_id'))
     finding = await _get_finding(vuln_id, user_id)
     if not finding:
@@ -350,42 +368,49 @@ async def close_remediation(vuln_id: UUID, request: Request, user=Depends(get_cu
     if get_state(validation) != RemediationState.VERIFIED:
         raise HTTPException(status_code=409, detail='Remediation can only be closed after explicit fix verification')
 
+    client_ip = str(request.client.host if request.client else '').strip()
+    if client_ip.count('.') != 3:
+        client_ip = '127.0.0.1'
     try:
-        validation = await sync_to_async(transition)(
-            validation.id,
-            RemediationState.CLOSED,
-            reason='Finding remediation lifecycle closed after explicit verification',
-            evidence_id=(validation.result or {}).get('evidence_id') if isinstance(validation.result, dict) else None,
+        governed = await sync_to_async(execute_governed_action, thread_sensitive=True)(
+            action_id='finding.close',
+            project_id=str(finding.project_id),
+            actor_id=user_id,
+            entity_type='finding',
+            entity_id=str(vuln_id),
+            expected_version=body.expected_version,
+            idempotency_key=body.idempotency_key,
+            parameters={},
+            ip_address=client_ip,
+            user_agent=request.headers.get('user-agent', ''),
+            session_id=request.cookies.get('sessionid', ''),
         )
-    except ValueError as exc:
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (GovernedActionConflict, StaleFindingClosureVersion) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    finding = await _get_finding(vuln_id, user_id)
-    try:
-        await sync_to_async(add_audit_entry)(
-            user=user_id,
-            action=AuditLog.Action.VULN_STATUS_CHANGE,
-            target=str(vuln_id),
-            project=str(finding.project_id) if finding else None,
-            resource_type='vulnerability',
-            resource_repr=f'Remediation closure {validation.id}',
-            changes={'status': 'fixed'},
-            metadata={
-                'workflow': 'remediation',
-                'operation': 'close',
-                'validation_id': str(validation.id),
-                'evidence_id': (validation.result or {}).get('evidence_id') if isinstance(validation.result, dict) else None,
+    except GovernedActionBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': exc.reason_code,
+                'reason': exc.reason,
+                'missing_requirements': exc.missing_requirements,
             },
-            request=request,
-        )
-    except Exception:
-        raise
+        ) from exc
+    except (GovernedActionError, FindingClosureError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    payload = dict(governed.execution.result_payload or {})
+    finding = await _get_finding(vuln_id, user_id)
+    validation = await _latest_run(vuln_id, user_id)
     return {
         'workflow': 'remediation',
-        'state': RemediationState.CLOSED,
+        'state': get_state(validation) if validation else RemediationState.CLOSED,
         'finding_id': str(vuln_id),
-        'validation_id': str(validation.id),
-        'vulnerability_status': finding.status if finding else Vulnerability.Status.FIXED,
-        'closed_at': datetime.now(timezone.utc).isoformat(),
+        'validation_id': payload.get('validation_id'),
+        'vulnerability_status': payload.get('status') or (finding.status if finding else None),
+        'version': payload.get('version'),
+        'execution_id': str(governed.execution.id),
+        'replayed': governed.replayed,
     }

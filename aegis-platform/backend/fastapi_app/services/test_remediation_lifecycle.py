@@ -12,7 +12,7 @@ from fastapi_app.services.remediation_lifecycle import RemediationState, get_sta
 
 
 @pytest.mark.django_db
-def test_remediation_lifecycle_tracks_verified_and_closed_states():
+def test_remediation_lifecycle_tracks_verified_and_rejects_direct_closure():
     user = User.objects.create_user(
         email='remediation-lifecycle@example.invalid',
         password='Strong-Test-Password-123!',
@@ -76,13 +76,18 @@ def test_remediation_lifecycle_tracks_verified_and_closed_states():
     assert get_state(validation) == RemediationState.VERIFIED
     assert VulnerabilityStatusHistory.objects.filter(vulnerability=finding, new_status=Vulnerability.Status.IN_PROGRESS).exists()
 
-    validation = transition(validation.id, RemediationState.CLOSED, reason='verified remediation closed', evidence_id='evidence-1')
+    with pytest.raises(ValueError, match='governed exclusively by finding.close'):
+        transition(validation.id, RemediationState.CLOSED, reason='direct close must fail', evidence_id='evidence-1')
     finding.refresh_from_db()
-    assert get_state(validation) == RemediationState.CLOSED
-    assert finding.status == Vulnerability.Status.FIXED
-    assert finding.fixed_at is not None
-    assert finding.fixed_by_id == user.id
-    assert VulnerabilityStatusHistory.objects.filter(vulnerability=finding, new_status=Vulnerability.Status.FIXED).exists()
+    validation.refresh_from_db()
+    assert get_state(validation) == RemediationState.VERIFIED
+    assert finding.status == Vulnerability.Status.IN_PROGRESS
+    assert finding.fixed_at is None
+    assert finding.fixed_by_id is None
+    assert not VulnerabilityStatusHistory.objects.filter(
+        vulnerability=finding,
+        new_status=Vulnerability.Status.FIXED,
+    ).exists()
 
     events = validation.result['remediation_events']
     assert [event['to'] for event in events] == [
@@ -90,7 +95,6 @@ def test_remediation_lifecycle_tracks_verified_and_closed_states():
         RemediationState.VALIDATING,
         RemediationState.VALIDATION_PASSED,
         RemediationState.VERIFIED,
-        RemediationState.CLOSED,
     ]
 
 
@@ -144,4 +148,4 @@ def test_remediation_lifecycle_rejects_illegal_transition():
     )
 
     with pytest.raises(ValueError, match='Invalid remediation transition'):
-        transition(validation.id, RemediationState.CLOSED, reason='must be rejected')
+        transition(validation.id, RemediationState.VERIFIED, reason='must be rejected')

@@ -11,7 +11,7 @@ from django_project.evidence.models import Evidence, FindingDisposition, Validat
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.models import InvestigationCase, OrganizationMembership
 from enterprise.soc_models import InvestigationCaseState, InvestigationClosure
-from fastapi_app.services.remediation_lifecycle import RemediationState, get_state, transition as remediation_transition
+from fastapi_app.services.remediation_lifecycle import RemediationState, get_state
 from fastapi_app.services.security_operations import SecurityOperationsError, StaleCaseVersion, _append_event_locked, _membership, _sha
 
 POLICY_VERSION = 'soc-closure.v1'
@@ -146,9 +146,8 @@ def close_investigation_case(*, case_id: str, project_id: str, user_id: str, exp
             source_id = str(disposition.id)
 
         fingerprint = _sha({'case_id': str(case_id), 'generation': state.generation, 'finding_id': str(finding_id), 'closure_type': closure_type, 'source_id': source_id, 'source_sha256': source_sha, 'decision_action_id': str(state.decision_action_id or ''), 'policy_version': POLICY_VERSION, 'rationale': normalized_rationale})
-        if validation is not None:
-            remediation_transition(validation.id, RemediationState.CLOSED, reason=f'Governed SOC investigation closure {case.id}; {normalized_rationale}'.strip(), evidence_id=str(evidence.id))
-
+        # Closing the investigation consumes VERIFIED remediation proof but does
+        # not close the finding. Terminal finding status is owned by finding.close.
         closure = InvestigationClosure.objects.create(case=case, finding=locked_finding, closure_type=closure_type, validation_run=validation, disposition=disposition, evidence=evidence, decision_action=state.decision_action, policy_version=POLICY_VERSION, source_sha256=source_sha, closure_fingerprint=fingerprint, rationale=normalized_rationale, closed_by_id=user_id)
         old_status = case.status
         case.status = InvestigationCase.Status.CLOSED
