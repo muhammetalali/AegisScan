@@ -20,6 +20,7 @@ class Migration(migrations.Migration):
                 ('source_ref', models.CharField(max_length=255)),
                 ('evidence_sha256', models.CharField(max_length=64)),
                 ('evidence_summary', models.JSONField(blank=True, default=dict)),
+                ('configuration_fingerprint', models.CharField(max_length=64)),
                 ('test_fingerprint', models.CharField(max_length=64)),
                 ('tested_at', models.DateTimeField(auto_now_add=True)),
                 ('integration', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='acceptance_tests', to='enterprise.externalintegration')),
