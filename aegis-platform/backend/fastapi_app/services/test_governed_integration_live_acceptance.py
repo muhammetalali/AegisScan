@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from django_project.audit.models import AuditLog
+from django_project.projects.models import Project
 from django_project.users.models import User
 from enterprise.governed_action_models import GovernedActionExecution
-from enterprise.models import ExternalIntegration, IntegrationAcceptanceTest, IntegrationLiveAcceptance, OrganizationMembership
+from enterprise.models import ExternalIntegration, IntegrationAcceptanceTest, IntegrationLiveAcceptance, Organization, OrganizationMembership, TenantProject
 from fastapi_app.contracts.governed_operations import ActionMode
 from fastapi_app.services.governed_action_executor import GovernedActionBlocked, GovernedActionConflict, execute_governed_action
 from fastapi_app.services.governed_action_requests import create_governed_action_request
@@ -231,3 +233,56 @@ def test_transport_probe_task_persists_sanitized_durable_test(disposition_fixtur
     assert test.outcome==IntegrationAcceptanceTest.Outcome.PASSED
     assert set(test.evidence_summary)=={'transport_result_sha256','http_status','status'}
     assert 'opaque_remote_value' not in str(test.evidence_summary)
+
+
+def test_acceptance_test_route_is_project_and_tenant_bound(disposition_fixture,monkeypatch):
+    client,owner,project,_asset,_authorization,_scan,_finding,organization,membership=disposition_fixture
+    _ownerize(membership)
+    integration=_integration(organization,owner,'route')
+    captured=[]
+    monkeypatch.setattr(
+        'fastapi_app.routers.enterprise_extra.run_integration_acceptance_test.delay',
+        lambda *args:(captured.append(args) or SimpleNamespace(id='queued-acceptance-test')),
+    )
+    response=client.post(
+        f'/api/v1/enterprise/integrations/{integration.id}/acceptance-test',
+        json={'project_id':str(project.id),'event':{'type':'aegis.acceptance.probe'}},
+    )
+    assert response.status_code==202,response.text
+    assert response.json()['status']=='queued'
+    assert captured==[(
+        str(integration.id),str(project.id),str(owner.id),{'type':'aegis.acceptance.probe'},
+    )]
+
+
+def test_transport_probe_rejects_cross_tenant_scope_before_delivery(disposition_fixture,monkeypatch):
+    from enterprise.tasks import run_integration_acceptance_test
+
+    _client,owner,project,_asset,_authorization,_scan,_finding,_organization,_membership=disposition_fixture
+    other_owner=User.objects.create_user(
+        email='a3-int-other-owner@example.invalid',password='Test-Password-123!',
+    )
+    other_project=Project.objects.create(
+        name='A3 Other Integration Project',slug='a3-other-integration-project',owner=other_owner,
+    )
+    other_org=Organization.objects.create(
+        name='A3 Other Integration Org',slug='a3-other-integration-org',owner=other_owner,is_active=True,
+    )
+    OrganizationMembership.objects.create(
+        organization=other_org,user=other_owner,role=OrganizationMembership.Role.OWNER,is_active=True,
+    )
+    TenantProject.objects.create(organization=other_org,project=other_project)
+    integration=_integration(other_org,other_owner,'cross-tenant')
+    delivered=[]
+    monkeypatch.setattr(
+        'enterprise.tasks.send_integration',
+        lambda item,event:(delivered.append(str(item.id)) or {'http_status':202}),
+    )
+    result=run_integration_acceptance_test.apply(
+        args=[str(integration.id),str(project.id),str(owner.id),{'type':'aegis.acceptance.probe'}],
+        task_id='a3-cross-tenant-test',
+    )
+    with pytest.raises(PermissionError,match='scope is not authorized'):
+        result.get(propagate=True)
+    assert delivered==[]
+    assert not IntegrationAcceptanceTest.objects.filter(integration=integration).exists()
