@@ -133,6 +133,54 @@ def _locked_scope(*, project_id: str, actor_id: str, integration_id: str):
     return organization, link, integration
 
 
+def current_integration_live_acceptance(
+    *,
+    integration: ExternalIntegration,
+    project_id: str,
+    evaluated_at: datetime | None = None,
+) -> IntegrationLiveAcceptance | None:
+    """
+    Resolve the single acceptance that is authoritative for the connector's
+    current immutable test/configuration state. A merely enabled connector is
+    never sufficient for live use.
+    """
+    now = evaluated_at or timezone.now()
+    if not integration.enabled:
+        return None
+    latest_test = (
+        IntegrationAcceptanceTest.objects.filter(
+            organization_id=integration.organization_id,
+            project_id=project_id,
+            integration=integration,
+        )
+        .order_by('-tested_at', '-id')
+        .first()
+    )
+    if (
+        latest_test is None
+        or latest_test.outcome != IntegrationAcceptanceTest.Outcome.PASSED
+        or latest_test.configuration_fingerprint != integration_configuration_fingerprint(integration)
+    ):
+        return None
+    latest_acceptance = (
+        IntegrationLiveAcceptance.objects.filter(
+            organization_id=integration.organization_id,
+            project_id=project_id,
+            integration=integration,
+        )
+        .order_by('-accepted_at', '-id')
+        .first()
+    )
+    if (
+        latest_acceptance is None
+        or str(latest_acceptance.acceptance_test_id) != str(latest_test.id)
+        or latest_acceptance.review_at <= now
+        or (latest_acceptance.expires_at is not None and latest_acceptance.expires_at <= now)
+    ):
+        return None
+    return latest_acceptance
+
+
 def integration_acceptance_generation(*, integration_id: str, project_id: str) -> int:
     tests = IntegrationAcceptanceTest.objects.filter(
         integration_id=integration_id,
