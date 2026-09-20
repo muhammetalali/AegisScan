@@ -6,6 +6,7 @@ on:
       - chatgpt-a/agom-direct-mutation-bypass-audit-2026-09-20
     paths:
       - 'aegis-platform/backend/**/*.py'
+      - 'aegis-platform/frontend/src/pages/vulnerabilities/**'
       - 'scripts/ci/agom_direct_mutation_guard.py'
       - 'tests/test_agom_direct_mutation_guard.py'
       - '.github/workflows/agom-direct-mutation-bypass-reality.yml'
@@ -13,6 +14,7 @@ on:
     branches: [main]
     paths:
       - 'aegis-platform/backend/**/*.py'
+      - 'aegis-platform/frontend/src/pages/vulnerabilities/**'
       - 'scripts/ci/agom_direct_mutation_guard.py'
       - 'tests/test_agom_direct_mutation_guard.py'
       - '.github/workflows/agom-direct-mutation-bypass-reality.yml'
@@ -28,7 +30,7 @@ concurrency:
 jobs:
   direct-mutation-bypass:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       DEBUG: 'False'
       SECRET_KEY: ci-a4-direct-mutation-secret-0123456789abcdef
@@ -65,14 +67,28 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Prove checkout is exact head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: aegis-platform/backend/requirements.txt
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+
       - name: Install backend dependencies
         run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: aegis-platform/frontend
+        run: npm ci
 
       - name: Run AST direct mutation guard
         run: python scripts/ci/agom_direct_mutation_guard.py | tee /tmp/a4-direct-mutation-guard.txt
@@ -105,6 +121,14 @@ jobs:
         run: |
           pytest -q             fastapi_app/services/test_soc_closure_governance.py             fastapi_app/services/test_governed_investigation_closure.py             | tee /tmp/a4-investigation-tests.txt
 
+      - name: Run governed finding frontend contract test
+        working-directory: aegis-platform/frontend
+        run: npx vitest run src/pages/vulnerabilities/VulnerabilityDetail.test.tsx | tee /tmp/a4-frontend-tests.txt
+
+      - name: Typecheck and build governed frontend
+        working-directory: aegis-platform/frontend
+        run: npm run build | tee /tmp/a4-frontend-build.txt
+
       - name: Retain A4 Reality evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -117,3 +141,5 @@ jobs:
             /tmp/a4-asset-tests.txt
             /tmp/a4-remediation-tests.txt
             /tmp/a4-investigation-tests.txt
+            /tmp/a4-frontend-tests.txt
+            /tmp/a4-frontend-build.txt

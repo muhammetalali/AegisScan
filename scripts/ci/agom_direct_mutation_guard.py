@@ -22,6 +22,12 @@ LEDGER_OWNERS = {
     "InvestigationClosure": "aegis-platform/backend/fastapi_app/services/soc_closure_governance.py",
     "DetectionPublication": "aegis-platform/backend/fastapi_app/services/detection_engineering.py",
     "IntegrationLiveAcceptance": "aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py",
+    "CampaignObjectiveAssessment": "aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py",
+    "CampaignAuditEvent": "aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py",
+    "AssuranceObligationEvent": "aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py",
+    "GovernedActionRequest": "aegis-platform/backend/fastapi_app/services/governed_action_requests.py",
+    "GovernedActionExecution": "aegis-platform/backend/fastapi_app/services/governed_action_executor.py",
+    "EvidenceQualificationEvaluation": "aegis-platform/backend/fastapi_app/services/evidence_qualification.py",
 }
 
 TERMINAL_STATE_OWNERS = {
@@ -33,6 +39,11 @@ TERMINAL_STATE_OWNERS = {
     "Vulnerability.Status.DUPLICATE": "aegis-platform/backend/fastapi_app/services/finding_disposition.py",
     "InvestigationCase.Status.CLOSED": "aegis-platform/backend/fastapi_app/services/soc_closure_governance.py",
     "DetectionRule.State.PUBLISHED": "aegis-platform/backend/fastapi_app/services/detection_engineering.py",
+    "AdversaryCampaign.Status.COMPLETED": "aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py",
+    "CampaignObjective.Status.REACHED": "aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py",
+    "CampaignObjective.Status.BLOCKED": "aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py",
+    "CampaignObjective.Status.INCONCLUSIVE": "aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py",
+    "AssuranceObligation.Status.SATISFIED": "aegis-platform/backend/fastapi_app/services/assurance_obligation_governance.py",
 }
 
 ASSET_PROJECTION_OWNER = "aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py"

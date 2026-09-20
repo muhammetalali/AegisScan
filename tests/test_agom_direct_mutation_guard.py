@@ -67,3 +67,21 @@ asset.configuration = configuration
 def test_current_repository_has_no_direct_mutation_bypass():
     violations = guard.scan_repo(ROOT)
     assert violations == [], "\n".join(item.render() for item in violations)
+
+
+
+def test_rejects_campaign_completion_outside_campaign_governance_owner():
+    source = """
+campaign.status = AdversaryCampaign.Status.COMPLETED
+campaign.save(update_fields=['status'])
+"""
+    assert "AGOM-DIRECT-STATUS" in codes(source)
+
+
+def test_allows_campaign_completion_in_canonical_owner():
+    source = """
+campaign.status = AdversaryCampaign.Status.COMPLETED
+campaign.save(update_fields=['status'])
+"""
+    path = "aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py"
+    assert guard.scan_source(source, path) == []
