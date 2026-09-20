@@ -12,7 +12,7 @@ from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import User
 from fastapi_app.routers import scans as scans_router
-from fastapi_app.routers.asset_authorization import AuthorizationUpdate, _set_authorization
+from fastapi_app.services.asset_authorization_governance import govern_asset_authorization
 from fastapi_app.routers.assets import scan_asset
 from fastapi_app.routers.scans import ScanCreate, _create_scan, _serialize_scan
 
@@ -38,17 +38,18 @@ def test_semgrep_scan_binds_source_code_authorization_decision():
         configuration={'path': '/app/e2e'},
     )
 
-    async_to_sync(_set_authorization)(
-        str(asset.id),
-        str(user.id),
-        True,
-        AuthorizationUpdate(authorized=True, reason='CI controlled source-code target'),
-        uuid4(),
-        '127.0.0.1',
-        'pytest',
+    governed = govern_asset_authorization(
+        asset_id=str(asset.id),
+        project_id=str(project.id),
+        actor_id=str(user.id),
+        expected_version=1,
+        authorized=True,
+        reason='CI controlled source-code target',
+        governed_request_id=str(uuid4()),
+        correlation_id=str(uuid4()),
     )
 
-    decision = AssetAuthorization.objects.get(asset=asset)
+    decision = governed.decision
     assert decision.authorized is True
     assert decision.target_snapshot == '/app/e2e'
 
