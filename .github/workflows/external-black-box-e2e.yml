@@ -251,7 +251,7 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T scanner_worker sh -c 'echo "AUTHORIZED_SCAN_TARGETS=$AUTHORIZED_SCAN_TARGETS"'
-      - name: Provision CI E2E operator
+      - name: Provision CI E2E governance actors
         working-directory: aegis-platform
         shell: bash
         run: |
@@ -261,17 +261,96 @@ jobs:
           print('Aegis-E2E-' + secrets.token_urlsafe(24))
           PY
           )"
-          printf 'AEGIS_E2E_PASSWORD=%s\n' "$E2E_PASSWORD" >> "$GITHUB_ENV"
+          E2E_APPROVER_EMAIL="e2e-governance-approver@aegisscan.local"
+          E2E_APPROVER_PASSWORD="$(python - <<'PY'
+          import secrets
+          print('Aegis-E2E-Approver-' + secrets.token_urlsafe(24))
+          PY
+          )"
           echo "::add-mask::$E2E_PASSWORD"
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T -e E2E_EMAIL="$AEGIS_E2E_EMAIL" -e E2E_PASSWORD="$E2E_PASSWORD" django python manage.py shell <<'PY'
+          echo "::add-mask::$E2E_APPROVER_PASSWORD"
+          GOV_STATE="$(
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
+              -e E2E_EMAIL="$AEGIS_E2E_EMAIL" \
+              -e E2E_PASSWORD="$E2E_PASSWORD" \
+              -e E2E_APPROVER_EMAIL="$E2E_APPROVER_EMAIL" \
+              -e E2E_APPROVER_PASSWORD="$E2E_APPROVER_PASSWORD" \
+              django python manage.py shell <<'PY'
           import os
           from django.contrib.auth import get_user_model
           from django_project.users.models import UserRole
-          User=get_user_model(); email=os.environ['E2E_EMAIL']; password=os.environ['E2E_PASSWORD']
-          user,_=User.objects.get_or_create(email=email,defaults={'first_name':'E2E','last_name':'Operator','role':UserRole.SECURITY_MANAGER,'is_active':True,'is_verified':True})
-          user.role=UserRole.SECURITY_MANAGER; user.is_active=True; user.is_verified=True; user.set_password(password); user.save()
+          from enterprise.models import Organization, OrganizationMembership
+
+          User = get_user_model()
+          user, _ = User.objects.get_or_create(
+              email=os.environ['E2E_EMAIL'],
+              defaults={
+                  'first_name': 'E2E',
+                  'last_name': 'Operator',
+                  'role': UserRole.SECURITY_MANAGER,
+                  'is_active': True,
+                  'is_verified': True,
+              },
+          )
+          user.role = UserRole.SECURITY_MANAGER
+          user.is_active = True
+          user.is_verified = True
+          user.set_password(os.environ['E2E_PASSWORD'])
+          user.save()
           assert user.has_permission('project.create') and user.has_permission('scan.create')
+
+          approver, _ = User.objects.get_or_create(
+              email=os.environ['E2E_APPROVER_EMAIL'],
+              defaults={
+                  'first_name': 'E2E',
+                  'last_name': 'Governance Approver',
+                  'role': UserRole.SECURITY_MANAGER,
+                  'is_active': True,
+                  'is_verified': True,
+              },
+          )
+          approver.role = UserRole.SECURITY_MANAGER
+          approver.is_active = True
+          approver.is_verified = True
+          approver.set_password(os.environ['E2E_APPROVER_PASSWORD'])
+          approver.save()
+
+          org, _ = Organization.objects.get_or_create(
+              slug='external-e2e-governance',
+              defaults={'name': 'External E2E Governance', 'owner': user, 'is_active': True},
+          )
+          org.owner = user
+          org.is_active = True
+          org.save(update_fields=['owner', 'is_active', 'updated_at'])
+          operator_membership, _ = OrganizationMembership.objects.get_or_create(
+              organization=org,
+              user=user,
+              defaults={'role': OrganizationMembership.Role.OWNER, 'is_active': True},
+          )
+          operator_membership.role = OrganizationMembership.Role.OWNER
+          operator_membership.is_active = True
+          operator_membership.save(update_fields=['role', 'is_active'])
+          approver_membership, _ = OrganizationMembership.objects.get_or_create(
+              organization=org,
+              user=approver,
+              defaults={'role': OrganizationMembership.Role.ADMIN, 'is_active': True},
+          )
+          approver_membership.role = OrganizationMembership.Role.ADMIN
+          approver_membership.is_active = True
+          approver_membership.save(update_fields=['role', 'is_active'])
+          print(f'{org.id}|{approver_membership.id}')
           PY
+          )"
+          GOV_IDS="$(printf '%s\n' "$GOV_STATE" | tail -n 1)"
+          AEGIS_E2E_GOV_ORG_ID="${GOV_IDS%%|*}"
+          AEGIS_E2E_APPROVER_MEMBERSHIP_ID="${GOV_IDS##*|}"
+          test -n "$AEGIS_E2E_GOV_ORG_ID"
+          test -n "$AEGIS_E2E_APPROVER_MEMBERSHIP_ID"
+          printf 'AEGIS_E2E_PASSWORD=%s\n' "$E2E_PASSWORD" >> "$GITHUB_ENV"
+          printf 'AEGIS_E2E_APPROVER_EMAIL=%s\n' "$E2E_APPROVER_EMAIL" >> "$GITHUB_ENV"
+          printf 'AEGIS_E2E_APPROVER_PASSWORD=%s\n' "$E2E_APPROVER_PASSWORD" >> "$GITHUB_ENV"
+          printf 'AEGIS_E2E_GOV_ORG_ID=%s\n' "$AEGIS_E2E_GOV_ORG_ID" >> "$GITHUB_ENV"
+          printf 'AEGIS_E2E_APPROVER_MEMBERSHIP_ID=%s\n' "$AEGIS_E2E_APPROVER_MEMBERSHIP_ID" >> "$GITHUB_ENV"
       - name: Run HTTP black-box E2E
         working-directory: aegis-platform
         run: |
@@ -289,6 +368,10 @@ jobs:
             -e AEGIS_VERIFY_TLS=false \
             -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" \
             -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" \
+            -e AEGIS_E2E_APPROVER_EMAIL="$AEGIS_E2E_APPROVER_EMAIL" \
+            -e AEGIS_E2E_APPROVER_PASSWORD="$AEGIS_E2E_APPROVER_PASSWORD" \
+            -e AEGIS_E2E_GOV_ORG_ID="$AEGIS_E2E_GOV_ORG_ID" \
+            -e AEGIS_E2E_APPROVER_MEMBERSHIP_ID="$AEGIS_E2E_APPROVER_MEMBERSHIP_ID" \
             -e AEGIS_E2E_STATE_PATH=/ci-artifacts/governed-execution-state.json \
             fastapi python /e2e/external_black_box_e2e.py
           test -s ci-artifacts/governed-execution-state.json
