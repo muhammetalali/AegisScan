@@ -145,11 +145,14 @@ _ACTIONS = (
         resulting_projection={'lifecycle': 'completed'}, audit_event='campaign.completed',
     ),
     _contract(
-        'detection.publish', 'detection_revision', 'Publish a validated detection revision',
-        ['validated'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
+        'detection.publish', 'detection_revision', 'Queue a validated detection revision for governed live publication',
+        ['validated', 'published'], [ActorLayer.GOVERN], ['manager', 'admin', 'owner'],
         responsibilities=['detection_publisher'],
-        gates=[GateType.VALIDATION, GateType.PUBLICATION], evidence=['passed_detection_validation'],
-        resulting_projection={'lifecycle': 'published'}, audit_event='detection.published',
+        gates=[GateType.VALIDATION, GateType.PUBLICATION],
+        evidence=['passed_detection_validation', 'current_live_accepted_siem'],
+        sod=['actor_must_not_be_request_proposer'],
+        side_effects=['create_durable_publication_delivery'],
+        resulting_projection={'publication': 'queued'}, audit_event='detection.publication.requested',
     ),
     _contract(
         'investigation.close', 'investigation_case', 'Close an investigation with governed closure proof',
