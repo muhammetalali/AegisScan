@@ -113,6 +113,9 @@ jobs:
             aegis-platform/backend/fastapi_app/routers/governed_action_execution.py \
             aegis-platform/backend/fastapi_app/services/governed_action_requests.py \
             aegis-platform/backend/fastapi_app/services/governed_action_executor.py \
+            aegis-platform/backend/fastapi_app/services/soc_closure_governance.py \
+            aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py \
+            aegis-platform/backend/fastapi_app/services/test_entity_capability_adapters.py \
             aegis-platform/backend/fastapi_app/services/test_governed_action_requests.py \
             aegis-platform/backend/fastapi_app/services/test_governed_finding_false_positive.py \
             aegis-platform/backend/fastapi_app/services/test_governed_finding_dispositions.py \
