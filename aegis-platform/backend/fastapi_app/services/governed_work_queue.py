@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
+from uuid import UUID
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q
@@ -43,6 +44,10 @@ class StaleGovernedWorkClaimVersion(GovernedWorkQueueConflict):
     pass
 
 
+class GovernedWorkSourceUnavailable(GovernedWorkQueueConflict):
+    pass
+
+
 @dataclass(frozen=True)
 class WorkMutationResult:
     snapshot: dict[str, Any]
@@ -69,6 +74,20 @@ def _normalize_source_type(value: str) -> str:
     if normalized not in _SOURCE_TYPES:
         raise GovernedWorkQueueError('Unsupported governed work source_type.')
     return normalized
+
+
+def _normalize_source_id(source_type: str, value: str) -> str:
+    source_id = str(value or '').strip()
+    if not source_id or len(source_id) > 255:
+        raise GovernedWorkQueueError('Governed work source_id must be 1-255 characters.')
+    if source_type != GovernedWorkClaim.SourceType.DECISION_ACTION:
+        try:
+            UUID(source_id)
+        except ValueError as exc:
+            raise GovernedWorkQueueError(
+                'Governed work source_id must be a UUID for this source_type.'
+            ) from exc
+    return source_id
 
 
 def _scope(*, project_id: str, actor_id: str, for_mutation: bool):
@@ -396,7 +415,7 @@ def list_governed_work(
 def _source_snapshot(*, organization, project, source_type: str, source_id: str) -> dict[str, Any]:
     """Resolve and lock exactly one authoritative source before claim mutation."""
     source_type = _normalize_source_type(source_type)
-    source_id = str(source_id)
+    source_id = _normalize_source_id(source_type, source_id)
     now = timezone.now()
     item: dict[str, Any] | None = None
 
@@ -564,7 +583,7 @@ def _source_snapshot(*, organization, project, source_type: str, source_id: str)
             }
 
     if item is None:
-        raise GovernedWorkQueueError(
+        raise GovernedWorkSourceUnavailable(
             'Governed work source is no longer actionable or is outside the project scope.'
         )
 
@@ -606,6 +625,7 @@ def mutate_governed_work_claim(
     lease_seconds: int | None = None,
 ) -> WorkMutationResult:
     normalized_type = _normalize_source_type(source_type)
+    normalized_source_id = _normalize_source_id(normalized_type, source_id)
     key = _normalize_key(idempotency_key)
     if operation not in {'claim', 'renew', 'release'}:
         raise GovernedWorkQueueError('Unsupported governed work mutation operation.')
@@ -633,7 +653,7 @@ def mutate_governed_work_claim(
         'project_id': str(project_id),
         'actor_id': str(actor_id),
         'source_type': normalized_type,
-        'source_id': str(source_id),
+        'source_id': normalized_source_id,
         'expected_version': int(expected_version),
         'lease_seconds': lease,
     })
@@ -680,12 +700,12 @@ def mutate_governed_work_claim(
             organization=organization,
             project=project,
             source_type=normalized_type,
-            source_id=str(source_id),
+            source_id=normalized_source_id,
         )
 
         claim = (
             GovernedWorkClaim.objects.select_for_update()
-            .filter(organization=organization, source_type=normalized_type, source_id=str(source_id))
+            .filter(organization=organization, source_type=normalized_type, source_id=normalized_source_id)
             .first()
         )
         current_version = int(claim.version) if claim is not None else 0
@@ -714,7 +734,7 @@ def mutate_governed_work_claim(
                         organization=organization,
                         project=project,
                         source_type=normalized_type,
-                        source_id=str(source_id),
+                        source_id=normalized_source_id,
                         claimed_by_id=actor_id,
                         claimed_at=now,
                         lease_expires_at=now + timedelta(seconds=lease),
@@ -754,7 +774,7 @@ def mutate_governed_work_claim(
         result_snapshot = {
             'policy_version': WORK_QUEUE_POLICY_VERSION,
             'source_type': normalized_type,
-            'source_id': str(source_id),
+            'source_id': normalized_source_id,
             'project_id': str(project.id),
             'organization_id': str(organization.id),
             'operation': operation,
