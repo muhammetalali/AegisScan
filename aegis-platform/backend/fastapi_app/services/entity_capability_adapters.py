@@ -8,7 +8,7 @@ from typing import Any, Callable
 from django.db.models import Q
 from django.utils import timezone as django_timezone
 
-from django_project.assets.models import AssetAuthorization
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, FindingDisposition, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.assurance_obligation_models import AssuranceObligation
@@ -697,34 +697,67 @@ def _integration_context(*, entity_id: str, link: TenantProject, actor_id: str) 
     )
 
 
-def _asset_authorization_context(*, entity_id: str, link: TenantProject, actor_id: str) -> EntityCapabilityContext:
-    decision = AssetAuthorization.objects.select_related('asset').filter(
+def _asset_context(*, entity_id: str, link: TenantProject, actor_id: str) -> EntityCapabilityContext:
+    asset = Asset.objects.filter(
         pk=entity_id,
-        asset__project_id=link.project_id,
+        project_id=link.project_id,
+        is_active=True,
     ).first()
-    if decision is None:
+    if asset is None:
         raise EntityCapabilityNotFound('Entity capability target not found.')
-    action = 'asset.authorization.approve'
-    gate = _gate(
+
+    target = asset_target(asset)
+    latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+    current, _current_reason = current_asset_authorization(asset, target) if target else (None, '')
+    if current is not None:
+        lifecycle = 'authorized'
+    elif latest is not None and latest.authorized is False:
+        lifecycle = 'revoked'
+    else:
+        lifecycle = 'authorization_required'
+
+    # AssetAuthorization is append-only. Holding the Asset row in the mutation
+    # primitive serializes this generation, so count+1 is a durable CAS version:
+    # 1 before the first decision, then one increment per immutable decision.
+    version = AssetAuthorization.objects.filter(asset=asset).count() + 1
+
+    approve = 'asset.authorization.approve'
+    revoke = 'asset.authorization.revoke'
+    scope_ready = bool(target)
+    approve_gate = _gate(
         GateType.AUTHORIZATION,
-        GateState.BLOCKED,
-        'AUTHORIZATION_REQUEST_ENTITY_NOT_IMPLEMENTED',
-        'Existing AssetAuthorization rows are immutable decisions; the required submitted authorization-request entity does not exist yet.',
-        missing=['asset_authorization_request'],
-        evidence_refs=[str(decision.id)],
+        GateState.PASS if scope_ready else GateState.BLOCKED,
+        'ASSET_SCOPE_READY' if scope_ready else 'ASSET_SCOPE_TARGET_REQUIRED',
+        'The active tenant-owned asset has a server-derived authorization target.' if scope_ready else 'Asset authorization requires a non-empty server-derived target.',
+        missing=[] if scope_ready else ['server_derived_asset_target'],
+        evidence_refs=[str(asset.id)] if scope_ready else [],
     )
-    lifecycle = 'approved' if decision.authorized and decision.is_currently_valid else 'rejected'
+    revoke_gate = _gate(
+        GateType.AUTHORIZATION,
+        GateState.PASS if current is not None else GateState.BLOCKED,
+        'CURRENT_ASSET_AUTHORIZATION_READY' if current is not None else 'CURRENT_ASSET_AUTHORIZATION_REQUIRED',
+        'A current immutable asset authorization decision is available for revocation.' if current is not None else 'Revocation requires a current valid authorization decision.',
+        missing=[] if current is not None else ['current_asset_authorization'],
+        evidence_refs=[str(current.id)] if current is not None else [],
+    )
+    evidence_ready = set()
+    if scope_ready:
+        evidence_ready.add(approve)
+    if current is not None:
+        evidence_ready.add(revoke)
+
     return EntityCapabilityContext(
         organization_id=str(link.organization_id),
-        entity=_entity_ref(entity_type='asset_authorization', entity_id=decision.id, link=link),
-        projection=ProjectionSnapshot(lifecycle=lifecycle),
-        gate_results_by_action={action: [gate]},
-        hard_blocks={
-            action: HardBlock(
-                reason_code='AUTHORIZATION_REQUEST_DOMAIN_NOT_IMPLEMENTED',
-                reason='Approval cannot be projected from an immutable decision row; a submitted authorization-request aggregate must exist first.',
-                missing_requirements=('asset_authorization_request',),
-            )
+        entity=_entity_ref(entity_type='asset', entity_id=asset.id, link=link),
+        projection=ProjectionSnapshot(
+            lifecycle=lifecycle,
+            posture=asset.criticality,
+            version=version,
+        ),
+        evidence_ready_actions=evidence_ready,
+        gate_results_by_action={
+            approve: [approve_gate],
+            revoke: [revoke_gate],
         },
     )
 
@@ -746,6 +779,38 @@ def _execution_context_for_action(
     if parameters is None:
         return gates, evidence_ready
     payload = dict(parameters)
+
+    if action_id in {'asset.authorization.approve', 'asset.authorization.revoke'}:
+        asset = Asset.objects.filter(
+            pk=context.entity.entity_id,
+            project_id=context.entity.project_id,
+            is_active=True,
+        ).first()
+        rationale = ' '.join(str(payload.get('reason') or '').split())
+        valid = asset is not None and bool(asset_target(asset)) and len(rationale) >= 3
+        if action_id == 'asset.authorization.approve':
+            expires_raw = payload.get('expires_at')
+            if expires_raw:
+                try:
+                    expires_at = (
+                        expires_raw if isinstance(expires_raw, datetime)
+                        else datetime.fromisoformat(str(expires_raw).replace('Z', '+00:00'))
+                    )
+                    valid = valid and expires_at.tzinfo is not None and expires_at > datetime.now(timezone.utc)
+                except (TypeError, ValueError):
+                    valid = False
+        base_gate = next((item for item in gates if item.gate is GateType.AUTHORIZATION), None)
+        if base_gate is not None and base_gate.state is not GateState.PASS:
+            valid = False
+        gates = [_gate(
+            GateType.AUTHORIZATION,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'ASSET_AUTHORIZATION_REQUEST_VALID' if valid else 'ASSET_AUTHORIZATION_REQUEST_INVALID',
+            'Immutable request parameters and server-derived asset scope satisfy authorization policy.' if valid else 'Asset authorization requires a non-empty rationale, a valid server-derived target, and a valid future expiry when supplied.',
+            missing=[] if valid else ['authorization_reason', 'server_derived_asset_target', 'valid_expires_at'],
+            evidence_refs=list(base_gate.evidence_refs) if base_gate else [],
+        )]
+        return gates, valid
 
     if action_id in _RISK_DISPOSITION_ACTIONS:
         risk_ref = str(payload.get('risk_correlation_id') or '').strip()
@@ -885,7 +950,7 @@ def _execution_context_for_action(
 
 
 _ADAPTERS: dict[str, Callable[..., EntityCapabilityContext]] = {
-    'asset_authorization': _asset_authorization_context,
+    'asset': _asset_context,
     'finding': _finding_context,
     'crown_jewel_objective': _objective_context,
     'campaign': _campaign_context,
@@ -950,6 +1015,8 @@ def build_entity_capability_manifest(
             context=context,
             action_id=contract.action_id,
             parameters=execution_parameters if contract.action_id in {
+                'asset.authorization.approve',
+                'asset.authorization.revoke',
                 'finding.disposition.accept_risk',
                 'finding.disposition.wont_fix',
                 'finding.disposition.duplicate',
