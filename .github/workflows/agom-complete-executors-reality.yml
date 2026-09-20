@@ -10,6 +10,9 @@ on:
       - 'aegis-platform/backend/fastapi_app/contracts/governed_actions.py'
       - 'aegis-platform/backend/fastapi_app/routers/governed_action_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/governed_action_requests.py'
+      - 'aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/asset_authorization.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_asset_authorization.py'
       - 'aegis-platform/backend/fastapi_app/services/governed_action_executor.py'
       - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
       - 'aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py'
@@ -32,6 +35,9 @@ on:
       - 'aegis-platform/backend/fastapi_app/contracts/governed_actions.py'
       - 'aegis-platform/backend/fastapi_app/routers/governed_action_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/governed_action_requests.py'
+      - 'aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/asset_authorization.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_asset_authorization.py'
       - 'aegis-platform/backend/fastapi_app/services/governed_action_executor.py'
       - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
       - 'aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py'
@@ -112,6 +118,9 @@ jobs:
             aegis-platform/backend/fastapi_app/contracts/governed_actions.py \
             aegis-platform/backend/fastapi_app/routers/governed_action_execution.py \
             aegis-platform/backend/fastapi_app/services/governed_action_requests.py \
+            aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py \
+            aegis-platform/backend/fastapi_app/routers/asset_authorization.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_asset_authorization.py \
             aegis-platform/backend/fastapi_app/services/governed_action_executor.py \
             aegis-platform/backend/fastapi_app/services/soc_closure_governance.py \
             aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py \
@@ -139,6 +148,14 @@ jobs:
         run: |
           pytest -q --junitxml=agom-complete-executors-junit.xml \
             fastapi_app/services/test_governed_action_requests.py
+
+      - name: Run request-bound asset authorization Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_governed_asset_authorization.py
 
       - name: Run request-bound false-positive Reality tests
         working-directory: aegis-platform/backend
