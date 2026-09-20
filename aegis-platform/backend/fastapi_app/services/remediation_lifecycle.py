@@ -28,7 +28,7 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     RemediationState.VALIDATING: {RemediationState.NOT_FIXED, RemediationState.VALIDATION_PASSED, RemediationState.CANCELLED, RemediationState.FAILED},
     RemediationState.NOT_FIXED: {RemediationState.REQUESTED, RemediationState.VALIDATING},
     RemediationState.VALIDATION_PASSED: {RemediationState.VERIFIED, RemediationState.REQUESTED, RemediationState.VALIDATING},
-    RemediationState.VERIFIED: {RemediationState.CLOSED, RemediationState.REQUESTED},
+    RemediationState.VERIFIED: {RemediationState.REQUESTED},
     RemediationState.CLOSED: {RemediationState.REQUESTED},
     RemediationState.FAILED: {RemediationState.REQUESTED},
     RemediationState.CANCELLED: {RemediationState.REQUESTED},
@@ -69,6 +69,10 @@ def transition(
 ) -> ValidationRun:
     if to_state not in _ALLOWED_TRANSITIONS:
         raise ValueError(f'Unsupported remediation state: {to_state}')
+    if to_state == RemediationState.CLOSED:
+        raise ValueError(
+            'Remediation closure is governed exclusively by finding.close; generic lifecycle transition cannot close a finding.'
+        )
 
     with transaction.atomic():
         # finding is nullable, so do not combine its relation with SELECT FOR UPDATE.
@@ -113,10 +117,6 @@ def transition(
             RemediationState.VERIFIED,
         } and finding.status == Vulnerability.Status.OPEN:
             finding.status = Vulnerability.Status.IN_PROGRESS
-        elif to_state == RemediationState.CLOSED:
-            finding.status = Vulnerability.Status.FIXED
-            finding.fixed_at = datetime.now(timezone.utc)
-            finding.fixed_by = user
 
         if finding.status != old_status:
             finding.save(update_fields=['status', 'fixed_at', 'fixed_by', 'updated_at'])
@@ -127,9 +127,6 @@ def transition(
                 changed_by=user,
                 reason=f'remediation_state={to_state}; {reason.strip()}'.strip(),
             )
-        elif to_state == RemediationState.CLOSED:
-            finding.save(update_fields=['fixed_at', 'fixed_by', 'updated_at'])
-
         return validation
 
 

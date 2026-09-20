@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 
 from django_project.assets.models import Asset, AssetAuthorization
 from fastapi_app.services.authorization_guard import asset_target
@@ -57,6 +58,74 @@ def _normalize_expiry(value: datetime | str | None) -> datetime | None:
 
 def asset_authorization_version(asset: Asset) -> int:
     return AssetAuthorization.objects.filter(asset=asset).count() + 1
+
+
+def initialize_asset_configuration(configuration: dict | None) -> dict:
+    """Create a new asset configuration without accepting client authority state."""
+    normalized = dict(configuration or {})
+    if 'authorized' in normalized:
+        raise AssetAuthorizationGovernanceError(
+            'Asset configuration authorized is server-owned; use the governed asset authorization workflow.'
+        )
+    normalized['authorized'] = False
+    return normalized
+
+
+def replace_asset_configuration_preserving_authorization(
+    current_configuration: dict | None,
+    replacement: dict | None,
+) -> dict:
+    """Replace mutable asset configuration while preserving the governed authorization projection."""
+    normalized = dict(replacement or {})
+    if 'authorized' in normalized:
+        raise AssetAuthorizationGovernanceError(
+            'Asset configuration authorized is server-owned; use the governed asset authorization workflow.'
+        )
+    normalized['authorized'] = bool(dict(current_configuration or {}).get('authorized', False))
+    return normalized
+
+
+def asset_security_lineage(asset: Asset) -> list[str]:
+    """Return every durable reverse relation that would be severed or deleted."""
+    lineage: set[str] = set()
+    for relation in asset._meta.related_objects:
+        related_model = relation.related_model
+        field = relation.field
+        try:
+            exists = related_model._base_manager.filter(**{field.name: asset}).exists()
+        except (TypeError, ValueError):
+            # A relation we cannot prove empty is treated as durable lineage.
+            exists = True
+        if exists:
+            lineage.add(related_model._meta.label_lower)
+    return sorted(lineage)
+
+
+def delete_asset_if_lineage_free(*, asset_id: str) -> None:
+    """Hard-delete only an unused asset; never sever security/governance history."""
+    with transaction.atomic():
+        asset = (
+            Asset.objects.select_for_update(of=('self',))
+            .filter(pk=asset_id)
+            .first()
+        )
+        if asset is None:
+            raise AssetAuthorizationGovernanceError('Asset was not found for governed deletion.')
+
+        lineage = asset_security_lineage(asset)
+        if lineage:
+            raise AssetAuthorizationGovernanceError(
+                'Asset hard-delete is blocked because durable security/governance lineage exists: '
+                + ', '.join(lineage)
+                + '. Retain or deactivate the asset instead.'
+            )
+
+        try:
+            asset.delete()
+        except ProtectedError as exc:
+            raise AssetAuthorizationGovernanceError(
+                'Asset hard-delete is blocked by protected governance lineage; retain or deactivate the asset instead.'
+            ) from exc
 
 
 def govern_asset_authorization(

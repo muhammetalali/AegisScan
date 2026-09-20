@@ -81,7 +81,7 @@ def test_direct_close_is_forbidden(disposition_fixture):
     assert case.status == InvestigationCase.Status.INVESTIGATING
 
 
-def test_remediated_closure_requires_verified_lineage_and_closes_finding(disposition_fixture):
+def test_remediated_closure_requires_verified_lineage_without_closing_finding(disposition_fixture):
     _client, user, project, _asset, _authorization, _scan, finding, organization, _membership = disposition_fixture
     case, state = _case(user, project, organization, finding)
     action = _action(user, project, organization, finding)
@@ -91,6 +91,7 @@ def test_remediated_closure_requires_verified_lineage_and_closes_finding(disposi
     )
     assert replayed is False
     validation, evidence = _verified_validation(user, finding)
+    before_finding_status = finding.status
 
     result = close_investigation_case(
         case_id=str(case.id), project_id=str(project.id), user_id=str(user.id),
@@ -102,8 +103,8 @@ def test_remediated_closure_requires_verified_lineage_and_closes_finding(disposi
     assert result.closure.decision_action_id == action.action_id
     case.refresh_from_db(); finding.refresh_from_db(); validation.refresh_from_db()
     assert case.status == InvestigationCase.Status.CLOSED
-    assert finding.status == Vulnerability.Status.FIXED
-    assert get_state(validation) == RemediationState.CLOSED
+    assert finding.status == before_finding_status
+    assert get_state(validation) == RemediationState.VERIFIED
     assert verify_case_chain(case_id=str(case.id), project_id=str(project.id), user_id=str(user.id))['valid'] is True
 
     replay = close_investigation_case(

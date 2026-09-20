@@ -12,6 +12,12 @@ from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
 from ..core.dependencies import get_current_user
+from ..services.asset_authorization_governance import (
+    AssetAuthorizationGovernanceError,
+    delete_asset_if_lineage_free,
+    initialize_asset_configuration,
+    replace_asset_configuration_preserving_authorization,
+)
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 
 router = APIRouter()
@@ -80,7 +86,11 @@ def _create_asset(data: AssetCreate, user_id: str):
     if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
     base_slug=slugify(data.name) or 'asset'; slug=base_slug; suffix=2
     while Asset.objects.filter(project=project,slug=slug).exists(): slug=f'{base_slug}-{suffix}'; suffix+=1
-    return Asset.objects.create(project=project,owner_id=user_id,name=data.name,slug=slug,type=data.type,description=data.description,environment=data.environment,criticality=data.criticality,configuration=data.configuration,tags=data.tags)
+    try:
+        configuration = initialize_asset_configuration(data.configuration)
+    except AssetAuthorizationGovernanceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return Asset.objects.create(project=project,owner_id=user_id,name=data.name,slug=slug,type=data.type,description=data.description,environment=data.environment,criticality=data.criticality,configuration=configuration,tags=data.tags)
 
 
 @router.post('/', response_model=AssetResponse, status_code=201)
@@ -101,6 +111,14 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
     if not asset: raise HTTPException(status_code=404,detail='Asset not found')
     data=update.model_dump(exclude_unset=True)
     if 'name' in data: data['slug']=slugify(data['name']) or asset.slug
+    if 'configuration' in data:
+        try:
+            data['configuration'] = replace_asset_configuration_preserving_authorization(
+                asset.configuration,
+                data['configuration'],
+            )
+        except AssetAuthorizationGovernanceError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     for key,value in data.items(): setattr(asset,key,value)
     asset.save(); return asset
 
@@ -118,7 +136,10 @@ async def update_asset(asset_id: str, update: AssetUpdate, user=Depends(get_curr
 def _delete_asset(asset_id: str,user_id: str):
     asset=_get_asset_sync(asset_id,user_id)
     if not asset: raise HTTPException(status_code=404,detail='Asset not found')
-    asset.delete()
+    try:
+        delete_asset_if_lineage_free(asset_id=str(asset.id))
+    except AssetAuthorizationGovernanceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.delete('/{asset_id}')
@@ -190,9 +211,10 @@ async def add_relationship(asset_id: str,target_id: str,relationship_type: str,u
 
 def _normalize_import_row(row: dict[str,object],project_id: str) -> AssetCreate:
     config=dict(row.get('configuration') or {}) if isinstance(row.get('configuration'),dict) else {}
-    for key in ('url','host','ip','domain','cidr','repo_url','path','services','authorized'):
+    if 'authorized' in row or 'authorized' in config:
+        raise ValueError('Asset import cannot set server-owned authorization state; use the governed authorization workflow.')
+    for key in ('url','host','ip','domain','cidr','repo_url','path','services'):
         if key in row and key not in config: config[key]=row[key]
-    if config.get('authorized') is not True: config['authorized']=False
     tags=row.get('tags') if isinstance(row.get('tags'),list) else [x.strip() for x in str(row.get('tags') or '').split(',') if x.strip()]
     name=str(row.get('name') or row.get('target') or row.get('url') or row.get('host') or row.get('domain') or '').strip()
     asset_type=str(row.get('type') or '').strip();
@@ -236,7 +258,8 @@ def _bulk_create_assets(items: List[AssetCreate], user_id: str):
         if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
         base_slug=slugify(item.name) or 'asset'; slug=base_slug; suffix=2
         while Asset.objects.filter(project=project,slug=slug).exists(): slug=f'{base_slug}-{suffix}'; suffix+=1
-        created.append(Asset(project=project,owner_id=user_id,name=item.name,slug=slug,type=item.type,description=item.description,environment=item.environment,criticality=item.criticality,configuration=item.configuration,tags=item.tags))
+        configuration = initialize_asset_configuration(item.configuration)
+        created.append(Asset(project=project,owner_id=user_id,name=item.name,slug=slug,type=item.type,description=item.description,environment=item.environment,criticality=item.criticality,configuration=configuration,tags=item.tags))
     Asset.objects.bulk_create(created)
     return created
 
