@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from django_project.assets.models import AssetAuthorization
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.audit.models import AuditLog
 from django_project.users.models import User
 from enterprise.governed_action_models import GovernedActionExecution, GovernedActionRequest
