@@ -53,6 +53,16 @@ def _sha(value: Any) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
+def integration_configuration_fingerprint(integration: ExternalIntegration) -> str:
+    return _sha({
+        'kind': integration.kind,
+        'base_url': integration.base_url,
+        'secret_ref': integration.secret_ref,
+        'config': dict(integration.config or {}),
+        'enabled': bool(integration.enabled),
+    })
+
+
 def _sha256(value: str, *, field: str) -> str:
     normalized = str(value or '').strip().lower()
     if not _SHA256_RE.fullmatch(normalized):
@@ -166,10 +176,31 @@ def record_integration_acceptance_test(
             actor_id=str(actor_id),
             integration_id=str(integration_id),
         )
+        existing = IntegrationAcceptanceTest.objects.filter(
+            integration=integration,
+            project_id=project_id,
+            source_ref=normalized_source,
+        ).first()
+        if existing is not None:
+            exact_replay = (
+                existing.test_type == normalized_type
+                and existing.outcome == normalized_outcome
+                and existing.evidence_sha256 == evidence_hash
+                and dict(existing.evidence_summary or {}) == summary
+                and str(existing.tested_by_id) == str(actor_id)
+            )
+            if not exact_replay:
+                raise IntegrationAcceptanceConflict(
+                    'The same integration acceptance test source_ref is already bound to different immutable evidence.'
+                )
+            return IntegrationAcceptanceTestResult(existing, True)
+
+        configuration_fingerprint = integration_configuration_fingerprint(integration)
         fingerprint = _sha({
             'organization_id': str(organization.id),
             'project_id': str(project_id),
             'integration_id': str(integration.id),
+            'configuration_fingerprint': configuration_fingerprint,
             'test_type': normalized_type,
             'outcome': normalized_outcome,
             'source_ref': normalized_source,
@@ -177,17 +208,6 @@ def record_integration_acceptance_test(
             'evidence_summary': summary,
             'tested_by_id': str(actor_id),
         })
-        existing = IntegrationAcceptanceTest.objects.filter(
-            integration=integration,
-            project_id=project_id,
-            source_ref=normalized_source,
-        ).first()
-        if existing is not None:
-            if existing.test_fingerprint != fingerprint:
-                raise IntegrationAcceptanceConflict(
-                    'The same integration acceptance test source_ref is already bound to different immutable evidence.'
-                )
-            return IntegrationAcceptanceTestResult(existing, True)
         row = IntegrationAcceptanceTest.objects.create(
             organization=organization,
             project_id=project_id,
@@ -197,6 +217,7 @@ def record_integration_acceptance_test(
             source_ref=normalized_source,
             evidence_sha256=evidence_hash,
             evidence_summary=summary,
+            configuration_fingerprint=configuration_fingerprint,
             test_fingerprint=fingerprint,
             tested_by_id=actor_id,
         )
@@ -257,6 +278,10 @@ def accept_integration_live(
             raise IntegrationAcceptanceConflict('Live acceptance must bind the latest immutable integration acceptance test.')
         if latest_test.outcome != IntegrationAcceptanceTest.Outcome.PASSED:
             raise IntegrationAcceptanceError('The latest integration acceptance test did not pass.')
+        if latest_test.configuration_fingerprint != integration_configuration_fingerprint(integration):
+            raise IntegrationAcceptanceConflict(
+                'The integration configuration changed after its latest acceptance test; run a new test.'
+            )
 
         if evidence_hash != latest_test.evidence_sha256:
             raise IntegrationAcceptanceError(
