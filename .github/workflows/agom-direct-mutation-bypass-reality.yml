@@ -1,0 +1,119 @@
+name: AGOM Direct Mutation Bypass Reality
+
+on:
+  push:
+    branches:
+      - chatgpt-a/agom-direct-mutation-bypass-audit-2026-09-20
+    paths:
+      - 'aegis-platform/backend/**/*.py'
+      - 'scripts/ci/agom_direct_mutation_guard.py'
+      - 'tests/test_agom_direct_mutation_guard.py'
+      - '.github/workflows/agom-direct-mutation-bypass-reality.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/**/*.py'
+      - 'scripts/ci/agom_direct_mutation_guard.py'
+      - 'tests/test_agom_direct_mutation_guard.py'
+      - '.github/workflows/agom-direct-mutation-bypass-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-direct-mutation-bypass-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  direct-mutation-bypass:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-a4-direct-mutation-secret-0123456789abcdef
+      JWT_SECRET_KEY: ci-a4-direct-mutation-jwt-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-a4-direct-mutation-evidence-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-a4-direct-mutation-fingerprint-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target,aegis-scan-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Run AST direct mutation guard
+        run: python scripts/ci/agom_direct_mutation_guard.py | tee /tmp/a4-direct-mutation-guard.txt
+
+      - name: Run guard unit tests
+        run: pytest -q tests/test_agom_direct_mutation_guard.py | tee /tmp/a4-guard-tests.txt
+
+      - name: Compile A4 governed mutation plane
+        run: |
+          python -m py_compile             scripts/ci/agom_direct_mutation_guard.py             aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py             aegis-platform/backend/fastapi_app/routers/assets.py             aegis-platform/backend/fastapi_app/services/remediation_lifecycle.py             aegis-platform/backend/fastapi_app/routers/remediation.py             aegis-platform/backend/fastapi_app/services/soc_closure_governance.py
+
+      - name: Verify Django schema and migration drift
+        working-directory: aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Run asset authorization bypass regressions
+        working-directory: aegis-platform/backend
+        run: pytest -q fastapi_app/services/test_governed_asset_authorization.py | tee /tmp/a4-asset-tests.txt
+
+      - name: Run remediation ownership regressions
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_remediation_lifecycle.py             fastapi_app/tests/test_remediation_workflow.py             fastapi_app/services/test_finding_governed_actions.py             | tee /tmp/a4-remediation-tests.txt
+
+      - name: Run investigation closure isolation regressions
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_soc_closure_governance.py             fastapi_app/services/test_governed_investigation_closure.py             | tee /tmp/a4-investigation-tests.txt
+
+      - name: Retain A4 Reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-direct-mutation-bypass-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            /tmp/a4-direct-mutation-guard.txt
+            /tmp/a4-guard-tests.txt
+            /tmp/a4-asset-tests.txt
+            /tmp/a4-remediation-tests.txt
+            /tmp/a4-investigation-tests.txt

@@ -135,6 +135,8 @@ def test_remediated_investigation_closure_is_request_bound_and_evidence_qualifie
         finding_present=False,
         remediation_state='verified',
     )
+    finding.refresh_from_db()
+    before_finding_status = finding.status
     approver = _closure_approver(owner=owner, project=project, organization=organization, marker='remediated')
     parameters = {
         'finding_id': str(finding.id),
@@ -164,7 +166,11 @@ def test_remediated_investigation_closure_is_request_bound_and_evidence_qualifie
     )
 
     case.refresh_from_db()
+    finding.refresh_from_db()
+    validation.refresh_from_db()
     assert case.status == 'closed'
+    assert finding.status == before_finding_status
+    assert validation.result['remediation_state'] == 'verified'
     assert result.execution.request_id == request.id
     assert result.execution.result_payload['closure_type'] == 'remediated'
     assert result.execution.result_payload['evidence_id'] == str(evidence.id)
