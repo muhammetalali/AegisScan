@@ -6,6 +6,12 @@ on:
       - chatgpt-a/complete-governed-action-executors-2026-09-20
     paths:
       - 'aegis-platform/backend/enterprise/governed_action_models.py'
+      - 'aegis-platform/backend/enterprise/detection_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0035_detection_publication_delivery.py'
+      - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/routers/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_detection_publication.py'
       - 'aegis-platform/backend/enterprise/models.py'
       - 'aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py'
       - 'aegis-platform/backend/enterprise/tasks.py'
@@ -37,6 +43,12 @@ on:
     branches: [main]
     paths:
       - 'aegis-platform/backend/enterprise/governed_action_models.py'
+      - 'aegis-platform/backend/enterprise/detection_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0035_detection_publication_delivery.py'
+      - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/routers/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_detection_publication.py'
       - 'aegis-platform/backend/enterprise/models.py'
       - 'aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py'
       - 'aegis-platform/backend/enterprise/tasks.py'
@@ -126,6 +138,12 @@ jobs:
         run: |
           python -m py_compile \
             aegis-platform/backend/enterprise/governed_action_models.py \
+            aegis-platform/backend/enterprise/detection_models.py \
+            aegis-platform/backend/enterprise/migrations/0035_detection_publication_delivery.py \
+            aegis-platform/backend/fastapi_app/services/detection_engineering.py \
+            aegis-platform/backend/fastapi_app/routers/detection_engineering.py \
+            aegis-platform/backend/fastapi_app/services/test_detection_engineering.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_detection_publication.py \
             aegis-platform/backend/enterprise/models.py \
             aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py \
             aegis-platform/backend/enterprise/tasks.py \
@@ -208,6 +226,16 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
           pytest -q fastapi_app/services/test_governed_integration_live_acceptance.py
+
+      - name: Run request-bound detection publication Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_governed_detection_publication.py \
+            fastapi_app/services/test_detection_engineering.py
 
       - name: Run existing AGOM executor regressions
         working-directory: aegis-platform/backend
