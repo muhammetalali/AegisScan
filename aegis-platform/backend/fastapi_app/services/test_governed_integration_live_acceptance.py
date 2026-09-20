@@ -342,3 +342,28 @@ def test_configuration_drift_invalidates_test_and_pending_acceptance_request(dis
     )
     assert refreshed.projection.lifecycle=='tested'
     assert new_test.configuration_fingerprint!=test.configuration_fingerprint
+
+
+def test_disable_reenable_does_not_resurrect_old_acceptance_test(disposition_fixture):
+    _client,owner,project,_asset,_authorization,_scan,_finding,organization,membership=disposition_fixture
+    _ownerize(membership)
+    integration=_integration(organization,owner,'toggle')
+    test=_test(integration,project,owner,'toggle')
+    original_fingerprint=test.configuration_fingerprint
+
+    integration.enabled=False
+    integration.save(update_fields=['enabled','updated_at'])
+    integration.enabled=True
+    integration.save(update_fields=['enabled','updated_at'])
+
+    manifest=build_entity_capability_manifest(
+        project_id=str(project.id),user_id=str(owner.id),entity_type='integration',entity_id=str(integration.id),
+    )
+    assert manifest.projection.lifecycle=='configuration_changed'
+
+    new_test=record_integration_acceptance_test(
+        integration_id=str(integration.id),project_id=str(project.id),actor_id=str(owner.id),
+        outcome='passed',source_ref='reality:toggle-new',evidence_sha256='8'*64,
+        evidence_summary={'http_status':202},test_type='live_transport_probe',
+    ).test
+    assert new_test.configuration_fingerprint!=original_fingerprint
