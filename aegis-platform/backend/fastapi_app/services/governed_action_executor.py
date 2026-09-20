@@ -23,6 +23,11 @@ from fastapi_app.services.finding_disposition import govern_finding_disposition
 from fastapi_app.services.finding_confirmation import confirm_finding
 from fastapi_app.services.evidence_qualification import EvidenceQualificationPolicy, qualify_evidence
 from fastapi_app.services.governed_capability_manifest import build_governed_capability_manifest
+from fastapi_app.services.integration_live_acceptance import (
+    IntegrationAcceptanceConflict,
+    IntegrationAcceptanceError,
+    accept_integration_live,
+)
 from fastapi_app.services.governed_temporal_policy import (
     TemporalEnvelope,
     evaluate_governed_temporal_policy,
@@ -67,6 +72,7 @@ _IMPLEMENTED_ACTIONS = {
     'finding.disposition.duplicate',
     'finding.close',
     'investigation.close',
+    'integration.live_accept',
 }
 
 _REQUEST_REQUIRED_ACTIONS = {
@@ -77,6 +83,7 @@ _REQUEST_REQUIRED_ACTIONS = {
     'finding.disposition.wont_fix',
     'finding.disposition.duplicate',
     'investigation.close',
+    'integration.live_accept',
 }
 
 
@@ -207,6 +214,31 @@ def _temporal_envelope_for_action(
             recurrence={
                 'source': 'asset_authorization_request',
                 'asset_id': str(entity_id),
+            },
+        )
+
+    if action_id == 'integration.live_accept':
+        review_raw = parameters.get('review_at')
+        expires_raw = parameters.get('expires_at')
+        review_at = review_raw if isinstance(review_raw, datetime) else None
+        expires_at = expires_raw if isinstance(expires_raw, datetime) else None
+        if review_at is None and review_raw:
+            try:
+                review_at = datetime.fromisoformat(str(review_raw).replace('Z', '+00:00'))
+            except ValueError:
+                review_at = None
+        if expires_at is None and expires_raw:
+            try:
+                expires_at = datetime.fromisoformat(str(expires_raw).replace('Z', '+00:00'))
+            except ValueError:
+                expires_at = None
+        return TemporalEnvelope(
+            review_at=review_at,
+            expires_at=expires_at,
+            recurrence={
+                'source': 'integration_live_acceptance',
+                'integration_id': str(entity_id),
+                'acceptance_test_id': str(parameters.get('acceptance_test_id') or ''),
             },
         )
 
@@ -821,6 +853,52 @@ def _execute_investigation_closure(
     }
 
 
+def _execute_integration_live_acceptance(
+    *,
+    project_id: str,
+    actor_id: str,
+    entity_id: str,
+    expected_version: int,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    _require_parameters(
+        parameters,
+        required={'acceptance_test_id', 'vendor_ack', 'acceptance_evidence_sha256', 'review_at'},
+        allowed={'acceptance_test_id', 'vendor_ack', 'acceptance_evidence_sha256', 'review_at', 'expires_at'},
+    )
+    try:
+        result = accept_integration_live(
+            integration_id=entity_id,
+            project_id=project_id,
+            actor_id=actor_id,
+            expected_version=expected_version,
+            acceptance_test_id=str(parameters['acceptance_test_id']),
+            vendor_ack=str(parameters['vendor_ack']),
+            acceptance_evidence_sha256=str(parameters['acceptance_evidence_sha256']),
+            review_at=parameters['review_at'],
+            expires_at=parameters.get('expires_at'),
+        )
+    except IntegrationAcceptanceConflict as exc:
+        raise GovernedActionConflict(str(exc)) from exc
+    except IntegrationAcceptanceError as exc:
+        raise GovernedActionError(str(exc)) from exc
+    acceptance = result.acceptance
+    return {
+        'id': str(acceptance.id),
+        'acceptance_id': str(acceptance.id),
+        'acceptance_test_id': str(acceptance.acceptance_test_id),
+        'acceptance_test_fingerprint': acceptance.acceptance_test.test_fingerprint,
+        'vendor_ack': acceptance.vendor_ack,
+        'acceptance_evidence_sha256': acceptance.acceptance_evidence_sha256,
+        'review_at': acceptance.review_at.isoformat(),
+        'expires_at': acceptance.expires_at.isoformat() if acceptance.expires_at else None,
+        'supersedes_id': str(acceptance.supersedes_id) if acceptance.supersedes_id else None,
+        'acceptance_fingerprint': acceptance.acceptance_fingerprint,
+        'version': result.generation,
+        'domain_replayed': False,
+    }
+
+
 def _execute_finding_closure(
     *,
     project_id: str,
@@ -859,6 +937,7 @@ _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     'finding.disposition.duplicate': _execute_duplicate,
     'finding.close': _execute_finding_closure,
     'investigation.close': _execute_investigation_closure,
+    'integration.live_accept': _execute_integration_live_acceptance,
 }
 
 
