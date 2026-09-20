@@ -31,13 +31,13 @@ from fastapi_app.services.soc_closure_governance import close_investigation_case
 
 
 _INVESTIGATION_REMEDIATION_EVIDENCE_POLICY = EvidenceQualificationPolicy(
-    policy_version='investigation-remediation-evidence.v1',
+    policy_version='investigation-remediation-evidence.v2',
     min_count=1,
-    evidence_types=('validation', 'validation_output'),
+    evidence_types=('validation_output',),
     require_subject=True,
-    require_target=False,
-    require_authorization=False,
-    require_execution=False,
+    require_target=True,
+    require_authorization=True,
+    require_execution=True,
     require_producer=True,
 )
 
@@ -334,13 +334,29 @@ def _investigation_closure_qualification(
     if not finding_id or not validation_id:
         return None
     validation = (
-        ValidationRun.objects.select_related('finding')
+        ValidationRun.objects.select_related('finding', 'authorization_decision')
         .filter(pk=validation_id, finding_id=finding_id, finding__project_id=project_id)
         .first()
     )
     if validation is None:
         return None
+    latest = (
+        ValidationRun.objects.filter(finding_id=finding_id)
+        .order_by('-created_at', '-id')
+        .values_list('id', flat=True)
+        .first()
+    )
+    if latest is None or str(latest) != str(validation.id):
+        raise GovernedActionBlocked(
+            'LATEST_REMEDIATION_VALIDATION_REQUIRED',
+            'Investigation closure must bind the latest validation for the governed finding.',
+            ['latest_remediation_validation'],
+        )
     result = validation.result if isinstance(validation.result, dict) else {}
+    if validation.status != ValidationRun.Status.COMPLETED or validation.authorized is not True:
+        return None
+    if result.get('finding_present') is not False:
+        return None
     evidence_id = str(result.get('evidence_id') or '').strip()
     if not evidence_id:
         return None
@@ -349,6 +365,9 @@ def _investigation_closure_qualification(
         evidence_ids=[evidence_id],
         subject_type='finding',
         subject_id=finding_id,
+        target=str(validation.target_value or ''),
+        authorization_ref=str(validation.authorization_decision_id or ''),
+        execution_ref=str(validation.id),
         requested_by_id=actor_id,
         policy=_INVESTIGATION_REMEDIATION_EVIDENCE_POLICY,
         evaluated_at=evaluated_at,
