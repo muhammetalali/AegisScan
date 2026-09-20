@@ -22,6 +22,7 @@ from fastapi_app.services.finding_closure import close_finding
 from fastapi_app.services.finding_disposition import govern_finding_disposition
 from fastapi_app.services.finding_confirmation import confirm_finding
 from fastapi_app.services.evidence_qualification import EvidenceQualificationPolicy, qualify_evidence
+from fastapi_app.services.detection_engineering import DetectionEngineeringError, queue_publication_delivery
 from fastapi_app.services.governed_capability_manifest import build_governed_capability_manifest
 from fastapi_app.services.integration_live_acceptance import (
     IntegrationAcceptanceConflict,
@@ -65,6 +66,7 @@ _IMPLEMENTED_ACTIONS = {
     'asset.authorization.revoke',
     'campaign.objective.assess',
     'campaign.complete',
+    'detection.publish',
     'finding.confirm',
     'finding.false_positive',
     'finding.disposition.accept_risk',
@@ -78,6 +80,7 @@ _IMPLEMENTED_ACTIONS = {
 _REQUEST_REQUIRED_ACTIONS = {
     'asset.authorization.approve',
     'asset.authorization.revoke',
+    'detection.publish',
     'finding.false_positive',
     'finding.disposition.accept_risk',
     'finding.disposition.wont_fix',
@@ -853,6 +856,47 @@ def _execute_investigation_closure(
     }
 
 
+def _execute_detection_publication(
+    *,
+    project_id: str,
+    actor_id: str,
+    entity_id: str,
+    expected_version: int,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    _require_parameters(
+        parameters,
+        required={'integration_id', '_agom_request_id', '_agom_correlation_id'},
+        allowed={'integration_id', '_agom_request_id', '_agom_correlation_id'},
+    )
+    try:
+        result = queue_publication_delivery(
+            revision_id=entity_id,
+            integration_id=str(parameters['integration_id']),
+            project_id=project_id,
+            user_id=actor_id,
+            expected_version=expected_version,
+            governed_request_id=str(parameters['_agom_request_id']),
+            correlation_id=str(parameters['_agom_correlation_id']),
+        )
+    except PermissionError:
+        raise
+    except DetectionEngineeringError as exc:
+        raise GovernedActionError(str(exc)) from exc
+    delivery = result.delivery
+    return {
+        'id': str(delivery.id),
+        'delivery_id': str(delivery.id),
+        'delivery_status': delivery.status,
+        'integration_id': str(delivery.integration_id),
+        'live_acceptance_id': str(delivery.live_acceptance_id),
+        'package_sha256': delivery.package_sha256,
+        'configuration_fingerprint': delivery.integration_configuration_fingerprint,
+        'version': expected_version + (0 if result.replayed else 1),
+        'domain_replayed': result.replayed,
+    }
+
+
 def _execute_integration_live_acceptance(
     *,
     project_id: str,
@@ -930,6 +974,7 @@ _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     'asset.authorization.revoke': _execute_asset_authorization_revoke,
     'campaign.objective.assess': _execute_objective_assessment,
     'campaign.complete': _execute_campaign_completion,
+    'detection.publish': _execute_detection_publication,
     'finding.confirm': _execute_finding_confirmation,
     'finding.false_positive': _execute_finding_false_positive,
     'finding.disposition.accept_risk': _execute_accept_risk,
@@ -1224,9 +1269,13 @@ def execute_governed_action(
         )
         dispatcher = _DISPATCH[normalized_action]
         dispatch_parameters = payload
-        if normalized_action in {'asset.authorization.approve', 'asset.authorization.revoke'}:
+        if normalized_action in {
+            'asset.authorization.approve',
+            'asset.authorization.revoke',
+            'detection.publish',
+        }:
             if governed_request is None:
-                raise GovernedActionError('Asset authorization execution requires an immutable governed request.')
+                raise GovernedActionError('This governed action requires an immutable governed request.')
             dispatch_parameters = {
                 **payload,
                 '_agom_request_id': str(governed_request.id),
