@@ -66,7 +66,7 @@ def _parameters(test):
     return {
         'acceptance_test_id':str(test.id),
         'vendor_ack':'Vendor acknowledged the tested live transport.',
-        'acceptance_evidence_sha256':'c'*64,
+        'acceptance_evidence_sha256':test.evidence_sha256,
         'review_at':review.isoformat(),
         'expires_at':(review+timedelta(days=30)).isoformat(),
     }
@@ -171,7 +171,7 @@ def test_expired_acceptance_requires_a_new_passed_test(disposition_fixture,monke
         integration_id=str(integration.id),project_id=str(project.id),actor_id=str(owner.id),
         expected_version=integration_acceptance_generation(integration_id=str(integration.id),project_id=str(project.id)),
         acceptance_test_id=str(test.id),vendor_ack='Vendor acknowledged current transport acceptance.',
-        acceptance_evidence_sha256='d'*64,
+        acceptance_evidence_sha256=test.evidence_sha256,
         review_at=datetime.now(timezone.utc)+timedelta(days=7),
         expires_at=datetime.now(timezone.utc)+timedelta(days=14),
     )
@@ -188,7 +188,7 @@ def test_expired_acceptance_requires_a_new_passed_test(disposition_fixture,monke
             integration_id=str(integration.id),project_id=str(project.id),actor_id=str(owner.id),
             expected_version=integration_acceptance_generation(integration_id=str(integration.id),project_id=str(project.id)),
             acceptance_test_id=str(test.id),vendor_ack='Vendor acknowledged repeated transport acceptance.',
-            acceptance_evidence_sha256='e'*64,
+            acceptance_evidence_sha256=test.evidence_sha256,
             review_at=datetime.now(timezone.utc)+timedelta(days=30),
             expires_at=datetime.now(timezone.utc)+timedelta(days=60),
         )
@@ -286,3 +286,18 @@ def test_transport_probe_rejects_cross_tenant_scope_before_delivery(disposition_
         result.get(propagate=True)
     assert delivered==[]
     assert not IntegrationAcceptanceTest.objects.filter(integration=integration).exists()
+
+
+def test_live_acceptance_rejects_unbound_evidence_hash(disposition_fixture):
+    _client,owner,project,_asset,_authorization,_scan,_finding,organization,membership=disposition_fixture
+    _ownerize(membership)
+    integration=_integration(organization,owner,'evidence-mismatch')
+    test=_test(integration,project,owner,'evidence-mismatch')
+    proposer=_proposer(project,organization,'evidence-mismatch')
+    approver=_approver(owner,project,organization,'evidence-mismatch')
+    parameters=_parameters(test)
+    parameters['acceptance_evidence_sha256']='f'*64
+    request=_request(project,integration,proposer,parameters,'evidence-mismatch')
+    with pytest.raises(GovernedActionBlocked):
+        _execute(project,integration,approver,request,parameters,'evidence-mismatch')
+    assert not IntegrationLiveAcceptance.objects.filter(integration=integration).exists()
