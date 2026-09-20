@@ -99,7 +99,7 @@ jobs:
           import os
           import subprocess
 
-          allowed = {
+          oast_owned = {
               '.github/workflows/governed-oast-runtime-reality.yml',
               '.github/workflows/wstg-runtime-technical-reality.yml',
               'aegis-platform/backend/django_project/evidence/models.py',
@@ -114,6 +114,21 @@ jobs:
               'aegis-platform/backend/scripts/oast_dns_collector.py',
               'aegis-platform/backend/scripts/governed_oast_reality.py',
           }
+          scheduled_successor = {
+              '.github/workflows/governed-oast-runtime-reality.yml',
+              '.github/workflows/scheduled-scan-canonical-reality.yml',
+              'aegis-platform/backend/django_project/projects/models.py',
+              'aegis-platform/backend/django_project/projects/migrations/0003_governed_scheduled_scan.py',
+              'aegis-platform/backend/fastapi_app/celery_app.py',
+              'aegis-platform/backend/fastapi_app/main.py',
+              'aegis-platform/backend/fastapi_app/routers/scheduled_scans.py',
+              'aegis-platform/backend/fastapi_app/services/scheduled_execution.py',
+              'aegis-platform/backend/fastapi_app/services/test_scheduled_execution.py',
+              'aegis-platform/backend/fastapi_app/tasks/scheduled_scans.py',
+              'aegis-platform/backend/requirements.txt',
+              'aegis-platform/backend/scripts/scheduled_scan_canonical_reality.py',
+          }
+          allowed = oast_owned | scheduled_successor
           base = os.environ.get('BASE_SHA', '').strip()
           if not base or set(base) == {'0'}:
               raise SystemExit('Governed OAST lockset requires a concrete base SHA')
