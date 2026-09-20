@@ -13,8 +13,13 @@ from fastapi_app.core.dependencies import get_current_user
 from fastapi_app.services.detection_engineering import (
     DetectionEngineeringError,
     create_revision,
-    publish_revision,
     validate_revision,
+)
+from fastapi_app.services.governed_action_executor import (
+    GovernedActionBlocked,
+    GovernedActionConflict,
+    GovernedActionError,
+    execute_governed_action,
 )
 
 router = APIRouter()
@@ -54,7 +59,10 @@ class DetectionValidationCreate(StrictModel):
 
 
 class DetectionPublicationCreate(StrictModel):
-    integration_id: UUID
+    integration_id: int = Field(ge=1)
+    request_id: UUID
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=128)
 
 
 def _uid(user: dict) -> str:
@@ -107,21 +115,44 @@ async def validate_detection_revision(project_id: UUID, revision_id: UUID, body:
     }
 
 
-@router.post('/projects/{project_id}/revisions/{revision_id}/publish', status_code=201)
+@router.post('/projects/{project_id}/revisions/{revision_id}/publish', status_code=202)
 async def publish_detection_revision(project_id: UUID, revision_id: UUID, body: DetectionPublicationCreate, user=Depends(get_current_user)):
     try:
-        result = await sync_to_async(publish_revision)(
-            revision_id=str(revision_id), integration_id=str(body.integration_id),
-            project_id=str(project_id), user_id=_uid(user),
+        result = await sync_to_async(execute_governed_action)(
+            action_id='detection.publish',
+            project_id=str(project_id),
+            actor_id=_uid(user),
+            entity_type='detection_revision',
+            entity_id=str(revision_id),
+            expected_version=body.expected_version,
+            idempotency_key=body.idempotency_key,
+            parameters={'integration_id': body.integration_id},
+            request_id=str(body.request_id),
         )
-    except (DetectionEngineeringError, PermissionError) as exc:
-        raise _translate(exc) from exc
-    item = result.publication
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except GovernedActionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GovernedActionBlocked as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                'reason_code': exc.reason_code,
+                'reason': exc.reason,
+                'missing_requirements': exc.missing_requirements,
+            },
+        ) from exc
+    except (GovernedActionError, DetectionEngineeringError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    payload = dict(result.execution.result_payload or {})
     return {
-        'publication_id': str(item.id), 'revision_id': str(item.revision_id),
-        'integration_id': str(item.integration_id), 'provider': item.provider,
-        'package_sha256': item.package_sha256, 'response_sha256': item.response_sha256,
-        'transport_status': item.transport_status, 'replayed': result.replayed,
+        'delivery_id': payload.get('delivery_id'),
+        'delivery_status': payload.get('delivery_status'),
+        'revision_id': str(revision_id),
+        'integration_id': payload.get('integration_id'),
+        'live_acceptance_id': payload.get('live_acceptance_id'),
+        'package_sha256': payload.get('package_sha256'),
+        'replayed': result.replayed,
     }
 
 
