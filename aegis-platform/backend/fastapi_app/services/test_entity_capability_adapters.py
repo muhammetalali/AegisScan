@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -21,6 +21,11 @@ from fastapi_app.services.entity_capability_adapters import (
     supported_entity_types,
 )
 from fastapi_app.services.finding_disposition import govern_finding_disposition
+from fastapi_app.services.integration_live_acceptance import (
+    accept_integration_live,
+    integration_acceptance_generation,
+    record_integration_acceptance_test,
+)
 from fastapi_app.services.governed_operations import get_action_contract
 from fastapi_app.services.governed_responsibility_authority import grant_responsibility, revoke_responsibility
 from fastapi_app.services.test_assurance_obligation_governance import _schedule
@@ -231,7 +236,7 @@ def test_campaign_objective_enables_but_campaign_completion_enforces_sod(disposi
     assert 'lead_must_not_be_sole_assessor_for_all_objectives' in complete.missing_requirements
 
 
-def test_detection_publish_requires_passed_validation_and_live_siem_target(detection_fixture):
+def test_detection_publish_requires_passed_validation_and_current_live_siem_target(detection_fixture):
     _client, user, project, finding, evidence, organization, membership = detection_fixture
     _owner_role(membership)
     revision = _revision(user, project, finding, evidence).revision
@@ -239,16 +244,42 @@ def test_detection_publish_requires_passed_validation_and_live_siem_target(detec
         revision_id=str(revision.id), project_id=str(project.id), user_id=str(user.id),
         telemetry=_telemetry(), minimum_matches=1,
     )
-    ExternalIntegration.objects.create(
+    integration = ExternalIntegration.objects.create(
         organization=organization, kind=ExternalIntegration.Kind.ELASTIC, name='Capability Elastic',
         base_url='http://127.0.0.1:9', config={'index': 'detections'}, enabled=True, created_by=user,
+    )
+    acceptance_test = record_integration_acceptance_test(
+        integration_id=str(integration.id), project_id=str(project.id), actor_id=str(user.id),
+        outcome='passed', source_ref='entity-cap-detection-live',
+        evidence_sha256='c' * 64, evidence_summary={'http_status': 201},
+        test_type='live_transport_probe',
+    ).test
+    accept_integration_live(
+        integration_id=str(integration.id), project_id=str(project.id), actor_id=str(user.id),
+        expected_version=integration_acceptance_generation(
+            integration_id=str(integration.id), project_id=str(project.id),
+        ),
+        acceptance_test_id=str(acceptance_test.id),
+        vendor_ack='Capability test connector live acceptance.',
+        acceptance_evidence_sha256=acceptance_test.evidence_sha256,
+        review_at=datetime.now(timezone.utc) + timedelta(days=30),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=60),
     )
     _grant(
         issuer=user, organization=organization, membership=membership, project=project,
         responsibility='detection_publisher', key='entity-cap-detection-publisher',
     )
-    manifest = build_entity_capability_manifest(
+    plain = build_entity_capability_manifest(
         project_id=str(project.id), user_id=str(user.id), entity_type='detection_revision', entity_id=str(revision.id),
+    )
+    plain_publish = _action(plain, 'detection.publish')
+    assert plain_publish.mode is ActionMode.BLOCKED
+    assert plain_publish.reason_code == 'SOD_VIOLATION'
+
+    manifest = build_entity_capability_manifest(
+        project_id=str(project.id), user_id=str(user.id), entity_type='detection_revision',
+        entity_id=str(revision.id), request_proposer_id='independent-proposer',
+        execution_parameters={'integration_id': integration.id},
     )
     publish = _action(manifest, 'detection.publish')
     assert publish.mode is ActionMode.ENABLED
