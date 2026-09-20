@@ -39,6 +39,14 @@ def _remediation_proof(*, finding_id: str, validation_id: str, project_id: str, 
     validation = ValidationRun.objects.select_for_update().filter(pk=validation_id, finding_id=finding_id).first()
     if validation is None:
         raise ClosureGovernanceError('Validation run does not belong to the closure finding.')
+    latest_validation_id = (
+        ValidationRun.objects.filter(finding_id=finding_id)
+        .order_by('-created_at', '-id')
+        .values_list('id', flat=True)
+        .first()
+    )
+    if latest_validation_id is None or str(latest_validation_id) != str(validation.id):
+        raise ClosureGovernanceError('Remediated closure requires the latest validation run for the finding.')
     if str(validation.finding.project_id) != str(project_id):
         raise ClosureGovernanceError('Validation run is outside the investigation project scope.')
     if validation.status != ValidationRun.Status.COMPLETED:

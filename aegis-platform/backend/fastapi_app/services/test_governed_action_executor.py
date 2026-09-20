@@ -17,14 +17,25 @@ from enterprise.models import OrganizationMembership
 from fastapi_app.services.governed_action_executor import (
     GovernedActionBlocked,
     GovernedActionConflict,
+    _AUTOMATIC_ONLY_ACTIONS,
+    _DISPATCH,
+    _IMPLEMENTED_ACTIONS,
     execute_governed_action,
 )
+from fastapi_app.services.governed_operations import list_action_contracts
 from fastapi_app.services.governed_responsibility_authority import grant_responsibility
 from fastapi_app.services.test_campaign_objective_assurance import _setup
 from fastapi_app.services.test_finding_disposition import disposition_fixture
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+def test_every_action_contract_has_authoritative_manual_executor_or_explicit_automatic_owner():
+    contract_actions = {item.action_id for item in list_action_contracts()}
+    assert set(_DISPATCH) == _IMPLEMENTED_ACTIONS
+    assert contract_actions == (_IMPLEMENTED_ACTIONS | _AUTOMATIC_ONLY_ACTIONS)
+    assert _AUTOMATIC_ONLY_ACTIONS == {'assurance.obligation.satisfy'}
 
 
 def _grant(*, owner, project, organization, membership, responsibility: str, key: str):

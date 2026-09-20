@@ -16,10 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.evidence.models import Evidence, FindingConfirmation, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityNote
+from ..contracts.governed_actions import GovernedActionRequestView
 from ..core.dependencies import get_current_user
 from .governed_action_execution import translate_governed_action_error
 from ..services.finding_confirmation import list_confirmations
 from ..services.governed_action_executor import execute_governed_action
+from ..services.governed_action_requests import create_governed_action_request, governed_action_request_view
 from ..services.remediation_lifecycle import RemediationState, get_state, verify_validation
 
 router = APIRouter()
@@ -269,7 +271,7 @@ async def get_evidences(vuln_id: UUID, user=Depends(get_current_user)):
     return [{'id': str(e.id), 'scan_id': str(e.scan_id) if e.scan_id else None, 'asset_id': str(e.asset_id) if e.asset_id else None, 'finding_id': str(e.finding_id) if e.finding_id else None, 'source': e.source, 'evidence_type': e.evidence_type, 'sha256': e.sha256, 'metadata': e.metadata, 'collected_at': e.collected_at.astimezone(timezone.utc).isoformat()} for e in evidences]
 
 
-@router.post('/{vuln_id}/confirmations', response_model=FindingConfirmationResponse, status_code=201)
+@router.post('/{vuln_id}/confirmations', response_model=FindingConfirmationResponse | GovernedActionRequestView, status_code=201)
 async def create_finding_confirmation(
     vuln_id: UUID,
     body: FindingConfirmationCreate,
@@ -281,14 +283,23 @@ async def create_finding_confirmation(
     vulnerability = await _get_vulnerability(vuln_id, user_id)
     if not vulnerability:
         raise HTTPException(status_code=404, detail='Vulnerability not found')
-    if body.verdict != 'confirmed':
-        raise HTTPException(
-            status_code=409,
-            detail={
-                'code': 'FALSE_POSITIVE_GOVERNED_ACTION_NOT_IMPLEMENTED',
-                'reason': 'False-positive classification remains fail-closed until its own governed ActionContract and SoD policy are implemented.',
-            },
-        )
+    if body.verdict == 'false_positive':
+        try:
+            proposal = await sync_to_async(create_governed_action_request, thread_sensitive=True)(
+                action_id='finding.false_positive',
+                project_id=str(vulnerability.project_id),
+                requested_by_id=user_id,
+                entity_type='finding',
+                entity_id=str(vuln_id),
+                expected_version=body.expected_version,
+                idempotency_key=body.idempotency_key,
+                parameters={'validation_id': str(body.validation_id), 'rationale': body.rationale},
+            )
+        except Exception as exc:  # noqa: BLE001
+            translate_governed_action_error(exc)
+        response.status_code = 202
+        return GovernedActionRequestView(**governed_action_request_view(proposal))
+
     try:
         result = await sync_to_async(execute_governed_action, thread_sensitive=True)(
             action_id='finding.confirm',

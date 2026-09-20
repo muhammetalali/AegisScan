@@ -257,22 +257,36 @@ def test_positive_validation_creates_confirmed_verdict_and_lineage(confirmation_
     ).count() == 0
 
 
-def test_negative_validation_false_positive_route_remains_fail_closed(confirmation_fixture):
-    client, user, _project, _asset, authorization, _scan, finding = confirmation_fixture
+def test_negative_validation_false_positive_route_submits_governed_proposal_without_mutation(confirmation_fixture):
+    client, user, project, _asset, authorization, _scan, finding = confirmation_fixture
     validation, _ = _completed_validation(
         user=user,
         finding=finding,
         authorization=authorization,
         finding_present=False,
     )
+    body = _confirmation_body(
+        validation,
+        'false_positive',
+        'Exact re-validation did not reproduce the source finding.',
+    )
 
     response = client.post(
         f'/api/v1/vulnerabilities/{finding.id}/confirmations',
-        json=_confirmation_body(validation, 'false_positive', 'Exact re-validation did not reproduce the source finding.'),
+        json=body,
     )
 
-    assert response.status_code == 409
-    assert response.json()['detail']['code'] == 'FALSE_POSITIVE_GOVERNED_ACTION_NOT_IMPLEMENTED'
+    assert response.status_code == 202, response.text
+    proposal = response.json()
+    assert proposal['action_id'] == 'finding.false_positive'
+    assert proposal['project_id'] == str(project.id)
+    assert proposal['entity_type'] == 'finding'
+    assert proposal['entity_id'] == str(finding.id)
+    assert proposal['expected_version'] == body['expected_version']
+    assert proposal['parameters'] == {
+        'validation_id': str(validation.id),
+        'rationale': body['rationale'],
+    }
     finding.refresh_from_db()
     assert finding.status == Vulnerability.Status.OPEN
     assert finding.validation_status != 'false_positive'

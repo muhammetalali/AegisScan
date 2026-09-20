@@ -76,6 +76,13 @@ def _load_policy(path: Path) -> dict[str, Any]:
         raise GovernanceError("successful_conclusions must remain fail-closed as ['success']")
     if not isinstance(policy.get("observe_all_triggered_workflows"), bool):
         raise GovernanceError("observe_all_triggered_workflows must be boolean")
+    lifecycle_only = policy.get("lifecycle_only_workflows")
+    if (
+        not isinstance(lifecycle_only, list)
+        or any(not isinstance(name, str) or not name for name in lifecycle_only)
+        or len(lifecycle_only) != len(set(lifecycle_only))
+    ):
+        raise GovernanceError("lifecycle_only_workflows must be a unique non-empty string list")
     for key in ("poll_seconds", "settle_seconds", "timeout_seconds"):
         value = policy.get(key)
         if not isinstance(value, int) or value <= 0:
@@ -108,6 +115,16 @@ def _load_policy(path: Path) -> dict[str, Any]:
             raise GovernanceError(f"conditional workflow {rule['name']} has no paths")
         if any(not isinstance(pattern, str) or not pattern for pattern in rule["paths"]):
             raise GovernanceError(f"conditional workflow {rule['name']} has invalid path pattern")
+    required_names = {
+        name
+        for names in always.values()
+        for name in names
+    } | {rule["name"] for rule in conditional}
+    lifecycle_overlap = sorted(required_names.intersection(lifecycle_only))
+    if lifecycle_overlap:
+        raise GovernanceError(
+            f"lifecycle_only_workflows may not also be required workflows: {lifecycle_overlap}"
+        )
     return policy
 
 
@@ -213,6 +230,19 @@ def _run_summary(run: dict[str, Any]) -> dict[str, Any]:
     return {key: run.get(key) for key in ("id", "name", "status", "conclusion", "run_attempt", "html_url")}
 
 
+def _premerge_workflow_runs(
+    runs: dict[str, dict[str, Any]],
+    *,
+    governance_workflow: str,
+    lifecycle_only_workflows: set[str],
+) -> dict[str, dict[str, Any]]:
+    filtered = dict(runs)
+    filtered.pop(governance_workflow, None)
+    for name in lifecycle_only_workflows:
+        filtered.pop(name, None)
+    return filtered
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise GovernanceError("usage: required_ci_governance.py POLICY_JSON")
@@ -240,6 +270,7 @@ def main() -> int:
 
     expected = _required_workflows(policy, event_name, changed_paths)
     self_workflow = policy["governance_workflow"]
+    lifecycle_only = set(policy["lifecycle_only_workflows"])
     successful = set(policy["successful_conclusions"])
     poll_seconds = policy["poll_seconds"]
     settle_seconds = policy["settle_seconds"]
@@ -259,6 +290,7 @@ def main() -> int:
                 "changed_paths": changed_paths,
                 "expected_workflows": sorted(expected),
                 "observe_all_triggered_workflows": policy["observe_all_triggered_workflows"],
+                "lifecycle_only_workflows": sorted(lifecycle_only),
             },
             indent=2,
             sort_keys=True,
@@ -266,8 +298,11 @@ def main() -> int:
     )
 
     while time.monotonic() < deadline:
-        runs = _workflow_runs(repo, sha, event_name, token, head_ref)
-        runs.pop(self_workflow, None)
+        runs = _premerge_workflow_runs(
+            _workflow_runs(repo, sha, event_name, token, head_ref),
+            governance_workflow=self_workflow,
+            lifecycle_only_workflows=lifecycle_only,
+        )
         observed_names = set(runs)
         missing = sorted(expected - observed_names)
         governed_names = observed_names if policy["observe_all_triggered_workflows"] else expected
@@ -316,8 +351,11 @@ def main() -> int:
             last_log = now
         time.sleep(poll_seconds)
 
-    runs = _workflow_runs(repo, sha, event_name, token, head_ref)
-    runs.pop(self_workflow, None)
+    runs = _premerge_workflow_runs(
+        _workflow_runs(repo, sha, event_name, token, head_ref),
+        governance_workflow=self_workflow,
+        lifecycle_only_workflows=lifecycle_only,
+    )
     missing = sorted(expected - set(runs))
     pending = sorted(name for name, run in runs.items() if run.get("status") != "completed")
     raise GovernanceError(f"required CI governance timed out for exact SHA {sha}; missing={missing}; pending={pending}")

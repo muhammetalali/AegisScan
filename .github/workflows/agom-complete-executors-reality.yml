@@ -1,0 +1,282 @@
+name: AGOM Complete Executors Reality
+
+on:
+  push:
+    branches:
+      - chatgpt-a/complete-governed-action-executors-2026-09-20
+    paths:
+      - 'aegis-platform/backend/enterprise/governed_action_models.py'
+      - 'aegis-platform/backend/enterprise/detection_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0035_detection_publication_delivery.py'
+      - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/routers/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_detection_publication.py'
+      - 'aegis-platform/backend/enterprise/models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py'
+      - 'aegis-platform/backend/enterprise/tasks.py'
+      - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py'
+      - 'aegis-platform/backend/fastapi_app/routers/enterprise_extra.py'
+      - 'aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py'
+      - 'aegis-platform/backend/enterprise/migrations/0033_agom_governed_action_requests.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_actions.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governed_action_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_action_requests.py'
+      - 'aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/asset_authorization.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_asset_authorization.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_action_executor.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_capability_manifest.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_action_requests.py'
+      - 'aegis-platform/backend/fastapi_app/services/finding_disposition.py'
+      - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_finding_disposition.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_finding_false_positive.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_finding_dispositions.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_investigation_closure.py'
+      - 'aegis-platform/backend/fastapi_app/routers/security_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/soc_closure_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_soc_closure_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_finding_governed_actions.py'
+      - '.github/workflows/agom-complete-executors-reality.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/governed_action_models.py'
+      - 'aegis-platform/backend/enterprise/detection_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0035_detection_publication_delivery.py'
+      - 'aegis-platform/backend/fastapi_app/services/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/routers/detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_detection_engineering.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_detection_publication.py'
+      - 'aegis-platform/backend/enterprise/models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py'
+      - 'aegis-platform/backend/enterprise/tasks.py'
+      - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py'
+      - 'aegis-platform/backend/fastapi_app/routers/enterprise_extra.py'
+      - 'aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py'
+      - 'aegis-platform/backend/enterprise/migrations/0033_agom_governed_action_requests.py'
+      - 'aegis-platform/backend/fastapi_app/contracts/governed_actions.py'
+      - 'aegis-platform/backend/fastapi_app/routers/governed_action_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_action_requests.py'
+      - 'aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py'
+      - 'aegis-platform/backend/fastapi_app/routers/asset_authorization.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_asset_authorization.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_action_executor.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_capability_manifest.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_action_requests.py'
+      - 'aegis-platform/backend/fastapi_app/services/finding_disposition.py'
+      - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_finding_disposition.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_finding_false_positive.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_finding_dispositions.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_investigation_closure.py'
+      - 'aegis-platform/backend/fastapi_app/routers/security_operations.py'
+      - 'aegis-platform/backend/fastapi_app/services/soc_closure_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_soc_closure_governance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_finding_governed_actions.py'
+      - '.github/workflows/agom-complete-executors-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-complete-executors-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governed-executors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-agom-complete-executors-django-secret-0123456789abcdef
+      JWT_SECRET_KEY: ci-agom-complete-executors-jwt-secret-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-agom-complete-executors-evidence-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-agom-complete-executors-fingerprint-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile governed executor plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/governed_action_models.py \
+            aegis-platform/backend/enterprise/detection_models.py \
+            aegis-platform/backend/enterprise/migrations/0035_detection_publication_delivery.py \
+            aegis-platform/backend/fastapi_app/services/detection_engineering.py \
+            aegis-platform/backend/fastapi_app/routers/detection_engineering.py \
+            aegis-platform/backend/fastapi_app/services/test_detection_engineering.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_detection_publication.py \
+            aegis-platform/backend/enterprise/models.py \
+            aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py \
+            aegis-platform/backend/enterprise/tasks.py \
+            aegis-platform/backend/fastapi_app/celery_app.py \
+            aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py \
+            aegis-platform/backend/fastapi_app/routers/enterprise_extra.py \
+            aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py \
+            aegis-platform/backend/enterprise/migrations/0033_agom_governed_action_requests.py \
+            aegis-platform/backend/fastapi_app/contracts/governed_actions.py \
+            aegis-platform/backend/fastapi_app/routers/governed_action_execution.py \
+            aegis-platform/backend/fastapi_app/services/governed_action_requests.py \
+            aegis-platform/backend/fastapi_app/routers/finding_dispositions.py \
+            aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py \
+            aegis-platform/backend/fastapi_app/routers/vulnerabilities.py \
+            aegis-platform/backend/fastapi_app/routers/security_operations.py \
+            aegis-platform/backend/fastapi_app/routers/asset_authorization.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_asset_authorization.py \
+            aegis-platform/backend/fastapi_app/services/governed_action_executor.py \
+            aegis-platform/backend/fastapi_app/services/soc_closure_governance.py \
+            aegis-platform/backend/fastapi_app/services/entity_capability_adapters.py \
+            aegis-platform/backend/fastapi_app/services/test_entity_capability_adapters.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_action_requests.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_finding_false_positive.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_finding_dispositions.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_investigation_closure.py
+
+      - name: Verify Django schema and migration drift
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Run governed request Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q --junitxml=agom-complete-executors-junit.xml \
+            fastapi_app/services/test_governed_action_requests.py
+
+      - name: Run request-bound asset authorization Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_governed_asset_authorization.py
+
+      - name: Run request-bound false-positive Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_governed_finding_false_positive.py
+
+      - name: Run request-bound finding disposition Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_governed_finding_dispositions.py
+
+      - name: Run request-bound investigation closure Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_governed_investigation_closure.py \
+            fastapi_app/services/test_soc_closure_governance.py
+
+      - name: Run request-bound integration live acceptance Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_governed_integration_live_acceptance.py
+
+      - name: Run request-bound detection publication Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_governed_detection_publication.py \
+            fastapi_app/services/test_detection_engineering.py
+
+      - name: Verify detection publication outbox recovery schedule
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/tasks/test_celery_reliability_contract.py::test_detection_publication_outbox_has_periodic_recovery_dispatch
+
+      - name: Run existing AGOM executor regressions
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_governed_action_executor.py \
+            fastapi_app/services/test_finding_governed_actions.py \
+            fastapi_app/services/test_entity_capability_adapters.py
+
+      - name: Retain A3 Reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-complete-executors-${{ github.sha }}
+          path: aegis-platform/backend/agom-complete-executors-junit.xml
+          retention-days: 30
+          if-no-files-found: warn

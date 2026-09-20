@@ -218,6 +218,134 @@ def dispatch_notification_deliveries(limit: int = 100):
 @shared_task(name='enterprise.dispatch_integration')
 def dispatch_integration(integration_id: str,event: dict): return send_integration(ExternalIntegration.objects.get(pk=integration_id),event)
 
+@shared_task(bind=True,name='enterprise.run_integration_acceptance_test')
+def run_integration_acceptance_test(self, integration_id: str, project_id: str, user_id: str, event: dict):
+    from fastapi_app.services.integration_live_acceptance import (
+        integration_configuration_fingerprint,
+        record_integration_acceptance_test,
+    )
+
+    source_ref=f'celery:{self.request.id}'
+    project=Project.objects.filter(pk=project_id).first()
+    if project is None:
+        raise ValueError('Integration acceptance test project was not found.')
+    integration=ExternalIntegration.objects.filter(
+        pk=integration_id,
+        enabled=True,
+        organization__project_links__project_id=project_id,
+        organization__memberships__user_id=user_id,
+        organization__memberships__is_active=True,
+        organization__memberships__user__is_active=True,
+    ).distinct().first()
+    project_access=(
+        str(project.owner_id)==str(user_id)
+        or project.members.filter(pk=user_id).exists()
+    )
+    if integration is None or not project_access:
+        raise PermissionError('Integration acceptance test scope is not authorized.')
+    tested_configuration_fingerprint=integration_configuration_fingerprint(integration)
+    material={
+        'integration_id':str(integration.id),
+        'project_id':str(project_id),
+        'configuration_fingerprint':tested_configuration_fingerprint,
+        'event':dict(event or {}),
+    }
+    try:
+        result=send_integration(integration,dict(event or {}))
+        evidence_material={
+            **material,
+            'outcome':'passed',
+            'transport_result':result,
+        }
+        evidence_sha=hashlib.sha256(
+            json.dumps(evidence_material,sort_keys=True,separators=(',',':'),ensure_ascii=False,default=str).encode('utf-8')
+        ).hexdigest()
+        safe_summary={
+            'transport_result_sha256':evidence_sha,
+            'http_status':result.get('http_status') if isinstance(result,dict) else None,
+            'status':result.get('status') if isinstance(result,dict) else None,
+        }
+        recorded=record_integration_acceptance_test(
+            integration_id=str(integration.id),
+            project_id=str(project_id),
+            actor_id=str(user_id),
+            outcome='passed',
+            source_ref=source_ref,
+            evidence_sha256=evidence_sha,
+            evidence_summary=safe_summary,
+            test_type='live_transport_probe',
+            tested_configuration_fingerprint=tested_configuration_fingerprint,
+        )
+        return {
+            'status':'passed',
+            'integration_id':str(integration.id),
+            'project_id':str(project_id),
+            'acceptance_test_id':str(recorded.test.id),
+            'evidence_sha256':recorded.test.evidence_sha256,
+            'replayed':recorded.replayed,
+        }
+    except Exception as exc:
+        failure_material={
+            **material,
+            'outcome':'failed',
+            'error_type':type(exc).__name__,
+            'error_message':str(exc),
+        }
+        failure_sha=hashlib.sha256(
+            json.dumps(failure_material,sort_keys=True,separators=(',',':'),ensure_ascii=False,default=str).encode('utf-8')
+        ).hexdigest()
+        try:
+            record_integration_acceptance_test(
+                integration_id=str(integration.id),
+                project_id=str(project_id),
+                actor_id=str(user_id),
+                outcome='failed',
+                source_ref=source_ref,
+                evidence_sha256=failure_sha,
+                evidence_summary={
+                    'error_type':type(exc).__name__,
+                    'error_sha256':failure_sha,
+                },
+                test_type='live_transport_probe',
+                tested_configuration_fingerprint=tested_configuration_fingerprint,
+            )
+        except Exception as evidence_exc:
+            raise RuntimeError('Integration acceptance test failed and durable failure evidence could not be recorded.') from evidence_exc
+        raise
+
+
+@shared_task(name='enterprise.deliver_detection_publication')
+def deliver_detection_publication(delivery_id: str):
+    from fastapi_app.services.detection_engineering import deliver_publication_delivery
+
+    result=deliver_publication_delivery(delivery_id=str(delivery_id))
+    return {
+        'delivery_id':str(result.delivery.id),
+        'status':result.delivery.status,
+        'publication_id':str(result.publication.id) if result.publication else None,
+        'transport_status':result.delivery.transport_status,
+        'response_sha256':result.delivery.response_sha256 or None,
+        'replayed':result.replayed,
+    }
+
+
+@shared_task(name='enterprise.dispatch_detection_publication_deliveries')
+def dispatch_detection_publication_deliveries(limit: int = 100):
+    from enterprise.detection_models import DetectionPublicationDelivery
+
+    bounded=max(1,min(int(limit),500))
+    ids=list(
+        DetectionPublicationDelivery.objects.filter(
+            status=DetectionPublicationDelivery.Status.QUEUED,
+        )
+        .order_by('created_at')
+        .values_list('id',flat=True)[:bounded]
+    )
+    for delivery_id in ids:
+        deliver_detection_publication.delay(str(delivery_id))
+    return {'queued':len(ids),'delivery_ids':[str(item) for item in ids]}
+
+
 @shared_task(name='enterprise.sync_external_integration')
 def sync_external_integration_task(integration_id: str, project_id: str, user_id: str):
     from fastapi_app.services.external_fabric import sync_external_integration

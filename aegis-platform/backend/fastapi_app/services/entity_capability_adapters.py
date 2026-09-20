@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from django.db.models import Q
 from django.utils import timezone as django_timezone
 
-from django_project.assets.models import AssetAuthorization
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, FindingDisposition, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.assurance_obligation_models import AssuranceObligation
+from enterprise.governed_action_models import GovernedActionExecution
 from enterprise.campaign_models import AdversaryCampaign, CampaignObjective
-from enterprise.detection_models import DetectionRevision, DetectionValidation
-from enterprise.models import AttackPath, ExternalIntegration, InvestigationCase, RiskCorrelationSnapshot, TenantProject
+from enterprise.detection_models import DetectionPublicationDelivery, DetectionRevision, DetectionValidation
+from enterprise.models import AttackPath, ExternalIntegration, IntegrationAcceptanceTest, IntegrationLiveAcceptance, InvestigationCase, RiskCorrelationSnapshot, TenantProject
 from enterprise.soc_models import InvestigationCaseState, InvestigationClosure
 from fastapi_app.contracts.governed_operations import (
     ActionMode,
@@ -32,6 +33,8 @@ from fastapi_app.services.governed_responsibility_authority import (
     GovernedResponsibilityError,
     resolve_actor_authority,
 )
+from fastapi_app.services.governed_temporal_policy import GovernedTemporalError, validate_review_deadline
+from fastapi_app.services.integration_live_acceptance import current_integration_live_acceptance, integration_configuration_fingerprint
 from fastapi_app.services.remediation_lifecycle import RemediationState, get_state
 
 
@@ -324,7 +327,7 @@ def _latest_validation(finding: Vulnerability) -> ValidationRun | None:
     )
 
 
-def _confirmation_candidate(finding: Vulnerability) -> tuple[ValidationRun, Evidence] | None:
+def _confirmation_candidate(finding: Vulnerability, *, expected_presence: bool = True) -> tuple[ValidationRun, Evidence] | None:
     if not finding.asset_id:
         return None
     validation = _latest_validation(finding)
@@ -335,7 +338,7 @@ def _confirmation_candidate(finding: Vulnerability) -> tuple[ValidationRun, Evid
     if not validation.authorization_decision_id:
         return None
     result = validation.result if isinstance(validation.result, dict) else {}
-    if result.get('finding_present') is not True:
+    if result.get('finding_present') is not expected_presence:
         return None
     evidence_id = result.get('evidence_id')
     if not evidence_id:
@@ -349,7 +352,7 @@ def _confirmation_candidate(finding: Vulnerability) -> tuple[ValidationRun, Evid
     metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
     if str(metadata.get('validation_run_id') or metadata.get('validation_id') or '') != str(validation.id):
         return None
-    if metadata.get('finding_present') is not True:
+    if metadata.get('finding_present') is not expected_presence:
         return None
     if str(metadata.get('authorization_decision_id') or '') != str(validation.authorization_decision_id):
         return None
@@ -394,7 +397,8 @@ def _finding_context(*, entity_id: str, link: TenantProject, actor_id: str) -> E
     )
     if finding is None:
         raise EntityCapabilityNotFound('Entity capability target not found.')
-    confirmation = _confirmation_candidate(finding)
+    confirmation = _confirmation_candidate(finding, expected_presence=True)
+    false_positive = _confirmation_candidate(finding, expected_presence=False)
     verified = _verified_remediation(finding)
     if verified is not None:
         lifecycle = 'verified'
@@ -425,30 +429,54 @@ def _finding_context(*, entity_id: str, link: TenantProject, actor_id: str) -> E
     if creator_id and creator_id != str(actor_id):
         sod.add(confirm_action)
 
-    risk_action = 'finding.disposition.accept_risk'
+    false_action = 'finding.false_positive'
+    false_refs = [str(false_positive[0].id), str(false_positive[1].id)] if false_positive else []
+    gates[false_action] = [_gate(
+        GateType.EVIDENCE,
+        GateState.PASS if false_positive else GateState.BLOCKED,
+        'FALSE_POSITIVE_EVIDENCE_READY' if false_positive else 'FALSE_POSITIVE_EVIDENCE_REQUIRED',
+        'The latest validation is current, authorized, finding-absent, and bound to lineage-consistent validation evidence.' if false_positive else 'False-positive classification requires the latest validation to be completed, authorized, finding-absent, and bound to current validation_output evidence.',
+        missing=[] if false_positive else ['latest_finding_absent_validation', 'finding_confirmation_evidence'],
+        evidence_refs=false_refs,
+    )]
+    if false_positive:
+        evidence_ready.add(false_action)
+    if creator_id and creator_id != str(actor_id):
+        sod.add(false_action)
+
     risk = RiskCorrelationSnapshot.objects.filter(
         project_id=link.project_id,
         vulnerability=finding,
     ).order_by('-created_at', '-id').first()
-    gates[risk_action] = [
-        _gate(
-            GateType.EVIDENCE,
-            GateState.PASS if risk else GateState.BLOCKED,
-            'RISK_SNAPSHOT_READY' if risk else 'RISK_SNAPSHOT_REQUIRED',
-            'Latest immutable risk correlation snapshot is available.' if risk else 'Risk disposition requires an immutable risk correlation snapshot.',
-            missing=[] if risk else ['risk_correlation_snapshot'],
-            evidence_refs=[str(risk.id), risk.correlation_sha256] if risk else [],
-        ),
-        _gate(
-            GateType.EXPIRY_REVIEW,
-            GateState.BLOCKED,
-            'REVIEW_DEADLINE_INPUT_REQUIRED',
-            'Risk acceptance requires a future review_at value and rationale at execution time.',
-            missing=['review_at', 'disposition_rationale'],
-        ),
-    ]
-    if risk:
-        evidence_ready.add(risk_action)
+    for risk_action in ('finding.disposition.accept_risk', 'finding.disposition.wont_fix'):
+        gates[risk_action] = [
+            _gate(
+                GateType.EVIDENCE,
+                GateState.PASS if risk else GateState.BLOCKED,
+                'RISK_SNAPSHOT_READY' if risk else 'RISK_SNAPSHOT_REQUIRED',
+                'Latest immutable risk correlation snapshot is available.' if risk else 'Risk disposition requires an immutable risk correlation snapshot.',
+                missing=[] if risk else ['risk_correlation_snapshot'],
+                evidence_refs=[str(risk.id), risk.correlation_sha256] if risk else [],
+            ),
+            _gate(
+                GateType.EXPIRY_REVIEW,
+                GateState.BLOCKED,
+                'REVIEW_DEADLINE_INPUT_REQUIRED',
+                'Risk disposition requires a future review_at value and rationale at execution time.',
+                missing=['review_at', 'disposition_rationale'],
+            ),
+        ]
+        if risk:
+            evidence_ready.add(risk_action)
+
+    duplicate_action = 'finding.disposition.duplicate'
+    gates[duplicate_action] = [_gate(
+        GateType.VALIDATION,
+        GateState.BLOCKED,
+        'DUPLICATE_TARGET_INPUT_REQUIRED',
+        'Duplicate disposition requires a same-project canonical duplicate target at execution time.',
+        missing=['duplicate_of_id'],
+    )]
 
     close_action = 'finding.close'
     verifier_id = str(verified[0].user_id) if verified else ''
@@ -503,11 +531,24 @@ def _detection_context(*, entity_id: str, link: TenantProject, actor_id: str) ->
     is_latest = latest is not None and latest.id == revision.id
     lifecycle = revision.rule.state if is_latest else 'superseded'
     passed = revision.validations.filter(status=DetectionValidation.Status.PASSED).order_by('-created_at').first()
-    integration = ExternalIntegration.objects.filter(
+    delivery_count = DetectionPublicationDelivery.objects.filter(revision=revision).count()
+
+    live_target = None
+    live_acceptance = None
+    for candidate in ExternalIntegration.objects.filter(
         organization=link.organization,
         enabled=True,
         kind__in=_SIEM_KINDS,
-    ).order_by('kind', 'id').first()
+    ).order_by('kind', 'id'):
+        acceptance = current_integration_live_acceptance(
+            integration=candidate,
+            project_id=str(link.project_id),
+        )
+        if acceptance is not None:
+            live_target = candidate
+            live_acceptance = acceptance
+            break
+
     action = 'detection.publish'
     validation_gate = _gate(
         GateType.VALIDATION,
@@ -517,19 +558,32 @@ def _detection_context(*, entity_id: str, link: TenantProject, actor_id: str) ->
         missing=[] if passed else ['passed_detection_validation'],
         evidence_refs=[str(passed.id), passed.result_sha256] if passed else [],
     )
+    publication_ready = live_target is not None and live_acceptance is not None
     publication_gate = _gate(
         GateType.PUBLICATION,
-        GateState.PASS if integration else GateState.BLOCKED,
-        'SIEM_TARGET_AVAILABLE' if integration else 'SIEM_TARGET_REQUIRED',
-        'At least one enabled tenant-owned SIEM publication target is available.' if integration else 'Detection publication requires an enabled tenant-owned SIEM integration.',
-        missing=[] if integration else ['enabled_siem_integration'],
-        evidence_refs=[str(integration.id)] if integration else [],
+        GateState.PASS if publication_ready else GateState.BLOCKED,
+        'LIVE_ACCEPTED_SIEM_TARGET_AVAILABLE' if publication_ready else 'LIVE_ACCEPTED_SIEM_TARGET_REQUIRED',
+        'A current live-accepted tenant-owned SIEM target is available.' if publication_ready else 'Detection publication requires a current live-accepted tenant-owned SIEM integration.',
+        missing=[] if publication_ready else ['current_live_accepted_siem_integration'],
+        evidence_refs=(
+            [
+                str(live_target.id),
+                str(live_acceptance.id),
+                str(live_acceptance.acceptance_test_id),
+                live_acceptance.acceptance_test.configuration_fingerprint,
+            ]
+            if publication_ready else []
+        ),
     )
+    evidence_ready = bool(passed and publication_ready)
     return EntityCapabilityContext(
         organization_id=str(link.organization_id),
         entity=_entity_ref(entity_type='detection_revision', entity_id=revision.id, link=link),
-        projection=ProjectionSnapshot(lifecycle=lifecycle, version=revision.version),
-        evidence_ready_actions={action} if passed else set(),
+        projection=ProjectionSnapshot(
+            lifecycle=lifecycle,
+            version=revision.version + delivery_count,
+        ),
+        evidence_ready_actions={action} if evidence_ready else set(),
         gate_results_by_action={action: [validation_gate, publication_gate]},
     )
 
@@ -640,70 +694,454 @@ def _integration_context(*, entity_id: str, link: TenantProject, actor_id: str) 
     integration = ExternalIntegration.objects.filter(pk=entity_id, organization=link.organization).first()
     if integration is None:
         raise EntityCapabilityNotFound('Entity capability target not found.')
+
+    tests = IntegrationAcceptanceTest.objects.filter(
+        organization=link.organization,
+        project_id=link.project_id,
+        integration=integration,
+    )
+    acceptances = IntegrationLiveAcceptance.objects.filter(
+        organization=link.organization,
+        project_id=link.project_id,
+        integration=integration,
+    )
+    latest_test = tests.order_by('-tested_at', '-id').first()
+    latest_acceptance = acceptances.order_by('-accepted_at', '-id').first()
+    version = tests.count() + acceptances.count() + 1
+    now = django_timezone.now()
+
+    if not integration.enabled:
+        lifecycle = 'disabled'
+    elif latest_test is None:
+        lifecycle = 'untested'
+    elif latest_test.configuration_fingerprint != integration_configuration_fingerprint(integration):
+        lifecycle = 'configuration_changed'
+    elif latest_test.outcome != IntegrationAcceptanceTest.Outcome.PASSED:
+        lifecycle = 'test_failed'
+    else:
+        accepted_latest = (
+            latest_acceptance is not None
+            and str(latest_acceptance.acceptance_test_id) == str(latest_test.id)
+        )
+        acceptance_current = (
+            accepted_latest
+            and latest_acceptance.review_at > now
+            and (latest_acceptance.expires_at is None or latest_acceptance.expires_at > now)
+        )
+        if acceptance_current:
+            lifecycle = 'live_accepted'
+        elif latest_acceptance is not None and latest_test.tested_at <= latest_acceptance.accepted_at:
+            lifecycle = 'acceptance_expired'
+        else:
+            lifecycle = 'tested'
+
     action = 'integration.live_accept'
+    test_ready = lifecycle == 'tested'
+    test_refs = [str(latest_test.id), latest_test.evidence_sha256, latest_test.configuration_fingerprint] if latest_test is not None else []
     live_gate = _gate(
         GateType.LIVE_ACCEPTANCE,
-        GateState.BLOCKED,
-        'LIVE_ACCEPTANCE_RECORD_NOT_IMPLEMENTED',
-        'The integration domain has no authoritative tested/live-acceptance record yet; capability is fail-closed.',
-        missing=['integration_acceptance_test', 'vendor_ack', 'acceptance_test_evidence'],
+        GateState.PASS if test_ready else GateState.BLOCKED,
+        'LATEST_INTEGRATION_TEST_READY' if test_ready else 'LATEST_INTEGRATION_TEST_REQUIRED',
+        'The latest immutable integration acceptance test passed and is newer than the last live acceptance.' if test_ready else 'Live acceptance requires an enabled connector with a newer passed immutable acceptance test.',
+        missing=[] if test_ready else ['newer_passed_integration_acceptance_test'],
+        evidence_refs=test_refs,
     )
     evidence_gate = _gate(
         GateType.EVIDENCE,
         GateState.BLOCKED,
-        'ACCEPTANCE_EVIDENCE_NOT_MODELED',
-        'No durable integration acceptance-evidence entity exists yet.',
-        missing=['vendor_ack', 'acceptance_test_evidence'],
+        'LIVE_ACCEPTANCE_REQUEST_EVIDENCE_REQUIRED',
+        'Execution must bind vendor acknowledgement, acceptance evidence hash, and review timing through an immutable governed request.',
+        missing=['vendor_ack', 'acceptance_test_evidence', 'review_at'],
+        evidence_refs=test_refs,
     )
     return EntityCapabilityContext(
         organization_id=str(link.organization_id),
         entity=_entity_ref(entity_type='integration', entity_id=integration.id, link=link),
-        projection=ProjectionSnapshot(lifecycle='enabled' if integration.enabled else 'disabled'),
+        projection=ProjectionSnapshot(lifecycle=lifecycle, posture=integration.kind, version=version),
         gate_results_by_action={action: [live_gate, evidence_gate]},
-        hard_blocks={
-            action: HardBlock(
-                reason_code='LIVE_ACCEPTANCE_DOMAIN_NOT_IMPLEMENTED',
-                reason='A durable tested/live-acceptance aggregate and evidence lineage must exist before this governed action can be enabled.',
-                missing_requirements=('integration_acceptance_test', 'vendor_ack', 'acceptance_test_evidence'),
-            )
-        },
     )
 
 
-def _asset_authorization_context(*, entity_id: str, link: TenantProject, actor_id: str) -> EntityCapabilityContext:
-    decision = AssetAuthorization.objects.select_related('asset').filter(
+def _asset_context(*, entity_id: str, link: TenantProject, actor_id: str) -> EntityCapabilityContext:
+    asset = Asset.objects.filter(
         pk=entity_id,
-        asset__project_id=link.project_id,
+        project_id=link.project_id,
+        is_active=True,
     ).first()
-    if decision is None:
+    if asset is None:
         raise EntityCapabilityNotFound('Entity capability target not found.')
-    action = 'asset.authorization.approve'
-    gate = _gate(
+
+    target = asset_target(asset)
+    latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
+    current, _current_reason = current_asset_authorization(asset, target) if target else (None, '')
+    if current is not None:
+        lifecycle = 'authorized'
+    elif latest is not None and latest.authorized is False:
+        lifecycle = 'revoked'
+    else:
+        lifecycle = 'authorization_required'
+
+    # AssetAuthorization is append-only. Holding the Asset row in the mutation
+    # primitive serializes this generation, so count+1 is a durable CAS version:
+    # 1 before the first decision, then one increment per immutable decision.
+    version = AssetAuthorization.objects.filter(asset=asset).count() + 1
+
+    approve = 'asset.authorization.approve'
+    revoke = 'asset.authorization.revoke'
+    scope_ready = bool(target)
+    approve_gate = _gate(
         GateType.AUTHORIZATION,
-        GateState.BLOCKED,
-        'AUTHORIZATION_REQUEST_ENTITY_NOT_IMPLEMENTED',
-        'Existing AssetAuthorization rows are immutable decisions; the required submitted authorization-request entity does not exist yet.',
-        missing=['asset_authorization_request'],
-        evidence_refs=[str(decision.id)],
+        GateState.PASS if scope_ready else GateState.BLOCKED,
+        'ASSET_SCOPE_READY' if scope_ready else 'ASSET_SCOPE_TARGET_REQUIRED',
+        'The active tenant-owned asset has a server-derived authorization target.' if scope_ready else 'Asset authorization requires a non-empty server-derived target.',
+        missing=[] if scope_ready else ['server_derived_asset_target'],
+        evidence_refs=[str(asset.id)] if scope_ready else [],
     )
-    lifecycle = 'approved' if decision.authorized and decision.is_currently_valid else 'rejected'
+    revoke_gate = _gate(
+        GateType.AUTHORIZATION,
+        GateState.PASS if current is not None else GateState.BLOCKED,
+        'CURRENT_ASSET_AUTHORIZATION_READY' if current is not None else 'CURRENT_ASSET_AUTHORIZATION_REQUIRED',
+        'A current immutable asset authorization decision is available for revocation.' if current is not None else 'Revocation requires a current valid authorization decision.',
+        missing=[] if current is not None else ['current_asset_authorization'],
+        evidence_refs=[str(current.id)] if current is not None else [],
+    )
+    evidence_ready = set()
+    if scope_ready:
+        evidence_ready.add(approve)
+    if current is not None:
+        evidence_ready.add(revoke)
+
     return EntityCapabilityContext(
         organization_id=str(link.organization_id),
-        entity=_entity_ref(entity_type='asset_authorization', entity_id=decision.id, link=link),
-        projection=ProjectionSnapshot(lifecycle=lifecycle),
-        gate_results_by_action={action: [gate]},
-        hard_blocks={
-            action: HardBlock(
-                reason_code='AUTHORIZATION_REQUEST_DOMAIN_NOT_IMPLEMENTED',
-                reason='Approval cannot be projected from an immutable decision row; a submitted authorization-request aggregate must exist first.',
-                missing_requirements=('asset_authorization_request',),
-            )
+        entity=_entity_ref(entity_type='asset', entity_id=asset.id, link=link),
+        projection=ProjectionSnapshot(
+            lifecycle=lifecycle,
+            posture=asset.criticality,
+            version=version,
+        ),
+        evidence_ready_actions=evidence_ready,
+        gate_results_by_action={
+            approve: [approve_gate],
+            revoke: [revoke_gate],
         },
     )
+
+
+_RISK_DISPOSITION_ACTIONS = {
+    'finding.disposition.accept_risk',
+    'finding.disposition.wont_fix',
+}
+
+
+def _execution_context_for_action(
+    *,
+    context: EntityCapabilityContext,
+    action_id: str,
+    parameters: dict[str, Any] | None,
+) -> tuple[list[GateResult], bool]:
+    gates = list(context.gate_results_by_action.get(action_id, []))
+    evidence_ready = action_id in context.evidence_ready_actions
+    if parameters is None:
+        return gates, evidence_ready
+    payload = dict(parameters)
+
+    if action_id in {'asset.authorization.approve', 'asset.authorization.revoke'}:
+        asset = Asset.objects.filter(
+            pk=context.entity.entity_id,
+            project_id=context.entity.project_id,
+            is_active=True,
+        ).first()
+        rationale = ' '.join(str(payload.get('reason') or '').split())
+        valid = asset is not None and bool(asset_target(asset)) and len(rationale) >= 3
+        if action_id == 'asset.authorization.approve':
+            expires_raw = payload.get('expires_at')
+            if expires_raw:
+                try:
+                    expires_at = (
+                        expires_raw if isinstance(expires_raw, datetime)
+                        else datetime.fromisoformat(str(expires_raw).replace('Z', '+00:00'))
+                    )
+                    valid = valid and expires_at.tzinfo is not None and expires_at > datetime.now(timezone.utc)
+                except (TypeError, ValueError):
+                    valid = False
+        base_gate = next((item for item in gates if item.gate is GateType.AUTHORIZATION), None)
+        if base_gate is not None and base_gate.state is not GateState.PASS:
+            valid = False
+        gates = [_gate(
+            GateType.AUTHORIZATION,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'ASSET_AUTHORIZATION_REQUEST_VALID' if valid else 'ASSET_AUTHORIZATION_REQUEST_INVALID',
+            'Immutable request parameters and server-derived asset scope satisfy authorization policy.' if valid else 'Asset authorization requires a non-empty rationale, a valid server-derived target, and a valid future expiry when supplied.',
+            missing=[] if valid else ['authorization_reason', 'server_derived_asset_target', 'valid_expires_at'],
+            evidence_refs=list(base_gate.evidence_refs) if base_gate else [],
+        )]
+        return gates, valid
+
+    if action_id == 'detection.publish':
+        requested_integration_id = str(payload.get('integration_id') or '').strip()
+        integration = (
+            ExternalIntegration.objects.filter(
+                pk=requested_integration_id,
+                organization_id=context.organization_id,
+                enabled=True,
+                kind__in=_SIEM_KINDS,
+            ).first()
+            if requested_integration_id else None
+        )
+        acceptance = (
+            current_integration_live_acceptance(
+                integration=integration,
+                project_id=str(context.entity.project_id),
+            )
+            if integration is not None else None
+        )
+        validation_gate = next((item for item in gates if item.gate is GateType.VALIDATION), None)
+        valid = bool(
+            validation_gate is not None
+            and validation_gate.state is GateState.PASS
+            and integration is not None
+            and acceptance is not None
+        )
+        publication_gate = _gate(
+            GateType.PUBLICATION,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'REQUEST_BOUND_LIVE_SIEM_READY' if valid else 'REQUEST_BOUND_LIVE_SIEM_REQUIRED',
+            'The immutable request selects a current live-accepted tenant-owned SIEM target.' if valid else 'The immutable request must select a current live-accepted tenant-owned SIEM target.',
+            missing=[] if valid else ['integration_id', 'current_live_accepted_siem_integration'],
+            evidence_refs=(
+                [
+                    str(integration.id),
+                    str(acceptance.id),
+                    str(acceptance.acceptance_test_id),
+                    acceptance.acceptance_test.configuration_fingerprint,
+                ]
+                if valid else []
+            ),
+        )
+        gates = [
+            publication_gate if item.gate is GateType.PUBLICATION else item
+            for item in gates
+        ]
+        return gates, valid
+
+    if action_id == 'integration.live_accept':
+        base_live_gate = next((item for item in gates if item.gate is GateType.LIVE_ACCEPTANCE), None)
+        latest_test_id = (
+            str(base_live_gate.evidence_refs[0])
+            if base_live_gate is not None and base_live_gate.evidence_refs
+            else ''
+        )
+        requested_test_id = str(payload.get('acceptance_test_id') or '').strip()
+        authoritative_evidence_hash = (
+            str(base_live_gate.evidence_refs[1])
+            if base_live_gate is not None and len(base_live_gate.evidence_refs) > 1
+            else ''
+        )
+        vendor_ack = ' '.join(str(payload.get('vendor_ack') or '').split())
+        evidence_hash = str(payload.get('acceptance_evidence_sha256') or '').strip().lower()
+        digest_valid = (
+            len(evidence_hash) == 64
+            and all(ch in '0123456789abcdef' for ch in evidence_hash)
+            and bool(authoritative_evidence_hash)
+            and evidence_hash == authoritative_evidence_hash
+        )
+        review_raw = payload.get('review_at')
+        expires_raw = payload.get('expires_at')
+        review_at = None
+        expires_at = None
+        try:
+            if review_raw:
+                review_at = (
+                    review_raw if isinstance(review_raw, datetime)
+                    else datetime.fromisoformat(str(review_raw).replace('Z', '+00:00'))
+                )
+            if expires_raw:
+                expires_at = (
+                    expires_raw if isinstance(expires_raw, datetime)
+                    else datetime.fromisoformat(str(expires_raw).replace('Z', '+00:00'))
+                )
+        except (TypeError, ValueError):
+            review_at = None
+            expires_at = None
+        now = datetime.now(timezone.utc)
+        time_valid = bool(
+            review_at is not None
+            and review_at.tzinfo is not None
+            and review_at > now
+            and (
+                expires_at is None
+                or (
+                    expires_at.tzinfo is not None
+                    and expires_at > review_at
+                )
+            )
+        )
+        valid = bool(
+            base_live_gate is not None
+            and base_live_gate.state is GateState.PASS
+            and latest_test_id
+            and requested_test_id == latest_test_id
+            and 3 <= len(vendor_ack) <= 500
+            and digest_valid
+            and time_valid
+        )
+        live_gate = _gate(
+            GateType.LIVE_ACCEPTANCE,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'LIVE_ACCEPTANCE_REQUEST_VALID' if valid else 'LIVE_ACCEPTANCE_REQUEST_INVALID',
+            'Immutable request parameters bind the latest passed connector test and valid review window.' if valid else 'Live acceptance must bind the latest passed test, vendor acknowledgement, acceptance evidence SHA-256, and a valid future review window.',
+            missing=[] if valid else ['latest_acceptance_test', 'vendor_ack', 'acceptance_evidence_sha256', 'review_at'],
+            evidence_refs=list(base_live_gate.evidence_refs) if base_live_gate else [],
+        )
+        evidence_gate = _gate(
+            GateType.EVIDENCE,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'LIVE_ACCEPTANCE_EVIDENCE_BOUND' if valid else 'LIVE_ACCEPTANCE_EVIDENCE_INVALID',
+            'Vendor acknowledgement and acceptance evidence are bound to the immutable governed request.' if valid else 'Acceptance evidence is incomplete or not bound to the latest tested connector state.',
+            missing=[] if valid else ['vendor_ack', 'acceptance_test_evidence'],
+            evidence_refs=[requested_test_id] if requested_test_id else [],
+        )
+        return [live_gate, evidence_gate], valid
+
+    if action_id in _RISK_DISPOSITION_ACTIONS:
+        risk_ref = str(payload.get('risk_correlation_id') or '').strip()
+        evidence_gate = next((item for item in gates if item.gate is GateType.EVIDENCE), None)
+        if evidence_gate is not None and evidence_gate.state is GateState.PASS:
+            authoritative_ref = str(evidence_gate.evidence_refs[0]) if evidence_gate.evidence_refs else ''
+            if not risk_ref or risk_ref != authoritative_ref:
+                evidence_gate = _gate(
+                    GateType.EVIDENCE,
+                    GateState.FAIL,
+                    'RISK_SNAPSHOT_INPUT_MISMATCH',
+                    'Execution must bind the latest immutable risk correlation snapshot selected by governance.',
+                    missing=['latest_risk_correlation_snapshot'],
+                    evidence_refs=list(evidence_gate.evidence_refs),
+                )
+                evidence_ready = False
+            gates = [evidence_gate if item.gate is GateType.EVIDENCE else item for item in gates]
+
+        rationale = ' '.join(str(payload.get('rationale') or '').split())
+        review_raw = payload.get('review_at')
+        review_at = review_raw if isinstance(review_raw, datetime) else None
+        if review_at is None and review_raw:
+            try:
+                review_at = datetime.fromisoformat(str(review_raw).replace('Z', '+00:00'))
+            except ValueError:
+                review_at = None
+        valid_review = False
+        if review_at is not None and review_at.tzinfo is not None and len(rationale) >= 3:
+            try:
+                validate_review_deadline(
+                    review_at,
+                    now=datetime.now(timezone.utc),
+                    max_horizon=timedelta(days=365),
+                )
+                valid_review = True
+            except GovernedTemporalError:
+                valid_review = False
+        review_gate = _gate(
+            GateType.EXPIRY_REVIEW,
+            GateState.PASS if valid_review else GateState.BLOCKED,
+            'REVIEW_DEADLINE_INPUT_VALID' if valid_review else 'REVIEW_DEADLINE_INPUT_INVALID',
+            'Risk disposition review deadline and rationale satisfy the temporal input policy.' if valid_review else 'Risk disposition requires a valid future review_at within policy horizon and a non-empty rationale.',
+            missing=[] if valid_review else ['review_at', 'disposition_rationale'],
+        )
+        gates = [review_gate if item.gate is GateType.EXPIRY_REVIEW else item for item in gates]
+        return gates, evidence_ready
+
+    if action_id == 'investigation.close':
+        case = InvestigationCase.objects.filter(
+            pk=context.entity.entity_id,
+            project_id=context.entity.project_id,
+            organization_id=context.organization_id,
+        ).first()
+        finding_id = str(payload.get('finding_id') or '').strip()
+        closure_type = str(payload.get('closure_type') or '').strip()
+        validation_id = str(payload.get('validation_id') or '').strip()
+        disposition_id = str(payload.get('disposition_id') or '').strip()
+        linked = bool(case and finding_id and case.findings.filter(pk=finding_id).exists())
+        proof_ok = False
+        refs: list[str] = []
+        if linked and closure_type == 'remediated' and validation_id and not disposition_id:
+            verified = _verified_remediation(
+                Vulnerability.objects.filter(pk=finding_id, project_id=context.entity.project_id).first()
+            )
+            proof_ok = bool(verified and str(verified[0].id) == validation_id)
+            if proof_ok:
+                refs = [str(verified[0].id), str(verified[1].id)]
+        elif linked and closure_type in {'accepted_risk', 'wont_fix', 'duplicate'} and disposition_id and not validation_id:
+            disposition = FindingDisposition.objects.filter(
+                pk=disposition_id,
+                finding_id=finding_id,
+                organization_id=context.organization_id,
+                disposition=closure_type,
+            ).first()
+            latest = FindingDisposition.objects.filter(finding_id=finding_id).order_by('-created_at', '-id').first()
+            action_map = {
+                'accepted_risk': 'finding.disposition.accept_risk',
+                'wont_fix': 'finding.disposition.wont_fix',
+                'duplicate': 'finding.disposition.duplicate',
+            }
+            governed = bool(
+                disposition
+                and latest
+                and latest.id == disposition.id
+                and GovernedActionExecution.objects.filter(
+                    project_id=context.entity.project_id,
+                    action_id=action_map[closure_type],
+                    entity_type='finding',
+                    entity_id=finding_id,
+                    result_payload__disposition_id=str(disposition.id),
+                ).exists()
+            )
+            if governed and closure_type in {'accepted_risk', 'wont_fix'}:
+                governed = bool(disposition.review_at and disposition.review_at > django_timezone.now())
+            proof_ok = governed
+            if proof_ok:
+                refs = [str(disposition.id)]
+
+        gates = [
+            item if item.gate is not GateType.EVIDENCE else _gate(
+                GateType.EVIDENCE,
+                GateState.PASS if proof_ok else GateState.BLOCKED,
+                'REQUEST_BOUND_CLOSURE_PROOF_READY' if proof_ok else 'REQUEST_BOUND_CLOSURE_PROOF_REQUIRED',
+                'The exact request-bound closure proof is valid and governance-linked.' if proof_ok else 'Investigation closure requires an exact same-project governed proof matching the request.',
+                missing=[] if proof_ok else ['request_bound_closure_proof'],
+                evidence_refs=refs,
+            )
+            for item in gates
+        ]
+        return gates, proof_ok
+
+    if action_id == 'finding.disposition.duplicate':
+        target_id = str(payload.get('duplicate_of_id') or '').strip()
+        target = (
+            Vulnerability.objects.filter(
+                pk=target_id,
+                project_id=context.entity.project_id,
+            ).only('id', 'status', 'duplicate_of_id').first()
+            if target_id else None
+        )
+        valid = (
+            target is not None
+            and str(target.id) != str(context.entity.entity_id)
+            and target.status not in {Vulnerability.Status.FIXED, Vulnerability.Status.FALSE_POSITIVE}
+        )
+        gates = [_gate(
+            GateType.VALIDATION,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'DUPLICATE_TARGET_VALID' if valid else 'DUPLICATE_TARGET_INVALID',
+            'Duplicate target is an active same-project finding.' if valid else 'Duplicate target must resolve to a different active finding in the same project.',
+            missing=[] if valid else ['valid_duplicate_of_id'],
+            evidence_refs=[str(target.id)] if valid and target is not None else [],
+        )]
+        return gates, True
+
+    return gates, evidence_ready
 
 
 _ADAPTERS: dict[str, Callable[..., EntityCapabilityContext]] = {
-    'asset_authorization': _asset_authorization_context,
+    'asset': _asset_context,
     'finding': _finding_context,
     'crown_jewel_objective': _objective_context,
     'campaign': _campaign_context,
@@ -739,6 +1177,8 @@ def build_entity_capability_manifest(
     user_id: str,
     entity_type: str,
     entity_id: str,
+    request_proposer_id: str = '',
+    execution_parameters: dict[str, Any] | None = None,
 ) -> AuthoritativeCapabilityManifest:
     context = resolve_entity_capability_context(
         project_id=project_id,
@@ -762,6 +1202,37 @@ def build_entity_capability_manifest(
     capabilities: list[CapabilityItem] = []
     for contract in contracts:
         evaluated_layer = contract.actor_layers[0]
+        gate_results, execution_evidence_ready = _execution_context_for_action(
+            context=context,
+            action_id=contract.action_id,
+            parameters=execution_parameters if contract.action_id in {
+                'asset.authorization.approve',
+                'asset.authorization.revoke',
+                'detection.publish',
+                'finding.disposition.accept_risk',
+                'finding.disposition.wont_fix',
+                'finding.disposition.duplicate',
+                'investigation.close',
+                'integration.live_accept',
+            } else None,
+        )
+        request_bound_sod_rules = {
+            'actor_must_not_be_disposition_proposer',
+            'actor_must_not_be_request_proposer',
+        }
+        contract_sod_rules = set(contract.sod_rules)
+        request_bound_sod = bool(contract_sod_rules & request_bound_sod_rules)
+        non_request_sod_rules = contract_sod_rules - request_bound_sod_rules
+        # Request-proposer SoD cannot be evaluated before an immutable request
+        # exists. Preserve domain-derived SoD checks, then bind proposer SoD
+        # only when execution supplies the authoritative request proposer.
+        sod_eligible = (
+            not non_request_sod_rules
+            or contract.action_id in context.sod_eligible_actions
+        )
+        if request_bound_sod and request_proposer_id:
+            sod_eligible = sod_eligible and str(user_id) != str(request_proposer_id)
+
         item = evaluate_action(
             contract,
             current_state=lifecycle,
@@ -769,15 +1240,23 @@ def build_entity_capability_manifest(
             actor_layer=evaluated_layer,
             actor_responsibilities=responsibilities,
             evidence_ready=(
-                contract.action_id in context.evidence_ready_actions
+                execution_evidence_ready
                 or not contract.evidence_requirements
             ),
-            sod_eligible=(
-                contract.action_id in context.sod_eligible_actions
-                or not contract.sod_rules
-            ),
-            gate_results=context.gate_results_by_action.get(contract.action_id, []),
+            sod_eligible=sod_eligible,
+            gate_results=gate_results,
         ).model_copy(update={'evaluated_actor_layer': evaluated_layer})
+        if request_bound_sod and not request_proposer_id and item.mode is ActionMode.ENABLED:
+            item = CapabilityItem(
+                action_id=contract.action_id,
+                mode=ActionMode.BLOCKED,
+                intent=contract.intent,
+                evaluated_actor_layer=evaluated_layer,
+                reason_code='GOVERNED_REQUEST_REQUIRED',
+                reason='This action requires an immutable governed request before proposer separation-of-duties can be evaluated.',
+                missing_requirements=['immutable_governed_request'],
+                gate_results=gate_results,
+            )
         hard_block = context.hard_blocks.get(contract.action_id)
         if hard_block is not None and item.mode is not ActionMode.HIDDEN:
             item = CapabilityItem(
@@ -788,7 +1267,7 @@ def build_entity_capability_manifest(
                 reason_code=hard_block.reason_code,
                 reason=hard_block.reason,
                 missing_requirements=list(hard_block.missing_requirements),
-                gate_results=context.gate_results_by_action.get(contract.action_id, []),
+                gate_results=gate_results,
             )
         capabilities.append(item)
 

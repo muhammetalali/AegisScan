@@ -172,8 +172,14 @@ jobs:
           assert "action_id='finding.confirm'" in vuln_source
           assert "action_id='finding.close'" in vuln_source
           assert 'govern_finding_disposition(' not in disposition_source
-          assert 'RISK_ACCEPTANCE_GOVERNED_ACTION_NOT_IMPLEMENTED' in disposition_source
-          assert 'FINDING_DISPOSITION_GOVERNANCE_NOT_MIGRATED' in disposition_source
+          assert 'create_governed_action_request' in disposition_source
+          assert "status_code=202" in disposition_source
+          for action_id in (
+              'finding.disposition.accept_risk',
+              'finding.disposition.wont_fix',
+              'finding.disposition.duplicate',
+          ):
+              assert action_id in disposition_source, action_id
           print('AGOM_FINDING_COMPATIBILITY_ROUTES=EXECUTOR_WIRED')
           print('AGOM_FINDING_DISPOSITION_MUTATION_BYPASS=CLOSED')
           PY

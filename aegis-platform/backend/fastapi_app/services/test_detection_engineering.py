@@ -172,20 +172,20 @@ def test_validation_executes_against_telemetry_and_replays(detection_fixture):
     assert DetectionEvent.objects.filter(rule=revision.rule, event_type='validation.completed').count() == 1
 
 
-def test_publication_requires_passed_validation(detection_fixture):
+def test_direct_publication_service_is_fail_closed(detection_fixture):
     _client, user, project, finding, evidence, organization, _membership = detection_fixture
     revision = _revision(user, project, finding, evidence).revision
     integration = ExternalIntegration.objects.create(
-        organization=organization, kind=ExternalIntegration.Kind.ELASTIC, name='No Validation Elastic',
+        organization=organization, kind=ExternalIntegration.Kind.ELASTIC, name='Legacy Direct Elastic',
         base_url='http://127.0.0.1:9', config={'index': 'detections'}, created_by=user,
     )
-    with pytest.raises(DetectionEngineeringError, match='passed telemetry validation'):
+    with pytest.raises(DetectionEngineeringError, match='request-bound AGOM'):
         publish_revision(
             revision_id=str(revision.id), integration_id=str(integration.id), project_id=str(project.id), user_id=str(user.id),
         )
 
 
-def test_publication_uses_real_http_transport_and_exact_replay(detection_fixture):
+def test_direct_publication_never_performs_remote_transport(detection_fixture):
     _client, user, project, finding, evidence, organization, _membership = detection_fixture
     revision = _revision(user, project, finding, evidence).revision
     validate_revision(
@@ -196,29 +196,17 @@ def test_publication_uses_real_http_transport_and_exact_replay(detection_fixture
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     try:
         integration = ExternalIntegration.objects.create(
-            organization=organization, kind=ExternalIntegration.Kind.ELASTIC, name='Reality Elastic',
+            organization=organization, kind=ExternalIntegration.Kind.ELASTIC, name='Legacy Direct Reality Elastic',
             base_url=f'http://127.0.0.1:{server.server_port}', config={'index': 'detections'}, created_by=user,
         )
-        first = publish_revision(
-            revision_id=str(revision.id), integration_id=str(integration.id), project_id=str(project.id), user_id=str(user.id),
-        )
-        second = publish_revision(
-            revision_id=str(revision.id), integration_id=str(integration.id), project_id=str(project.id), user_id=str(user.id),
-        )
+        with pytest.raises(DetectionEngineeringError, match='request-bound AGOM'):
+            publish_revision(
+                revision_id=str(revision.id), integration_id=str(integration.id), project_id=str(project.id), user_id=str(user.id),
+            )
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=3)
-    assert first.replayed is False
-    assert second.replayed is True
-    assert first.publication.id == second.publication.id
-    assert first.publication.transport_status == 201
-    assert len(_CaptureHandler.requests) == 1
-    request = _CaptureHandler.requests[0]
-    assert request['path'] == '/detections/_doc'
-    assert request['body']['type'] == 'aegisscan.detection.package'
-    assert request['body']['attack_techniques'] == ['T1059.001']
-    assert request['body']['source_finding_id'] == str(finding.id)
-    assert DetectionPublication.objects.filter(revision=revision).count() == 1
-    revision.rule.refresh_from_db(); assert revision.rule.state == DetectionRule.State.PUBLISHED
+    assert _CaptureHandler.requests == []
+    assert DetectionPublication.objects.filter(revision=revision).count() == 0
 
 
 def test_analyst_can_author_but_cannot_publish(detection_fixture):

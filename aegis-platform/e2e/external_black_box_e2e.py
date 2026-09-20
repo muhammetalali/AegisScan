@@ -5,7 +5,7 @@ import json,os,sys,time,uuid
 from pathlib import Path
 from typing import Any
 import requests
-BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip()
+BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip()
 def require(response:requests.Response,expected:set[int],label:str)->dict[str,Any]|list[Any]:
  if response.status_code not in expected: raise RuntimeError(f'{label} failed: HTTP {response.status_code}: {response.text[:1000]}')
  if not response.text:return {}
@@ -54,14 +54,26 @@ def main()->int:
  if not (E2E_EMAIL and E2E_PASSWORD): http(session,'POST',f'{DJANGO_URL}/auth/register/','User registration',{201},json={'email':email,'first_name':'E2E','last_name':'Harness','password':password,'password_confirm':password},headers=headers,timeout=20)
  csrf_token=csrf(session); headers['X-CSRFToken']=csrf_token; http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)
  project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20); project_id=project['id']
- organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E {unique}','slug':f'external-e2e-{unique}'},timeout=20); organization_id=organization.get('id')
- if not organization_id:raise RuntimeError(f'Tenant creation did not return id: {organization!r}')
+ created_organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
+ if not isinstance(created_organization,dict) or not created_organization.get('id'):raise RuntimeError(f'Tenant creation did not return id: {created_organization!r}')
+ if not all([E2E_GOV_ORG_ID,E2E_APPROVER_MEMBERSHIP_ID,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):raise RuntimeError('A3 external E2E requires a separately provisioned governance approver and tenant.')
+ organization_id=E2E_GOV_ORG_ID
  binding=http(session,'POST',f'{API_V1}/enterprise/projects/{project_id}/tenant','Project tenant binding',{200},params={'organization_id':organization_id},timeout=20)
  if binding.get('organization_id')!=organization_id:raise RuntimeError(f'Project tenant binding did not persist: {binding!r}')
+ grant=http(session,'POST',f'{API_V1}/assurance/governance/responsibilities/grants','Governed authorization responsibility grant',{200},json={'organization_id':organization_id,'membership_id':E2E_APPROVER_MEMBERSHIP_ID,'responsibility':'authorization_approver','scope_kind':'project','project_id':project_id,'reason':'Independent CI asset authorization approval duty.','idempotency_key':f'e2e-authorization-responsibility-{unique}'},timeout=20)
+ if grant.get('membership_id')!=E2E_APPROVER_MEMBERSHIP_ID or grant.get('responsibility')!='authorization_approver':raise RuntimeError(f'Authorization responsibility grant did not persist: {grant!r}')
  asset=http(session,'POST',f'{API_V1}/assets/','Nmap asset creation',{201},json={'project_id':project_id,'name':f'External Nmap target {unique}','type':'ip_address','description':'Real E2E target','environment':'development','criticality':'medium','configuration':{'host':TARGET},'tags':['e2e','nmap']},timeout=20); asset_id=asset.get('id') if isinstance(asset,dict) else None
  if not asset_id:raise RuntimeError(f'Asset creation did not return id: {asset!r}')
- authorization=http(session,'POST',f'{API_V1}/assets/{asset_id}/authorization','Authoritative Nmap authorization',{200},json={'authorized':True,'reason':'CI controlled real scanner target'},timeout=20)
- if not isinstance(authorization,dict) or (authorization.get('configuration') or {}).get('authorized') is not True:raise RuntimeError(f'Authorization grant did not persist: {authorization!r}')
+ proposal=http(session,'POST',f'{API_V1}/assets/{asset_id}/authorization','Submit governed Nmap authorization',{202},json={'authorized':True,'reason':'CI controlled real scanner target'},timeout=20)
+ governed_request=proposal.get('governed_action') if isinstance(proposal,dict) else None
+ if not isinstance(governed_request,dict) or governed_request.get('action_id')!='asset.authorization.approve':raise RuntimeError(f'Authorization proposal contract invalid: {proposal!r}')
+ approver=requests.Session(); approver.verify=VERIFY_TLS; approver_token=csrf(approver); approver_headers={'X-CSRFToken':approver_token,'Referer':f'{BASE_URL}/'}
+ http(approver,'POST',f'{DJANGO_URL}/auth/login/','Governance approver login',{200},json={'email':E2E_APPROVER_EMAIL,'password':E2E_APPROVER_PASSWORD},headers=approver_headers,timeout=20)
+ authorization_execution=http(approver,'POST',f'{API_V1}/assurance/governance/actions/execute','Execute governed Nmap authorization',{200},json={'action_id':'asset.authorization.approve','project_id':project_id,'entity_type':'asset','entity_id':asset_id,'expected_version':governed_request['expected_version'],'idempotency_key':f'e2e-authorization-execute-{unique}','request_id':governed_request['request_id'],'parameters':governed_request['parameters']},timeout=20)
+ authorization_result=authorization_execution.get('result') if isinstance(authorization_execution,dict) else None
+ authorization_decision_id=authorization_result.get('authorization_decision_id') if isinstance(authorization_result,dict) else None
+ if not authorization_decision_id:raise RuntimeError(f'Governed authorization execution did not return a durable decision: {authorization_execution!r}')
+ if authorization_execution.get('request_id')!=governed_request['request_id']:raise RuntimeError(f'Governed authorization lost request lineage: {authorization_execution!r}')
  prove_detection_response(session,email,password)
  idempotency_key=f'e2e-governed-{unique}'; correlation_id=f'e2e-corr-{unique}'
  execution=http(session,'POST',f'{API_V1}/capabilities/network.nmap/execute','Governed Nmap capability execution',{202},json={'project_id':project_id,'asset_id':asset_id,'depth':'quick','options':{},'credential_refs':[],'idempotency_key':idempotency_key,'correlation_id':correlation_id},timeout=20)
@@ -95,6 +107,7 @@ def main()->int:
  if not matching or matching[0].get('status')!='completed':raise RuntimeError(f'Nmap execution contract invalid: {executions}')
  auth_id=matching[0].get('result_data',{}).get('authorization_decision_id');
  if not auth_id:raise RuntimeError(f'Nmap execution lost authorization provenance: {matching[0]}')
+ if str(auth_id)!=str(authorization_decision_id):raise RuntimeError(f'Nmap execution authorization lineage mismatch: expected={authorization_decision_id} actual={auth_id}')
  if STATE_PATH:
   state={'project_id':project_id,'asset_id':asset_id,'capability_id':'network.nmap','depth':'quick','idempotency_key':idempotency_key,'correlation_id':correlation_id,'scan_id':scan_id,'execution_contract':contract,'execution_contract_fingerprint':execution.get('execution_contract_fingerprint'),'policy_version':execution.get('policy_version')}
   state_path=Path(STATE_PATH); state_path.parent.mkdir(parents=True,exist_ok=True); state_path.write_text(json.dumps(state,sort_keys=True,indent=2),encoding='utf-8')

@@ -66,7 +66,7 @@ def test_generic_governed_action_api_executes_and_exactly_replays(disposition_fi
     assert len(first.json()['audit']['entry_hash']) == 64
 
 
-def test_generic_api_rejects_unimplemented_action_contract_fail_closed(disposition_fixture):
+def test_generic_api_requires_immutable_request_for_request_bound_action(disposition_fixture):
     client, _user, project, _asset, _authorization, _scan, _finding, _organization, _membership = disposition_fixture
     response = client.post(
         '/api/v1/assurance/governance/actions/execute',
@@ -81,7 +81,7 @@ def test_generic_api_rejects_unimplemented_action_contract_fail_closed(dispositi
         },
     )
     assert response.status_code == 400
-    assert 'remains fail-closed' in response.text
+    assert 'requires an immutable request_id' in response.text
 
 
 def test_generic_api_rejects_client_asserted_authority_fields(disposition_fixture):

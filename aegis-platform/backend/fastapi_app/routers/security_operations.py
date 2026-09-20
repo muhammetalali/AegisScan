@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import UUID, uuid4
 
 from asgiref.sync import sync_to_async
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from fastapi_app.core.dependencies import get_current_user
+from fastapi_app.contracts.governed_actions import GovernedActionRequestView
 from fastapi_app.services.security_operations import SecurityOperationsError, StaleCaseVersion, attach_decision_action, get_case_state, ingest_detection_signal, transition_case, verify_case_chain
-from fastapi_app.services.soc_closure_governance import ClosureGovernanceError, close_investigation_case, get_investigation_closure
+from fastapi_app.services.governed_action_requests import GovernedActionRequestConflict, GovernedActionRequestError, create_governed_action_request, governed_action_request_view
+from fastapi_app.services.soc_closure_governance import ClosureGovernanceError, get_investigation_closure
 
 router = APIRouter()
 
@@ -50,6 +53,16 @@ def _uid(user: dict[str, Any]) -> str:
     if not value:
         raise HTTPException(status_code=401, detail='Invalid authenticated user')
     return str(value)
+
+
+def _proposal_request_id(request: Request) -> UUID:
+    raw = str(request.headers.get('X-Request-ID') or '').strip()
+    if not raw:
+        return uuid4()
+    try:
+        return UUID(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='X-Request-ID must be a valid UUID') from exc
 
 
 def _raise(exc: Exception):
@@ -99,15 +112,37 @@ async def response_handoff(project_id: str, case_id: str, payload: ResponseHando
     return {'case_id': str(state.case_id), 'decision_action_id': state.decision_action_id, 'version': state.version, 'replayed': replayed}
 
 
-@router.post('/projects/{project_id}/cases/{case_id}/closure', status_code=201)
-async def governed_closure(project_id: str, case_id: str, payload: CaseClosureIn, response: Response, user=Depends(get_current_user)):
+@router.post('/projects/{project_id}/cases/{case_id}/closure', response_model=GovernedActionRequestView, status_code=202)
+async def governed_closure(project_id: str, case_id: str, payload: CaseClosureIn, request: Request, user=Depends(get_current_user)):
+    request_id = _proposal_request_id(request)
+    parameters: dict[str, str] = {
+        'finding_id': payload.finding_id,
+        'closure_type': payload.closure_type,
+        'rationale': payload.rationale,
+    }
+    if payload.validation_id:
+        parameters['validation_id'] = payload.validation_id
+    if payload.disposition_id:
+        parameters['disposition_id'] = payload.disposition_id
     try:
-        result = await sync_to_async(close_investigation_case)(case_id=case_id, project_id=project_id, user_id=_uid(user), expected_version=payload.expected_version, finding_id=payload.finding_id, closure_type=payload.closure_type, rationale=payload.rationale, validation_id=payload.validation_id, disposition_id=payload.disposition_id)
-    except (SecurityOperationsError, ClosureGovernanceError, PermissionError) as exc:
-        _raise(exc)
-    if result.replayed:
-        response.status_code = 200
-    return {'closure_id': str(result.closure.id), 'case_id': str(result.closure.case_id), 'closure_type': result.closure.closure_type, 'status': result.state.case.status, 'version': result.state.version, 'replayed': result.replayed}
+        result = await sync_to_async(create_governed_action_request, thread_sensitive=True)(
+            action_id='investigation.close',
+            project_id=project_id,
+            requested_by_id=_uid(user),
+            entity_type='investigation_case',
+            entity_id=case_id,
+            expected_version=payload.expected_version,
+            idempotency_key=f'investigation-closure:{request_id}',
+            parameters=parameters,
+            correlation_id=request_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except GovernedActionRequestConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GovernedActionRequestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return GovernedActionRequestView(**governed_action_request_view(result))
 
 
 @router.get('/projects/{project_id}/cases/{case_id}/closure')

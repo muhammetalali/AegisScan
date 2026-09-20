@@ -16,6 +16,8 @@ def build_governed_capability_manifest(
     user_id: str,
     entity_type: str,
     entity_id: str,
+    request_proposer_id: str = '',
+    execution_parameters: dict | None = None,
 ):
     """Return the authoritative capability manifest with durable CAS state.
 
@@ -28,6 +30,8 @@ def build_governed_capability_manifest(
         user_id=user_id,
         entity_type=entity_type,
         entity_id=entity_id,
+        request_proposer_id=request_proposer_id,
+        execution_parameters=execution_parameters,
     )
     normalized_type = str(entity_type or '').strip().lower()
     if normalized_type != 'finding':

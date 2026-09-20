@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -21,6 +21,11 @@ from fastapi_app.services.entity_capability_adapters import (
     supported_entity_types,
 )
 from fastapi_app.services.finding_disposition import govern_finding_disposition
+from fastapi_app.services.integration_live_acceptance import (
+    accept_integration_live,
+    integration_acceptance_generation,
+    record_integration_acceptance_test,
+)
 from fastapi_app.services.governed_operations import get_action_contract
 from fastapi_app.services.governed_responsibility_authority import grant_responsibility, revoke_responsibility
 from fastapi_app.services.test_assurance_obligation_governance import _schedule
@@ -115,7 +120,7 @@ def test_contract_states_match_real_soc_and_assurance_domains():
 
 def test_adapter_registry_covers_every_current_agom_entity_type():
     expected = {
-        'asset_authorization', 'finding', 'crown_jewel_objective', 'campaign',
+        'asset', 'finding', 'crown_jewel_objective', 'campaign',
         'detection_revision', 'investigation_case', 'assurance_obligation', 'integration',
     }
     assert set(supported_entity_types()) == expected
@@ -231,7 +236,7 @@ def test_campaign_objective_enables_but_campaign_completion_enforces_sod(disposi
     assert 'lead_must_not_be_sole_assessor_for_all_objectives' in complete.missing_requirements
 
 
-def test_detection_publish_requires_passed_validation_and_live_siem_target(detection_fixture):
+def test_detection_publish_requires_passed_validation_and_current_live_siem_target(detection_fixture):
     _client, user, project, finding, evidence, organization, membership = detection_fixture
     _owner_role(membership)
     revision = _revision(user, project, finding, evidence).revision
@@ -239,16 +244,43 @@ def test_detection_publish_requires_passed_validation_and_live_siem_target(detec
         revision_id=str(revision.id), project_id=str(project.id), user_id=str(user.id),
         telemetry=_telemetry(), minimum_matches=1,
     )
-    ExternalIntegration.objects.create(
+    integration = ExternalIntegration.objects.create(
         organization=organization, kind=ExternalIntegration.Kind.ELASTIC, name='Capability Elastic',
         base_url='http://127.0.0.1:9', config={'index': 'detections'}, enabled=True, created_by=user,
+    )
+    acceptance_test = record_integration_acceptance_test(
+        integration_id=str(integration.id), project_id=str(project.id), actor_id=str(user.id),
+        outcome='passed', source_ref='entity-cap-detection-live',
+        evidence_sha256='c' * 64, evidence_summary={'http_status': 201},
+        test_type='live_transport_probe',
+    ).test
+    accept_integration_live(
+        integration_id=str(integration.id), project_id=str(project.id), actor_id=str(user.id),
+        expected_version=integration_acceptance_generation(
+            integration_id=str(integration.id), project_id=str(project.id),
+        ),
+        acceptance_test_id=str(acceptance_test.id),
+        vendor_ack='Capability test connector live acceptance.',
+        acceptance_evidence_sha256=acceptance_test.evidence_sha256,
+        review_at=datetime.now(timezone.utc) + timedelta(days=30),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=60),
     )
     _grant(
         issuer=user, organization=organization, membership=membership, project=project,
         responsibility='detection_publisher', key='entity-cap-detection-publisher',
     )
-    manifest = build_entity_capability_manifest(
+    plain = build_entity_capability_manifest(
         project_id=str(project.id), user_id=str(user.id), entity_type='detection_revision', entity_id=str(revision.id),
+    )
+    plain_publish = _action(plain, 'detection.publish')
+    assert plain_publish.mode is ActionMode.BLOCKED
+    assert plain_publish.reason_code == 'GOVERNED_REQUEST_REQUIRED'
+    assert 'immutable_governed_request' in plain_publish.missing_requirements
+
+    manifest = build_entity_capability_manifest(
+        project_id=str(project.id), user_id=str(user.id), entity_type='detection_revision',
+        entity_id=str(revision.id), request_proposer_id='independent-proposer',
+        execution_parameters={'integration_id': integration.id},
     )
     publish = _action(manifest, 'detection.publish')
     assert publish.mode is ActionMode.ENABLED
@@ -284,8 +316,12 @@ def test_soc_closure_uses_real_investigating_state_and_governed_disposition(disp
     )
     close = _action(manifest, 'investigation.close')
     assert manifest.projection.lifecycle == 'investigating'
-    assert close.mode is ActionMode.ENABLED
-    assert {result.gate.value for result in close.gate_results} == {'closure', 'evidence'}
+    # A3 makes investigation closure request-bound. A general capability
+    # projection must not enable the mutation without an immutable proposer
+    # context, even when a legacy disposition exists.
+    assert close.mode is ActionMode.BLOCKED
+    assert close.reason_code == 'GOVERNED_REQUEST_REQUIRED'
+    assert 'immutable_governed_request' in close.missing_requirements
 
 
 def django_future_review():
@@ -294,7 +330,7 @@ def django_future_review():
     return django_timezone.now() + timedelta(days=30)
 
 
-def test_unimplemented_governance_domains_fail_closed_with_explicit_reasons(disposition_fixture):
+def test_request_bound_governance_domains_fail_closed_without_request_context(disposition_fixture):
     _client, user, project, asset, authorization, _scan, finding, organization, membership = disposition_fixture
     _owner_role(membership)
 
@@ -304,11 +340,17 @@ def test_unimplemented_governance_domains_fail_closed_with_explicit_reasons(disp
     )
     auth_manifest = build_entity_capability_manifest(
         project_id=str(project.id), user_id=str(user.id),
-        entity_type='asset_authorization', entity_id=str(authorization.id),
+        entity_type='asset', entity_id=str(asset.id),
     )
     auth_action = _action(auth_manifest, 'asset.authorization.approve')
+    revoke_action = _action(auth_manifest, 'asset.authorization.revoke')
+    assert auth_manifest.projection.lifecycle == 'authorized'
     assert auth_action.mode is ActionMode.BLOCKED
-    assert auth_action.reason_code == 'AUTHORIZATION_REQUEST_DOMAIN_NOT_IMPLEMENTED'
+    assert revoke_action.mode is ActionMode.BLOCKED
+    assert auth_action.reason_code == 'GOVERNED_REQUEST_REQUIRED'
+    assert revoke_action.reason_code == 'GOVERNED_REQUEST_REQUIRED'
+    assert 'immutable_governed_request' in auth_action.missing_requirements
+    assert 'immutable_governed_request' in revoke_action.missing_requirements
 
     integration = ExternalIntegration.objects.create(
         organization=organization, kind=ExternalIntegration.Kind.GITHUB, name='Capability GitHub',
@@ -322,8 +364,9 @@ def test_unimplemented_governance_domains_fail_closed_with_explicit_reasons(disp
         project_id=str(project.id), user_id=str(user.id), entity_type='integration', entity_id=str(integration.id),
     )
     integration_action = _action(integration_manifest, 'integration.live_accept')
+    assert integration_manifest.projection.lifecycle == 'untested'
     assert integration_action.mode is ActionMode.BLOCKED
-    assert integration_action.reason_code == 'LIVE_ACCEPTANCE_DOMAIN_NOT_IMPLEMENTED'
+    assert integration_action.reason_code == 'STATE_PRECONDITION_UNMET'
 
     schedule = _schedule(user, project, asset, authorization, organization)
     risk = _risk_snapshot(user=user, project=project, finding=finding, marker='cap-assurance')

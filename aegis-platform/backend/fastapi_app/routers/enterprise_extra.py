@@ -13,7 +13,7 @@ from ..core.dependencies import get_current_user
 from django_project.projects.models import Project
 from enterprise.models import ExternalIntegration, IntegrationSyncRun, Notification, SBOMArtifact
 from enterprise.services import ensure_project_tenant
-from enterprise.tasks import dispatch_integration, ingest_sbom_task, send_notification, sync_external_integration_task
+from enterprise.tasks import dispatch_integration, ingest_sbom_task, run_integration_acceptance_test, send_notification, sync_external_integration_task
 
 router=APIRouter()
 
@@ -31,6 +31,10 @@ class IntegrationCreate(BaseModel):
     base_url:str
     secret_ref:str=''
     config:dict[str,Any]=Field(default_factory=dict)
+
+class IntegrationAcceptanceTestCreate(BaseModel):
+    project_id:UUID
+    event:dict[str,Any]=Field(default_factory=dict)
 
 class SBOMCreate(BaseModel):
     project_id:UUID
@@ -127,10 +131,30 @@ async def create_integration(body:IntegrationCreate,user=Depends(get_current_use
     return {'id':str(item.id),'organization_id':str(org.id),'kind':item.kind,'enabled':item.enabled}
 
 @router.post('/integrations/{integration_id}/test',status_code=202)
-async def test_integration(integration_id:UUID,event:dict[str,Any],user=Depends(get_current_user)):
+async def test_integration(integration_id:int,event:dict[str,Any],user=Depends(get_current_user)):
     item=await sync_to_async(lambda:ExternalIntegration.objects.filter(id=integration_id,organization__memberships__user_id=str(user.get('user_id')),organization__memberships__is_active=True).first())()
     if not item: raise HTTPException(status_code=404,detail='Integration not found')
     task=dispatch_integration.delay(str(item.id),event); return {'integration_id':str(item.id),'task_id':task.id}
+
+@router.post('/integrations/{integration_id}/acceptance-test',status_code=202)
+async def run_acceptance_test(integration_id:int,body:IntegrationAcceptanceTestCreate,user=Depends(get_current_user)):
+    project=await _project(body.project_id,user)
+    org=await sync_to_async(ensure_project_tenant)(project,str(user.get('user_id')))
+    integration=await sync_to_async(lambda:ExternalIntegration.objects.filter(
+        id=integration_id,organization=org,enabled=True,
+    ).first())()
+    if integration is None:
+        raise HTTPException(status_code=404,detail='Enabled tenant-owned integration not found')
+    task=run_integration_acceptance_test.delay(
+        str(integration.id),str(project.id),str(user.get('user_id')),dict(body.event or {}),
+    )
+    return {
+        'integration_id':str(integration.id),
+        'project_id':str(project.id),
+        'task_id':task.id,
+        'status':'queued',
+    }
+
 
 @router.post('/sbom',status_code=202)
 async def ingest_sbom(body:SBOMCreate,user=Depends(get_current_user)):
@@ -146,7 +170,7 @@ async def list_sbom(project_id:UUID,user=Depends(get_current_user)):
 
 
 @router.post('/integrations/{integration_id}/sync',status_code=202)
-async def sync_integration(integration_id:UUID,project_id:UUID,user=Depends(get_current_user)):
+async def sync_integration(integration_id:int,project_id:UUID,user=Depends(get_current_user)):
     project=await _project(project_id,user)
     org=await sync_to_async(ensure_project_tenant)(project,str(user.get('user_id')))
     integration=await sync_to_async(lambda:ExternalIntegration.objects.filter(
@@ -164,7 +188,7 @@ async def sync_integration(integration_id:UUID,project_id:UUID,user=Depends(get_
 
 
 @router.get('/integrations/{integration_id}/sync-runs')
-async def integration_sync_runs(integration_id:UUID,project_id:UUID,limit:int=Query(50,ge=1,le=200),user=Depends(get_current_user)):
+async def integration_sync_runs(integration_id:int,project_id:UUID,limit:int=Query(50,ge=1,le=200),user=Depends(get_current_user)):
     project=await _project(project_id,user)
     rows=await sync_to_async(lambda:list(IntegrationSyncRun.objects.filter(
         integration_id=integration_id,project=project,

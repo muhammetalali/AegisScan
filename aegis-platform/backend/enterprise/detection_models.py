@@ -146,6 +146,65 @@ class DetectionPublication(models.Model):
         raise ValidationError('Detection publications are immutable and cannot be deleted.')
 
 
+class DetectionPublicationDelivery(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = 'queued', 'Queued'
+        SENDING = 'sending', 'Sending'
+        DELIVERED = 'delivered', 'Delivered'
+        FAILED = 'failed', 'Failed'
+        BLOCKED = 'blocked', 'Blocked'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        'enterprise.Organization', on_delete=models.PROTECT, related_name='detection_publication_deliveries',
+    )
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.PROTECT, related_name='detection_publication_deliveries',
+    )
+    revision = models.ForeignKey(
+        DetectionRevision, on_delete=models.PROTECT, related_name='publication_deliveries',
+    )
+    integration = models.ForeignKey(
+        'enterprise.ExternalIntegration', on_delete=models.PROTECT, related_name='detection_publication_deliveries',
+    )
+    live_acceptance = models.ForeignKey(
+        'enterprise.IntegrationLiveAcceptance',
+        on_delete=models.PROTECT,
+        related_name='detection_publication_deliveries',
+    )
+    governed_request = models.OneToOneField(
+        'enterprise.GovernedActionRequest',
+        on_delete=models.PROTECT,
+        related_name='detection_publication_delivery',
+    )
+    correlation_id = models.UUIDField()
+    package = models.JSONField()
+    package_sha256 = models.CharField(max_length=64)
+    integration_configuration_fingerprint = models.CharField(max_length=64)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
+    attempts = models.PositiveIntegerField(default=0)
+    transport_status = models.PositiveIntegerField(null=True, blank=True)
+    response_sha256 = models.CharField(max_length=64, blank=True)
+    last_error = models.TextField(blank=True)
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='requested_detection_publication_deliveries',
+    )
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = 'enterprise'
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['status', 'created_at'], name='idx_det_delivery_state'),
+            models.Index(fields=['revision', 'created_at'], name='idx_det_delivery_revision'),
+            models.Index(fields=['integration', 'status'], name='idx_det_delivery_target'),
+        ]
+
+
 class DetectionEvent(models.Model):
     id = models.BigAutoField(primary_key=True)
     rule = models.ForeignKey(DetectionRule, on_delete=models.PROTECT, related_name='events')

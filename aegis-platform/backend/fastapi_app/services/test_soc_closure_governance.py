@@ -208,3 +208,34 @@ def test_postgresql_concurrent_identical_risk_closure_is_idempotent(disposition_
     assert sorted(result.replayed for result in results) == [False, True]
     assert len({result.closure.id for result in results}) == 1
     assert InvestigationClosure.objects.filter(case=case).count() == 1
+
+
+def test_domain_closure_rejects_non_latest_remediation_validation(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, finding, organization, _membership = disposition_fixture
+    case, state = _case(user, project, organization, finding)
+    action = _action(user, project, organization, finding)
+    state, _ = attach_decision_action(
+        case_id=str(case.id),
+        action_id=action.action_id,
+        project_id=str(project.id),
+        user_id=str(user.id),
+        expected_version=state.version,
+    )
+    older, _older_evidence = _verified_validation(user, finding)
+    _newer, _newer_evidence = _verified_validation(user, finding)
+
+    with pytest.raises(ClosureGovernanceError, match='latest validation run'):
+        close_investigation_case(
+            case_id=str(case.id),
+            project_id=str(project.id),
+            user_id=str(user.id),
+            expected_version=state.version,
+            finding_id=str(finding.id),
+            closure_type='remediated',
+            validation_id=str(older.id),
+            rationale='Older remediation proof must not close the case.',
+        )
+
+    case.refresh_from_db()
+    assert case.status == InvestigationCase.Status.INVESTIGATING
+    assert InvestigationClosure.objects.filter(case=case).count() == 0
