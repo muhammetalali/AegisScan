@@ -59,11 +59,20 @@ def _contract(
 
 _ACTIONS = (
     _contract(
-        'asset.authorization.approve', 'asset_authorization', 'Approve asset scope authorization',
-        ['submitted'], [ActorLayer.GOVERN], ['owner', 'admin'],
+        'asset.authorization.approve', 'asset', 'Approve or renew asset scope authorization',
+        ['authorization_required', 'revoked', 'authorized'], [ActorLayer.GOVERN], ['owner', 'admin'],
         responsibilities=['authorization_approver'],
-        gates=[GateType.AUTHORIZATION], evidence=['ownership', 'scope'],
-        resulting_projection={'lifecycle': 'approved'}, audit_event='asset.authorization.approved',
+        gates=[GateType.AUTHORIZATION], evidence=['server_derived_asset_scope'],
+        sod=['actor_must_not_be_request_proposer'], time_aware=True,
+        resulting_projection={'lifecycle': 'authorized'}, audit_event='asset.authorization.approved',
+    ),
+    _contract(
+        'asset.authorization.revoke', 'asset', 'Revoke the current asset scope authorization',
+        ['authorized'], [ActorLayer.GOVERN], ['owner', 'admin'],
+        responsibilities=['authorization_approver'],
+        gates=[GateType.AUTHORIZATION], evidence=['current_authorization'],
+        sod=['actor_must_not_be_request_proposer'],
+        resulting_projection={'lifecycle': 'revoked'}, audit_event='asset.authorization.revoked',
     ),
     _contract(
         'finding.confirm', 'finding', 'Confirm a finding as technically real',
