@@ -27,7 +27,7 @@ class GovernedWorkClaim(models.Model):
         related_name='governed_work_claims',
     )
     source_type = models.CharField(max_length=40, choices=SourceType.choices)
-    source_id = models.CharField(max_length=128)
+    source_id = models.CharField(max_length=255)
     claimed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
