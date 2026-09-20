@@ -114,6 +114,7 @@ jobs:
           python -m compileall -q \
             fastapi_app/services/cloud_target.py \
             fastapi_app/services/cloud_security.py \
+            fastapi_app/services/cloud_live_provider_reality.py \
             fastapi_app/services/cloud_capability.py \
             fastapi_app/services/cloud_launcher.py \
             fastapi_app/services/native_tool_runtime.py \
@@ -125,6 +126,7 @@ jobs:
           python manage.py migrate --noinput
           python -m pytest -q \
             fastapi_app/services/test_cloud_security.py \
+            fastapi_app/services/test_cloud_live_provider_reality.py \
             fastapi_app/services/test_cloud_capability_contract.py \
             fastapi_app/services/test_cloud_credential_scope.py \
             fastapi_app/services/test_credential_scope_regression.py \
@@ -193,45 +195,54 @@ jobs:
           sudo rm -f -- /tmp/cloud-invalid.json
           rm -f -- /tmp/cloud-invalid-result.json
 
-      - name: Run configured live provider proofs
+      - name: Run optional configured provider probes
         shell: bash
         working-directory: aegis-platform/backend
         run: |
           set -euo pipefail
+          count=0
           run_provider() {
             provider="$1"
             target="$2"
             credential="$3"
-            if [ -z "$target" ] || [ -z "$credential" ]; then
-              echo "${provider}: live-provider proof not configured" >> "$GITHUB_STEP_SUMMARY"
+
+            if { [ -n "$target" ] && [ -z "$credential" ]; } || { [ -z "$target" ] && [ -n "$credential" ]; }; then
+              echo "::error::${provider}: partial provider binding; target and credential must be configured together"
+              exit 78
+            fi
+            if [ -z "$target" ]; then
+              echo "${provider}: optional provider probe not configured" >> "$GITHUB_STEP_SUMMARY"
               return 0
             fi
+
+            count=$((count + 1))
             file="/tmp/aegis-${provider}-credential.json"
             output="/tmp/aegis-${provider}-result.json"
+            proof="/tmp/aegis-${provider}-proof.json"
             umask 077
             printf '%s' "$credential" > "$file"
+            chmod 0600 "$file"
+
             python -m fastapi_app.services.cloud_security "$target" --credentials-file "$file" > "$output"
-            PROVIDER="$provider" TARGET="$target" CREDENTIAL_FILE="$file" OUTPUT_FILE="$output" python - <<'PY'
-          import json
-          import os
-          provider = os.environ['PROVIDER']
-          target = os.environ['TARGET']
-          secret = open(os.environ['CREDENTIAL_FILE'], encoding='utf-8').read()
-          raw = open(os.environ['OUTPUT_FILE'], encoding='utf-8').read()
-          data = json.loads(raw)
-          assert data['schema'] == 'aegis.cloud-security.v1', data
-          assert data['provider'] == provider, data
-          assert data['target'] == target, data
-          summary = data['observations'][0]
-          assert summary['identity_verified'] is True, summary
-          assert summary['read_only'] is True, summary
-          assert summary['ambient_credentials_used'] is False, summary
-          assert secret not in raw
-          print(f'{provider}-live-provider-proof-ok')
-          PY
-            rm -f -- "$file" "$output"
-            echo "${provider}: live-provider proof PASSED" >> "$GITHUB_STEP_SUMMARY"
+            python -m fastapi_app.services.cloud_live_provider_reality \
+              --provider "$provider" \
+              --target "$target" \
+              --credential-file "$file" \
+              --result-file "$output" \
+              --source-sha "$GITHUB_SHA" \
+              --output "$proof"
+
+            rm -f -- "$file" "$output" "$proof"
+            echo "${provider}: optional provider probe PASSED" >> "$GITHUB_STEP_SUMMARY"
           }
+
           run_provider aws "${AEGIS_AWS_CLOUD_TARGET:-}" "${AEGIS_AWS_CLOUD_CREDENTIAL_JSON:-}"
           run_provider azure "${AEGIS_AZURE_CLOUD_TARGET:-}" "${AEGIS_AZURE_CLOUD_CREDENTIAL_JSON:-}"
           run_provider gcp "${AEGIS_GCP_CLOUD_TARGET:-}" "${AEGIS_GCP_CLOUD_CREDENTIAL_JSON:-}"
+
+          echo "Optional configured provider probes: $count" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -eq 0 ]; then
+            echo "No live provider was configured. This Cloud Security Reality run proves contracts/runtime only; it is NOT a Cloud Live Provider Reality proof." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Configured provider probes passed here are supplemental. Authoritative live evidence is captured only by the fail-closed Cloud Live Provider Reality workflow." >> "$GITHUB_STEP_SUMMARY"
+          fi
