@@ -29,6 +29,7 @@ from fastapi_app.core import dependencies as core_dependencies
 from fastapi_app.main import app
 from fastapi_app.services.finding_disposition import (
     FindingDispositionError,
+    StaleFindingDispositionVersion,
     govern_finding_disposition,
 )
 
@@ -618,3 +619,52 @@ def test_postgresql_concurrent_exact_request_creates_one_immutable_decision(disp
     assert FindingDisposition.objects.filter(finding=finding).count() == 1
     assert VulnerabilityStatusHistory.objects.filter(vulnerability=finding).count() == 1
     assert AuditLog.objects.filter(resource_id=str(finding.id), metadata__operation='finding_disposition').count() == 1
+
+
+def test_domain_primitive_enforces_cas_and_can_suppress_legacy_audit(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, finding, _organization, _membership = disposition_fixture
+    risk = _risk_snapshot(user=user, project=project, finding=finding, marker='agom-cas')
+    before_version = finding.version
+
+    result = govern_finding_disposition(
+        finding_id=finding.id,
+        disposition=FindingDisposition.Disposition.ACCEPTED_RISK,
+        rationale='AGOM executor owns the authoritative audit envelope.',
+        actor_id=user.id,
+        risk_correlation_id=risk.id,
+        review_at=datetime.now(timezone.utc) + timedelta(days=30),
+        expected_version=before_version,
+        emit_audit=False,
+    )
+
+    finding.refresh_from_db()
+    assert result.status_changed is True
+    assert finding.status == Vulnerability.Status.ACCEPTED_RISK
+    assert finding.version == before_version + 1
+    assert AuditLog.objects.filter(
+        metadata__operation='finding_disposition',
+        resource_id=str(finding.id),
+    ).count() == 0
+
+
+def test_domain_primitive_stale_version_rolls_back_without_disposition(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, finding, _organization, _membership = disposition_fixture
+    risk = _risk_snapshot(user=user, project=project, finding=finding, marker='agom-stale-cas')
+    before_version = finding.version
+
+    with pytest.raises(StaleFindingDispositionVersion, match='Expected finding version'):
+        govern_finding_disposition(
+            finding_id=finding.id,
+            disposition=FindingDisposition.Disposition.ACCEPTED_RISK,
+            rationale='Stale CAS must fail before mutation.',
+            actor_id=user.id,
+            risk_correlation_id=risk.id,
+            review_at=datetime.now(timezone.utc) + timedelta(days=30),
+            expected_version=before_version + 1,
+            emit_audit=False,
+        )
+
+    finding.refresh_from_db()
+    assert finding.status == Vulnerability.Status.OPEN
+    assert finding.version == before_version
+    assert FindingDisposition.objects.filter(finding=finding).count() == 0
