@@ -223,7 +223,23 @@ def run_integration_acceptance_test(self, integration_id: str, project_id: str, 
     from fastapi_app.services.integration_live_acceptance import record_integration_acceptance_test
 
     source_ref=f'celery:{self.request.id}'
-    integration=ExternalIntegration.objects.get(pk=integration_id,enabled=True)
+    project=Project.objects.filter(pk=project_id).first()
+    if project is None:
+        raise ValueError('Integration acceptance test project was not found.')
+    integration=ExternalIntegration.objects.filter(
+        pk=integration_id,
+        enabled=True,
+        organization__project_links__project_id=project_id,
+        organization__memberships__user_id=user_id,
+        organization__memberships__is_active=True,
+        organization__memberships__user__is_active=True,
+    ).distinct().first()
+    project_access=(
+        str(project.owner_id)==str(user_id)
+        or project.members.filter(pk=user_id).exists()
+    )
+    if integration is None or not project_access:
+        raise PermissionError('Integration acceptance test scope is not authorized.')
     material={
         'integration_id':str(integration.id),
         'project_id':str(project_id),
