@@ -171,7 +171,7 @@ jobs:
           assert get_action_contract('investigation.close').allowed_states == ['investigating', 'decided']
           assert get_action_contract('assurance.obligation.satisfy').allowed_states == ['open', 'due', 'overdue']
           assert set(supported_entity_types()) == {
-              'asset_authorization', 'finding', 'crown_jewel_objective', 'campaign',
+              'asset', 'finding', 'crown_jewel_objective', 'campaign',
               'detection_revision', 'investigation_case', 'assurance_obligation', 'integration',
           }
           print('AGOM_ENTITY_CAPABILITY_API=WIRED')
