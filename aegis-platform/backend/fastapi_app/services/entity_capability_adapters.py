@@ -877,6 +877,53 @@ def _execution_context_for_action(
         )]
         return gates, valid
 
+    if action_id == 'detection.publish':
+        requested_integration_id = str(payload.get('integration_id') or '').strip()
+        integration = (
+            ExternalIntegration.objects.filter(
+                pk=requested_integration_id,
+                organization_id=context.organization_id,
+                enabled=True,
+                kind__in=_SIEM_KINDS,
+            ).first()
+            if requested_integration_id else None
+        )
+        acceptance = (
+            current_integration_live_acceptance(
+                integration=integration,
+                project_id=str(context.entity.project_id),
+            )
+            if integration is not None else None
+        )
+        validation_gate = next((item for item in gates if item.gate is GateType.VALIDATION), None)
+        valid = bool(
+            validation_gate is not None
+            and validation_gate.state is GateState.PASS
+            and integration is not None
+            and acceptance is not None
+        )
+        publication_gate = _gate(
+            GateType.PUBLICATION,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'REQUEST_BOUND_LIVE_SIEM_READY' if valid else 'REQUEST_BOUND_LIVE_SIEM_REQUIRED',
+            'The immutable request selects a current live-accepted tenant-owned SIEM target.' if valid else 'The immutable request must select a current live-accepted tenant-owned SIEM target.',
+            missing=[] if valid else ['integration_id', 'current_live_accepted_siem_integration'],
+            evidence_refs=(
+                [
+                    str(integration.id),
+                    str(acceptance.id),
+                    str(acceptance.acceptance_test_id),
+                    acceptance.acceptance_test.configuration_fingerprint,
+                ]
+                if valid else []
+            ),
+        )
+        gates = [
+            publication_gate if item.gate is GateType.PUBLICATION else item
+            for item in gates
+        ]
+        return gates, valid
+
     if action_id == 'integration.live_accept':
         base_live_gate = next((item for item in gates if item.gate is GateType.LIVE_ACCEPTANCE), None)
         latest_test_id = (
