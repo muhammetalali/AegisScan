@@ -32,6 +32,10 @@ class FindingDispositionError(ValueError):
     pass
 
 
+class StaleFindingDispositionVersion(FindingDispositionError):
+    pass
+
+
 @dataclass(frozen=True)
 class DispositionResult:
     disposition: FindingDisposition
@@ -156,6 +160,8 @@ def govern_finding_disposition(
     *, finding_id: UUID | str, disposition: str, rationale: str, actor_id: UUID | str,
     risk_correlation_id: UUID | str | None = None, review_at: datetime | None = None,
     duplicate_of_id: UUID | str | None = None,
+    expected_version: int | None = None,
+    emit_audit: bool = True,
 ) -> DispositionResult:
     normalized = _normalize_rationale(rationale)
     if len(normalized) < 3:
@@ -201,6 +207,10 @@ def govern_finding_disposition(
         existing = FindingDisposition.objects.select_for_update().filter(request_fingerprint=fingerprint).first()
         if existing is not None:
             return DispositionResult(existing, True, False, finding.status)
+        if expected_version is not None and int(finding.version) != int(expected_version):
+            raise StaleFindingDispositionVersion(
+                f'Expected finding version {expected_version}, current version is {finding.version}.'
+            )
         if finding.status == target_status:
             raise FindingDispositionError('Finding already has this disposition with different immutable semantics.')
 
@@ -226,11 +236,12 @@ def govern_finding_disposition(
             return DispositionResult(existing, True, False, finding.status)
 
         finding.status = target_status
+        finding.version = int(finding.version) + 1
         if disposition == FindingDisposition.Disposition.DUPLICATE:
             finding.duplicate_of = canonical_duplicate
-            update_fields = ['status', 'duplicate_of', 'updated_at']
+            update_fields = ['status', 'duplicate_of', 'version', 'updated_at']
         else:
-            update_fields = ['status', 'updated_at']
+            update_fields = ['status', 'version', 'updated_at']
         finding.save(update_fields=update_fields)
 
         VulnerabilityStatusHistory.objects.create(
@@ -238,12 +249,13 @@ def govern_finding_disposition(
             changed_by_id=actor_id,
             reason=f'Governed finding disposition {record.id}; policy={POLICY_VERSION}',
         )
-        add_audit_entry(
-            user=str(actor_id), action=AuditLog.Action.VULN_STATUS_CHANGE,
-            target=str(finding.id), project=str(finding.project_id), resource_type='vulnerability',
-            resource_repr=f'Governed finding disposition {record.id}',
-            changes={'status': {'from': previous_status, 'to': target_status}},
-            metadata={
+        if emit_audit:
+            add_audit_entry(
+                user=str(actor_id), action=AuditLog.Action.VULN_STATUS_CHANGE,
+                target=str(finding.id), project=str(finding.project_id), resource_type='vulnerability',
+                resource_repr=f'Governed finding disposition {record.id}',
+                changes={'status': {'from': previous_status, 'to': target_status}},
+                metadata={
                 'operation': 'finding_disposition', 'disposition_id': str(record.id),
                 'organization_id': str(organization.id), 'approving_role': membership.role,
                 'risk_correlation_id': str(risk.id) if risk else None,
@@ -251,8 +263,8 @@ def govern_finding_disposition(
                 'duplicate_of_id': str(canonical_duplicate.id) if canonical_duplicate else None,
                 'review_at': normalized_review.isoformat() if normalized_review else None,
                 'policy_version': POLICY_VERSION,
-            },
-        )
+                },
+                )
         return DispositionResult(record, False, True, previous_status)
 
 
