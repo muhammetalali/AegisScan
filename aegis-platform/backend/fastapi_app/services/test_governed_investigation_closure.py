@@ -10,7 +10,7 @@ from fastapi_app.services.governed_action_requests import create_governed_action
 from fastapi_app.services.security_operations import attach_decision_action, verify_case_chain
 from fastapi_app.services.soc_closure_governance import close_investigation_case
 from fastapi_app.services.test_finding_disposition import disposition_fixture, _other_finding
-from fastapi_app.services.test_finding_governed_actions import _actor, _ownerize
+from fastapi_app.services.test_finding_governed_actions import _actor, _ownerize, _validation
 from fastapi_app.services.test_governed_finding_dispositions import _execute_requested
 from fastapi_app.services.test_soc_closure_governance import _action, _case, _verified_validation
 
@@ -44,7 +44,7 @@ def _request(*, project, proposer, case, state, parameters, marker: str):
 
 
 def test_remediated_investigation_closure_is_request_bound_and_evidence_qualified(disposition_fixture):
-    _client, owner, project, _asset, _authorization, _scan, finding, organization, owner_membership = disposition_fixture
+    _client, owner, project, _asset, authorization, _scan, finding, organization, owner_membership = disposition_fixture
     _ownerize(owner_membership)
     case, state = _case(owner, project, organization, finding)
     action = _action(owner, project, organization, finding)
@@ -56,7 +56,13 @@ def test_remediated_investigation_closure_is_request_bound_and_evidence_qualifie
         expected_version=state.version,
     )
     assert replayed is False
-    validation, evidence = _verified_validation(owner, finding)
+    validation, evidence = _validation(
+        user=owner,
+        finding=finding,
+        authorization=authorization,
+        finding_present=False,
+        remediation_state='verified',
+    )
     approver = _closure_approver(owner=owner, project=project, organization=organization, marker='remediated')
     parameters = {
         'finding_id': str(finding.id),
@@ -158,7 +164,7 @@ def test_investigation_disposition_closure_requires_governed_disposition_provena
 
 
 def test_investigation_closure_self_approval_is_blocked(disposition_fixture):
-    _client, owner, project, _asset, _authorization, _scan, finding, organization, owner_membership = disposition_fixture
+    _client, owner, project, _asset, authorization, _scan, finding, organization, owner_membership = disposition_fixture
     _ownerize(owner_membership)
     case, state = _case(owner, project, organization, finding)
     action = _action(owner, project, organization, finding)
@@ -169,7 +175,13 @@ def test_investigation_closure_self_approval_is_blocked(disposition_fixture):
         user_id=str(owner.id),
         expected_version=state.version,
     )
-    validation, _evidence = _verified_validation(owner, finding)
+    validation, _evidence = _validation(
+        user=owner,
+        finding=finding,
+        authorization=authorization,
+        finding_present=False,
+        remediation_state='verified',
+    )
     approver = _closure_approver(owner=owner, project=project, organization=organization, marker='self')
     parameters = {
         'finding_id': str(finding.id),
@@ -241,4 +253,66 @@ def test_legacy_disposition_without_agom_execution_cannot_close_investigation(di
             request_id=str(request.id),
             parameters=parameters,
         )
+    assert InvestigationClosure.objects.filter(case=case).count() == 0
+
+
+def test_investigation_remediated_closure_rejects_non_latest_validation(disposition_fixture):
+    _client, owner, project, _asset, authorization, _scan, finding, organization, owner_membership = disposition_fixture
+    _ownerize(owner_membership)
+    case, state = _case(owner, project, organization, finding)
+    action = _action(owner, project, organization, finding)
+    state, _ = attach_decision_action(
+        case_id=str(case.id),
+        action_id=action.action_id,
+        project_id=str(project.id),
+        user_id=str(owner.id),
+        expected_version=state.version,
+    )
+    older, _older_evidence = _validation(
+        user=owner,
+        finding=finding,
+        authorization=authorization,
+        finding_present=False,
+        remediation_state='verified',
+    )
+    _newer, _newer_evidence = _validation(
+        user=owner,
+        finding=finding,
+        authorization=authorization,
+        finding_present=False,
+        remediation_state='verified',
+    )
+    approver = _closure_approver(
+        owner=owner,
+        project=project,
+        organization=organization,
+        marker='non-latest',
+    )
+    parameters = {
+        'finding_id': str(finding.id),
+        'closure_type': 'remediated',
+        'rationale': 'Older validation must not authorize closure.',
+        'validation_id': str(older.id),
+    }
+    request = _request(
+        project=project,
+        proposer=owner,
+        case=case,
+        state=state,
+        parameters=parameters,
+        marker='non-latest',
+    )
+    with pytest.raises(GovernedActionBlocked) as blocked:
+        execute_governed_action(
+            action_id='investigation.close',
+            project_id=str(project.id),
+            actor_id=str(approver.id),
+            entity_type='investigation_case',
+            entity_id=str(case.id),
+            expected_version=state.version,
+            idempotency_key='a3-investigation-execution-non-latest',
+            request_id=str(request.id),
+            parameters=parameters,
+        )
+    assert blocked.value.reason_code == 'LATEST_REMEDIATION_VALIDATION_REQUIRED'
     assert InvestigationClosure.objects.filter(case=case).count() == 0
