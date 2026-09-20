@@ -76,6 +76,10 @@ celery_app.conf.update(
             "task": "enterprise.dispatch_report_deliveries",
             "schedule": 60.0,
         },
+        "dispatch-detection-publication-outbox-every-minute": {
+            "task": "enterprise.dispatch_detection_publication_deliveries",
+            "schedule": 60.0,
+        },
         "dispatch-notification-delivery-outbox-every-minute": {
             "task": "enterprise.dispatch_notification_deliveries",
             "schedule": 60.0,
