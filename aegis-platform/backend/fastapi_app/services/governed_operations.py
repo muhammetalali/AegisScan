@@ -171,7 +171,8 @@ _ACTIONS = (
         ['tested'], [ActorLayer.GOVERN, ActorLayer.ASSURE], ['admin', 'owner'],
         responsibilities=['integration_acceptor'],
         gates=[GateType.LIVE_ACCEPTANCE, GateType.EVIDENCE], evidence=['vendor_ack', 'acceptance_test_evidence'],
-        time_aware=True, resulting_projection={'lifecycle': 'live_accepted'}, audit_event='integration.live_accepted',
+        sod=['actor_must_not_be_request_proposer'], time_aware=True,
+        resulting_projection={'lifecycle': 'live_accepted'}, audit_event='integration.live_accepted',
     ),
 )
 
