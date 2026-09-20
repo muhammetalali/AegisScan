@@ -36,8 +36,10 @@ on:
       - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
       - 'aegis-platform/backend/fastapi_app/services/test_finding_disposition.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_finding_false_positive.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_finding_dispositions.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_investigation_closure.py'
+      - 'aegis-platform/backend/fastapi_app/routers/security_operations.py'
       - 'aegis-platform/backend/fastapi_app/services/soc_closure_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_soc_closure_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_finding_governed_actions.py'
@@ -76,8 +78,10 @@ on:
       - 'aegis-platform/backend/fastapi_app/routers/finding_dispositions.py'
       - 'aegis-platform/backend/fastapi_app/services/test_finding_disposition.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_finding_false_positive.py'
+      - 'aegis-platform/backend/fastapi_app/routers/vulnerabilities.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_finding_dispositions.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_investigation_closure.py'
+      - 'aegis-platform/backend/fastapi_app/routers/security_operations.py'
       - 'aegis-platform/backend/fastapi_app/services/soc_closure_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_soc_closure_governance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_finding_governed_actions.py'
@@ -164,6 +168,8 @@ jobs:
             aegis-platform/backend/fastapi_app/services/governed_action_requests.py \
             aegis-platform/backend/fastapi_app/routers/finding_dispositions.py \
             aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py \
+            aegis-platform/backend/fastapi_app/routers/vulnerabilities.py \
+            aegis-platform/backend/fastapi_app/routers/security_operations.py \
             aegis-platform/backend/fastapi_app/routers/asset_authorization.py \
             aegis-platform/backend/fastapi_app/services/test_governed_asset_authorization.py \
             aegis-platform/backend/fastapi_app/services/governed_action_executor.py \
