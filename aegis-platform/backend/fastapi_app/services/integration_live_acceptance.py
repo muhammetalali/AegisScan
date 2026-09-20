@@ -203,6 +203,7 @@ def record_integration_acceptance_test(
     evidence_sha256: str,
     evidence_summary: dict[str, Any] | None = None,
     test_type: str = 'live_probe',
+    tested_configuration_fingerprint: str | None = None,
 ) -> IntegrationAcceptanceTestResult:
     normalized_outcome = str(outcome or '').strip().lower()
     if normalized_outcome not in {
@@ -217,6 +218,11 @@ def record_integration_acceptance_test(
     if not normalized_type or len(normalized_type) > 80:
         raise IntegrationAcceptanceError('Integration acceptance test type is required and must fit 80 characters.')
     evidence_hash = _sha256(evidence_sha256, field='evidence_sha256')
+    tested_fingerprint = (
+        _sha256(tested_configuration_fingerprint, field='tested_configuration_fingerprint')
+        if tested_configuration_fingerprint is not None
+        else None
+    )
     summary = dict(evidence_summary or {})
 
     with transaction.atomic():
@@ -237,6 +243,10 @@ def record_integration_acceptance_test(
                 and existing.evidence_sha256 == evidence_hash
                 and dict(existing.evidence_summary or {}) == summary
                 and str(existing.tested_by_id) == str(actor_id)
+                and (
+                    tested_fingerprint is None
+                    or existing.configuration_fingerprint == tested_fingerprint
+                )
             )
             if not exact_replay:
                 raise IntegrationAcceptanceConflict(
@@ -244,7 +254,11 @@ def record_integration_acceptance_test(
                 )
             return IntegrationAcceptanceTestResult(existing, True)
 
-        configuration_fingerprint = integration_configuration_fingerprint(integration)
+        configuration_fingerprint = (
+            tested_fingerprint
+            if tested_fingerprint is not None
+            else integration_configuration_fingerprint(integration)
+        )
         fingerprint = _sha({
             'organization_id': str(organization.id),
             'project_id': str(project_id),
