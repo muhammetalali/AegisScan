@@ -94,6 +94,7 @@ jobs:
       - name: Enforce Chat B governed OAST lockset
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           python - <<'PY'
           import os
@@ -129,30 +130,43 @@ jobs:
               'aegis-platform/backend/scripts/scheduled_scan_canonical_reality.py',
           }
           allowed = oast_owned | scheduled_successor
+          shared_triggers = {
+              '.github/workflows/governed-oast-runtime-reality.yml',
+              'aegis-platform/backend/fastapi_app/main.py',
+          }
           base = os.environ.get('BASE_SHA', '').strip()
+          head_ref = os.environ.get('HEAD_REF', '').strip()
           if not base or set(base) == {'0'}:
               raise SystemExit('Governed OAST lockset requires a concrete base SHA')
           changed = subprocess.check_output(
               ['git', 'diff', '--name-only', base, 'HEAD'],
               text=True,
           ).splitlines()
-          unexpected = sorted(set(changed) - allowed)
-          if unexpected:
-              raise SystemExit(f'CHAT_B_OAST_LOCKSET_VIOLATION={unexpected}')
-          forbidden = [
-              path for path in changed
-              if (
-                  '/resources/methodologies/' in path
-                  or path.endswith('/wstg_capability_mapping.py')
-                  or path.endswith('/wstg_catalog.py')
-                  or path.endswith('/wstg_execution_planner.py')
-                  or 'agom' in path.lower()
-                  or 'governed_temporal' in path.lower()
-              )
-          ]
-          if forbidden:
-              raise SystemExit(f'CHAT_A_OWNERSHIP_VIOLATION={forbidden}')
-          print('GOVERNED_OAST_LOCKSET=PASS')
+          changed_set = set(changed)
+
+          if head_ref.startswith('chatgpt-b/'):
+              unexpected = sorted(changed_set - allowed)
+              if unexpected:
+                  raise SystemExit(f'CHAT_B_OAST_LOCKSET_VIOLATION={unexpected}')
+              forbidden = [
+                  path for path in changed
+                  if (
+                      '/resources/methodologies/' in path
+                      or path.endswith('/wstg_capability_mapping.py')
+                      or path.endswith('/wstg_catalog.py')
+                      or path.endswith('/wstg_execution_planner.py')
+                      or 'agom' in path.lower()
+                      or 'governed_temporal' in path.lower()
+                  )
+              ]
+              if forbidden:
+                  raise SystemExit(f'CHAT_A_OWNERSHIP_VIOLATION={forbidden}')
+          else:
+              oast_specific = sorted((changed_set & oast_owned) - shared_triggers)
+              if oast_specific:
+                  raise SystemExit(f'CHAT_B_OWNERSHIP_VIOLATION={oast_specific}')
+
+          print(f'GOVERNED_OAST_LOCKSET=PASS head_ref={head_ref or "detached"}')
           PY
 
       - uses: actions/setup-python@v6

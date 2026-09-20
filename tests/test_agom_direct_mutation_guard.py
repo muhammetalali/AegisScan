@@ -103,3 +103,22 @@ asset.delete()
 """
     path = "aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py"
     assert guard.scan_source(source, path) == []
+
+
+
+def test_rejects_governed_work_claim_mutation_outside_work_queue_authority():
+    source = """
+from enterprise.work_queue_models import GovernedWorkClaim
+claim = GovernedWorkClaim.objects.get(pk='claim-id')
+claim.version += 1
+claim.save(update_fields=['version'])
+"""
+    assert "AGOM-LEDGER-WRITE" in codes(source)
+
+
+def test_rejects_governed_work_event_creation_outside_work_queue_authority():
+    source = """
+from enterprise.work_queue_models import GovernedWorkClaimEvent
+GovernedWorkClaimEvent.objects.create(sequence=1)
+"""
+    assert "AGOM-LEDGER-WRITE" in codes(source)
