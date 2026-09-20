@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Barrier
 
 import pytest
@@ -392,7 +392,7 @@ def test_confirmation_compatibility_route_uses_governed_executor_and_replays(dis
     assert GovernedActionExecution.objects.filter(action_id='finding.confirm', entity_id=str(finding.id)).count() == 1
 
 
-def test_false_positive_compatibility_route_is_fail_closed(disposition_fixture):
+def test_false_positive_compatibility_route_creates_governed_request_without_mutation(disposition_fixture):
     client, owner, project, _asset, authorization, _scan, finding, organization, owner_membership = disposition_fixture
     _ownerize(owner_membership)
     confirmer, _membership = _actor(
@@ -415,32 +415,46 @@ def test_false_positive_compatibility_route_is_fail_closed(disposition_fixture):
         json={
             'validation_id': str(validation.id),
             'verdict': 'false_positive',
-            'rationale': 'False positive still requires its own governed action.',
+            'rationale': 'False positive is proposed through the governed action request plane.',
             'expected_version': finding.version,
             'idempotency_key': 'route-false-positive-1',
         },
     )
-    assert response.status_code == 409, response.text
-    assert response.json()['detail']['code'] == 'FALSE_POSITIVE_GOVERNED_ACTION_NOT_IMPLEMENTED'
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload['action_id'] == 'finding.false_positive'
+    assert payload['entity_id'] == str(finding.id)
+    assert payload['expected_version'] == finding.version
+    assert payload['parameters']['validation_id'] == str(validation.id)
     finding.refresh_from_db()
     assert finding.status == Vulnerability.Status.OPEN
     assert FindingConfirmation.objects.filter(finding=finding).count() == 0
+    assert GovernedActionExecution.objects.filter(action_id='finding.false_positive', entity_id=str(finding.id)).count() == 0
 
 
-def test_disposition_compatibility_route_is_fail_closed(disposition_fixture):
+def test_disposition_compatibility_route_creates_governed_request_without_mutation(disposition_fixture):
     client, _owner, _project, _asset, _authorization, _scan, finding, _organization, _membership = disposition_fixture
+    review_at = datetime.now(timezone.utc) + timedelta(days=30)
     response = client.post(
         f'/api/v1/vulnerabilities/{finding.id}/dispositions',
         json={
             'disposition': 'accepted_risk',
-            'rationale': 'Risk acceptance must not bypass the governed action plane.',
+            'rationale': 'Risk acceptance is proposed through the governed action request plane.',
+            'risk_correlation_id': '11111111-2222-4333-8444-555555555555',
+            'review_at': review_at.isoformat(),
         },
+        headers={'X-Request-ID': 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'},
     )
-    assert response.status_code == 409, response.text
-    assert response.json()['detail']['code'] == 'RISK_ACCEPTANCE_GOVERNED_ACTION_NOT_IMPLEMENTED'
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload['action_id'] == 'finding.disposition.accepted_risk'
+    assert payload['entity_id'] == str(finding.id)
+    assert payload['expected_version'] == finding.version
+    assert payload['parameters']['risk_correlation_id'] == '11111111-2222-4333-8444-555555555555'
     finding.refresh_from_db()
     assert finding.status == Vulnerability.Status.OPEN
     assert FindingDisposition.objects.filter(finding=finding).count() == 0
+    assert GovernedActionExecution.objects.filter(action_id='finding.disposition.accepted_risk', entity_id=str(finding.id)).count() == 0
 
 
 def test_close_compatibility_route_uses_independent_governed_closure(disposition_fixture):
