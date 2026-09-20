@@ -3,23 +3,31 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from django.db import transaction
 from django.db.models import Max
+from django.utils import timezone
 
 from django_project.evidence.models import Evidence
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.detection_models import (
     DetectionEvent,
     DetectionPublication,
+    DetectionPublicationDelivery,
     DetectionRevision,
     DetectionRule,
     DetectionValidation,
 )
+from enterprise.governed_action_models import GovernedActionRequest
 from enterprise.integrations import send_integration
 from enterprise.models import ExternalIntegration, OrganizationMembership, TenantProject
+from fastapi_app.services.integration_live_acceptance import (
+    current_integration_live_acceptance,
+    integration_configuration_fingerprint,
+)
 
 
 _TECHNIQUE_RE = re.compile(r'^T\d{4}(?:\.\d{3})?$')
@@ -65,6 +73,19 @@ class ValidationResult:
 @dataclass(frozen=True)
 class PublicationResult:
     publication: DetectionPublication
+    replayed: bool
+
+
+@dataclass(frozen=True)
+class PublicationDeliveryResult:
+    delivery: DetectionPublicationDelivery
+    replayed: bool
+
+
+@dataclass(frozen=True)
+class PublicationDeliveryExecutionResult:
+    delivery: DetectionPublicationDelivery
+    publication: DetectionPublication | None
     replayed: bool
 
 
@@ -324,51 +345,318 @@ def validate_revision(*, revision_id: str, project_id: str, user_id: str, teleme
         return ValidationResult(validation, False)
 
 
-def publish_revision(*, revision_id: str, integration_id: str, project_id: str, user_id: str) -> PublicationResult:
+def _publication_package(
+    *,
+    revision: DetectionRevision,
+    rule: DetectionRule,
+    integration: ExternalIntegration,
+    delivery_id: uuid.UUID,
+    governed_request_id: str,
+) -> dict[str, Any]:
+    target = {
+        ExternalIntegration.Kind.SPLUNK: 'splunk',
+        ExternalIntegration.Kind.ELASTIC: 'elastic_kql',
+        ExternalIntegration.Kind.SENTINEL: 'sentinel_kql',
+        ExternalIntegration.Kind.QRADAR: 'qradar_aql',
+    }[integration.kind]
+    return {
+        'type': 'aegisscan.detection.package',
+        'contract_version': revision.contract_version,
+        'delivery_id': str(delivery_id),
+        'governed_request_id': str(governed_request_id),
+        'rule_id': str(rule.id),
+        'revision_id': str(revision.id),
+        'version': revision.version,
+        'title': rule.title,
+        'severity': revision.spec['severity'],
+        'logsource': revision.spec['logsource'],
+        'attack_techniques': revision.attack_techniques,
+        'query_target': target,
+        'query': revision.compiled[target],
+        'content_sha256': revision.content_sha256,
+        'source_finding_id': str(revision.source_finding_id),
+        'source_evidence_id': str(revision.source_evidence_id) if revision.source_evidence_id else None,
+    }
+
+
+def queue_publication_delivery(
+    *,
+    revision_id: str,
+    integration_id: str,
+    project_id: str,
+    user_id: str,
+    expected_version: int,
+    governed_request_id: str,
+    correlation_id: str,
+) -> PublicationDeliveryResult:
+    """
+    Persist the publication intent inside the caller's transaction. The remote
+    SIEM side effect is deliberately deferred until transaction.on_commit so a
+    failed AGOM audit/execution can never leave an untracked external publish.
+    """
     link, _ = _membership(project_id, user_id, _PUBLISH_ROLES)
     with transaction.atomic():
-        revision = DetectionRevision.objects.select_related('rule').filter(pk=revision_id, rule__project_id=project_id).first()
+        request = (
+            GovernedActionRequest.objects.select_related('organization')
+            .filter(
+                pk=governed_request_id,
+                organization=link.organization,
+                project_id=project_id,
+                action_id='detection.publish',
+                entity_type='detection_revision',
+                entity_id=str(revision_id),
+                expected_version=int(expected_version),
+            )
+            .first()
+        )
+        if request is None:
+            raise DetectionEngineeringError('Detection publication requires its exact immutable governed request.')
+        if str(request.requested_by_id) == str(user_id):
+            raise PermissionError('Detection publication approver must differ from the governed request proposer.')
+        if str((request.parameters_snapshot or {}).get('integration_id') or '') != str(integration_id):
+            raise DetectionEngineeringError('Governed request integration_id does not match the publication target.')
+
+        existing = (
+            DetectionPublicationDelivery.objects.select_related('revision', 'integration', 'live_acceptance')
+            .filter(governed_request=request)
+            .first()
+        )
+        if existing is not None:
+            if (
+                str(existing.revision_id) != str(revision_id)
+                or str(existing.integration_id) != str(integration_id)
+                or int(existing.revision.version + existing.revision.publication_deliveries.count() - 1) < int(expected_version)
+            ):
+                raise DetectionEngineeringError('Governed request is already bound to a different publication delivery.')
+            return PublicationDeliveryResult(existing, True)
+
+        revision = (
+            DetectionRevision.objects.select_related('rule')
+            .filter(pk=revision_id, rule__project_id=project_id, rule__organization=link.organization)
+            .first()
+        )
         if revision is None:
-            raise DetectionEngineeringError('Detection revision not found in project.')
+            raise DetectionEngineeringError('Detection revision not found in the governed project.')
         rule = DetectionRule.objects.select_for_update().get(pk=revision.rule_id)
         latest = rule.revisions.order_by('-version').first()
         if latest is None or latest.id != revision.id:
             raise DetectionEngineeringError('Only the latest detection revision may be published.')
         if not revision.validations.filter(status=DetectionValidation.Status.PASSED).exists():
             raise DetectionEngineeringError('A passed telemetry validation is required before publication.')
-        integration = ExternalIntegration.objects.filter(
-            pk=integration_id, organization=link.organization, enabled=True, kind__in=_SIEM_KINDS,
-        ).first()
+
+        current_version = revision.version + DetectionPublicationDelivery.objects.filter(revision=revision).count()
+        if int(current_version) != int(expected_version):
+            raise DetectionEngineeringError(
+                f'Expected detection publication version {expected_version}, current version is {current_version}.'
+            )
+
+        integration = (
+            ExternalIntegration.objects.select_for_update()
+            .filter(
+                pk=integration_id,
+                organization=link.organization,
+                enabled=True,
+                kind__in=_SIEM_KINDS,
+            )
+            .first()
+        )
         if integration is None:
             raise DetectionEngineeringError('Active tenant-owned SIEM integration not found.')
-        target = {
-            ExternalIntegration.Kind.SPLUNK: 'splunk', ExternalIntegration.Kind.ELASTIC: 'elastic_kql',
-            ExternalIntegration.Kind.SENTINEL: 'sentinel_kql', ExternalIntegration.Kind.QRADAR: 'qradar_aql',
-        }[integration.kind]
-        package = {
-            'type': 'aegisscan.detection.package', 'contract_version': revision.contract_version,
-            'rule_id': str(rule.id), 'revision_id': str(revision.id), 'version': revision.version,
-            'title': rule.title, 'severity': revision.spec['severity'], 'logsource': revision.spec['logsource'],
-            'attack_techniques': revision.attack_techniques, 'query_target': target,
-            'query': revision.compiled[target], 'content_sha256': revision.content_sha256,
-            'source_finding_id': str(revision.source_finding_id),
-            'source_evidence_id': str(revision.source_evidence_id) if revision.source_evidence_id else None,
-        }
+        live_acceptance = current_integration_live_acceptance(
+            integration=integration,
+            project_id=str(project_id),
+        )
+        if live_acceptance is None:
+            raise DetectionEngineeringError(
+                'Detection publication requires a current live-accepted SIEM integration.'
+            )
+
+        delivery_id = uuid.uuid4()
+        package = _publication_package(
+            revision=revision,
+            rule=rule,
+            integration=integration,
+            delivery_id=delivery_id,
+            governed_request_id=str(request.id),
+        )
         package_sha = _sha(package)
-        existing = DetectionPublication.objects.filter(revision=revision, integration=integration, package_sha256=package_sha).first()
-        if existing:
-            return PublicationResult(existing, True)
-        response = send_integration(integration, package)
+        configuration_fingerprint = integration_configuration_fingerprint(integration)
+        delivery = DetectionPublicationDelivery.objects.create(
+            id=delivery_id,
+            organization=link.organization,
+            project_id=project_id,
+            revision=revision,
+            integration=integration,
+            live_acceptance=live_acceptance,
+            governed_request=request,
+            correlation_id=uuid.UUID(str(correlation_id)),
+            package=package,
+            package_sha256=package_sha,
+            integration_configuration_fingerprint=configuration_fingerprint,
+            requested_by_id=user_id,
+        )
+        _append_event(
+            rule,
+            user_id,
+            'publication.queued',
+            {
+                'delivery_id': str(delivery.id),
+                'integration_id': str(integration.id),
+                'live_acceptance_id': str(live_acceptance.id),
+                'package_sha256': package_sha,
+                'configuration_fingerprint': configuration_fingerprint,
+                'governed_request_id': str(request.id),
+            },
+            revision,
+        )
+
+        def _queue_delivery() -> None:
+            from enterprise.tasks import deliver_detection_publication
+
+            deliver_detection_publication.delay(str(delivery.id))
+
+        transaction.on_commit(_queue_delivery, robust=True)
+        return PublicationDeliveryResult(delivery, False)
+
+
+def deliver_publication_delivery(*, delivery_id: str) -> PublicationDeliveryExecutionResult:
+    """
+    Execute one durable publication attempt outside the database transaction.
+    Automatic retries intentionally never resend SENDING/FAILED deliveries:
+    after an ambiguous transport outcome a new governed request is required.
+    """
+    with transaction.atomic():
+        delivery = (
+            DetectionPublicationDelivery.objects.select_for_update()
+            .select_related('revision__rule', 'integration', 'live_acceptance')
+            .filter(pk=delivery_id)
+            .first()
+        )
+        if delivery is None:
+            raise DetectionEngineeringError('Detection publication delivery was not found.')
+        existing_publication = DetectionPublication.objects.filter(
+            revision=delivery.revision,
+            integration=delivery.integration,
+            package_sha256=delivery.package_sha256,
+        ).first()
+        if delivery.status == DetectionPublicationDelivery.Status.DELIVERED:
+            return PublicationDeliveryExecutionResult(delivery, existing_publication, True)
+        if delivery.status != DetectionPublicationDelivery.Status.QUEUED:
+            return PublicationDeliveryExecutionResult(delivery, existing_publication, True)
+
+        integration = (
+            ExternalIntegration.objects.select_for_update()
+            .filter(pk=delivery.integration_id, organization=delivery.organization)
+            .first()
+        )
+        acceptance = (
+            current_integration_live_acceptance(
+                integration=integration,
+                project_id=str(delivery.project_id),
+            )
+            if integration is not None else None
+        )
+        configuration_fingerprint = (
+            integration_configuration_fingerprint(integration)
+            if integration is not None else ''
+        )
+        if (
+            integration is None
+            or not integration.enabled
+            or integration.kind not in _SIEM_KINDS
+            or acceptance is None
+            or str(acceptance.id) != str(delivery.live_acceptance_id)
+            or configuration_fingerprint != delivery.integration_configuration_fingerprint
+        ):
+            delivery.status = DetectionPublicationDelivery.Status.BLOCKED
+            delivery.last_error = 'Live acceptance or connector configuration changed before transport.'
+            delivery.save(update_fields=['status', 'last_error', 'updated_at'])
+            return PublicationDeliveryExecutionResult(delivery, None, False)
+
+        delivery.status = DetectionPublicationDelivery.Status.SENDING
+        delivery.attempts += 1
+        delivery.last_error = ''
+        delivery.save(update_fields=['status', 'attempts', 'last_error', 'updated_at'])
+        integration_snapshot = integration
+        package = dict(delivery.package or {})
+
+    try:
+        response = send_integration(integration_snapshot, package)
         response_sha = _sha(response)
+    except Exception as exc:
+        with transaction.atomic():
+            current = DetectionPublicationDelivery.objects.select_for_update().get(pk=delivery_id)
+            if current.status == DetectionPublicationDelivery.Status.SENDING:
+                current.status = DetectionPublicationDelivery.Status.FAILED
+                current.last_error = f'{type(exc).__name__}: {str(exc)}'[:2000]
+                current.save(update_fields=['status', 'last_error', 'updated_at'])
+        raise
+
+    with transaction.atomic():
+        current = (
+            DetectionPublicationDelivery.objects.select_for_update()
+            .select_related('revision__rule', 'integration')
+            .get(pk=delivery_id)
+        )
+        if current.status == DetectionPublicationDelivery.Status.DELIVERED:
+            publication = DetectionPublication.objects.filter(
+                revision=current.revision,
+                integration=current.integration,
+                package_sha256=current.package_sha256,
+            ).first()
+            return PublicationDeliveryExecutionResult(current, publication, True)
+        if current.status != DetectionPublicationDelivery.Status.SENDING:
+            raise DetectionEngineeringError(
+                'Detection publication delivery state changed after transport; automatic resend is forbidden.'
+            )
+        rule = DetectionRule.objects.select_for_update().get(pk=current.revision.rule_id)
         publication = DetectionPublication.objects.create(
-            revision=revision, integration=integration, package_sha256=package_sha, provider=integration.kind,
-            transport_status=response.get('http_status'), response_sha256=response_sha, published_by_id=user_id,
+            revision=current.revision,
+            integration=current.integration,
+            package_sha256=current.package_sha256,
+            provider=current.integration.kind,
+            transport_status=response.get('http_status') if isinstance(response, dict) else None,
+            response_sha256=response_sha,
+            published_by_id=current.requested_by_id,
         )
         rule.state = DetectionRule.State.PUBLISHED
         rule.save(update_fields=['state', 'updated_at'])
-        _append_event(rule, user_id, 'publication.completed', {
-            'publication_id': str(publication.id), 'integration_id': str(integration.id),
-            'provider': integration.kind, 'package_sha256': package_sha, 'response_sha256': response_sha,
-            'transport_status': publication.transport_status,
-        }, revision)
-        return PublicationResult(publication, False)
+        _append_event(
+            rule,
+            str(current.requested_by_id),
+            'publication.completed',
+            {
+                'publication_id': str(publication.id),
+                'delivery_id': str(current.id),
+                'integration_id': str(current.integration_id),
+                'provider': current.integration.kind,
+                'package_sha256': current.package_sha256,
+                'response_sha256': response_sha,
+                'transport_status': publication.transport_status,
+                'live_acceptance_id': str(current.live_acceptance_id),
+            },
+            current.revision,
+        )
+        current.status = DetectionPublicationDelivery.Status.DELIVERED
+        current.transport_status = publication.transport_status
+        current.response_sha256 = response_sha
+        current.sent_at = timezone.now()
+        current.last_error = ''
+        current.save(
+            update_fields=[
+                'status',
+                'transport_status',
+                'response_sha256',
+                'sent_at',
+                'last_error',
+                'updated_at',
+            ]
+        )
+        return PublicationDeliveryExecutionResult(current, publication, False)
+
+
+def publish_revision(*, revision_id: str, integration_id: str, project_id: str, user_id: str) -> PublicationResult:
+    _membership(project_id, user_id, _PUBLISH_ROLES)
+    raise DetectionEngineeringError(
+        'Direct detection publication is disabled; use the request-bound AGOM detection.publish action.'
+    )
