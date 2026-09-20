@@ -566,6 +566,7 @@ class IntegrationAcceptanceTest(models.Model):
     source_ref=models.CharField(max_length=255)
     evidence_sha256=models.CharField(max_length=64)
     evidence_summary=models.JSONField(default=dict,blank=True)
+    configuration_fingerprint=models.CharField(max_length=64)
     test_fingerprint=models.CharField(max_length=64)
     tested_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='integration_acceptance_tests')
     tested_at=models.DateTimeField(auto_now_add=True)
