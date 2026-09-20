@@ -7,6 +7,79 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 
+
+class _ImmutableGovernedActionRequestQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Governed action requests are immutable and cannot be updated.')
+
+    def delete(self):
+        raise ValidationError('Governed action requests are immutable and cannot be deleted.')
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('Governed action requests must be created through the request authority.')
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise ValidationError('Governed action requests are immutable and cannot be updated.')
+
+
+class GovernedActionRequest(models.Model):
+    """Immutable server-authoritative proposal for a sensitive AGOM action."""
+
+    objects = _ImmutableGovernedActionRequestQuerySet.as_manager()
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        'enterprise.Organization',
+        on_delete=models.PROTECT,
+        related_name='governed_action_requests',
+    )
+    project = models.ForeignKey(
+        'projects.Project',
+        on_delete=models.PROTECT,
+        related_name='governed_action_requests',
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='governed_action_requests',
+    )
+    action_id = models.CharField(max_length=128)
+    entity_type = models.CharField(max_length=80)
+    entity_id = models.CharField(max_length=128)
+    expected_version = models.PositiveIntegerField()
+    idempotency_key = models.CharField(max_length=128, editable=False)
+    request_fingerprint = models.CharField(max_length=64, editable=False, db_index=True)
+    contract_version = models.CharField(max_length=32)
+    contract_policy_version = models.CharField(max_length=64)
+    contract_snapshot = models.JSONField(default=dict)
+    contract_fingerprint = models.CharField(max_length=64, editable=False, db_index=True)
+    correlation_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    parameters_snapshot = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'idempotency_key'],
+                name='uniq_govreq_org_idem',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['organization', 'action_id', '-created_at'], name='idx_govreq_org_action'),
+            models.Index(fields=['project', 'entity_type', 'entity_id'], name='idx_govreq_project_entity'),
+            models.Index(fields=['correlation_id'], name='idx_govreq_correlation'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Governed action requests are immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Governed action requests are immutable and cannot be deleted.')
+
+
 class _ImmutableGovernedActionQuerySet(models.QuerySet):
     def update(self, **kwargs):
         raise ValidationError('Governed action execution records are immutable and cannot be updated.')
@@ -46,6 +119,13 @@ class GovernedActionExecution(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name='governed_action_executions',
+    )
+    request = models.OneToOneField(
+        'enterprise.GovernedActionRequest',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='execution',
     )
     action_id = models.CharField(max_length=128)
     entity_type = models.CharField(max_length=80)
