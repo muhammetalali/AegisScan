@@ -389,7 +389,7 @@ jobs:
           python e2e/raw_l2_egress_proof.py /tmp/raw-l2-forbidden.json \
             /tmp/raw-l2-egress-before.txt /tmp/raw-l2-egress-after.txt "$AEGIS_FORBIDDEN_TARGET_IP"
 
-      - name: Provision Raw/L2 E2E operator
+      - name: Provision Raw/L2 governed E2E actors
         working-directory: aegis-platform
         shell: bash
         run: |
@@ -399,26 +399,82 @@ jobs:
           print('Aegis-Raw-L2-' + secrets.token_urlsafe(24))
           PY
           )"
-          printf 'AEGIS_E2E_PASSWORD=%s\n' "$E2E_PASSWORD" >> "$GITHUB_ENV"
+          E2E_APPROVER_EMAIL="raw-l2-governance-approver@aegisscan.local"
+          E2E_APPROVER_PASSWORD="$(python - <<'PY'
+          import secrets
+          print('Aegis-Raw-L2-Approver-' + secrets.token_urlsafe(24))
+          PY
+          )"
           echo "::add-mask::$E2E_PASSWORD"
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
-            -e E2E_EMAIL="$AEGIS_E2E_EMAIL" -e E2E_PASSWORD="$E2E_PASSWORD" django python manage.py shell <<'PY'
+          echo "::add-mask::$E2E_APPROVER_PASSWORD"
+          GOV_STATE="$(
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
+              -e E2E_EMAIL="$AEGIS_E2E_EMAIL" \
+              -e E2E_PASSWORD="$E2E_PASSWORD" \
+              -e E2E_APPROVER_EMAIL="$E2E_APPROVER_EMAIL" \
+              -e E2E_APPROVER_PASSWORD="$E2E_APPROVER_PASSWORD" \
+              django python manage.py shell <<'PY'
           import os
           from django.contrib.auth import get_user_model
           from django_project.users.models import UserRole
+          from enterprise.models import Organization, OrganizationMembership
+
           User = get_user_model()
-          email = os.environ['E2E_EMAIL']; password = os.environ['E2E_PASSWORD']
-          user, _ = User.objects.get_or_create(email=email, defaults={
+          user, _ = User.objects.get_or_create(email=os.environ['E2E_EMAIL'], defaults={
               'first_name': 'Raw', 'last_name': 'L2', 'role': UserRole.SECURITY_MANAGER,
               'is_active': True, 'is_verified': True,
           })
           user.role = UserRole.SECURITY_MANAGER
           user.is_active = True
           user.is_verified = True
-          user.set_password(password)
+          user.set_password(os.environ['E2E_PASSWORD'])
           user.save()
           assert user.has_permission('project.create') and user.has_permission('scan.create')
+
+          approver, _ = User.objects.get_or_create(email=os.environ['E2E_APPROVER_EMAIL'], defaults={
+              'first_name': 'Raw', 'last_name': 'L2 Approver', 'role': UserRole.SECURITY_MANAGER,
+              'is_active': True, 'is_verified': True,
+          })
+          approver.role = UserRole.SECURITY_MANAGER
+          approver.is_active = True
+          approver.is_verified = True
+          approver.set_password(os.environ['E2E_APPROVER_PASSWORD'])
+          approver.save()
+
+          org, _ = Organization.objects.get_or_create(
+              slug='raw-l2-e2e-governance',
+              defaults={'name': 'Raw L2 E2E Governance', 'owner': user, 'is_active': True},
+          )
+          org.owner = user
+          org.is_active = True
+          org.save(update_fields=['owner', 'is_active', 'updated_at'])
+          owner_membership, _ = OrganizationMembership.objects.get_or_create(
+              organization=org, user=user,
+              defaults={'role': OrganizationMembership.Role.OWNER, 'is_active': True},
+          )
+          owner_membership.role = OrganizationMembership.Role.OWNER
+          owner_membership.is_active = True
+          owner_membership.save(update_fields=['role', 'is_active'])
+          approver_membership, _ = OrganizationMembership.objects.get_or_create(
+              organization=org, user=approver,
+              defaults={'role': OrganizationMembership.Role.ADMIN, 'is_active': True},
+          )
+          approver_membership.role = OrganizationMembership.Role.ADMIN
+          approver_membership.is_active = True
+          approver_membership.save(update_fields=['role', 'is_active'])
+          print(f'{org.id}|{approver_membership.id}')
           PY
+          )"
+          GOV_IDS="$(printf '%s\n' "$GOV_STATE" | tail -n 1)"
+          AEGIS_E2E_GOV_ORG_ID="${GOV_IDS%%|*}"
+          AEGIS_E2E_APPROVER_MEMBERSHIP_ID="${GOV_IDS##*|}"
+          test -n "$AEGIS_E2E_GOV_ORG_ID"
+          test -n "$AEGIS_E2E_APPROVER_MEMBERSHIP_ID"
+          printf 'AEGIS_E2E_PASSWORD=%s\n' "$E2E_PASSWORD" >> "$GITHUB_ENV"
+          printf 'AEGIS_E2E_APPROVER_EMAIL=%s\n' "$E2E_APPROVER_EMAIL" >> "$GITHUB_ENV"
+          printf 'AEGIS_E2E_APPROVER_PASSWORD=%s\n' "$E2E_APPROVER_PASSWORD" >> "$GITHUB_ENV"
+          printf 'AEGIS_E2E_GOV_ORG_ID=%s\n' "$AEGIS_E2E_GOV_ORG_ID" >> "$GITHUB_ENV"
+          printf 'AEGIS_E2E_APPROVER_MEMBERSHIP_ID=%s\n' "$AEGIS_E2E_APPROVER_MEMBERSHIP_ID" >> "$GITHUB_ENV"
 
       - name: Run real authorized scanner engine E2E
         working-directory: aegis-platform
@@ -437,6 +493,10 @@ jobs:
             -e AEGIS_VERIFY_TLS=false \
             -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" \
             -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" \
+            -e AEGIS_E2E_APPROVER_EMAIL="$AEGIS_E2E_APPROVER_EMAIL" \
+            -e AEGIS_E2E_APPROVER_PASSWORD="$AEGIS_E2E_APPROVER_PASSWORD" \
+            -e AEGIS_E2E_GOV_ORG_ID="$AEGIS_E2E_GOV_ORG_ID" \
+            -e AEGIS_E2E_APPROVER_MEMBERSHIP_ID="$AEGIS_E2E_APPROVER_MEMBERSHIP_ID" \
             fastapi python /e2e/scanner_engines_e2e.py | tee /tmp/raw-l2-engine-e2e.txt
           grep -q 'SCANNER_ENGINES_REAL_E2E=PASS' /tmp/raw-l2-engine-e2e.txt
           grep -q "'nmap':" /tmp/raw-l2-engine-e2e.txt
