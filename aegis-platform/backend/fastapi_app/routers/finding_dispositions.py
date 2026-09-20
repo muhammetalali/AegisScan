@@ -121,7 +121,11 @@ async def create_finding_disposition(
             )
         parameters['duplicate_of_id'] = str(body.duplicate_of_id)
 
-    action_id = f'finding.disposition.{body.disposition}'
+    action_id = {
+        FindingDisposition.Disposition.ACCEPTED_RISK: 'finding.disposition.accept_risk',
+        FindingDisposition.Disposition.WONT_FIX: 'finding.disposition.wont_fix',
+        FindingDisposition.Disposition.DUPLICATE: 'finding.disposition.duplicate',
+    }[body.disposition]
     try:
         result = await sync_to_async(create_governed_action_request, thread_sensitive=True)(
             project_id=str(vulnerability.project_id),
