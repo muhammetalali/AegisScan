@@ -6,6 +6,12 @@ on:
       - chatgpt-a/complete-governed-action-executors-2026-09-20
     paths:
       - 'aegis-platform/backend/enterprise/governed_action_models.py'
+      - 'aegis-platform/backend/enterprise/models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py'
+      - 'aegis-platform/backend/enterprise/tasks.py'
+      - 'aegis-platform/backend/fastapi_app/routers/enterprise_extra.py'
+      - 'aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py'
       - 'aegis-platform/backend/enterprise/migrations/0033_agom_governed_action_requests.py'
       - 'aegis-platform/backend/fastapi_app/contracts/governed_actions.py'
       - 'aegis-platform/backend/fastapi_app/routers/governed_action_execution.py'
@@ -31,6 +37,12 @@ on:
     branches: [main]
     paths:
       - 'aegis-platform/backend/enterprise/governed_action_models.py'
+      - 'aegis-platform/backend/enterprise/models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py'
+      - 'aegis-platform/backend/enterprise/tasks.py'
+      - 'aegis-platform/backend/fastapi_app/routers/enterprise_extra.py'
+      - 'aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py'
       - 'aegis-platform/backend/enterprise/migrations/0033_agom_governed_action_requests.py'
       - 'aegis-platform/backend/fastapi_app/contracts/governed_actions.py'
       - 'aegis-platform/backend/fastapi_app/routers/governed_action_execution.py'
@@ -114,6 +126,12 @@ jobs:
         run: |
           python -m py_compile \
             aegis-platform/backend/enterprise/governed_action_models.py \
+            aegis-platform/backend/enterprise/models.py \
+            aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py \
+            aegis-platform/backend/enterprise/tasks.py \
+            aegis-platform/backend/fastapi_app/routers/enterprise_extra.py \
+            aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py \
             aegis-platform/backend/enterprise/migrations/0033_agom_governed_action_requests.py \
             aegis-platform/backend/fastapi_app/contracts/governed_actions.py \
             aegis-platform/backend/fastapi_app/routers/governed_action_execution.py \
@@ -182,6 +200,14 @@ jobs:
           pytest -q \
             fastapi_app/services/test_governed_investigation_closure.py \
             fastapi_app/services/test_soc_closure_governance.py
+
+      - name: Run request-bound integration live acceptance Reality tests
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_governed_integration_live_acceptance.py
 
       - name: Run existing AGOM executor regressions
         working-directory: aegis-platform/backend
