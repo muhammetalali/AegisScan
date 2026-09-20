@@ -33,7 +33,7 @@ from fastapi_app.services.governed_temporal_policy import (
     TemporalEnvelope,
     evaluate_governed_temporal_policy,
 )
-from fastapi_app.services.governed_operations import get_action_contract
+from fastapi_app.services.governed_operations import get_action_contract, list_action_contracts
 from fastapi_app.services.soc_closure_governance import close_investigation_case
 
 
@@ -75,6 +75,10 @@ _IMPLEMENTED_ACTIONS = {
     'finding.close',
     'investigation.close',
     'integration.live_accept',
+}
+
+_AUTOMATIC_ONLY_ACTIONS = {
+    'assurance.obligation.satisfy',
 }
 
 _REQUEST_REQUIRED_ACTIONS = {
@@ -985,6 +989,17 @@ _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     'integration.live_accept': _execute_integration_live_acceptance,
 }
 
+_CONTRACT_ACTIONS = {item.action_id for item in list_action_contracts()}
+if set(_DISPATCH) != _IMPLEMENTED_ACTIONS:
+    raise RuntimeError('AGOM implemented-action registry and dispatcher must remain identical.')
+if _CONTRACT_ACTIONS != (_IMPLEMENTED_ACTIONS | _AUTOMATIC_ONLY_ACTIONS):
+    missing = sorted(_CONTRACT_ACTIONS - _IMPLEMENTED_ACTIONS - _AUTOMATIC_ONLY_ACTIONS)
+    orphaned = sorted((_IMPLEMENTED_ACTIONS | _AUTOMATIC_ONLY_ACTIONS) - _CONTRACT_ACTIONS)
+    raise RuntimeError(
+        f'Every ActionContract must have exactly one authoritative owner; '
+        f'unclassified={missing}, orphaned={orphaned}.'
+    )
+
 
 def execute_governed_action(
     *,
@@ -1028,6 +1043,12 @@ def execute_governed_action(
         raise GovernedActionError('Unknown governed action contract.')
     if contract.entity_type != normalized_entity_type:
         raise GovernedActionError('Governed action entity_type does not match its canonical ActionContract.')
+    if normalized_action in _AUTOMATIC_ONLY_ACTIONS:
+        raise GovernedActionBlocked(
+            'AUTOMATIC_ONLY_ACTION',
+            'This ActionContract is owned by its authoritative automatic revalidation pipeline and has no manual executor.',
+            ['authoritative_automatic_revalidation'],
+        )
     if normalized_action not in _IMPLEMENTED_ACTIONS or normalized_action not in _DISPATCH:
         raise GovernedActionError('Governed action execution is not implemented for this ActionContract and remains fail-closed.')
 
