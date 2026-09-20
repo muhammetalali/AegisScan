@@ -18,6 +18,13 @@ def test_celery_worker_loss_redelivery_contract():
     assert int(timeout) > 0
 
 
+def test_detection_publication_outbox_has_periodic_recovery_dispatch():
+    beat = celery_app.conf.beat_schedule
+    entry = beat['dispatch-detection-publication-outbox-every-minute']
+    assert entry['task'] == 'enterprise.dispatch_detection_publication_deliveries'
+    assert float(entry['schedule']) <= 60.0
+
+
 def test_scanner_tasks_are_routed_to_dedicated_queue():
     expected = {
         'fastapi_app.tasks.security_scan.run_nmap_scan',
