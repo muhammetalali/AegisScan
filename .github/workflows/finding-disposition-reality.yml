@@ -135,8 +135,16 @@ jobs:
                   raise AssertionError(f'direct bypass remained open for {status}')
           source = Path('fastapi_app/routers/finding_dispositions.py').read_text()
           assert 'govern_finding_disposition(' not in source
-          assert 'RISK_ACCEPTANCE_GOVERNED_ACTION_NOT_IMPLEMENTED' in source
-          assert 'FINDING_DISPOSITION_GOVERNANCE_NOT_MIGRATED' in source
+          assert 'create_governed_action_request' in source
+          for action_id in (
+              'finding.disposition.accept_risk',
+              'finding.disposition.wont_fix',
+              'finding.disposition.duplicate',
+          ):
+              assert action_id in source
+          assert "status_code=202" in source
+          assert 'RISK_ACCEPTANCE_GOVERNED_ACTION_NOT_IMPLEMENTED' not in source
+          assert 'FINDING_DISPOSITION_GOVERNANCE_NOT_MIGRATED' not in source
           print('FINDING_DISPOSITION_API_ROUTE=PASS')
           print('FINDING_DISPOSITION_STRICT_CONTRACT=PASS')
           print('FINDING_DISPOSITION_INTRINSIC_BYPASS_GUARD=PASS')
