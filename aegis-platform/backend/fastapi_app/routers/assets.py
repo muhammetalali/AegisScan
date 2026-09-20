@@ -14,6 +14,7 @@ from ..core.security import verify_token
 from ..core.dependencies import get_current_user
 from ..services.asset_authorization_governance import (
     AssetAuthorizationGovernanceError,
+    delete_asset_if_lineage_free,
     initialize_asset_configuration,
     replace_asset_configuration_preserving_authorization,
 )
@@ -135,7 +136,10 @@ async def update_asset(asset_id: str, update: AssetUpdate, user=Depends(get_curr
 def _delete_asset(asset_id: str,user_id: str):
     asset=_get_asset_sync(asset_id,user_id)
     if not asset: raise HTTPException(status_code=404,detail='Asset not found')
-    asset.delete()
+    try:
+        delete_asset_if_lineage_free(asset_id=str(asset.id))
+    except AssetAuthorizationGovernanceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.delete('/{asset_id}')

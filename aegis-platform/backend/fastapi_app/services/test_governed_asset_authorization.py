@@ -14,6 +14,7 @@ from fastapi_app.routers.assets import _normalize_import_row
 from fastapi_app.services.asset_authorization_governance import (
     AssetAuthorizationGovernanceError,
     asset_authorization_version,
+    delete_asset_if_lineage_free,
     initialize_asset_configuration,
     replace_asset_configuration_preserving_authorization,
 )
@@ -313,3 +314,34 @@ def test_asset_configuration_projection_is_server_owned_and_preserved(dispositio
             },
             str(project.id),
         )
+
+
+
+def test_asset_hard_delete_is_blocked_when_governance_lineage_exists(disposition_fixture):
+    _client, _owner, _project, asset, initial, _scan, _finding, _organization, _membership = disposition_fixture
+    asset_id = asset.id
+    authorization_id = initial.id
+
+    with pytest.raises(AssetAuthorizationGovernanceError, match='durable security/governance lineage'):
+        delete_asset_if_lineage_free(asset_id=str(asset_id))
+
+    assert Asset.objects.filter(pk=asset_id).exists()
+    preserved = AssetAuthorization.objects.get(pk=authorization_id)
+    assert preserved.asset_id == asset_id
+
+
+def test_asset_hard_delete_allows_truly_unused_asset(disposition_fixture):
+    _client, owner, project, _asset, _initial, _scan, _finding, _organization, _membership = disposition_fixture
+    unused = Asset.objects.create(
+        project=project,
+        owner=owner,
+        name='Unused disposable asset',
+        slug='unused-disposable-asset',
+        type=Asset.Type.IP_ADDRESS,
+        configuration={'host': '192.0.2.250', 'authorized': False},
+    )
+    asset_id = unused.id
+
+    delete_asset_if_lineage_free(asset_id=str(asset_id))
+
+    assert not Asset.objects.filter(pk=asset_id).exists()

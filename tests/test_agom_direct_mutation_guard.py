@@ -85,3 +85,21 @@ campaign.save(update_fields=['status'])
 """
     path = "aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py"
     assert guard.scan_source(source, path) == []
+
+
+
+def test_rejects_asset_hard_delete_outside_authoritative_owner():
+    source = """
+asset = get_asset()
+asset.delete()
+"""
+    assert "AGOM-ASSET-HARD-DELETE" in codes(source)
+
+
+def test_allows_asset_hard_delete_in_authoritative_owner():
+    source = """
+asset = get_asset()
+asset.delete()
+"""
+    path = "aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py"
+    assert guard.scan_source(source, path) == []

@@ -47,6 +47,7 @@ TERMINAL_STATE_OWNERS = {
 }
 
 ASSET_PROJECTION_OWNER = "aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py"
+ASSET_DELETE_OWNER = ASSET_PROJECTION_OWNER
 
 
 @dataclass(frozen=True)
@@ -226,6 +227,19 @@ class MutationVisitor(ast.NodeVisitor):
                         "AGOM-LEDGER-WRITE",
                         f"{model} instance {node.func.attr} may only occur in {LEDGER_OWNERS[model]}",
                     )
+
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "delete" and self.path != ASSET_DELETE_OWNER:
+            receiver = node.func.value
+            direct_asset_name = isinstance(receiver, ast.Name) and receiver.id in {
+                "asset", "locked_asset", "current_asset",
+            }
+            asset_manager_delete = _contains_manager(receiver, "Asset")
+            if direct_asset_name or asset_manager_delete:
+                self.add(
+                    node,
+                    "AGOM-ASSET-HARD-DELETE",
+                    f"Asset hard-delete may only occur in {ASSET_DELETE_OWNER}",
+                )
 
         for value in [*node.args, *(kw.value for kw in node.keywords)]:
             if _dotted(value) == "RemediationState.CLOSED":
