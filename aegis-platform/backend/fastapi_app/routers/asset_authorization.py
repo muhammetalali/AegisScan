@@ -11,7 +11,12 @@ from pydantic import BaseModel, Field
 from django_project.assets.models import Asset, AssetAuthorization
 from ..core.dependencies import get_current_user
 from ..services.asset_authorization_governance import asset_authorization_version
-from ..services.governed_action_requests import create_governed_action_request, governed_action_request_view
+from ..services.governed_action_requests import (
+    GovernedActionRequestConflict,
+    GovernedActionRequestError,
+    create_governed_action_request,
+    governed_action_request_view,
+)
 
 router = APIRouter()
 
@@ -88,7 +93,9 @@ def _submit_authorization_request(
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except ValueError as exc:
+    except GovernedActionRequestConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GovernedActionRequestError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return {
