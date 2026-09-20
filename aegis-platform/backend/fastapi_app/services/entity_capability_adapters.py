@@ -14,7 +14,7 @@ from django_project.vulnerabilities.models import Vulnerability
 from enterprise.assurance_obligation_models import AssuranceObligation
 from enterprise.governed_action_models import GovernedActionExecution
 from enterprise.campaign_models import AdversaryCampaign, CampaignObjective
-from enterprise.detection_models import DetectionRevision, DetectionValidation
+from enterprise.detection_models import DetectionPublicationDelivery, DetectionRevision, DetectionValidation
 from enterprise.models import AttackPath, ExternalIntegration, IntegrationAcceptanceTest, IntegrationLiveAcceptance, InvestigationCase, RiskCorrelationSnapshot, TenantProject
 from enterprise.soc_models import InvestigationCaseState, InvestigationClosure
 from fastapi_app.contracts.governed_operations import (
@@ -34,7 +34,7 @@ from fastapi_app.services.governed_responsibility_authority import (
     resolve_actor_authority,
 )
 from fastapi_app.services.governed_temporal_policy import GovernedTemporalError, validate_review_deadline
-from fastapi_app.services.integration_live_acceptance import integration_configuration_fingerprint
+from fastapi_app.services.integration_live_acceptance import current_integration_live_acceptance, integration_configuration_fingerprint
 from fastapi_app.services.remediation_lifecycle import RemediationState, get_state
 
 
@@ -531,11 +531,24 @@ def _detection_context(*, entity_id: str, link: TenantProject, actor_id: str) ->
     is_latest = latest is not None and latest.id == revision.id
     lifecycle = revision.rule.state if is_latest else 'superseded'
     passed = revision.validations.filter(status=DetectionValidation.Status.PASSED).order_by('-created_at').first()
-    integration = ExternalIntegration.objects.filter(
+    delivery_count = DetectionPublicationDelivery.objects.filter(revision=revision).count()
+
+    live_target = None
+    live_acceptance = None
+    for candidate in ExternalIntegration.objects.filter(
         organization=link.organization,
         enabled=True,
         kind__in=_SIEM_KINDS,
-    ).order_by('kind', 'id').first()
+    ).order_by('kind', 'id'):
+        acceptance = current_integration_live_acceptance(
+            integration=candidate,
+            project_id=str(link.project_id),
+        )
+        if acceptance is not None:
+            live_target = candidate
+            live_acceptance = acceptance
+            break
+
     action = 'detection.publish'
     validation_gate = _gate(
         GateType.VALIDATION,
@@ -545,19 +558,32 @@ def _detection_context(*, entity_id: str, link: TenantProject, actor_id: str) ->
         missing=[] if passed else ['passed_detection_validation'],
         evidence_refs=[str(passed.id), passed.result_sha256] if passed else [],
     )
+    publication_ready = live_target is not None and live_acceptance is not None
     publication_gate = _gate(
         GateType.PUBLICATION,
-        GateState.PASS if integration else GateState.BLOCKED,
-        'SIEM_TARGET_AVAILABLE' if integration else 'SIEM_TARGET_REQUIRED',
-        'At least one enabled tenant-owned SIEM publication target is available.' if integration else 'Detection publication requires an enabled tenant-owned SIEM integration.',
-        missing=[] if integration else ['enabled_siem_integration'],
-        evidence_refs=[str(integration.id)] if integration else [],
+        GateState.PASS if publication_ready else GateState.BLOCKED,
+        'LIVE_ACCEPTED_SIEM_TARGET_AVAILABLE' if publication_ready else 'LIVE_ACCEPTED_SIEM_TARGET_REQUIRED',
+        'A current live-accepted tenant-owned SIEM target is available.' if publication_ready else 'Detection publication requires a current live-accepted tenant-owned SIEM integration.',
+        missing=[] if publication_ready else ['current_live_accepted_siem_integration'],
+        evidence_refs=(
+            [
+                str(live_target.id),
+                str(live_acceptance.id),
+                str(live_acceptance.acceptance_test_id),
+                live_acceptance.acceptance_test.configuration_fingerprint,
+            ]
+            if publication_ready else []
+        ),
     )
+    evidence_ready = bool(passed and publication_ready)
     return EntityCapabilityContext(
         organization_id=str(link.organization_id),
         entity=_entity_ref(entity_type='detection_revision', entity_id=revision.id, link=link),
-        projection=ProjectionSnapshot(lifecycle=lifecycle, version=revision.version),
-        evidence_ready_actions={action} if passed else set(),
+        projection=ProjectionSnapshot(
+            lifecycle=lifecycle,
+            version=revision.version + delivery_count,
+        ),
+        evidence_ready_actions={action} if evidence_ready else set(),
         gate_results_by_action={action: [validation_gate, publication_gate]},
     )
 
