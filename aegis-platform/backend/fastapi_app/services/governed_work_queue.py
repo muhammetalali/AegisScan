@@ -634,3 +634,70 @@ def mutate_governed_work_claim(
             entry_hash=_event_hash(entry_payload),
         )
         return WorkMutationResult(result_snapshot, False)
+
+
+
+def verify_governed_work_claim_chain(*, claim_id: str) -> dict[str, Any]:
+    claim = GovernedWorkClaim.objects.filter(pk=claim_id).first()
+    if claim is None:
+        raise GovernedWorkQueueError('Governed work claim was not found.')
+    events = list(
+        GovernedWorkClaimEvent.objects.filter(claim=claim)
+        .order_by('sequence', 'occurred_at', 'id')
+    )
+    previous_hash = ''
+    expected_sequence = 1
+    for event in events:
+        if event.sequence != expected_sequence or event.result_version != event.sequence:
+            return {
+                'valid': False,
+                'claim_id': str(claim.id),
+                'events': len(events),
+                'reason': 'sequence_mismatch',
+            }
+        if event.previous_hash != previous_hash:
+            return {
+                'valid': False,
+                'claim_id': str(claim.id),
+                'events': len(events),
+                'reason': 'previous_hash_mismatch',
+            }
+        payload = {
+            'claim_id': str(claim.id),
+            'sequence': event.sequence,
+            'event_type': event.event_type,
+            'actor_id': str(event.actor_id),
+            'idempotency_key': event.idempotency_key,
+            'request_fingerprint': event.request_fingerprint,
+            'expected_version': event.expected_version,
+            'result_version': event.result_version,
+            'result_claimed_by': str(event.result_claimed_by_id) if event.result_claimed_by_id else None,
+            'lease_expires_at': event.lease_expires_at.isoformat() if event.lease_expires_at else None,
+            'source_snapshot': event.source_snapshot,
+            'result_snapshot': event.result_snapshot,
+            'previous_hash': event.previous_hash,
+        }
+        calculated = _event_hash(payload)
+        if calculated != event.entry_hash:
+            return {
+                'valid': False,
+                'claim_id': str(claim.id),
+                'events': len(events),
+                'reason': 'entry_hash_mismatch',
+            }
+        previous_hash = event.entry_hash
+        expected_sequence += 1
+    if events and claim.version != events[-1].result_version:
+        return {
+            'valid': False,
+            'claim_id': str(claim.id),
+            'events': len(events),
+            'reason': 'claim_version_mismatch',
+        }
+    return {
+        'valid': True,
+        'claim_id': str(claim.id),
+        'events': len(events),
+        'head_hash': previous_hash,
+        'version': claim.version,
+    }

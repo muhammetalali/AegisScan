@@ -1,0 +1,122 @@
+name: AGOM Unified Work Queue Reality
+
+on:
+  push:
+    branches:
+      - chatgpt-a/unified-governed-work-queue-2026-09-21
+    paths:
+      - 'aegis-platform/backend/enterprise/work_queue_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0036_governed_work_queue.py'
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_work_queue.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_work_queue.py'
+      - 'aegis-platform/backend/fastapi_app/routers/work_queue.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_governed_work_queue_api.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/agom-unified-work-queue-reality.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/work_queue_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0036_governed_work_queue.py'
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/fastapi_app/services/governed_work_queue.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_governed_work_queue.py'
+      - 'aegis-platform/backend/fastapi_app/routers/work_queue.py'
+      - 'aegis-platform/backend/fastapi_app/routers/test_governed_work_queue_api.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/agom-unified-work-queue-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-unified-work-queue-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governed-work-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-a5-work-queue-secret-0123456789abcdef
+      JWT_SECRET_KEY: ci-a5-work-queue-jwt-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-a5-work-queue-evidence-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-a5-work-queue-fingerprint-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target,aegis-scan-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout is exact head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile governed work queue plane
+        run: |
+          python -m py_compile             aegis-platform/backend/enterprise/work_queue_models.py             aegis-platform/backend/fastapi_app/services/governed_work_queue.py             aegis-platform/backend/fastapi_app/routers/work_queue.py             aegis-platform/backend/fastapi_app/services/test_governed_work_queue.py             aegis-platform/backend/fastapi_app/routers/test_governed_work_queue_api.py
+
+      - name: Verify Django schema and migration drift
+        working-directory: aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Run unified governed work queue Reality
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_governed_work_queue.py             fastapi_app/routers/test_governed_work_queue_api.py             | tee /tmp/a5-work-queue-tests.txt
+
+      - name: Run authoritative source regressions
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_governed_action_requests.py             fastapi_app/services/test_decision_action_orchestration.py             fastapi_app/services/test_assurance_obligation_governance.py             fastapi_app/services/test_soc_closure_governance.py             | tee /tmp/a5-source-regressions.txt
+
+      - name: Retain A5 Reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-unified-work-queue-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            /tmp/a5-work-queue-tests.txt
+            /tmp/a5-source-regressions.txt

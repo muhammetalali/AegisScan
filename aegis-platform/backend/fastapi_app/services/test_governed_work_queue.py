@@ -23,6 +23,7 @@ from fastapi_app.services.governed_work_queue import (
     StaleGovernedWorkClaimVersion,
     list_governed_work,
     mutate_governed_work_claim,
+    verify_governed_work_claim_chain,
 )
 from fastapi_app.services.test_assurance_obligation_governance import _disposition, _schedule
 from fastapi_app.services.test_finding_disposition import disposition_fixture
@@ -164,6 +165,11 @@ def test_claim_renew_release_are_versioned_idempotent_and_append_only(dispositio
     assert events[0].previous_hash == ''
     assert events[1].previous_hash == events[0].entry_hash
     assert events[2].previous_hash == events[1].entry_hash
+    proof = verify_governed_work_claim_chain(claim_id=str(claim.id))
+    assert proof['valid'] is True
+    assert proof['events'] == 3
+    assert proof['version'] == 3
+    assert proof['head_hash'] == events[-1].entry_hash
     event = events[0]
     event.result_snapshot = {'tampered': True}
     with pytest.raises(ValidationError):
