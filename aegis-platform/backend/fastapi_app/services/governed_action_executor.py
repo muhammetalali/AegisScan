@@ -16,6 +16,7 @@ from django_project.vulnerabilities.models import Vulnerability
 from enterprise.governed_action_models import GovernedActionExecution, GovernedActionRequest
 from enterprise.models import Organization, TenantProject
 from fastapi_app.contracts.governed_operations import AGOM_CONTRACT_VERSION, ActionMode
+from fastapi_app.services.asset_authorization_governance import govern_asset_authorization
 from fastapi_app.services.campaign_objective_assurance import assess_objective, complete_campaign
 from fastapi_app.services.finding_closure import close_finding
 from fastapi_app.services.finding_disposition import govern_finding_disposition
@@ -55,6 +56,8 @@ _FINDING_CONFIRM_EVIDENCE_POLICY = EvidenceQualificationPolicy(
 
 
 _IMPLEMENTED_ACTIONS = {
+    'asset.authorization.approve',
+    'asset.authorization.revoke',
     'campaign.objective.assess',
     'campaign.complete',
     'finding.confirm',
@@ -67,6 +70,8 @@ _IMPLEMENTED_ACTIONS = {
 }
 
 _REQUEST_REQUIRED_ACTIONS = {
+    'asset.authorization.approve',
+    'asset.authorization.revoke',
     'finding.false_positive',
     'finding.disposition.accept_risk',
     'finding.disposition.wont_fix',
@@ -186,6 +191,25 @@ def _temporal_envelope_for_action(
     entity_id: str,
     parameters: dict[str, Any],
 ) -> TemporalEnvelope:
+    if action_id == 'asset.authorization.approve':
+        expires_raw = parameters.get('expires_at')
+        expires_at = None
+        if expires_raw:
+            try:
+                expires_at = (
+                    expires_raw if isinstance(expires_raw, datetime)
+                    else datetime.fromisoformat(str(expires_raw).replace('Z', '+00:00'))
+                )
+            except ValueError:
+                expires_at = None
+        return TemporalEnvelope(
+            expires_at=expires_at,
+            recurrence={
+                'source': 'asset_authorization_request',
+                'asset_id': str(entity_id),
+            },
+        )
+
     validation = None
     if action_id in {'finding.confirm', 'finding.false_positive'}:
         validation_id = str(parameters.get('validation_id') or '').strip()
@@ -590,6 +614,51 @@ def _execute_finding_confirmation(
     }
 
 
+def _execute_asset_authorization(
+    *,
+    authorized: bool,
+    project_id: str,
+    actor_id: str,
+    entity_id: str,
+    expected_version: int,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    required = {'reason', '_agom_request_id', '_agom_correlation_id'}
+    allowed = set(required)
+    if authorized:
+        allowed.add('expires_at')
+    _require_parameters(parameters, required=required, allowed=allowed)
+    result = govern_asset_authorization(
+        asset_id=entity_id,
+        project_id=project_id,
+        actor_id=actor_id,
+        expected_version=expected_version,
+        authorized=authorized,
+        reason=str(parameters['reason']),
+        governed_request_id=str(parameters['_agom_request_id']),
+        correlation_id=str(parameters['_agom_correlation_id']),
+        expires_at=parameters.get('expires_at'),
+    )
+    return {
+        'id': str(result.decision.id),
+        'authorization_decision_id': str(result.decision.id),
+        'authorized': bool(result.decision.authorized),
+        'target_snapshot': result.decision.target_snapshot,
+        'expires_at': result.decision.expires_at.isoformat() if result.decision.expires_at else None,
+        'supersedes_id': str(result.decision.supersedes_id) if result.decision.supersedes_id else None,
+        'version': result.version,
+        'domain_replayed': result.replayed,
+    }
+
+
+def _execute_asset_authorization_approve(**kwargs) -> dict[str, Any]:
+    return _execute_asset_authorization(authorized=True, **kwargs)
+
+
+def _execute_asset_authorization_revoke(**kwargs) -> dict[str, Any]:
+    return _execute_asset_authorization(authorized=False, **kwargs)
+
+
 def _execute_finding_false_positive(
     *,
     project_id: str,
@@ -779,6 +848,8 @@ def _execute_finding_closure(
 
 
 _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
+    'asset.authorization.approve': _execute_asset_authorization_approve,
+    'asset.authorization.revoke': _execute_asset_authorization_revoke,
     'campaign.objective.assess': _execute_objective_assessment,
     'campaign.complete': _execute_campaign_completion,
     'finding.confirm': _execute_finding_confirmation,
@@ -814,6 +885,8 @@ def execute_governed_action(
     normalized_actor_id = str(actor_id or '').strip()
     key = _normalize_idempotency_key(idempotency_key)
     payload = dict(parameters or {})
+    if any(str(key).startswith('_agom_') for key in payload):
+        raise GovernedActionError('Governed action parameters may not use the reserved _agom_ namespace.')
     requested_correlation = str(correlation_id or '').strip()
     normalized_request_id = str(request_id or '').strip()
 
@@ -1038,13 +1111,27 @@ def execute_governed_action(
             ),
         )
 
+        correlation_uuid = (
+            uuid.UUID(requested_correlation)
+            if requested_correlation
+            else governed_request.correlation_id if governed_request is not None else uuid.uuid4()
+        )
         dispatcher = _DISPATCH[normalized_action]
+        dispatch_parameters = payload
+        if normalized_action in {'asset.authorization.approve', 'asset.authorization.revoke'}:
+            if governed_request is None:
+                raise GovernedActionError('Asset authorization execution requires an immutable governed request.')
+            dispatch_parameters = {
+                **payload,
+                '_agom_request_id': str(governed_request.id),
+                '_agom_correlation_id': str(correlation_uuid),
+            }
         result_payload = dispatcher(
             project_id=normalized_project_id,
             actor_id=normalized_actor_id,
             entity_id=normalized_entity_id,
             expected_version=int(expected_version),
-            parameters=payload,
+            parameters=dispatch_parameters,
         )
         if qualification is not None:
             result_payload = {
@@ -1063,12 +1150,6 @@ def execute_governed_action(
             entity_id=normalized_entity_id,
         )
         after_projection = _projection_dict(after_manifest)
-        correlation_uuid = (
-            uuid.UUID(requested_correlation)
-            if requested_correlation
-            else governed_request.correlation_id if governed_request is not None else uuid.uuid4()
-        )
-
         audit = append_audit(
             user_id=normalized_actor_id,
             action=AuditLog.Action.API_REQUEST,
