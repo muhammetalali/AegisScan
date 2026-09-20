@@ -856,9 +856,19 @@ def _execution_context_for_action(
             else ''
         )
         requested_test_id = str(payload.get('acceptance_test_id') or '').strip()
+        authoritative_evidence_hash = (
+            str(base_live_gate.evidence_refs[1])
+            if base_live_gate is not None and len(base_live_gate.evidence_refs) > 1
+            else ''
+        )
         vendor_ack = ' '.join(str(payload.get('vendor_ack') or '').split())
         evidence_hash = str(payload.get('acceptance_evidence_sha256') or '').strip().lower()
-        digest_valid = len(evidence_hash) == 64 and all(ch in '0123456789abcdef' for ch in evidence_hash)
+        digest_valid = (
+            len(evidence_hash) == 64
+            and all(ch in '0123456789abcdef' for ch in evidence_hash)
+            and bool(authoritative_evidence_hash)
+            and evidence_hash == authoritative_evidence_hash
+        )
         review_raw = payload.get('review_at')
         expires_raw = payload.get('expires_at')
         review_at = None
