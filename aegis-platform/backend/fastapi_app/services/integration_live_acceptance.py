@@ -60,6 +60,7 @@ def integration_configuration_fingerprint(integration: ExternalIntegration) -> s
         'secret_ref': integration.secret_ref,
         'config': dict(integration.config or {}),
         'enabled': bool(integration.enabled),
+        'configuration_generation': integration.updated_at.isoformat() if integration.updated_at else None,
     })
 
 
