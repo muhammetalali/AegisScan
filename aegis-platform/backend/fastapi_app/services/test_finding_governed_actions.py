@@ -447,14 +447,14 @@ def test_disposition_compatibility_route_creates_governed_request_without_mutati
     )
     assert response.status_code == 202, response.text
     payload = response.json()
-    assert payload['action_id'] == 'finding.disposition.accepted_risk'
+    assert payload['action_id'] == 'finding.disposition.accept_risk'
     assert payload['entity_id'] == str(finding.id)
     assert payload['expected_version'] == finding.version
     assert payload['parameters']['risk_correlation_id'] == '11111111-2222-4333-8444-555555555555'
     finding.refresh_from_db()
     assert finding.status == Vulnerability.Status.OPEN
     assert FindingDisposition.objects.filter(finding=finding).count() == 0
-    assert GovernedActionExecution.objects.filter(action_id='finding.disposition.accepted_risk', entity_id=str(finding.id)).count() == 0
+    assert GovernedActionExecution.objects.filter(action_id='finding.disposition.accept_risk', entity_id=str(finding.id)).count() == 0
 
 
 def test_close_compatibility_route_uses_independent_governed_closure(disposition_fixture):
