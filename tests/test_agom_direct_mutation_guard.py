@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,6 +9,7 @@ MODULE_PATH = ROOT / "scripts" / "ci" / "agom_direct_mutation_guard.py"
 SPEC = importlib.util.spec_from_file_location("agom_direct_mutation_guard", MODULE_PATH)
 assert SPEC and SPEC.loader
 guard = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = guard
 SPEC.loader.exec_module(guard)
 
 
@@ -34,10 +36,16 @@ AssetAuthorization.objects.create(asset_id='1', authorized=True)
 
 def test_rejects_terminal_finding_status_assignment_outside_owner():
     source = """
-finding.status = Vulnerability.Status.FIXED
+terminal = Vulnerability.Status.FIXED
+finding.status = terminal
 finding.save(update_fields=['status'])
 """
     assert "AGOM-DIRECT-STATUS" in codes(source)
+
+
+def test_local_terminal_constant_without_domain_write_is_not_a_violation():
+    source = "terminal = Vulnerability.Status.FIXED"
+    assert "AGOM-DIRECT-STATUS" not in codes(source)
 
 
 def test_rejects_generic_remediation_closed_invocation():

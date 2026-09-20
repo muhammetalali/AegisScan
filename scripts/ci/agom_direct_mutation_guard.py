@@ -109,17 +109,32 @@ class MutationVisitor(ast.NodeVisitor):
         self.path = path
         self.violations: list[Violation] = []
         self.tainted: dict[str, str] = {}
+        self.state_tainted: dict[str, str] = {}
 
     def add(self, node: ast.AST, code: str, detail: str) -> None:
         self.violations.append(
             Violation(self.path, getattr(node, "lineno", 1), code, detail)
         )
 
-    def _check_assignment_value(self, node: ast.AST, value: ast.AST) -> None:
-        state = _dotted(value)
+    def _state_value(self, value: ast.AST) -> str:
+        direct = _dotted(value)
+        if direct in TERMINAL_STATE_OWNERS:
+            return direct
+        if isinstance(value, ast.Name):
+            return self.state_tainted.get(value.id, "")
+        return ""
+
+    def _check_status_target(self, node: ast.AST, target: ast.AST, value: ast.AST) -> None:
+        state = self._state_value(value)
         owner = TERMINAL_STATE_OWNERS.get(state)
-        if owner and self.path != owner:
-            self.add(node, "AGOM-DIRECT-STATUS", f"{state} may only be assigned by {owner}")
+        if not owner or self.path == owner:
+            return
+        if isinstance(target, ast.Attribute) and target.attr in {"status", "state"}:
+            self.add(node, "AGOM-DIRECT-STATUS", f"{state} may only be written by {owner}")
+        elif isinstance(target, ast.Subscript):
+            key = target.slice
+            if isinstance(key, ast.Constant) and key.value in {"status", "state"}:
+                self.add(node, "AGOM-DIRECT-STATUS", f"{state} may only be written by {owner}")
 
     def _check_target(self, node: ast.AST, target: ast.AST) -> None:
         if self.path == ASSET_PROJECTION_OWNER:
@@ -138,23 +153,36 @@ class MutationVisitor(ast.NodeVisitor):
             )
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        for model in LEDGER_OWNERS:
-            if _contains_manager(node.value, model):
-                for target in node.targets:
-                    for name in _target_names(target):
-                        self.tainted[name] = model
-        self._check_assignment_value(node, node.value)
+        direct_state = _dotted(node.value)
+        manager_models = [model for model in LEDGER_OWNERS if _contains_manager(node.value, model)]
         for target in node.targets:
+            for name in _target_names(target):
+                if manager_models:
+                    self.tainted[name] = manager_models[0]
+                else:
+                    self.tainted.pop(name, None)
+                if direct_state in TERMINAL_STATE_OWNERS:
+                    self.state_tainted[name] = direct_state
+                else:
+                    self.state_tainted.pop(name, None)
+            self._check_status_target(node, target, node.value)
             self._check_target(node, target)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if node.value is not None:
-            for model in LEDGER_OWNERS:
-                if _contains_manager(node.value, model):
-                    for name in _target_names(node.target):
-                        self.tainted[name] = model
-            self._check_assignment_value(node, node.value)
+            direct_state = _dotted(node.value)
+            manager_models = [model for model in LEDGER_OWNERS if _contains_manager(node.value, model)]
+            for name in _target_names(node.target):
+                if manager_models:
+                    self.tainted[name] = manager_models[0]
+                else:
+                    self.tainted.pop(name, None)
+                if direct_state in TERMINAL_STATE_OWNERS:
+                    self.state_tainted[name] = direct_state
+                else:
+                    self.state_tainted.pop(name, None)
+            self._check_status_target(node, node.target, node.value)
         self._check_target(node, node.target)
         self.generic_visit(node)
 
@@ -197,7 +225,7 @@ class MutationVisitor(ast.NodeVisitor):
                 )
 
         for kw in node.keywords:
-            state = _dotted(kw.value)
+            state = self._state_value(kw.value)
             owner = TERMINAL_STATE_OWNERS.get(state)
             if kw.arg in {"status", "state"} and owner and self.path != owner:
                 self.add(
@@ -217,7 +245,7 @@ class MutationVisitor(ast.NodeVisitor):
                 )
 
         if isinstance(node.func, ast.Name) and node.func.id == "setattr" and len(node.args) >= 3:
-            state = _dotted(node.args[2])
+            state = self._state_value(node.args[2])
             owner = TERMINAL_STATE_OWNERS.get(state)
             if owner and self.path != owner:
                 self.add(node, "AGOM-DIRECT-STATUS", f"{state} may only be written by {owner}")
