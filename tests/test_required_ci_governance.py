@@ -12,6 +12,29 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+class WorkflowObservationTests(unittest.TestCase):
+    def test_lifecycle_only_workflow_is_excluded_without_relaxing_other_failures(self) -> None:
+        runs = {
+            "Required CI Governance": {"status": "completed", "conclusion": "failure"},
+            "Branch Hygiene Reality": {"status": "completed", "conclusion": "skipped"},
+            "Domain Contract Reality": {"status": "completed", "conclusion": "success"},
+            "Unexpected Triggered Reality": {"status": "completed", "conclusion": "skipped"},
+        }
+        filtered = MODULE._premerge_workflow_runs(
+            runs,
+            governance_workflow="Required CI Governance",
+            lifecycle_only_workflows={"Branch Hygiene Reality"},
+        )
+        self.assertNotIn("Required CI Governance", filtered)
+        self.assertNotIn("Branch Hygiene Reality", filtered)
+        self.assertEqual(filtered["Domain Contract Reality"]["conclusion"], "success")
+        self.assertEqual(filtered["Unexpected Triggered Reality"]["conclusion"], "skipped")
+        self.assertNotIn(
+            filtered["Unexpected Triggered Reality"]["conclusion"],
+            {"success"},
+        )
+
+
 class LiveBaseDiffTests(unittest.TestCase):
     def test_pull_request_paths_come_from_live_base_compare(self) -> None:
         calls: list[str] = []
