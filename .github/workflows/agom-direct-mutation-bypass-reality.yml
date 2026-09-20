@@ -1,0 +1,70 @@
+name: AGOM Direct Mutation Bypass Reality
+
+on:
+  push:
+    branches:
+      - main
+      - chatgpt-a/direct-mutation-bypass-audit-2026-09-20
+    paths:
+      - 'aegis-platform/backend/**'
+      - 'scripts/ci/agom_direct_mutation_audit.py'
+      - 'tests/test_agom_direct_mutation_audit.py'
+      - '.github/governance/agom-direct-mutation-policy.json'
+      - '.github/workflows/agom-direct-mutation-bypass-reality.yml'
+  pull_request:
+    paths:
+      - 'aegis-platform/backend/**'
+      - 'scripts/ci/agom_direct_mutation_audit.py'
+      - 'tests/test_agom_direct_mutation_audit.py'
+      - '.github/governance/agom-direct-mutation-policy.json'
+      - '.github/workflows/agom-direct-mutation-bypass-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  direct-mutation-bypass:
+    name: Direct mutation bypass audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Compile audit controls
+        run: |
+          python -m py_compile scripts/ci/agom_direct_mutation_audit.py tests/test_agom_direct_mutation_audit.py
+
+      - name: Run fail-closed audit unit tests
+        run: |
+          python -m unittest -v tests.test_agom_direct_mutation_audit
+
+      - name: Audit real production source tree
+        run: |
+          python scripts/ci/agom_direct_mutation_audit.py . .github/governance/agom-direct-mutation-policy.json
+
+      - name: Retain A4 governance evidence
+        if: always()
+        run: |
+          mkdir -p artifacts/agom-direct-mutation
+          {
+            echo "commit_sha=${GITHUB_SHA}"
+            echo "workflow=AGOM Direct Mutation Bypass Reality"
+            echo "policy=.github/governance/agom-direct-mutation-policy.json"
+            echo "audit=scripts/ci/agom_direct_mutation_audit.py"
+          } > artifacts/agom-direct-mutation/evidence.txt
+
+      - name: Upload A4 governance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-direct-mutation-bypass-${{ github.sha }}
+          path: artifacts/agom-direct-mutation/evidence.txt
+          if-no-files-found: error
+          retention-days: 14

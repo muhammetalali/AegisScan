@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "production_roots": ["aegis-platform/backend"],
+  "excluded_path_parts": ["migrations", "tests", "__pycache__"],
+  "excluded_filename_prefixes": ["test_"],
+  "protected_models": {
+    "AssetAuthorization": ["aegis-platform/backend/fastapi_app/services/asset_authorization_governance.py"],
+    "FindingConfirmation": ["aegis-platform/backend/fastapi_app/services/finding_confirmation.py"],
+    "FindingDisposition": ["aegis-platform/backend/fastapi_app/services/finding_disposition.py"],
+    "InvestigationClosure": ["aegis-platform/backend/fastapi_app/services/soc_closure_governance.py"],
+    "IntegrationLiveAcceptance": ["aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py"],
+    "DetectionPublication": ["aegis-platform/backend/fastapi_app/services/detection_engineering.py"],
+    "DetectionPublicationDelivery": ["aegis-platform/backend/fastapi_app/services/detection_engineering.py"],
+    "GovernedActionRequest": ["aegis-platform/backend/fastapi_app/services/governed_action_requests.py"],
+    "GovernedActionExecution": ["aegis-platform/backend/fastapi_app/services/governed_action_executor.py"]
+  },
+  "protected_callables": {
+    "confirm_finding": ["aegis-platform/backend/fastapi_app/services/governed_action_executor.py"],
+    "govern_finding_disposition": ["aegis-platform/backend/fastapi_app/services/governed_action_executor.py"],
+    "close_finding": ["aegis-platform/backend/fastapi_app/services/governed_action_executor.py"],
+    "close_investigation_case": ["aegis-platform/backend/fastapi_app/services/governed_action_executor.py"],
+    "govern_asset_authorization": ["aegis-platform/backend/fastapi_app/services/governed_action_executor.py"],
+    "accept_integration_live": ["aegis-platform/backend/fastapi_app/services/governed_action_executor.py"],
+    "queue_publication_delivery": ["aegis-platform/backend/fastapi_app/services/governed_action_executor.py"],
+    "publish_revision": []
+  },
+  "protected_state_assignments": {
+    "Vulnerability.Status.CONFIRMED": ["aegis-platform/backend/fastapi_app/services/finding_confirmation.py"],
+    "Vulnerability.Status.FALSE_POSITIVE": ["aegis-platform/backend/fastapi_app/services/finding_confirmation.py"],
+    "Vulnerability.Status.FIXED": ["aegis-platform/backend/fastapi_app/services/finding_closure.py"],
+    "InvestigationCase.Status.CLOSED": ["aegis-platform/backend/fastapi_app/services/soc_closure_governance.py"],
+    "DetectionRule.State.PUBLISHED": ["aegis-platform/backend/fastapi_app/services/detection_engineering.py"]
+  },
+  "required_source_guards": [
+    {"path":"aegis-platform/backend/fastapi_app/routers/vulnerabilities.py","token":"_reject_direct_governed_status(update.status)","min_count":2},
+    {"path":"aegis-platform/backend/fastapi_app/routers/vulnerabilities.py","token":"Vulnerability.Status.CONFIRMED","min_count":1},
+    {"path":"aegis-platform/backend/fastapi_app/routers/vulnerabilities.py","token":"Vulnerability.Status.FALSE_POSITIVE","min_count":1},
+    {"path":"aegis-platform/backend/fastapi_app/routers/vulnerabilities.py","token":"Vulnerability.Status.FIXED","min_count":1},
+    {"path":"aegis-platform/backend/fastapi_app/routers/vulnerabilities.py","token":"Vulnerability.Status.ACCEPTED_RISK","min_count":1},
+    {"path":"aegis-platform/backend/fastapi_app/routers/vulnerabilities.py","token":"Vulnerability.Status.WONT_FIX","min_count":1},
+    {"path":"aegis-platform/backend/fastapi_app/routers/vulnerabilities.py","token":"Vulnerability.Status.DUPLICATE","min_count":1},
+    {"path":"aegis-platform/backend/fastapi_app/routers/asset_authorization.py","token":"create_governed_action_request","min_count":2},
+    {"path":"aegis-platform/backend/fastapi_app/routers/finding_dispositions.py","token":"create_governed_action_request","min_count":2},
+    {"path":"aegis-platform/backend/fastapi_app/routers/detection_engineering.py","token":"action_id='detection.publish'","min_count":1},
+    {"path":"aegis-platform/backend/fastapi_app/services/detection_engineering.py","token":"Direct detection publication is disabled; use the request-bound AGOM detection.publish action.","min_count":1}
+  ]
+}
