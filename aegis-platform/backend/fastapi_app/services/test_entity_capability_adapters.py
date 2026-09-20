@@ -115,7 +115,7 @@ def test_contract_states_match_real_soc_and_assurance_domains():
 
 def test_adapter_registry_covers_every_current_agom_entity_type():
     expected = {
-        'asset_authorization', 'finding', 'crown_jewel_objective', 'campaign',
+        'asset', 'finding', 'crown_jewel_objective', 'campaign',
         'detection_revision', 'investigation_case', 'assurance_obligation', 'integration',
     }
     assert set(supported_entity_types()) == expected
@@ -308,11 +308,16 @@ def test_unimplemented_governance_domains_fail_closed_with_explicit_reasons(disp
     )
     auth_manifest = build_entity_capability_manifest(
         project_id=str(project.id), user_id=str(user.id),
-        entity_type='asset_authorization', entity_id=str(authorization.id),
+        entity_type='asset', entity_id=str(asset.id),
     )
     auth_action = _action(auth_manifest, 'asset.authorization.approve')
+    revoke_action = _action(auth_manifest, 'asset.authorization.revoke')
+    assert auth_manifest.projection.lifecycle == 'authorized'
     assert auth_action.mode is ActionMode.BLOCKED
-    assert auth_action.reason_code == 'AUTHORIZATION_REQUEST_DOMAIN_NOT_IMPLEMENTED'
+    assert revoke_action.mode is ActionMode.BLOCKED
+    assert auth_action.reason_code == 'SOD_VIOLATION'
+    assert revoke_action.reason_code == 'SOD_VIOLATION'
+    assert 'actor_must_not_be_request_proposer' in auth_action.missing_requirements
 
     integration = ExternalIntegration.objects.create(
         organization=organization, kind=ExternalIntegration.Kind.GITHUB, name='Capability GitHub',
