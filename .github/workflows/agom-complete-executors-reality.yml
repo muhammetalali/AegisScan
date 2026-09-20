@@ -15,6 +15,8 @@ on:
       - 'aegis-platform/backend/enterprise/models.py'
       - 'aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py'
       - 'aegis-platform/backend/enterprise/tasks.py'
+      - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py'
       - 'aegis-platform/backend/fastapi_app/routers/enterprise_extra.py'
       - 'aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py'
@@ -52,6 +54,8 @@ on:
       - 'aegis-platform/backend/enterprise/models.py'
       - 'aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py'
       - 'aegis-platform/backend/enterprise/tasks.py'
+      - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py'
       - 'aegis-platform/backend/fastapi_app/routers/enterprise_extra.py'
       - 'aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py'
       - 'aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py'
@@ -147,6 +151,8 @@ jobs:
             aegis-platform/backend/enterprise/models.py \
             aegis-platform/backend/enterprise/migrations/0034_integration_live_acceptance.py \
             aegis-platform/backend/enterprise/tasks.py \
+            aegis-platform/backend/fastapi_app/celery_app.py \
+            aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py \
             aegis-platform/backend/fastapi_app/routers/enterprise_extra.py \
             aegis-platform/backend/fastapi_app/services/integration_live_acceptance.py \
             aegis-platform/backend/fastapi_app/services/test_governed_integration_live_acceptance.py \
@@ -236,6 +242,15 @@ jobs:
           pytest -q \
             fastapi_app/services/test_governed_detection_publication.py \
             fastapi_app/services/test_detection_engineering.py
+
+      - name: Verify detection publication outbox recovery schedule
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/tasks/test_celery_reliability_contract.py::test_detection_publication_outbox_has_periodic_recovery_dispatch
 
       - name: Run existing AGOM executor regressions
         working-directory: aegis-platform/backend
