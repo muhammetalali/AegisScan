@@ -11,13 +11,14 @@ from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection
 from django.utils import timezone
 
-from django_project.projects.models import ProjectMembership
+from django_project.projects.models import Project, ProjectMembership
 from django_project.users.models import User
 from enterprise.assurance_obligation_models import AssuranceObligation
-from enterprise.models import DecisionAction, InvestigationCase, OrganizationMembership
+from enterprise.models import DecisionAction, InvestigationCase, OrganizationMembership, TenantProject
 from enterprise.soc_models import InvestigationCaseState
 from enterprise.work_queue_models import GovernedWorkClaim, GovernedWorkClaimEvent
 from fastapi_app.services.assurance_obligation_governance import materialize_assurance_obligation
+from fastapi_app.services.detection_engineering import deliver_publication_delivery
 from fastapi_app.services.governed_action_requests import create_governed_action_request
 from fastapi_app.services.governed_work_queue import (
     GovernedWorkQueueConflict,
@@ -27,7 +28,17 @@ from fastapi_app.services.governed_work_queue import (
     verify_governed_work_claim_chain,
 )
 from fastapi_app.services.test_assurance_obligation_governance import _disposition, _schedule
+from fastapi_app.services.test_detection_engineering import detection_fixture  # noqa: F401
 from fastapi_app.services.test_finding_disposition import disposition_fixture
+from fastapi_app.services.test_governed_detection_publication import (
+    _approver as _detection_approver,
+    _execute as _execute_detection_publication,
+    _live_siem,
+    _ownerize as _ownerize_detection_membership,
+    _proposer as _detection_proposer,
+    _request as _detection_request,
+    _validated_revision,
+)
 from fastapi_app.services.test_soc_closure_governance import _case
 
 
@@ -445,3 +456,91 @@ def test_invalid_uuid_source_identifier_fails_as_contract_error(disposition_fixt
             idempotency_key='a5-invalid-source-0001',
             lease_seconds=300,
         )
+
+
+
+def test_same_tenant_cross_project_source_cannot_be_claimed(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, finding, organization, _membership = disposition_fixture
+    request = _pending_request(user, project, finding, marker='cross-project')
+    other_project = Project.objects.create(
+        name='A5 Other Project',
+        slug=f'a5-other-project-{uuid4().hex[:8]}',
+        owner=user,
+    )
+    TenantProject.objects.create(organization=organization, project=other_project)
+
+    from fastapi_app.services.governed_work_queue import GovernedWorkSourceUnavailable
+    with pytest.raises(GovernedWorkSourceUnavailable):
+        mutate_governed_work_claim(
+            actor_id=str(user.id),
+            project_id=str(other_project.id),
+            source_type='governed_action_request',
+            source_id=str(request.id),
+            operation='claim',
+            expected_version=0,
+            idempotency_key='a5-cross-project-claim-0001',
+            lease_seconds=300,
+        )
+    assert not GovernedWorkClaim.objects.filter(source_id=str(request.id)).exists()
+
+
+def test_blocked_detection_delivery_is_projected_and_claimable(
+    detection_fixture,
+    monkeypatch,
+):
+    _client, owner, project, finding, evidence, organization, membership = detection_fixture
+    _ownerize_detection_membership(membership)
+    revision = _validated_revision(owner, project, finding, evidence)
+    integration, _acceptance = _live_siem(
+        owner=owner,
+        project=project,
+        organization=organization,
+        marker='a5-queue-blocked',
+        base_url='http://127.0.0.1:9',
+    )
+    proposer = _detection_proposer(project, organization, 'a5-queue-blocked')
+    approver = _detection_approver(owner, project, organization, 'a5-queue-blocked')
+    monkeypatch.setattr(
+        'enterprise.tasks.deliver_detection_publication.delay',
+        lambda _delivery_id: None,
+    )
+    request = _detection_request(
+        project=project,
+        revision=revision,
+        integration=integration,
+        proposer=proposer,
+        marker='a5-queue-blocked',
+    )
+    execution = _execute_detection_publication(
+        project=project,
+        revision=revision,
+        integration=integration,
+        approver=approver,
+        request=request,
+        marker='a5-queue-blocked',
+    )
+    integration.enabled = False
+    integration.save(update_fields=['enabled', 'updated_at'])
+    delivery = deliver_publication_delivery(
+        delivery_id=execution.execution.result_payload['delivery_id'],
+    ).delivery
+    assert delivery.status == 'blocked'
+
+    payload = list_governed_work(actor_id=str(owner.id), project_id=str(project.id))
+    item = next(
+        item for item in payload['items']
+        if item['source_type'] == 'detection_delivery' and item['source_id'] == str(delivery.id)
+    )
+    assert item['authoritative_state'] == 'blocked'
+    claimed = mutate_governed_work_claim(
+        actor_id=str(owner.id),
+        project_id=str(project.id),
+        source_type='detection_delivery',
+        source_id=str(delivery.id),
+        operation='claim',
+        expected_version=0,
+        idempotency_key='a5-detection-delivery-claim-0001',
+        lease_seconds=300,
+    )
+    assert claimed.snapshot['source_snapshot']['authoritative_state'] == 'blocked'
+    assert claimed.snapshot['claim']['claimed_by_id'] == str(owner.id)
