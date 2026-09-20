@@ -307,6 +307,38 @@ def run_integration_acceptance_test(self, integration_id: str, project_id: str, 
         raise
 
 
+@shared_task(name='enterprise.deliver_detection_publication')
+def deliver_detection_publication(delivery_id: str):
+    from fastapi_app.services.detection_engineering import deliver_publication_delivery
+
+    result=deliver_publication_delivery(delivery_id=str(delivery_id))
+    return {
+        'delivery_id':str(result.delivery.id),
+        'status':result.delivery.status,
+        'publication_id':str(result.publication.id) if result.publication else None,
+        'transport_status':result.delivery.transport_status,
+        'response_sha256':result.delivery.response_sha256 or None,
+        'replayed':result.replayed,
+    }
+
+
+@shared_task(name='enterprise.dispatch_detection_publication_deliveries')
+def dispatch_detection_publication_deliveries(limit: int = 100):
+    from enterprise.detection_models import DetectionPublicationDelivery
+
+    bounded=max(1,min(int(limit),500))
+    ids=list(
+        DetectionPublicationDelivery.objects.filter(
+            status=DetectionPublicationDelivery.Status.QUEUED,
+        )
+        .order_by('created_at')
+        .values_list('id',flat=True)[:bounded]
+    )
+    for delivery_id in ids:
+        deliver_detection_publication.delay(str(delivery_id))
+    return {'queued':len(ids),'delivery_ids':[str(item) for item in ids]}
+
+
 @shared_task(name='enterprise.sync_external_integration')
 def sync_external_integration_task(integration_id: str, project_id: str, user_id: str):
     from fastapi_app.services.external_fabric import sync_external_integration
