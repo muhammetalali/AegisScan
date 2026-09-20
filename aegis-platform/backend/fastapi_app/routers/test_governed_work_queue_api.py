@@ -69,3 +69,31 @@ def test_work_queue_api_rejects_client_actor_and_unknown_fields(disposition_fixt
         },
     )
     assert response.status_code == 422
+
+
+
+def test_work_queue_api_distinguishes_invalid_and_non_actionable_sources(disposition_fixture):
+    client, _user, project, _asset, _authorization, _scan, _finding, _organization, _membership = disposition_fixture
+
+    invalid = client.post(
+        '/api/v1/work-queue/governed_action_request/not-a-uuid/claim',
+        json={
+            'project_id': str(project.id),
+            'expected_claim_version': 0,
+            'idempotency_key': 'a5-api-invalid-source-0001',
+            'lease_seconds': 300,
+        },
+    )
+    assert invalid.status_code == 422
+
+    from uuid import uuid4
+    missing = client.post(
+        f'/api/v1/work-queue/governed_action_request/{uuid4()}/claim',
+        json={
+            'project_id': str(project.id),
+            'expected_claim_version': 0,
+            'idempotency_key': 'a5-api-missing-source-0001',
+            'lease_seconds': 300,
+        },
+    )
+    assert missing.status_code == 409
