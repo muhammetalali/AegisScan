@@ -109,6 +109,30 @@ def test_legacy_asset_authorization_post_submits_request_without_mutation(dispos
     ).exists()
 
 
+def test_legacy_asset_authorization_post_rejects_idempotency_rebinding_as_conflict(disposition_fixture):
+    client, _owner, _project, asset, _initial, _scan, _finding, _organization, owner_membership = disposition_fixture
+    _ownerize(owner_membership)
+    request_id = uuid4()
+
+    first = client.post(
+        f'/api/v1/assets/{asset.id}/authorization',
+        json={'authorized': False, 'reason': 'First immutable governed revocation proposal.'},
+        headers={'X-Request-ID': str(request_id)},
+    )
+    assert first.status_code == 202, first.text
+
+    rebound = client.post(
+        f'/api/v1/assets/{asset.id}/authorization',
+        json={'authorized': False, 'reason': 'Different payload must not rebind the same request id.'},
+        headers={'X-Request-ID': str(request_id)},
+    )
+    assert rebound.status_code == 409, rebound.text
+    assert GovernedActionRequest.objects.filter(
+        id=first.json()['governed_action']['request_id'],
+        entity_id=str(asset.id),
+    ).count() == 1
+
+
 def test_request_bound_asset_revoke_and_reapprove_are_atomic_and_versioned(disposition_fixture):
     _client, owner, project, asset, initial, _scan, _finding, organization, owner_membership = disposition_fixture
     _ownerize(owner_membership)
