@@ -220,7 +220,10 @@ def dispatch_integration(integration_id: str,event: dict): return send_integrati
 
 @shared_task(bind=True,name='enterprise.run_integration_acceptance_test')
 def run_integration_acceptance_test(self, integration_id: str, project_id: str, user_id: str, event: dict):
-    from fastapi_app.services.integration_live_acceptance import record_integration_acceptance_test
+    from fastapi_app.services.integration_live_acceptance import (
+        integration_configuration_fingerprint,
+        record_integration_acceptance_test,
+    )
 
     source_ref=f'celery:{self.request.id}'
     project=Project.objects.filter(pk=project_id).first()
@@ -240,9 +243,11 @@ def run_integration_acceptance_test(self, integration_id: str, project_id: str, 
     )
     if integration is None or not project_access:
         raise PermissionError('Integration acceptance test scope is not authorized.')
+    tested_configuration_fingerprint=integration_configuration_fingerprint(integration)
     material={
         'integration_id':str(integration.id),
         'project_id':str(project_id),
+        'configuration_fingerprint':tested_configuration_fingerprint,
         'event':dict(event or {}),
     }
     try:
@@ -269,6 +274,7 @@ def run_integration_acceptance_test(self, integration_id: str, project_id: str, 
             evidence_sha256=evidence_sha,
             evidence_summary=safe_summary,
             test_type='live_transport_probe',
+            tested_configuration_fingerprint=tested_configuration_fingerprint,
         )
         return {
             'status':'passed',
@@ -301,6 +307,7 @@ def run_integration_acceptance_test(self, integration_id: str, project_id: str, 
                     'error_sha256':failure_sha,
                 },
                 test_type='live_transport_probe',
+                tested_configuration_fingerprint=tested_configuration_fingerprint,
             )
         except Exception as evidence_exc:
             raise RuntimeError('Integration acceptance test failed and durable failure evidence could not be recorded.') from evidence_exc
