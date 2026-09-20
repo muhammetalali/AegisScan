@@ -34,6 +34,7 @@ from fastapi_app.services.governed_responsibility_authority import (
     resolve_actor_authority,
 )
 from fastapi_app.services.governed_temporal_policy import GovernedTemporalError, validate_review_deadline
+from fastapi_app.services.integration_live_acceptance import integration_configuration_fingerprint
 from fastapi_app.services.remediation_lifecycle import RemediationState, get_state
 
 
@@ -687,6 +688,8 @@ def _integration_context(*, entity_id: str, link: TenantProject, actor_id: str) 
         lifecycle = 'disabled'
     elif latest_test is None:
         lifecycle = 'untested'
+    elif latest_test.configuration_fingerprint != integration_configuration_fingerprint(integration):
+        lifecycle = 'configuration_changed'
     elif latest_test.outcome != IntegrationAcceptanceTest.Outcome.PASSED:
         lifecycle = 'test_failed'
     else:
@@ -708,7 +711,7 @@ def _integration_context(*, entity_id: str, link: TenantProject, actor_id: str) 
 
     action = 'integration.live_accept'
     test_ready = lifecycle == 'tested'
-    test_refs = [str(latest_test.id), latest_test.evidence_sha256] if latest_test is not None else []
+    test_refs = [str(latest_test.id), latest_test.evidence_sha256, latest_test.configuration_fingerprint] if latest_test is not None else []
     live_gate = _gate(
         GateType.LIVE_ACCEPTANCE,
         GateState.PASS if test_ready else GateState.BLOCKED,
