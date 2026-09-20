@@ -131,6 +131,7 @@ jobs:
           }
           allowed = oast_owned | scheduled_successor
           shared_triggers = {
+              '.github/workflows/governed-oast-runtime-reality.yml',
               'aegis-platform/backend/fastapi_app/main.py',
           }
           base = os.environ.get('BASE_SHA', '').strip()
