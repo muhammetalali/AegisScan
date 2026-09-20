@@ -551,6 +551,77 @@ class IntegrationSyncRun(models.Model):
         ]
 
 
+
+class IntegrationAcceptanceTest(models.Model):
+    class Outcome(models.TextChoices):
+        PASSED='passed','Passed'
+        FAILED='failed','Failed'
+
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='integration_acceptance_tests')
+    project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='integration_acceptance_tests')
+    integration=models.ForeignKey(ExternalIntegration,on_delete=models.PROTECT,related_name='acceptance_tests')
+    test_type=models.CharField(max_length=80,default='live_probe')
+    outcome=models.CharField(max_length=20,choices=Outcome.choices)
+    source_ref=models.CharField(max_length=255)
+    evidence_sha256=models.CharField(max_length=64)
+    evidence_summary=models.JSONField(default=dict,blank=True)
+    test_fingerprint=models.CharField(max_length=64)
+    tested_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='integration_acceptance_tests')
+    tested_at=models.DateTimeField(auto_now_add=True)
+    objects=_AppendOnlyManager()
+
+    class Meta:
+        constraints=[
+            models.UniqueConstraint(fields=['organization','test_fingerprint'],name='uniq_integration_test_fingerprint'),
+        ]
+        indexes=[
+            models.Index(fields=['integration','project','tested_at'],name='idx_integration_test_time'),
+            models.Index(fields=['organization','outcome'],name='idx_integration_test_outcome'),
+        ]
+
+    def save(self,*args,**kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Integration acceptance tests are immutable; create a new test record')
+        super().save(*args,**kwargs)
+
+    def delete(self,*args,**kwargs):
+        raise ValidationError('Integration acceptance tests are immutable and cannot be deleted')
+
+
+class IntegrationLiveAcceptance(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='integration_live_acceptances')
+    project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='integration_live_acceptances')
+    integration=models.ForeignKey(ExternalIntegration,on_delete=models.PROTECT,related_name='live_acceptances')
+    acceptance_test=models.OneToOneField(IntegrationAcceptanceTest,on_delete=models.PROTECT,related_name='live_acceptance')
+    vendor_ack=models.CharField(max_length=500)
+    acceptance_evidence_sha256=models.CharField(max_length=64)
+    review_at=models.DateTimeField()
+    expires_at=models.DateTimeField(null=True,blank=True)
+    supersedes=models.ForeignKey('self',on_delete=models.PROTECT,null=True,blank=True,related_name='superseded_by')
+    acceptance_fingerprint=models.CharField(max_length=64)
+    accepted_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='integration_live_acceptances')
+    accepted_at=models.DateTimeField(auto_now_add=True)
+    objects=_AppendOnlyManager()
+
+    class Meta:
+        constraints=[
+            models.UniqueConstraint(fields=['organization','acceptance_fingerprint'],name='uniq_integration_accept_fingerprint'),
+        ]
+        indexes=[
+            models.Index(fields=['integration','project','accepted_at'],name='idx_integration_accept_time'),
+            models.Index(fields=['organization','review_at'],name='idx_integration_accept_review'),
+        ]
+
+    def save(self,*args,**kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Integration live acceptances are immutable; create a superseding acceptance')
+        super().save(*args,**kwargs)
+
+    def delete(self,*args,**kwargs):
+        raise ValidationError('Integration live acceptances are immutable and cannot be deleted')
+
 class ExternalIntelligenceSnapshot(models.Model):
     class Provider(models.TextChoices):
         SHODAN='shodan','Shodan'; CENSYS='censys','Censys'; GREYNOISE='greynoise','GreyNoise'
