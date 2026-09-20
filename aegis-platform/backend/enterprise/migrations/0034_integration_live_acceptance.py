@@ -32,6 +32,10 @@ class Migration(migrations.Migration):
             model_name='integrationacceptancetest',
             constraint=models.UniqueConstraint(fields=('organization', 'test_fingerprint'), name='uniq_integration_test_fingerprint'),
         ),
+        migrations.AddConstraint(
+            model_name='integrationacceptancetest',
+            constraint=models.UniqueConstraint(fields=('integration', 'project', 'source_ref'), name='uniq_integration_test_source'),
+        ),
         migrations.AddIndex(
             model_name='integrationacceptancetest',
             index=models.Index(fields=['integration', 'project', 'tested_at'], name='idx_integration_test_time'),
