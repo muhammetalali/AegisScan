@@ -574,6 +574,7 @@ class IntegrationAcceptanceTest(models.Model):
     class Meta:
         constraints=[
             models.UniqueConstraint(fields=['organization','test_fingerprint'],name='uniq_integration_test_fingerprint'),
+            models.UniqueConstraint(fields=['integration','project','source_ref'],name='uniq_integration_test_source'),
         ]
         indexes=[
             models.Index(fields=['integration','project','tested_at'],name='idx_integration_test_time'),
