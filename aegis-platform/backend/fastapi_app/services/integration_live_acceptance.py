@@ -258,6 +258,11 @@ def accept_integration_live(
         if latest_test.outcome != IntegrationAcceptanceTest.Outcome.PASSED:
             raise IntegrationAcceptanceError('The latest integration acceptance test did not pass.')
 
+        if evidence_hash != latest_test.evidence_sha256:
+            raise IntegrationAcceptanceError(
+                'acceptance_evidence_sha256 must match the latest immutable integration acceptance test evidence.'
+            )
+
         latest_acceptance = (
             IntegrationLiveAcceptance.objects.filter(
                 organization=organization,
