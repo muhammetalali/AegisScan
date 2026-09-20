@@ -13,7 +13,7 @@ from enterprise.models import ExternalIntegration, IntegrationAcceptanceTest, In
 from fastapi_app.contracts.governed_operations import ActionMode
 from fastapi_app.services.governed_action_executor import GovernedActionBlocked, GovernedActionConflict, execute_governed_action
 from fastapi_app.services.governed_action_requests import create_governed_action_request
-from fastapi_app.services.integration_live_acceptance import IntegrationAcceptanceConflict, accept_integration_live, integration_acceptance_generation, record_integration_acceptance_test
+from fastapi_app.services.integration_live_acceptance import IntegrationAcceptanceConflict, accept_integration_live, integration_acceptance_generation, integration_configuration_fingerprint, record_integration_acceptance_test
 from fastapi_app.services import entity_capability_adapters
 from fastapi_app.services.entity_capability_adapters import build_entity_capability_manifest
 from fastapi_app.services.test_finding_disposition import disposition_fixture  # noqa: F401
@@ -233,6 +233,40 @@ def test_transport_probe_task_persists_sanitized_durable_test(disposition_fixtur
     assert test.outcome==IntegrationAcceptanceTest.Outcome.PASSED
     assert set(test.evidence_summary)=={'transport_result_sha256','http_status','status'}
     assert 'opaque_remote_value' not in str(test.evidence_summary)
+
+
+def test_transport_probe_pass_stays_bound_to_configuration_used_before_concurrent_drift(disposition_fixture,monkeypatch):
+    from enterprise.tasks import run_integration_acceptance_test
+
+    _client,owner,project,_asset,_authorization,_scan,_finding,organization,membership=disposition_fixture
+    _ownerize(membership)
+    integration=_integration(organization,owner,'during-probe-drift')
+    probed_fingerprint=integration_configuration_fingerprint(integration)
+
+    def _drifting_send(item,event):
+        ExternalIntegration.objects.filter(pk=item.pk).update(
+            base_url='https://rotated-during-probe.example.invalid',
+            updated_at=datetime.now(timezone.utc),
+        )
+        return {'http_status':202,'status':'accepted'}
+
+    monkeypatch.setattr('enterprise.tasks.send_integration',_drifting_send)
+    task_result=run_integration_acceptance_test.apply(
+        args=[str(integration.id),str(project.id),str(owner.id),{'type':'aegis.acceptance.probe'}],
+        task_id='a3-integration-during-probe-drift',
+    ).get(propagate=True)
+
+    recorded=IntegrationAcceptanceTest.objects.get(pk=task_result['acceptance_test_id'])
+    integration.refresh_from_db()
+    current_fingerprint=integration_configuration_fingerprint(integration)
+
+    assert recorded.outcome==IntegrationAcceptanceTest.Outcome.PASSED
+    assert recorded.configuration_fingerprint==probed_fingerprint
+    assert recorded.configuration_fingerprint!=current_fingerprint
+    manifest=build_entity_capability_manifest(
+        project_id=str(project.id),user_id=str(owner.id),entity_type='integration',entity_id=str(integration.id),
+    )
+    assert manifest.projection.lifecycle=='configuration_changed'
 
 
 def test_acceptance_test_route_is_project_and_tenant_bound(disposition_fixture,monkeypatch):
