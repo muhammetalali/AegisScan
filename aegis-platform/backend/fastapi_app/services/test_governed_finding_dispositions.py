@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 
@@ -8,6 +9,7 @@ from django_project.audit.models import AuditLog
 from django_project.evidence.models import FindingDisposition
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability
+from enterprise.governed_action_models import GovernedActionRequest
 from enterprise.models import OrganizationMembership
 from fastapi_app.services.governed_action_executor import (
     GovernedActionBlocked,
@@ -278,3 +280,57 @@ def test_governed_request_is_single_consumption(disposition_fixture):
             request_id=str(request.id),
             parameters=parameters,
         )
+
+
+def test_disposition_api_submits_immutable_governed_request_without_domain_mutation(disposition_fixture):
+    client, _owner, project, asset, _authorization, scan, finding, _organization, _membership = disposition_fixture
+    target = _other_finding(
+        user=_owner,
+        project=project,
+        asset=asset,
+        scan=scan,
+        title='A3 API governed duplicate target',
+    )
+    request_id = uuid4()
+    body = {
+        'disposition': 'duplicate',
+        'rationale': 'API proposal must remain immutable until independent approval.',
+        'duplicate_of_id': str(target.id),
+    }
+
+    first = client.post(
+        f'/api/v1/vulnerabilities/{finding.id}/dispositions',
+        json=body,
+        headers={'X-Request-ID': str(request_id)},
+    )
+    assert first.status_code == 202, first.text
+    payload = first.json()
+    assert payload['action_id'] == 'finding.disposition.duplicate'
+    assert payload['entity_type'] == 'finding'
+    assert payload['entity_id'] == str(finding.id)
+    assert payload['expected_version'] == finding.version
+    assert payload['parameters'] == {
+        'rationale': body['rationale'],
+        'duplicate_of_id': str(target.id),
+    }
+    assert payload['replayed'] is False
+    row = GovernedActionRequest.objects.get(pk=payload['request_id'])
+    assert row.requested_by_id == _owner.id
+    assert row.correlation_id == request_id
+    assert not FindingDisposition.objects.filter(finding=finding).exists()
+
+    replay = client.post(
+        f'/api/v1/vulnerabilities/{finding.id}/dispositions',
+        json=body,
+        headers={'X-Request-ID': str(request_id)},
+    )
+    assert replay.status_code == 202, replay.text
+    assert replay.json()['request_id'] == payload['request_id']
+    assert replay.json()['replayed'] is True
+    assert GovernedActionRequest.objects.filter(
+        action_id='finding.disposition.duplicate',
+        entity_id=str(finding.id),
+    ).count() == 1
+    finding.refresh_from_db()
+    assert finding.status == Vulnerability.Status.OPEN
+    assert not FindingDisposition.objects.filter(finding=finding).exists()
