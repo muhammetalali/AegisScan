@@ -67,6 +67,8 @@ def create_governed_action_request(
     normalized_entity = str(entity_id or '').strip()
     key = _normalize_key(idempotency_key)
     payload = dict(parameters or {})
+    if any(str(key).startswith('_agom_') for key in payload):
+        raise GovernedActionRequestError('Governed action request parameters may not use the reserved _agom_ namespace.')
     if not normalized_project or not normalized_actor or not normalized_action or not normalized_type or not normalized_entity:
         raise GovernedActionRequestError('project_id, requested_by_id, action_id, entity_type, and entity_id are required.')
     if int(expected_version) < 1:
