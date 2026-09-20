@@ -46,6 +46,7 @@ class Migration(migrations.Migration):
                         ),
                         name='gwork_claim_shape',
                     ),
+                    models.CheckConstraint(condition=models.Q(version__gte=1), name='gwork_claim_version_gte_1'),
                 ],
             },
         ),
@@ -80,6 +81,16 @@ class Migration(migrations.Migration):
                 'constraints': [
                     models.UniqueConstraint(fields=('claim','sequence'), name='uniq_gwork_event_sequence'),
                     models.UniqueConstraint(fields=('organization','idempotency_key'), name='uniq_gwork_org_idem'),
+                    models.CheckConstraint(condition=models.Q(sequence__gte=1), name='gwork_event_sequence_gte_1'),
+                    models.CheckConstraint(condition=models.Q(result_version=models.F('sequence')), name='gwork_event_result_sequence'),
+                    models.CheckConstraint(condition=models.Q(result_version=models.F('expected_version') + 1), name='gwork_event_version_step'),
+                    models.CheckConstraint(
+                        condition=(
+                            models.Q(result_claimed_by__isnull=True, lease_expires_at__isnull=True)
+                            | models.Q(result_claimed_by__isnull=False, lease_expires_at__isnull=False)
+                        ),
+                        name='gwork_event_claim_shape',
+                    ),
                 ],
             },
         ),

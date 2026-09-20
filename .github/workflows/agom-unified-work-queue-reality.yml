@@ -13,6 +13,8 @@ on:
       - 'aegis-platform/backend/fastapi_app/routers/work_queue.py'
       - 'aegis-platform/backend/fastapi_app/routers/test_governed_work_queue_api.py'
       - 'aegis-platform/backend/fastapi_app/main.py'
+      - 'scripts/ci/agom_direct_mutation_guard.py'
+      - 'tests/test_agom_direct_mutation_guard.py'
       - '.github/workflows/agom-unified-work-queue-reality.yml'
   pull_request:
     branches: [main]
@@ -25,6 +27,8 @@ on:
       - 'aegis-platform/backend/fastapi_app/routers/work_queue.py'
       - 'aegis-platform/backend/fastapi_app/routers/test_governed_work_queue_api.py'
       - 'aegis-platform/backend/fastapi_app/main.py'
+      - 'scripts/ci/agom_direct_mutation_guard.py'
+      - 'tests/test_agom_direct_mutation_guard.py'
       - '.github/workflows/agom-unified-work-queue-reality.yml'
   workflow_dispatch:
 
@@ -92,7 +96,18 @@ jobs:
 
       - name: Compile governed work queue plane
         run: |
-          python -m py_compile             aegis-platform/backend/enterprise/work_queue_models.py             aegis-platform/backend/fastapi_app/services/governed_work_queue.py             aegis-platform/backend/fastapi_app/routers/work_queue.py             aegis-platform/backend/fastapi_app/services/test_governed_work_queue.py             aegis-platform/backend/fastapi_app/routers/test_governed_work_queue_api.py
+          python -m py_compile \
+            aegis-platform/backend/enterprise/work_queue_models.py \
+            aegis-platform/backend/fastapi_app/services/governed_work_queue.py \
+            aegis-platform/backend/fastapi_app/routers/work_queue.py \
+            aegis-platform/backend/fastapi_app/services/test_governed_work_queue.py \
+            aegis-platform/backend/fastapi_app/routers/test_governed_work_queue_api.py \
+            scripts/ci/agom_direct_mutation_guard.py
+
+      - name: Enforce governed mutation ownership
+        run: |
+          python scripts/ci/agom_direct_mutation_guard.py | tee /tmp/a5-mutation-guard.txt
+          pytest -q tests/test_agom_direct_mutation_guard.py | tee /tmp/a5-mutation-guard-tests.txt
 
       - name: Verify Django schema and migration drift
         working-directory: aegis-platform/backend
@@ -104,12 +119,21 @@ jobs:
       - name: Run unified governed work queue Reality
         working-directory: aegis-platform/backend
         run: |
-          pytest -q             fastapi_app/services/test_governed_work_queue.py             fastapi_app/routers/test_governed_work_queue_api.py             | tee /tmp/a5-work-queue-tests.txt
+          pytest -q \
+            fastapi_app/services/test_governed_work_queue.py \
+            fastapi_app/routers/test_governed_work_queue_api.py \
+            | tee /tmp/a5-work-queue-tests.txt
 
       - name: Run authoritative source regressions
         working-directory: aegis-platform/backend
         run: |
-          pytest -q             fastapi_app/services/test_governed_action_requests.py             fastapi_app/services/test_decision_action_orchestration.py             fastapi_app/services/test_assurance_obligation_governance.py             fastapi_app/services/test_soc_closure_governance.py             | tee /tmp/a5-source-regressions.txt
+          pytest -q \
+            fastapi_app/services/test_governed_action_requests.py \
+            fastapi_app/services/test_decision_action_orchestration.py \
+            fastapi_app/services/test_assurance_obligation_governance.py \
+            fastapi_app/services/test_soc_closure_governance.py \
+            fastapi_app/services/test_governed_detection_publication.py \
+            | tee /tmp/a5-source-regressions.txt
 
       - name: Retain A5 Reality evidence
         if: always()
@@ -118,5 +142,7 @@ jobs:
           name: agom-unified-work-queue-${{ github.run_id }}
           if-no-files-found: warn
           path: |
+            /tmp/a5-mutation-guard.txt
+            /tmp/a5-mutation-guard-tests.txt
             /tmp/a5-work-queue-tests.txt
             /tmp/a5-source-regressions.txt

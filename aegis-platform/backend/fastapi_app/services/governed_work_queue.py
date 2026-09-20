@@ -16,6 +16,7 @@ from enterprise.assurance_obligation_models import AssuranceObligation
 from enterprise.detection_models import DetectionPublicationDelivery
 from enterprise.governed_action_models import GovernedActionRequest
 from enterprise.models import DecisionAction, InvestigationCase, Organization, OrganizationMembership, TenantProject
+from enterprise.soc_models import InvestigationCaseState
 from enterprise.work_queue_models import GovernedWorkClaim, GovernedWorkClaimEvent
 
 
@@ -296,11 +297,11 @@ def _claim_view(claim: GovernedWorkClaim | None, *, actor_id: str, now) -> dict[
     expired = bool(claim.claimed_by_id and claim.lease_expires_at and claim.lease_expires_at <= now)
     state = 'expired' if expired else 'claimed' if claim.claimed_by_id else 'unclaimed'
     return {
-        'version': claim.version,
+        'version': int(claim.version),
         'state': state,
         'claimed_by_id': str(claim.claimed_by_id) if claim.claimed_by_id else None,
-        'claimed_at': claim.claimed_at,
-        'lease_expires_at': claim.lease_expires_at,
+        'claimed_at': claim.claimed_at.isoformat() if claim.claimed_at else None,
+        'lease_expires_at': claim.lease_expires_at.isoformat() if claim.lease_expires_at else None,
         'mine': bool(claim.claimed_by_id and str(claim.claimed_by_id) == str(actor_id) and not expired),
     }
 
@@ -378,41 +379,206 @@ def list_governed_work(
             items.append(item)
 
     items.sort(key=_sort_key)
-    items = items[: max(1, min(int(limit), 500))]
+    total = len(items)
     counts: dict[str, int] = {}
     for item in items:
         counts[item['work_category']] = counts.get(item['work_category'], 0) + 1
+    items = items[: max(1, min(int(limit), 500))]
     return {
         'policy_version': WORK_QUEUE_POLICY_VERSION,
         'items': items,
-        'total': len(items),
+        'total': total,
+        'returned': len(items),
         'counts': counts,
     }
 
 
 def _source_snapshot(*, organization, project, source_type: str, source_id: str) -> dict[str, Any]:
+    """Resolve and lock exactly one authoritative source before claim mutation."""
     source_type = _normalize_source_type(source_type)
+    source_id = str(source_id)
     now = timezone.now()
-    items = [
-        *_pending_request_items(organization, project),
-        *_decision_action_items(organization, project, now),
-        *_assurance_items(organization, project, now),
-        *_investigation_items(organization, project),
-        *_delivery_items(organization, project),
-    ]
-    for item in items:
-        if item['source_type'] == source_type and item['source_id'] == str(source_id):
-            return {
-                'policy_version': WORK_QUEUE_POLICY_VERSION,
-                'source_type': source_type,
-                'source_id': str(source_id),
-                'authoritative_state': item['authoritative_state'],
-                'source_version': item['source_version'],
-                'title': item['title'],
-                'priority_score': item['priority_score'],
-                'details': item['details'],
+    item: dict[str, Any] | None = None
+
+    if source_type == GovernedWorkClaim.SourceType.GOVERNED_ACTION_REQUEST:
+        row = (
+            GovernedActionRequest.objects.select_for_update(of=('self',))
+            .select_related('requested_by')
+            .filter(
+                pk=source_id,
+                organization=organization,
+                project=project,
+                execution__isnull=True,
+            )
+            .first()
+        )
+        if row is not None:
+            item = {
+                'authoritative_state': 'pending_approval',
+                'source_version': int(row.expected_version),
+                'title': f'Governed approval: {row.action_id}',
+                'priority_score': 75,
+                'details': {
+                    'action_id': row.action_id,
+                    'entity_type': row.entity_type,
+                    'entity_id': row.entity_id,
+                    'requested_by_id': str(row.requested_by_id),
+                    'request_fingerprint': row.request_fingerprint,
+                    'contract_policy_version': row.contract_policy_version,
+                    'correlation_id': str(row.correlation_id),
+                },
             }
-    raise GovernedWorkQueueError('Governed work source is no longer actionable or is outside the project scope.')
+    elif source_type == GovernedWorkClaim.SourceType.DECISION_ACTION:
+        row = (
+            DecisionAction.objects.select_for_update(of=('self',))
+            .filter(organization=organization, project=project, pk=source_id)
+            .exclude(state__in={'verified', 'rejected'})
+            .first()
+        )
+        if row is not None:
+            due_at = row.created_at + timedelta(hours=row.sla_hours)
+            priority = max(0, min(100, int(row.priority or 0)))
+            if row.sla_status == 'breached':
+                priority = 100
+            elif row.sla_status == 'at_risk':
+                priority = max(priority, 90)
+            item = {
+                'authoritative_state': row.state,
+                'source_version': int(row.version),
+                'title': row.title,
+                'priority_score': priority,
+                'details': {
+                    'owner': row.owner,
+                    'requested_by': row.requested_by,
+                    'sla_status': row.sla_status,
+                    'escalation_level': row.escalation_level,
+                    'validation_id': str(row.validation_id) if row.validation_id else None,
+                    'risk_correlation_id': str(row.risk_correlation_id) if row.risk_correlation_id else None,
+                    'due_at': due_at.isoformat(),
+                    'overdue': bool(due_at <= now or row.sla_status == 'breached'),
+                },
+            }
+    elif source_type == GovernedWorkClaim.SourceType.ASSURANCE_OBLIGATION:
+        row = (
+            AssuranceObligation.objects.select_for_update(of=('self',))
+            .filter(
+                pk=source_id,
+                organization=organization,
+                project=project,
+                status__in=[
+                    AssuranceObligation.Status.OPEN,
+                    AssuranceObligation.Status.DUE,
+                    AssuranceObligation.Status.OVERDUE,
+                ],
+            )
+            .first()
+        )
+        if row is not None:
+            priority_by_state = {
+                AssuranceObligation.Status.OVERDUE: 100,
+                AssuranceObligation.Status.DUE: 90,
+                AssuranceObligation.Status.OPEN: 60,
+            }
+            item = {
+                'authoritative_state': row.status,
+                'source_version': int(row.version),
+                'title': f'Assurance review: {row.kind}',
+                'priority_score': priority_by_state[row.status],
+                'details': {
+                    'finding_id': str(row.finding_id),
+                    'asset_id': str(row.asset_id),
+                    'kind': row.kind,
+                    'generation': row.generation,
+                    'schedule_id': str(row.schedule_id),
+                    'due_at': row.due_at.isoformat(),
+                    'overdue': bool(row.status == AssuranceObligation.Status.OVERDUE or row.due_at <= now),
+                },
+            }
+    elif source_type == GovernedWorkClaim.SourceType.INVESTIGATION_CASE:
+        state = (
+            InvestigationCaseState.objects.select_for_update(of=('self',))
+            .select_related('case__owner')
+            .filter(
+                case_id=source_id,
+                case__organization=organization,
+                case__project=project,
+                case__status__in=[
+                    InvestigationCase.Status.OPEN,
+                    InvestigationCase.Status.INVESTIGATING,
+                    InvestigationCase.Status.DECIDED,
+                ],
+            )
+            .first()
+        )
+        if state is not None:
+            row = state.case
+            priority_by_state = {
+                InvestigationCase.Status.DECIDED: 85,
+                InvestigationCase.Status.INVESTIGATING: 70,
+                InvestigationCase.Status.OPEN: 60,
+            }
+            item = {
+                'authoritative_state': row.status,
+                'source_version': int(state.version),
+                'title': row.title,
+                'priority_score': priority_by_state[row.status],
+                'details': {
+                    'owner_id': str(row.owner_id),
+                    'decision_summary': row.decision_summary,
+                    'generation': state.generation,
+                },
+            }
+    elif source_type == GovernedWorkClaim.SourceType.DETECTION_DELIVERY:
+        row = (
+            DetectionPublicationDelivery.objects.select_for_update(of=('self',))
+            .select_related('integration', 'revision__rule')
+            .filter(
+                pk=source_id,
+                organization=organization,
+                project=project,
+                status__in=[
+                    DetectionPublicationDelivery.Status.FAILED,
+                    DetectionPublicationDelivery.Status.BLOCKED,
+                ],
+            )
+            .first()
+        )
+        if row is not None:
+            priority_by_state = {
+                DetectionPublicationDelivery.Status.BLOCKED: 100,
+                DetectionPublicationDelivery.Status.FAILED: 95,
+            }
+            item = {
+                'authoritative_state': row.status,
+                'source_version': int(row.attempts) + 1,
+                'title': f'Detection delivery: {row.revision.rule.name}',
+                'priority_score': priority_by_state[row.status],
+                'details': {
+                    'revision_id': str(row.revision_id),
+                    'integration_id': str(row.integration_id),
+                    'integration_kind': row.integration.kind,
+                    'attempts': row.attempts,
+                    'last_error': row.last_error,
+                    'governed_request_id': str(row.governed_request_id),
+                },
+            }
+
+    if item is None:
+        raise GovernedWorkQueueError(
+            'Governed work source is no longer actionable or is outside the project scope.'
+        )
+
+    return {
+        'policy_version': WORK_QUEUE_POLICY_VERSION,
+        'source_type': source_type,
+        'source_id': source_id,
+        'authoritative_state': item['authoritative_state'],
+        'source_version': item['source_version'],
+        'title': item['title'],
+        'priority_score': item['priority_score'],
+        'details': item['details'],
+        'captured_at': now.isoformat(),
+    }
 
 
 def _event_hash(payload: dict[str, Any]) -> str:
@@ -584,6 +750,7 @@ def mutate_governed_work_claim(
             claim.save(update_fields=['claimed_by','claimed_at','lease_expires_at','version','updated_at'])
             result_version = claim.version
 
+        source_snapshot_sha256 = _sha(source_snapshot)
         result_snapshot = {
             'policy_version': WORK_QUEUE_POLICY_VERSION,
             'source_type': normalized_type,
@@ -593,6 +760,7 @@ def mutate_governed_work_claim(
             'operation': operation,
             'claim': _claim_view(claim, actor_id=str(actor_id), now=now),
             'source_snapshot': source_snapshot,
+            'source_snapshot_sha256': source_snapshot_sha256,
         }
         previous = (
             GovernedWorkClaimEvent.objects.filter(claim=claim)
@@ -637,6 +805,130 @@ def mutate_governed_work_claim(
 
 
 
+def verify_governed_work_claim_chain(*, claim_id: str) -> dict[str, Any]:
+    claim = GovernedWorkClaim.objects.filter(pk=claim_id).first()
+    if claim is None:
+        raise GovernedWorkQueueError('Governed work claim was not found.')
+    events = list(
+        GovernedWorkClaimEvent.objects.filter(claim=claim)
+        .order_by('sequence', 'occurred_at', 'id')
+    )
+    previous_hash = ''
+    expected_sequence = 1
+    for event in events:
+        if event.sequence != expected_sequence or event.result_version != event.sequence:
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'sequence_mismatch',
+            }
+        if event.expected_version != event.sequence - 1:
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'version_step_mismatch',
+            }
+        if event.organization_id != claim.organization_id or event.project_id != claim.project_id:
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'scope_mismatch',
+            }
+        if event.previous_hash != previous_hash:
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'previous_hash_mismatch',
+            }
+
+        source_snapshot = dict(event.source_snapshot or {})
+        result_snapshot = dict(event.result_snapshot or {})
+        claim_snapshot = dict(result_snapshot.get('claim') or {})
+        if (
+            source_snapshot.get('policy_version') != WORK_QUEUE_POLICY_VERSION
+            or source_snapshot.get('source_type') != claim.source_type
+            or str(source_snapshot.get('source_id')) != str(claim.source_id)
+        ):
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'source_snapshot_scope_mismatch',
+            }
+        if result_snapshot.get('source_snapshot_sha256') != _sha(source_snapshot):
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'source_snapshot_hash_mismatch',
+            }
+        if (
+            result_snapshot.get('policy_version') != WORK_QUEUE_POLICY_VERSION
+            or result_snapshot.get('source_type') != claim.source_type
+            or str(result_snapshot.get('source_id')) != str(claim.source_id)
+            or str(result_snapshot.get('organization_id')) != str(claim.organization_id)
+            or str(result_snapshot.get('project_id')) != str(claim.project_id)
+            or int(claim_snapshot.get('version', -1)) != event.result_version
+        ):
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'result_snapshot_scope_mismatch',
+            }
+        if claim_snapshot.get('claimed_by_id') != (
+            str(event.result_claimed_by_id) if event.result_claimed_by_id else None
+        ):
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'result_claimant_mismatch',
+            }
+        if claim_snapshot.get('lease_expires_at') != (
+            event.lease_expires_at.isoformat() if event.lease_expires_at else None
+        ):
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'result_lease_mismatch',
+            }
+
+        payload = {
+            'claim_id': str(claim.id),
+            'sequence': event.sequence,
+            'event_type': event.event_type,
+            'actor_id': str(event.actor_id),
+            'idempotency_key': event.idempotency_key,
+            'request_fingerprint': event.request_fingerprint,
+            'expected_version': event.expected_version,
+            'result_version': event.result_version,
+            'result_claimed_by': str(event.result_claimed_by_id) if event.result_claimed_by_id else None,
+            'lease_expires_at': event.lease_expires_at.isoformat() if event.lease_expires_at else None,
+            'source_snapshot': event.source_snapshot,
+            'result_snapshot': event.result_snapshot,
+            'previous_hash': event.previous_hash,
+        }
+        calculated = _event_hash(payload)
+        if calculated != event.entry_hash:
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'entry_hash_mismatch',
+            }
+        previous_hash = event.entry_hash
+        expected_sequence += 1
+
+    if events:
+        last = events[-1]
+        if claim.version != last.result_version:
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'claim_version_mismatch',
+            }
+        if claim.claimed_by_id != last.result_claimed_by_id:
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'claim_owner_mismatch',
+            }
+        if claim.lease_expires_at != last.lease_expires_at:
+            return {
+                'valid': False, 'claim_id': str(claim.id), 'events': len(events),
+                'reason': 'claim_lease_mismatch',
+            }
+    return {
+        'valid': True,
+        'claim_id': str(claim.id),
+        'events': len(events),
+        'head_hash': previous_hash,
+        'version': claim.version,
+    }
 def verify_governed_work_claim_chain(*, claim_id: str) -> dict[str, Any]:
     claim = GovernedWorkClaim.objects.filter(pk=claim_id).first()
     if claim is None:

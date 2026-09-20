@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
@@ -92,6 +93,7 @@ def test_queue_projects_authoritative_sources_without_copying_business_state(dis
     case_item = by_key[f'investigation_case:{case.id}']
 
     assert payload['policy_version'] == 'agom.work-queue.v1'
+    assert payload['returned'] == payload['total']
     assert request_item['authoritative_state'] == 'pending_approval'
     assert request_item['source_version'] == request.expected_version
     assert action_item['authoritative_state'] == action.state
@@ -132,6 +134,9 @@ def test_claim_renew_release_are_versioned_idempotent_and_append_only(dispositio
     assert replay.snapshot == first.snapshot
     assert first.snapshot['claim']['version'] == 1
     assert first.snapshot['claim']['state'] == 'claimed'
+    assert isinstance(first.snapshot['claim']['claimed_at'], str)
+    assert isinstance(first.snapshot['claim']['lease_expires_at'], str)
+    assert len(first.snapshot['source_snapshot_sha256']) == 64
 
     renewed = mutate_governed_work_claim(
         actor_id=str(user.id),
@@ -171,6 +176,8 @@ def test_claim_renew_release_are_versioned_idempotent_and_append_only(dispositio
     assert proof['version'] == 3
     assert proof['head_hash'] == events[-1].entry_hash
     event = events[0]
+    json.dumps(event.result_snapshot)
+    assert event.result_snapshot['source_snapshot_sha256']
     event.result_snapshot = {'tampered': True}
     with pytest.raises(ValidationError):
         event.save()
@@ -327,3 +334,73 @@ def test_postgresql_concurrent_first_claim_serializes_to_one_winner(disposition_
     claim = GovernedWorkClaim.objects.get(source_id=str(request.id))
     assert str(claim.claimed_by_id) in {str(owner.id), str(other.id)}
     assert GovernedWorkClaimEvent.objects.filter(claim=claim).count() == 1
+
+
+
+def test_queue_total_and_counts_are_computed_before_limit(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, finding, _organization, _membership = disposition_fixture
+    first = _pending_request(user, project, finding, marker='limit-a')
+    second = _pending_request(user, project, finding, marker='limit-b')
+
+    payload = list_governed_work(actor_id=str(user.id), project_id=str(project.id), limit=1)
+
+    assert payload['total'] >= 2
+    assert payload['returned'] == 1
+    assert payload['counts']['approval'] >= 2
+    assert {str(first.id), str(second.id)}.issubset({
+        item['source_id']
+        for item in list_governed_work(actor_id=str(user.id), project_id=str(project.id), limit=20)['items']
+    })
+
+
+def test_expired_claim_can_be_reclaimed_with_auditable_version_step(disposition_fixture):
+    _client, owner, project, _asset, _authorization, _scan, finding, organization, _membership = disposition_fixture
+    request = _pending_request(owner, project, finding, marker='reclaim')
+    other = User.objects.create_user(email='a5-reclaim@example.invalid', password='Strong-Test-Password-123!')
+    project.members.add(other)
+    OrganizationMembership.objects.create(
+        organization=organization,
+        user=other,
+        role=OrganizationMembership.Role.ANALYST,
+        is_active=True,
+    )
+    mutate_governed_work_claim(
+        actor_id=str(owner.id), project_id=str(project.id),
+        source_type='governed_action_request', source_id=str(request.id),
+        operation='claim', expected_version=0,
+        idempotency_key='a5-reclaim-owner-0001', lease_seconds=300,
+    )
+    claim = GovernedWorkClaim.objects.get(source_id=str(request.id))
+    claim.lease_expires_at = timezone.now() - timedelta(seconds=1)
+    claim.save(update_fields=['lease_expires_at', 'updated_at'])
+
+    reclaimed = mutate_governed_work_claim(
+        actor_id=str(other.id), project_id=str(project.id),
+        source_type='governed_action_request', source_id=str(request.id),
+        operation='claim', expected_version=1,
+        idempotency_key='a5-reclaim-other-0001', lease_seconds=300,
+    )
+    assert reclaimed.snapshot['claim']['version'] == 2
+    assert reclaimed.snapshot['claim']['claimed_by_id'] == str(other.id)
+    events = list(GovernedWorkClaimEvent.objects.filter(claim=claim).order_by('sequence'))
+    assert [event.event_type for event in events] == ['claimed', 'reclaimed']
+    assert verify_governed_work_claim_chain(claim_id=str(claim.id))['valid'] is True
+
+
+def test_terminal_source_cannot_be_claimed(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, _finding, organization, _membership = disposition_fixture
+    action = _decision_action(user, project, organization, marker='terminal-before-claim')
+    action.state = 'verified'
+    action.version += 1
+    action.updated_at = timezone.now()
+    action.save(update_fields=['state', 'version', 'updated_at'])
+
+    from fastapi_app.services.governed_work_queue import GovernedWorkQueueError
+    with pytest.raises(GovernedWorkQueueError, match='no longer actionable'):
+        mutate_governed_work_claim(
+            actor_id=str(user.id), project_id=str(project.id),
+            source_type='decision_action', source_id=action.action_id,
+            operation='claim', expected_version=0,
+            idempotency_key='a5-terminal-before-claim-0001', lease_seconds=300,
+        )
+    assert not GovernedWorkClaim.objects.filter(source_id=action.action_id).exists()

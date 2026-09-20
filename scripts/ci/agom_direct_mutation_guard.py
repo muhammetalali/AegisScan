@@ -28,6 +28,8 @@ LEDGER_OWNERS = {
     "GovernedActionRequest": "aegis-platform/backend/fastapi_app/services/governed_action_requests.py",
     "GovernedActionExecution": "aegis-platform/backend/fastapi_app/services/governed_action_executor.py",
     "EvidenceQualificationEvaluation": "aegis-platform/backend/fastapi_app/services/evidence_qualification.py",
+    "GovernedWorkClaim": "aegis-platform/backend/fastapi_app/services/governed_work_queue.py",
+    "GovernedWorkClaimEvent": "aegis-platform/backend/fastapi_app/services/governed_work_queue.py",
 }
 
 TERMINAL_STATE_OWNERS = {
