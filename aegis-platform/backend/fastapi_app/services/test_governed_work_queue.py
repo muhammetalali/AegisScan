@@ -47,10 +47,10 @@ def _pending_request(user, project, finding, marker='queue'):
     ).request
 
 
-def _decision_action(user, project, organization, marker='queue'):
+def _decision_action(user, project, organization, marker='queue', action_id=None):
     now = timezone.now()
     return DecisionAction.objects.create(
-        action_id=f'a5-action-{marker}-{uuid4().hex[:8]}',
+        action_id=action_id or f'a5-action-{marker}-{uuid4().hex[:8]}',
         organization=organization,
         project=project,
         decision_id=f'a5-decision-{marker}',
@@ -404,3 +404,44 @@ def test_terminal_source_cannot_be_claimed(disposition_fixture):
             idempotency_key='a5-terminal-before-claim-0001', lease_seconds=300,
         )
     assert not GovernedWorkClaim.objects.filter(source_id=action.action_id).exists()
+
+
+
+def test_long_decision_action_identifier_can_be_claimed_without_schema_truncation(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, _finding, organization, _membership = disposition_fixture
+    source_id = 'a5-long-action-' + ('x' * 180)
+    action = _decision_action(
+        user,
+        project,
+        organization,
+        marker='long-id',
+        action_id=source_id,
+    )
+    result = mutate_governed_work_claim(
+        actor_id=str(user.id),
+        project_id=str(project.id),
+        source_type='decision_action',
+        source_id=action.action_id,
+        operation='claim',
+        expected_version=0,
+        idempotency_key='a5-long-action-claim-0001',
+        lease_seconds=300,
+    )
+    assert result.snapshot['source_id'] == source_id
+    assert GovernedWorkClaim.objects.get(source_id=source_id).source_id == source_id
+
+
+def test_invalid_uuid_source_identifier_fails_as_contract_error(disposition_fixture):
+    _client, user, project, _asset, _authorization, _scan, _finding, _organization, _membership = disposition_fixture
+    from fastapi_app.services.governed_work_queue import GovernedWorkQueueError
+    with pytest.raises(GovernedWorkQueueError, match='must be a UUID'):
+        mutate_governed_work_claim(
+            actor_id=str(user.id),
+            project_id=str(project.id),
+            source_type='governed_action_request',
+            source_id='not-a-uuid',
+            operation='claim',
+            expected_version=0,
+            idempotency_key='a5-invalid-source-0001',
+            lease_seconds=300,
+        )
