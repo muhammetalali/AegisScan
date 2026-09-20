@@ -22,7 +22,7 @@ class Migration(migrations.Migration):
                     ('investigation_case', 'Investigation Case'),
                     ('detection_delivery', 'Detection Delivery'),
                 ], max_length=40)),
-                ('source_id', models.CharField(max_length=128)),
+                ('source_id', models.CharField(max_length=255)),
                 ('claimed_at', models.DateTimeField(blank=True, null=True)),
                 ('lease_expires_at', models.DateTimeField(blank=True, null=True)),
                 ('version', models.PositiveIntegerField(default=1)),
