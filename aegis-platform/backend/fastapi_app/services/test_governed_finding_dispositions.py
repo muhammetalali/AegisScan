@@ -282,6 +282,40 @@ def test_governed_request_is_single_consumption(disposition_fixture):
         )
 
 
+def test_accepted_risk_api_maps_to_canonical_governed_action_without_domain_mutation(disposition_fixture):
+    client, _owner, _project, _asset, _authorization, _scan, finding, _organization, _membership = disposition_fixture
+    request_id = uuid4()
+    risk_correlation_id = uuid4()
+    review_at = datetime.now(timezone.utc) + timedelta(days=30)
+    body = {
+        'disposition': 'accepted_risk',
+        'rationale': 'Accepted risk proposal must resolve to the canonical governed action id.',
+        'risk_correlation_id': str(risk_correlation_id),
+        'review_at': review_at.isoformat(),
+    }
+
+    response = client.post(
+        f'/api/v1/vulnerabilities/{finding.id}/dispositions',
+        json=body,
+        headers={'X-Request-ID': str(request_id)},
+    )
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload['action_id'] == 'finding.disposition.accept_risk'
+    assert payload['entity_type'] == 'finding'
+    assert payload['entity_id'] == str(finding.id)
+    assert payload['expected_version'] == finding.version
+    assert payload['parameters']['risk_correlation_id'] == str(risk_correlation_id)
+    assert payload['replayed'] is False
+    assert GovernedActionRequest.objects.filter(
+        action_id='finding.disposition.accept_risk',
+        entity_id=str(finding.id),
+    ).count() == 1
+    finding.refresh_from_db()
+    assert finding.status == Vulnerability.Status.OPEN
+    assert not FindingDisposition.objects.filter(finding=finding).exists()
+
+
 def test_disposition_api_submits_immutable_governed_request_without_domain_mutation(disposition_fixture):
     client, _owner, project, asset, _authorization, scan, finding, _organization, _membership = disposition_fixture
     target = _other_finding(
