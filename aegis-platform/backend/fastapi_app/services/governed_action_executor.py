@@ -1032,6 +1032,29 @@ def execute_governed_action(
         if requested_correlation and str(preflight_request.correlation_id) != requested_correlation:
             raise GovernedActionConflict('Execution correlation_id does not match the immutable governed request.')
 
+        # A governed request is version-bound. Check the current projection
+        # before dynamic evidence/temporal gates so a newer immutable domain
+        # generation is reported deterministically as a CAS conflict rather
+        # than being misclassified as missing/stale evidence.
+        preflight_manifest = build_governed_capability_manifest(
+            project_id=normalized_project_id,
+            user_id=normalized_actor_id,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+            request_proposer_id=str(preflight_request.requested_by_id),
+            execution_parameters=payload,
+        )
+        preflight_capability = _capability_for(preflight_manifest, normalized_action)
+        if preflight_capability.mode is ActionMode.HIDDEN:
+            raise PermissionError('Governed action is not available to this actor.')
+        preflight_version = preflight_manifest.projection.version
+        if preflight_version is None:
+            raise GovernedActionError('Governed action target does not expose a version for CAS enforcement.')
+        if int(preflight_version) != int(expected_version):
+            raise GovernedActionConflict(
+                f'Expected entity version {expected_version}, current version is {preflight_version}.'
+            )
+
     # Persist qualification before mutation so rejected evidence decisions remain
     # auditable. Capability authority is checked first to avoid evidence-state
     # disclosure to an ineligible actor.
@@ -1129,19 +1152,23 @@ def execute_governed_action(
         capability = _capability_for(manifest, normalized_action)
         if capability.mode is ActionMode.HIDDEN:
             raise PermissionError('Governed action is not available to this actor.')
-        if capability.mode is not ActionMode.ENABLED:
-            raise GovernedActionBlocked(
-                capability.reason_code,
-                capability.reason,
-                capability.missing_requirements,
-            )
 
+        # Re-check CAS after acquiring the serialization locks and before
+        # mutable/dynamic gates. This closes the race between preflight and
+        # execution and preserves a single stale-version conflict semantic.
         current_version = manifest.projection.version
         if current_version is None:
             raise GovernedActionError('Governed action target does not expose a version for CAS enforcement.')
         if int(current_version) != int(expected_version):
             raise GovernedActionConflict(
                 f'Expected entity version {expected_version}, current version is {current_version}.'
+            )
+
+        if capability.mode is not ActionMode.ENABLED:
+            raise GovernedActionBlocked(
+                capability.reason_code,
+                capability.reason,
+                capability.missing_requirements,
             )
 
         gate_snapshot = [item.model_dump(mode='json') for item in capability.gate_results]
