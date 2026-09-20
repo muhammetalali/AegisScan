@@ -105,6 +105,8 @@ async def create_finding_disposition(
             )
         if body.duplicate_of_id is not None:
             raise HTTPException(status_code=422, detail='duplicate_of_id is only valid for duplicate proposals')
+        if body.review_at.tzinfo is None or body.review_at.utcoffset() is None:
+            raise HTTPException(status_code=422, detail='review_at must be timezone-aware')
         parameters.update({
             'risk_correlation_id': str(body.risk_correlation_id),
             'review_at': body.review_at.astimezone(timezone.utc).isoformat(),
