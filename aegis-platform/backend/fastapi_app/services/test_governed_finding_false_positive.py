@@ -5,6 +5,7 @@ import pytest
 from django_project.audit.models import AuditLog
 from django_project.evidence.models import FindingConfirmation
 from django_project.vulnerabilities.models import Vulnerability
+from enterprise.governed_action_models import GovernedActionRequest
 from enterprise.models import OrganizationMembership
 from fastapi_app.services.governed_action_executor import (
     GovernedActionConflict,
@@ -51,6 +52,65 @@ def _setup(disposition_fixture):
         parameters=parameters,
     ).request
     return project, finding, confirmer, validation, evidence, request, parameters
+
+
+def test_false_positive_api_submits_governed_request_without_classification(disposition_fixture):
+    client, owner, project, _asset, authorization, _scan, finding, organization, owner_membership = disposition_fixture
+    _ownerize(owner_membership)
+    validator, _membership = _actor(
+        owner=owner,
+        project=project,
+        organization=organization,
+        email='a3-false-positive-api-validator@example.invalid',
+        role=OrganizationMembership.Role.ANALYST,
+        responsibility='finding_confirmer',
+    )
+    validation, _evidence = _validation(
+        user=validator,
+        finding=finding,
+        authorization=authorization,
+        finding_present=False,
+    )
+    body = {
+        'validation_id': str(validation.id),
+        'verdict': 'false_positive',
+        'rationale': 'API false-positive proposal remains immutable before governed execution.',
+        'expected_version': finding.version,
+        'idempotency_key': 'a3-false-positive-api-proposal-0001',
+    }
+
+    first = client.post(
+        f'/api/v1/vulnerabilities/{finding.id}/confirmations',
+        json=body,
+    )
+    assert first.status_code == 202, first.text
+    payload = first.json()
+    assert payload['action_id'] == 'finding.false_positive'
+    assert payload['entity_type'] == 'finding'
+    assert payload['entity_id'] == str(finding.id)
+    assert payload['expected_version'] == finding.version
+    assert payload['parameters'] == {
+        'validation_id': str(validation.id),
+        'rationale': body['rationale'],
+    }
+    assert payload['replayed'] is False
+    assert GovernedActionRequest.objects.filter(pk=payload['request_id']).exists()
+    finding.refresh_from_db()
+    assert finding.status == Vulnerability.Status.OPEN
+    assert not FindingConfirmation.objects.filter(finding=finding).exists()
+
+    replay = client.post(
+        f'/api/v1/vulnerabilities/{finding.id}/confirmations',
+        json=body,
+    )
+    assert replay.status_code == 202, replay.text
+    assert replay.json()['request_id'] == payload['request_id']
+    assert replay.json()['replayed'] is True
+    assert GovernedActionRequest.objects.filter(
+        action_id='finding.false_positive',
+        entity_id=str(finding.id),
+    ).count() == 1
+    assert not FindingConfirmation.objects.filter(finding=finding).exists()
 
 
 def test_false_positive_executes_only_through_request_bound_agom(disposition_fixture):
