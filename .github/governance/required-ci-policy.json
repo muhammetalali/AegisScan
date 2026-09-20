@@ -1,7 +1,9 @@
 {
   "schema_version": 1,
   "governance_workflow": "Required CI Governance",
-  "successful_conclusions": ["success"],
+  "successful_conclusions": [
+    "success"
+  ],
   "observe_all_triggered_workflows": true,
   "poll_seconds": 15,
   "settle_seconds": 60,
@@ -30,7 +32,10 @@
   "conditional_required_workflows": [
     {
       "name": "External Black-Box E2E",
-      "events": ["pull_request", "push"],
+      "events": [
+        "pull_request",
+        "push"
+      ],
       "paths": [
         "aegis-platform/e2e/**",
         "aegis-platform/backend/**",
@@ -47,7 +52,10 @@
     },
     {
       "name": "AegisScan Production Runtime Reality Gate",
-      "events": ["pull_request", "push"],
+      "events": [
+        "pull_request",
+        "push"
+      ],
       "paths": [
         "aegis-platform/backend/**",
         "aegis-platform/docker-compose.yml",
@@ -63,7 +71,9 @@
     },
     {
       "name": "Supply Chain Release",
-      "events": ["pull_request"],
+      "events": [
+        "pull_request"
+      ],
       "paths": [
         ".github/workflows/supply-chain-release.yml",
         "aegis-platform/backend/**",
@@ -76,7 +86,10 @@
     },
     {
       "name": "Scanner Crash Recovery Reality",
-      "events": ["pull_request", "push"],
+      "events": [
+        "pull_request",
+        "push"
+      ],
       "paths": [
         "aegis-platform/backend/**",
         "aegis-platform/docker-compose.yml",
@@ -85,5 +98,8 @@
         ".github/workflows/scanner-crash-recovery-reality.yml"
       ]
     }
+  ],
+  "lifecycle_only_workflows": [
+    "Branch Hygiene Reality"
   ]
 }
