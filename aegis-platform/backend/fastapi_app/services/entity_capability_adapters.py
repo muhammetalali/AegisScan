@@ -1208,6 +1208,7 @@ def build_entity_capability_manifest(
             parameters=execution_parameters if contract.action_id in {
                 'asset.authorization.approve',
                 'asset.authorization.revoke',
+                'detection.publish',
                 'finding.disposition.accept_risk',
                 'finding.disposition.wont_fix',
                 'finding.disposition.duplicate',
