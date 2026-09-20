@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from asgiref.sync import async_to_sync
 
-from django_project.assets.models import Asset
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.users.models import User
 from fastapi_app.routers.assets import AssetCreate, _bulk_create_assets
@@ -40,7 +40,7 @@ def test_bulk_import_rolls_back_every_asset_on_persistence_failure(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_bulk_import_does_not_create_authorization_ledger_decisions():
+def test_bulk_import_rejects_client_owned_authorization_projection_atomically():
     user = User.objects.create_user(
         email='bulk-auth@example.invalid',
         password='Strong-Test-Password-123!',
@@ -53,10 +53,32 @@ def test_bulk_import_does_not_create_authorization_ledger_decisions():
         configuration={'host': '192.0.2.10', 'authorized': True},
     )
 
+    from fastapi_app.services.asset_authorization_governance import AssetAuthorizationGovernanceError
+
+    with pytest.raises(AssetAuthorizationGovernanceError, match='server-owned'):
+        async_to_sync(_bulk_create_assets)([item], str(user.id))
+
+    assert Asset.objects.filter(project=project).count() == 0
+    assert AssetAuthorization.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_bulk_import_initializes_authorization_projection_false_without_ledger_decision():
+    user = User.objects.create_user(
+        email='bulk-auth-safe@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    project = Project.objects.create(name='Bulk auth safe', slug='bulk-auth-safe', owner=user)
+    item = AssetCreate(
+        project_id=str(project.id),
+        name='safe imported target',
+        type=Asset.Type.IP_ADDRESS,
+        configuration={'host': '192.0.2.11'},
+    )
+
     created = async_to_sync(_bulk_create_assets)([item], str(user.id))
 
     assert len(created) == 1
     asset = Asset.objects.get(pk=created[0].pk)
-    # A legacy configuration flag is never authoritative. Importing an asset
-    # must not mint the immutable authorization decision required by scanners.
+    assert asset.configuration['authorized'] is False
     assert asset.authorization_records.count() == 0
