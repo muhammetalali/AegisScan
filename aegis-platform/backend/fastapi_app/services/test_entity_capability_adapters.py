@@ -274,7 +274,8 @@ def test_detection_publish_requires_passed_validation_and_current_live_siem_targ
     )
     plain_publish = _action(plain, 'detection.publish')
     assert plain_publish.mode is ActionMode.BLOCKED
-    assert plain_publish.reason_code == 'SOD_VIOLATION'
+    assert plain_publish.reason_code == 'GOVERNED_REQUEST_REQUIRED'
+    assert 'immutable_governed_request' in plain_publish.missing_requirements
 
     manifest = build_entity_capability_manifest(
         project_id=str(project.id), user_id=str(user.id), entity_type='detection_revision',
@@ -319,8 +320,8 @@ def test_soc_closure_uses_real_investigating_state_and_governed_disposition(disp
     # projection must not enable the mutation without an immutable proposer
     # context, even when a legacy disposition exists.
     assert close.mode is ActionMode.BLOCKED
-    assert close.reason_code == 'SOD_VIOLATION'
-    assert 'actor_must_not_be_request_proposer' in close.missing_requirements
+    assert close.reason_code == 'GOVERNED_REQUEST_REQUIRED'
+    assert 'immutable_governed_request' in close.missing_requirements
 
 
 def django_future_review():
@@ -329,7 +330,7 @@ def django_future_review():
     return django_timezone.now() + timedelta(days=30)
 
 
-def test_unimplemented_governance_domains_fail_closed_with_explicit_reasons(disposition_fixture):
+def test_request_bound_governance_domains_fail_closed_without_request_context(disposition_fixture):
     _client, user, project, asset, authorization, _scan, finding, organization, membership = disposition_fixture
     _owner_role(membership)
 
@@ -346,9 +347,10 @@ def test_unimplemented_governance_domains_fail_closed_with_explicit_reasons(disp
     assert auth_manifest.projection.lifecycle == 'authorized'
     assert auth_action.mode is ActionMode.BLOCKED
     assert revoke_action.mode is ActionMode.BLOCKED
-    assert auth_action.reason_code == 'SOD_VIOLATION'
-    assert revoke_action.reason_code == 'SOD_VIOLATION'
-    assert 'actor_must_not_be_request_proposer' in auth_action.missing_requirements
+    assert auth_action.reason_code == 'GOVERNED_REQUEST_REQUIRED'
+    assert revoke_action.reason_code == 'GOVERNED_REQUEST_REQUIRED'
+    assert 'immutable_governed_request' in auth_action.missing_requirements
+    assert 'immutable_governed_request' in revoke_action.missing_requirements
 
     integration = ExternalIntegration.objects.create(
         organization=organization, kind=ExternalIntegration.Kind.GITHUB, name='Capability GitHub',
