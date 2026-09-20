@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from django.db.models import Q
@@ -12,6 +12,7 @@ from django_project.assets.models import AssetAuthorization
 from django_project.evidence.models import Evidence, FindingDisposition, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.assurance_obligation_models import AssuranceObligation
+from enterprise.governed_action_models import GovernedActionExecution
 from enterprise.campaign_models import AdversaryCampaign, CampaignObjective
 from enterprise.detection_models import DetectionRevision, DetectionValidation
 from enterprise.models import AttackPath, ExternalIntegration, InvestigationCase, RiskCorrelationSnapshot, TenantProject
@@ -32,6 +33,7 @@ from fastapi_app.services.governed_responsibility_authority import (
     GovernedResponsibilityError,
     resolve_actor_authority,
 )
+from fastapi_app.services.governed_temporal_policy import GovernedTemporalError, validate_review_deadline
 from fastapi_app.services.remediation_lifecycle import RemediationState, get_state
 
 
@@ -324,7 +326,7 @@ def _latest_validation(finding: Vulnerability) -> ValidationRun | None:
     )
 
 
-def _confirmation_candidate(finding: Vulnerability) -> tuple[ValidationRun, Evidence] | None:
+def _confirmation_candidate(finding: Vulnerability, *, expected_presence: bool = True) -> tuple[ValidationRun, Evidence] | None:
     if not finding.asset_id:
         return None
     validation = _latest_validation(finding)
@@ -335,7 +337,7 @@ def _confirmation_candidate(finding: Vulnerability) -> tuple[ValidationRun, Evid
     if not validation.authorization_decision_id:
         return None
     result = validation.result if isinstance(validation.result, dict) else {}
-    if result.get('finding_present') is not True:
+    if result.get('finding_present') is not expected_presence:
         return None
     evidence_id = result.get('evidence_id')
     if not evidence_id:
@@ -349,7 +351,7 @@ def _confirmation_candidate(finding: Vulnerability) -> tuple[ValidationRun, Evid
     metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
     if str(metadata.get('validation_run_id') or metadata.get('validation_id') or '') != str(validation.id):
         return None
-    if metadata.get('finding_present') is not True:
+    if metadata.get('finding_present') is not expected_presence:
         return None
     if str(metadata.get('authorization_decision_id') or '') != str(validation.authorization_decision_id):
         return None
@@ -394,7 +396,8 @@ def _finding_context(*, entity_id: str, link: TenantProject, actor_id: str) -> E
     )
     if finding is None:
         raise EntityCapabilityNotFound('Entity capability target not found.')
-    confirmation = _confirmation_candidate(finding)
+    confirmation = _confirmation_candidate(finding, expected_presence=True)
+    false_positive = _confirmation_candidate(finding, expected_presence=False)
     verified = _verified_remediation(finding)
     if verified is not None:
         lifecycle = 'verified'
@@ -425,30 +428,54 @@ def _finding_context(*, entity_id: str, link: TenantProject, actor_id: str) -> E
     if creator_id and creator_id != str(actor_id):
         sod.add(confirm_action)
 
-    risk_action = 'finding.disposition.accept_risk'
+    false_action = 'finding.false_positive'
+    false_refs = [str(false_positive[0].id), str(false_positive[1].id)] if false_positive else []
+    gates[false_action] = [_gate(
+        GateType.EVIDENCE,
+        GateState.PASS if false_positive else GateState.BLOCKED,
+        'FALSE_POSITIVE_EVIDENCE_READY' if false_positive else 'FALSE_POSITIVE_EVIDENCE_REQUIRED',
+        'The latest validation is current, authorized, finding-absent, and bound to lineage-consistent validation evidence.' if false_positive else 'False-positive classification requires the latest validation to be completed, authorized, finding-absent, and bound to current validation_output evidence.',
+        missing=[] if false_positive else ['latest_finding_absent_validation', 'finding_confirmation_evidence'],
+        evidence_refs=false_refs,
+    )]
+    if false_positive:
+        evidence_ready.add(false_action)
+    if creator_id and creator_id != str(actor_id):
+        sod.add(false_action)
+
     risk = RiskCorrelationSnapshot.objects.filter(
         project_id=link.project_id,
         vulnerability=finding,
     ).order_by('-created_at', '-id').first()
-    gates[risk_action] = [
-        _gate(
-            GateType.EVIDENCE,
-            GateState.PASS if risk else GateState.BLOCKED,
-            'RISK_SNAPSHOT_READY' if risk else 'RISK_SNAPSHOT_REQUIRED',
-            'Latest immutable risk correlation snapshot is available.' if risk else 'Risk disposition requires an immutable risk correlation snapshot.',
-            missing=[] if risk else ['risk_correlation_snapshot'],
-            evidence_refs=[str(risk.id), risk.correlation_sha256] if risk else [],
-        ),
-        _gate(
-            GateType.EXPIRY_REVIEW,
-            GateState.BLOCKED,
-            'REVIEW_DEADLINE_INPUT_REQUIRED',
-            'Risk acceptance requires a future review_at value and rationale at execution time.',
-            missing=['review_at', 'disposition_rationale'],
-        ),
-    ]
-    if risk:
-        evidence_ready.add(risk_action)
+    for risk_action in ('finding.disposition.accept_risk', 'finding.disposition.wont_fix'):
+        gates[risk_action] = [
+            _gate(
+                GateType.EVIDENCE,
+                GateState.PASS if risk else GateState.BLOCKED,
+                'RISK_SNAPSHOT_READY' if risk else 'RISK_SNAPSHOT_REQUIRED',
+                'Latest immutable risk correlation snapshot is available.' if risk else 'Risk disposition requires an immutable risk correlation snapshot.',
+                missing=[] if risk else ['risk_correlation_snapshot'],
+                evidence_refs=[str(risk.id), risk.correlation_sha256] if risk else [],
+            ),
+            _gate(
+                GateType.EXPIRY_REVIEW,
+                GateState.BLOCKED,
+                'REVIEW_DEADLINE_INPUT_REQUIRED',
+                'Risk disposition requires a future review_at value and rationale at execution time.',
+                missing=['review_at', 'disposition_rationale'],
+            ),
+        ]
+        if risk:
+            evidence_ready.add(risk_action)
+
+    duplicate_action = 'finding.disposition.duplicate'
+    gates[duplicate_action] = [_gate(
+        GateType.VALIDATION,
+        GateState.BLOCKED,
+        'DUPLICATE_TARGET_INPUT_REQUIRED',
+        'Duplicate disposition requires a same-project canonical duplicate target at execution time.',
+        missing=['duplicate_of_id'],
+    )]
 
     close_action = 'finding.close'
     verifier_id = str(verified[0].user_id) if verified else ''
@@ -702,6 +729,161 @@ def _asset_authorization_context(*, entity_id: str, link: TenantProject, actor_i
     )
 
 
+_RISK_DISPOSITION_ACTIONS = {
+    'finding.disposition.accept_risk',
+    'finding.disposition.wont_fix',
+}
+
+
+def _execution_context_for_action(
+    *,
+    context: EntityCapabilityContext,
+    action_id: str,
+    parameters: dict[str, Any] | None,
+) -> tuple[list[GateResult], bool]:
+    gates = list(context.gate_results_by_action.get(action_id, []))
+    evidence_ready = action_id in context.evidence_ready_actions
+    if parameters is None:
+        return gates, evidence_ready
+    payload = dict(parameters)
+
+    if action_id in _RISK_DISPOSITION_ACTIONS:
+        risk_ref = str(payload.get('risk_correlation_id') or '').strip()
+        evidence_gate = next((item for item in gates if item.gate is GateType.EVIDENCE), None)
+        if evidence_gate is not None and evidence_gate.state is GateState.PASS:
+            authoritative_ref = str(evidence_gate.evidence_refs[0]) if evidence_gate.evidence_refs else ''
+            if not risk_ref or risk_ref != authoritative_ref:
+                evidence_gate = _gate(
+                    GateType.EVIDENCE,
+                    GateState.FAIL,
+                    'RISK_SNAPSHOT_INPUT_MISMATCH',
+                    'Execution must bind the latest immutable risk correlation snapshot selected by governance.',
+                    missing=['latest_risk_correlation_snapshot'],
+                    evidence_refs=list(evidence_gate.evidence_refs),
+                )
+                evidence_ready = False
+            gates = [evidence_gate if item.gate is GateType.EVIDENCE else item for item in gates]
+
+        rationale = ' '.join(str(payload.get('rationale') or '').split())
+        review_raw = payload.get('review_at')
+        review_at = review_raw if isinstance(review_raw, datetime) else None
+        if review_at is None and review_raw:
+            try:
+                review_at = datetime.fromisoformat(str(review_raw).replace('Z', '+00:00'))
+            except ValueError:
+                review_at = None
+        valid_review = False
+        if review_at is not None and review_at.tzinfo is not None and len(rationale) >= 3:
+            try:
+                validate_review_deadline(
+                    review_at,
+                    now=datetime.now(timezone.utc),
+                    max_horizon=timedelta(days=365),
+                )
+                valid_review = True
+            except GovernedTemporalError:
+                valid_review = False
+        review_gate = _gate(
+            GateType.EXPIRY_REVIEW,
+            GateState.PASS if valid_review else GateState.BLOCKED,
+            'REVIEW_DEADLINE_INPUT_VALID' if valid_review else 'REVIEW_DEADLINE_INPUT_INVALID',
+            'Risk disposition review deadline and rationale satisfy the temporal input policy.' if valid_review else 'Risk disposition requires a valid future review_at within policy horizon and a non-empty rationale.',
+            missing=[] if valid_review else ['review_at', 'disposition_rationale'],
+        )
+        gates = [review_gate if item.gate is GateType.EXPIRY_REVIEW else item for item in gates]
+        return gates, evidence_ready
+
+    if action_id == 'investigation.close':
+        case = InvestigationCase.objects.filter(
+            pk=context.entity.entity_id,
+            project_id=context.entity.project_id,
+            organization_id=context.organization_id,
+        ).first()
+        finding_id = str(payload.get('finding_id') or '').strip()
+        closure_type = str(payload.get('closure_type') or '').strip()
+        validation_id = str(payload.get('validation_id') or '').strip()
+        disposition_id = str(payload.get('disposition_id') or '').strip()
+        linked = bool(case and finding_id and case.findings.filter(pk=finding_id).exists())
+        proof_ok = False
+        refs: list[str] = []
+        if linked and closure_type == 'remediated' and validation_id and not disposition_id:
+            verified = _verified_remediation(
+                Vulnerability.objects.filter(pk=finding_id, project_id=context.entity.project_id).first()
+            )
+            proof_ok = bool(verified and str(verified[0].id) == validation_id)
+            if proof_ok:
+                refs = [str(verified[0].id), str(verified[1].id)]
+        elif linked and closure_type in {'accepted_risk', 'wont_fix', 'duplicate'} and disposition_id and not validation_id:
+            disposition = FindingDisposition.objects.filter(
+                pk=disposition_id,
+                finding_id=finding_id,
+                organization_id=context.organization_id,
+                disposition=closure_type,
+            ).first()
+            latest = FindingDisposition.objects.filter(finding_id=finding_id).order_by('-created_at', '-id').first()
+            action_map = {
+                'accepted_risk': 'finding.disposition.accept_risk',
+                'wont_fix': 'finding.disposition.wont_fix',
+                'duplicate': 'finding.disposition.duplicate',
+            }
+            governed = bool(
+                disposition
+                and latest
+                and latest.id == disposition.id
+                and GovernedActionExecution.objects.filter(
+                    project_id=context.entity.project_id,
+                    action_id=action_map[closure_type],
+                    entity_type='finding',
+                    entity_id=finding_id,
+                    result_payload__disposition_id=str(disposition.id),
+                ).exists()
+            )
+            if governed and closure_type in {'accepted_risk', 'wont_fix'}:
+                governed = bool(disposition.review_at and disposition.review_at > django_timezone.now())
+            proof_ok = governed
+            if proof_ok:
+                refs = [str(disposition.id)]
+
+        gates = [
+            item if item.gate is not GateType.EVIDENCE else _gate(
+                GateType.EVIDENCE,
+                GateState.PASS if proof_ok else GateState.BLOCKED,
+                'REQUEST_BOUND_CLOSURE_PROOF_READY' if proof_ok else 'REQUEST_BOUND_CLOSURE_PROOF_REQUIRED',
+                'The exact request-bound closure proof is valid and governance-linked.' if proof_ok else 'Investigation closure requires an exact same-project governed proof matching the request.',
+                missing=[] if proof_ok else ['request_bound_closure_proof'],
+                evidence_refs=refs,
+            )
+            for item in gates
+        ]
+        return gates, proof_ok
+
+    if action_id == 'finding.disposition.duplicate':
+        target_id = str(payload.get('duplicate_of_id') or '').strip()
+        target = (
+            Vulnerability.objects.filter(
+                pk=target_id,
+                project_id=context.entity.project_id,
+            ).only('id', 'status', 'duplicate_of_id').first()
+            if target_id else None
+        )
+        valid = (
+            target is not None
+            and str(target.id) != str(context.entity.entity_id)
+            and target.status not in {Vulnerability.Status.FIXED, Vulnerability.Status.FALSE_POSITIVE}
+        )
+        gates = [_gate(
+            GateType.VALIDATION,
+            GateState.PASS if valid else GateState.BLOCKED,
+            'DUPLICATE_TARGET_VALID' if valid else 'DUPLICATE_TARGET_INVALID',
+            'Duplicate target is an active same-project finding.' if valid else 'Duplicate target must resolve to a different active finding in the same project.',
+            missing=[] if valid else ['valid_duplicate_of_id'],
+            evidence_refs=[str(target.id)] if valid and target is not None else [],
+        )]
+        return gates, True
+
+    return gates, evidence_ready
+
+
 _ADAPTERS: dict[str, Callable[..., EntityCapabilityContext]] = {
     'asset_authorization': _asset_authorization_context,
     'finding': _finding_context,
@@ -739,6 +921,8 @@ def build_entity_capability_manifest(
     user_id: str,
     entity_type: str,
     entity_id: str,
+    request_proposer_id: str = '',
+    execution_parameters: dict[str, Any] | None = None,
 ) -> AuthoritativeCapabilityManifest:
     context = resolve_entity_capability_context(
         project_id=project_id,
@@ -762,6 +946,26 @@ def build_entity_capability_manifest(
     capabilities: list[CapabilityItem] = []
     for contract in contracts:
         evaluated_layer = contract.actor_layers[0]
+        gate_results, execution_evidence_ready = _execution_context_for_action(
+            context=context,
+            action_id=contract.action_id,
+            parameters=execution_parameters if contract.action_id in {
+                'finding.disposition.accept_risk',
+                'finding.disposition.wont_fix',
+                'finding.disposition.duplicate',
+                'investigation.close',
+            } else None,
+        )
+        sod_eligible = (
+            contract.action_id in context.sod_eligible_actions
+            or not contract.sod_rules
+        )
+        if request_proposer_id and (
+            'actor_must_not_be_disposition_proposer' in contract.sod_rules
+            or 'actor_must_not_be_request_proposer' in contract.sod_rules
+        ):
+            sod_eligible = str(user_id) != str(request_proposer_id)
+
         item = evaluate_action(
             contract,
             current_state=lifecycle,
@@ -769,14 +973,11 @@ def build_entity_capability_manifest(
             actor_layer=evaluated_layer,
             actor_responsibilities=responsibilities,
             evidence_ready=(
-                contract.action_id in context.evidence_ready_actions
+                execution_evidence_ready
                 or not contract.evidence_requirements
             ),
-            sod_eligible=(
-                contract.action_id in context.sod_eligible_actions
-                or not contract.sod_rules
-            ),
-            gate_results=context.gate_results_by_action.get(contract.action_id, []),
+            sod_eligible=sod_eligible,
+            gate_results=gate_results,
         ).model_copy(update={'evaluated_actor_layer': evaluated_layer})
         hard_block = context.hard_blocks.get(contract.action_id)
         if hard_block is not None and item.mode is not ActionMode.HIDDEN:
@@ -788,7 +989,7 @@ def build_entity_capability_manifest(
                 reason_code=hard_block.reason_code,
                 reason=hard_block.reason,
                 missing_requirements=list(hard_block.missing_requirements),
-                gate_results=context.gate_results_by_action.get(contract.action_id, []),
+                gate_results=gate_results,
             )
         capabilities.append(item)
 
