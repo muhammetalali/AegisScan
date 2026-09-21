@@ -47,3 +47,4 @@ jobs:
           grep -F "live_acceptance_request.py" .github/workflows/cloud-live-provider-reality.yml
           grep -F -- "--scope cloud-providers" .github/workflows/cloud-live-provider-reality.yml
           grep -F -- "--required-confirm VALIDATE" .github/workflows/cloud-live-provider-reality.yml
+          grep -F "environment: production" .github/workflows/cloud-live-provider-reality.yml
