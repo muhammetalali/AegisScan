@@ -1,0 +1,156 @@
+name: Threat Modeling Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0037_threat_model_snapshot.py'
+      - 'aegis-platform/backend/fastapi_app/services/threat_modeling.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_threat_modeling.py'
+      - 'aegis-platform/backend/fastapi_app/routers/threat_modeling.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/threat-modeling-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0037_threat_model_snapshot.py'
+      - 'aegis-platform/backend/fastapi_app/services/threat_modeling.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_threat_modeling.py'
+      - 'aegis-platform/backend/fastapi_app/routers/threat_modeling.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/threat-modeling-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: threat-modeling-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  threat-modeling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-threat-model-django-secret-key-0123456789abcdef0123456789
+      JWT_SECRET_KEY: ci-threat-model-jwt-secret-key-0123456789abcdef0123456789
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-threat-model-evidence-hmac-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-threat-model-credential-fingerprint-key-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile threat modeling plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/models.py \
+            aegis-platform/backend/fastapi_app/services/threat_modeling.py \
+            aegis-platform/backend/fastapi_app/services/test_threat_modeling.py \
+            aegis-platform/backend/fastapi_app/routers/threat_modeling.py \
+            aegis-platform/backend/fastapi_app/main.py
+
+      - name: Django schema and migration reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from enterprise.models import ThreatModelSnapshot
+          assert connection.vendor == 'postgresql', connection.vendor
+          assert ThreatModelSnapshot._meta.get_field('model_sha256').unique is True
+          print('THREAT_MODEL_DATABASE=POSTGRESQL')
+          print('THREAT_MODEL_IMMUTABLE_DIGEST=PASS')
+          PY
+
+      - name: Threat methodology, tenant isolation, drift and evidence suite
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_threat_modeling.py \
+            --junitxml=/tmp/threat-modeling-junit.xml
+
+      - name: Verify API and methodology contract
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.routers.threat_modeling import ThreatModelCreateIn, ThreatScenarioIn
+          from fastapi_app.services.threat_modeling import (
+              LINDDUN_CATEGORIES,
+              METHODOLOGIES,
+              STRIDE_CATEGORIES,
+          )
+
+          paths = set(app.openapi()['paths'])
+          expected = {
+              '/api/v1/threat-modeling/contract',
+              '/api/v1/threat-modeling/projects/{project_id}/snapshots',
+              '/api/v1/threat-modeling/projects/{project_id}/snapshots/{snapshot_id}',
+          }
+          assert expected.issubset(paths), sorted(path for path in paths if 'threat-modeling' in path)
+          assert METHODOLOGIES == {'STRIDE', 'LINDDUN', 'CAPEC', 'PASTA'}
+          assert len(STRIDE_CATEGORIES) == 6
+          assert len(LINDDUN_CATEGORIES) == 7
+          assert ThreatModelCreateIn.model_config.get('extra') == 'forbid'
+          assert ThreatScenarioIn.model_config.get('extra') == 'forbid'
+          print('THREAT_MODEL_API_REGISTRATION=PASS')
+          print('THREAT_MODEL_STRIDE_LINDDUN_CAPEC_PASTA=PASS')
+          PY
+
+      - name: Retain threat modeling evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: threat-modeling-reality-${{ github.sha }}
+          path: /tmp/threat-modeling-junit.xml
+          retention-days: 30
+          if-no-files-found: warn
