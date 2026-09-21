@@ -33,7 +33,7 @@ on:
 permissions: {contents: read}
 
 concurrency:
-  group: production-host-reality-${{ github.ref }}
+  group: production-host-reality-v2-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
