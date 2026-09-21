@@ -7,6 +7,9 @@ name: Production Resilience Acceptance
         description: 'Type DRILL to run the protected production resilience acceptance'
         required: true
         type: string
+  workflow_run:
+    workflows: ['Internal Production Deploy and Acceptance']
+    types: [completed]
 
 permissions:
   contents: read
@@ -17,7 +20,12 @@ concurrency:
 
 jobs:
   resilience-acceptance:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 240
     environment: production
@@ -35,6 +43,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
 
     env:
+      RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       PROD_SSH_HOST: ${{ secrets.AEGIS_PRODUCTION_SSH_HOST }}
       PROD_SSH_PORT: ${{ vars.AEGIS_PRODUCTION_SSH_PORT || '22' }}
       PROD_SSH_USER: ${{ secrets.AEGIS_PRODUCTION_SSH_USER }}
@@ -53,20 +62,31 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - name: Require explicit exact-main resilience drill
+      - name: Require authorized exact-main resilience acceptance
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ inputs.confirm }}" = "DRILL"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "${{ inputs.confirm }}" = "DRILL"
+          else
+            test "${{ github.event.workflow_run.conclusion }}" = "success"
+            test "${{ github.event.workflow_run.head_branch }}" = "main"
+            test "${{ github.event.workflow_run.head_repository.full_name }}" = "$GITHUB_REPOSITORY"
+          fi
+          case "$RELEASE_SHA" in
+            *[!0-9a-f]*|'') echo 'release SHA must be lowercase hexadecimal' >&2; exit 1 ;;
+          esac
+          test "${#RELEASE_SHA}" -eq 40
           git fetch --no-tags origin main
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
 
       - name: Validate protected production material
         shell: bash
@@ -128,7 +148,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python aegis-platform/scripts/production_resilience_backup.py             --host "$PROD_SSH_HOST"             --port "$PROD_SSH_PORT"             --user "$PROD_SSH_USER"             --private-key /tmp/aegis-resilience/id             --known-hosts /tmp/aegis-resilience/known_hosts             --release-sha "$GITHUB_SHA"             | tee /tmp/aegis-resilience/remote-backup.json
+          python aegis-platform/scripts/production_resilience_backup.py             --host "$PROD_SSH_HOST"             --port "$PROD_SSH_PORT"             --user "$PROD_SSH_USER"             --private-key /tmp/aegis-resilience/id             --known-hosts /tmp/aegis-resilience/known_hosts             --release-sha "$RELEASE_SHA"             | tee /tmp/aegis-resilience/remote-backup.json
 
           python - <<'PY'
           import json
@@ -238,7 +258,7 @@ jobs:
               "alertname": "AegisProductionResilienceAcceptance",
               "service": "aegisscan",
               "severity": "critical",
-              "release_sha": "$GITHUB_SHA"
+              "release_sha": "$RELEASE_SHA"
             },
             "annotations": {
               "summary": "AegisScan production external alert-route acceptance"
@@ -295,7 +315,7 @@ jobs:
         if: success()
         shell: bash
         env:
-          AEGIS_RELEASE_SHA: ${{ github.sha }}
+          AEGIS_RELEASE_SHA: ${{ env.RELEASE_SHA }}
           AEGIS_RUN_ID: ${{ github.run_id }}
           AEGIS_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -357,7 +377,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: aegisscan-production-resilience-${{ github.sha }}-${{ github.run_id }}
+          name: aegisscan-production-resilience-${{ env.RELEASE_SHA }}-${{ github.run_id }}
           path: |
             /tmp/aegis-resilience/remote-backup.json
             /tmp/aegis-resilience/remote-restore.json
