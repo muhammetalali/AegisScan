@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.live-acceptance-request.v1",
-  "request_id": "cloud-live-20260921-v1",
+  "request_id": "cloud-live-20260921-v2",
   "scope": "cloud-providers",
   "confirm": "VALIDATE",
   "requested_branch": "main",
-  "requested_base_sha": "172accb7bea726a8b6d0480e6d7302355e0c658a",
-  "requested_at": "2026-09-21T00:00:00Z",
-  "expires_at": "2026-09-21T23:59:59Z"
+  "requested_base_sha": "c83fa96134b29ba41cc09f3d199f8e37143bbd23",
+  "requested_at": "2026-09-21T06:15:00Z",
+  "expires_at": "2026-09-22T06:14:59Z"
 }
