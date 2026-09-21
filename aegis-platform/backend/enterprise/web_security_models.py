@@ -354,3 +354,37 @@ class WebSecurityObservation(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError('web security observations are immutable')
+
+
+class ThreatModelSnapshot(models.Model):
+    """Immutable evidence-backed threat-model snapshot derived from the security graph."""
+
+    class Status(models.TextChoices):
+        COMPLETED = 'completed', 'Completed'
+        FAILED = 'failed', 'Failed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey('projects.Project', on_delete=models.PROTECT, related_name='threat_model_snapshots')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.COMPLETED)
+    methodologies = models.JSONField(default=list)
+    graph_sha256 = models.CharField(max_length=64)
+    findings = models.JSONField(default=list)
+    summary = models.JSONField(default=dict)
+    snapshot_sha256 = models.CharField(max_length=64, unique=True, editable=False)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='threat_model_snapshots')
+    created_at = models.DateTimeField(auto_now_add=True)
+    objects = _ImmutableManager()
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['project', '-created_at'], name='idx_threatmodel_project'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('threat model snapshots are immutable')
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('threat model snapshots are immutable')
