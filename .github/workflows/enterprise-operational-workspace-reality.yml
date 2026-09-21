@@ -106,11 +106,14 @@ jobs:
       - name: Run operational workspace contract tests
         working-directory: aegis-platform/frontend
         run: |
+          set -o pipefail
           npx vitest run             src/pages/assurance/WorkflowControlTowerPage.test.tsx             src/services/agom.test.ts             | tee /tmp/a7-workspace-tests.txt
 
       - name: Typecheck and build frontend
         working-directory: aegis-platform/frontend
-        run: npm run build | tee /tmp/a7-frontend-build.txt
+        run: |
+          set -o pipefail
+          npm run build | tee /tmp/a7-frontend-build.txt
 
       - name: Reject direct work-queue transport bypass in workspace
         run: |
@@ -123,12 +126,14 @@ jobs:
       - name: Verify governed queue backend reality on PostgreSQL
         working-directory: aegis-platform/backend
         run: |
+          set -o pipefail
           python manage.py migrate --noinput
           pytest -q             fastapi_app/services/test_governed_work_queue.py             fastapi_app/routers/test_governed_work_queue_api.py             | tee /tmp/a7-backend-work-queue-tests.txt
 
       - name: Prove operational route and AGOM queue routes remain registered
         working-directory: aegis-platform/backend
         run: |
+          set -o pipefail
           python - <<'PY' | tee /tmp/a7-route-proof.txt
           from fastapi_app.main import app
           paths = app.openapi()['paths']
@@ -142,7 +147,7 @@ jobs:
           assert not missing, missing
           print('A7_GOVERNED_WORK_QUEUE_ROUTES=WIRED')
           PY
-          grep -F 'path="/assurance/workflow"' aegis-platform/frontend/src/App.tsx >/dev/null
+          grep -F 'path="/assurance/workflow"' ../frontend/src/App.tsx >/dev/null
           echo "A7_OPERATIONAL_WORKSPACE_ROUTE=WIRED" | tee -a /tmp/a7-route-proof.txt
 
       - name: Retain A7 Reality evidence
