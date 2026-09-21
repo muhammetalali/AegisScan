@@ -458,6 +458,39 @@ class EvidenceGraphEdge(models.Model):
         indexes=[models.Index(fields=['project','edge_type'],name='idx_egraph_project_edge')]
 
 
+class ThreatModelSnapshot(models.Model):
+    """Immutable methodology snapshot bound to the current architecture graph."""
+
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='threat_model_snapshots')
+    project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='threat_model_snapshots')
+    title=models.CharField(max_length=240)
+    methodologies=models.JSONField(default=list)
+    pasta_stage=models.PositiveSmallIntegerField()
+    scope=models.JSONField(default=dict)
+    scenarios=models.JSONField(default=list)
+    architecture_sha256=models.CharField(max_length=64)
+    model_sha256=models.CharField(max_length=64,unique=True,editable=False)
+    created_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='threat_model_snapshots')
+    created_at=models.DateTimeField(auto_now_add=True)
+    objects=_AppendOnlyManager()
+
+    class Meta:
+        ordering=['-created_at','-id']
+        indexes=[
+            models.Index(fields=['project','-created_at'],name='idx_threatmodel_project'),
+            models.Index(fields=['project','pasta_stage'],name='idx_threatmodel_pasta'),
+        ]
+
+    def save(self,*args,**kwargs):
+        if not self._state.adding:
+            raise RuntimeError('threat model snapshots are immutable')
+        return super().save(*args,**kwargs)
+
+    def delete(self,*args,**kwargs):
+        raise RuntimeError('threat model snapshots are immutable')
+
+
 class BlastRadiusSnapshot(models.Model):
     id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
     organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='blast_radius_snapshots')
