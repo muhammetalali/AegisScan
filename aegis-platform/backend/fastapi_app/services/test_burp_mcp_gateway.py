@@ -27,6 +27,7 @@ from fastapi_app.services.burp_mcp_gateway import (
 )
 from fastapi_app.services.test_finding_disposition import disposition_fixture  # noqa: F401
 from fastapi_app.services.web_security_foundation import persist_provider_approval
+from fastapi_app.services.provider_approval import record_provider_decision
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -38,6 +39,11 @@ def _manifest(endpoint: str) -> dict:
         'maintenance': {'status': 'active'},
         'sbom': True,
         'supply_chain_integrity': True,
+        'sbom_sha256': 'a' * 64,
+        'provenance_sha256': 'b' * 64,
+        'artifact_sha256': 'c' * 64,
+        'signature_identity': 'https://github.com/example/burp-provider/.github/workflows/release.yml@refs/tags/v2026.9',
+        'signature_verified': True,
         'known_cves': [],
         'container_privileges': [],
         'network_permissions': ['authorized-target-only'],
@@ -293,6 +299,37 @@ def test_real_mcp_jsonrpc_call_creates_qualified_redacted_immutable_evidence(dis
                 Evidence.objects.filter(pk=evidence.id).update(raw_output='tampered')
         evidence.refresh_from_db()
         assert evidence.raw_output != 'tampered'
+
+
+def test_enterprise_provider_revocation_blocks_existing_session_before_provider_call(disposition_fixture, monkeypatch):
+    monkeypatch.setenv('BURP_MCP_ALLOW_INSECURE_LOCAL', 'true')
+    _client, user, project, _asset, _authorization, _scan, *_rest = disposition_fixture
+    with _MCPServer() as server:
+        session_result, _approval_row = _session(disposition_fixture, server.endpoint, marker='provider-revoke')
+        revoked_manifest = _manifest(server.endpoint)
+        revoked_manifest['review_marker'] = 'provider-revoke'
+        record_provider_decision(
+            project_id=str(project.id),
+            actor_id=str(user.id),
+            provider_name='burp-suite-mcp',
+            provider_version='2026.9',
+            capability=BURP_MCP_CAPABILITY_ID,
+            status='revoked',
+            manifest=revoked_manifest,
+            rationale='Revoke provider before governed invocation.',
+        )
+        with pytest.raises(BurpMCPProviderError, match='not currently admissible'):
+            invoke_burp_mcp(
+                session_id=str(session_result.session.id),
+                actor_id=str(user.id),
+                operation='burp.site_map',
+                arguments={'path_prefix': '/'},
+                idempotency_key='burp-provider-revoked',
+            )
+
+    assert _MCPHandler.requests == []
+    assert BurpMCPInvocation.objects.count() == 0
+    assert Evidence.objects.filter(source='burp_mcp').count() == 0
 
 
 def test_authorization_drift_after_session_fails_closed_without_partial_evidence(disposition_fixture, monkeypatch):
