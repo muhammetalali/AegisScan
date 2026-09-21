@@ -42,3 +42,16 @@ def test_runner_bootstrap_provisions_execution_dependencies_from_verified_archiv
     assert 'verified runner archive is missing bin/installdependencies.sh' in text
     for command_name in ("git", "gh", "ssh", "ssh-keygen", "curl", "tar"):
         assert f'command -v "$command_name"' in text or f'command_name in' in text
+
+
+def test_runner_bootstrap_requires_attested_existing_runner_marker():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert 'RUNNER_MARKER="/etc/aegisscan/production-runner.env"' in text
+    assert "schema=aegisscan.production-runner.v1" in text
+    assert "runner_url=$AEGIS_GITHUB_RUNNER_URL" in text
+    assert "runner_name=$RUNNER_NAME" in text
+    assert "runner_labels=$RUNNER_LABELS" in text
+    assert "runner_archive_sha256=$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" in text
+    assert "root:root:640" in text
+    assert "existing active runner is not bound to the approved AegisScan production runner marker" in text
+    assert "marker_matches" in text
