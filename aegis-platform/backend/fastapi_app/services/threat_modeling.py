@@ -121,6 +121,12 @@ def _validate_scenarios(
             raise ThreatModelError(f"scenario {ref} contains an invalid LINDDUN category")
         if any(not CAPEC_RE.fullmatch(value) for value in capec_ids):
             raise ThreatModelError(f"scenario {ref} contains an invalid CAPEC identifier")
+        if stride and "STRIDE" not in methodologies:
+            raise ThreatModelError(f"scenario {ref} contains STRIDE mappings but STRIDE was not declared")
+        if linddun and "LINDDUN" not in methodologies:
+            raise ThreatModelError(f"scenario {ref} contains LINDDUN mappings but LINDDUN was not declared")
+        if capec_ids and "CAPEC" not in methodologies:
+            raise ThreatModelError(f"scenario {ref} contains CAPEC mappings but CAPEC was not declared")
 
         assumptions = [str(v).strip() for v in (raw.get("assumptions") or []) if str(v).strip()]
         preconditions = [str(v).strip() for v in (raw.get("preconditions") or []) if str(v).strip()]
