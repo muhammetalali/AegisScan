@@ -23,6 +23,7 @@ jobs:
   live-provider-reality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: production
     env:
       AEGIS_AWS_CLOUD_TARGET: ${{ secrets.AEGIS_AWS_CLOUD_TARGET }}
       AEGIS_AWS_CLOUD_CREDENTIAL_JSON: ${{ secrets.AEGIS_AWS_CLOUD_CREDENTIAL_JSON }}
