@@ -42,10 +42,10 @@ class WSTGApplicabilityPlannerTests(unittest.TestCase):
             if item.classification == 'GAP_NATIVE_SMALL'
         }
         self.assertTrue(gap_ids)
-        self.assertEqual(
-            {item.wstg_id for item in result.items if item.wstg_id in gap_ids and item.status == 'blocked'},
-            gap_ids,
-        )
+        gap_items = [item for item in result.items if item.wstg_id in gap_ids]
+        self.assertEqual({item.wstg_id for item in gap_items}, gap_ids)
+        self.assertTrue(all(item.status == 'planned' for item in gap_items))
+        self.assertTrue(all(item.provider_capability_ids or item.support_service_refs for item in gap_items))
 
     def test_conditional_flash_test_fails_closed_without_authoritative_fact(self):
         result = self.planner.plan(self._website(), 'comprehensive')
