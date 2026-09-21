@@ -283,7 +283,7 @@ def _delivery_items(organization, project) -> list[dict[str, Any]]:
     return [{
         'source_type': GovernedWorkClaim.SourceType.DETECTION_DELIVERY,
         'source_id': str(row.id),
-        'title': f'Detection delivery: {row.revision.rule.name}',
+        'title': f'Detection delivery: {row.revision.rule.title}',
         'work_category': 'integration_delivery',
         'authoritative_state': row.status,
         'source_version': int(row.attempts) + 1,
