@@ -8,6 +8,7 @@ import unittest
 from pydantic import ValidationError
 
 from fastapi_app.services.wstg_capability_mapping import (
+    CUTOVER_PROVIDER_ANCHORS,
     EXPECTED_GAPS,
     CapabilityRequirement,
     WSTGCapabilityMapping,
@@ -53,16 +54,23 @@ class WSTGCapabilityMappingTests(unittest.TestCase):
             with self.subTest(capability_id=capability_id):
                 self.assertEqual(get_capability(capability_id).id, capability_id)
 
-    def test_only_five_approved_native_gaps_exist(self):
-        actual = {}
-        for test in self.mapping.catalog.tests:
-            if test.classification != 'GAP_NATIVE_SMALL':
-                continue
-            requirement = self.mapping.resolve(test.id)[0]
-            actual[test.id] = [
-                item.ref for item in requirement.provider_bindings if item.kind == 'planned_native'
-            ][0]
-        self.assertEqual(actual, EXPECTED_GAPS)
+    def test_exact_five_approved_native_gaps_are_reviewed_into_real_providers(self):
+        gap_ids = {
+            test.id for test in self.mapping.catalog.tests
+            if test.classification == 'GAP_NATIVE_SMALL'
+        }
+        self.assertEqual(gap_ids, set(EXPECTED_GAPS))
+        self.assertEqual(gap_ids, set(CUTOVER_PROVIDER_ANCHORS))
+        for wstg_id in sorted(gap_ids):
+            with self.subTest(wstg_id=wstg_id):
+                requirement = self.mapping.resolve(wstg_id)[0]
+                bindings = {
+                    (item.kind, item.ref)
+                    for item in requirement.provider_bindings
+                }
+                self.assertEqual(requirement.availability, 'existing')
+                self.assertFalse(any(item.kind == 'planned_native' for item in requirement.provider_bindings))
+                self.assertIn(CUTOVER_PROVIDER_ANCHORS[wstg_id], bindings)
 
     def test_manual_rows_remain_governed_and_conditional_row_stays_conditional(self):
         for test in self.mapping.catalog.tests:
