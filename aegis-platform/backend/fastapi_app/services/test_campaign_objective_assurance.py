@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 from threading import Barrier
 
 import pytest
@@ -11,7 +12,7 @@ from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.campaign_models import AdversaryCampaign, CampaignAuditEvent, CampaignObjectiveAssessment
-from enterprise.models import AttackPath, BlastRadiusSnapshot
+from enterprise.models import AttackPath, AttackPathValidation, BlastRadiusSnapshot, ThreatModelSnapshot
 from fastapi_app.services.campaign_objective_assurance import (
     CampaignAssuranceError,
     add_objective,
@@ -51,6 +52,32 @@ def _setup(disposition_fixture):
         crown_jewel_refs=[str(asset.id)], impacted_nodes=[str(asset.id)], score=88.0,
         evidence_refs=[str(evidence.id)],
     )
+    model_sha = hashlib.sha256(f"campaign-threat-model:{path.id}".encode()).hexdigest()
+    threat_model = ThreatModelSnapshot.objects.create(
+        organization=organization,
+        project=project,
+        title='Campaign threat model proof',
+        methodologies=['PASTA'],
+        pasta_stage=4,
+        scope={'source': 'campaign-reality'},
+        scenarios=[],
+        architecture_sha256='a' * 64,
+        model_sha256=model_sha,
+        created_by=user,
+    )
+    AttackPathValidation.objects.create(
+        organization=organization,
+        project=project,
+        attack_path=path,
+        threat_model_snapshot=threat_model,
+        blast_radius_snapshot=blast,
+        scenario_refs=[],
+        evidence_refs=[str(evidence.id)],
+        authorization_refs=[],
+        relationship_refs=[],
+        validation_sha256=hashlib.sha256(f"campaign-path-validation:{path.id}".encode()).hexdigest(),
+        validated_by=user,
+    )
     return user, project, asset, campaign, objective, path, evidence, blast
 
 
@@ -76,6 +103,33 @@ def test_reached_objective_requires_validated_path_and_produces_auditable_comple
     summary = campaign_summary(campaign_id=str(campaign.id), project_id=str(project.id), user_id=str(user.id))
     assert summary['objectives'][0]['status'] == 'reached'
     assert summary['objectives'][0]['latest_assessment']['proof_sha256'] == result.assessment.proof_sha256
+
+
+def test_reached_objective_rejects_ungoverned_blast_radius(disposition_fixture):
+    user, project, asset, campaign, objective, path, evidence, _blast = _setup(disposition_fixture)
+    ungoverned = BlastRadiusSnapshot.objects.create(
+        organization=path.organization,
+        project=project,
+        attack_path=path,
+        root_ref=str(asset.id),
+        crown_jewel_refs=[str(asset.id)],
+        impacted_nodes=[{'id': str(asset.id), 'risk': 100, 'distance': 0}],
+        score=99.0,
+        evidence_refs=[str(evidence.id)],
+    )
+    with pytest.raises(CampaignAssuranceError, match='immutable AttackPathValidation'):
+        assess_objective(
+            objective_id=str(objective.id),
+            campaign_id=str(campaign.id),
+            project_id=str(project.id),
+            user_id=str(user.id),
+            expected_objective_version=1,
+            attack_path_id=str(path.id),
+            evidence_id=str(evidence.id),
+            blast_radius_snapshot_id=str(ungoverned.id),
+            outcome='reached',
+            reason_code='ungoverned_blast',
+        )
 
 
 def test_reached_outcome_rejects_unvalidated_attack_path(disposition_fixture):
