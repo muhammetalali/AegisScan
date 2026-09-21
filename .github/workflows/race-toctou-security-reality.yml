@@ -107,6 +107,9 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
           python - <<'PY'
+          import django
+          django.setup()
+
           from fastapi_app.services.governed_action_executor import _IMPLEMENTED_ACTIONS
           from fastapi_app.services.governed_operations import list_action_contracts
           from fastapi_app.services.race_toctou_security import (
