@@ -1,0 +1,59 @@
+name: External Identity Live Contract Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/scripts/external_identity_live_reality.py'
+      - 'tests/test_external_identity_live_reality.py'
+      - '.github/workflows/external-identity-live-contract-reality.yml'
+      - '.github/workflows/external-identity-live-provider-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/scripts/external_identity_live_reality.py'
+      - 'tests/test_external_identity_live_reality.py'
+      - '.github/workflows/external-identity-live-contract-reality.yml'
+      - '.github/workflows/external-identity-live-provider-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-identity-live-contract-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+      - name: Install identity validation dependencies
+        run: python -m pip install requests cryptography defusedxml pytest
+      - name: Compile live identity validator
+        run: python -m py_compile aegis-platform/backend/scripts/external_identity_live_reality.py
+      - name: Run fail-closed identity contract suite
+        run: python -m pytest -q tests/test_external_identity_live_reality.py
+      - name: Prove live workflow remains read-only and governed
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=.github/workflows/external-identity-live-provider-reality.yml
+          grep -F 'environment: production' "$file"
+          grep -F 'live_acceptance_request.py' "$file"
+          grep -F -- '--scope external-identity' "$file"
+          grep -F -- '--required-confirm VALIDATE' "$file"
+          grep -F '/ServiceProviderConfig' aegis-platform/backend/scripts/external_identity_live_reality.py
+          grep -F '/ResourceTypes' aegis-platform/backend/scripts/external_identity_live_reality.py
+          if grep -nE 'session\.(post|put|patch|delete)\(' aegis-platform/backend/scripts/external_identity_live_reality.py; then
+            echo 'External identity live acceptance must remain GET-only.' >&2
+            exit 1
+          fi
+          echo 'EXTERNAL_IDENTITY_READ_ONLY=PASS'
