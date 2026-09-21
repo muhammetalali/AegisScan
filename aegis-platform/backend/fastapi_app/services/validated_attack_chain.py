@@ -14,6 +14,7 @@ from enterprise.models import (
     AttackPath,
     AttackPathValidation,
     BlastRadiusSnapshot,
+    OrganizationMembership,
     ThreatModelSnapshot,
 )
 from vulnerabilities.models import Vulnerability
@@ -34,6 +35,14 @@ _INACTIVE_FINDING_STATES = {
     Vulnerability.Status.DUPLICATE,
 }
 _CRITICALITY = {"critical": 100.0, "high": 75.0, "medium": 50.0, "low": 25.0}
+
+
+_VALIDATION_ROLES = {
+    OrganizationMembership.Role.OWNER,
+    OrganizationMembership.Role.ADMIN,
+    OrganizationMembership.Role.MANAGER,
+    OrganizationMembership.Role.ANALYST,
+}
 
 
 def _sha(value: Any) -> str:
@@ -267,6 +276,17 @@ def validate_attack_path(
     max_depth: int,
     actor_id: str,
 ) -> tuple[AttackPathValidation, bool]:
+    if not OrganizationMembership.objects.filter(
+        organization=organization,
+        user_id=actor_id,
+        is_active=True,
+        user__is_active=True,
+        role__in=_VALIDATION_ROLES,
+    ).exists():
+        raise AttackPathValidationError(
+            "active tenant role does not permit attack-path validation"
+        )
+
     path = (
         AttackPath.objects.select_for_update()
         .filter(pk=attack_path_id, project=project, organization=organization)
