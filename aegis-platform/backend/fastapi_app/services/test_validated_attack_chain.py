@@ -8,7 +8,9 @@ from django.utils import timezone
 
 from assets.models import Asset, AssetAuthorization, AssetRelationship
 from django_project.projects.models import Project
+from django_project.scans.models import Scan
 from django_project.users.models import User
+from django_project.vulnerabilities.models import Vulnerability
 from evidence.models import Evidence
 from enterprise.models import AttackPath, AttackPathValidation, BlastRadiusSnapshot
 from enterprise.services import ensure_project_tenant
@@ -60,6 +62,39 @@ def _authorize(asset: Asset, user: User, *, authorized=True, expires_at=None):
         reason="validated attack chain test",
         expires_at=expires_at,
     )
+
+
+def _confirmed_evidence(*, project: Project, user: User, asset: Asset, suffix: str, risk_score: float):
+    scan = Scan.objects.create(
+        project=project,
+        name=f"Validated attack-chain {suffix}",
+        scan_type=Scan.Type.FULL_VALIDATION,
+        initiated_by=user,
+        engines=["validated-attack-chain-test"],
+    )
+    finding = Vulnerability.objects.create(
+        project=project,
+        scan=scan,
+        asset=asset,
+        title=f"Confirmed path finding {suffix}",
+        description="Evidence-backed attack-chain validation fixture.",
+        severity=Vulnerability.Severity.HIGH,
+        status=Vulnerability.Status.CONFIRMED,
+        confidence=Vulnerability.Confidence.CONFIRMED,
+        risk_score=risk_score,
+        source_engine="validated-attack-chain-test",
+    )
+    evidence = Evidence.objects.create(
+        scan=scan,
+        asset=asset,
+        finding=finding,
+        source="validated-attack-chain-test",
+        evidence_type="validation_output",
+        raw_output=f"confirmed path evidence {suffix}",
+        metadata={"finding_present": True},
+        collected_by=user,
+    )
+    return finding, evidence
 
 
 def _fixture(prefix: str = "validated-chain"):
@@ -143,13 +178,19 @@ def _fixture(prefix: str = "validated-chain"):
         risk_score=92.0,
         evidence={"source": "attack-path-test"},
     )
-    evidence = Evidence.objects.create(
+    middle_finding, middle_evidence = _confirmed_evidence(
+        project=project,
+        user=user,
+        asset=middle,
+        suffix="middle",
+        risk_score=8.0,
+    )
+    target_finding, evidence = _confirmed_evidence(
+        project=project,
+        user=user,
         asset=target,
-        source="validated-attack-chain-test",
-        evidence_type="validation_output",
-        raw_output="target compromise proof",
-        metadata={"finding_present": True},
-        collected_by=user,
+        suffix="target",
+        risk_score=9.0,
     )
     return {
         "user": user,
@@ -163,7 +204,11 @@ def _fixture(prefix: str = "validated-chain"):
         "authorizations": authorizations,
         "threat_model": threat_model,
         "path": path,
+        "middle_finding": middle_finding,
+        "target_finding": target_finding,
+        "middle_evidence": middle_evidence,
         "evidence": evidence,
+        "evidence_ids": [str(middle_evidence.id), str(evidence.id)],
     }
 
 
@@ -176,7 +221,7 @@ def test_validated_attack_chain_is_evidence_bound_and_derives_blast_radius():
         attack_path_id=str(data["path"].id),
         threat_model_snapshot_id=str(data["threat_model"].id),
         scenario_refs=["CHAIN-001"],
-        evidence_ids=[str(data["evidence"].id)],
+        evidence_ids=data["evidence_ids"],
         crown_jewel_asset_ids=[str(data["crown"].id)],
         max_depth=3,
         actor_id=str(data["user"].id),
@@ -184,7 +229,7 @@ def test_validated_attack_chain_is_evidence_bound_and_derives_blast_radius():
     assert created is True
     assert len(row.validation_sha256) == 64
     assert row.scenario_refs == ["CHAIN-001"]
-    assert row.evidence_refs == [str(data["evidence"].id)]
+    assert set(row.evidence_refs) == set(data["evidence_ids"])
     assert len(row.authorization_refs) == 3
     assert len(row.relationship_refs) == 2
 
@@ -206,7 +251,7 @@ def test_validated_attack_chain_is_evidence_bound_and_derives_blast_radius():
         attack_path_id=str(data["path"].id),
         threat_model_snapshot_id=str(data["threat_model"].id),
         scenario_refs=["CHAIN-001"],
-        evidence_ids=[str(data["evidence"].id)],
+        evidence_ids=data["evidence_ids"],
         crown_jewel_asset_ids=[str(data["crown"].id)],
         max_depth=3,
         actor_id=str(data["user"].id),
@@ -221,6 +266,12 @@ def test_validated_attack_chain_is_evidence_bound_and_derives_blast_radius():
         row.save()
     with pytest.raises(RuntimeError, match="append-only"):
         AttackPathValidation.objects.filter(pk=row.pk).update(scenario_refs=[])
+
+    blast.score = 0
+    with pytest.raises(RuntimeError, match="immutable"):
+        blast.save()
+    with pytest.raises(RuntimeError, match="append-only"):
+        BlastRadiusSnapshot.objects.filter(pk=blast.pk).update(score=0)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -240,7 +291,7 @@ def test_validation_rejects_stale_threat_model_architecture():
             attack_path_id=str(data["path"].id),
             threat_model_snapshot_id=str(data["threat_model"].id),
             scenario_refs=["CHAIN-001"],
-            evidence_ids=[str(data["evidence"].id)],
+            evidence_ids=data["evidence_ids"],
             crown_jewel_asset_ids=[],
             max_depth=3,
             actor_id=str(data["user"].id),
@@ -258,7 +309,7 @@ def test_validation_rejects_missing_relationship_and_expired_authorization():
             attack_path_id=str(data["path"].id),
             threat_model_snapshot_id=str(data["threat_model"].id),
             scenario_refs=["CHAIN-001"],
-            evidence_ids=[str(data["evidence"].id)],
+            evidence_ids=data["evidence_ids"],
             crown_jewel_asset_ids=[],
             max_depth=3,
             actor_id=str(data["user"].id),
@@ -278,7 +329,7 @@ def test_validation_rejects_missing_relationship_and_expired_authorization():
             attack_path_id=str(other["path"].id),
             threat_model_snapshot_id=str(other["threat_model"].id),
             scenario_refs=["CHAIN-001"],
-            evidence_ids=[str(other["evidence"].id)],
+            evidence_ids=other["evidence_ids"],
             crown_jewel_asset_ids=[],
             max_depth=3,
             actor_id=str(other["user"].id),
@@ -309,14 +360,14 @@ def test_validation_rejects_evidence_outside_path_and_requires_target_evidence()
             actor_id=str(data["user"].id),
         )
 
-    source_evidence = Evidence.objects.create(
+    _, source_evidence = _confirmed_evidence(
+        project=data["project"],
+        user=data["user"],
         asset=data["source"],
-        source="validated-attack-chain-test",
-        evidence_type="scanner_output",
-        raw_output="source only",
-        collected_by=data["user"],
+        suffix="source-only",
+        risk_score=7.0,
     )
-    with pytest.raises(AttackPathValidationError, match="target asset"):
+    with pytest.raises(AttackPathValidationError, match="each attack-path hop target"):
         validate_attack_path(
             organization=data["organization"],
             project=data["project"],
@@ -324,6 +375,44 @@ def test_validation_rejects_evidence_outside_path_and_requires_target_evidence()
             threat_model_snapshot_id=str(data["threat_model"].id),
             scenario_refs=["CHAIN-001"],
             evidence_ids=[str(source_evidence.id)],
+            crown_jewel_asset_ids=[],
+            max_depth=3,
+            actor_id=str(data["user"].id),
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_validation_requires_confirmed_evidence_for_each_hop_target():
+    data = _fixture("hop-proof-chain")
+
+    with pytest.raises(AttackPathValidationError, match="each attack-path hop target"):
+        validate_attack_path(
+            organization=data["organization"],
+            project=data["project"],
+            attack_path_id=str(data["path"].id),
+            threat_model_snapshot_id=str(data["threat_model"].id),
+            scenario_refs=["CHAIN-001"],
+            evidence_ids=[str(data["evidence"].id)],
+            crown_jewel_asset_ids=[],
+            max_depth=3,
+            actor_id=str(data["user"].id),
+        )
+
+    generic_middle = Evidence.objects.create(
+        asset=data["middle"],
+        source="validated-attack-chain-test",
+        evidence_type="scanner_output",
+        raw_output="generic unqualified middle evidence",
+        collected_by=data["user"],
+    )
+    with pytest.raises(AttackPathValidationError, match="bound to a confirmed finding"):
+        validate_attack_path(
+            organization=data["organization"],
+            project=data["project"],
+            attack_path_id=str(data["path"].id),
+            threat_model_snapshot_id=str(data["threat_model"].id),
+            scenario_refs=["CHAIN-001"],
+            evidence_ids=[str(generic_middle.id), str(data["evidence"].id)],
             crown_jewel_asset_ids=[],
             max_depth=3,
             actor_id=str(data["user"].id),
