@@ -30,7 +30,7 @@ def test_runner_bootstrap_installs_dedicated_service_without_hosted_fallback():
 
 def test_runner_bootstrap_refuses_destructive_live_replacement():
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "existing production runner service is active" in text
+    assert "existing approved production runner service is active" in text
     assert "refusing destructive replacement" in text
 
 
