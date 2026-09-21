@@ -23,6 +23,9 @@ name: Final Internal Production Governance
         description: 'Successful Supply Chain Release push run ID for this SHA'
         required: true
         type: string
+  workflow_run:
+    workflows: ['Production Resilience Acceptance']
+    types: [completed]
 
 permissions:
   contents: read
