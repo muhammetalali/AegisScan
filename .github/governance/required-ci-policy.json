@@ -100,6 +100,11 @@
     }
   ],
   "lifecycle_only_workflows": [
-    "Branch Hygiene Reality"
+    "Branch Hygiene Reality",
+    "Cloud Live Provider Reality",
+    "External Identity Live Provider Reality",
+    "Internal Production Deploy and Acceptance",
+    "Production Resilience Acceptance",
+    "Final Internal Production Governance"
   ]
 }

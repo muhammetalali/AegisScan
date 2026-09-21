@@ -35,6 +35,40 @@ class WorkflowObservationTests(unittest.TestCase):
         )
 
 
+class LifecyclePolicyTests(unittest.TestCase):
+    def test_live_operational_workflows_are_lifecycle_only_and_do_not_relax_code_reality(self) -> None:
+        policy_path = Path(__file__).resolve().parents[1] / ".github" / "governance" / "required-ci-policy.json"
+        policy = MODULE._load_policy(policy_path)
+        lifecycle = set(policy["lifecycle_only_workflows"])
+        self.assertTrue({
+            "Branch Hygiene Reality",
+            "Cloud Live Provider Reality",
+            "External Identity Live Provider Reality",
+            "Internal Production Deploy and Acceptance",
+            "Production Resilience Acceptance",
+            "Final Internal Production Governance",
+        }.issubset(lifecycle))
+
+        runs = {
+            "Required CI Governance": {"status": "completed", "conclusion": "failure"},
+            "Internal Production Deploy and Acceptance": {"status": "queued", "conclusion": None},
+            "Production Resilience Acceptance": {"status": "queued", "conclusion": None},
+            "Final Internal Production Governance": {"status": "queued", "conclusion": None},
+            "Domain Contract Reality": {"status": "completed", "conclusion": "success"},
+            "Unexpected Triggered Reality": {"status": "completed", "conclusion": "failure"},
+        }
+        filtered = MODULE._premerge_workflow_runs(
+            runs,
+            governance_workflow=policy["governance_workflow"],
+            lifecycle_only_workflows=lifecycle,
+        )
+        self.assertNotIn("Internal Production Deploy and Acceptance", filtered)
+        self.assertNotIn("Production Resilience Acceptance", filtered)
+        self.assertNotIn("Final Internal Production Governance", filtered)
+        self.assertEqual(filtered["Domain Contract Reality"]["conclusion"], "success")
+        self.assertEqual(filtered["Unexpected Triggered Reality"]["conclusion"], "failure")
+
+
 class LiveBaseDiffTests(unittest.TestCase):
     def test_pull_request_paths_come_from_live_base_compare(self) -> None:
         calls: list[str] = []
