@@ -504,6 +504,7 @@ class AttackPathValidation(models.Model):
     evidence_refs=models.JSONField(default=list)
     authorization_refs=models.JSONField(default=list)
     relationship_refs=models.JSONField(default=list)
+    proof_material=models.JSONField(default=dict)
     validation_sha256=models.CharField(max_length=64,unique=True,editable=False)
     validated_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='attack_path_validations')
     created_at=models.DateTimeField(auto_now_add=True)
