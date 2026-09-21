@@ -474,7 +474,8 @@ def _perform_mcp_call(
         raise BurpMCPProviderError('Burp MCP provider returned a non-object JSON-RPC response.')
     if str(body.get('id')) != str(request_id):
         raise BurpMCPProviderError('Burp MCP provider returned a mismatched JSON-RPC request id.')
-    if body.get('error') not in {None, {}}:
+    error = body.get('error')
+    if error not in (None, {}):
         raise BurpMCPProviderError('Burp MCP provider returned a JSON-RPC error.')
     if 'result' not in body:
         raise BurpMCPProviderError('Burp MCP provider response has no result.')
