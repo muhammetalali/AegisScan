@@ -1,0 +1,71 @@
+name: AGOM Frontend SDK Reality
+
+on:
+  push:
+    branches:
+      - chatgpt-a6-agom-frontend-sdk-20260921
+    paths:
+      - 'aegis-platform/frontend/src/contracts/agom.ts'
+      - 'aegis-platform/frontend/src/contracts/agom.test.ts'
+      - 'aegis-platform/frontend/src/services/agom.ts'
+      - 'aegis-platform/frontend/src/services/agom.test.ts'
+      - 'aegis-platform/frontend/src/pages/assurance/GovernancePage.tsx'
+      - 'aegis-platform/frontend/package.json'
+      - '.github/workflows/agom-frontend-sdk-reality.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/frontend/src/contracts/agom.ts'
+      - 'aegis-platform/frontend/src/contracts/agom.test.ts'
+      - 'aegis-platform/frontend/src/services/agom.ts'
+      - 'aegis-platform/frontend/src/services/agom.test.ts'
+      - 'aegis-platform/frontend/src/pages/assurance/GovernancePage.tsx'
+      - 'aegis-platform/frontend/package.json'
+      - '.github/workflows/agom-frontend-sdk-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-frontend-sdk-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-sdk-reality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: aegis-platform/frontend
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout is exact head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Prove AGOM SDK contracts
+        run: npm run test:agom
+
+      - name: UI transport and route audit
+        run: npm run audit:ui
+
+      - name: i18n audit
+        run: npm run i18n:audit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck and production build
+        run: npm run build
