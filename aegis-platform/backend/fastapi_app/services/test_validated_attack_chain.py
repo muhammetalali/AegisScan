@@ -339,7 +339,7 @@ def test_validation_rejects_stale_threat_model_architecture():
 def test_validation_rejects_missing_relationship_and_expired_authorization():
     data = _fixture("relationship-chain")
     data["relationships"][1].delete()
-    with pytest.raises(AttackPathValidationError, match="no persisted AssetRelationship"):
+    with pytest.raises(AttackPathValidationError, match="no directionally valid AssetRelationship"):
         validate_attack_path(
             organization=data["organization"],
             project=data["project"],
@@ -370,6 +370,32 @@ def test_validation_rejects_missing_relationship_and_expired_authorization():
             crown_jewel_asset_ids=[],
             max_depth=3,
             actor_id=str(other["user"].id),
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_validation_rejects_reversed_directional_relationship():
+    data = _fixture("directional-chain")
+    relation = data["relationships"][1]
+    relation.delete()
+    AssetRelationship.objects.create(
+        project=data["project"],
+        source=data["target"],
+        target=data["middle"],
+        relationship_type=AssetRelationship.RelationshipType.DEPENDS_ON,
+    )
+
+    with pytest.raises(AttackPathValidationError, match="directionally valid"):
+        validate_attack_path(
+            organization=data["organization"],
+            project=data["project"],
+            attack_path_id=str(data["path"].id),
+            threat_model_snapshot_id=str(data["threat_model"].id),
+            scenario_refs=["CHAIN-001"],
+            evidence_ids=data["evidence_ids"],
+            crown_jewel_asset_ids=[],
+            max_depth=3,
+            actor_id=str(data["user"].id),
         )
 
 
