@@ -8,8 +8,8 @@ from typing import Any
 from django.db import transaction
 from django.db.models import Q
 
-from assets.models import Asset, AssetAuthorization, AssetRelationship
-from evidence.models import Evidence
+from django_project.assets.models import Asset, AssetAuthorization, AssetRelationship
+from django_project.evidence.models import Evidence
 from enterprise.models import (
     AttackPath,
     AttackPathValidation,
@@ -17,7 +17,7 @@ from enterprise.models import (
     OrganizationMembership,
     ThreatModelSnapshot,
 )
-from vulnerabilities.models import Vulnerability
+from django_project.vulnerabilities.models import Vulnerability
 
 from fastapi_app.services.authorization_guard import asset_target
 from fastapi_app.services.threat_modeling import architecture_snapshot
