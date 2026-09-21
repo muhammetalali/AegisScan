@@ -2,6 +2,15 @@ name: Cloud Live Provider Reality
 
 'on':
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type VALIDATE to execute configured real cloud-provider acceptance'
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - '.github/live-acceptance-requests/cloud-providers.json'
 
 concurrency:
   group: cloud-live-provider-reality-${{ github.run_id }}
@@ -24,6 +33,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
@@ -32,6 +43,18 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             aegis-platform/backend/requirements.txt
+
+      - name: Authorize exact-main live-provider acceptance
+        shell: bash
+        env:
+          AEGIS_EVENT_BEFORE: ${{ github.event.before }}
+          AEGIS_LIVE_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/live_acceptance_request.py             --event-name "$GITHUB_EVENT_NAME"             --ref "$GITHUB_REF"             --current-sha "$GITHUB_SHA"             --event-before "${AEGIS_EVENT_BEFORE:-}"             --confirm "${AEGIS_LIVE_CONFIRM:-}"             --request-file .github/live-acceptance-requests/cloud-providers.json             --scope cloud-providers             --required-confirm VALIDATE             | tee /tmp/aegis-cloud-live-authorization.json
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
 
       - name: Install exact cloud runtime dependencies
         run: |
@@ -129,4 +152,8 @@ jobs:
           name: cloud-live-provider-proof-${{ github.sha }}
           path: ${{ runner.temp }}/cloud-live-proof/*-proof.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+
+      - name: Destroy local authorization evidence
+        if: always()
+        run: rm -f /tmp/aegis-cloud-live-authorization.json
