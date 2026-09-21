@@ -37,15 +37,20 @@ concurrency:
 
 jobs:
   final-governance:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: [self-hosted, linux, x64, aegisscan-production]
     timeout-minutes: 45
     environment: production
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_SHA: ${{ inputs.release_sha }}
+      RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.release_sha }}
       LIVE_DEPLOY_RUN_ID: ${{ inputs.live_deploy_run_id }}
-      RESILIENCE_RUN_ID: ${{ inputs.resilience_run_id }}
+      RESILIENCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.resilience_run_id }}
       SUPPLY_CHAIN_RUN_ID: ${{ inputs.supply_chain_run_id }}
       PROD_ENTERPRISE_CA_BUNDLE: ${{ secrets.AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE }}
 
@@ -53,6 +58,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.release_sha }}
 
       - uses: actions/setup-python@v6
         with:
