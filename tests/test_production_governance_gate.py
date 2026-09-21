@@ -37,7 +37,7 @@ def _run_metadata(tmp_path: Path, kind: str, run_id: int) -> Path:
             "conclusion": "success",
             "head_sha": RELEASE,
             "path": expected["path"],
-            "event": expected["event"],
+            "event": expected["events"][0],
             "html_url": f"https://github.com/example/aegis/actions/runs/{run_id}",
         },
     )
@@ -97,13 +97,16 @@ def _go_live(tmp_path: Path) -> Path:
     _write_json(
         root / "manifest.json",
         {
-            "schema": "aegisscan.go-live-evidence.v2",
+            "schema": "aegisscan.go-live-evidence.v3",
             "status": "success",
             "deployment_mode": "internal",
             "network_scope": "rfc1918-or-ipv6-ula",
             "release_sha": RELEASE,
             "internal_origin": ORIGIN,
             "enterprise_ca_sha256": CA_SHA,
+            "alertmanager_status": "ready",
+            "backup_status": "healthy",
+            "backup_id": "go-live-backup-123",
             "sha256": {name: _sha(root / name) for name in evidence},
         },
     )
@@ -235,6 +238,9 @@ def test_final_governance_approves_only_complete_internal_bound_evidence(tmp_pat
     assert decision["release_sha"] == RELEASE
     assert decision["internal_origin"] == ORIGIN
     assert decision["evidence"]["current_enterprise_ca_sha256"] == CA_SHA
+    assert decision["evidence"]["go_live"]["alertmanager_status"] == "ready"
+    assert decision["evidence"]["go_live"]["backup_status"] == "healthy"
+    assert decision["evidence"]["go_live"]["backup_id"] == "go-live-backup-123"
     assert all(decision["controls"].values())
     assert (tmp_path / "decision.json").is_file()
 
@@ -244,6 +250,16 @@ def test_final_governance_rejects_tampered_go_live_evidence(tmp_path: Path):
     log = next(inputs["go_live_root"].rglob("internal-black-box.log"))
     log.write_text("tampered\n", encoding="utf-8")
     with pytest.raises(gate.GovernanceError, match="digest mismatch"):
+        gate.decide(**inputs)
+
+
+def test_final_governance_rejects_incomplete_go_live_operational_evidence(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    manifest = next(inputs["go_live_root"].rglob("manifest.json"))
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["backup_status"] = "degraded"
+    _write_json(manifest, payload)
+    with pytest.raises(gate.GovernanceError, match="backup operational readiness"):
         gate.decide(**inputs)
 
 
@@ -268,6 +284,27 @@ def test_final_governance_rejects_enterprise_ca_drift(tmp_path: Path):
     payload["enterprise_ca"]["sha256"] = "f" * 64
     _write_json(current, payload)
     with pytest.raises(gate.GovernanceError, match="enterprise CA changed"):
+        gate.decide(**inputs)
+
+
+def test_final_governance_accepts_automated_release_chain_events(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    live = json.loads(inputs["live_run_metadata"].read_text(encoding="utf-8"))
+    live["event"] = "push"
+    _write_json(inputs["live_run_metadata"], live)
+    resilience = json.loads(inputs["resilience_run_metadata"].read_text(encoding="utf-8"))
+    resilience["event"] = "workflow_run"
+    _write_json(inputs["resilience_run_metadata"], resilience)
+    decision = gate.decide(**inputs)
+    assert decision["decision"] == "APPROVED"
+
+
+def test_final_governance_rejects_unapproved_workflow_trigger(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    live = json.loads(inputs["live_run_metadata"].read_text(encoding="utf-8"))
+    live["event"] = "pull_request"
+    _write_json(inputs["live_run_metadata"], live)
+    with pytest.raises(gate.GovernanceError, match="workflow trigger mismatch"):
         gate.decide(**inputs)
 
 

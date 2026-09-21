@@ -12,14 +12,20 @@ def _workflow() -> dict:
     return data
 
 
-def test_resilience_workflow_is_manual_main_only_and_protected():
+def test_resilience_workflow_is_manual_or_chained_main_only_and_protected():
     data = _workflow()
     triggers = data.get("on")
     assert isinstance(triggers, dict)
-    assert set(triggers) == {"workflow_dispatch"}
+    assert set(triggers) == {"workflow_dispatch", "workflow_run"}
+    assert triggers["workflow_run"]["workflows"] == ["Internal Production Deploy and Acceptance"]
+    assert triggers["workflow_run"]["types"] == ["completed"]
     job = data["jobs"]["resilience-acceptance"]
     assert job["environment"] == "production"
-    assert job["if"] == "github.ref == 'refs/heads/main'"
+    condition = job["if"]
+    assert "workflow_dispatch" in condition
+    assert "workflow_run.conclusion == 'success'" in condition
+    assert "workflow_run.head_branch == 'main'" in condition
+    assert "workflow_run.head_repository.full_name == github.repository" in condition
     assert data["concurrency"]["cancel-in-progress"] is False
 
 
@@ -57,3 +63,13 @@ def test_resilience_workflow_keeps_ssh_pinned_and_evidence_hashed():
     assert "aegisscan.production-resilience-evidence.v1" in text
     assert "hashlib.sha256" in text
     assert "retention-days: 90" in text
+
+
+def test_resilience_chaining_preserves_exact_release_sha():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "RELEASE_SHA:" in text
+    assert "github.event.workflow_run.head_sha" in text
+    assert 'test "$(git rev-parse HEAD)" = "$RELEASE_SHA"' in text
+    assert 'test "$(git rev-parse origin/main)" = "$RELEASE_SHA"' in text
+    assert '--release-sha "$RELEASE_SHA"' in text
+    assert "aegisscan-production-resilience-${{ env.RELEASE_SHA }}" in text
