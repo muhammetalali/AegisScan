@@ -247,3 +247,20 @@ def test_threat_model_rejects_invalid_capec_and_future_pasta_stage():
             scope={},
             scenarios=[_scenario(pasta_stage=4, linddun=[], capec_ids=[])],
         )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_threat_model_rejects_undeclared_framework_mappings():
+    user, project, organization = _project("threat-method-boundary")
+    _graph(project)
+    with pytest.raises(ThreatModelError, match="CAPEC was not declared"):
+        create_threat_model_snapshot(
+            organization=organization,
+            project=project,
+            actor_id=str(user.id),
+            title="Method boundary model",
+            methodologies=["STRIDE", "PASTA"],
+            pasta_stage=4,
+            scope={},
+            scenarios=[_scenario(linddun=[], capec_ids=["CAPEC-115"])],
+        )
