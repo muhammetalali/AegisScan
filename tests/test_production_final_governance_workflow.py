@@ -43,7 +43,7 @@ def test_final_governance_requires_exact_main_three_run_ids_and_enterprise_ca():
 
 def test_final_governance_revalidates_internal_surface_and_evidence_gate():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "aegisscan.go-live-evidence.v2" in text
+    assert "aegisscan.go-live-evidence.v3" in text
     assert "internal_origin" in text
     assert "public_acceptance.py" in text
     assert "current-internal-acceptance.json" in text
