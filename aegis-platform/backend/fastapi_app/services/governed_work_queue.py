@@ -570,7 +570,7 @@ def _source_snapshot(*, organization, project, source_type: str, source_id: str)
             item = {
                 'authoritative_state': row.status,
                 'source_version': int(row.attempts) + 1,
-                'title': f'Detection delivery: {row.revision.rule.name}',
+                'title': f'Detection delivery: {row.revision.rule.title}',
                 'priority_score': priority_by_state[row.status],
                 'details': {
                     'revision_id': str(row.revision_id),
