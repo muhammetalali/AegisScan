@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from enterprise.models import AttackPathValidation
 from enterprise.services import ensure_project_tenant
-from projects.models import Project
+from django_project.projects.models import Project
 
 from ..core.dependencies import get_current_user
 from ..services.validated_attack_chain import (
