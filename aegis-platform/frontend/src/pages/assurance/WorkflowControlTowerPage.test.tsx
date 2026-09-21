@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { WorkflowControlTowerPage } from './WorkflowControlTowerPage'
 import { apiHelpers } from '@/services/api'
@@ -21,6 +21,7 @@ vi.mock('@/services/agom', () => ({
     claimWork: vi.fn(),
     renewWork: vi.fn(),
     releaseWork: vi.fn(),
+    getAuthority: vi.fn(),
   },
   buildAgomIdempotencyKey: vi.fn(() => 'ops:claim:key-0001'),
   getAgomErrorMessage: (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback,
@@ -31,6 +32,7 @@ const mockedList = vi.mocked(agomSdk.listWorkQueue)
 const mockedClaim = vi.mocked(agomSdk.claimWork)
 const mockedRenew = vi.mocked(agomSdk.renewWork)
 const mockedRelease = vi.mocked(agomSdk.releaseWork)
+const mockedAuthority = vi.mocked(agomSdk.getAuthority)
 const mockedKey = vi.mocked(buildAgomIdempotencyKey)
 
 const projectId = '33333333-3333-4333-8333-333333333333'
@@ -94,6 +96,14 @@ const queue = {
   ],
 }
 
+const analystAuthority = {
+  organization_id: '22222222-2222-4222-8222-222222222222',
+  project_id: projectId,
+  membership_id: '99999999-9999-4999-8999-999999999999',
+  role: 'analyst',
+  responsibilities: [],
+}
+
 const renderPage = () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -111,6 +121,8 @@ afterEach(() => {
 })
 
 describe('Enterprise Operational Workspace', () => {
+  beforeEach(() => mockedAuthority.mockResolvedValue(analystAuthority))
+
   it('renders the unified authoritative queue and its operating signals', async () => {
     mockedGet.mockResolvedValue([{ id: projectId, name: 'Production' }])
     mockedList.mockResolvedValue(queue)
@@ -182,5 +194,19 @@ describe('Enterprise Operational Workspace', () => {
         expected_claim_version: 4,
       }),
     ))
+  })
+
+  it('fails closed to read-only controls for a server-authoritative auditor role', async () => {
+    mockedGet.mockResolvedValue([{ id: projectId, name: 'Production' }])
+    mockedList.mockResolvedValue(queue)
+    mockedAuthority.mockResolvedValue({ ...analystAuthority, role: 'auditor' })
+
+    renderPage()
+
+    expect(await screen.findByText(/Read-only governed queue/)).toBeTruthy()
+    expect(screen.queryByRole('button', {
+      name: 'Claim Governed approval: finding.disposition.accept_risk',
+    })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Renew Assurance review: recurrence' })).toBeNull()
   })
 })
