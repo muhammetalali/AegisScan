@@ -491,6 +491,40 @@ class ThreatModelSnapshot(models.Model):
         raise RuntimeError('threat model snapshots are immutable')
 
 
+class AttackPathValidation(models.Model):
+    """Immutable proof that an AttackPath was validated against live project lineage."""
+
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    organization=models.ForeignKey(Organization,on_delete=models.PROTECT,related_name='attack_path_validations')
+    project=models.ForeignKey('projects.Project',on_delete=models.PROTECT,related_name='attack_path_validations')
+    attack_path=models.ForeignKey(AttackPath,on_delete=models.PROTECT,related_name='validations')
+    threat_model_snapshot=models.ForeignKey(ThreatModelSnapshot,on_delete=models.PROTECT,related_name='attack_path_validations')
+    blast_radius_snapshot=models.ForeignKey('BlastRadiusSnapshot',on_delete=models.PROTECT,related_name='attack_path_validations')
+    scenario_refs=models.JSONField(default=list)
+    evidence_refs=models.JSONField(default=list)
+    authorization_refs=models.JSONField(default=list)
+    relationship_refs=models.JSONField(default=list)
+    validation_sha256=models.CharField(max_length=64,unique=True,editable=False)
+    validated_by=models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name='attack_path_validations')
+    created_at=models.DateTimeField(auto_now_add=True)
+    objects=_AppendOnlyManager()
+
+    class Meta:
+        ordering=['-created_at','-id']
+        indexes=[
+            models.Index(fields=['project','-created_at'],name='idx_apval_project_created'),
+            models.Index(fields=['attack_path','-created_at'],name='idx_apval_path_created'),
+        ]
+
+    def save(self,*args,**kwargs):
+        if not self._state.adding:
+            raise RuntimeError('attack path validations are immutable')
+        return super().save(*args,**kwargs)
+
+    def delete(self,*args,**kwargs):
+        raise RuntimeError('attack path validations are immutable')
+
+
 class BlastRadiusSnapshot(models.Model):
     id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
     organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='blast_radius_snapshots')
