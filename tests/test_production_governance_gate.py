@@ -97,13 +97,16 @@ def _go_live(tmp_path: Path) -> Path:
     _write_json(
         root / "manifest.json",
         {
-            "schema": "aegisscan.go-live-evidence.v2",
+            "schema": "aegisscan.go-live-evidence.v3",
             "status": "success",
             "deployment_mode": "internal",
             "network_scope": "rfc1918-or-ipv6-ula",
             "release_sha": RELEASE,
             "internal_origin": ORIGIN,
             "enterprise_ca_sha256": CA_SHA,
+            "alertmanager_status": "ready",
+            "backup_status": "healthy",
+            "backup_id": "go-live-backup-123",
             "sha256": {name: _sha(root / name) for name in evidence},
         },
     )
@@ -235,6 +238,9 @@ def test_final_governance_approves_only_complete_internal_bound_evidence(tmp_pat
     assert decision["release_sha"] == RELEASE
     assert decision["internal_origin"] == ORIGIN
     assert decision["evidence"]["current_enterprise_ca_sha256"] == CA_SHA
+    assert decision["evidence"]["go_live"]["alertmanager_status"] == "ready"
+    assert decision["evidence"]["go_live"]["backup_status"] == "healthy"
+    assert decision["evidence"]["go_live"]["backup_id"] == "go-live-backup-123"
     assert all(decision["controls"].values())
     assert (tmp_path / "decision.json").is_file()
 
@@ -244,6 +250,16 @@ def test_final_governance_rejects_tampered_go_live_evidence(tmp_path: Path):
     log = next(inputs["go_live_root"].rglob("internal-black-box.log"))
     log.write_text("tampered\n", encoding="utf-8")
     with pytest.raises(gate.GovernanceError, match="digest mismatch"):
+        gate.decide(**inputs)
+
+
+def test_final_governance_rejects_incomplete_go_live_operational_evidence(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    manifest = next(inputs["go_live_root"].rglob("manifest.json"))
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["backup_status"] = "degraded"
+    _write_json(manifest, payload)
+    with pytest.raises(gate.GovernanceError, match="backup operational readiness"):
         gate.decide(**inputs)
 
 
