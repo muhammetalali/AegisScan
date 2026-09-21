@@ -12,7 +12,7 @@ from django_project.scans.models import Scan
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability
 from evidence.models import Evidence
-from enterprise.models import AttackPath, AttackPathValidation, BlastRadiusSnapshot
+from enterprise.models import AttackPath, AttackPathValidation, BlastRadiusSnapshot, OrganizationMembership
 from enterprise.services import ensure_project_tenant
 from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
 from fastapi_app.services.authorization_guard import asset_target
@@ -272,6 +272,30 @@ def test_validated_attack_chain_is_evidence_bound_and_derives_blast_radius():
         blast.save()
     with pytest.raises(RuntimeError, match="append-only"):
         BlastRadiusSnapshot.objects.filter(pk=blast.pk).update(score=0)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_validation_rejects_read_only_tenant_roles():
+    data = _fixture("viewer-chain")
+    membership = OrganizationMembership.objects.get(
+        organization=data["organization"],
+        user=data["user"],
+    )
+    membership.role = OrganizationMembership.Role.VIEWER
+    membership.save(update_fields=["role", "updated_at"])
+
+    with pytest.raises(AttackPathValidationError, match="tenant role"):
+        validate_attack_path(
+            organization=data["organization"],
+            project=data["project"],
+            attack_path_id=str(data["path"].id),
+            threat_model_snapshot_id=str(data["threat_model"].id),
+            scenario_refs=["CHAIN-001"],
+            evidence_ids=data["evidence_ids"],
+            crown_jewel_asset_ids=[],
+            max_depth=3,
+            actor_id=str(data["user"].id),
+        )
 
 
 @pytest.mark.django_db(transaction=True)
