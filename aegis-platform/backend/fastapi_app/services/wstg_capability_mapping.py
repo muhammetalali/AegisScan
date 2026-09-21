@@ -30,6 +30,17 @@ EXPECTED_GAPS = {
     'WSTG-v42-CRYP-01': 'tls.posture',
     'WSTG-v42-CLNT-11': 'browser.postmessage-instrumentation',
 }
+
+# A8 reviewed cutover anchors. EXPECTED_GAPS preserves the approved design-gap
+# identities; these anchors describe the real canonical providers accepted after
+# runtime Reality and governance review.
+CUTOVER_PROVIDER_ANCHORS = {
+    'WSTG-v42-CONF-06': ('registry_capability', 'web.http-method-policy'),
+    'WSTG-v42-INPV-04': ('registry_capability', 'web.duplicate-parameter-semantics'),
+    'WSTG-v42-INPV-19': ('registry_capability', 'web.ssrf-canary-validation'),
+    'WSTG-v42-CRYP-01': ('registry_capability', 'tls.posture'),
+    'WSTG-v42-CLNT-11': ('control_plane_service', 'fastapi_app.services.web_messaging_semantics'),
+}
 _BANNED_REQUIREMENT_TERMS = {
     'nmap', 'masscan', 'rustscan', 'nuclei', 'semgrep', 'httpx', 'katana', 'ffuf',
     'feroxbuster', 'gobuster', 'dirb', 'nikto', 'wafw00f', 'amass', 'subfinder',
@@ -182,10 +193,16 @@ class WSTGCapabilityMapping:
                 if not any(item.kind == 'governed_service' for item in requirement.provider_bindings):
                     raise ValueError(f'{test.id} manual mapping must retain governed execution')
             elif test.classification == 'GAP_NATIVE_SMALL':
-                expected = EXPECTED_GAPS.get(test.id)
-                planned = [item.ref for item in requirement.provider_bindings if item.kind == 'planned_native']
-                if requirement.availability != 'planned_native' or planned != [expected]:
-                    raise ValueError(f'{test.id} does not match the approved native gap')
+                if test.id not in EXPECTED_GAPS:
+                    raise ValueError(f'{test.id} is not an approved native-gap identity')
+                if requirement.availability != 'existing':
+                    raise ValueError(f'{test.id} has not completed reviewed native-gap cutover')
+                if any(item.kind == 'planned_native' for item in requirement.provider_bindings):
+                    raise ValueError(f'{test.id} still depends on an unreviewed planned-native provider')
+                anchor = CUTOVER_PROVIDER_ANCHORS[test.id]
+                bindings = {(item.kind, item.ref) for item in requirement.provider_bindings}
+                if anchor not in bindings:
+                    raise ValueError(f'{test.id} is missing its reviewed native-gap cutover provider')
             elif test.classification == 'CONDITIONAL_NA':
                 if requirement.availability != 'conditional':
                     raise ValueError(f'{test.id} conditional applicability contract changed')
