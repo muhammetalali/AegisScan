@@ -28,6 +28,8 @@ The `production` GitHub Environment remains the approval/secret boundary. A GitH
 
 The repository provides `aegis-platform/scripts/production_runner_bootstrap.sh` to provision the dedicated runner on an authorized internal Linux host. The bootstrap is fail-closed: it requires the official `actions/runner` Linux x64 archive URL, an operator-supplied SHA-256 digest, a short-lived GitHub runner registration token, and an explicit GitHub repository/organization URL. It installs the runner under a dedicated `aegisrunner` service account, registers the required `aegisscan-production` custom label, installs the runner as a systemd service, and verifies that the service is enabled and active.
 
+The bootstrap also provisions the execution prerequisites used by the live release chain: Git, GitHub CLI, OpenSSH client tooling, and the verified runner archive's official dependency installer. The deploy workflow pins Python 3.12 with `actions/setup-python@v6` and creates an isolated venv, so acceptance does not depend on an arbitrary system Python version.
+
 A queued `Internal Production Deploy and Acceptance` job is not production acceptance. If no online runner matches `[self-hosted, linux, x64, aegisscan-production]`, the deployment remains queued and must not be represented as deployed. Activation requests are exact-main and time bounded; if `main` advances while a deployment is queued, a fresh activation request bound to the new main SHA is required.
 
 ## Enterprise CA
