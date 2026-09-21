@@ -667,6 +667,9 @@ def ingest_iast_observation(
             raise IASTConflict('IAST observation could not be committed idempotently.') from exc
 
         sync_scan_finding_counts(scan)
+        scan.save(update_fields=[
+            'findings_count', 'critical_count', 'high_count', 'medium_count', 'low_count', 'info_count', 'updated_at',
+        ])
         add_audit_entry(
             user=actor_id,
             action='iast.observation.commit',
