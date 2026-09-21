@@ -1,0 +1,211 @@
+name: Burp MCP Gateway Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/burp_mcp_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
+      - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/burp-mcp-gateway-reality.yml'
+  push:
+    branches: [main, chatgpt-a/burp-mcp-gateway-20260922]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/burp_mcp_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
+      - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/burp-mcp-gateway-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: burp-mcp-gateway-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  burp-mcp-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-burp-mcp-secret-key-0123456789abcdef0123456789
+      JWT_SECRET_KEY: ci-burp-mcp-jwt-key-0123456789abcdef0123456789
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-burp-mcp-evidence-hmac-key-0123456789abcdef
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-burp-mcp-credential-fingerprint-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
+      BURP_MCP_ALLOW_INSECURE_LOCAL: 'true'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile Burp MCP gateway plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/burp_mcp_models.py \
+            aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py \
+            aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py \
+            aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py \
+            aegis-platform/backend/fastapi_app/routers/burp_mcp.py \
+            aegis-platform/backend/fastapi_app/main.py
+
+      - name: PostgreSQL schema migration and evidence immutability reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+
+          from django.db import connection
+          from enterprise.burp_mcp_models import BurpMCPInvocation, BurpMCPSession
+
+          assert connection.vendor == 'postgresql', connection.vendor
+          session_fields = {field.name for field in BurpMCPSession._meta.fields}
+          invocation_fields = {field.name for field in BurpMCPInvocation._meta.fields}
+          assert {
+              'organization', 'project', 'asset', 'scan', 'authorization_decision',
+              'provider_approval', 'credential_ref', 'provider_identity_sha256',
+              'allowed_tools', 'request_fingerprint', 'contract_fingerprint',
+          } <= session_fields
+          assert {
+              'session', 'evidence', 'qualification', 'operation', 'provider_tool_name',
+              'request_fingerprint', 'arguments_sha256', 'provider_result_sha256',
+          } <= invocation_fields
+          with connection.cursor() as cursor:
+              cursor.execute("""
+                  SELECT tgname
+                  FROM pg_trigger
+                  WHERE tgrelid = 'evidence_evidence'::regclass
+                    AND NOT tgisinternal
+              """)
+              triggers = {row[0] for row in cursor.fetchall()}
+          assert 'trg_burp_mcp_evidence_immutable' in triggers, triggers
+          print('BURP_MCP_DATABASE=POSTGRESQL')
+          print('BURP_MCP_SCHEMA=WIRED')
+          print('BURP_MCP_EVIDENCE_IMMUTABILITY=POSTGRESQL_TRIGGER')
+          PY
+
+      - name: Governed Burp MCP JSON-RPC provider and security reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_burp_mcp_gateway.py \
+            --junitxml=/tmp/burp-mcp-gateway-junit.xml
+
+      - name: Provider approval gate regression
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_web_security_foundation.py -k 'provider'
+
+      - name: Evidence qualification regression
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_evidence_qualification.py
+
+      - name: Prove no arbitrary execution and bounded MCP wiring
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import django
+          django.setup()
+
+          from fastapi_app.services.burp_mcp_gateway import (
+              BURP_MCP_CAPABILITY_ID,
+              BURP_MCP_POLICY_VERSION,
+          )
+
+          service = Path('fastapi_app/services/burp_mcp_gateway.py').read_text()
+          router = Path('fastapi_app/routers/burp_mcp.py').read_text()
+          migration = Path('enterprise/migrations/0041_burp_mcp_gateway.py').read_text()
+
+          assert BURP_MCP_CAPABILITY_ID == 'burp.mcp.gateway'
+          assert BURP_MCP_POLICY_VERSION == 'burp-mcp-gateway.v1'
+          assert "'method': 'tools/call'" in service
+          assert '_OPERATION_ARGUMENTS' in service
+          assert "'shell'" in service
+          assert "'command'" in service
+          assert 'subprocess.' not in service
+          assert 'os.system' not in service
+          assert 'shell=True' not in service
+          assert "ConfigDict(extra='forbid')" in router
+          assert 'evaluate_provider_gate(' in service
+          assert 'qualify_evidence(' in service
+          assert 'resolve_credential_refs_for_worker(' in service
+          assert 'aegis_burp_mcp_evidence_immutable' in migration
+          assert 'trg_burp_mcp_evidence_immutable' in migration
+          print('BURP_MCP_ARBITRARY_EXECUTION=DENIED')
+          print('BURP_MCP_PROVIDER_APPROVAL=PINNED')
+          print('BURP_MCP_AUTHORIZATION=REVALIDATED')
+          print('BURP_MCP_EVIDENCE_QUALIFICATION=WIRED')
+          PY
+
+      - name: Retain Burp MCP Reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: burp-mcp-gateway-${{ github.sha }}
+          path: /tmp/burp-mcp-gateway-junit.xml
+          retention-days: 30
+          if-no-files-found: warn
