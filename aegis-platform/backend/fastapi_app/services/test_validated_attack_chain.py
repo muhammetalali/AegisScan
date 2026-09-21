@@ -219,7 +219,7 @@ def test_validated_attack_chain_is_evidence_bound_and_derives_blast_radius():
     row.scenario_refs = ["mutated"]
     with pytest.raises(RuntimeError, match="immutable"):
         row.save()
-    with pytest.raises(RuntimeError, match="immutable"):
+    with pytest.raises(RuntimeError, match="append-only"):
         AttackPathValidation.objects.filter(pk=row.pk).update(scenario_refs=[])
 
 
