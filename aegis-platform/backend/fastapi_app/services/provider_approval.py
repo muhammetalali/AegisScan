@@ -268,13 +268,15 @@ def record_provider_decision(
     if expires_at is not None and timezone.is_naive(expires_at):
         raise ProviderApprovalError('expires_at must be timezone-aware.')
 
-    project = Project.objects.select_for_update().filter(pk=project_id).first()
-    if project is None:
-        raise ProviderApprovalAuthorizationError('Provider project was not found.')
-    tenant = _active_tenant(str(project.id))
+    # Preserve the enterprise serialization order used by AGOM:
+    # Organization -> TenantProject -> Project.
+    tenant = _active_tenant(str(project_id))
     if tenant is None:
         raise ProviderApprovalAuthorizationError('Provider project is not bound to an active enterprise tenant.')
     organization, _link = tenant
+    project = Project.objects.select_for_update().filter(pk=project_id).first()
+    if project is None:
+        raise ProviderApprovalAuthorizationError('Provider project was not found.')
     _assert_reviewer(project, organization, str(actor_id))
 
     manifest_snapshot = json.loads(_canonical(manifest).decode('utf-8'))
@@ -291,14 +293,6 @@ def record_provider_decision(
         manifest_sha256=manifest_sha256,
         supply_chain=supply_chain,
     )
-
-    previous = (
-        ProviderApprovalDecision.objects.select_for_update()
-        .filter(project=project, provider_name=name, capability=capability_id)
-        .order_by('-decision_version', '-created_at', '-id')
-        .first()
-    )
-    next_version = int(previous.decision_version) + 1 if previous else 1
 
     if legacy_approval is None:
         legacy_status = _legacy_status(normalized_status)
@@ -317,6 +311,26 @@ def record_provider_decision(
         )
     elif legacy_approval.project_id != project.id:
         raise ProviderApprovalConflict('Legacy provider approval belongs to another project.')
+
+    previous = (
+        ProviderApprovalDecision.objects.select_for_update()
+        .filter(project=project, provider_name=name, capability=capability_id)
+        .order_by('-decision_version', '-created_at', '-id')
+        .first()
+    )
+    if (
+        previous is not None
+        and str(previous.legacy_approval_id or '') == str(legacy_approval.id)
+        and previous.provider_version == version
+        and previous.status == normalized_status
+        and previous.manifest_sha256 == manifest_sha256
+        and previous.capability_manifest_sha256 == capability_sha256
+        and previous.supply_chain_sha256 == supply_chain_sha256
+        and previous.expires_at == expires_at
+    ):
+        return ProviderDecisionResult(decision=previous, replayed=True)
+
+    next_version = int(previous.decision_version) + 1 if previous else 1
 
     request_fingerprint = _sha({
         'organization_id': str(organization.id),
