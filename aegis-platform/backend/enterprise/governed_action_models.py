@@ -272,3 +272,77 @@ class EvidenceQualificationEvaluation(models.Model):
     def delete(self, *args, **kwargs):
         raise ValidationError('Evidence qualification evaluations are immutable and cannot be deleted.')
 
+
+
+class _ImmutableBusinessLogicAssessmentQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('Business logic assessments are immutable and cannot be updated.')
+
+    def delete(self):
+        raise ValidationError('Business logic assessments are immutable and cannot be deleted.')
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('Business logic assessments must be created through the assessment authority.')
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise ValidationError('Business logic assessments are immutable and cannot be updated.')
+
+
+class BusinessLogicAssessment(models.Model):
+    """Immutable proof that one governed request was checked against current workflow invariants."""
+
+    class Decision(models.TextChoices):
+        PASSED = 'passed', 'Passed'
+        BLOCKED = 'blocked', 'Blocked'
+
+    objects = _ImmutableBusinessLogicAssessmentQuerySet.as_manager()
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        'enterprise.Organization',
+        on_delete=models.PROTECT,
+        related_name='business_logic_assessments',
+    )
+    project = models.ForeignKey(
+        'projects.Project',
+        on_delete=models.PROTECT,
+        related_name='business_logic_assessments',
+    )
+    request = models.ForeignKey(
+        'enterprise.GovernedActionRequest',
+        on_delete=models.PROTECT,
+        related_name='business_logic_assessments',
+    )
+    assessed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='business_logic_assessments',
+    )
+    action_id = models.CharField(max_length=128)
+    entity_type = models.CharField(max_length=80)
+    entity_id = models.CharField(max_length=128)
+    request_fingerprint = models.CharField(max_length=64)
+    contract_fingerprint = models.CharField(max_length=64)
+    evaluation_policy_version = models.CharField(max_length=64)
+    projection_snapshot = models.JSONField(default=dict)
+    capability_snapshot = models.JSONField(default=dict)
+    invariant_results = models.JSONField(default=list)
+    decision = models.CharField(max_length=16, choices=Decision.choices)
+    reason_codes = models.JSONField(default=list)
+    assessment_sha256 = models.CharField(max_length=64, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['project', 'decision', '-created_at'], name='idx_bizlogic_project_dec'),
+            models.Index(fields=['request', '-created_at'], name='idx_bizlogic_request_time'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError('Business logic assessments are immutable.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('Business logic assessments are immutable and cannot be deleted.')
