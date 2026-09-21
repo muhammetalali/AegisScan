@@ -136,7 +136,7 @@ def test_threat_model_snapshot_is_immutable_deduplicated_and_projected():
     snapshot.title = "mutated"
     with pytest.raises(RuntimeError, match="immutable"):
         snapshot.save()
-    with pytest.raises(RuntimeError, match="immutable"):
+    with pytest.raises(RuntimeError, match="append-only"):
         ThreatModelSnapshot.objects.filter(pk=snapshot.pk).update(title="mutated")
 
 
