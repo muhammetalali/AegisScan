@@ -1,36 +1,50 @@
-# WSTG Native Gap Cutover Gate
+# WSTG Native Gap Cutover Reality — A8
 
 ## Purpose
 
-This gate protects the five approved OWASP WSTG v4.2 `GAP_NATIVE_SMALL` rows from being promoted by implementation presence alone.
+A8 performs the reviewed methodology cutover that the earlier native-gap guard
+required. Runtime implementation is still owned by Chat B; this gate does not modify
+or certify validator internals. It consumes the current authoritative registry and
+semantic-service surfaces and decides whether they may satisfy canonical WSTG
+planning and evidence-lineage contracts.
 
-A registered runtime capability, browser telemetry, or scanner observation is not methodology completion.
+The historical design-gap identities remain exactly:
 
-The approved set remains:
+- `WSTG-v42-CONF-06`
+- `WSTG-v42-INPV-04`
+- `WSTG-v42-INPV-19`
+- `WSTG-v42-CRYP-01`
+- `WSTG-v42-CLNT-11`
 
-- `WSTG-v42-CONF-06` → `web.http-method-policy`
-- `WSTG-v42-INPV-04` → `web.duplicate-parameter-semantics`
-- `WSTG-v42-INPV-19` → `web.ssrf-canary-validation`
-- `WSTG-v42-CRYP-01` → `tls.posture`
-- `WSTG-v42-CLNT-11` → `browser.postmessage-instrumentation`
+Their `GAP_NATIVE_SMALL` classification is retained as provenance. Classification
+is not a runtime status.
 
-## Invariants
+## Cutover invariants
 
-The Reality gate independently proves:
+The Reality gate proves that:
 
-- the canonical 97-test classification remains `25 / 45 / 21 / 5 / 1`;
-- the exact five approved native-gap WSTG identities are unchanged;
-- each gap remains `planned_native` in the canonical mapping;
-- each gap remains `blocked` in the WSTG execution planner;
-- blocked gaps expose no executable provider capability IDs through the planner;
-- a planned capability that is already registered may emit trusted evidence lineage, but that lineage stays `blocked_native_gap` with `completion_claim_allowed=false`;
-- the current internal native-gap normalizers force `observation_only=true` and `final_decision=false`;
-- CLNT-11 browser `postMessage` telemetry remains supporting blocked-gap evidence and cannot perform methodology cutover.
+- the canonical 97-test matrix remains `25 / 45 / 21 / 5 / 1`;
+- all five rows resolve to `availability=existing` with no `planned_native`
+  provider left in canonical mapping;
+- each row contains its explicitly reviewed registry/service anchor;
+- the planner emits `planned` only when that anchor is execution-ready for the
+  asset/depth (or its reviewed semantic service is present);
+- authorization remains required;
+- native/runtime output remains observation evidence, never a final methodology
+  decision;
+- trusted lineage is `observed` + `supporting_observation` after cutover while
+  `completion_claim_allowed=false`;
+- CLNT-11 uses bounded browser telemetry plus the existing web-messaging semantic
+  service instead of inventing a fake executable capability;
+- forged runtime fields cannot promote an observation into final-decision authority.
 
-## Cutover boundary
+## Authority boundary
 
-A future cutover is a separate reviewed change. It must be based on independently proven runtime behavior and the approved architecture, not on capability registration, green unit tests, or passive telemetry alone.
+This gate does **not** dispatch scans, change runtime validator code, create or
+confirm Findings, close Findings, accept risk, or grant client-side authority.
+Governed action execution and finding confirmation remain the only lifecycle
+authorities.
 
-This gate does not dispatch scans, create Findings, confirm Findings, close Findings, accept risk, change WSTG classifications, or grant client-side authorization authority.
-
-This gate also does not certify the technical completeness of a native validator. Runtime implementation and its focused validator tests remain Account B scope; a validator bug discovered by this gate must be fixed and proven in that implementation lane before any methodology cutover.
+If a reviewed provider disappears, loses execution readiness, or its mapping drifts,
+A8 fails closed: the mapping/Reality gate fails and the planner returns `blocked`
+rather than silently claiming WSTG coverage.

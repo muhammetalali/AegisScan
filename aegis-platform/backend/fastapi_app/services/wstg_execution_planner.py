@@ -295,10 +295,21 @@ class WSTGExecutionPlanner:
                     applicability_refs = context.evidence_refs
                     eligible = ()
                 elif test.classification == 'GAP_NATIVE_SMALL':
-                    status = 'blocked'
-                    reason = 'Approved native validator remains blocked until reviewed canonical integration.'
-                    applicability_refs = context.evidence_refs
-                    eligible = ()
+                    if requirement.availability == 'existing' and (eligible or service_refs):
+                        status = 'planned'
+                        reason = (
+                            'Reviewed native-gap cutover provider is execution-ready; '
+                            'runtime observations remain evidence-only and dispatch stays authorization-bound.'
+                        )
+                        applicability_refs = context.evidence_refs
+                    else:
+                        status = 'blocked'
+                        reason = (
+                            'Native-gap cutover is not execution-ready for this asset/depth; '
+                            'planner fails closed without dispatch.'
+                        )
+                        applicability_refs = context.evidence_refs
+                        eligible = ()
                 elif eligible or service_refs:
                     status = 'planned'
                     reason = (

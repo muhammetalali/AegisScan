@@ -315,14 +315,14 @@
   {
     "id": "web.conf.http-methods",
     "description": "Test HTTP Methods",
-    "availability": "planned_native",
+    "availability": "existing",
     "provider_bindings": [
       {
         "kind": "control_plane_service",
         "ref": "fastapi_app.services.http_protocol_security"
       },
       {
-        "kind": "planned_native",
+        "kind": "registry_capability",
         "ref": "web.http-method-policy"
       }
     ]
@@ -874,7 +874,7 @@
   {
     "id": "web.inpv.http-parameter-pollution",
     "description": "Testing for HTTP Parameter Pollution",
-    "availability": "planned_native",
+    "availability": "existing",
     "provider_bindings": [
       {
         "kind": "registry_capability",
@@ -885,7 +885,7 @@
         "ref": "fastapi_app.services.http_protocol_security"
       },
       {
-        "kind": "planned_native",
+        "kind": "registry_capability",
         "ref": "web.duplicate-parameter-semantics"
       }
     ]
@@ -1087,10 +1087,10 @@
   {
     "id": "web.inpv.server-side-request-forgery",
     "description": "Testing for Server-Side Request Forgery",
-    "availability": "planned_native",
+    "availability": "existing",
     "provider_bindings": [
       {
-        "kind": "planned_native",
+        "kind": "registry_capability",
         "ref": "web.ssrf-canary-validation"
       }
     ]
@@ -1124,14 +1124,14 @@
   {
     "id": "web.cryp.weak-transport-layer-security",
     "description": "Testing for Weak Transport Layer Security",
-    "availability": "planned_native",
+    "availability": "existing",
     "provider_bindings": [
       {
         "kind": "registry_capability",
         "ref": "web.nuclei"
       },
       {
-        "kind": "planned_native",
+        "kind": "registry_capability",
         "ref": "tls.posture"
       }
     ]
@@ -1421,15 +1421,15 @@
   {
     "id": "web.clnt.web-messaging",
     "description": "Test Web Messaging",
-    "availability": "planned_native",
+    "availability": "existing",
     "provider_bindings": [
       {
         "kind": "registry_capability",
         "ref": "browser.spa-discovery"
       },
       {
-        "kind": "planned_native",
-        "ref": "browser.postmessage-instrumentation"
+        "kind": "control_plane_service",
+        "ref": "fastapi_app.services.web_messaging_semantics"
       }
     ]
   },

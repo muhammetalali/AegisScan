@@ -30,7 +30,10 @@ _CLASSIFICATION_SEMANTICS: dict[str, tuple[EvidenceRole, MethodologyState]] = {
     'AUTO_EXISTING': ('direct_observation', 'observed'),
     'ASSISTED_EXISTING': ('supporting_observation', 'observed'),
     'MANUAL_GOVERNED': ('supporting_context', 'manual_required'),
-    'GAP_NATIVE_SMALL': ('supporting_context', 'blocked_native_gap'),
+    # GAP_NATIVE_SMALL is retained as design provenance. A8 reviewed the exact five
+    # native providers into canonical mapping, so their runtime output is now trusted
+    # supporting observation while completion authority remains governed and false here.
+    'GAP_NATIVE_SMALL': ('supporting_observation', 'observed'),
     'CONDITIONAL_NA': ('conditional_context', 'inconclusive'),
 }
 

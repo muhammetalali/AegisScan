@@ -28,7 +28,7 @@ def verify() -> dict:
     mapping = WSTGCapabilityMapping()
     expected: dict[str, set[str]] = {}
     registry_capabilities: set[str] = set()
-    registered_planned_native: set[str] = set()
+    reviewed_native_capabilities: set[str] = set()
     registry_classifications = Counter()
     lineage_classifications = Counter()
 
@@ -40,16 +40,12 @@ def verify() -> dict:
                 capability_id = binding.ref
                 registry_capabilities.add(capability_id)
                 registry_classifications[test.classification] += 1
-            elif binding.kind == 'planned_native':
-                try:
-                    capability_id = get_capability(binding.ref).id
-                except ValueError:
-                    continue
-                registered_planned_native.add(capability_id)
             else:
                 continue
             expected.setdefault(capability_id, set()).add(test.id)
             lineage_classifications[test.classification] += 1
+            if test.classification == 'GAP_NATIVE_SMALL':
+                reviewed_native_capabilities.add(capability_id)
 
     fingerprints: dict[str, str] = {}
     for capability_id, expected_ids in sorted(expected.items()):
@@ -74,8 +70,11 @@ def verify() -> dict:
             state = item['methodology_state']
             if classification == 'MANUAL_GOVERNED' and state != 'manual_required':
                 raise ValueError('Manual-governed evidence became self-attesting')
-            if classification == 'GAP_NATIVE_SMALL' and state != 'blocked_native_gap':
-                raise ValueError('Native-gap evidence became executable completion')
+            if classification == 'GAP_NATIVE_SMALL':
+                if state != 'observed' or item['evidence_role'] != 'supporting_observation':
+                    raise ValueError('Reviewed native-gap evidence lost observed supporting semantics')
+                if item['completion_claim_allowed'] is not False:
+                    raise ValueError('Reviewed native-gap evidence gained completion authority')
             if classification == 'CONDITIONAL_NA' and state != 'inconclusive':
                 raise ValueError('Conditional WSTG evidence bypassed applicability')
         fingerprints[capability_id] = payload['lineage_fingerprint']
@@ -107,7 +106,8 @@ def verify() -> dict:
             'no WSTG pass/fail claim and no finding confirmation/closure/disposition authority'
         ),
         'registry_capabilities_with_wstg_lineage': len(registry_capabilities),
-        'registered_planned_native_capabilities_with_blocked_lineage': sorted(registered_planned_native),
+        'reviewed_native_capabilities_with_observed_lineage': sorted(reviewed_native_capabilities),
+        'native_gap_completion_claim_allowed': False,
         'capabilities_with_wstg_lineage': len(expected),
         'registry_binding_occurrences_by_classification': dict(sorted(registry_classifications.items())),
         'lineage_binding_occurrences_by_classification': dict(sorted(lineage_classifications.items())),

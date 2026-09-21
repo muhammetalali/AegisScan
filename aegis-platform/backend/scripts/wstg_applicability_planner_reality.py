@@ -47,8 +47,12 @@ def verify() -> dict:
         item for item in website_plan.items
         if item.classification == 'GAP_NATIVE_SMALL'
     ]
-    if len(gaps) != 5 or any(item.status != 'blocked' for item in gaps):
-        raise ValueError('Approved native gaps must remain blocked until reviewed integration')
+    if len(gaps) != 5 or any(item.status != 'planned' for item in gaps):
+        raise ValueError('Reviewed native-gap cutovers must be planned through current providers')
+    if any(not (item.provider_capability_ids or item.support_service_refs) for item in gaps):
+        raise ValueError('Reviewed native-gap cutover lost its execution-ready provider/service')
+    if any(not item.authorization_required for item in gaps):
+        raise ValueError('Reviewed native-gap cutover lost authorization requirement')
 
     conditional = next(
         item for item in website_plan.items
@@ -114,7 +118,8 @@ def verify() -> dict:
         'website_status_counts': dict(sorted(Counter(item.status for item in website_plan.items).items())),
         'non_web_status_counts': non_web_plan.status_counts,
         'manual_governed': len(manual),
-        'approved_native_gaps_blocked': [item.wstg_id for item in gaps],
+        'reviewed_native_gap_cutovers_planned': [item.wstg_id for item in gaps],
+        'native_gap_completion_claim_allowed': False,
         'conditional_without_evidence': conditional.status,
         'conditional_with_flash_evidence': flash.status,
         'website_policy_fingerprint': website_plan.policy_fingerprint,
