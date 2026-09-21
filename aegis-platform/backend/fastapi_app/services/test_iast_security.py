@@ -4,6 +4,7 @@ import hashlib
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import DatabaseError, connection, transaction
 
 from django_project.assets.models import AssetAuthorization
 from django_project.evidence.models import Evidence
@@ -117,8 +118,13 @@ def test_iast_observation_creates_qualified_immutable_evidence_and_finding(dispo
     assert len(observation.observation_sha256) == 64
     assert scan.vulnerabilities.filter(pk=finding.id).exists()
 
-    with pytest.raises(ValidationError):
-        Evidence.objects.filter(pk=evidence.id).update(raw_output='tampered')
+    if connection.vendor == 'postgresql':
+        with pytest.raises(DatabaseError, match='IAST evidence is immutable'):
+            with transaction.atomic():
+                Evidence.objects.filter(pk=evidence.id).update(raw_output='tampered')
+        evidence.refresh_from_db()
+        assert hashlib.sha256(evidence.raw_output.encode()).hexdigest() == evidence.sha256
+        assert evidence.raw_output != 'tampered'
     with pytest.raises(ValidationError):
         IASTObservation.objects.filter(pk=observation.id).update(severity='low')
     with pytest.raises(ValidationError):
