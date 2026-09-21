@@ -15,6 +15,7 @@ from enterprise.services import ensure_project_tenant
 from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
 from fastapi_app.services.authorization_guard import asset_target
 from fastapi_app.services.threat_modeling import create_threat_model_snapshot
+from fastapi_app.services.enterprise_gap_closure import persist_blast_radius
 from fastapi_app.services.validated_attack_chain import (
     AttackPathValidationError,
     validate_attack_path,
@@ -326,4 +327,18 @@ def test_validation_rejects_evidence_outside_path_and_requires_target_evidence()
             crown_jewel_asset_ids=[],
             max_depth=3,
             actor_id=str(data["user"].id),
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_legacy_blast_api_cannot_create_attack_path_bound_snapshot():
+    data = _fixture("legacy-blast-bypass")
+    with pytest.raises(ValueError, match="validated attack chain workflow"):
+        persist_blast_radius(
+            project=data["project"],
+            root_ref=str(data["target"].id),
+            impacted_nodes=[{"id": str(data["target"].id), "risk": 100, "distance": 0}],
+            crown_jewel_refs=[str(data["target"].id)],
+            evidence_refs=[str(data["evidence"].id)],
+            attack_path_id=str(data["path"].id),
         )
