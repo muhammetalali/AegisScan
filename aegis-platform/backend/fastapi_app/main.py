@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
 import asyncio,logging,time
 from datetime import datetime,timezone
-from .routers import scans,vulnerabilities,finding_dispositions,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,plugin_registry,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities,risk_correlation,web_security,wstg,oast,scheduled_scans,work_queue,threat_modeling,validated_attack_chain,business_logic_security
+from .routers import scans,vulnerabilities,finding_dispositions,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,plugin_registry,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities,risk_correlation,web_security,wstg,oast,scheduled_scans,work_queue,threat_modeling,validated_attack_chain,business_logic_security,iast
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -187,6 +187,7 @@ app.include_router(reports.router,prefix='/reports',tags=['Reports']); app.inclu
 app.include_router(assets.router,prefix='/assets',tags=['Assets']); app.include_router(assets.router,prefix='/api/v1/assets',tags=['Assets'])
 app.include_router(asset_authorization.router,tags=['Asset Authorization'])
 app.include_router(evidence.router,prefix='/api/v1/evidence',tags=['Evidence'])
+app.include_router(iast.router,prefix='/api/v1/iast',tags=['IAST Enterprise Security'])
 app.include_router(compliance.router,prefix='/compliance',tags=['Compliance']); app.include_router(compliance.router,prefix='/api/v1/compliance',tags=['Compliance'])
 app.include_router(compliance_validation.router,prefix='/api/v1',tags=['Compliance Validation'])
 app.include_router(knowledge.router,prefix='/knowledge',tags=['Knowledge']); app.include_router(knowledge.router,prefix='/api/v1/knowledge',tags=['Knowledge'])
