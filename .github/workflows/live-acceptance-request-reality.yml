@@ -1,0 +1,49 @@
+name: Live Acceptance Request Reality
+
+'on':
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/scripts/live_acceptance_request.py'
+      - 'tests/test_live_acceptance_request.py'
+      - '.github/workflows/live-acceptance-request-reality.yml'
+      - '.github/workflows/cloud-live-provider-reality.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/scripts/live_acceptance_request.py'
+      - 'tests/test_live_acceptance_request.py'
+      - '.github/workflows/live-acceptance-request-reality.yml'
+      - '.github/workflows/cloud-live-provider-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-acceptance-request-reality-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  request-authorization:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Compile request authorizer
+        run: python -m py_compile aegis-platform/scripts/live_acceptance_request.py
+      - name: Prove fail-closed request authorization
+        run: |
+          python -m pip install pytest==9.1.1
+          python -m pytest -q tests/test_live_acceptance_request.py
+      - name: Prove Cloud live workflow consumes the governed request
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F ".github/live-acceptance-requests/cloud-providers.json" .github/workflows/cloud-live-provider-reality.yml
+          grep -F "live_acceptance_request.py" .github/workflows/cloud-live-provider-reality.yml
+          grep -F -- "--scope cloud-providers" .github/workflows/cloud-live-provider-reality.yml
+          grep -F -- "--required-confirm VALIDATE" .github/workflows/cloud-live-provider-reality.yml
