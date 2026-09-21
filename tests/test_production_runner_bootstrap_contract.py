@@ -13,6 +13,7 @@ def test_runner_bootstrap_is_fail_closed_and_pinned():
     assert "--proto '=https'" in text
     assert "--tlsv1.2" in text
     assert "aegisscan-production" in text
+    assert "--disableupdate" in text
 
 
 def test_runner_bootstrap_installs_dedicated_service_without_hosted_fallback():
