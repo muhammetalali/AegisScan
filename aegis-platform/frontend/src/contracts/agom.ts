@@ -185,6 +185,14 @@ export const AgomActionRequestSchema = z.object({
   created_at: z.string().min(1),
 }).strict()
 
+export const AgomWorkSourceTypeSchema = z.enum([
+  'governed_action_request',
+  'decision_action',
+  'assurance_obligation',
+  'investigation_case',
+  'detection_delivery',
+])
+
 export const AgomWorkClaimSchema = z.object({
   version: z.number().int().nonnegative(),
   state: z.enum(['unclaimed', 'claimed', 'expired']),
@@ -195,13 +203,7 @@ export const AgomWorkClaimSchema = z.object({
 }).strict()
 
 export const AgomWorkItemSchema = z.object({
-  source_type: z.enum([
-    'governed_action_request',
-    'decision_action',
-    'assurance_obligation',
-    'investigation_case',
-    'detection_delivery',
-  ]),
+  source_type: AgomWorkSourceTypeSchema,
   source_id: z.string().min(1),
   title: z.string().min(1),
   work_category: z.string().min(1),
@@ -242,8 +244,119 @@ export const AgomWorkQueueSchema = z.object({
   }
 })
 
-export const AgomWorkMutationSchema = AgomWorkItemSchema.extend({
+export const AgomWorkOperationSchema = z.enum(['claim', 'renew', 'release'])
+
+export const AgomWorkMutationSchema = z.object({
+  policy_version: z.literal('agom.work-queue.v1'),
+  source_type: AgomWorkSourceTypeSchema,
+  source_id: z.string().min(1),
+  project_id: z.string().min(1),
+  organization_id: z.string().min(1),
+  operation: AgomWorkOperationSchema,
+  claim: AgomWorkClaimSchema,
+  source_snapshot: z.record(z.unknown()),
+  source_snapshot_sha256: z.string().length(64),
   replayed: z.boolean(),
+}).strict()
+
+
+export const AgomExecuteActionInputSchema = z.object({
+  action_id: z.string().min(1).max(128),
+  project_id: z.string().min(1),
+  entity_type: z.string().min(1).max(80),
+  entity_id: z.string().min(1).max(128),
+  expected_version: z.number().int().positive(),
+  idempotency_key: z.string().min(1).max(128),
+  request_id: z.string().uuid().optional(),
+  correlation_id: z.string().uuid().optional(),
+  parameters: z.record(z.unknown()).default({}),
+}).strict()
+
+export const AgomActionRequestCreateInputSchema = AgomExecuteActionInputSchema.omit({
+  request_id: true,
+}).strict()
+
+export const AgomClaimStateSchema = z.enum(['unclaimed', 'claimed', 'expired', 'mine'])
+
+export const AgomWorkQueueQuerySchema = z.object({
+  project_id: z.string().uuid().optional(),
+  source_type: AgomWorkSourceTypeSchema.optional(),
+  claim_state: AgomClaimStateSchema.optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+}).strict()
+
+export const AgomWorkClaimMutationInputSchema = z.object({
+  project_id: z.string().uuid(),
+  expected_claim_version: z.number().int().nonnegative(),
+  idempotency_key: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
+  lease_seconds: z.number().int().min(60).max(86400).optional(),
+}).strict()
+
+export const AgomResponsibilityAssignmentSchema = z.object({
+  assignment_id: z.string().min(1),
+  organization_id: z.string().min(1),
+  project_id: z.string().nullable(),
+  membership_id: z.string().min(1),
+  responsibility: z.string().min(1),
+  scope_kind: z.string().min(1),
+  entity_type: z.string(),
+  entity_id: z.string(),
+  valid_from: z.string().min(1),
+  valid_until: z.string().nullable(),
+  policy_version: z.string().min(1),
+  request_fingerprint: z.string().min(1),
+  grant_fingerprint: z.string().min(1),
+  issued_by: z.string().min(1),
+  issued_at: z.string().min(1),
+  supersedes_assignment_id: z.string().nullable(),
+  replayed: z.boolean(),
+}).strict()
+
+export const AgomResponsibilityRevocationSchema = z.object({
+  revocation_id: z.string().min(1),
+  assignment_id: z.string().min(1),
+  policy_version: z.string().min(1),
+  request_fingerprint: z.string().min(1),
+  revocation_fingerprint: z.string().min(1),
+  revoked_by: z.string().min(1),
+  revoked_at: z.string().min(1),
+  replayed: z.boolean(),
+}).strict()
+
+export const AgomActorAuthoritySchema = z.object({
+  organization_id: z.string().min(1),
+  project_id: z.string().nullable(),
+  membership_id: z.string().min(1),
+  role: z.string().min(1),
+  responsibilities: z.array(z.string()),
+}).strict()
+
+export const AgomResponsibilityChainSchema = z.object({
+  valid: z.boolean(),
+  entries: z.number().int().nonnegative(),
+  head: z.string(),
+  broken_at: z.number().int().nullable(),
+  reason: z.string(),
+}).strict()
+
+export const AgomResponsibilityGrantInputSchema = z.object({
+  organization_id: z.string().min(1),
+  membership_id: z.string().min(1),
+  responsibility: z.string().min(1).max(64),
+  scope_kind: z.string().min(1).max(24),
+  reason: z.string().min(1),
+  idempotency_key: z.string().min(1).max(128),
+  project_id: z.string().nullable().optional(),
+  entity_type: z.string().max(80).default(''),
+  entity_id: z.string().max(128).default(''),
+  valid_from: z.string().optional(),
+  valid_until: z.string().nullable().optional(),
+  supersedes_assignment_id: z.string().nullable().optional(),
+}).strict()
+
+export const AgomResponsibilityRevokeInputSchema = z.object({
+  reason: z.string().min(1),
+  idempotency_key: z.string().min(1).max(128),
 }).strict()
 
 export type AgomActionContract = z.infer<typeof AgomActionContractSchema>
@@ -256,3 +369,16 @@ export type AgomActionRequest = z.infer<typeof AgomActionRequestSchema>
 export type AgomWorkQueue = z.infer<typeof AgomWorkQueueSchema>
 export type AgomWorkItem = z.infer<typeof AgomWorkItemSchema>
 export type AgomWorkMutation = z.infer<typeof AgomWorkMutationSchema>
+
+export type AgomExecuteActionInput = z.infer<typeof AgomExecuteActionInputSchema>
+export type AgomActionRequestCreateInput = z.infer<typeof AgomActionRequestCreateInputSchema>
+export type AgomWorkSourceType = z.infer<typeof AgomWorkSourceTypeSchema>
+export type AgomClaimState = z.infer<typeof AgomClaimStateSchema>
+export type AgomWorkQueueQuery = z.infer<typeof AgomWorkQueueQuerySchema>
+export type AgomWorkClaimMutationInput = z.infer<typeof AgomWorkClaimMutationInputSchema>
+export type AgomResponsibilityAssignment = z.infer<typeof AgomResponsibilityAssignmentSchema>
+export type AgomResponsibilityRevocation = z.infer<typeof AgomResponsibilityRevocationSchema>
+export type AgomActorAuthority = z.infer<typeof AgomActorAuthoritySchema>
+export type AgomResponsibilityChain = z.infer<typeof AgomResponsibilityChainSchema>
+export type AgomResponsibilityGrantInput = z.infer<typeof AgomResponsibilityGrantInputSchema>
+export type AgomResponsibilityRevokeInput = z.infer<typeof AgomResponsibilityRevokeInputSchema>

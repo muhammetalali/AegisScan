@@ -1,0 +1,151 @@
+name: AGOM Frontend SDK Reality
+
+on:
+  push:
+    branches:
+      - chatgpt-a/agom-frontend-sdk-2026-09-21
+    paths:
+      - 'aegis-platform/frontend/src/contracts/agom.ts'
+      - 'aegis-platform/frontend/src/services/agom.ts'
+      - 'aegis-platform/frontend/src/services/agom.test.ts'
+      - 'aegis-platform/frontend/src/pages/vulnerabilities/Vulnerabilities.tsx'
+      - 'aegis-platform/frontend/src/pages/vulnerabilities/VulnerabilityDetail.tsx'
+      - 'aegis-platform/frontend/src/pages/vulnerabilities/VulnerabilityDetail.test.tsx'
+      - '.github/workflows/agom-frontend-sdk-reality.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/frontend/src/contracts/agom.ts'
+      - 'aegis-platform/frontend/src/services/agom.ts'
+      - 'aegis-platform/frontend/src/services/agom.test.ts'
+      - 'aegis-platform/frontend/src/pages/vulnerabilities/Vulnerabilities.tsx'
+      - 'aegis-platform/frontend/src/pages/vulnerabilities/VulnerabilityDetail.tsx'
+      - 'aegis-platform/frontend/src/pages/vulnerabilities/VulnerabilityDetail.test.tsx'
+      - '.github/workflows/agom-frontend-sdk-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agom-frontend-sdk-\${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-a6-frontend-sdk-secret-0123456789abcdef
+      JWT_SECRET_KEY: ci-a6-frontend-sdk-jwt-0123456789abcdef
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-a6-frontend-sdk-evidence-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-a6-frontend-sdk-fingerprint-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target,aegis-scan-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: \${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout is exact head
+        run: test "$(git rev-parse HEAD)" = "\${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: aegis-platform/frontend
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Run AGOM SDK contract tests
+        working-directory: aegis-platform/frontend
+        run: |
+          npx vitest run \
+            src/services/agom.test.ts \
+            src/pages/vulnerabilities/VulnerabilityDetail.test.tsx \
+            | tee /tmp/a6-frontend-tests.txt
+
+      - name: Typecheck and build frontend
+        working-directory: aegis-platform/frontend
+        run: npm run build | tee /tmp/a6-frontend-build.txt
+
+      - name: Verify backend AGOM API contracts on PostgreSQL
+        working-directory: aegis-platform/backend
+        run: |
+          python manage.py migrate --noinput
+          pytest -q \
+            fastapi_app/routers/test_governed_action_execution_api.py \
+            fastapi_app/routers/test_governed_work_queue_api.py \
+            | tee /tmp/a6-backend-contract-tests.txt
+
+      - name: Prove canonical AGOM routes remain registered
+        working-directory: aegis-platform/backend
+        run: |
+          python - <<'PY' | tee /tmp/a6-openapi-proof.txt
+          from fastapi_app.main import app
+          paths = app.openapi()['paths']
+          required = {
+              '/api/v1/assurance/governance/contracts',
+              '/api/v1/assurance/governance/capabilities/{entity_type}/{entity_id}',
+              '/api/v1/assurance/governance/actions/execute',
+              '/api/v1/assurance/governance/actions/requests',
+              '/api/v1/work-queue',
+              '/api/v1/work-queue/{source_type}/{source_id}/claim',
+              '/api/v1/work-queue/{source_type}/{source_id}/renew',
+              '/api/v1/work-queue/{source_type}/{source_id}/release',
+          }
+          missing = sorted(required - set(paths))
+          assert not missing, missing
+          print('AGOM_FRONTEND_SDK_ROUTES=WIRED')
+          PY
+
+      - name: Retain A6 Reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agom-frontend-sdk-\${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            /tmp/a6-frontend-tests.txt
+            /tmp/a6-frontend-build.txt
+            /tmp/a6-backend-contract-tests.txt
+            /tmp/a6-openapi-proof.txt
