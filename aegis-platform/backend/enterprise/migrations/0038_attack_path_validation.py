@@ -19,6 +19,7 @@ class Migration(migrations.Migration):
                 ('evidence_refs', models.JSONField(default=list)),
                 ('authorization_refs', models.JSONField(default=list)),
                 ('relationship_refs', models.JSONField(default=list)),
+                ('proof_material', models.JSONField(default=dict)),
                 ('validation_sha256', models.CharField(editable=False, max_length=64, unique=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('attack_path', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='validations', to='enterprise.attackpath')),
