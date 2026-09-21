@@ -7,6 +7,9 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/enterprise/apps.py'
       - 'aegis-platform/backend/enterprise/burp_mcp_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
+      - 'aegis-platform/backend/enterprise/provider_approval_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0042_provider_approval_plane.py'
+      - 'aegis-platform/backend/fastapi_app/services/provider_approval.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
@@ -87,6 +90,9 @@ jobs:
           python -m py_compile \
             aegis-platform/backend/enterprise/burp_mcp_models.py \
             aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py \
+            aegis-platform/backend/enterprise/provider_approval_models.py \
+            aegis-platform/backend/enterprise/migrations/0042_provider_approval_plane.py \
+            aegis-platform/backend/fastapi_app/services/provider_approval.py \
             aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py \
             aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py \
             aegis-platform/backend/fastapi_app/routers/burp_mcp.py \
@@ -113,7 +119,7 @@ jobs:
           invocation_fields = {field.name for field in BurpMCPInvocation._meta.fields}
           assert {
               'organization', 'project', 'asset', 'scan', 'authorization_decision',
-              'provider_approval', 'credential_ref', 'provider_identity_sha256',
+              'provider_approval', 'provider_governance_decision', 'credential_ref', 'provider_identity_sha256',
               'allowed_tools', 'request_fingerprint', 'contract_fingerprint',
           } <= session_fields
           assert {
@@ -190,13 +196,14 @@ jobs:
           assert 'os.system' not in service
           assert 'shell=True' not in service
           assert "ConfigDict(extra='forbid')" in router
-          assert 'evaluate_provider_gate(' in service
+          assert 'evaluate_provider_admissibility(' in service
+          assert 'provider_governance_decision' in service
           assert 'qualify_evidence(' in service
           assert 'resolve_credential_refs_for_worker(' in service
           assert 'aegis_burp_mcp_evidence_immutable' in migration
           assert 'trg_burp_mcp_evidence_immutable' in migration
           print('BURP_MCP_ARBITRARY_EXECUTION=DENIED')
-          print('BURP_MCP_PROVIDER_APPROVAL=PINNED')
+          print('BURP_MCP_PROVIDER_APPROVAL=ENTERPRISE_PINNED')
           print('BURP_MCP_AUTHORIZATION=REVALIDATED')
           print('BURP_MCP_EVIDENCE_QUALIFICATION=WIRED')
           PY
