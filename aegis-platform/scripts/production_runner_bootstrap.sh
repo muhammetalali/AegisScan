@@ -107,7 +107,7 @@ done
 
 chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_DIR" "$RUNNER_WORK"
 
-runuser -u "$RUNNER_USER" -- "$RUNNER_DIR/config.sh"   --unattended   --url "$AEGIS_GITHUB_RUNNER_URL"   --token "$AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN"   --name "$RUNNER_NAME"   --labels "$RUNNER_LABELS"   --work "$RUNNER_WORK"
+runuser -u "$RUNNER_USER" -- "$RUNNER_DIR/config.sh"   --unattended   --disableupdate   --url "$AEGIS_GITHUB_RUNNER_URL"   --token "$AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN"   --name "$RUNNER_NAME"   --labels "$RUNNER_LABELS"   --work "$RUNNER_WORK"
 
 cd "$RUNNER_DIR"
 ./svc.sh install "$RUNNER_USER"
