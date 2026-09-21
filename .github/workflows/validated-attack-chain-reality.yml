@@ -106,6 +106,8 @@ jobs:
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
           python - <<'PY'
+          import django
+          django.setup()
           from django.db import connection
           from enterprise.models import AttackPathValidation
           assert connection.vendor == 'postgresql', connection.vendor
