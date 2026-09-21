@@ -94,6 +94,7 @@ def test_queue_projects_authoritative_sources_without_copying_business_state(dis
         schedule_id=str(schedule.id),
     ).obligation
     case, state = _case(user, project, organization, finding)
+    case.refresh_from_db()
 
     payload = list_governed_work(actor_id=str(user.id), project_id=str(project.id))
     by_key = {item['item_key']: item for item in payload['items']}
