@@ -3,6 +3,7 @@ name: AGOM Frontend SDK Reality
 on:
   push:
     branches:
+      - main
       - chatgpt-a/agom-frontend-sdk-2026-09-21
     paths:
       - 'aegis-platform/frontend/src/contracts/agom.ts'
