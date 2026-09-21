@@ -162,6 +162,8 @@ def test_burp_session_is_provider_authorization_bound_immutable_and_replay_safe(
     assert second.session.id == first.session.id
     session = first.session
     assert session.provider_approval_id == approval.id
+    assert session.provider_governance_decision_id is not None
+    assert session.contract_snapshot['provider']['governance_decision_id'] == str(session.provider_governance_decision_id)
     assert session.target_snapshot == 'aegis-disposition-target'
     assert session.allowed_tools['burp.site_map'] == 'burp_get_site_map'
     assert session.contract_snapshot['arbitrary_execution'] is False
