@@ -85,7 +85,10 @@ def _create(project_id: str, user_id: str, payload: ThreatModelCreateIn) -> dict
     )
     if not project:
         raise ThreatModelError("project not found or inaccessible")
-    organization = ensure_project_tenant(project, user_id)
+    try:
+        organization = ensure_project_tenant(project, user_id)
+    except PermissionError as exc:
+        raise ThreatModelError("project tenant membership is not authorized") from exc
     snapshot, created = create_threat_model_snapshot(
         organization=organization,
         project=project,
