@@ -316,6 +316,10 @@ def persist_blast_radius(
     *, project, root_ref: str, impacted_nodes: list[dict[str, Any]], crown_jewel_refs: list[str],
     evidence_refs: list[str], attack_path_id: str | None = None,
 ) -> BlastRadiusSnapshot:
+    if attack_path_id:
+        raise ValueError(
+            'attack-path-bound blast radius must be created through the validated attack chain workflow'
+        )
     organization = _tenant_for_project(project)
     crown = set(str(value) for value in crown_jewel_refs)
     total = 0.0
