@@ -114,9 +114,9 @@
       "kali_requirement": "required"
     },
     "GAP_NATIVE_SMALL": {
-      "execution_backend": "New bounded Aegis validator packaged and executed inside Kali profile",
-      "runtime_action": "Implement the small native validator only; package it in the relevant Kali profile and add Reality tests before enabling.",
-      "evidence_contract": "Validator result + bounded request/response semantics + fingerprint + runtime provenance",
+      "execution_backend": "Reviewed bounded Aegis native validator or governed semantic service integrated into the canonical control plane",
+      "runtime_action": "Use the reviewed cutover provider under the existing authorization-bound runtime; observations remain evidence and never self-authorize methodology pass/fail",
+      "evidence_contract": "Bounded validator/service observation + trusted WSTG lineage + runtime provenance + governed decision evidence",
       "kali_requirement": "required"
     },
     "MANUAL_GOVERNED": {
