@@ -16,6 +16,7 @@ from fastapi_app.services.asset_authorization_governance import (
     govern_asset_authorization,
 )
 from fastapi_app.services.governed_action_executor import (
+    GovernedActionBlocked,
     GovernedActionConflict,
     execute_governed_action,
 )
@@ -212,3 +213,57 @@ def test_domain_change_between_check_and_use_fails_closed_without_execution_enve
         resource_id=str(asset.id),
     ).count() == 0
     assert AssetAuthorization.objects.filter(asset=asset).count() == 2
+
+
+def test_temporal_policy_is_re_evaluated_fresh_at_commit_time(disposition_fixture, monkeypatch):
+    _owner, project, asset, _organization, proposer, approver, parameters = _race_setup(
+        disposition_fixture,
+        'temporal-freshness',
+    )
+    request = _request(
+        project=project,
+        asset=asset,
+        proposer=proposer,
+        action_id='asset.authorization.revoke',
+        parameters=parameters,
+        marker='temporal-freshness',
+    )
+    before_count = AssetAuthorization.objects.filter(asset=asset).count()
+    original = executor._preflight_temporal_policy
+    observed_evaluated_at = []
+
+    def temporal_probe(**kwargs):
+        observed_evaluated_at.append(kwargs.get('evaluated_at'))
+        if len(observed_evaluated_at) == 1:
+            return original(**kwargs)
+        if kwargs.get('evaluated_at') is None:
+            raise GovernedActionBlocked(
+                'TEMPORAL_POLICY_EXPIRED_AT_USE',
+                'Synthetic expiry proves the commit-time policy check uses fresh time.',
+                ['fresh_commit_time_temporal_policy'],
+            )
+        return original(**kwargs)
+
+    monkeypatch.setattr(executor, '_preflight_temporal_policy', temporal_probe)
+
+    with pytest.raises(GovernedActionBlocked) as blocked:
+        execute_governed_action(
+            action_id='asset.authorization.revoke',
+            project_id=str(project.id),
+            actor_id=str(approver.id),
+            entity_type='asset',
+            entity_id=str(asset.id),
+            expected_version=request.expected_version,
+            idempotency_key='temporal-freshness-execution',
+            request_id=str(request.id),
+            parameters=parameters,
+        )
+
+    assert blocked.value.reason_code == 'TEMPORAL_POLICY_EXPIRED_AT_USE'
+    assert observed_evaluated_at == [None, None]
+    assert GovernedActionExecution.objects.filter(request=request).count() == 0
+    assert AuditLog.objects.filter(
+        metadata__governed_action_id='asset.authorization.revoke',
+        resource_id=str(asset.id),
+    ).count() == 0
+    assert AssetAuthorization.objects.filter(asset=asset).count() == before_count
