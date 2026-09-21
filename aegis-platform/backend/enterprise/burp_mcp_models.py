@@ -57,6 +57,13 @@ class BurpMCPSession(models.Model):
         on_delete=models.PROTECT,
         related_name='burp_mcp_sessions',
     )
+    provider_governance_decision = models.ForeignKey(
+        'enterprise.ProviderApprovalDecision',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='burp_mcp_sessions',
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
