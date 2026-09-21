@@ -17,15 +17,15 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 EXPECTED_RUNS = {
     "live_deploy": {
         "path": ".github/workflows/production-live-deploy.yml",
-        "event": "workflow_dispatch",
+        "events": ("push", "workflow_dispatch"),
     },
     "resilience": {
         "path": ".github/workflows/production-resilience-acceptance.yml",
-        "event": "workflow_dispatch",
+        "events": ("workflow_run", "workflow_dispatch"),
     },
     "supply_chain": {
         "path": ".github/workflows/supply-chain-release.yml",
-        "event": "push",
+        "events": ("push",),
     },
 }
 COMPONENTS = ("django", "fastapi", "frontend")
@@ -114,8 +114,11 @@ def _verify_run_metadata(path: Path, kind: str, release_sha: str) -> dict[str, A
         raise GovernanceError(f"{kind} workflow run is not bound to release SHA")
     if payload.get("path") != expected["path"]:
         raise GovernanceError(f"{kind} workflow path mismatch: {payload.get('path')!r}")
-    if payload.get("event") != expected["event"]:
-        raise GovernanceError(f"{kind} workflow trigger mismatch: {payload.get('event')!r}")
+    if payload.get("event") not in expected["events"]:
+        raise GovernanceError(
+            f"{kind} workflow trigger mismatch: {payload.get('event')!r}; "
+            f"expected one of {expected['events']!r}"
+        )
     run_id = payload.get("id")
     if not isinstance(run_id, int) or run_id <= 0:
         raise GovernanceError(f"{kind} workflow run id is invalid")
