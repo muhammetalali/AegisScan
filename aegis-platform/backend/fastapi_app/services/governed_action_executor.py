@@ -16,7 +16,7 @@ from django_project.vulnerabilities.models import Vulnerability
 from enterprise.governed_action_models import GovernedActionExecution, GovernedActionRequest
 from enterprise.models import Organization, TenantProject
 from fastapi_app.contracts.governed_operations import AGOM_CONTRACT_VERSION, ActionMode
-from fastapi_app.services.asset_authorization_governance import govern_asset_authorization
+from fastapi_app.services.asset_authorization_governance import (\n    StaleAssetAuthorizationVersion,\n    govern_asset_authorization,\n)
 from fastapi_app.services.campaign_objective_assurance import assess_objective, complete_campaign
 from fastapi_app.services.finding_closure import close_finding
 from fastapi_app.services.finding_disposition import govern_finding_disposition
@@ -667,17 +667,20 @@ def _execute_asset_authorization(
     if authorized:
         allowed.add('expires_at')
     _require_parameters(parameters, required=required, allowed=allowed)
-    result = govern_asset_authorization(
-        asset_id=entity_id,
-        project_id=project_id,
-        actor_id=actor_id,
-        expected_version=expected_version,
-        authorized=authorized,
-        reason=str(parameters['reason']),
-        governed_request_id=str(parameters['_agom_request_id']),
-        correlation_id=str(parameters['_agom_correlation_id']),
-        expires_at=parameters.get('expires_at'),
-    )
+    try:
+        result = govern_asset_authorization(
+            asset_id=entity_id,
+            project_id=project_id,
+            actor_id=actor_id,
+            expected_version=expected_version,
+            authorized=authorized,
+            reason=str(parameters['reason']),
+            governed_request_id=str(parameters['_agom_request_id']),
+            correlation_id=str(parameters['_agom_correlation_id']),
+            expires_at=parameters.get('expires_at'),
+        )
+    except StaleAssetAuthorizationVersion as exc:
+        raise GovernedActionConflict(str(exc)) from exc
     return {
         'id': str(result.decision.id),
         'authorization_decision_id': str(result.decision.id),
@@ -1288,6 +1291,34 @@ def execute_governed_action(
             if requested_correlation
             else governed_request.correlation_id if governed_request is not None else uuid.uuid4()
         )
+
+        race_toctou = build_race_toctou_proof(
+            action_id=normalized_action,
+            organization_id=str(organization.id),
+            project_id=normalized_project_id,
+            actor_id=normalized_actor_id,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+            expected_version=int(expected_version),
+            current_version=int(current_version),
+            request_fingerprint=request_fingerprint,
+            governed_request_id=str(governed_request.id) if governed_request else '',
+            governed_request_fingerprint=(
+                governed_request.request_fingerprint if governed_request else ''
+            ),
+            contract_snapshot={
+                'contract_version': AGOM_CONTRACT_VERSION,
+                'contract': contract.model_dump(mode='json'),
+            },
+            evaluation_policy_version=manifest.evaluation_policy_version,
+            gate_snapshot=gate_snapshot,
+            evidence_qualification_fingerprint=(
+                qualification.evaluation.evaluation_fingerprint
+                if qualification is not None else ''
+            ),
+            temporal_evaluation_fingerprint=temporal.evaluation.evaluation_fingerprint,
+        ).as_dict()
+
         dispatcher = _DISPATCH[normalized_action]
         dispatch_parameters = payload
         if normalized_action in {
@@ -1317,6 +1348,7 @@ def execute_governed_action(
         result_payload = {
             **result_payload,
             'temporal_policy': _temporal_view(temporal),
+            'race_toctou': race_toctou,
         }
 
         after_manifest = build_governed_capability_manifest(
@@ -1350,6 +1382,7 @@ def execute_governed_action(
                 'governed_request_proposer_id': str(governed_request.requested_by_id) if governed_request else None,
                 'correlation_id': str(correlation_uuid),
                 'gate_snapshot': gate_snapshot,
+                'race_toctou': race_toctou,
                 'result_payload': result_payload,
             },
             ip_address=ip_address,
