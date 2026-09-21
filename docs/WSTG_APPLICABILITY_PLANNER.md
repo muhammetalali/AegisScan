@@ -77,12 +77,18 @@ Planning revalidates the current authorization binding but does not weaken or re
 the execution-time authorization/egress checks. Dispatch must still pass through the
 existing control plane.
 
-## Account B boundary
+## Runtime ownership and A8 cutover boundary
 
-The five `GAP_NATIVE_SMALL` requirements remain `blocked` in this PR. A capability
-implemented by Account B is not automatically trusted merely because its ID appears
-in another branch. Those validators become eligible only after explicit review and
-canonical mapping integration.
+Chat B retains exclusive ownership of native runtime implementation, validators,
+Kali packaging and external security Reality. A8 is the separate reviewed
+methodology-integration step anticipated by the earlier guard: the exact five
+historical `GAP_NATIVE_SMALL` rows now resolve only through accepted canonical
+registry/service anchors.
+
+This does not trust implementation presence alone. The planner requires the reviewed
+mapping **and** current execution readiness. If either condition is absent, the item
+returns `blocked`. A planned item still requires the normal authorization-bound
+control-plane dispatch and cannot emit a methodology pass/fail verdict by itself.
 
 ## Reality proof
 
@@ -90,7 +96,7 @@ canonical mapping integration.
 
 - all 97 official tests are planned exactly once;
 - manual tests remain `manual_required`;
-- the five approved native gaps remain blocked pending reviewed integration;
+- the exact five historical native gaps are planned only through reviewed, execution-ready cutover providers;
 - conditional applicability fails closed without evidence;
 - positive Flash evidence makes the conditional row plannable through the existing
   browser capability;
