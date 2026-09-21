@@ -37,6 +37,7 @@ from fastapi_app.services.governed_temporal_policy import (
     evaluate_governed_temporal_policy,
 )
 from fastapi_app.services.governed_operations import get_action_contract, list_action_contracts
+from fastapi_app.services.race_toctou_security import build_race_toctou_proof
 from fastapi_app.services.soc_closure_governance import close_investigation_case
 
 
