@@ -103,6 +103,7 @@ def _validate_evidence(
     project_id: str,
     steps: list[str],
     evidence_ids: list[str],
+    authorization_by_asset: dict[str, str],
 ) -> list[dict[str, str]]:
     unique_ids = sorted({str(value).strip() for value in evidence_ids if str(value).strip()})
     if not unique_ids:
@@ -114,31 +115,60 @@ def _validate_evidence(
     )
     if len(rows) != len(unique_ids):
         raise AttackPathValidationError("attack path evidence crossed the project boundary or does not exist")
+
     step_set = set(steps)
-    target_id = steps[-1]
-    target_covered = False
+    required_hop_targets = set(steps[1:])
+    covered_hop_targets: set[str] = set()
     normalized: list[dict[str, str]] = []
+
     for evidence in rows:
-        if not evidence.asset_id or str(evidence.asset_id) not in step_set:
+        asset_id = str(evidence.asset_id or "")
+        if not asset_id or asset_id not in step_set:
             raise AttackPathValidationError("attack path evidence is not bound to a path asset")
         digest = hashlib.sha256((evidence.raw_output or "").encode("utf-8", errors="replace")).hexdigest()
         if evidence.sha256 != digest:
             raise AttackPathValidationError("attack path evidence integrity check failed")
-        if str(evidence.asset_id) == target_id:
-            target_covered = True
-        if evidence.finding_id and str(evidence.finding.project_id) != str(project_id):
-            raise AttackPathValidationError("attack path evidence finding crossed the project boundary")
+        if evidence.finding_id is None:
+            raise AttackPathValidationError(
+                "attack path evidence must be bound to a confirmed finding"
+            )
+
+        finding = evidence.finding
+        if (
+            str(finding.project_id) != str(project_id)
+            or str(finding.asset_id or "") != asset_id
+        ):
+            raise AttackPathValidationError("attack path evidence finding crossed the project or asset boundary")
+        if finding.status in _INACTIVE_FINDING_STATES:
+            raise AttackPathValidationError("attack path evidence finding is not active")
+
+        confirmation_matches = finding.confirmation_records.filter(
+            evidence=evidence,
+            verdict="confirmed",
+            finding_present=True,
+            authorization_decision_id=authorization_by_asset.get(asset_id),
+        ).exists()
+        if finding.status != Vulnerability.Status.CONFIRMED and not confirmation_matches:
+            raise AttackPathValidationError(
+                "attack path evidence must be backed by a confirmed finding or governed confirmation"
+            )
+
+        covered_hop_targets.add(asset_id)
         normalized.append({
             "id": str(evidence.id),
-            "asset_id": str(evidence.asset_id),
-            "finding_id": str(evidence.finding_id or ""),
+            "asset_id": asset_id,
+            "finding_id": str(evidence.finding_id),
             "sha256": evidence.sha256,
             "type": str(evidence.evidence_type),
         })
-    if not target_covered:
-        raise AttackPathValidationError("validated attack path requires evidence bound to the target asset")
-    return normalized
 
+    missing_targets = sorted(required_hop_targets - covered_hop_targets)
+    if missing_targets:
+        raise AttackPathValidationError(
+            "each attack-path hop target requires confirmed finding evidence; "
+            f"missing assets: {','.join(missing_targets)}"
+        )
+    return normalized
 
 def _impact_value(asset: Asset) -> float:
     baseline = _CRITICALITY.get(str(asset.criticality or "medium").lower(), 50.0)
@@ -276,10 +306,19 @@ def validate_attack_path(
     if set(assets) != set(steps):
         raise AttackPathValidationError("attack path references inactive or foreign assets")
     authorization_refs = []
+    authorization_by_asset: dict[str, str] = {}
     for asset_id in steps:
-        authorization_refs.append(str(_current_authorization(assets[asset_id]).id))
+        decision = _current_authorization(assets[asset_id])
+        decision_id = str(decision.id)
+        authorization_refs.append(decision_id)
+        authorization_by_asset[asset_id] = decision_id
     relationship_refs = _validate_relationships(str(project.id), steps)
-    evidence = _validate_evidence(project_id=str(project.id), steps=steps, evidence_ids=evidence_ids)
+    evidence = _validate_evidence(
+        project_id=str(project.id),
+        steps=steps,
+        evidence_ids=evidence_ids,
+        authorization_by_asset=authorization_by_asset,
+    )
 
     root_asset_id = steps[-1]
     blast = _derive_blast_radius(
