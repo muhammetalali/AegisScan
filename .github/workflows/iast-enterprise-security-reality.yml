@@ -7,7 +7,6 @@ name: IAST Enterprise Security Reality
       - 'aegis-platform/backend/enterprise/apps.py'
       - 'aegis-platform/backend/enterprise/iast_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0040_iast_enterprise_security_plane.py'
-      - 'aegis-platform/backend/django_project/evidence/models.py'
       - 'aegis-platform/backend/fastapi_app/services/iast_security.py'
       - 'aegis-platform/backend/fastapi_app/services/test_iast_security.py'
       - 'aegis-platform/backend/fastapi_app/routers/iast.py'
@@ -19,7 +18,6 @@ name: IAST Enterprise Security Reality
       - 'aegis-platform/backend/enterprise/apps.py'
       - 'aegis-platform/backend/enterprise/iast_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0040_iast_enterprise_security_plane.py'
-      - 'aegis-platform/backend/django_project/evidence/models.py'
       - 'aegis-platform/backend/fastapi_app/services/iast_security.py'
       - 'aegis-platform/backend/fastapi_app/services/test_iast_security.py'
       - 'aegis-platform/backend/fastapi_app/routers/iast.py'
@@ -120,8 +118,18 @@ jobs:
               'session', 'finding', 'evidence', 'qualification', 'observation_sha256',
               'request_fingerprint', 'data_labels',
           } <= observation_fields
+          with connection.cursor() as cursor:
+              cursor.execute("""
+                  SELECT tgname
+                  FROM pg_trigger
+                  WHERE tgrelid = 'evidence_evidence'::regclass
+                    AND NOT tgisinternal
+              """)
+              triggers = {row[0] for row in cursor.fetchall()}
+          assert 'trg_iast_evidence_immutable' in triggers, triggers
           print('IAST_DATABASE=POSTGRESQL')
           print('IAST_SCHEMA=WIRED')
+          print('IAST_EVIDENCE_IMMUTABILITY=POSTGRESQL_TRIGGER')
           PY
 
       - name: IAST tenant authorization evidence and replay reality
@@ -168,12 +176,13 @@ jobs:
 
           service = Path('fastapi_app/services/iast_security.py').read_text()
           router = Path('fastapi_app/routers/iast.py').read_text()
-          evidence = Path('django_project/evidence/models.py').read_text()
+          migration = Path('enterprise/migrations/0040_iast_enterprise_security_plane.py').read_text()
           assert IAST_CAPABILITY_ID == 'iast.runtime-taint-flow'
           assert IAST_POLICY_VERSION == 'iast-enterprise.v1'
           assert "'raw_values_captured': False" in service
           assert "ConfigDict(extra='forbid')" in router
-          assert "{'oast', 'iast'}" in evidence
+          assert 'aegis_iast_evidence_immutable' in migration
+          assert 'trg_iast_evidence_immutable' in migration
           assert 'qualify_evidence(' in service
           assert 'authorization_decision_id' in service
           assert 'execution_ref' in service
