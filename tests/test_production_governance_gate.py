@@ -37,7 +37,7 @@ def _run_metadata(tmp_path: Path, kind: str, run_id: int) -> Path:
             "conclusion": "success",
             "head_sha": RELEASE,
             "path": expected["path"],
-            "event": expected["event"],
+            "event": expected["events"][0],
             "html_url": f"https://github.com/example/aegis/actions/runs/{run_id}",
         },
     )
@@ -284,6 +284,27 @@ def test_final_governance_rejects_enterprise_ca_drift(tmp_path: Path):
     payload["enterprise_ca"]["sha256"] = "f" * 64
     _write_json(current, payload)
     with pytest.raises(gate.GovernanceError, match="enterprise CA changed"):
+        gate.decide(**inputs)
+
+
+def test_final_governance_accepts_automated_release_chain_events(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    live = json.loads(inputs["live_run_metadata"].read_text(encoding="utf-8"))
+    live["event"] = "push"
+    _write_json(inputs["live_run_metadata"], live)
+    resilience = json.loads(inputs["resilience_run_metadata"].read_text(encoding="utf-8"))
+    resilience["event"] = "workflow_run"
+    _write_json(inputs["resilience_run_metadata"], resilience)
+    decision = gate.decide(**inputs)
+    assert decision["decision"] == "APPROVED"
+
+
+def test_final_governance_rejects_unapproved_workflow_trigger(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    live = json.loads(inputs["live_run_metadata"].read_text(encoding="utf-8"))
+    live["event"] = "pull_request"
+    _write_json(inputs["live_run_metadata"], live)
+    with pytest.raises(gate.GovernanceError, match="workflow trigger mismatch"):
         gate.decide(**inputs)
 
 
