@@ -555,6 +555,11 @@ def persist_provider_approval(project, actor_id: str, payload: dict[str, Any]) -
             'reviewed_by_id': actor_id,
         },
     )
+    # Enterprise-bound projects promote the compatibility record into the
+    # authoritative append-only Provider Approval Plane. Legacy-only projects
+    # retain their historical Web Security behavior.
+    from fastapi_app.services.provider_approval import mirror_legacy_provider_approval
+    mirror_legacy_provider_approval(row, str(actor_id))
     return row, created
 
 
