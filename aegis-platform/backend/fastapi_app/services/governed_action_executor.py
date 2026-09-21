@@ -16,7 +16,10 @@ from django_project.vulnerabilities.models import Vulnerability
 from enterprise.governed_action_models import GovernedActionExecution, GovernedActionRequest
 from enterprise.models import Organization, TenantProject
 from fastapi_app.contracts.governed_operations import AGOM_CONTRACT_VERSION, ActionMode
-from fastapi_app.services.asset_authorization_governance import (\n    StaleAssetAuthorizationVersion,\n    govern_asset_authorization,\n)
+from fastapi_app.services.asset_authorization_governance import (
+    StaleAssetAuthorizationVersion,
+    govern_asset_authorization,
+)
 from fastapi_app.services.campaign_objective_assurance import assess_objective, complete_campaign
 from fastapi_app.services.finding_closure import close_finding
 from fastapi_app.services.finding_disposition import govern_finding_disposition
