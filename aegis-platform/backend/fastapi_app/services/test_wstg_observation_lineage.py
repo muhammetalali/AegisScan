@@ -46,7 +46,8 @@ class WSTGObservationLineageTests(unittest.TestCase):
 
         gap = rows['WSTG-v42-CLNT-11']
         self.assertEqual(gap['classification'], 'GAP_NATIVE_SMALL')
-        self.assertEqual(gap['methodology_state'], 'blocked_native_gap')
+        self.assertEqual(gap['evidence_role'], 'supporting_observation')
+        self.assertEqual(gap['methodology_state'], 'observed')
         self.assertFalse(gap['completion_claim_allowed'])
 
         conditional = rows['WSTG-v42-CLNT-08']
@@ -55,7 +56,7 @@ class WSTGObservationLineageTests(unittest.TestCase):
         self.assertEqual(conditional['methodology_state'], 'inconclusive')
         self.assertFalse(conditional['completion_claim_allowed'])
 
-    def test_registered_planned_native_gaps_emit_blocked_lineage_without_cutover(self):
+    def test_reviewed_native_cutovers_emit_observed_non_authoritative_lineage(self):
         expected = {
             'web.http-method-policy': 'WSTG-v42-CONF-06',
             'web.duplicate-parameter-semantics': 'WSTG-v42-INPV-04',
@@ -69,8 +70,8 @@ class WSTGObservationLineageTests(unittest.TestCase):
                 self.assertIn(wstg_id, rows)
                 row = rows[wstg_id]
                 self.assertEqual(row['classification'], 'GAP_NATIVE_SMALL')
-                self.assertEqual(row['evidence_role'], 'supporting_context')
-                self.assertEqual(row['methodology_state'], 'blocked_native_gap')
+                self.assertEqual(row['evidence_role'], 'supporting_observation')
+                self.assertEqual(row['methodology_state'], 'observed')
                 self.assertFalse(row['completion_claim_allowed'])
                 self.assertFalse(payload['completion_claim_allowed'])
                 decorated = attach_wstg_evidence_metadata({'capability_id': capability_id}, capability_id)
