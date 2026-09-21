@@ -41,21 +41,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require compatible system Python and isolated deployment venv
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require pinned Python and isolated deployment venv
         shell: bash
         run: |
           set -euo pipefail
-          command -v python3 >/dev/null
-          python3 - <<'PY'
+          command -v python >/dev/null
+          python - <<'PY'
           import sys
-          if sys.version_info < (3, 12):
-              raise SystemExit(f'production runner requires Python >= 3.12, found {sys.version.split()[0]}')
+          if sys.version_info[:2] != (3, 12):
+              raise SystemExit(f'production runner requires workflow-pinned Python 3.12, found {sys.version.split()[0]}')
           print(f'production_runner_python={sys.version.split()[0]}')
           PY
-          if ! python3 -m venv "$RUNNER_TEMP/aegis-production-venv"; then
-            echo 'production runner requires the Python venv module (for Debian/Kali install python3-venv)' >&2
-            exit 1
-          fi
+          python -m venv "$RUNNER_TEMP/aegis-production-venv"
           "$RUNNER_TEMP/aegis-production-venv/bin/python" -m pip --version
           echo "$RUNNER_TEMP/aegis-production-venv/bin" >> "$GITHUB_PATH"
 
