@@ -6,12 +6,12 @@ from datetime import timedelta
 import pytest
 from django.utils import timezone
 
-from assets.models import Asset, AssetAuthorization, AssetRelationship
+from django_project.assets.models import Asset, AssetAuthorization, AssetRelationship
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability
-from evidence.models import Evidence
+from django_project.evidence.models import Evidence
 from enterprise.models import AttackPath, AttackPathValidation, BlastRadiusSnapshot, OrganizationMembership
 from enterprise.services import ensure_project_tenant
 from enterprise.web_security_models import SecurityGraphEdge, SecurityGraphNode
