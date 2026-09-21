@@ -32,3 +32,13 @@ def test_runner_bootstrap_refuses_destructive_live_replacement():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "existing production runner service is active" in text
     assert "refusing destructive replacement" in text
+
+
+def test_runner_bootstrap_provisions_execution_dependencies_from_verified_archive():
+    text = SCRIPT.read_text(encoding="utf-8")
+    for package in ("git", "gh", "openssh-client"):
+        assert package in text
+    assert 'bin/installdependencies.sh' in text
+    assert 'verified runner archive is missing bin/installdependencies.sh' in text
+    for command_name in ("git", "gh", "ssh", "ssh-keygen", "curl", "tar"):
+        assert f'command -v "$command_name"' in text or f'command_name in' in text
