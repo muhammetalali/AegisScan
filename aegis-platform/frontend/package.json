@@ -10,7 +10,8 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "i18n:audit": "node scripts/i18n-audit.mjs",
-    "audit:ui": "node scripts/ui-contract-audit.mjs"
+    "audit:ui": "node scripts/ui-contract-audit.mjs",
+    "test:agom": "vitest run src/contracts/agom.test.ts src/services/agom.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.5.0",
