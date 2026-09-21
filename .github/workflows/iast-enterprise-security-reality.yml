@@ -148,11 +148,10 @@ jobs:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
-          # Run in a fresh interpreter. The Evidence Qualification suite exercises
-          # FastAPI TestClient cleanup that deliberately closes Django DB
-          # connections; process isolation prevents that lifecycle from leaking
-          # into Django TestCase connection state.
-          pytest -q django_project/evidence/test_governed_oast_runtime.py
+          # Match the canonical Governed OAST Reality harness. This suite is
+          # Django TestCase based and exercises threaded/async callback paths;
+          # Django's test runner owns the connection lifecycle correctly.
+          python manage.py test django_project.evidence.test_governed_oast_runtime -v 2
 
       - name: Prove IAST redaction and governed lineage wiring
         working-directory: aegis-platform/backend
