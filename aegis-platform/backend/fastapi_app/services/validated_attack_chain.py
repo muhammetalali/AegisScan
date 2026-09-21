@@ -371,6 +371,8 @@ def validate_attack_path(
     if existing is not None:
         if existing.project_id != project.id or existing.organization_id != organization.id:
             raise AttackPathValidationError("attack path validation digest collision crossed a tenant boundary")
+        if _sha(existing.proof_material or {}) != existing.validation_sha256:
+            raise AttackPathValidationError("stored attack-path validation proof material failed integrity verification")
         return existing, False
 
     evidence_refs = [item["id"] for item in evidence]
@@ -394,6 +396,7 @@ def validate_attack_path(
         evidence_refs=evidence_refs,
         authorization_refs=authorization_refs,
         relationship_refs=relationship_refs,
+        proof_material=material,
         validation_sha256=validation_sha256,
         validated_by_id=actor_id,
     )
@@ -401,6 +404,21 @@ def validate_attack_path(
         path.status = AttackPath.Status.VALIDATED
         path.save(update_fields=["status", "updated_at"])
     return validation, True
+
+
+def verify_attack_path_validation(row: AttackPathValidation) -> dict[str, Any]:
+    material = row.proof_material if isinstance(row.proof_material, dict) else {}
+    expected = _sha(material)
+    valid = expected == row.validation_sha256
+    return {
+        "valid": valid,
+        "expected_sha256": expected,
+        "validation_sha256": row.validation_sha256,
+        "contract_version": str(material.get("contract_version") or ""),
+        "attack_path_id": str(row.attack_path_id),
+        "threat_model_snapshot_id": str(row.threat_model_snapshot_id),
+        "blast_radius_snapshot_id": str(row.blast_radius_snapshot_id),
+    }
 
 
 def serialize_attack_path_validation(row: AttackPathValidation) -> dict[str, Any]:
@@ -416,6 +434,7 @@ def serialize_attack_path_validation(row: AttackPathValidation) -> dict[str, Any
         "authorization_refs": row.authorization_refs,
         "relationship_refs": row.relationship_refs,
         "validation_sha256": row.validation_sha256,
+        "proof_integrity": verify_attack_path_validation(row),
         "blast_radius": {
             "root_ref": blast.root_ref,
             "crown_jewel_refs": blast.crown_jewel_refs,
