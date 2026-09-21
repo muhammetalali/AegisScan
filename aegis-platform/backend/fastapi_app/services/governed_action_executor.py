@@ -16,7 +16,10 @@ from django_project.vulnerabilities.models import Vulnerability
 from enterprise.governed_action_models import GovernedActionExecution, GovernedActionRequest
 from enterprise.models import Organization, TenantProject
 from fastapi_app.contracts.governed_operations import AGOM_CONTRACT_VERSION, ActionMode
-from fastapi_app.services.asset_authorization_governance import govern_asset_authorization
+from fastapi_app.services.asset_authorization_governance import (
+    StaleAssetAuthorizationVersion,
+    govern_asset_authorization,
+)
 from fastapi_app.services.campaign_objective_assurance import assess_objective, complete_campaign
 from fastapi_app.services.finding_closure import close_finding
 from fastapi_app.services.finding_disposition import govern_finding_disposition
@@ -34,6 +37,7 @@ from fastapi_app.services.governed_temporal_policy import (
     evaluate_governed_temporal_policy,
 )
 from fastapi_app.services.governed_operations import get_action_contract, list_action_contracts
+from fastapi_app.services.race_toctou_security import build_race_toctou_proof
 from fastapi_app.services.soc_closure_governance import close_investigation_case
 
 
@@ -667,17 +671,20 @@ def _execute_asset_authorization(
     if authorized:
         allowed.add('expires_at')
     _require_parameters(parameters, required=required, allowed=allowed)
-    result = govern_asset_authorization(
-        asset_id=entity_id,
-        project_id=project_id,
-        actor_id=actor_id,
-        expected_version=expected_version,
-        authorized=authorized,
-        reason=str(parameters['reason']),
-        governed_request_id=str(parameters['_agom_request_id']),
-        correlation_id=str(parameters['_agom_correlation_id']),
-        expires_at=parameters.get('expires_at'),
-    )
+    try:
+        result = govern_asset_authorization(
+            asset_id=entity_id,
+            project_id=project_id,
+            actor_id=actor_id,
+            expected_version=expected_version,
+            authorized=authorized,
+            reason=str(parameters['reason']),
+            governed_request_id=str(parameters['_agom_request_id']),
+            correlation_id=str(parameters['_agom_correlation_id']),
+            expires_at=parameters.get('expires_at'),
+        )
+    except StaleAssetAuthorizationVersion as exc:
+        raise GovernedActionConflict(str(exc)) from exc
     return {
         'id': str(result.decision.id),
         'authorization_decision_id': str(result.decision.id),
@@ -1237,17 +1244,6 @@ def execute_governed_action(
                 capability.missing_requirements,
             )
 
-        gate_snapshot = [item.model_dump(mode='json') for item in capability.gate_results]
-        gate_policy_versions = sorted({str(item.policy_version or '') for item in capability.gate_results})
-        policy_material = {
-            'contract_version': AGOM_CONTRACT_VERSION,
-            'action_contract': contract.model_dump(mode='json'),
-            'evaluation_policy_version': manifest.evaluation_policy_version,
-            'gate_policy_versions': gate_policy_versions,
-        }
-        policy_fingerprint = _sha(policy_material)
-        before_projection = _projection_dict(manifest)
-
         qualification = None
         if normalized_action in {'finding.confirm', 'finding.false_positive'}:
             qualification = _finding_confirmation_qualification(
@@ -1255,7 +1251,6 @@ def execute_governed_action(
                 actor_id=normalized_actor_id,
                 entity_id=normalized_entity_id,
                 parameters=payload,
-                evaluated_at=prequalification.evaluation.evaluated_at if prequalification else None,
             )
             _require_qualified_evidence(qualification)
         elif normalized_action == 'investigation.close':
@@ -1264,7 +1259,6 @@ def execute_governed_action(
                 actor_id=normalized_actor_id,
                 case_id=normalized_entity_id,
                 parameters=payload,
-                evaluated_at=prequalification.evaluation.evaluated_at if prequalification else None,
             )
             if str(payload.get('closure_type') or '').strip() == 'remediated':
                 _require_qualified_evidence(qualification)
@@ -1276,18 +1270,92 @@ def execute_governed_action(
             entity_type=normalized_entity_type,
             entity_id=normalized_entity_id,
             parameters=payload,
-            evaluated_at=pretemporal.evaluation.evaluated_at,
             request_proposer_id=(
                 str(governed_request.requested_by_id)
                 if governed_request is not None else ''
             ),
         )
 
+        # Re-resolve the authoritative manifest after dynamic evidence and temporal
+        # evaluation. This is the commit-time check immediately before the domain
+        # CAS primitive; non-versioned authority/gate drift cannot inherit an
+        # earlier preflight decision.
+        manifest = build_governed_capability_manifest(
+            project_id=normalized_project_id,
+            user_id=normalized_actor_id,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+            request_proposer_id=(
+                str(governed_request.requested_by_id)
+                if governed_request is not None else ''
+            ),
+            execution_parameters=payload if governed_request is not None else None,
+        )
+        if str(manifest.entity.tenant_id or '') != str(organization.id):
+            raise GovernedActionError('Commit-time capability tenant lineage changed during execution.')
+        if str(manifest.entity.project_id or '') != normalized_project_id:
+            raise GovernedActionError('Commit-time capability project lineage changed during execution.')
+        capability = _capability_for(manifest, normalized_action)
+        if capability.mode is ActionMode.HIDDEN:
+            raise PermissionError('Governed action is not available to this actor at commit time.')
+        current_version = manifest.projection.version
+        if current_version is None:
+            raise GovernedActionError('Governed action target does not expose a commit-time version for CAS enforcement.')
+        if int(current_version) != int(expected_version):
+            raise GovernedActionConflict(
+                f'Expected entity version {expected_version}, commit-time version is {current_version}.'
+            )
+        if capability.mode is not ActionMode.ENABLED:
+            raise GovernedActionBlocked(
+                capability.reason_code,
+                capability.reason,
+                capability.missing_requirements,
+            )
+
+        gate_snapshot = [item.model_dump(mode='json') for item in capability.gate_results]
+        gate_policy_versions = sorted({str(item.policy_version or '') for item in capability.gate_results})
+        policy_material = {
+            'contract_version': AGOM_CONTRACT_VERSION,
+            'action_contract': contract.model_dump(mode='json'),
+            'evaluation_policy_version': manifest.evaluation_policy_version,
+            'gate_policy_versions': gate_policy_versions,
+        }
+        policy_fingerprint = _sha(policy_material)
+        before_projection = _projection_dict(manifest)
+
         correlation_uuid = (
             uuid.UUID(requested_correlation)
             if requested_correlation
             else governed_request.correlation_id if governed_request is not None else uuid.uuid4()
         )
+
+        race_toctou = build_race_toctou_proof(
+            action_id=normalized_action,
+            organization_id=str(organization.id),
+            project_id=normalized_project_id,
+            actor_id=normalized_actor_id,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+            expected_version=int(expected_version),
+            current_version=int(current_version),
+            request_fingerprint=request_fingerprint,
+            governed_request_id=str(governed_request.id) if governed_request else '',
+            governed_request_fingerprint=(
+                governed_request.request_fingerprint if governed_request else ''
+            ),
+            contract_snapshot={
+                'contract_version': AGOM_CONTRACT_VERSION,
+                'contract': contract.model_dump(mode='json'),
+            },
+            evaluation_policy_version=manifest.evaluation_policy_version,
+            gate_snapshot=gate_snapshot,
+            evidence_qualification_fingerprint=(
+                qualification.evaluation.evaluation_fingerprint
+                if qualification is not None else ''
+            ),
+            temporal_evaluation_fingerprint=temporal.evaluation.evaluation_fingerprint,
+        ).as_dict()
+
         dispatcher = _DISPATCH[normalized_action]
         dispatch_parameters = payload
         if normalized_action in {
@@ -1317,6 +1385,7 @@ def execute_governed_action(
         result_payload = {
             **result_payload,
             'temporal_policy': _temporal_view(temporal),
+            'race_toctou': race_toctou,
         }
 
         after_manifest = build_governed_capability_manifest(
@@ -1350,6 +1419,7 @@ def execute_governed_action(
                 'governed_request_proposer_id': str(governed_request.requested_by_id) if governed_request else None,
                 'correlation_id': str(correlation_uuid),
                 'gate_snapshot': gate_snapshot,
+                'race_toctou': race_toctou,
                 'result_payload': result_payload,
             },
             ip_address=ip_address,
