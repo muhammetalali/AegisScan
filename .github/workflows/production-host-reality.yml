@@ -48,7 +48,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install test dependencies
-        run: python -m pip install pytest==9.1.1
+        run: python -m pip install pytest==9.1.1 PyYAML==6.0.2
 
       - name: Validate production shell and Python syntax
         shell: bash
