@@ -21,6 +21,7 @@ from fastapi_app.services.enterprise_gap_closure import persist_blast_radius
 from fastapi_app.services.validated_attack_chain import (
     AttackPathValidationError,
     validate_attack_path,
+    verify_attack_path_validation,
 )
 
 
@@ -232,6 +233,12 @@ def test_validated_attack_chain_is_evidence_bound_and_derives_blast_radius():
     assert set(row.evidence_refs) == set(data["evidence_ids"])
     assert len(row.authorization_refs) == 3
     assert len(row.relationship_refs) == 2
+    assert row.proof_material["contract_version"] == "aegis.validated-attack-chain.v1"
+    assert row.proof_material["attack_path_id"] == str(data["path"].id)
+    assert len(row.proof_material["evidence"]) == 2
+    integrity = verify_attack_path_validation(row)
+    assert integrity["valid"] is True
+    assert integrity["expected_sha256"] == row.validation_sha256
 
     data["path"].refresh_from_db()
     assert data["path"].status == AttackPath.Status.VALIDATED
@@ -266,6 +273,12 @@ def test_validated_attack_chain_is_evidence_bound_and_derives_blast_radius():
         row.save()
     with pytest.raises(RuntimeError, match="append-only"):
         AttackPathValidation.objects.filter(pk=row.pk).update(scenario_refs=[])
+
+    stored_material = row.proof_material
+    row.proof_material = {"tampered": True}
+    with pytest.raises(RuntimeError, match="immutable"):
+        row.save()
+    row.proof_material = stored_material
 
     blast.score = 0
     with pytest.raises(RuntimeError, match="immutable"):
