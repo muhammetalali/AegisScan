@@ -11,7 +11,7 @@ from django.utils import timezone
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, ValidationRun
 from enterprise.campaign_models import AdversaryCampaign, CampaignAuditEvent, CampaignObjective, CampaignObjectiveAssessment
-from enterprise.models import AttackPath, BlastRadiusSnapshot, OrganizationMembership, TenantProject
+from enterprise.models import AttackPath, AttackPathValidation, BlastRadiusSnapshot, OrganizationMembership, TenantProject
 from fastapi_app.services.authorization_guard import current_asset_authorization
 
 
@@ -345,6 +345,17 @@ def assess_objective(*, objective_id: str, campaign_id: str, project_id: str, us
             blast_evidence_refs = sorted({str(item) for item in (blast.evidence_refs or [])})
             if blast_evidence_refs and str(evidence.id) not in blast_evidence_refs:
                 raise CampaignAssuranceError('Blast-radius evidence refs do not include the assessment evidence.')
+            attack_validation = AttackPathValidation.objects.filter(
+                project_id=project_id,
+                organization=link.organization,
+                attack_path=attack_path,
+                blast_radius_snapshot=blast,
+            ).order_by('-created_at', '-id').first()
+            if attack_validation is None:
+                raise CampaignAssuranceError('Blast-radius snapshot is not backed by immutable AttackPathValidation.')
+            validation_evidence_refs = {str(item) for item in (attack_validation.evidence_refs or [])}
+            if str(evidence.id) not in validation_evidence_refs:
+                raise CampaignAssuranceError('AttackPathValidation evidence refs do not include the assessment evidence.')
 
         proof_material = {
             'policy_version': _POLICY_VERSION,

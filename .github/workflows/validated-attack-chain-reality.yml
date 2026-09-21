@@ -1,0 +1,162 @@
+name: Validated Attack Chain Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0037_threat_model_snapshot.py'
+      - 'aegis-platform/backend/enterprise/migrations/0038_attack_path_validation.py'
+      - 'aegis-platform/backend/fastapi_app/services/threat_modeling.py'
+      - 'aegis-platform/backend/fastapi_app/services/validated_attack_chain.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_validated_attack_chain.py'
+      - 'aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/enterprise_gap_closure.py'
+      - 'aegis-platform/backend/fastapi_app/routers/validated_attack_chain.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/validated-attack-chain-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0038_attack_path_validation.py'
+      - 'aegis-platform/backend/fastapi_app/services/validated_attack_chain.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_validated_attack_chain.py'
+      - 'aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_campaign_objective_assurance.py'
+      - 'aegis-platform/backend/fastapi_app/services/enterprise_gap_closure.py'
+      - 'aegis-platform/backend/fastapi_app/routers/validated_attack_chain.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/validated-attack-chain-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validated-attack-chain-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validated-attack-chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-validated-chain-django-secret-key-0123456789abcdef0123456789
+      JWT_SECRET_KEY: ci-validated-chain-jwt-secret-key-0123456789abcdef0123456789
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-validated-chain-evidence-hmac-key-0123456789
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-validated-chain-credential-fingerprint-key-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile validated attack-chain plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/models.py \
+            aegis-platform/backend/fastapi_app/services/validated_attack_chain.py \
+            aegis-platform/backend/fastapi_app/services/test_validated_attack_chain.py \
+            aegis-platform/backend/fastapi_app/services/campaign_objective_assurance.py \
+            aegis-platform/backend/fastapi_app/services/enterprise_gap_closure.py \
+            aegis-platform/backend/fastapi_app/routers/validated_attack_chain.py \
+            aegis-platform/backend/fastapi_app/main.py
+
+      - name: Django schema and migration reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from enterprise.models import AttackPathValidation
+          assert connection.vendor == 'postgresql', connection.vendor
+          assert AttackPathValidation._meta.get_field('validation_sha256').unique is True
+          print('VALIDATED_ATTACK_CHAIN_DATABASE=POSTGRESQL')
+          print('VALIDATED_ATTACK_CHAIN_IMMUTABLE_DIGEST=PASS')
+          PY
+
+      - name: Path authorization, evidence, drift and derived blast suite
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q \
+            fastapi_app/services/test_validated_attack_chain.py \
+            fastapi_app/services/test_campaign_objective_assurance.py \
+            --junitxml=/tmp/validated-attack-chain-junit.xml
+
+      - name: Verify API and bypass closure contract
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from fastapi_app.main import app
+          from fastapi_app.routers.validated_attack_chain import AttackPathValidationIn
+
+          paths = set(app.openapi()['paths'])
+          expected = {
+              '/api/v1/attack-path/projects/{project_id}/{attack_path_id}/validate',
+              '/api/v1/attack-path/projects/{project_id}/{attack_path_id}/validations',
+          }
+          assert expected.issubset(paths), sorted(path for path in paths if 'attack-path' in path)
+          assert AttackPathValidationIn.model_config.get('extra') == 'forbid'
+          print('VALIDATED_ATTACK_CHAIN_API=PASS')
+          PY
+          grep -F 'attack-path-bound blast radius must be created through the validated attack chain workflow' \
+            fastapi_app/services/enterprise_gap_closure.py
+          grep -F 'Blast-radius snapshot is not backed by immutable AttackPathValidation.' \
+            fastapi_app/services/campaign_objective_assurance.py
+          echo 'VALIDATED_ATTACK_CHAIN_BYPASS_CLOSURE=PASS'
+
+      - name: Retain validated attack-chain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-attack-chain-reality-${{ github.sha }}
+          path: /tmp/validated-attack-chain-junit.xml
+          retention-days: 30
+          if-no-files-found: warn
