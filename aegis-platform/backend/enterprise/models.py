@@ -526,6 +526,8 @@ class AttackPathValidation(models.Model):
 
 
 class BlastRadiusSnapshot(models.Model):
+    """Immutable point-in-time blast-radius evidence snapshot."""
+
     id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
     organization=models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='blast_radius_snapshots')
     project=models.ForeignKey('projects.Project',on_delete=models.CASCADE,related_name='blast_radius_snapshots')
@@ -536,8 +538,18 @@ class BlastRadiusSnapshot(models.Model):
     score=models.FloatField(default=0)
     evidence_refs=models.JSONField(default=list)
     created_at=models.DateTimeField(auto_now_add=True)
+    objects=_AppendOnlyManager()
+
     class Meta:
         indexes=[models.Index(fields=['project','created_at'],name='idx_blast_project_created')]
+
+    def save(self,*args,**kwargs):
+        if not self._state.adding:
+            raise RuntimeError('blast radius snapshots are immutable')
+        return super().save(*args,**kwargs)
+
+    def delete(self,*args,**kwargs):
+        raise RuntimeError('blast radius snapshots are immutable')
 
 
 class ArtifactIntegrityRecord(models.Model):
