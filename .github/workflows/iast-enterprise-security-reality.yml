@@ -132,15 +132,25 @@ jobs:
             fastapi_app/services/test_iast_security.py \
             --junitxml=/tmp/iast-enterprise-junit.xml
 
-      - name: Evidence qualification and governed evidence regressions
+      - name: Evidence qualification regression
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
         run: |
-          pytest -q \
-            fastapi_app/services/test_evidence_qualification.py \
-            django_project/evidence/test_governed_oast_runtime.py
+          pytest -q fastapi_app/services/test_evidence_qualification.py
+
+      - name: Governed OAST evidence immutability regression
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          # Run in a fresh interpreter. The Evidence Qualification suite exercises
+          # FastAPI TestClient cleanup that deliberately closes Django DB
+          # connections; process isolation prevents that lifecycle from leaking
+          # into Django TestCase connection state.
+          pytest -q django_project/evidence/test_governed_oast_runtime.py
 
       - name: Prove IAST redaction and governed lineage wiring
         working-directory: aegis-platform/backend
