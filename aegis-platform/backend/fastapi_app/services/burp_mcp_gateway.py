@@ -20,6 +20,7 @@ from django_project.scans.models import Scan
 from django_project.system.credential_models import CredentialSecret
 from enterprise.burp_mcp_models import BurpMCPInvocation, BurpMCPSession
 from enterprise.models import Organization, OrganizationMembership, TenantProject
+from enterprise.provider_approval_models import ProviderApprovalDecision
 from enterprise.web_security_models import ProviderApprovalRecord
 
 from .audit_writer import add_audit_entry
@@ -31,7 +32,7 @@ from .credential_execution import (
 )
 from .evidence_identity import evidence_id
 from .evidence_qualification import EvidenceQualificationPolicy, qualify_evidence
-from .web_security_foundation import evaluate_provider_gate
+from .provider_approval import evaluate_provider_admissibility
 
 
 BURP_MCP_POLICY_VERSION = 'burp-mcp-gateway.v1'
@@ -252,7 +253,7 @@ def _current_provider_approval(
     project_id: str,
     provider_name: str,
     provider_version: str,
-) -> tuple[ProviderApprovalRecord, dict[str, str], str]:
+) -> tuple[ProviderApprovalRecord, ProviderApprovalDecision, dict[str, str], str]:
     record = (
         ProviderApprovalRecord.objects.select_for_update()
         .filter(
@@ -267,11 +268,33 @@ def _current_provider_approval(
     if record is None:
         raise BurpMCPProviderError('No governed Burp MCP provider approval exists for this project/version.')
 
-    gate = evaluate_provider_gate(record, BURP_MCP_CAPABILITY_ID)
-    if not gate['allowed']:
-        raise BurpMCPProviderError('Burp MCP provider approval is not currently admissible: ' + '; '.join(gate['failures']))
+    governance = (
+        ProviderApprovalDecision.objects.select_for_update()
+        .filter(
+            project_id=project_id,
+            provider_name=provider_name,
+            capability=BURP_MCP_CAPABILITY_ID,
+        )
+        .order_by('-decision_version', '-created_at', '-id')
+        .first()
+    )
+    if governance is None:
+        raise BurpMCPProviderError('No enterprise provider approval decision exists for this Burp provider.')
 
-    manifest = record.manifest if isinstance(record.manifest, dict) else {}
+    gate = evaluate_provider_admissibility(
+        project_id=project_id,
+        provider_name=provider_name,
+        provider_version=provider_version,
+        capability=BURP_MCP_CAPABILITY_ID,
+        expected_legacy_approval_id=str(record.id),
+        expected_decision_id=str(governance.id),
+    )
+    if not gate['allowed']:
+        raise BurpMCPProviderError(
+            'Burp MCP provider approval is not currently admissible: ' + '; '.join(gate['failures'])
+        )
+
+    manifest = governance.manifest if isinstance(governance.manifest, dict) else {}
     mapping = manifest.get('mcp_tools')
     if not isinstance(mapping, dict) or not mapping:
         raise BurpMCPProviderError('Approved Burp MCP provider manifest has no mcp_tools mapping.')
@@ -284,8 +307,7 @@ def _current_provider_approval(
             raise BurpMCPProviderError('Approved Burp MCP provider manifest contains an unsupported tool mapping.')
         normalized[op] = tool
 
-    return record, normalized, _endpoint(manifest)
-
+    return record, governance, normalized, _endpoint(manifest)
 
 def _credential(
     *,
@@ -487,6 +509,7 @@ def _session_contract(
     provider_name: str,
     provider_version: str,
     approval: ProviderApprovalRecord,
+    governance: ProviderApprovalDecision,
     endpoint: str,
     target: str,
     allowed_tools: dict[str, str],
@@ -504,6 +527,11 @@ def _session_contract(
             'version': provider_version,
             'approval_id': str(approval.id),
             'approval_manifest_sha256': approval.manifest_sha256,
+            'governance_decision_id': str(governance.id),
+            'governance_decision_version': int(governance.decision_version),
+            'provider_identity_sha256': governance.provider_identity_sha256,
+            'capability_manifest_sha256': governance.capability_manifest_sha256,
+            'supply_chain_sha256': governance.supply_chain_sha256,
             'endpoint_sha256': hashlib.sha256(endpoint.encode('utf-8')).hexdigest(),
         },
         'target': target,
@@ -558,7 +586,7 @@ def start_burp_mcp_session(
             authorization_id=str(authorization_id),
             actor_id=str(actor_id),
         )
-        approval, mapping, endpoint = _current_provider_approval(
+        approval, governance, mapping, endpoint = _current_provider_approval(
             project_id=str(project.id),
             provider_name=name,
             provider_version=version,
@@ -580,6 +608,7 @@ def start_burp_mcp_session(
             provider_name=name,
             provider_version=version,
             approval=approval,
+            governance=governance,
             endpoint=endpoint,
             target=decision.target_snapshot,
             allowed_tools=selected_tools,
@@ -605,7 +634,7 @@ def start_burp_mcp_session(
 
         existing = (
             BurpMCPSession.objects.filter(organization=organization, idempotency_key=idem)
-            .select_related('provider_approval', 'credential_ref')
+            .select_related('provider_approval', 'provider_governance_decision', 'credential_ref')
             .first()
         )
         if existing is not None:
@@ -613,11 +642,7 @@ def start_burp_mcp_session(
                 raise BurpMCPConflict('Burp MCP session idempotency key is bound to a different request.')
             return BurpMCPSessionResult(session=existing, replayed=True)
 
-        provider_identity_sha256 = _sha({
-            'provider_name': name,
-            'provider_version': version,
-            'approval_manifest_sha256': approval.manifest_sha256,
-        })
+        provider_identity_sha256 = governance.provider_identity_sha256
         try:
             session = BurpMCPSession.objects.create(
                 organization=organization,
@@ -626,6 +651,7 @@ def start_burp_mcp_session(
                 scan=scan,
                 authorization_decision=decision,
                 provider_approval=approval,
+                provider_governance_decision=governance,
                 created_by_id=actor_id,
                 credential_ref=credential,
                 provider_name=name,
@@ -659,7 +685,10 @@ def start_burp_mcp_session(
                 'scan_id': str(scan.id),
                 'authorization_decision_id': str(decision.id),
                 'provider_approval_id': str(approval.id),
+                'provider_governance_decision_id': str(governance.id),
+                'provider_governance_decision_version': int(governance.decision_version),
                 'provider_identity_sha256': provider_identity_sha256,
+                'provider_supply_chain_sha256': governance.supply_chain_sha256,
                 'contract_fingerprint': contract_fingerprint,
                 'policy_version': BURP_MCP_POLICY_VERSION,
             },
@@ -724,7 +753,7 @@ def invoke_burp_mcp(
                 BurpMCPSession.objects.select_for_update(of=('self',))
                 .select_related(
                     'organization', 'project', 'asset', 'scan', 'authorization_decision',
-                    'provider_approval', 'credential_ref',
+                    'provider_approval', 'provider_governance_decision', 'credential_ref',
                 )
                 .filter(pk=session_id)
                 .first()
@@ -748,13 +777,19 @@ def invoke_burp_mcp(
             if session.expires_at <= timezone.now():
                 raise BurpMCPAuthorizationError('Burp MCP session has expired.')
 
-            approval, mapping, endpoint = _current_provider_approval(
+            approval, governance, mapping, endpoint = _current_provider_approval(
                 project_id=str(project.id),
                 provider_name=session.provider_name,
                 provider_version=session.provider_version,
             )
             if approval.id != session.provider_approval_id or approval.manifest_sha256 != session.provider_approval.manifest_sha256:
                 raise BurpMCPProviderError('Pinned Burp MCP provider approval is no longer current.')
+            if (
+                session.provider_governance_decision_id is None
+                or governance.id != session.provider_governance_decision_id
+                or governance.provider_identity_sha256 != session.provider_identity_sha256
+            ):
+                raise BurpMCPProviderError('Pinned enterprise provider decision is no longer current.')
             if endpoint != session.endpoint_origin:
                 raise BurpMCPProviderError('Approved Burp MCP endpoint changed after session creation.')
 
@@ -827,7 +862,10 @@ def invoke_burp_mcp(
                 'scan_id': str(scan.id),
                 'authorization_decision_id': str(decision.id),
                 'provider_approval_id': str(approval.id),
+                'provider_governance_decision_id': str(governance.id),
+                'provider_governance_decision_version': int(governance.decision_version),
                 'provider_identity_sha256': session.provider_identity_sha256,
+                'provider_supply_chain_sha256': governance.supply_chain_sha256,
                 'operation': op,
                 'provider_tool_name': provider_tool_name,
                 'arguments_sha256': arguments_sha256,
