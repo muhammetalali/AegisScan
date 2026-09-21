@@ -28,14 +28,15 @@ def test_live_production_workflow_has_only_manual_or_one_time_main_request_trigg
     assert data["concurrency"]["cancel-in-progress"] is False
 
 
-def test_live_production_workflow_uses_runner_system_python_in_isolated_venv():
+def test_live_production_workflow_pins_python_312_in_isolated_venv():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "actions/setup-python" not in text
-    assert "command -v python3" in text
-    assert "sys.version_info < (3, 12)" in text
-    assert "python3 -m venv \"$RUNNER_TEMP/aegis-production-venv\"" in text
-    assert "production runner requires the Python venv module" in text
+    assert "uses: actions/setup-python@v6" in text
+    assert "python-version: '3.12'" in text
+    assert "command -v python" in text
+    assert "sys.version_info[:2] != (3, 12)" in text
+    assert 'python -m venv "$RUNNER_TEMP/aegis-production-venv"' in text
     assert 'echo "$RUNNER_TEMP/aegis-production-venv/bin" >> "$GITHUB_PATH"' in text
+    assert "command -v python3" not in text
 
 
 def test_live_production_workflow_requires_bounded_authorization_pinned_ssh_enterprise_ca_and_exact_main():

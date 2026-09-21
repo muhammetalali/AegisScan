@@ -24,6 +24,14 @@ The runner must be located inside the authorized enterprise network, resolve the
 
 The `production` GitHub Environment remains the approval/secret boundary. A GitHub-hosted runner is not an accepted substitute for live production or final production governance.
 
+### Runner bootstrap and liveness
+
+The repository provides `aegis-platform/scripts/production_runner_bootstrap.sh` to provision the dedicated runner on an authorized internal Linux host. The bootstrap is fail-closed: it requires the official `actions/runner` Linux x64 archive URL, an operator-supplied SHA-256 digest, a short-lived GitHub runner registration token, and an explicit GitHub repository/organization URL. It installs the runner under a dedicated `aegisrunner` service account, registers the required `aegisscan-production` custom label, installs the runner as a systemd service, and verifies that the service is enabled and active.
+
+The bootstrap also provisions the execution prerequisites used by the live release chain: Git, GitHub CLI, OpenSSH client tooling, and the verified runner archive's official dependency installer. The deploy workflow pins Python 3.12 with `actions/setup-python@v6` and creates an isolated venv, so acceptance does not depend on an arbitrary system Python version. Automatic runner self-update is disabled so the verified archive digest remains the installed runner provenance; runner upgrades must be performed deliberately with a newly reviewed archive digest before GitHub's supported-version window expires.
+
+A queued `Internal Production Deploy and Acceptance` job is not production acceptance. If no online runner matches `[self-hosted, linux, x64, aegisscan-production]`, the deployment remains queued and must not be represented as deployed. Activation requests are exact-main and time bounded; if `main` advances while a deployment is queued, a fresh activation request bound to the new main SHA is required.
+
 ## Enterprise CA
 
 The production TLS certificate must chain to the enterprise CA bundle supplied to the protected workflow as `AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE`.
@@ -42,7 +50,7 @@ Host Reality rejects a missing, empty, oversized or unparsable CA bundle before 
 
 ## Evidence contract
 
-A successful internal go-live artifact uses `aegisscan.go-live-evidence.v2` and binds:
+A successful internal go-live artifact uses `aegisscan.go-live-evidence.v3` and binds:
 
 - exact release SHA;
 - `deployment_mode=internal`;
@@ -53,7 +61,9 @@ A successful internal go-live artifact uses `aegisscan.go-live-evidence.v2` and 
 - verified TLS and security headers;
 - real black-box E2E evidence from the internal production runner;
 - installed CLI evidence;
-- per-file SHA-256 digests.
+- per-file SHA-256 digests;
+- Alertmanager readiness;
+- remote backup health and backup identifier.
 
 Final governance uses `aegisscan.production-governance-decision.v2` and refuses legacy public-origin evidence as an approval basis.
 
