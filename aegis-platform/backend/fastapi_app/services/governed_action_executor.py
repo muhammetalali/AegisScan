@@ -1244,17 +1244,6 @@ def execute_governed_action(
                 capability.missing_requirements,
             )
 
-        gate_snapshot = [item.model_dump(mode='json') for item in capability.gate_results]
-        gate_policy_versions = sorted({str(item.policy_version or '') for item in capability.gate_results})
-        policy_material = {
-            'contract_version': AGOM_CONTRACT_VERSION,
-            'action_contract': contract.model_dump(mode='json'),
-            'evaluation_policy_version': manifest.evaluation_policy_version,
-            'gate_policy_versions': gate_policy_versions,
-        }
-        policy_fingerprint = _sha(policy_material)
-        before_projection = _projection_dict(manifest)
-
         qualification = None
         if normalized_action in {'finding.confirm', 'finding.false_positive'}:
             qualification = _finding_confirmation_qualification(
@@ -1262,7 +1251,6 @@ def execute_governed_action(
                 actor_id=normalized_actor_id,
                 entity_id=normalized_entity_id,
                 parameters=payload,
-                evaluated_at=prequalification.evaluation.evaluated_at if prequalification else None,
             )
             _require_qualified_evidence(qualification)
         elif normalized_action == 'investigation.close':
@@ -1271,7 +1259,6 @@ def execute_governed_action(
                 actor_id=normalized_actor_id,
                 case_id=normalized_entity_id,
                 parameters=payload,
-                evaluated_at=prequalification.evaluation.evaluated_at if prequalification else None,
             )
             if str(payload.get('closure_type') or '').strip() == 'remediated':
                 _require_qualified_evidence(qualification)
@@ -1283,12 +1270,58 @@ def execute_governed_action(
             entity_type=normalized_entity_type,
             entity_id=normalized_entity_id,
             parameters=payload,
-            evaluated_at=pretemporal.evaluation.evaluated_at,
             request_proposer_id=(
                 str(governed_request.requested_by_id)
                 if governed_request is not None else ''
             ),
         )
+
+        # Re-resolve the authoritative manifest after dynamic evidence and temporal
+        # evaluation. This is the commit-time check immediately before the domain
+        # CAS primitive; non-versioned authority/gate drift cannot inherit an
+        # earlier preflight decision.
+        manifest = build_governed_capability_manifest(
+            project_id=normalized_project_id,
+            user_id=normalized_actor_id,
+            entity_type=normalized_entity_type,
+            entity_id=normalized_entity_id,
+            request_proposer_id=(
+                str(governed_request.requested_by_id)
+                if governed_request is not None else ''
+            ),
+            execution_parameters=payload if governed_request is not None else None,
+        )
+        if str(manifest.entity.tenant_id or '') != str(organization.id):
+            raise GovernedActionError('Commit-time capability tenant lineage changed during execution.')
+        if str(manifest.entity.project_id or '') != normalized_project_id:
+            raise GovernedActionError('Commit-time capability project lineage changed during execution.')
+        capability = _capability_for(manifest, normalized_action)
+        if capability.mode is ActionMode.HIDDEN:
+            raise PermissionError('Governed action is not available to this actor at commit time.')
+        current_version = manifest.projection.version
+        if current_version is None:
+            raise GovernedActionError('Governed action target does not expose a commit-time version for CAS enforcement.')
+        if int(current_version) != int(expected_version):
+            raise GovernedActionConflict(
+                f'Expected entity version {expected_version}, commit-time version is {current_version}.'
+            )
+        if capability.mode is not ActionMode.ENABLED:
+            raise GovernedActionBlocked(
+                capability.reason_code,
+                capability.reason,
+                capability.missing_requirements,
+            )
+
+        gate_snapshot = [item.model_dump(mode='json') for item in capability.gate_results]
+        gate_policy_versions = sorted({str(item.policy_version or '') for item in capability.gate_results})
+        policy_material = {
+            'contract_version': AGOM_CONTRACT_VERSION,
+            'action_contract': contract.model_dump(mode='json'),
+            'evaluation_policy_version': manifest.evaluation_policy_version,
+            'gate_policy_versions': gate_policy_versions,
+        }
+        policy_fingerprint = _sha(policy_material)
+        before_projection = _projection_dict(manifest)
 
         correlation_uuid = (
             uuid.UUID(requested_correlation)
