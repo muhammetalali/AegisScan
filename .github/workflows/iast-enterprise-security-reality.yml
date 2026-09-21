@@ -51,6 +51,8 @@ jobs:
       AEGIS_EVIDENCE_HMAC_KEY: ci-iast-evidence-hmac-key-0123456789abcdef
       CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
       CREDENTIAL_FINGERPRINT_KEY: ci-iast-credential-fingerprint-key-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
 
     services:
       postgres:
