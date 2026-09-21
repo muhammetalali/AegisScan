@@ -64,27 +64,106 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Require explicit exact-main governance evaluation
+      - name: Require authorized exact-main governance evaluation
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ inputs.confirm }}" = "APPROVE"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "${{ inputs.confirm }}" = "APPROVE"
+          else
+            test "${{ github.event.workflow_run.name }}" = "Production Resilience Acceptance"
+            test "${{ github.event.workflow_run.conclusion }}" = "success"
+            test "${{ github.event.workflow_run.head_branch }}" = "main"
+            test "${{ github.event.workflow_run.head_repository.full_name }}" = "$GITHUB_REPOSITORY"
+            test "${{ github.event.workflow_run.head_sha }}" = "$RELEASE_SHA"
+          fi
           case "$RELEASE_SHA" in
             *[!0-9a-f]*|'') echo 'release_sha must be lowercase hexadecimal' >&2; exit 1 ;;
           esac
           test "${#RELEASE_SHA}" -eq 40
+          test -n "$PROD_ENTERPRISE_CA_BUNDLE"
+          command -v gh >/dev/null
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+
+      - name: Resolve exact-SHA evidence workflow run IDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" \
+              > /tmp/aegis-release-runs.json
+            python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          release_sha = os.environ['RELEASE_SHA']
+          repository = os.environ['GITHUB_REPOSITORY']
+          resilience_run_id = str(os.environ['RESILIENCE_RUN_ID'])
+          payload = json.loads(Path('/tmp/aegis-release-runs.json').read_text(encoding='utf-8'))
+          runs = payload.get('workflow_runs') or []
+
+          def select(label, path, events):
+              candidates = []
+              for run in runs:
+                  repo = run.get('repository') or {}
+                  if (
+                      run.get('status') == 'completed'
+                      and run.get('conclusion') == 'success'
+                      and run.get('head_sha') == release_sha
+                      and run.get('head_branch') == 'main'
+                      and run.get('path') == path
+                      and run.get('event') in events
+                      and repo.get('full_name') == repository
+                  ):
+                      candidates.append(run)
+              if not candidates:
+                  raise SystemExit(f'no successful exact-SHA {label} workflow run found')
+              candidates.sort(
+                  key=lambda item: (
+                      str(item.get('updated_at') or ''),
+                      int(item.get('run_attempt') or 0),
+                      int(item.get('id') or 0),
+                  ),
+                  reverse=True,
+              )
+              return str(candidates[0]['id'])
+
+          live_id = select(
+              'live deploy',
+              '.github/workflows/production-live-deploy.yml',
+              {'push', 'workflow_dispatch'},
+          )
+          supply_id = select(
+              'supply chain',
+              '.github/workflows/supply-chain-release.yml',
+              {'push'},
+          )
+          if not resilience_run_id.isdigit() or int(resilience_run_id) <= 0:
+              raise SystemExit('resilience workflow run id is invalid')
+
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write(f'LIVE_DEPLOY_RUN_ID={live_id}\n')
+              stream.write(f'SUPPLY_CHAIN_RUN_ID={supply_id}\n')
+          print(f'live_deploy_run_id={live_id}')
+          print(f'resilience_run_id={resilience_run_id}')
+          print(f'supply_chain_run_id={supply_id}')
+          PY
+          fi
+
+      - name: Validate evidence workflow identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
           for value in "$LIVE_DEPLOY_RUN_ID" "$RESILIENCE_RUN_ID" "$SUPPLY_CHAIN_RUN_ID"; do
             case "$value" in
               ''|*[!0-9]*) echo 'all workflow run IDs must be positive integers' >&2; exit 1 ;;
             esac
             test "$value" -gt 0
           done
-          test -n "$PROD_ENTERPRISE_CA_BUNDLE"
-          command -v gh >/dev/null
-          git fetch --no-tags origin main
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
-          test "$RELEASE_SHA" = "$GITHUB_SHA"
 
       - name: Materialize enterprise trust anchor
         shell: bash
