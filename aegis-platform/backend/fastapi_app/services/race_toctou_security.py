@@ -14,6 +14,7 @@ RACE_TOCTOU_LOCK_ORDER = (
     'fresh_capability_manifest',
     'dynamic_evidence',
     'temporal_policy',
+    'commit_capability_manifest',
     'domain_cas',
 )
 
