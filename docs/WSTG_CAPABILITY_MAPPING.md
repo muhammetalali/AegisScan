@@ -24,19 +24,26 @@ still expose a tool-oriented name such as `web.nuclei`. Those IDs are provider
 implementation details, not WSTG identities. Renaming the execution registry is not
 part of PR-3 and would be a breaking API migration.
 
-## Approved unresolved native gaps
+## A8 reviewed native-gap cutover
 
-Only the five design-approved native gaps may appear as `planned_native`:
+The five original `GAP_NATIVE_SMALL` classifications are retained permanently as
+design provenance; A8 does not rewrite the approved 25/45/21/5/1 matrix. Their
+methodology mappings are no longer unresolved `planned_native` placeholders.
 
-- WSTG-v42-CONF-06 → `web.http-method-policy`
-- WSTG-v42-INPV-04 → `web.duplicate-parameter-semantics`
-- WSTG-v42-INPV-19 → `web.ssrf-canary-validation`
-- WSTG-v42-CRYP-01 → `tls.posture`
-- WSTG-v42-CLNT-11 → `browser.postmessage-instrumentation`
+The reviewed canonical anchors are:
 
-They are requirements, not fake executable capabilities. Account B owns their native
-validator implementation in PR-8; this account owns their contracts and integration.
-No unmerged Account B capability is accepted by this PR.
+- WSTG-v42-CONF-06 → registry `web.http-method-policy`
+- WSTG-v42-INPV-04 → registry `web.duplicate-parameter-semantics`
+- WSTG-v42-INPV-19 → registry `web.ssrf-canary-validation`
+- WSTG-v42-CRYP-01 → registry `tls.posture`
+- WSTG-v42-CLNT-11 → `browser.spa-discovery` telemetry plus
+  `fastapi_app.services.web_messaging_semantics`
+
+Chat B continues to own runtime implementation and validator behavior. Chat A owns
+this methodology acceptance boundary. A mapped provider becomes plannable only when
+the existing capability planner reports it execution-ready (or the reviewed semantic
+service is present). Runtime observations remain non-authoritative evidence:
+`completion_claim_allowed=false`, and pass/fail/finding state remains governed.
 
 ## Boundaries
 
