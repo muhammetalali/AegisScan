@@ -44,7 +44,8 @@ esac
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl tar gzip libicu-dev
+apt-get install -y --no-install-recommends \
+  ca-certificates curl tar gzip libicu-dev git gh openssh-client
 
 if ! id "$RUNNER_USER" >/dev/null 2>&1; then
   useradd --system --create-home --shell /bin/bash "$RUNNER_USER"
@@ -75,6 +76,20 @@ if [ -x "$RUNNER_DIR/config.sh" ]; then
 fi
 
 tar -xzf "$tmp_archive" -C "$RUNNER_DIR"
+
+if [ ! -x "$RUNNER_DIR/bin/installdependencies.sh" ]; then
+  echo "verified runner archive is missing bin/installdependencies.sh" >&2
+  exit 1
+fi
+"$RUNNER_DIR/bin/installdependencies.sh"
+
+for command_name in git gh ssh ssh-keygen curl tar; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "production runner dependency is unavailable: $command_name" >&2
+    exit 1
+  fi
+done
+
 chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_DIR" "$RUNNER_WORK"
 
 runuser -u "$RUNNER_USER" -- "$RUNNER_DIR/config.sh"   --unattended   --url "$AEGIS_GITHUB_RUNNER_URL"   --token "$AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN"   --name "$RUNNER_NAME"   --labels "$RUNNER_LABELS"   --work "$RUNNER_WORK"
