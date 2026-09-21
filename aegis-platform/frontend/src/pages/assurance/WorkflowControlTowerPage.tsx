@@ -17,6 +17,7 @@ import {
 import { apiHelpers } from '@/services/api'
 import { agomSdk, buildAgomIdempotencyKey, getAgomErrorMessage } from '@/services/agom'
 import type { AgomClaimState, AgomWorkItem, AgomWorkSourceType } from '@/contracts/agom'
+import { useLanguageStore } from '@/stores/languageStore'
 
 type Project = { id: string; name: string }
 type ProjectsResponse = Project[] | { items?: Project[]; results?: Project[] }
@@ -85,6 +86,7 @@ const claimTone = (item: AgomWorkItem) => {
 }
 
 export function WorkflowControlTowerPage() {
+  useLanguageStore((state) => state.language)
   const [projectId, setProjectId] = useState('')
   const [sourceFilter, setSourceFilter] = useState<AgomWorkSourceType | ''>('')
   const [claimFilter, setClaimFilter] = useState<AgomClaimState | ''>('')
@@ -115,6 +117,19 @@ export function WorkflowControlTowerPage() {
     }),
     refetchInterval: 15_000,
   })
+
+  const authorityOrganizationId = queue.data?.items[0]?.organization_id ?? ''
+  const authority = useQuery({
+    queryKey: ['agom-operational-authority', authorityOrganizationId, projectId],
+    enabled: Boolean(authorityOrganizationId && projectId),
+    queryFn: () => agomSdk.getAuthority({
+      organizationId: authorityOrganizationId,
+      projectId,
+    }),
+  })
+  const canMutateClaims = Boolean(
+    authority.data && ['owner', 'admin', 'manager', 'analyst'].includes(authority.data.role),
+  )
 
   const items = useMemo(() => {
     const needle = search.trim().toLowerCase()
@@ -266,6 +281,10 @@ export function WorkflowControlTowerPage() {
       </div>}
     </section>
 
+    {authority.data && !canMutateClaims && <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">
+      Read-only governed queue. Your server-authoritative tenant role is <strong className="text-foreground">{authority.data.role}</strong>.
+    </div>}
+
     {(actionError || queueError) && <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <span>{actionError || queueError}</span>
@@ -286,9 +305,9 @@ export function WorkflowControlTowerPage() {
           : <section className="space-y-3">
               {items.map((item) => {
                 const destination = destinationFor(item)
-                const canClaim = item.claim.state === 'unclaimed' || item.claim.state === 'expired'
-                const canRenew = item.claim.mine
-                const canRelease = item.claim.mine
+                const canClaim = canMutateClaims && (item.claim.state === 'unclaimed' || item.claim.state === 'expired')
+                const canRenew = canMutateClaims && item.claim.mine
+                const canRelease = canMutateClaims && item.claim.mine
                 const busy = busyKey.endsWith(item.item_key)
                 return <article key={item.item_key} className="enterprise-card rounded-2xl p-4 md:p-5">
                   <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-start">
