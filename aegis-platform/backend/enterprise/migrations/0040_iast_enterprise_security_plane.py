@@ -9,17 +9,19 @@ def _install_iast_evidence_immutability(apps, schema_editor):
         return
     schema_editor.execute("""
         CREATE OR REPLACE FUNCTION aegis_iast_evidence_immutable()
-        RETURNS trigger AS $
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS '
         BEGIN
-            IF OLD.source = 'iast' OR (TG_OP = 'UPDATE' AND NEW.source = 'iast') THEN
-                RAISE EXCEPTION 'IAST evidence is immutable';
+            IF OLD.source = ''iast'' OR (TG_OP = ''UPDATE'' AND NEW.source = ''iast'') THEN
+                RAISE EXCEPTION ''IAST evidence is immutable'';
             END IF;
-            IF TG_OP = 'DELETE' THEN
+            IF TG_OP = ''DELETE'' THEN
                 RETURN OLD;
             END IF;
             RETURN NEW;
         END;
-        $ LANGUAGE plpgsql;
+        ';
     """)
     schema_editor.execute("""
         DROP TRIGGER IF EXISTS trg_iast_evidence_immutable ON evidence_evidence;
