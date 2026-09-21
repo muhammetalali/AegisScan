@@ -4,7 +4,7 @@ from typing import Literal
 
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.dependencies import get_current_user
 from ..services.iast_security import (
@@ -20,6 +20,8 @@ router = APIRouter()
 
 
 class IASTSessionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     project_id: str
     asset_id: str
     scan_id: str
@@ -30,6 +32,8 @@ class IASTSessionRequest(BaseModel):
 
 
 class IASTObservationRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     idempotency_key: str = Field(min_length=1, max_length=128)
     observation_kind: Literal['taint-flow', 'runtime-sink-reachability', 'runtime-policy-violation']
     rule_id: str = Field(min_length=1, max_length=200)
