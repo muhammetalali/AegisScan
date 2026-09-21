@@ -63,13 +63,18 @@ def _validate(project_id: str, attack_path_id: str, user_id: str, body: AttackPa
 
 @sync_to_async
 def _list(project_id: str, attack_path_id: str, user_id: str, limit: int):
-    accessible = (
+    project = (
         Project.objects.filter(pk=project_id)
         .filter(Q(owner_id=user_id) | Q(members__id=user_id))
-        .exists()
+        .distinct()
+        .first()
     )
-    if not accessible:
+    if project is None:
         raise AttackPathValidationError("project not found or inaccessible")
+    try:
+        ensure_project_tenant(project, user_id)
+    except PermissionError as exc:
+        raise AttackPathValidationError("project tenant membership is not authorized") from exc
     rows = (
         AttackPathValidation.objects.filter(project_id=project_id, attack_path_id=attack_path_id)
         .select_related("blast_radius_snapshot", "threat_model_snapshot", "validated_by")
