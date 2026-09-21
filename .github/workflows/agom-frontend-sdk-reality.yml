@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: agom-frontend-sdk-\${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  group: agom-frontend-sdk-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -72,10 +72,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: \${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Prove checkout is exact head
-        run: test "$(git rev-parse HEAD)" = "\${{ github.event.pull_request.head.sha || github.sha }}"
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - uses: actions/setup-node@v4
         with:
@@ -142,7 +142,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agom-frontend-sdk-\${{ github.run_id }}
+          name: agom-frontend-sdk-${{ github.run_id }}
           if-no-files-found: warn
           path: |
             /tmp/a6-frontend-tests.txt
