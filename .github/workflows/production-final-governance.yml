@@ -142,7 +142,7 @@ jobs:
                   payload = json.loads(path.read_text(encoding='utf-8'))
               except Exception:
                   continue
-              if payload.get('schema') == 'aegisscan.go-live-evidence.v2':
+              if payload.get('schema') == 'aegisscan.go-live-evidence.v3':
                   candidates.append((path, payload))
           if len(candidates) != 1:
               raise SystemExit(f'expected exactly one internal go-live manifest, found {len(candidates)}')
