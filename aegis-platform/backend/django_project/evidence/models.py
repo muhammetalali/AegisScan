@@ -6,28 +6,26 @@ from django.core.exceptions import ValidationError
 
 
 class EvidenceQuerySet(models.QuerySet):
-    _IMMUTABLE_SOURCES = {'oast', 'iast'}
-
-    def _contains_immutable_source(self) -> bool:
-        return self.filter(source__in=self._IMMUTABLE_SOURCES).exists()
+    def _contains_oast(self) -> bool:
+        return self.filter(source='oast').exists()
 
     def update(self, **kwargs):
-        if self._contains_immutable_source() or str(kwargs.get('source') or '').lower() in self._IMMUTABLE_SOURCES:
-            raise ValidationError('Governed OAST/IAST evidence is immutable and cannot be updated.')
+        if self._contains_oast() or str(kwargs.get('source') or '').lower() == 'oast':
+            raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
         return super().update(**kwargs)
 
     def delete(self):
-        if self._contains_immutable_source():
-            raise ValidationError('Governed OAST/IAST evidence is immutable and cannot be deleted.')
+        if self._contains_oast():
+            raise ValidationError('Governed OAST evidence is immutable and cannot be deleted.')
         return super().delete()
 
     def bulk_update(self, objs, fields, **kwargs):
         objs = tuple(objs)
         ids = [obj.pk for obj in objs if getattr(obj, 'pk', None)]
-        if any(str(getattr(obj, 'source', '')).lower() in self._IMMUTABLE_SOURCES for obj in objs):
-            raise ValidationError('Governed OAST/IAST evidence is immutable and cannot be updated.')
-        if ids and self.model.objects.filter(pk__in=ids, source__in=self._IMMUTABLE_SOURCES).exists():
-            raise ValidationError('Governed OAST/IAST evidence is immutable and cannot be updated.')
+        if any(str(getattr(obj, 'source', '')).lower() == 'oast' for obj in objs):
+            raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
+        if ids and self.model.objects.filter(pk__in=ids, source='oast').exists():
+            raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
         return super().bulk_update(objs, fields, **kwargs)
 
 
@@ -52,16 +50,15 @@ class Evidence(models.Model):
 
     def save(self, *args, **kwargs):
         if not self._state.adding:
-            immutable_sources = {'oast', 'iast'}
             existing_source = type(self).objects.filter(pk=self.pk).values_list('source', flat=True).first()
-            if str(existing_source or '').lower() in immutable_sources or str(self.source or '').lower() in immutable_sources:
-                raise ValidationError('Governed OAST/IAST evidence is immutable and cannot be updated.')
+            if str(existing_source or '').lower() == 'oast' or str(self.source or '').lower() == 'oast':
+                raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
         self.sha256 = hashlib.sha256(self.raw_output.encode('utf-8', errors='replace')).hexdigest()
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        if str(self.source or '').lower() in {'oast', 'iast'}:
-            raise ValidationError('Governed OAST/IAST evidence is immutable and cannot be deleted.')
+        if str(self.source or '').lower() == 'oast':
+            raise ValidationError('Governed OAST evidence is immutable and cannot be deleted.')
         return super().delete(*args, **kwargs)
 
 
