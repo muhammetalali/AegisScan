@@ -50,12 +50,14 @@ jobs:
         run: |
           python -m pytest -q             tests/test_production_governance_gate.py             tests/test_production_final_governance_workflow.py
 
-      - name: Prove final governance workflow remains manual and read-only
+      - name: Prove final governance workflow remains governed and read-only
         shell: bash
         run: |
           set -euo pipefail
           workflow=.github/workflows/production-final-governance.yml
           grep -q "workflow_dispatch:" "$workflow"
+          grep -q "workflow_run:" "$workflow"
+          grep -q "Production Resilience Acceptance" "$workflow"
           grep -q "environment: production" "$workflow"
           grep -q "actions: read" "$workflow"
           ! grep -q "contents: write" "$workflow"
