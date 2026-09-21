@@ -35,6 +35,10 @@ _INACTIVE_FINDING_STATES = {
     Vulnerability.Status.DUPLICATE,
 }
 _CRITICALITY = {"critical": 100.0, "high": 75.0, "medium": 50.0, "low": 25.0}
+_SYMMETRIC_RELATIONSHIP_TYPES = {
+    AssetRelationship.RelationshipType.CONNECTS_TO,
+    AssetRelationship.RelationshipType.SAME_AS,
+}
 
 
 _VALIDATION_ROLES = {
@@ -91,21 +95,31 @@ def _validate_relationships(project_id: str, steps: list[str]) -> list[str]:
     relationship_refs: list[str] = []
     for source_id, target_id in zip(steps, steps[1:]):
         relationship = (
-            AssetRelationship.objects.filter(project_id=project_id)
-            .filter(
-                Q(source_id=source_id, target_id=target_id)
-                | Q(source_id=target_id, target_id=source_id)
+            AssetRelationship.objects.filter(
+                project_id=project_id,
+                source_id=source_id,
+                target_id=target_id,
             )
             .order_by("id")
             .first()
         )
         if relationship is None:
+            relationship = (
+                AssetRelationship.objects.filter(
+                    project_id=project_id,
+                    source_id=target_id,
+                    target_id=source_id,
+                    relationship_type__in=_SYMMETRIC_RELATIONSHIP_TYPES,
+                )
+                .order_by("id")
+                .first()
+            )
+        if relationship is None:
             raise AttackPathValidationError(
-                f"attack path step {source_id} -> {target_id} has no persisted AssetRelationship"
+                f"attack path step {source_id} -> {target_id} has no directionally valid AssetRelationship"
             )
         relationship_refs.append(str(relationship.id))
     return relationship_refs
-
 
 def _validate_evidence(
     *,
