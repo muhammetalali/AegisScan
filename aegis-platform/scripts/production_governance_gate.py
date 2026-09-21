@@ -156,7 +156,7 @@ def _verify_internal_acceptance(payload: dict[str, Any], internal_origin: str, l
 def _verify_go_live(root: Path, release_sha: str) -> dict[str, Any]:
     manifest_path = _unique(root, "manifest.json", "go-live evidence")
     manifest = _load_json(manifest_path, "go-live manifest")
-    if manifest.get("schema") != "aegisscan.go-live-evidence.v2":
+    if manifest.get("schema") != "aegisscan.go-live-evidence.v3":
         raise GovernanceError("go-live manifest schema is invalid")
     if manifest.get("status") != "success" or manifest.get("deployment_mode") != "internal":
         raise GovernanceError("go-live manifest is not successful internal production evidence")
@@ -170,6 +170,13 @@ def _verify_go_live(root: Path, release_sha: str) -> dict[str, Any]:
     manifest_ca = str(manifest.get("enterprise_ca_sha256", ""))
     if not SHA256_RE.fullmatch(manifest_ca):
         raise GovernanceError("go-live manifest enterprise CA evidence is invalid")
+    alertmanager_status = str(manifest.get("alertmanager_status", ""))
+    backup_status = str(manifest.get("backup_status", ""))
+    backup_id = str(manifest.get("backup_id", "")).strip()
+    if alertmanager_status != "ready":
+        raise GovernanceError("go-live manifest Alertmanager readiness evidence is invalid")
+    if backup_status != "healthy" or not backup_id:
+        raise GovernanceError("go-live manifest backup operational readiness evidence is invalid")
     _verify_digest_manifest(root, manifest, "go-live manifest")
 
     deploy = _load_json(_unique(root, "deploy.json", "go-live evidence"), "deploy evidence")
@@ -215,6 +222,9 @@ def _verify_go_live(root: Path, release_sha: str) -> dict[str, Any]:
         "enterprise_ca_sha256": manifest_ca,
         "manifest_sha256": _sha256(manifest_path),
         "tls_certificate_sha256": acceptance["checks"]["tls"]["certificate_sha256"],
+        "alertmanager_status": alertmanager_status,
+        "backup_status": backup_status,
+        "backup_id": backup_id,
     }
 
 
