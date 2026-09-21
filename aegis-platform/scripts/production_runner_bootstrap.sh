@@ -16,6 +16,7 @@ RUNNER_NAME="${AEGIS_GITHUB_RUNNER_NAME:-aegisscan-production}"
 RUNNER_DIR="${AEGIS_GITHUB_RUNNER_DIR:-/opt/actions-runner}"
 RUNNER_WORK="${AEGIS_GITHUB_RUNNER_WORK:-/var/lib/aegisscan/actions-runner-work}"
 RUNNER_LABELS="aegisscan-production"
+RUNNER_MARKER="/etc/aegisscan/production-runner.env"
 
 case "$AEGIS_GITHUB_RUNNER_URL" in
   https://github.com/*) ;;
@@ -65,10 +66,24 @@ curl --fail --silent --show-error --location   --proto '=https' --tlsv1.2   "$AE
 printf '%s  %s
 ' "$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" "$tmp_archive" | sha256sum -c -
 
+marker_matches() {
+  [ -f "$RUNNER_MARKER" ] || return 1
+  [ "$(stat -c '%U:%G:%a' "$RUNNER_MARKER" 2>/dev/null || true)" = "root:root:640" ] || return 1
+  grep -Fqx "schema=aegisscan.production-runner.v1" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_url=$AEGIS_GITHUB_RUNNER_URL" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_name=$RUNNER_NAME" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_labels=$RUNNER_LABELS" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_archive_sha256=$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" "$RUNNER_MARKER" || return 1
+}
+
 if [ -x "$RUNNER_DIR/config.sh" ]; then
   service_name="$(cd "$RUNNER_DIR" && ./svc.sh status 2>/dev/null | sed -n 's/.*\(actions.runner[^ ]*\.service\).*/\1/p' | head -n 1 || true)"
   if [ -n "$service_name" ] && systemctl is-active --quiet "$service_name"; then
-    echo "existing production runner service is active: $service_name"
+    if ! marker_matches; then
+      echo "existing active runner is not bound to the approved AegisScan production runner marker" >&2
+      exit 1
+    fi
+    echo "existing approved production runner service is active: $service_name"
     exit 0
   fi
   echo "existing runner installation is not active; refusing destructive replacement" >&2
@@ -105,6 +120,20 @@ if [ -z "$service_name" ]; then
 fi
 systemctl is-enabled --quiet "$service_name"
 systemctl is-active --quiet "$service_name"
+
+install -d -m 0750 -o root -g root /etc/aegisscan
+marker_tmp="$(mktemp /etc/aegisscan/production-runner.env.XXXXXX)"
+{
+  printf '%s\n' "schema=aegisscan.production-runner.v1"
+  printf '%s\n' "runner_url=$AEGIS_GITHUB_RUNNER_URL"
+  printf '%s\n' "runner_name=$RUNNER_NAME"
+  printf '%s\n' "runner_labels=$RUNNER_LABELS"
+  printf '%s\n' "runner_archive_sha256=$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256"
+} > "$marker_tmp"
+chmod 0640 "$marker_tmp"
+chown root:root "$marker_tmp"
+mv -f "$marker_tmp" "$RUNNER_MARKER"
+marker_matches
 
 printf '%s
 ' "AEGISSCAN_PRODUCTION_RUNNER_BOOTSTRAP=PASS"
