@@ -4,6 +4,38 @@ import django.db.models.deletion
 import uuid
 
 
+def _install_iast_evidence_immutability(apps, schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+    schema_editor.execute("""
+        CREATE OR REPLACE FUNCTION aegis_iast_evidence_immutable()
+        RETURNS trigger AS $
+        BEGIN
+            IF OLD.source = 'iast' OR (TG_OP = 'UPDATE' AND NEW.source = 'iast') THEN
+                RAISE EXCEPTION 'IAST evidence is immutable';
+            END IF;
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            END IF;
+            RETURN NEW;
+        END;
+        $ LANGUAGE plpgsql;
+    """)
+    schema_editor.execute("""
+        DROP TRIGGER IF EXISTS trg_iast_evidence_immutable ON evidence_evidence;
+        CREATE TRIGGER trg_iast_evidence_immutable
+        BEFORE UPDATE OR DELETE ON evidence_evidence
+        FOR EACH ROW EXECUTE FUNCTION aegis_iast_evidence_immutable();
+    """)
+
+
+def _remove_iast_evidence_immutability(apps, schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+    schema_editor.execute('DROP TRIGGER IF EXISTS trg_iast_evidence_immutable ON evidence_evidence;')
+    schema_editor.execute('DROP FUNCTION IF EXISTS aegis_iast_evidence_immutable();')
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ('enterprise', '0039_business_logic_assessment'),
@@ -82,5 +114,9 @@ class Migration(migrations.Migration):
                     models.UniqueConstraint(fields=('session', 'observation_sha256'), name='uniq_iast_observation_session_hash'),
                 ],
             },
+        ),
+        migrations.RunPython(
+            _install_iast_evidence_immutability,
+            _remove_iast_evidence_immutability,
         ),
     ]
