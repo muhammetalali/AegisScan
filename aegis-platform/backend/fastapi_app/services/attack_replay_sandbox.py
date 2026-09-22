@@ -409,9 +409,11 @@ def _observation_evidence_snapshot(
 
     allowed_assets = {str(item) for item in (scenario.source_snapshot.get('path_steps') or []) if str(item)}
     supports: dict[str, list[str]] = {evidence_id: [] for evidence_id in requested}
+    asserted_outcomes: dict[str, dict[str, str]] = {evidence_id: {} for evidence_id in requested}
     for row in observed:
         for evidence_id in row['evidence_ids']:
             supports[evidence_id].append(row['control_id'])
+            asserted_outcomes[evidence_id][row['control_id']] = row['observed']
 
     snapshot: list[dict[str, Any]] = []
     for evidence_id in requested:
@@ -423,6 +425,18 @@ def _observation_evidence_snapshot(
         digest = hashlib.sha256((evidence.raw_output or '').encode('utf-8', errors='replace')).hexdigest()
         if not evidence.sha256 or digest != evidence.sha256:
             raise AttackReplayError(f'Replay observation evidence integrity mismatch for {evidence.id}.')
+        metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
+        declared_controls = metadata.get('replay_controls')
+        if not isinstance(declared_controls, dict):
+            raise AttackReplayError(
+                f'Replay observation evidence {evidence.id} does not declare replay_controls.'
+            )
+        for control_id, asserted in asserted_outcomes[evidence_id].items():
+            declared = str(declared_controls.get(control_id) or '').strip().lower()
+            if declared != asserted:
+                raise AttackReplayError(
+                    f'Replay observation evidence {evidence.id} does not prove {control_id}={asserted}.'
+                )
         snapshot.append({
             'evidence_id': str(evidence.id),
             'asset_id': str(evidence.asset_id),
