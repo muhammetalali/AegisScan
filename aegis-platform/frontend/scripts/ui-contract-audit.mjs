@@ -17,7 +17,7 @@ for (const match of source.matchAll(/import\('\.\/([^']+)'\)/g)) {
   if (size < 150) failures.push(`Suspiciously tiny routed module (${size} bytes): ./src/${relative}`)
 }
 const routePaths = [...source.matchAll(/<Route path="([^"]+)"/g)].map((m) => m[1])
-for (const required of ['/dashboard','/scan','/validations/new','/vulnerabilities','/compliance','/digital-twin','/assurance/graph','/reports','/investigation','/wstg']) if (!routePaths.includes(required)) failures.push(`Required UI route missing: ${required}`)
+for (const required of ['/dashboard','/scan','/validations/new','/vulnerabilities','/compliance','/digital-twin','/assurance/graph','/reports','/investigation','/wstg','/enterprise-security']) if (!routePaths.includes(required)) failures.push(`Required UI route missing: ${required}`)
 if (!routePaths.includes('/')) failures.push('Protected workspace has no canonical root redirect')
 function walk(dir) { for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { if (['node_modules','dist','.git'].includes(entry.name)) continue; const full=path.join(dir,entry.name); if(entry.isDirectory()) walk(full); else if(/\.(ts|tsx)$/.test(entry.name)) scannedSourceFiles.push(full) } }
 walk(path.join(root,'src'))
@@ -27,6 +27,9 @@ if(!scanPage.includes('apiContractPaths.capabilityPlan'))failures.push('ScanPage
 if(!scanPage.includes('apiContractPaths.capabilityExecute'))failures.push('ScanPage must execute through the governed capability endpoint')
 if(/apiHelpers\.post(?:<[^>]+>)?\(\s*['"]\/scans\//.test(scanPage))failures.push('ScanPage must not create raw /scans executions directly')
 if(/authorized\s*:\s*true/.test(scanPage))failures.push('ScanPage must not claim client-side authorization authority')
+const enterprisePagePath=path.join(root,'src','pages','enterprise','EnterpriseSecurityPlanesPage.tsx')
+if(!fs.existsSync(enterprisePagePath))failures.push('Enterprise security planes page is missing')
+else{const enterprisePage=fs.readFileSync(enterprisePagePath,'utf8');for(const endpoint of ['/iast/sessions','/burp-mcp/sessions','/provider-approvals/projects/','/crypto-assets/projects/','/crypto-lifecycle/snapshots/','/fair-risk/projects/','/agentic-security/projects/','/attack-replay/projects/'])if(!enterprisePage.includes(endpoint))failures.push(`Enterprise security plane UI missing governed endpoint family: ${endpoint}`);if(!enterprisePage.includes('apiHelpers.post'))failures.push('Enterprise security plane UI must execute through the cookie-auth API helper');if(!enterprisePage.includes('Templates intentionally contain no fabricated evidence'))failures.push('Enterprise security plane UI must explicitly reject synthetic evidence defaults')}
 const hardcodedMetricPatterns=[/\bAssets:\s*\d+\b/i,/\bServices:\s*\d+\b/i,/\bRelationships:\s*\d+\b/i,/\bAttack Paths:\s*\d+\b/i,/\bControls:\s*\d+\b/i,/\bFindings:\s*\d+\s*(?:→|->)\s*\d+\b/i,/\bRisk\s+\d+\/100\b/i,/\bRisk\s*Score\s*[:=]\s*\d+(?:\.\d+)?\b/i]
 const syntheticOperationalPatterns=[/\.catch\s*\(\s*\(\s*\)\s*=>\s*\[\s*\{\s*metric_type\s*:/i,/uptime_percentage\s*:\s*\d+(?:\.\d+)?/i,/status\s*:\s*['"]healthy['"][^\n}]*response_time_ms\s*:\s*\d+/i]
 const stubPatterns=[/coming soon/i,/not implemented/i,/lorem ipsum/i,/mock data/i,/dummy data/i,/placeholder data/i,/backend integration intentionally deferred/i]
