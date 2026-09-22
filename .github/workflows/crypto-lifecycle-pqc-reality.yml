@@ -105,6 +105,8 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import django
+          django.setup()
           from fastapi_app.services.crypto_lifecycle_pqc import CRYPTO_LIFECYCLE_POLICY_VERSION
 
           service = Path('fastapi_app/services/crypto_lifecycle_pqc.py').read_text()
