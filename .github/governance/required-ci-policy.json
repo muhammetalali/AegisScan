@@ -17,7 +17,8 @@
       "Risk Correlation Acceptance",
       "Risk Decision Lineage Reality",
       "Remediation Verification Lineage Reality",
-      "Final Red Blue SRE Acceptance"
+      "Final Red Blue SRE Acceptance",
+      "Final Governance Closure"
     ],
     "push": [
       "Domain Contract Reality",
@@ -28,7 +29,8 @@
       "Risk Decision Lineage Reality",
       "Remediation Verification Lineage Reality",
       "Supply Chain Release",
-      "Final Red Blue SRE Acceptance"
+      "Final Red Blue SRE Acceptance",
+      "Final Governance Closure"
     ]
   },
   "conditional_required_workflows": [
