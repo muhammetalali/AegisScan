@@ -99,7 +99,7 @@ const planes: Array<{
     label: 'Attack Replay Sandbox',
     description: 'Isolated deterministic replay against expected controls.',
     endpoint: (projectId) => `/attack-replay/projects/${projectId}/scenarios`,
-    latest: (rows) => rows[0] ? `scenario ${String(rows[0].scenario_sha256 ?? '').slice(0, 12) || rows[0].id ?? 'recorded'}` : 'No replay scenarios',
+    latest: (rows) => rows[0] ? `scenario ${String(rows[0].scenario_sha256 ?? '').slice(0, 12) || (rows[0].id ?? 'recorded')}` : 'No replay scenarios',
   },
 ]
 
