@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 from django.core.exceptions import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from django_project.evidence.models import Evidence
-from django_project.users.models import User
 from enterprise.attack_replay_models import AttackReplayRun, AttackReplayScenario
 from enterprise.models import OrganizationMembership
 from fastapi_app.services.attack_replay_sandbox import (
@@ -255,23 +255,14 @@ def test_replay_run_rejects_control_claim_that_evidence_does_not_prove():
         )
 
 
-def test_attack_replay_api_rejects_raw_execution_payloads():
-    data, validation = _validated('api')
-    client = data.get('client')
-    if client is None:
-        from fastapi.testclient import TestClient
-        from fastapi_app.main import app
-        client = TestClient(app)
-        client.cookies.clear()
-        pytest.skip('Validated attack-chain fixture does not provide authenticated API client.')
+def test_attack_replay_api_contract_rejects_raw_execution_payloads():
+    from fastapi_app.routers.attack_replay import AttackReplayScenarioIn
 
-    response = client.post(
-        f"/api/v1/attack-replay/projects/{data['project'].id}/scenarios",
-        json={
+    _data, validation = _validated('api')
+    with pytest.raises(PydanticValidationError):
+        AttackReplayScenarioIn.model_validate({
             'attack_path_validation_id': str(validation.id),
             'expected_controls': _expected(),
             'idempotency_key': 'attack-replay-api',
             'raw_command': 'curl https://example.invalid',
-        },
-    )
-    assert response.status_code == 422
+        })
