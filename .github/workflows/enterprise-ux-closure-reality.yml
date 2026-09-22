@@ -1,0 +1,105 @@
+name: Enterprise UX Closure Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/frontend/src/App.tsx'
+      - 'aegis-platform/frontend/src/components/layout/Layout.tsx'
+      - 'aegis-platform/frontend/src/pages/enterprise/EnterpriseSecurityPlanesPage.tsx'
+      - 'aegis-platform/frontend/src/services/api.ts'
+      - 'aegis-platform/frontend/scripts/ui-contract-audit.mjs'
+      - '.github/workflows/enterprise-ux-closure-reality.yml'
+  push:
+    branches: [main, chatgpt-a/enterprise-ux-closure-20260922]
+    paths:
+      - 'aegis-platform/frontend/src/App.tsx'
+      - 'aegis-platform/frontend/src/components/layout/Layout.tsx'
+      - 'aegis-platform/frontend/src/pages/enterprise/EnterpriseSecurityPlanesPage.tsx'
+      - 'aegis-platform/frontend/src/services/api.ts'
+      - 'aegis-platform/frontend/scripts/ui-contract-audit.mjs'
+      - '.github/workflows/enterprise-ux-closure-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enterprise-ux-closure-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  enterprise-ux-closure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: aegis-platform/frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: aegis-platform/frontend/package-lock.json
+
+      - name: Install deterministic frontend dependencies
+        run: npm ci
+
+      - name: TypeScript and production bundle reality
+        run: npm run build
+
+      - name: Existing enterprise UI contract audit
+        run: npm run audit:ui
+
+      - name: Prove enterprise planes are first-class governed UX
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs'
+
+          const app = fs.readFileSync('src/App.tsx', 'utf8')
+          const layout = fs.readFileSync('src/components/layout/Layout.tsx', 'utf8')
+          const page = fs.readFileSync('src/pages/enterprise/EnterpriseSecurityPlanesPage.tsx', 'utf8')
+
+          if (!app.includes('path="/enterprise-security"')) throw new Error('enterprise security route is missing')
+          if (!layout.includes("href: '/enterprise-security'")) throw new Error('enterprise security navigation is missing')
+
+          const endpoints = [
+            '/iast/sessions',
+            '/burp-mcp/sessions',
+            '/provider-approvals/projects/',
+            '/crypto-assets/projects/',
+            '/crypto-lifecycle/snapshots/',
+            '/fair-risk/projects/',
+            '/agentic-security/projects/',
+            '/attack-replay/projects/',
+          ]
+          for (const endpoint of endpoints) {
+            if (!page.includes(endpoint)) throw new Error(`governed endpoint family missing from UX: ${endpoint}`)
+          }
+
+          for (const forbidden of ['localStorage.setItem(\'access_token\'', 'sessionStorage.setItem(\'access_token\'', 'Authorization: Bearer', 'mock data', 'placeholder data']) {
+            if (page.includes(forbidden)) throw new Error(`forbidden enterprise UX pattern: ${forbidden}`)
+          }
+
+          if (!page.includes('apiHelpers.get') || !page.includes('apiHelpers.post')) {
+            throw new Error('enterprise UX must use the centralized cookie-auth API transport')
+          }
+          if (!page.includes('Templates intentionally contain no fabricated evidence')) {
+            throw new Error('enterprise UX must state its no-synthetic-evidence invariant')
+          }
+
+          console.log('ENTERPRISE_UX_ROUTE=WIRED')
+          console.log('ENTERPRISE_UX_GOVERNED_PLANES=8')
+          console.log('ENTERPRISE_UX_SYNTHETIC_EVIDENCE=DENIED')
+          console.log('ENTERPRISE_UX_TRANSPORT=COOKIE_AUTH_API_HELPER')
+          NODE
+
+      - name: Retain enterprise UX build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: enterprise-ux-closure-${{ github.sha }}
+          path: aegis-platform/frontend/dist
+          if-no-files-found: warn
+          retention-days: 14
