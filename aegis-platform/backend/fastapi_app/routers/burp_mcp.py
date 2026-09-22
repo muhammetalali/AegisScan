@@ -46,6 +46,7 @@ class BurpMCPSessionOut(BaseModel):
     scan_id: str
     authorization_id: str
     provider_approval_id: str
+    provider_governance_decision_id: str
     provider_identity_sha256: str
     target: str
     allowed_tools: dict[str, str]
@@ -132,6 +133,7 @@ async def create_burp_mcp_session(payload: BurpMCPSessionIn, user=Depends(get_cu
         scan_id=str(session.scan_id),
         authorization_id=str(session.authorization_decision_id),
         provider_approval_id=str(session.provider_approval_id),
+        provider_governance_decision_id=str(session.provider_governance_decision_id or ''),
         provider_identity_sha256=session.provider_identity_sha256,
         target=session.target_snapshot,
         allowed_tools=dict(session.allowed_tools or {}),

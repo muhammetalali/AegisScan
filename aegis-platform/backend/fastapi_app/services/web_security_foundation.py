@@ -542,6 +542,38 @@ def persist_budget(project, actor_id: str, payload: dict[str, Any]) -> tuple[Exe
 def persist_provider_approval(project, actor_id: str, payload: dict[str, Any]) -> tuple[ProviderApprovalRecord, bool]:
     manifest = payload.get('manifest') or {}
     digest = canonical_digest(manifest)
+
+    # Enterprise-bound projects must acquire governance locks before creating
+    # the compatibility projection. This preserves the AGOM serialization
+    # order and prevents a legacy-row-first / organization-lock-second path.
+    from enterprise.models import TenantProject
+    if TenantProject.objects.filter(project_id=project.id, organization__is_active=True).exists():
+        from fastapi_app.services.provider_approval import record_provider_decision
+
+        existed = ProviderApprovalRecord.objects.filter(
+            project=project,
+            provider_name=payload['provider_name'],
+            provider_version=payload['provider_version'],
+            capability=payload['capability'],
+            status=payload['status'],
+            manifest_sha256=digest,
+        ).exists()
+        result = record_provider_decision(
+            project_id=str(project.id),
+            actor_id=str(actor_id),
+            provider_name=payload['provider_name'],
+            provider_version=payload['provider_version'],
+            capability=payload['capability'],
+            status=payload['status'],
+            manifest=manifest,
+            rationale=payload.get('rationale', ''),
+        )
+        row = result.decision.legacy_approval
+        if row is None:
+            raise RuntimeError('Enterprise provider decision did not produce a compatibility approval.')
+        return row, not existed
+
+    # Legacy-only projects retain their historical Web Security behavior.
     row, created = ProviderApprovalRecord.objects.get_or_create(
         project=project,
         provider_name=payload['provider_name'],
