@@ -1,0 +1,298 @@
+name: Release 1 Final Closure
+
+'on':
+  workflow_run:
+    workflows: ['Final Internal Production Governance']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type RELEASE to evaluate exact-SHA Release 1 closure'
+        required: true
+        type: string
+      release_sha:
+        description: 'Exact 40-character main SHA'
+        required: true
+        type: string
+      production_governance_run_id:
+        description: 'Successful Final Internal Production Governance run ID'
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: aegisscan-release1-final-closure
+  cancel-in-progress: false
+
+jobs:
+  release1-final:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.release_sha }}
+      PRODUCTION_GOVERNANCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.production_governance_run_id }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_SHA }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require authorized exact-main Release 1 evaluation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "${{ inputs.confirm }}" = "RELEASE"
+          else
+            test "${{ github.event.workflow_run.name }}" = "Final Internal Production Governance"
+            test "${{ github.event.workflow_run.conclusion }}" = "success"
+            test "${{ github.event.workflow_run.head_branch }}" = "main"
+            test "${{ github.event.workflow_run.head_repository.full_name }}" = "$GITHUB_REPOSITORY"
+          fi
+          case "$RELEASE_SHA" in
+            *[!0-9a-f]*|'') echo 'release SHA must be lowercase hexadecimal' >&2; exit 1 ;;
+          esac
+          test "${#RELEASE_SHA}" -eq 40
+          case "$PRODUCTION_GOVERNANCE_RUN_ID" in
+            ''|*[!0-9]*) echo 'production governance run id must be numeric' >&2; exit 1 ;;
+          esac
+          test "$PRODUCTION_GOVERNANCE_RUN_ID" -gt 0
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          command -v gh >/dev/null
+
+      - name: Resolve exact-SHA release workflow evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/release1/metadata
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" > /tmp/release1/runs.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          release_sha = os.environ['RELEASE_SHA']
+          repository = os.environ['GITHUB_REPOSITORY']
+          requested_prod_id = int(os.environ['PRODUCTION_GOVERNANCE_RUN_ID'])
+          payload = json.loads(Path('/tmp/release1/runs.json').read_text(encoding='utf-8'))
+          runs = payload.get('workflow_runs') or []
+          expected = {
+              'required_ci': ('Required CI Governance', '.github/workflows/required-ci-governance.yml', 'push'),
+              'final_acceptance': ('Final Red Blue SRE Acceptance', '.github/workflows/final-red-blue-sre-acceptance.yml', 'push'),
+              'final_governance': ('Final Governance Closure', '.github/workflows/final-governance-closure.yml', 'push'),
+              'supply_chain': ('Supply Chain Release', '.github/workflows/supply-chain-release.yml', 'push'),
+              'launch_readiness': ('Production Launch Readiness', '.github/workflows/production-launch-readiness.yml', 'push'),
+              'live_deploy': ('Internal Production Deploy and Acceptance', '.github/workflows/production-live-deploy.yml', 'push'),
+              'resilience': ('Production Resilience Acceptance', '.github/workflows/production-resilience-acceptance.yml', 'workflow_run'),
+              'production_governance': ('Final Internal Production Governance', '.github/workflows/production-final-governance.yml', 'workflow_run'),
+          }
+
+          selected = {}
+          for key, (name, path, event) in expected.items():
+              candidates = []
+              for run in runs:
+                  repo = run.get('repository') or {}
+                  if (
+                      run.get('name') == name
+                      and run.get('path') == path
+                      and run.get('event') == event
+                      and run.get('status') == 'completed'
+                      and run.get('conclusion') == 'success'
+                      and run.get('head_sha') == release_sha
+                      and run.get('head_branch') == 'main'
+                      and repo.get('full_name') == repository
+                  ):
+                      candidates.append(run)
+              if not candidates:
+                  raise SystemExit(f'missing successful exact-SHA workflow evidence: {key}')
+              candidates.sort(
+                  key=lambda item: (
+                      str(item.get('updated_at') or ''),
+                      int(item.get('run_attempt') or 0),
+                      int(item.get('id') or 0),
+                  ),
+                  reverse=True,
+              )
+              selected[key] = candidates[0]
+
+          if int(selected['production_governance']['id']) != requested_prod_id:
+              raise SystemExit('triggering production governance run is not the selected exact-SHA run')
+
+          root = Path('/tmp/release1/metadata')
+          env_lines = []
+          for key, run in selected.items():
+              (root / f'{key}.json').write_text(
+                  json.dumps(run, sort_keys=True, indent=2) + '\n',
+                  encoding='utf-8',
+              )
+              env_lines.append(f"{key.upper()}_RUN_ID={int(run['id'])}")
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write('\n'.join(env_lines) + '\n')
+          print(json.dumps({key: int(run['id']) for key, run in selected.items()}, sort_keys=True))
+          PY
+
+      - name: Download exact-SHA release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d             /tmp/release1/final-governance             /tmp/release1/final-acceptance             /tmp/release1/production-governance             /tmp/release1/supply-chain
+
+          gh run download "$FINAL_GOVERNANCE_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/release1/final-governance
+          gh run download "$FINAL_ACCEPTANCE_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/release1/final-acceptance
+          gh run download "$PRODUCTION_GOVERNANCE_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/release1/production-governance
+          gh run download "$SUPPLY_CHAIN_RUN_ID"             --repo "$GITHUB_REPOSITORY"             --dir /tmp/release1/supply-chain
+
+      - name: Prove clean repository release state and merged-branch hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          token = os.environ['GH_TOKEN']
+          repository = os.environ['GITHUB_REPOSITORY']
+          release_sha = os.environ['RELEASE_SHA']
+          api = 'https://api.github.com'
+
+          def get(path):
+              request = urllib.request.Request(
+                  api + path,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'AegisScan-release1-closure',
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          main = get(f'/repos/{repository}/branches/main')
+          default_sha = str((main.get('commit') or {}).get('sha') or '')
+          open_prs = get(f'/repos/{repository}/pulls?state=open&per_page=100')
+          release_prs = get(f'/repos/{repository}/commits/{release_sha}/pulls')
+
+          candidates = [
+              pr for pr in release_prs
+              if pr.get('merged_at')
+              and (pr.get('base') or {}).get('ref') == 'main'
+              and pr.get('merge_commit_sha') == release_sha
+          ]
+          if len(candidates) != 1:
+              raise SystemExit(f'expected exactly one merged release PR for {release_sha}; found {len(candidates)}')
+          pr = candidates[0]
+          head_ref = str((pr.get('head') or {}).get('ref') or '')
+          if not head_ref:
+              raise SystemExit('release PR head ref is missing')
+
+          ref_path = urllib.parse.quote(f'heads/{head_ref}', safe='')
+          branch_absent = False
+          try:
+              get(f'/repos/{repository}/git/ref/{ref_path}')
+          except urllib.error.HTTPError as exc:
+              if exc.code == 404:
+                  branch_absent = True
+              else:
+                  raise
+
+          state = {
+              'default_branch': 'main',
+              'default_branch_sha': default_sha,
+              'open_pull_requests': len(open_prs),
+              'release_pr_number': int(pr['number']),
+              'release_pr_merged': True,
+              'release_head_ref': head_ref,
+              'release_head_branch_absent': branch_absent,
+          }
+          Path('/tmp/release1/repository-state.json').write_text(
+              json.dumps(state, sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(state, sort_keys=True))
+          PY
+
+      - name: Build Release 1 closure manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/release1
+          python scripts/ci/release1_closure.py             --release-sha "$RELEASE_SHA"             --repository "$GITHUB_REPOSITORY"             --metadata-root /tmp/release1/metadata             --final-governance-root /tmp/release1/final-governance             --final-acceptance-root /tmp/release1/final-acceptance             --production-governance-root /tmp/release1/production-governance             --supply-chain-root /tmp/release1/supply-chain             --repository-state /tmp/release1/repository-state.json             --output artifacts/release1/release1-closure.json
+
+          sha256sum artifacts/release1/release1-closure.json             > artifacts/release1/release1-closure.sha256
+          sha256sum -c artifacts/release1/release1-closure.sha256
+
+      - name: Prove final Release 1 decision
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(
+              Path('artifacts/release1/release1-closure.json').read_text(encoding='utf-8')
+          )
+          assert payload['schema'] == 'aegisscan.release1-closure.v1'
+          assert payload['status'] == 'success'
+          assert payload['decision'] == 'RELEASED'
+          assert payload['release'] == '1'
+          assert payload['release_sha'] == os.environ['RELEASE_SHA']
+          assert all(payload['controls'].values())
+          assert len(payload['release_manifest_sha256']) == 64
+          print('AEGISSCAN_RELEASE_1=CLOSED')
+          print(f"RELEASE_SHA={payload['release_sha']}")
+          print(f"RELEASE_MANIFEST_SHA256={payload['release_manifest_sha256']}")
+          PY
+
+      - name: Publish Release 1 summary
+        if: success()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          p = json.loads(Path('artifacts/release1/release1-closure.json').read_text())
+          print('# AegisScan Release 1 Closure')
+          print()
+          print(f"**Decision:** {p['decision']}")
+          print(f"**Release SHA:** `{p['release_sha']}`")
+          print(f"**Manifest SHA-256:** `{p['release_manifest_sha256']}`")
+          print()
+          print('Exact-main CI, Red/Blue/SRE acceptance, final governance, internal production deployment, resilience/restore, production governance, supply-chain provenance/SBOM, zero-open-PR state, and merged-branch hygiene are all proven on the same release SHA.')
+          PY
+
+      - name: Retain Release 1 closure evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-release1-closure-${{ env.RELEASE_SHA }}
+          path: |
+            artifacts/release1/release1-closure.json
+            artifacts/release1/release1-closure.sha256
+            /tmp/release1/repository-state.json
+            /tmp/release1/metadata/
+          if-no-files-found: error
+          retention-days: 180
