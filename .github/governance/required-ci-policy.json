@@ -18,7 +18,8 @@
       "Risk Decision Lineage Reality",
       "Remediation Verification Lineage Reality",
       "Final Red Blue SRE Acceptance",
-      "Final Governance Closure"
+      "Final Governance Closure",
+      "Release 1 Closure Reality"
     ],
     "push": [
       "Domain Contract Reality",
@@ -30,7 +31,8 @@
       "Remediation Verification Lineage Reality",
       "Supply Chain Release",
       "Final Red Blue SRE Acceptance",
-      "Final Governance Closure"
+      "Final Governance Closure",
+      "Release 1 Closure Reality"
     ]
   },
   "conditional_required_workflows": [
@@ -109,6 +111,7 @@
     "External Identity Live Provider Reality",
     "Internal Production Deploy and Acceptance",
     "Production Resilience Acceptance",
-    "Final Internal Production Governance"
+    "Final Internal Production Governance",
+    "Release 1 Final Closure"
   ]
 }
