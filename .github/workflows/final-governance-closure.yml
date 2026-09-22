@@ -107,8 +107,13 @@ jobs:
       - name: Append-only audit integrity reality
         working-directory: aegis-platform/backend
         run: |
-          python manage.py test django_project.audit.test_hash_chain -v 2 | tee /tmp/audit_hash_chain.log
-          pytest -q fastapi_app/services/test_audit_writer.py --junitxml=/tmp/audit_integrity-junit.xml
+          # Both suites use Django TestCase and share database lifecycle semantics.
+          # Run them under Django's canonical test runner in one process so the
+          # connection is recreated/managed consistently between test cases.
+          python manage.py test \
+            django_project.audit.test_hash_chain \
+            fastapi_app.services.test_audit_writer \
+            -v 2 | tee /tmp/audit_integrity.log
 
       - name: Evidence governance reality
         working-directory: aegis-platform/backend
@@ -154,7 +159,7 @@ jobs:
               'responsibility_sod': ['responsibility_sod-junit.xml'],
               'risk_acceptance': ['risk_acceptance-junit.xml'],
               'obligations_expiry': ['obligations_expiry-junit.xml'],
-              'audit_integrity': ['audit_integrity-junit.xml', 'audit_hash_chain.log'],
+              'audit_integrity': ['audit_integrity.log'],
               'evidence_governance': ['evidence_governance-junit.xml'],
           }
           root = Path('/tmp/final-governance')
