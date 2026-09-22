@@ -107,7 +107,8 @@ jobs:
       - name: Append-only audit integrity reality
         working-directory: aegis-platform/backend
         run: |
-          pytest -q             django_project/audit/test_hash_chain.py             fastapi_app/services/test_audit_writer.py             --junitxml=/tmp/audit_integrity-junit.xml
+          python manage.py test django_project.audit.test_hash_chain -v 2 | tee /tmp/audit_hash_chain.log
+          pytest -q fastapi_app/services/test_audit_writer.py --junitxml=/tmp/audit_integrity-junit.xml
 
       - name: Evidence governance reality
         working-directory: aegis-platform/backend
@@ -149,21 +150,30 @@ jobs:
                   'immutable-iast-evidence',
               ],
           }
+          artifact_names = {
+              'responsibility_sod': ['responsibility_sod-junit.xml'],
+              'risk_acceptance': ['risk_acceptance-junit.xml'],
+              'obligations_expiry': ['obligations_expiry-junit.xml'],
+              'audit_integrity': ['audit_integrity-junit.xml', 'audit_hash_chain.log'],
+              'evidence_governance': ['evidence_governance-junit.xml'],
+          }
           root = Path('/tmp/final-governance')
           for dimension, dimension_suites in suites.items():
-              source = Path(f'/tmp/{dimension}-junit.xml')
-              if not source.is_file() or source.stat().st_size <= 0:
-                  raise SystemExit(f'missing governance JUnit evidence: {source}')
-              target = root / source.name
-              target.write_bytes(source.read_bytes())
-              digest = hashlib.sha256(target.read_bytes()).hexdigest()
+              artifacts = {}
+              for name in artifact_names[dimension]:
+                  source = Path('/tmp') / name
+                  if not source.is_file() or source.stat().st_size <= 0:
+                      raise SystemExit(f'missing governance evidence: {source}')
+                  target = root / source.name
+                  target.write_bytes(source.read_bytes())
+                  artifacts[target.name] = hashlib.sha256(target.read_bytes()).hexdigest()
               payload = {
                   'schema': 'aegisscan.final-governance-dimension.v1',
                   'status': 'success',
                   'dimension': dimension,
                   'release_sha': release_sha,
                   'suites': dimension_suites,
-                  'artifacts': {target.name: digest},
+                  'artifacts': artifacts,
               }
               (root / f'{dimension}.json').write_text(
                   json.dumps(payload, sort_keys=True, indent=2) + '\n',
