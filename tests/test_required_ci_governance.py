@@ -68,6 +68,14 @@ class LifecyclePolicyTests(unittest.TestCase):
         self.assertEqual(filtered["Domain Contract Reality"]["conclusion"], "success")
         self.assertEqual(filtered["Unexpected Triggered Reality"]["conclusion"], "failure")
 
+    def test_final_red_blue_sre_acceptance_is_always_required(self) -> None:
+        policy_path = Path(__file__).resolve().parents[1] / ".github" / "governance" / "required-ci-policy.json"
+        policy = MODULE._load_policy(policy_path)
+        workflow = "Final Red Blue SRE Acceptance"
+        self.assertIn(workflow, policy["always_required_workflows"]["pull_request"])
+        self.assertIn(workflow, policy["always_required_workflows"]["push"])
+        self.assertNotIn(workflow, policy["lifecycle_only_workflows"])
+
 
 class LiveBaseDiffTests(unittest.TestCase):
     def test_pull_request_paths_come_from_live_base_compare(self) -> None:
