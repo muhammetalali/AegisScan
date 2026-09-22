@@ -18,6 +18,7 @@ class EnterpriseConfig(AppConfig):
         from . import iast_models  # noqa: F401
         from . import burp_mcp_models  # noqa: F401
         from . import provider_approval_models  # noqa: F401
+        from . import crypto_asset_models  # noqa: F401
         from . import work_queue_models  # noqa: F401
 
     def ready(self):
