@@ -1,0 +1,295 @@
+name: Final Red Blue SRE Acceptance
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-red-blue-sre-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+env:
+  AEGIS_EXACT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  acceptance-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_SHA }}
+
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "$AEGIS_EXACT_SHA"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Compile final acceptance verifier
+        run: |
+          python -m py_compile \
+            scripts/ci/final_red_blue_sre_acceptance.py \
+            tests/test_final_red_blue_sre_acceptance.py
+
+      - name: Prove fail-closed acceptance manifest contract
+        run: |
+          python -m pip install pytest==9.1.1
+          pytest -q tests/test_final_red_blue_sre_acceptance.py
+
+  acceptance-dimension:
+    name: Final acceptance (${{ matrix.dimension }})
+    needs: acceptance-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        dimension: [red, blue, sre]
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-final-acceptance-secret-key-0123456789abcdef0123456789
+      JWT_SECRET_KEY: ci-final-acceptance-jwt-key-0123456789abcdef0123456789
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-final-acceptance-evidence-hmac-0123456789abcdef
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-final-acceptance-fingerprint-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target,aegis-scan-target,127.0.0.1/32
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
+      BURP_MCP_ALLOW_INSECURE_LOCAL: 'true'
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+      DIMENSION: ${{ matrix.dimension }}
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_SHA }}
+
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "$AEGIS_EXACT_SHA"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install acceptance dependencies
+        run: |
+          python -m pip install -r aegis-platform/backend/requirements.txt
+          python -m pip install pyyaml==6.0.2
+
+      - name: PostgreSQL schema reality
+        working-directory: aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Execute objective-based acceptance suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$DIMENSION" in
+            red)
+              pytest -q \
+                aegis-platform/backend/fastapi_app/services/test_validated_attack_chain.py \
+                aegis-platform/backend/fastapi_app/services/test_attack_replay_sandbox.py \
+                aegis-platform/backend/fastapi_app/services/test_agentic_security.py \
+                aegis-platform/backend/fastapi_app/services/test_iast_security.py \
+                aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py \
+                --junitxml=/tmp/red-junit.xml
+              ;;
+            blue)
+              pytest -q \
+                aegis-platform/backend/fastapi_app/services/test_detection_engineering.py \
+                aegis-platform/backend/fastapi_app/services/test_detection_validation_concurrency.py \
+                aegis-platform/backend/fastapi_app/services/test_detection_read_rbac.py \
+                aegis-platform/backend/fastapi_app/services/test_security_operations.py \
+                aegis-platform/backend/fastapi_app/services/test_soc_closure_governance.py \
+                aegis-platform/backend/fastapi_app/services/test_remediation_verification_lineage.py \
+                --junitxml=/tmp/blue-junit.xml
+              ;;
+            sre)
+              pytest -q \
+                tests/test_production_preflight.py \
+                tests/test_production_host_reality.py \
+                tests/test_production_operational_acceptance.py \
+                tests/test_production_remote_operational_acceptance.py \
+                tests/test_production_resilience_workflow.py \
+                tests/test_production_governance_gate.py \
+                aegis-platform/backend/fastapi_app/tasks/test_scanner_redelivery.py \
+                aegis-platform/scripts/test_load_reality.py \
+                --junitxml=/tmp/sre-junit.xml
+              ;;
+            *)
+              echo "unsupported acceptance dimension: $DIMENSION" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Build exact-SHA dimension evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          dimension = os.environ['DIMENSION']
+          release_sha = os.environ['AEGIS_EXACT_SHA']
+          suites = {
+              'red': [
+                  'validated-attack-chain',
+                  'attack-replay-sandbox',
+                  'ai-agentic-security',
+                  'iast-enterprise-security',
+                  'burp-mcp-gateway',
+              ],
+              'blue': [
+                  'detection-engineering',
+                  'detection-rbac-concurrency',
+                  'security-operations',
+                  'soc-closure-governance',
+                  'remediation-verification-lineage',
+              ],
+              'sre': [
+                  'production-preflight',
+                  'production-host-reality',
+                  'production-operational-acceptance',
+                  'production-remote-operational-acceptance',
+                  'production-resilience-contract',
+                  'production-governance-contract',
+                  'scanner-redelivery',
+                  'load-reality',
+              ],
+          }[dimension]
+          junit = Path(f'/tmp/{dimension}-junit.xml')
+          if not junit.is_file() or junit.stat().st_size <= 0:
+              raise SystemExit(f'missing acceptance JUnit evidence: {junit}')
+          digest = hashlib.sha256(junit.read_bytes()).hexdigest()
+          payload = {
+              'schema': 'aegisscan.final-security-acceptance-dimension.v1',
+              'status': 'success',
+              'dimension': dimension,
+              'release_sha': release_sha,
+              'suites': suites,
+              'artifacts': {junit.name: digest},
+          }
+          Path(f'/tmp/{dimension}.json').write_text(
+              json.dumps(payload, sort_keys=True, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(payload, sort_keys=True))
+          PY
+
+      - name: Retain dimension evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-acceptance-${{ matrix.dimension }}-${{ env.AEGIS_EXACT_SHA }}
+          path: |
+            /tmp/${{ matrix.dimension }}.json
+            /tmp/${{ matrix.dimension }}-junit.xml
+          if-no-files-found: error
+          retention-days: 90
+
+  acceptance-manifest:
+    name: Final Red Blue SRE Acceptance
+    needs: acceptance-dimension
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_SHA }}
+
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "$AEGIS_EXACT_SHA"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Download dimension evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: final-acceptance-*-${{ env.AEGIS_EXACT_SHA }}
+          path: /tmp/final-acceptance
+
+      - name: Build final acceptance manifest
+        run: |
+          python scripts/ci/final_red_blue_sre_acceptance.py \
+            --release-sha "$AEGIS_EXACT_SHA" \
+            --evidence-root /tmp/final-acceptance \
+            --output artifacts/final-red-blue-sre-acceptance.json
+          mkdir -p artifacts/dimensions
+          find /tmp/final-acceptance -type f \( -name 'red.json' -o -name 'blue.json' -o -name 'sre.json' -o -name '*-junit.xml' \) \
+            -exec cp {} artifacts/dimensions/ \;
+          sha256sum artifacts/final-red-blue-sre-acceptance.json \
+            > artifacts/final-red-blue-sre-acceptance.sha256
+          sha256sum -c artifacts/final-red-blue-sre-acceptance.sha256
+
+      - name: Prove final acceptance decision
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(
+              Path('artifacts/final-red-blue-sre-acceptance.json').read_text(encoding='utf-8')
+          )
+          assert payload['schema'] == 'aegisscan.final-red-blue-sre-acceptance.v1'
+          assert payload['status'] == 'success'
+          assert payload['decision'] == 'ACCEPTED'
+          assert payload['release_sha'] == os.environ['AEGIS_EXACT_SHA']
+          assert set(payload['dimensions']) == {'red', 'blue', 'sre'}
+          assert all(item['status'] == 'success' for item in payload['dimensions'].values())
+          assert all(payload['controls'].values())
+          assert len(payload['acceptance_sha256']) == 64
+          print('FINAL_RED_BLUE_SRE_ACCEPTANCE=PASS')
+          PY
+
+      - name: Retain final acceptance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-red-blue-sre-acceptance-${{ env.AEGIS_EXACT_SHA }}
+          path: |
+            artifacts/final-red-blue-sre-acceptance.json
+            artifacts/final-red-blue-sre-acceptance.sha256
+            artifacts/dimensions/
+          if-no-files-found: error
+          retention-days: 90

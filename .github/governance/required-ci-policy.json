@@ -16,7 +16,8 @@
       "Native Capability Reality",
       "Risk Correlation Acceptance",
       "Risk Decision Lineage Reality",
-      "Remediation Verification Lineage Reality"
+      "Remediation Verification Lineage Reality",
+      "Final Red Blue SRE Acceptance"
     ],
     "push": [
       "Domain Contract Reality",
@@ -26,7 +27,8 @@
       "Risk Correlation Acceptance",
       "Risk Decision Lineage Reality",
       "Remediation Verification Lineage Reality",
-      "Supply Chain Release"
+      "Supply Chain Release",
+      "Final Red Blue SRE Acceptance"
     ]
   },
   "conditional_required_workflows": [
