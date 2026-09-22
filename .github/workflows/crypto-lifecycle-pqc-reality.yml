@@ -1,0 +1,131 @@
+name: Crypto Lifecycle PQC Reality
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, chatgpt-a/crypto-lifecycle-pqc-20260922]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crypto-lifecycle-pqc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-test-crypto-lifecycle-key
+      JWT_SECRET_KEY: ci-test-crypto-lifecycle-jwt
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile Crypto Lifecycle PQC Plane
+        run: |
+          python -m py_compile             aegis-platform/backend/enterprise/crypto_lifecycle_models.py             aegis-platform/backend/enterprise/migrations/0044_crypto_lifecycle_pqc_plane.py             aegis-platform/backend/fastapi_app/services/crypto_lifecycle_pqc.py             aegis-platform/backend/fastapi_app/services/test_crypto_lifecycle_pqc.py             aegis-platform/backend/fastapi_app/routers/crypto_lifecycle.py             aegis-platform/backend/fastapi_app/main.py
+
+      - name: PostgreSQL migration and schema reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from enterprise.crypto_lifecycle_models import CryptoLifecycleAssessment
+
+          assert connection.vendor == 'postgresql', connection.vendor
+          fields = {field.name for field in CryptoLifecycleAssessment._meta.fields}
+          assert {
+              'inventory_snapshot', 'predecessor', 'assessment_version',
+              'lifecycle_state', 'pqc_readiness', 'migration_plan',
+              'assessment_sha256', 'request_fingerprint',
+          } <= fields
+          assert CryptoLifecycleAssessment._meta.db_table in connection.introspection.table_names()
+          print('CRYPTO_LIFECYCLE_DATABASE=POSTGRESQL')
+          print('CRYPTO_LIFECYCLE_SCHEMA=WIRED')
+          PY
+
+      - name: Crypto Lifecycle and PQC policy reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_crypto_lifecycle_pqc.py             --junitxml=/tmp/crypto-lifecycle-pqc-junit.xml
+
+      - name: CBOM regression
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: pytest -q fastapi_app/services/test_crypto_asset_plane.py
+
+      - name: Prove fail-closed PQC policy wiring
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import django
+          django.setup()
+          from fastapi_app.services.crypto_lifecycle_pqc import CRYPTO_LIFECYCLE_POLICY_VERSION
+
+          service = Path('fastapi_app/services/crypto_lifecycle_pqc.py').read_text()
+          assert CRYPTO_LIFECYCLE_POLICY_VERSION == 'crypto-lifecycle-pqc.v1'
+          assert 'latest_snapshot.id != snapshot.id' in service
+          assert 'latest_decision.id != decision.id' in service
+          assert 'migrate_to_pqc_or_hybrid' in service
+          assert "'pqc_target_kem': 'ML-KEM'" in service
+          assert "'pqc_target_signature': 'ML-DSA'" in service
+          print('CRYPTO_LIFECYCLE_AUTHORIZATION=REVALIDATED')
+          print('CRYPTO_LIFECYCLE_LATEST_CBOM=PINNED')
+          print('CRYPTO_PQC_MIGRATION_POLICY=WIRED')
+          PY
+
+      - name: Retain Crypto Lifecycle Reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-lifecycle-pqc-${{ github.sha }}
+          path: /tmp/crypto-lifecycle-pqc-junit.xml
+          retention-days: 30
+          if-no-files-found: warn
