@@ -1,0 +1,216 @@
+name: Final Governance Closure
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-governance-closure-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+env:
+  AEGIS_EXACT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  final-governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-final-governance-secret-key-0123456789abcdef0123456789
+      JWT_SECRET_KEY: ci-final-governance-jwt-key-0123456789abcdef0123456789
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-final-governance-evidence-hmac-0123456789abcdef
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-final-governance-fingerprint-0123456789
+      AUTHORIZED_SCAN_TARGETS: aegis-disposition-target,aegis-scan-target,127.0.0.1/32
+      ALLOW_SINGLE_LABEL_SCAN_TARGETS: 'true'
+      BURP_MCP_ALLOW_INSECURE_LOCAL: 'true'
+      DJANGO_SETTINGS_MODULE: django_project.settings
+      PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend:${{ github.workspace }}
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_SHA }}
+
+      - name: Prove exact checkout
+        run: test "$(git rev-parse HEAD)" = "$AEGIS_EXACT_SHA"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install governance dependencies
+        run: |
+          python -m pip install -r aegis-platform/backend/requirements.txt
+          python -m pip install pytest==9.1.1
+
+      - name: Compile final governance closure
+        run: |
+          python -m py_compile scripts/ci/final_governance_closure.py tests/test_final_governance_closure.py
+          pytest -q tests/test_final_governance_closure.py
+
+      - name: PostgreSQL governance schema reality
+        working-directory: aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+
+      - name: Responsibility authority and SoD reality
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_governed_responsibility_authority.py             fastapi_app/services/test_governed_responsibility_lock_order.py             fastapi_app/routers/test_governed_responsibility_api.py             --junitxml=/tmp/responsibility_sod-junit.xml
+
+      - name: Governed risk acceptance reality
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_finding_disposition.py             fastapi_app/services/test_governed_finding_dispositions.py             fastapi_app/services/test_fair_quantitative_risk.py             --junitxml=/tmp/risk_acceptance-junit.xml
+
+      - name: Assurance obligation and expiry reality
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_assurance_obligation_governance.py             fastapi_app/services/test_assurance_recurrence_obligation_governance.py             fastapi_app/services/test_governed_temporal_policy.py             --junitxml=/tmp/obligations_expiry-junit.xml
+
+      - name: Append-only audit integrity reality
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             django_project/audit/test_hash_chain.py             fastapi_app/services/test_audit_writer.py             --junitxml=/tmp/audit_integrity-junit.xml
+
+      - name: Evidence governance reality
+        working-directory: aegis-platform/backend
+        run: |
+          pytest -q             fastapi_app/services/test_evidence_qualification.py             fastapi_app/services/test_iast_security.py             --junitxml=/tmp/evidence_governance-junit.xml
+
+      - name: Build exact-SHA governance dimension evidence
+        run: |
+          mkdir -p /tmp/final-governance
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          release_sha = os.environ['AEGIS_EXACT_SHA']
+          suites = {
+              'responsibility_sod': [
+                  'authoritative-responsibility',
+                  'separation-of-duties',
+                  'responsibility-lock-order',
+              ],
+              'risk_acceptance': [
+                  'finding-disposition',
+                  'risk-decision-lineage',
+                  'fair-quantitative-risk',
+              ],
+              'obligations_expiry': [
+                  'assurance-obligation',
+                  'recurrence-obligation',
+                  'global-temporal-policy',
+              ],
+              'audit_integrity': [
+                  'audit-hash-chain',
+                  'append-only-audit-writer',
+              ],
+              'evidence_governance': [
+                  'evidence-qualification',
+                  'immutable-iast-evidence',
+              ],
+          }
+          root = Path('/tmp/final-governance')
+          for dimension, dimension_suites in suites.items():
+              source = Path(f'/tmp/{dimension}-junit.xml')
+              if not source.is_file() or source.stat().st_size <= 0:
+                  raise SystemExit(f'missing governance JUnit evidence: {source}')
+              target = root / source.name
+              target.write_bytes(source.read_bytes())
+              digest = hashlib.sha256(target.read_bytes()).hexdigest()
+              payload = {
+                  'schema': 'aegisscan.final-governance-dimension.v1',
+                  'status': 'success',
+                  'dimension': dimension,
+                  'release_sha': release_sha,
+                  'suites': dimension_suites,
+                  'artifacts': {target.name: digest},
+              }
+              (root / f'{dimension}.json').write_text(
+                  json.dumps(payload, sort_keys=True, indent=2) + '\n',
+                  encoding='utf-8',
+              )
+          PY
+
+      - name: Build final governance manifest
+        run: |
+          mkdir -p artifacts
+          python scripts/ci/final_governance_closure.py             --release-sha "$AEGIS_EXACT_SHA"             --evidence-root /tmp/final-governance             --output artifacts/final-governance-closure.json
+          sha256sum artifacts/final-governance-closure.json             > artifacts/final-governance-closure.sha256
+          sha256sum -c artifacts/final-governance-closure.sha256
+
+      - name: Prove final governance decision
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(
+              Path('artifacts/final-governance-closure.json').read_text(encoding='utf-8')
+          )
+          assert payload['schema'] == 'aegisscan.final-governance-closure.v1'
+          assert payload['status'] == 'success'
+          assert payload['decision'] == 'APPROVED'
+          assert payload['release_sha'] == os.environ['AEGIS_EXACT_SHA']
+          assert len(payload['governance_sha256']) == 64
+          assert all(payload['controls'].values())
+          assert set(payload['dimensions']) == {
+              'responsibility_sod',
+              'risk_acceptance',
+              'obligations_expiry',
+              'audit_integrity',
+              'evidence_governance',
+          }
+          print('FINAL_GOVERNANCE_CLOSURE=PASS')
+          PY
+
+      - name: Retain final governance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-governance-closure-${{ env.AEGIS_EXACT_SHA }}
+          path: |
+            artifacts/final-governance-closure.json
+            artifacts/final-governance-closure.sha256
+            /tmp/final-governance/
+          if-no-files-found: error
+          retention-days: 90
