@@ -21,6 +21,7 @@ class EnterpriseConfig(AppConfig):
         from . import crypto_asset_models  # noqa: F401
         from . import crypto_lifecycle_models  # noqa: F401
         from . import fair_risk_models  # noqa: F401
+        from . import agentic_security_models  # noqa: F401
         from . import work_queue_models  # noqa: F401
 
     def ready(self):

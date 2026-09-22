@@ -1,0 +1,188 @@
+name: AI Agentic Security Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/agentic_security_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0046_agentic_security_plane.py'
+      - 'aegis-platform/backend/fastapi_app/services/agentic_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_agentic_security.py'
+      - 'aegis-platform/backend/fastapi_app/routers/agentic_security.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/ai-agentic-security-reality.yml'
+  push:
+    branches: [main, chatgpt-a/ai-agentic-security-20260922]
+    paths:
+      - 'aegis-platform/backend/enterprise/apps.py'
+      - 'aegis-platform/backend/enterprise/agentic_security_models.py'
+      - 'aegis-platform/backend/enterprise/migrations/0046_agentic_security_plane.py'
+      - 'aegis-platform/backend/fastapi_app/services/agentic_security.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_agentic_security.py'
+      - 'aegis-platform/backend/fastapi_app/routers/agentic_security.py'
+      - 'aegis-platform/backend/fastapi_app/main.py'
+      - '.github/workflows/ai-agentic-security-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-agentic-security-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ai-agentic-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DEBUG: 'False'
+      SECRET_KEY: ci-agentic-security-secret-key-0123456789abcdef0123456789
+      JWT_SECRET_KEY: ci-agentic-security-jwt-key-0123456789abcdef0123456789
+      DATABASE_URL: postgresql://aegis:aegis@127.0.0.1:5432/aegis
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      AEGIS_EVIDENCE_HMAC_KEY: ci-agentic-security-evidence-hmac-0123456789abcdef
+      CREDENTIAL_VAULT_KEYS: Gda3DhfD-EcoacpdQeTFnHHH1Q_rxQZaUISBiMvSwUM=
+      CREDENTIAL_FINGERPRINT_KEY: ci-agentic-security-credential-fingerprint-0123456789
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aegis
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: aegis-platform/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+
+      - name: Compile AI Agentic Security plane
+        run: |
+          python -m py_compile \
+            aegis-platform/backend/enterprise/agentic_security_models.py \
+            aegis-platform/backend/enterprise/migrations/0046_agentic_security_plane.py \
+            aegis-platform/backend/fastapi_app/services/agentic_security.py \
+            aegis-platform/backend/fastapi_app/services/test_agentic_security.py \
+            aegis-platform/backend/fastapi_app/routers/agentic_security.py \
+            aegis-platform/backend/fastapi_app/main.py
+
+      - name: PostgreSQL migration and schema reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python - <<'PY'
+          import django
+          django.setup()
+          from django.db import connection
+          from enterprise.agentic_security_models import AgenticActionDecision, AgenticSecurityProfile
+
+          assert connection.vendor == 'postgresql', connection.vendor
+          profile_fields = {field.name for field in AgenticSecurityProfile._meta.fields}
+          action_fields = {field.name for field in AgenticActionDecision._meta.fields}
+          assert {
+              'organization', 'project', 'provider_governance_decision',
+              'agent_name', 'agent_version', 'model_name', 'model_version',
+              'allowed_tools', 'data_boundaries', 'prompt_policy',
+              'profile_sha256', 'request_fingerprint',
+          } <= profile_fields
+          assert {
+              'organization', 'project', 'profile', 'tool_name', 'operation',
+              'prompt_sha256', 'arguments_sha256', 'decision', 'reason_codes',
+              'evidence_snapshot', 'evidence_sha256', 'decision_sha256',
+              'request_fingerprint',
+          } <= action_fields
+          assert AgenticSecurityProfile._meta.db_table in connection.introspection.table_names()
+          assert AgenticActionDecision._meta.db_table in connection.introspection.table_names()
+          print('AGENTIC_DATABASE=POSTGRESQL')
+          print('AGENTIC_SCHEMA=WIRED')
+          PY
+
+      - name: Agentic provider tool data prompt replay and tenant reality
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          pytest -q fastapi_app/services/test_agentic_security.py \
+            --junitxml=/tmp/ai-agentic-security-junit.xml
+
+      - name: Provider approval regression
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: pytest -q fastapi_app/services/test_provider_approval.py
+
+      - name: Prove agentic fail-closed wiring
+        working-directory: aegis-platform/backend
+        env:
+          DJANGO_SETTINGS_MODULE: django_project.settings
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import django
+          django.setup()
+          from fastapi_app.services.agentic_security import AGENTIC_CAPABILITY_ID, AGENTIC_POLICY_VERSION
+
+          service = Path('fastapi_app/services/agentic_security.py').read_text()
+          router = Path('fastapi_app/routers/agentic_security.py').read_text()
+          models = Path('enterprise/agentic_security_models.py').read_text()
+
+          assert AGENTIC_CAPABILITY_ID == 'ai.agent.runtime'
+          assert AGENTIC_POLICY_VERSION == 'agentic-security.v1'
+          assert 'evaluate_provider_admissibility(' in service
+          assert 'PROVIDER_NOT_ADMISSIBLE' in service
+          assert 'TOOL_NOT_ALLOWED' in service
+          assert 'DATA_LABEL_DENIED' in service
+          assert 'RISK_SIGNAL_BLOCKED' in service
+          assert 'HUMAN_APPROVAL_REQUIRED' in service
+          assert "'raw_prompt_captured': False" in service
+          assert "'raw_arguments_captured': False" in service
+          assert "ConfigDict(extra='forbid')" in router
+          assert 'AgenticActionDecision' in models
+          assert 'evidence_sha256' in models
+          assert 'decision_sha256' in models
+          print('AGENTIC_PROVIDER_PIN=FAIL_CLOSED')
+          print('AGENTIC_TOOL_AUTHORIZATION=WIRED')
+          print('AGENTIC_PROMPT_DATA_BOUNDARY=WIRED')
+          print('AGENTIC_RAW_CONTENT_STORAGE=DENIED')
+          print('AGENTIC_ACTION_EVIDENCE=IMMUTABLE')
+          PY
+
+      - name: Retain Agentic Reality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-agentic-security-${{ github.sha }}
+          path: /tmp/ai-agentic-security-junit.xml
+          retention-days: 30
+          if-no-files-found: warn
