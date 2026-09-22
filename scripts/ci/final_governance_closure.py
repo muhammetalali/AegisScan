@@ -136,7 +136,7 @@ def _verify_dimension(*, root: Path, dimension: str, release_sha: str) -> dict[s
 
 
 def build_manifest(*, release_sha: str, evidence_root: Path, output: Path) -> dict[str, Any]:
-    release_sha = str(release_sha or "").strip().lower()
+    release_sha = str(release_sha or "").strip()
     if not SHA_RE.fullmatch(release_sha):
         raise GovernanceClosureError(
             "release SHA must be exactly 40 lowercase hexadecimal characters"
