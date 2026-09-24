@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 
 from django_project.assets.models import Asset
-from django_project.evidence.models import Evidence, WSTGMethodologyAttestation
+from django_project.evidence.models import Evidence
+from enterprise.models import WSTGMethodologyAttestation
 from django_project.projects.models import Project
 from django_project.users.models import User
 from enterprise.models import Organization, OrganizationMembership, TenantProject
