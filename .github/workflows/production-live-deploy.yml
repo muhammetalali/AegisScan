@@ -371,5 +371,6 @@ jobs:
             rm -f \
               /tmp/aegis-production/id \
               /tmp/aegis-production/known_hosts \
-              /tmp/aegis-production/enterprise-ca.pem
+              /tmp/aegis-production/enterprise-ca.pem \
+              /tmp/aegis-production/e2e-fixture.json
           fi
