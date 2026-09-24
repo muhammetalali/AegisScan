@@ -82,14 +82,17 @@ def create_wstg_methodology_attestation(
     row = next(item for item in policy['rows'] if item['wstg_id'] == test.id)
     mode = row['completion_mode']
 
-    expected_decision = (
-        WSTGMethodologyAttestation.Decision.NOT_APPLICABLE
-        if test.classification == 'CONDITIONAL_NA'
-        else WSTGMethodologyAttestation.Decision.COMPLETED
-    )
-    if decision != expected_decision:
+    if test.classification == 'CONDITIONAL_NA':
+        allowed_decisions = {
+            WSTGMethodologyAttestation.Decision.COMPLETED,
+            WSTGMethodologyAttestation.Decision.NOT_APPLICABLE,
+        }
+    else:
+        allowed_decisions = {WSTGMethodologyAttestation.Decision.COMPLETED}
+    if decision not in allowed_decisions:
+        allowed = ','.join(sorted(allowed_decisions))
         raise WSTGAttestationError(
-            f'{test.id} requires decision={expected_decision}; methodology completion never represents pass/fail.'
+            f'{test.id} requires one of decision={allowed}; methodology completion never represents pass/fail.'
         )
     reason = str(rationale or '').strip()
     if len(reason) < 12 or len(reason) > 4000:
@@ -115,12 +118,25 @@ def create_wstg_methodology_attestation(
         raise WSTGAttestationError('One or more evidence records are missing or outside the project.')
     if scan is not None and any(str(item.scan_id or '') != str(scan.id) for item in rows):
         raise WSTGAttestationError('Scan-scoped attestation evidence must belong to the exact scan.')
-    if test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING', 'GAP_NATIVE_SMALL'}:
+    requires_trusted_lineage = (
+        test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING', 'GAP_NATIVE_SMALL'}
+        or (
+            test.classification == 'CONDITIONAL_NA'
+            and decision == WSTGMethodologyAttestation.Decision.COMPLETED
+        )
+    )
+    if requires_trusted_lineage:
         unsupported = [str(item.id) for item in rows if not _lineage_supports_test(item, test.id)]
         if unsupported:
             raise WSTGAttestationError(
                 f'Evidence does not contain trusted canonical WSTG lineage for {test.id}: {unsupported}'
             )
+
+    producer_ids = {str(item.collected_by_id) for item in rows if item.collected_by_id}
+    if producer_ids and producer_ids == {str(actor_id)}:
+        raise WSTGAttestationError(
+            'WSTG methodology attestation requires separation of duties from the sole evidence producer.'
+        )
 
     qualification = qualify_evidence(
         project_id=str(project.id),
