@@ -33,13 +33,6 @@ jobs:
       PROD_SSH_KNOWN_HOSTS: ${{ secrets.AEGIS_PRODUCTION_SSH_KNOWN_HOSTS }}
       PROD_ORIGIN: ${{ secrets.AEGIS_PRODUCTION_ORIGIN }}
       PROD_ENTERPRISE_CA_BUNDLE: ${{ secrets.AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE }}
-      PROD_E2E_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
-      PROD_E2E_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
-      PROD_E2E_TARGET: ${{ secrets.AEGIS_PRODUCTION_E2E_TARGET }}
-      PROD_E2E_APPROVER_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_EMAIL }}
-      PROD_E2E_APPROVER_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_PASSWORD }}
-      PROD_E2E_GOV_ORG_ID: ${{ secrets.AEGIS_PRODUCTION_E2E_GOV_ORG_ID }}
-      PROD_E2E_APPROVER_MEMBERSHIP_ID: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_MEMBERSHIP_ID }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -97,13 +90,7 @@ jobs:
             PROD_SSH_KNOWN_HOSTS \
             PROD_ORIGIN \
             PROD_ENTERPRISE_CA_BUNDLE \
-            PROD_E2E_EMAIL \
-            PROD_E2E_PASSWORD \
-            PROD_E2E_TARGET \
-            PROD_E2E_APPROVER_EMAIL \
-            PROD_E2E_APPROVER_PASSWORD \
-            PROD_E2E_GOV_ORG_ID \
-            PROD_E2E_APPROVER_MEMBERSHIP_ID; do
+            PROD_ENTERPRISE_CA_BUNDLE; do
             value="${!name:-}"
             if [ -z "$value" ]; then
               echo "Required internal production secret/variable is missing: $name" >&2
@@ -194,18 +181,35 @@ jobs:
             --origin "$AEGIS_LIVE_ORIGIN" \
             | tee /tmp/aegis-production/internal-acceptance.json
 
+      - name: Generate one-run governed E2E identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import secrets
+          import uuid
+
+          unique = uuid.uuid4().hex[:16]
+          actor_email = f'release-e2e-{unique}@aegisscan.local'
+          actor_password = f'Aegis-E2E-{unique}-!9-{secrets.token_urlsafe(24)}'
+          approver_email = f'release-e2e-approver-{unique}@aegisscan.local'
+          approver_password = f'Aegis-E2E-Approver-{unique}-!7-{secrets.token_urlsafe(24)}'
+          for value in (actor_password, approver_password):
+              print(f'::add-mask::{value}')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as handle:
+              handle.write(f'AEGIS_E2E_EMAIL={actor_email}\n')
+              handle.write(f'AEGIS_E2E_PASSWORD={actor_password}\n')
+              handle.write(f'AEGIS_E2E_APPROVER_EMAIL={approver_email}\n')
+              handle.write(f'AEGIS_E2E_APPROVER_PASSWORD={approver_password}\n')
+              handle.write('AEGIS_E2E_TARGET=aegis-scan-target\n')
+              handle.write('AEGIS_E2E_EPHEMERAL_FIXTURE=true\n')
+          PY
       - name: Run real internal-network black-box production E2E
         shell: bash
         env:
-          AEGIS_E2E_TARGET: ${{ secrets.AEGIS_PRODUCTION_E2E_TARGET }}
           AEGIS_E2E_TIMEOUT: '900'
           AEGIS_VERIFY_TLS: 'true'
-          AEGIS_E2E_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
-          AEGIS_E2E_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
-          AEGIS_E2E_APPROVER_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_EMAIL }}
-          AEGIS_E2E_APPROVER_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_PASSWORD }}
-          AEGIS_E2E_GOV_ORG_ID: ${{ secrets.AEGIS_PRODUCTION_E2E_GOV_ORG_ID }}
-          AEGIS_E2E_APPROVER_MEMBERSHIP_ID: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_MEMBERSHIP_ID }}
         run: |
           set -euo pipefail
           export AEGIS_BASE_URL="$AEGIS_LIVE_ORIGIN"
@@ -219,14 +223,26 @@ jobs:
         shell: bash
         env:
           AEGIS_PLATFORM_URL: ${{ env.AEGIS_LIVE_ORIGIN }}
-          AEGIS_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
-          AEGIS_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
+          AEGIS_EMAIL: ${{ env.AEGIS_E2E_EMAIL }}
+          AEGIS_PASSWORD: ${{ env.AEGIS_E2E_PASSWORD }}
         run: |
           set -euo pipefail
           python -m pip install -e .
           aegis platform-status --json \
             | tee /tmp/aegis-production/cli-platform-status.json
 
+      - name: Deactivate one-run E2E identities
+        shell: bash
+        env:
+          AEGIS_E2E_CLEANUP_ONLY: 'true'
+          AEGIS_VERIFY_TLS: 'true'
+        run: |
+          set -euo pipefail
+          export AEGIS_BASE_URL="$AEGIS_LIVE_ORIGIN"
+          export AEGIS_DJANGO_URL="$AEGIS_LIVE_ORIGIN/api/v1"
+          export AEGIS_FASTAPI_URL="$AEGIS_LIVE_ORIGIN"
+          python aegis-platform/e2e/external_black_box_e2e.py \
+            2>&1 | tee /tmp/aegis-production/e2e-cleanup.log
       - name: Build internal go-live evidence manifest
         if: success()
         shell: bash
@@ -251,6 +267,7 @@ jobs:
               'internal-acceptance.json',
               'internal-black-box.log',
               'cli-platform-status.json',
+              'e2e-cleanup.log',
           ]
           digests = {}
           for name in evidence_files:
@@ -324,6 +341,7 @@ jobs:
             /tmp/aegis-production/internal-acceptance.json
             /tmp/aegis-production/internal-black-box.log
             /tmp/aegis-production/cli-platform-status.json
+            /tmp/aegis-production/e2e-cleanup.log
             /tmp/aegis-production/manifest.json
           if-no-files-found: error
           retention-days: 90
