@@ -70,6 +70,14 @@ def test_live_production_workflow_requires_operational_backup_alertmanager_black
     assert "internal-black-box.log" in text
     assert "Prove installed CLI against internal production" in text
     assert "AEGIS_VERIFY_TLS: 'true'" in text
+    assert "AEGIS_PRODUCTION_E2E_APPROVER_EMAIL" in text
+    assert "AEGIS_PRODUCTION_E2E_APPROVER_PASSWORD" in text
+    assert "AEGIS_PRODUCTION_E2E_GOV_ORG_ID" in text
+    assert "AEGIS_PRODUCTION_E2E_APPROVER_MEMBERSHIP_ID" in text
+    assert "AEGIS_E2E_APPROVER_EMAIL:" in text
+    assert "AEGIS_E2E_APPROVER_PASSWORD:" in text
+    assert "AEGIS_E2E_GOV_ORG_ID:" in text
+    assert "AEGIS_E2E_APPROVER_MEMBERSHIP_ID:" in text
     assert "aegisscan.go-live-evidence.v3" in text
     assert "'deployment_mode': 'internal'" in text
     assert "'network_scope': 'rfc1918-or-ipv6-ula'" in text
