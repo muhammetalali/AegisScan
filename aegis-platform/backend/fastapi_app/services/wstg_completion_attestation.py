@@ -13,7 +13,7 @@ from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from enterprise.models import OrganizationMembership, TenantProject
 
-from .evidence_qualification import EvidenceQualificationPolicy, qualify_evidence
+from .evidence_qualification import EvidenceQualificationError, EvidenceQualificationPolicy, qualify_evidence
 from .wstg_catalog import WSTGCatalog
 from .wstg_completion_policy import build_wstg_completion_policy
 from .wstg_reporting import _trusted_lineage
@@ -88,7 +88,10 @@ def create_wstg_methodology_attestation(
     scan_id: str | None = None,
 ) -> dict[str, Any]:
     project = _project_for_actor(str(project_id), str(actor_id))
-    test = WSTGCatalog().resolve(str(wstg_id))
+    try:
+        test = WSTGCatalog().resolve(str(wstg_id))
+    except (KeyError, ValueError) as exc:
+        raise WSTGAttestationError(f'Unknown or invalid WSTG test identity: {wstg_id}') from exc
     policy = build_wstg_completion_policy()
     row = next(item for item in policy['rows'] if item['wstg_id'] == test.id)
     mode = row['completion_mode']
@@ -149,22 +152,25 @@ def create_wstg_methodology_attestation(
             'WSTG methodology attestation requires separation of duties from the sole evidence producer.'
         )
 
-    qualification = qualify_evidence(
-        project_id=str(project.id),
-        evidence_ids=normalized_evidence,
-        subject_type='wstg_test',
-        subject_id=test.id,
-        requested_by_id=str(actor_id),
-        policy=EvidenceQualificationPolicy(
-            policy_version='wstg-completion-evidence.v1',
-            min_count=1,
-            require_subject=False,
-            require_target=False,
-            require_authorization=False,
-            require_execution=False,
-            require_producer=True,
-        ),
-    )
+    try:
+        qualification = qualify_evidence(
+            project_id=str(project.id),
+            evidence_ids=normalized_evidence,
+            subject_type='wstg_test',
+            subject_id=test.id,
+            requested_by_id=str(actor_id),
+            policy=EvidenceQualificationPolicy(
+                policy_version='wstg-completion-evidence.v1',
+                min_count=1,
+                require_subject=False,
+                require_target=False,
+                require_authorization=False,
+                require_execution=False,
+                require_producer=True,
+            ),
+        )
+    except EvidenceQualificationError as exc:
+        raise WSTGAttestationError(f'WSTG completion evidence qualification failed: {exc}') from exc
     if not qualification.qualified:
         raise WSTGAttestationError(
             'WSTG completion evidence failed qualification: '
