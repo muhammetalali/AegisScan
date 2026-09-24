@@ -11,6 +11,7 @@ from django_project.projects.models import Project
 
 from ..core.dependencies import get_current_user
 from ..services.wstg_reporting import build_wstg_project_coverage
+from ..services.wstg_completion_attestation import WSTGAttestationError, create_wstg_methodology_attestation
 
 router = APIRouter()
 
@@ -71,6 +72,31 @@ class WSTGProjectCoverage(ContractModel):
     tests: list[WSTGTestCoverage] = Field(min_length=97, max_length=97)
 
 
+class WSTGAttestationCreate(ContractModel):
+    wstg_id: str
+    evidence_ids: list[str] = Field(min_length=1, max_length=64)
+    rationale: str = Field(min_length=12, max_length=4000)
+    decision: Literal['completed', 'not_applicable'] = 'completed'
+    scan_id: str | None = None
+
+
+class WSTGAttestationView(ContractModel):
+    id: str
+    project_id: str
+    scan_id: str | None
+    wstg_id: str
+    classification: str
+    completion_mode: str
+    decision: Literal['completed', 'not_applicable']
+    evidence_ids: list[str]
+    evidence_qualification_id: str
+    evidence_qualification_fingerprint: str
+    request_fingerprint: str
+    created_by_id: str
+    created_at: object
+    replayed: bool
+
+
 @sync_to_async
 def _authorized_project(project_id: str, user_id: str) -> Project:
     project = Project.objects.filter(
@@ -90,3 +116,25 @@ def _coverage(project: Project) -> dict:
 async def project_wstg_coverage(project_id: str, user=Depends(get_current_user)):
     project = await _authorized_project(project_id, str(user.get('user_id')))
     return await _coverage(project)
+
+
+@sync_to_async
+def _attest(project_id: str, user_id: str, body: WSTGAttestationCreate) -> dict:
+    try:
+        return create_wstg_methodology_attestation(
+            project_id=project_id,
+            actor_id=user_id,
+            wstg_id=body.wstg_id,
+            evidence_ids=body.evidence_ids,
+            rationale=body.rationale,
+            decision=body.decision,
+            scan_id=body.scan_id,
+        )
+    except WSTGAttestationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post('/projects/{project_id}/attestations', response_model=WSTGAttestationView)
+async def attest_wstg_completion(project_id: str, body: WSTGAttestationCreate, user=Depends(get_current_user)):
+    await _authorized_project(project_id, str(user.get('user_id')))
+    return await _attest(project_id, str(user.get('user_id')), body)
