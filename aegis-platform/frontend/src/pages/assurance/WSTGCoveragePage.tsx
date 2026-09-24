@@ -17,7 +17,6 @@ const stateClass = (state: string) => {
   switch (state) {
     case 'observed': return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
     case 'manual_required': return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-    case 'blocked_native_gap': return 'border-destructive/30 bg-destructive/10 text-destructive'
     case 'inconclusive': return 'border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400'
     default: return 'border-border bg-muted/30 text-muted-foreground'
   }
