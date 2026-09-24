@@ -29,10 +29,16 @@ def test_runner_bootstrap_installs_dedicated_service_without_hosted_fallback():
     assert "ubuntu-latest" not in text
 
 
-def test_runner_bootstrap_refuses_destructive_live_replacement():
+def test_runner_bootstrap_recovers_only_attested_inactive_service_without_reinstall():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "existing approved production runner service is active" in text
-    assert "refusing destructive replacement" in text
+    assert "existing runner installation is not bound to the approved AegisScan production runner marker" in text
+    assert "approved production runner service is inactive; attempting bounded service recovery" in text
+    assert 'systemctl is-enabled --quiet "$service_name" || systemctl enable "$service_name"' in text
+    assert './svc.sh start' in text
+    assert 'systemctl is-active --quiet "$service_name"' in text
+    assert "AEGISSCAN_PRODUCTION_RUNNER_RECOVERY=PASS" in text
+    assert "refusing destructive replacement" not in text
 
 
 def test_runner_bootstrap_provisions_execution_dependencies_from_verified_archive():
