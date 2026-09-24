@@ -169,8 +169,10 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
         applicability_attested = bool(
             attestation
             and attestation.evidence_qualification.qualified
-            and attestation.decision == 'not_applicable'
+            and attestation.decision in {'completed', 'not_applicable'}
         )
+        if test.classification == 'CONDITIONAL_NA' and applicability_attested:
+            row['state'] = 'not_applicable' if attestation.decision == 'not_applicable' else 'observed'
         row['completion_claim_allowed'] = completion_ready(
             classification=test.classification,
             has_trusted_observation=observed,
