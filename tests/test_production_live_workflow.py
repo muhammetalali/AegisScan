@@ -71,13 +71,16 @@ def test_live_production_workflow_requires_operational_backup_alertmanager_black
     assert "internal-black-box.log" in text
     assert "Prove installed CLI against internal production" in text
     assert "AEGIS_VERIFY_TLS: 'true'" in text
-    assert "Generate one-run governed E2E identities" in text
+    assert "Load one-run governed E2E identities" in text
     assert "::add-mask::" in text
+    assert "private E2E fixture file must be mode 0600" in text
     assert "AEGIS_E2E_EPHEMERAL_FIXTURE=true" in text
-    assert "AEGIS_E2E_TARGET=aegis-scan-target" in text
+    assert "--e2e-fixture-output /tmp/aegis-production/e2e-fixture.json" in text
+    assert "handle.write(f\"AEGIS_E2E_TARGET={payload[\'target\']}\\n\")" in text
     assert "Deactivate one-run E2E identities" in text
     assert "AEGIS_E2E_CLEANUP_ONLY" in text
     assert "e2e-cleanup.log" in text
+    assert "rm -f /tmp/aegis-production/e2e-fixture.json" in text
     assert "AEGIS_PRODUCTION_E2E_" not in text
     assert "aegisscan.go-live-evidence.v3" in text
     assert "'deployment_mode': 'internal'" in text
