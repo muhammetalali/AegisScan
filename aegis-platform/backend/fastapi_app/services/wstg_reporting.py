@@ -12,6 +12,7 @@ from django_project.vulnerabilities.models import Vulnerability
 
 from .capability_registry import get_capability
 from .wstg_catalog import WSTGCatalog
+from .wstg_completion_policy import build_wstg_completion_policy
 from .wstg_observation_lineage import wstg_observation_lineage
 
 
@@ -23,7 +24,7 @@ _CLASSIFICATION_STATE = {
     'AUTO_EXISTING': 'not_observed',
     'ASSISTED_EXISTING': 'not_observed',
     'MANUAL_GOVERNED': 'manual_required',
-    'GAP_NATIVE_SMALL': 'blocked_native_gap',
+    'GAP_NATIVE_SMALL': 'not_observed',
     'CONDITIONAL_NA': 'inconclusive',
 }
 
@@ -79,6 +80,8 @@ def _project_findings(project: Project, scan_id: str | None):
 
 def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None) -> dict[str, Any]:
     catalog = WSTGCatalog()
+    completion_policy = build_wstg_completion_policy()
+    completion_rows = {item['wstg_id']: item for item in completion_policy['rows']}
     rows: dict[str, dict[str, Any]] = {}
     for test in catalog.tests:
         rows[test.id] = {
@@ -92,6 +95,7 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
             'finding_records': 0,
             'capability_ids': set(),
             'latest_observed_at': None,
+            'completion_claim_supported': bool(completion_rows[test.id]['completion_claim_supported']),
             'completion_claim_allowed': False,
         }
 
@@ -146,7 +150,7 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
         row = rows[test.id]
         observed = (row['evidence_records'] + row['finding_records']) > 0
         row['has_observation'] = observed
-        if observed and test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING'}:
+        if observed and test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING', 'GAP_NATIVE_SMALL'}:
             row['state'] = 'observed'
         row['capability_ids'] = sorted(row['capability_ids'])
         row['latest_observed_at'] = _iso(row['latest_observed_at'])
@@ -191,6 +195,7 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
         'summary': {
             'total_tests': len(ordered),
             'observed_tests': observed_tests,
+            'completion_claim_supported_tests': completion_policy['completion_claim_supported_tests'],
             'observation_coverage_percent': round((observed_tests / len(ordered)) * 100, 2),
             'auto_assisted_total': len(auto_assisted),
             'auto_assisted_observed': auto_assisted_observed,
