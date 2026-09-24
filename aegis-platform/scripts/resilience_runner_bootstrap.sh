@@ -94,8 +94,32 @@ esac
 
 tmp_archive="$(mktemp /tmp/aegis-resilience-runner.XXXXXX.tar.gz)"
 trap 'rm -f "$tmp_archive"' EXIT HUP INT TERM
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-  "$AEGIS_GITHUB_RUNNER_ARCHIVE_URL" -o "$tmp_archive"
+
+download_runner_archive() {
+  attempt=1
+  max_attempts=8
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if curl --fail --show-error --location --progress-bar \
+      --proto '=https' --tlsv1.2 \
+      --connect-timeout 30 \
+      --speed-limit 1024 --speed-time 60 \
+      --continue-at - \
+      "$AEGIS_GITHUB_RUNNER_ARCHIVE_URL" -o "$tmp_archive"; then
+      return 0
+    fi
+
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      echo "runner archive download failed after $attempt attempts" >&2
+      return 1
+    fi
+
+    echo "runner archive download attempt $attempt failed or stalled; resuming partial archive" >&2
+    attempt=$((attempt + 1))
+    sleep 3
+  done
+}
+
+download_runner_archive
 printf '%s  %s\n' "$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" "$tmp_archive" | sha256sum -c -
 tar -xzf "$tmp_archive" -C "$RUNNER_DIR"
 if [ ! -x "$RUNNER_DIR/bin/installdependencies.sh" ]; then
