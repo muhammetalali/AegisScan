@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import secrets
 import stat
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -32,6 +34,7 @@ REQUIRED_RUNNING_SERVICES = {
     "prometheus",
     "alertmanager",
     "backup",
+    "scan_target",
 }
 
 
@@ -39,12 +42,18 @@ class OperationalAcceptanceError(RuntimeError):
     pass
 
 
-def _run(argv: list[str], *, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+def _run(
+    argv: list[str],
+    *,
+    timeout: int = 60,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             argv,
             cwd=PLATFORM_DIR,
             text=True,
+            input=input_text,
             capture_output=True,
             check=True,
             timeout=timeout,
@@ -211,6 +220,98 @@ def _wait_backup(env_file: Path, *, timeout_seconds: int, poll_seconds: int) -> 
     raise OperationalAcceptanceError(f"remote encrypted backup did not become healthy: {last_error[-1000:]}")
 
 
+
+def _provision_e2e_fixture(env_file: Path, release_sha: str) -> dict[str, str]:
+    unique = uuid.uuid4().hex[:16]
+    actor_email = f"release-e2e-{unique}@aegisscan.local"
+    actor_password = f"Aegis-E2E-{unique}-!9-{secrets.token_urlsafe(24)}"
+    approver_email = f"release-e2e-approver-{unique}@aegisscan.local"
+    approver_password = f"Aegis-E2E-Approver-{unique}-!7-{secrets.token_urlsafe(24)}"
+
+    bootstrap = f"""
+import json
+from django.db import transaction
+from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit
+from django_project.users.models import User, UserRole
+
+actor_email = {actor_email!r}
+actor_password = {actor_password!r}
+approver_email = {approver_email!r}
+approver_password = {approver_password!r}
+release_sha = {release_sha!r}
+
+with transaction.atomic():
+    actor = User.objects.create_user(
+        email=actor_email,
+        password=actor_password,
+        first_name='Release',
+        last_name='E2E Actor',
+        role=UserRole.SECURITY_MANAGER,
+    )
+    approver = User.objects.create_user(
+        email=approver_email,
+        password=approver_password,
+        first_name='Release',
+        last_name='E2E Approver',
+        role=UserRole.VIEWER,
+    )
+    for user, purpose in ((actor, 'actor'), (approver, 'approver')):
+        append_audit(
+            action=AuditLog.Action.USER_CREATE,
+            result=AuditLog.Result.SUCCESS,
+            resource_type='User',
+            resource_id=str(user.id),
+            resource_repr=user.email,
+            metadata={{
+                'event': 'release_e2e_identity_created',
+                'purpose': purpose,
+                'release_sha': release_sha,
+            }},
+            ip_address='127.0.0.1',
+            user_agent='production-operational-acceptance',
+        )
+print(json.dumps({{
+    'actor_id': str(actor.id),
+    'approver_id': str(approver.id),
+}}, sort_keys=True))
+"""
+    result = _run(
+        _compose(
+            env_file,
+            "exec",
+            "-T",
+            "django",
+            "python",
+            "manage.py",
+            "shell",
+        ),
+        timeout=60,
+        input_text=bootstrap,
+    )
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise OperationalAcceptanceError("production E2E identity bootstrap returned no result")
+    try:
+        identity = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise OperationalAcceptanceError("production E2E identity bootstrap returned invalid JSON") from exc
+    if not identity.get("actor_id") or not identity.get("approver_id"):
+        raise OperationalAcceptanceError("production E2E identity bootstrap did not return both identities")
+
+    return {
+        "schema": "aegisscan.production-e2e-fixture.v1",
+        "release_sha": release_sha,
+        "actor_id": str(identity["actor_id"]),
+        "actor_email": actor_email,
+        "actor_password": actor_password,
+        "approver_id": str(identity["approver_id"]),
+        "approver_email": approver_email,
+        "approver_password": approver_password,
+        "target": "aegis-scan-target",
+    }
+
+
 def accept(
     *,
     env_file: Path,
@@ -231,6 +332,7 @@ def accept(
     services = _wait_required_services(env_file, timeout_seconds=service_timeout_seconds, poll_seconds=poll_seconds)
     alertmanager = _wait_alertmanager(env_file, timeout_seconds=service_timeout_seconds, poll_seconds=poll_seconds)
     backup = _wait_backup(env_file, timeout_seconds=backup_timeout_seconds, poll_seconds=poll_seconds)
+    e2e_fixture = _provision_e2e_fixture(env_file, release_sha)
     return {
         "schema": "aegisscan.production-operational-acceptance.v1",
         "status": "success",
@@ -240,6 +342,7 @@ def accept(
         "running_services": services,
         "alertmanager": alertmanager,
         "backup": backup,
+        "e2e_fixture": e2e_fixture,
         "operational_material": {
             "alert_webhook_https": True,
             "backup_endpoint_https": True,
