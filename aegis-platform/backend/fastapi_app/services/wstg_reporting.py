@@ -17,7 +17,7 @@ from .wstg_observation_lineage import wstg_observation_lineage
 
 
 OBSERVATION_ONLY_POLICY = 'observation-only'
-COMPLETION_CLAIM_ALLOWED = False
+COVERAGE_CLAIM_POLICY = 'governed-methodology-completion'
 FINDING_STATE_AUTHORITY = 'governed-finding-confirmation'
 
 _CLASSIFICATION_STATE = {
@@ -209,15 +209,15 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
 
     states = Counter(row['state'] for row in ordered)
     return {
-        'contract_version': '1.0',
+        'contract_version': '1.1',
         'methodology': 'WSTG',
         'methodology_version': '4.2',
         'source': 'postgresql',
         'project_id': str(project.id),
         'project_name': project.name,
         'scope_scan_id': str(scan_id) if scan_id else None,
-        'claim_policy': OBSERVATION_ONLY_POLICY,
-        'completion_claim_allowed': COMPLETION_CLAIM_ALLOWED,
+        'claim_policy': COVERAGE_CLAIM_POLICY,
+        'completion_claim_allowed': completed_tests == len(ordered),
         'finding_state_authority': FINDING_STATE_AUTHORITY,
         'summary': {
             'total_tests': len(ordered),
