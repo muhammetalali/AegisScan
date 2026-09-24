@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "release1-wstg97-runner-recovery-20260924-v1",
+  "request_id": "release1-final-live-authorization-20260924-v1",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "1fde1bb177c4fac66fa64ab63d65febca3513440",
-  "requested_at": "2026-09-24T12:00:00Z",
-  "expires_at": "2026-09-25T11:59:59Z"
+  "requested_base_sha": "6cad172576012d3407d48018aba648004afa0cc0",
+  "requested_at": "2026-09-24T15:41:00Z",
+  "expires_at": "2026-09-25T15:40:00Z"
 }
