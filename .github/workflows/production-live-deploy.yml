@@ -89,7 +89,6 @@ jobs:
             PROD_SSH_PRIVATE_KEY \
             PROD_SSH_KNOWN_HOSTS \
             PROD_ORIGIN \
-            PROD_ENTERPRISE_CA_BUNDLE \
             PROD_ENTERPRISE_CA_BUNDLE; do
             value="${!name:-}"
             if [ -z "$value" ]; then
