@@ -21,12 +21,14 @@ def test_resilience_workflow_is_manual_or_chained_main_only_and_protected():
     assert triggers["workflow_run"]["types"] == ["completed"]
     job = data["jobs"]["resilience-acceptance"]
     assert job["environment"] == "production"
+    assert job["runs-on"] == ["self-hosted", "linux", "x64", "aegisscan-resilience"]
     condition = job["if"]
     assert "workflow_dispatch" in condition
     assert "workflow_run.conclusion == 'success'" in condition
     assert "workflow_run.head_branch == 'main'" in condition
     assert "workflow_run.head_repository.full_name == github.repository" in condition
     assert data["concurrency"]["cancel-in-progress"] is False
+    assert "runs-on: ubuntu-latest" not in WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_resilience_workflow_pins_remote_backup_versions_and_restores_disposable_db():
@@ -61,6 +63,8 @@ def test_resilience_workflow_keeps_ssh_pinned_and_evidence_hashed():
     assert "StrictHostKeyChecking=no" not in text
     assert "PasswordAuthentication=yes" not in text
     assert "aegisscan.production-resilience-evidence.v1" in text
+    assert "sudo apt-get" not in text
+    assert "Verify provisioned resilience dependencies" in text
     assert "hashlib.sha256" in text
     assert "retention-days: 90" in text
 
