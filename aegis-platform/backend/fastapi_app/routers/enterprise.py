@@ -6,7 +6,7 @@ from uuid import UUID
 
 from asgiref.sync import sync_to_async
 from django.db.models import Q
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from django.utils import timezone
 
@@ -83,6 +83,7 @@ async def create_organization(body: OrgCreate, user=Depends(__import__('fastapi_
 
 @router.post('/organizations/{organization_id}/members', status_code=201)
 async def add_organization_member(
+    request: Request,
     organization_id: UUID,
     body: OrgMemberCreate,
     user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user),
@@ -90,9 +91,20 @@ async def add_organization_member(
     actor_id = str(user.get('user_id') or '')
     if not actor_id:
         raise HTTPException(status_code=401, detail='Authenticated user id is missing')
+    client_ip = request.client.host if request.client and request.client.host else '127.0.0.1'
 
     def add_member():
+        import ipaddress
+        from django.db import transaction
+        from django_project.audit.models import AuditLog
+        from django_project.audit.services import append_audit
         from django_project.users.models import User
+
+        try:
+            ipaddress.ip_address(client_ip)
+            audit_ip = client_ip
+        except ValueError:
+            audit_ip = '127.0.0.1'
 
         organization = Organization.objects.filter(pk=organization_id, is_active=True).first()
         if organization is None:
@@ -126,12 +138,30 @@ async def add_organization_member(
                 }
             raise HTTPException(status_code=409, detail='Organization membership already exists with different state or role')
 
-        membership = OrganizationMembership.objects.create(
-            organization=organization,
-            user=target,
-            role=body.role,
-            is_active=True,
-        )
+        with transaction.atomic():
+            membership = OrganizationMembership.objects.create(
+                organization=organization,
+                user=target,
+                role=body.role,
+                is_active=True,
+            )
+            append_audit(
+                user_id=actor_id,
+                action=AuditLog.Action.USER_PERMISSION_CHANGE,
+                result=AuditLog.Result.SUCCESS,
+                resource_type='OrganizationMembership',
+                resource_id=str(membership.id),
+                resource_repr=f'{target.email} in {organization.slug}',
+                changes={
+                    'organization_id': str(organization.id),
+                    'member_user_id': str(target.id),
+                    'role': membership.role,
+                    'is_active': True,
+                },
+                metadata={'event': 'organization_member_added'},
+                ip_address=audit_ip,
+                user_agent='fastapi-enterprise-membership',
+            )
         return {
             'id': str(membership.id),
             'organization_id': str(organization.id),
