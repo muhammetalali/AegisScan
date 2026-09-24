@@ -78,16 +78,26 @@ marker_matches() {
 
 if [ -x "$RUNNER_DIR/config.sh" ]; then
   service_name="$(cd "$RUNNER_DIR" && ./svc.sh status 2>/dev/null | sed -n 's/.*\(actions.runner[^ ]*\.service\).*/\1/p' | head -n 1 || true)"
-  if [ -n "$service_name" ] && systemctl is-active --quiet "$service_name"; then
-    if ! marker_matches; then
-      echo "existing active runner is not bound to the approved AegisScan production runner marker" >&2
-      exit 1
-    fi
+  if ! marker_matches; then
+    echo "existing runner installation is not bound to the approved AegisScan production runner marker" >&2
+    exit 1
+  fi
+  if [ -z "$service_name" ]; then
+    echo "approved runner marker exists but the installed runner service cannot be resolved" >&2
+    exit 1
+  fi
+  if systemctl is-active --quiet "$service_name"; then
     echo "existing approved production runner service is active: $service_name"
     exit 0
   fi
-  echo "existing runner installation is not active; refusing destructive replacement" >&2
-  exit 1
+  echo "approved production runner service is inactive; attempting bounded service recovery: $service_name"
+  systemctl is-enabled --quiet "$service_name" || systemctl enable "$service_name"
+  ./svc.sh start
+  systemctl is-enabled --quiet "$service_name"
+  systemctl is-active --quiet "$service_name"
+  printf '%s\n' "AEGISSCAN_PRODUCTION_RUNNER_RECOVERY=PASS"
+  printf '%s\n' "runner_service=$service_name"
+  exit 0
 fi
 
 tar -xzf "$tmp_archive" -C "$RUNNER_DIR"
