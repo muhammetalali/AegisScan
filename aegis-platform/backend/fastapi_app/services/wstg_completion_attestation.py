@@ -66,6 +66,17 @@ def _lineage_supports_test(evidence: Evidence, wstg_id: str) -> bool:
     return any(item.get('wstg_id') == wstg_id for item in lineage.get('tests', []))
 
 
+def _producer_ref(evidence: Evidence) -> str:
+    metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
+    return str(
+        evidence.collected_by_id
+        or metadata.get('producer_id')
+        or metadata.get('producer_ref')
+        or metadata.get('producer')
+        or ''
+    ).strip()
+
+
 def create_wstg_methodology_attestation(
     *,
     project_id: str,
@@ -132,7 +143,7 @@ def create_wstg_methodology_attestation(
                 f'Evidence does not contain trusted canonical WSTG lineage for {test.id}: {unsupported}'
             )
 
-    producer_ids = {str(item.collected_by_id) for item in rows if item.collected_by_id}
+    producer_ids = {_producer_ref(item) for item in rows if _producer_ref(item)}
     if producer_ids and producer_ids == {str(actor_id)}:
         raise WSTGAttestationError(
             'WSTG methodology attestation requires separation of duties from the sole evidence producer.'
