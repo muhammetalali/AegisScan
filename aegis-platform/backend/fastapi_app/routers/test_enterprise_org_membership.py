@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from django_project.audit.models import AuditLog
+from django_project.audit.services import verify_audit_chain
 from django_project.users.models import User
 from enterprise.models import Organization, OrganizationMembership
 from fastapi_app.core import dependencies as core_dependencies
@@ -46,6 +48,11 @@ def test_organization_owner_can_add_distinct_active_approver_member():
         membership = OrganizationMembership.objects.get(pk=payload['id'])
         assert membership.user_id == approver.id
         assert membership.is_active is True
+        audit = AuditLog.objects.get(resource_type='OrganizationMembership', resource_id=str(membership.id))
+        assert audit.user_id == owner.id
+        assert audit.metadata['event'] == 'organization_member_added'
+        assert audit.changes['role'] == OrganizationMembership.Role.ADMIN
+        assert verify_audit_chain()[0] is True
     finally:
         app.dependency_overrides.clear()
 
