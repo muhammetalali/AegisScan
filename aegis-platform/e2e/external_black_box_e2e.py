@@ -56,7 +56,8 @@ def _deactivate_ephemeral_account(email:str,password:str,label:str)->None:
 
 def main()->int:
  if CLEANUP_ONLY:
-  if not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):raise RuntimeError('Ephemeral E2E cleanup requires actor and approver credentials.')
+  if not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):
+   print('EXTERNAL_E2E_CLEANUP=SKIPPED_NO_FIXTURE'); return 0
   _deactivate_ephemeral_account(E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD,'Governance approver')
   _deactivate_ephemeral_account(E2E_EMAIL,E2E_PASSWORD,'E2E actor')
   print('EXTERNAL_E2E_CLEANUP=PASS'); return 0
