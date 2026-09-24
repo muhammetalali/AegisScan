@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -39,6 +40,51 @@ def _remote_command(*, repo_path: str, env_path: str, release_sha: str) -> str:
     )
 
 
+def _write_private_fixture(path: Path, fixture: dict[str, object], release_sha: str) -> None:
+    if fixture.get("schema") != "aegisscan.production-e2e-fixture.v1":
+        raise RemoteOperationalAcceptanceError("production E2E fixture schema mismatch")
+    if fixture.get("release_sha") != release_sha:
+        raise RemoteOperationalAcceptanceError("production E2E fixture release SHA mismatch")
+    required = (
+        "actor_id",
+        "actor_email",
+        "actor_password",
+        "approver_id",
+        "approver_email",
+        "approver_password",
+        "target",
+    )
+    missing = [name for name in required if not str(fixture.get(name) or "").strip()]
+    if missing:
+        raise RemoteOperationalAcceptanceError(
+            "production E2E fixture fields are missing: " + ", ".join(missing)
+        )
+    for key in ("actor_password", "approver_password"):
+        value = str(fixture[key])
+        if len(value) < 24 or "\n" in value or "\r" in value or "\x00" in value:
+            raise RemoteOperationalAcceptanceError("production E2E fixture password contract is invalid")
+    if path.exists() and path.is_symlink():
+        raise RemoteOperationalAcceptanceError("production E2E fixture output must not be a symlink")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as handle:
+            json.dump(fixture, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(fd)
+    mode = path.stat().st_mode & 0o777
+    if mode != 0o600 or path.stat().st_size <= 0:
+        raise RemoteOperationalAcceptanceError("production E2E fixture output is not private and durable")
+
+
+
 def accept_remote(
     *,
     host: str,
@@ -50,6 +96,7 @@ def accept_remote(
     repo_path: str,
     env_path: str,
     timeout_seconds: int,
+    e2e_fixture_output: Path,
 ) -> dict[str, object]:
     try:
         host = remote._host(host)
@@ -129,6 +176,11 @@ def accept_remote(
     if payload.get("release_sha") != release_sha:
         raise RemoteOperationalAcceptanceError("remote operational acceptance release SHA mismatch")
 
+    fixture = payload.pop("e2e_fixture", None)
+    if not isinstance(fixture, dict):
+        raise RemoteOperationalAcceptanceError("remote operational acceptance omitted the E2E fixture")
+    _write_private_fixture(e2e_fixture_output.resolve(), fixture, release_sha)
+
     return {
         "schema": "aegisscan.remote-production-operational-acceptance.v1",
         "status": "success",
@@ -136,6 +188,7 @@ def accept_remote(
         "host": host,
         "host_resolved_addresses": host_addresses,
         "release_sha": release_sha,
+        "e2e_fixture_provisioned": True,
         "operational_acceptance": payload,
     }
 
@@ -151,6 +204,7 @@ def main() -> int:
     parser.add_argument("--repo-path", default="/opt/aegisscan/AegisScan")
     parser.add_argument("--env-path", default="/etc/aegisscan/production.env")
     parser.add_argument("--timeout-seconds", type=int, default=2400)
+    parser.add_argument("--e2e-fixture-output", type=Path, required=True)
     args = parser.parse_args()
     if args.timeout_seconds < 60 or args.timeout_seconds > 7200:
         print("timeout-seconds must be between 60 and 7200", file=sys.stderr)
@@ -166,6 +220,7 @@ def main() -> int:
             repo_path=args.repo_path,
             env_path=args.env_path,
             timeout_seconds=args.timeout_seconds,
+            e2e_fixture_output=args.e2e_fixture_output,
         )
     except RemoteOperationalAcceptanceError as exc:
         print(json.dumps({
