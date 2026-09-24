@@ -105,16 +105,17 @@ def test_project_coverage_is_canonical_observation_only_and_rejects_tampered_lin
 
     coverage = build_wstg_project_coverage(project)
 
-    assert coverage['contract_version'] == '1.0'
+    assert coverage['contract_version'] == '1.1'
     assert coverage['methodology'] == 'WSTG'
     assert coverage['methodology_version'] == '4.2'
     assert coverage['source'] == 'postgresql'
-    assert coverage['claim_policy'] == 'observation-only'
+    assert coverage['claim_policy'] == 'governed-methodology-completion'
     assert coverage['completion_claim_allowed'] is False
     assert coverage['finding_state_authority'] == 'governed-finding-confirmation'
     assert coverage['summary']['total_tests'] == 97
     assert coverage['summary']['observed_tests'] == 5
     assert coverage['summary']['completion_claim_supported_tests'] == 97
+    assert 0 <= coverage['summary']['methodology_completed_tests'] <= coverage['summary']['observed_tests']
     assert coverage['summary']['trusted_evidence_records'] == 1
     assert coverage['summary']['trusted_finding_records'] == 1
     assert coverage['summary']['rejected_lineage_records'] == 2
@@ -132,7 +133,8 @@ def test_project_coverage_is_canonical_observation_only_and_rejects_tampered_lin
     assert rows['WSTG-v42-INPV-04']['state'] == 'not_observed'
     assert rows['WSTG-v42-INPV-04']['completion_claim_supported'] is True
     assert rows['WSTG-v42-CLNT-08']['state'] == 'inconclusive'
-    assert all(item['completion_claim_allowed'] is False for item in coverage['tests'])
+    assert all(item['completion_claim_supported'] is True for item in coverage['tests'])
+    assert all(item['state'] not in {'passed', 'failed'} for item in coverage['tests'])
 
 
 @pytest.mark.django_db
@@ -145,6 +147,7 @@ def test_wstg_report_projection_reuses_same_coverage_contract():
     assert payload['wstg_coverage']['scope_scan_id'] == str(scan.id)
     assert payload['wstg_coverage']['summary']['observed_tests'] == 5
     assert payload['wstg_coverage']['completion_claim_allowed'] is False
+    assert payload['wstg_coverage']['summary']['completion_claim_supported_tests'] == 97
     csv_bytes = _make_csv(payload)
     csv_text = csv_bytes.decode('utf-8')
     assert 'WSTG-v42-INFO-02' in csv_text
@@ -178,7 +181,7 @@ def test_wstg_json_report_persists_integrity_bound_artifact(settings, tmp_path):
         report.file.close()
     assert '"methodology": "WSTG"' in artifact
     assert '"completion_claim_allowed": false' in artifact
-    assert '"claim_policy": "observation-only"' in artifact
+    assert '"claim_policy": "governed-methodology-completion"' in artifact
     assert '"rejected_lineage_records": 2' in artifact
 
 
@@ -199,6 +202,7 @@ def test_wstg_coverage_http_is_project_scoped_and_never_exposes_verdict_authorit
             assert body['summary']['total_tests'] == 97
             assert body['summary']['observed_tests'] == 5
             assert body['summary']['completion_claim_supported_tests'] == 97
+            assert body['summary']['methodology_completed_tests'] <= body['summary']['observed_tests']
             assert body['completion_claim_allowed'] is False
             assert 'passed' not in {item['state'] for item in body['tests']}
             assert 'failed' not in {item['state'] for item in body['tests']}
