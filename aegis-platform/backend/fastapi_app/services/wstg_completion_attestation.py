@@ -7,7 +7,8 @@ from typing import Any
 from django.db import transaction
 from django.db.models import Q
 
-from django_project.evidence.models import Evidence, WSTGMethodologyAttestation
+from django_project.evidence.models import Evidence
+from enterprise.models import WSTGMethodologyAttestation
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from enterprise.models import OrganizationMembership, TenantProject
