@@ -115,7 +115,7 @@ def create_wstg_methodology_attestation(
         raise WSTGAttestationError('One or more evidence records are missing or outside the project.')
     if scan is not None and any(str(item.scan_id or '') != str(scan.id) for item in rows):
         raise WSTGAttestationError('Scan-scoped attestation evidence must belong to the exact scan.')
-    if test.classification != 'CONDITIONAL_NA':
+    if test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING', 'GAP_NATIVE_SMALL'}:
         unsupported = [str(item.id) for item in rows if not _lineage_supports_test(item, test.id)]
         if unsupported:
             raise WSTGAttestationError(
