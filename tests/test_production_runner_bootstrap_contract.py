@@ -60,5 +60,5 @@ def test_runner_bootstrap_requires_attested_existing_runner_marker():
     assert "runner_labels=$RUNNER_LABELS" in text
     assert "runner_archive_sha256=$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" in text
     assert "root:root:640" in text
-    assert "existing active runner is not bound to the approved AegisScan production runner marker" in text
+    assert "existing runner installation is not bound to the approved AegisScan production runner marker" in text
     assert "marker_matches" in text
