@@ -28,6 +28,7 @@ class WSTGGroupCoverage(ContractModel):
 class WSTGCoverageSummary(ContractModel):
     total_tests: Literal[97]
     observed_tests: int = Field(ge=0, le=97)
+    completion_claim_supported_tests: Literal[97]
     observation_coverage_percent: float = Field(ge=0, le=100)
     auto_assisted_total: Literal[70]
     auto_assisted_observed: int = Field(ge=0, le=70)
@@ -49,6 +50,7 @@ class WSTGTestCoverage(ContractModel):
     finding_records: int = Field(ge=0)
     capability_ids: list[str]
     latest_observed_at: str | None
+    completion_claim_supported: Literal[True]
     completion_claim_allowed: Literal[False]
 
 
