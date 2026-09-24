@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Database, FileText, RefreshCw, Search, ShieldCheck } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { apiHelpers } from '@/services/api'
-import { WSTGProjectCoverageSchema, type WSTGProjectCoverage } from '@/contracts/api'
+import { WSTGAttestationViewSchema, WSTGProjectCoverageSchema, type WSTGProjectCoverage } from '@/contracts/api'
 import { useLanguageStore } from '@/stores/languageStore'
 import { cn } from '@/utils/cn'
 
@@ -31,6 +31,10 @@ export const WSTGCoveragePage = () => {
   const [search, setSearch] = useState('')
   const [state, setState] = useState('')
   const [category, setCategory] = useState('')
+  const [attestationTest, setAttestationTest] = useState('')
+  const [attestationEvidence, setAttestationEvidence] = useState('')
+  const [attestationRationale, setAttestationRationale] = useState('')
+  const [attestationDecision, setAttestationDecision] = useState<'completed' | 'not_applicable'>('completed')
 
   const projectsQuery = useQuery<ProjectsResponse>({
     queryKey: ['wstg-projects'],
@@ -76,6 +80,34 @@ export const WSTGCoveragePage = () => {
   )
 
   const summary = coverageQuery.data?.summary
+  const incompleteTests = useMemo(
+    () => (coverageQuery.data?.tests ?? []).filter(item => !item.methodology_completed),
+    [coverageQuery.data],
+  )
+  const selectedAttestationTest = incompleteTests.find(item => item.wstg_id === attestationTest)
+  const attestationMutation = useMutation({
+    mutationFn: async () => {
+      if (!projectId || !selectedAttestationTest) throw new Error('Select an incomplete WSTG test')
+      const evidence_ids = attestationEvidence.split(',').map(value => value.trim()).filter(Boolean)
+      if (!evidence_ids.length) throw new Error('At least one evidence ID is required')
+      const decision = selectedAttestationTest.classification === 'CONDITIONAL_NA'
+        ? attestationDecision
+        : 'completed'
+      const payload = await apiHelpers.post<unknown>(`/wstg/projects/${projectId}/attestations`, {
+        wstg_id: selectedAttestationTest.wstg_id,
+        evidence_ids,
+        rationale: attestationRationale.trim(),
+        decision,
+      })
+      return WSTGAttestationViewSchema.parse(payload)
+    },
+    onSuccess: async () => {
+      setAttestationEvidence('')
+      setAttestationRationale('')
+      setAttestationDecision('completed')
+      await coverageQuery.refetch()
+    },
+  })
 
   return <div className="space-y-6 pb-10">
     <section className="enterprise-card rounded-3xl p-6 md:p-8">
@@ -127,6 +159,44 @@ export const WSTGCoveragePage = () => {
         <div className="text-xs text-muted-foreground">{label}</div>
         <div className="mt-2 text-2xl font-semibold">{String(value)}</div>
       </div>)}
+    </section>}
+
+    {coverageQuery.data && <section className="enterprise-card rounded-2xl p-5">
+      <div className="flex flex-col gap-1">
+        <div className="font-semibold">{t('Governed methodology completion')}</div>
+        <p className="text-sm text-muted-foreground">{t('Completion requires qualified evidence and, where required, an analyst attestation. It never creates a pass/fail or Finding lifecycle decision.')}</p>
+      </div>
+      {incompleteTests.length === 0 ? <div className="mt-4 rounded-xl border bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-700 dark:text-emerald-400">{t('All 97 WSTG methodology rows are completed under the governed completion policy.')}</div> : <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Incomplete WSTG test')}</span>
+          <select value={attestationTest} onChange={e => { setAttestationTest(e.target.value); setAttestationDecision('completed') }} className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm">
+            <option value="">{t('Select test')}</option>
+            {incompleteTests.map(item => <option key={item.wstg_id} value={item.wstg_id}>{item.wstg_id} · {item.title}</option>)}
+          </select>
+        </label>
+        {selectedAttestationTest?.classification === 'CONDITIONAL_NA' && <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Decision')}</span>
+          <select value={attestationDecision} onChange={e => setAttestationDecision(e.target.value as 'completed' | 'not_applicable')} className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm">
+            <option value="completed">{t('Completed (applicable)')}</option>
+            <option value="not_applicable">{t('Not applicable')}</option>
+          </select>
+        </label>}
+        <label className="block lg:col-span-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Evidence IDs')}</span>
+          <input value={attestationEvidence} onChange={e => setAttestationEvidence(e.target.value)} placeholder={t('Comma-separated persisted evidence UUIDs')} className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm" />
+        </label>
+        <label className="block lg:col-span-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Governed rationale')}</span>
+          <textarea value={attestationRationale} onChange={e => setAttestationRationale(e.target.value)} rows={3} maxLength={4000} className="mt-2 w-full rounded-xl border bg-background px-3 py-2 text-sm" placeholder={t('Explain why the qualified evidence satisfies methodology completion.')} />
+        </label>
+        <div className="lg:col-span-2 flex items-center gap-3">
+          <button type="button" onClick={() => attestationMutation.mutate()} disabled={!selectedAttestationTest || !attestationEvidence.trim() || attestationRationale.trim().length < 12 || attestationMutation.isPending} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50">
+            {attestationMutation.isPending ? t('Submitting...') : t('Submit governed completion')}
+          </button>
+          {attestationMutation.isSuccess && <span className="text-sm text-emerald-600 dark:text-emerald-400">{t('Completion attestation recorded')}</span>}
+          {attestationMutation.isError && <span className="text-sm text-destructive">{t('Completion attestation was rejected')}</span>}
+        </div>
+      </div>}
     </section>}
 
     {summary && summary.rejected_lineage_records > 0 && <section className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
