@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from asgiref.sync import sync_to_async
@@ -30,6 +31,7 @@ class WSTGCoverageSummary(ContractModel):
     total_tests: Literal[97]
     observed_tests: int = Field(ge=0, le=97)
     completion_claim_supported_tests: Literal[97]
+    methodology_completed_tests: int = Field(ge=0, le=97)
     observation_coverage_percent: float = Field(ge=0, le=100)
     auto_assisted_total: Literal[70]
     auto_assisted_observed: int = Field(ge=0, le=70)
@@ -52,19 +54,21 @@ class WSTGTestCoverage(ContractModel):
     capability_ids: list[str]
     latest_observed_at: str | None
     completion_claim_supported: Literal[True]
-    completion_claim_allowed: Literal[False]
+    completion_claim_allowed: bool
+    methodology_completed: bool
+    completion_attestation_id: str | None
 
 
 class WSTGProjectCoverage(ContractModel):
-    contract_version: Literal['1.0']
+    contract_version: Literal['1.1']
     methodology: Literal['WSTG']
     methodology_version: Literal['4.2']
     source: Literal['postgresql']
     project_id: str
     project_name: str
     scope_scan_id: str | None
-    claim_policy: Literal['observation-only']
-    completion_claim_allowed: Literal[False]
+    claim_policy: Literal['governed-methodology-completion']
+    completion_claim_allowed: bool
     finding_state_authority: Literal['governed-finding-confirmation']
     summary: WSTGCoverageSummary
     category_summary: dict[str, WSTGGroupCoverage]
@@ -93,7 +97,7 @@ class WSTGAttestationView(ContractModel):
     evidence_qualification_fingerprint: str
     request_fingerprint: str
     created_by_id: str
-    created_at: object
+    created_at: datetime
     replayed: bool
 
 
