@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -24,6 +25,133 @@ class RemoteOperationalAcceptanceError(RuntimeError):
     pass
 
 
+_FIXTURE_PATH_RE = re.compile(r"^/home/aegisdeploy/\.aegis-e2e/e2e-fixture-[0-9a-f]{32}\.json$")
+
+
+def _ssh_base(
+    *,
+    host: str,
+    port: int,
+    user: str,
+    private_key: Path,
+    known_hosts: Path,
+) -> list[str]:
+    return [
+        "ssh",
+        "-T",
+        "-i",
+        str(private_key),
+        "-p",
+        str(port),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "PasswordAuthentication=no",
+        "-o",
+        "KbdInteractiveAuthentication=no",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        f"UserKnownHostsFile={known_hosts}",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=3",
+        f"{user}@{host}",
+    ]
+
+
+def _transfer_private_fixture(
+    *,
+    host: str,
+    port: int,
+    user: str,
+    private_key: Path,
+    known_hosts: Path,
+    remote_path: str,
+    local_path: Path,
+) -> None:
+    if not _FIXTURE_PATH_RE.fullmatch(remote_path):
+        raise RemoteOperationalAcceptanceError("remote production E2E fixture path is invalid")
+    local_path = local_path.resolve()
+    if local_path.exists() and local_path.is_symlink():
+        raise RemoteOperationalAcceptanceError("local production E2E fixture output must not be a symlink")
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    if local_path.exists():
+        local_path.unlink()
+
+    argv = [
+        "scp",
+        "-p",
+        "-q",
+        "-i",
+        str(private_key),
+        "-P",
+        str(port),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "PasswordAuthentication=no",
+        "-o",
+        "KbdInteractiveAuthentication=no",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        f"UserKnownHostsFile={known_hosts}",
+        "-o",
+        "ConnectTimeout=15",
+        f"{user}@{host}:{remote_path}",
+        str(local_path),
+    ]
+    old_umask = os.umask(0o077)
+    try:
+        subprocess.run(argv, check=True, text=True, capture_output=True, timeout=60)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip()[-2000:]
+        raise RemoteOperationalAcceptanceError(
+            f"unable to retrieve private production E2E fixture: {detail}"
+        ) from exc
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise RemoteOperationalAcceptanceError(
+            f"unable to retrieve private production E2E fixture: {exc}"
+        ) from exc
+    finally:
+        os.umask(old_umask)
+
+    if not local_path.is_file() or local_path.is_symlink():
+        raise RemoteOperationalAcceptanceError("retrieved production E2E fixture is missing or unsafe")
+    os.chmod(local_path, 0o600)
+    if (local_path.stat().st_mode & 0o777) != 0o600 or local_path.stat().st_size <= 0:
+        raise RemoteOperationalAcceptanceError("retrieved production E2E fixture is not private and durable")
+
+    cleanup = [
+        *_ssh_base(
+            host=host,
+            port=port,
+            user=user,
+            private_key=private_key,
+            known_hosts=known_hosts,
+        ),
+        f"/bin/rm -f -- {shlex.quote(remote_path)}",
+    ]
+    try:
+        subprocess.run(cleanup, check=True, text=True, capture_output=True, timeout=30)
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        try:
+            local_path.unlink()
+        except OSError:
+            pass
+        raise RemoteOperationalAcceptanceError(
+            "private production E2E fixture was retrieved but remote cleanup failed"
+        ) from exc
+
+
 def _remote_command(*, repo_path: str, env_path: str, release_sha: str) -> str:
     if repo_path != remote.PRODUCTION_REPO_PATH:
         raise RemoteOperationalAcceptanceError(
@@ -38,51 +166,6 @@ def _remote_command(*, repo_path: str, env_path: str, release_sha: str) -> str:
         f"sudo -n {q(remote.PRIVILEGED_GATE)} accept "
         f"--release-sha {q(release_sha)}"
     )
-
-
-def _write_private_fixture(path: Path, fixture: dict[str, object], release_sha: str) -> None:
-    if fixture.get("schema") != "aegisscan.production-e2e-fixture.v1":
-        raise RemoteOperationalAcceptanceError("production E2E fixture schema mismatch")
-    if fixture.get("release_sha") != release_sha:
-        raise RemoteOperationalAcceptanceError("production E2E fixture release SHA mismatch")
-    required = (
-        "actor_id",
-        "actor_email",
-        "actor_password",
-        "approver_id",
-        "approver_email",
-        "approver_password",
-        "target",
-    )
-    missing = [name for name in required if not str(fixture.get(name) or "").strip()]
-    if missing:
-        raise RemoteOperationalAcceptanceError(
-            "production E2E fixture fields are missing: " + ", ".join(missing)
-        )
-    for key in ("actor_password", "approver_password"):
-        value = str(fixture[key])
-        if len(value) < 24 or "\n" in value or "\r" in value or "\x00" in value:
-            raise RemoteOperationalAcceptanceError("production E2E fixture password contract is invalid")
-    if path.exists() and path.is_symlink():
-        raise RemoteOperationalAcceptanceError("production E2E fixture output must not be a symlink")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags, 0o600)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as handle:
-            json.dump(fixture, handle, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-    finally:
-        os.close(fd)
-    mode = path.stat().st_mode & 0o777
-    if mode != 0o600 or path.stat().st_size <= 0:
-        raise RemoteOperationalAcceptanceError("production E2E fixture output is not private and durable")
-
 
 
 def accept_remote(
@@ -119,31 +202,13 @@ def accept_remote(
 
     command = _remote_command(repo_path=repo_path, env_path=env_path, release_sha=release_sha)
     argv = [
-        "ssh",
-        "-T",
-        "-i",
-        str(private_key),
-        "-p",
-        str(port),
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "PasswordAuthentication=no",
-        "-o",
-        "KbdInteractiveAuthentication=no",
-        "-o",
-        "StrictHostKeyChecking=yes",
-        "-o",
-        f"UserKnownHostsFile={known_hosts}",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "ServerAliveInterval=30",
-        "-o",
-        "ServerAliveCountMax=3",
-        f"{user}@{host}",
+        *_ssh_base(
+            host=host,
+            port=port,
+            user=user,
+            private_key=private_key,
+            known_hosts=known_hosts,
+        ),
         command,
     ]
     try:
@@ -175,11 +240,18 @@ def accept_remote(
         raise RemoteOperationalAcceptanceError("remote host did not return successful operational acceptance")
     if payload.get("release_sha") != release_sha:
         raise RemoteOperationalAcceptanceError("remote operational acceptance release SHA mismatch")
-
-    fixture = payload.pop("e2e_fixture", None)
-    if not isinstance(fixture, dict):
-        raise RemoteOperationalAcceptanceError("remote operational acceptance omitted the E2E fixture")
-    _write_private_fixture(e2e_fixture_output.resolve(), fixture, release_sha)
+    remote_fixture_path = str(payload.pop("e2e_fixture_path", "") or "")
+    if payload.get("e2e_fixture_provisioned") is not True or not remote_fixture_path:
+        raise RemoteOperationalAcceptanceError("remote operational acceptance omitted the E2E fixture handoff")
+    _transfer_private_fixture(
+        host=host,
+        port=port,
+        user=user,
+        private_key=private_key,
+        known_hosts=known_hosts,
+        remote_path=remote_fixture_path,
+        local_path=e2e_fixture_output,
+    )
 
     return {
         "schema": "aegisscan.remote-production-operational-acceptance.v1",
@@ -188,7 +260,7 @@ def accept_remote(
         "host": host,
         "host_resolved_addresses": host_addresses,
         "release_sha": release_sha,
-        "e2e_fixture_provisioned": True,
+        "e2e_fixture_transferred": True,
         "operational_acceptance": payload,
     }
 
