@@ -83,16 +83,63 @@ def test_accept_binds_release_and_emits_sanitized_operational_evidence(monkeypat
         "_wait_backup",
         lambda *args, **kwargs: {"status": "healthy", "backup_id": "bk-real", "age_seconds": 7},
     )
+    fixture = {
+        "schema": "aegisscan.production-e2e-fixture.v1",
+        "release_sha": release,
+        "actor_id": "actor-1",
+        "actor_email": "actor@example.invalid",
+        "actor_password": "secret-actor-password",
+        "approver_id": "approver-1",
+        "approver_email": "approver@example.invalid",
+        "approver_password": "secret-approver-password",
+        "target": "aegis-scan-target",
+    }
+    monkeypatch.setattr(ops, "_provision_e2e_fixture", lambda *args, **kwargs: fixture)
+    monkeypatch.setattr(
+        ops,
+        "_persist_e2e_fixture_for_deploy_user",
+        lambda value: "/home/aegisdeploy/.aegis-e2e/e2e-fixture-" + "a" * 32 + ".json",
+    )
 
     result = ops.accept(env_file=env_file, release_sha=release, poll_seconds=1)
     assert result["status"] == "success"
     assert result["release_sha"] == release
     assert result["alertmanager"] == {"status": "ready"}
     assert result["backup"]["backup_id"] == "bk-real"
+    assert result["e2e_fixture_provisioned"] is True
+    assert result["e2e_fixture_path"].endswith(".json")
+    assert "scan_target" in result["required_services"]
     encoded = json.dumps(result)
     assert "alerts.internal" not in encoded
     assert "backup.internal" not in encoded
+    assert "secret-actor-password" not in encoded
+    assert "secret-approver-password" not in encoded
 
     monkeypatch.setattr(ops, "_current_sha", lambda: "b" * 40)
     with pytest.raises(ops.OperationalAcceptanceError, match="checkout"):
         ops.accept(env_file=env_file, release_sha=release, poll_seconds=1)
+
+
+def test_e2e_fixture_bootstrap_uses_scoped_roles_and_never_prints_passwords(monkeypatch, tmp_path: Path):
+    env_file = tmp_path / "production.env"
+    env_file.write_text("X=1\n", encoding="utf-8")
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["input_text"] = kwargs.get("input_text", "")
+        return SimpleNamespace(stdout='{"actor_id":"a-1","approver_id":"b-1"}\n')
+
+    monkeypatch.setattr(ops, "_run", fake_run)
+    fixture = ops._provision_e2e_fixture(env_file, "c" * 40)
+
+    assert fixture["schema"] == "aegisscan.production-e2e-fixture.v1"
+    assert fixture["target"] == "aegis-scan-target"
+    assert len(fixture["actor_password"]) >= 24
+    assert len(fixture["approver_password"]) >= 24
+    script = captured["input_text"]
+    assert "role=UserRole.SECURITY_MANAGER" in script
+    assert "role=UserRole.VIEWER" in script
+    assert "stale_release_e2e_identity_deactivated" in script
+    assert fixture["actor_password"] in script
+    assert fixture["actor_password"] not in captured.get("stdout", "")
