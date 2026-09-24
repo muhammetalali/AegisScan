@@ -32,8 +32,11 @@ The Reality gate proves that:
 - authorization remains required;
 - native/runtime output remains observation evidence, never a final methodology
   decision;
-- trusted lineage is `observed` + `supporting_observation` after cutover while
-  `completion_claim_allowed=false`;
+- trusted lineage remains `observed` + `supporting_observation` after cutover;
+- each reviewed native-gap row has a governed methodology-completion path using
+  trusted evidence plus governed attestation;
+- observation alone never grants a completion claim, and methodology completion
+  never means pass/fail or Finding lifecycle authority;
 - CLNT-11 uses bounded browser telemetry plus the existing web-messaging semantic
   service instead of inventing a fake executable capability;
 - forged runtime fields cannot promote an observation into final-decision authority.
@@ -48,3 +51,13 @@ authorities.
 If a reviewed provider disappears, loses execution readiness, or its mapping drifts,
 A8 fails closed: the mapping/Reality gate fails and the planner returns `blocked`
 rather than silently claiming WSTG coverage.
+
+## 97/97 completion-path contract
+
+AegisScan now treats methodology completion separately from security verdicts.
+All 97 canonical WSTG v4.2 rows have a governed completion-claim path. The five
+historical `GAP_NATIVE_SMALL` rows retain that classification as design provenance,
+but their reviewed providers are execution-ready and their completion mode is
+`evidence_plus_governed_attestation`. A trusted observation by itself is not enough.
+The independent `WSTG Full Completion Policy Reality` workflow proves this invariant
+without promoting scanner output into pass/fail authority.
