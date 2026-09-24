@@ -36,6 +36,10 @@ jobs:
       PROD_E2E_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
       PROD_E2E_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
       PROD_E2E_TARGET: ${{ secrets.AEGIS_PRODUCTION_E2E_TARGET }}
+      PROD_E2E_APPROVER_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_EMAIL }}
+      PROD_E2E_APPROVER_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_PASSWORD }}
+      PROD_E2E_GOV_ORG_ID: ${{ secrets.AEGIS_PRODUCTION_E2E_GOV_ORG_ID }}
+      PROD_E2E_APPROVER_MEMBERSHIP_ID: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_MEMBERSHIP_ID }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -95,7 +99,11 @@ jobs:
             PROD_ENTERPRISE_CA_BUNDLE \
             PROD_E2E_EMAIL \
             PROD_E2E_PASSWORD \
-            PROD_E2E_TARGET; do
+            PROD_E2E_TARGET \
+            PROD_E2E_APPROVER_EMAIL \
+            PROD_E2E_APPROVER_PASSWORD \
+            PROD_E2E_GOV_ORG_ID \
+            PROD_E2E_APPROVER_MEMBERSHIP_ID; do
             value="${!name:-}"
             if [ -z "$value" ]; then
               echo "Required internal production secret/variable is missing: $name" >&2
@@ -194,6 +202,10 @@ jobs:
           AEGIS_VERIFY_TLS: 'true'
           AEGIS_E2E_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_EMAIL }}
           AEGIS_E2E_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_PASSWORD }}
+          AEGIS_E2E_APPROVER_EMAIL: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_EMAIL }}
+          AEGIS_E2E_APPROVER_PASSWORD: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_PASSWORD }}
+          AEGIS_E2E_GOV_ORG_ID: ${{ secrets.AEGIS_PRODUCTION_E2E_GOV_ORG_ID }}
+          AEGIS_E2E_APPROVER_MEMBERSHIP_ID: ${{ secrets.AEGIS_PRODUCTION_E2E_APPROVER_MEMBERSHIP_ID }}
         run: |
           set -euo pipefail
           export AEGIS_BASE_URL="$AEGIS_LIVE_ORIGIN"
