@@ -7,9 +7,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 : "${AEGIS_GITHUB_RUNNER_URL:?AEGIS_GITHUB_RUNNER_URL is required}"
-: "${AEGIS_GITHUB_RUNNER_ARCHIVE_URL:?AEGIS_GITHUB_RUNNER_ARCHIVE_URL is required}"
 : "${AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256:?AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256 is required}"
-: "${AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN:?AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN is required}"
 
 RUNNER_USER="${AEGIS_GITHUB_RUNNER_USER:-aegisrunner}"
 RUNNER_NAME="${AEGIS_GITHUB_RUNNER_NAME:-aegisscan-production}"
@@ -21,11 +19,6 @@ RUNNER_MARKER="/etc/aegisscan/production-runner.env"
 case "$AEGIS_GITHUB_RUNNER_URL" in
   https://github.com/*) ;;
   *) echo "AEGIS_GITHUB_RUNNER_URL must be an HTTPS github.com repository or organization URL" >&2; exit 1 ;;
-esac
-
-case "$AEGIS_GITHUB_RUNNER_ARCHIVE_URL" in
-  https://github.com/actions/runner/releases/download/*/actions-runner-linux-x64-*.tar.gz) ;;
-  *) echo "AEGIS_GITHUB_RUNNER_ARCHIVE_URL must be a pinned official actions/runner linux-x64 release archive" >&2; exit 1 ;;
 esac
 
 case "$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" in
@@ -41,6 +34,48 @@ case "$RUNNER_USER" in
 esac
 case "$RUNNER_NAME" in
   ''|*[!A-Za-z0-9._-]*) echo "AEGIS_GITHUB_RUNNER_NAME is invalid" >&2; exit 1 ;;
+esac
+
+marker_matches() {
+  [ -f "$RUNNER_MARKER" ] || return 1
+  [ "$(stat -c '%U:%G:%a' "$RUNNER_MARKER" 2>/dev/null || true)" = "root:root:640" ] || return 1
+  grep -Fqx "schema=aegisscan.production-runner.v1" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_url=$AEGIS_GITHUB_RUNNER_URL" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_name=$RUNNER_NAME" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_labels=$RUNNER_LABELS" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_archive_sha256=$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" "$RUNNER_MARKER" || return 1
+}
+
+if [ -x "$RUNNER_DIR/config.sh" ]; then
+  service_name="$(cd "$RUNNER_DIR" && ./svc.sh status 2>/dev/null | sed -n 's/.*\(actions.runner[^ ]*\.service\).*/\1/p' | head -n 1 || true)"
+  if ! marker_matches; then
+    echo "existing runner installation is not bound to the approved AegisScan production runner marker" >&2
+    exit 1
+  fi
+  if [ -z "$service_name" ]; then
+    echo "approved runner marker exists but the installed runner service cannot be resolved" >&2
+    exit 1
+  fi
+  if systemctl is-active --quiet "$service_name"; then
+    echo "existing approved production runner service is active: $service_name"
+    exit 0
+  fi
+  echo "approved production runner service is inactive; attempting bounded service recovery: $service_name"
+  systemctl is-enabled --quiet "$service_name" || systemctl enable "$service_name"
+  (cd "$RUNNER_DIR" && ./svc.sh start)
+  systemctl is-enabled --quiet "$service_name"
+  systemctl is-active --quiet "$service_name"
+  printf '%s\n' "AEGISSCAN_PRODUCTION_RUNNER_RECOVERY=PASS"
+  printf '%s\n' "runner_service=$service_name"
+  exit 0
+fi
+
+: "${AEGIS_GITHUB_RUNNER_ARCHIVE_URL:?AEGIS_GITHUB_RUNNER_ARCHIVE_URL is required for fresh runner installation}"
+: "${AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN:?AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN is required for fresh runner installation}"
+
+case "$AEGIS_GITHUB_RUNNER_ARCHIVE_URL" in
+  https://github.com/actions/runner/releases/download/*/actions-runner-linux-x64-*.tar.gz) ;;
+  *) echo "AEGIS_GITHUB_RUNNER_ARCHIVE_URL must be a pinned official actions/runner linux-x64 release archive" >&2; exit 1 ;;
 esac
 
 export DEBIAN_FRONTEND=noninteractive
@@ -65,30 +100,6 @@ curl --fail --silent --show-error --location   --proto '=https' --tlsv1.2   "$AE
 
 printf '%s  %s
 ' "$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" "$tmp_archive" | sha256sum -c -
-
-marker_matches() {
-  [ -f "$RUNNER_MARKER" ] || return 1
-  [ "$(stat -c '%U:%G:%a' "$RUNNER_MARKER" 2>/dev/null || true)" = "root:root:640" ] || return 1
-  grep -Fqx "schema=aegisscan.production-runner.v1" "$RUNNER_MARKER" || return 1
-  grep -Fqx "runner_url=$AEGIS_GITHUB_RUNNER_URL" "$RUNNER_MARKER" || return 1
-  grep -Fqx "runner_name=$RUNNER_NAME" "$RUNNER_MARKER" || return 1
-  grep -Fqx "runner_labels=$RUNNER_LABELS" "$RUNNER_MARKER" || return 1
-  grep -Fqx "runner_archive_sha256=$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" "$RUNNER_MARKER" || return 1
-}
-
-if [ -x "$RUNNER_DIR/config.sh" ]; then
-  service_name="$(cd "$RUNNER_DIR" && ./svc.sh status 2>/dev/null | sed -n 's/.*\(actions.runner[^ ]*\.service\).*/\1/p' | head -n 1 || true)"
-  if [ -n "$service_name" ] && systemctl is-active --quiet "$service_name"; then
-    if ! marker_matches; then
-      echo "existing active runner is not bound to the approved AegisScan production runner marker" >&2
-      exit 1
-    fi
-    echo "existing approved production runner service is active: $service_name"
-    exit 0
-  fi
-  echo "existing runner installation is not active; refusing destructive replacement" >&2
-  exit 1
-fi
 
 tar -xzf "$tmp_archive" -C "$RUNNER_DIR"
 

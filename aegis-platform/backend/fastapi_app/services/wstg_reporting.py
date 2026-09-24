@@ -7,23 +7,25 @@ from typing import Any
 from django.db.models import Q
 
 from django_project.evidence.models import Evidence
+from enterprise.models import WSTGMethodologyAttestation
 from django_project.projects.models import Project
 from django_project.vulnerabilities.models import Vulnerability
 
 from .capability_registry import get_capability
 from .wstg_catalog import WSTGCatalog
+from .wstg_completion_policy import build_wstg_completion_policy, completion_ready
 from .wstg_observation_lineage import wstg_observation_lineage
 
 
 OBSERVATION_ONLY_POLICY = 'observation-only'
-COMPLETION_CLAIM_ALLOWED = False
+COVERAGE_CLAIM_POLICY = 'governed-methodology-completion'
 FINDING_STATE_AUTHORITY = 'governed-finding-confirmation'
 
 _CLASSIFICATION_STATE = {
     'AUTO_EXISTING': 'not_observed',
     'ASSISTED_EXISTING': 'not_observed',
     'MANUAL_GOVERNED': 'manual_required',
-    'GAP_NATIVE_SMALL': 'blocked_native_gap',
+    'GAP_NATIVE_SMALL': 'not_observed',
     'CONDITIONAL_NA': 'inconclusive',
 }
 
@@ -79,6 +81,8 @@ def _project_findings(project: Project, scan_id: str | None):
 
 def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None) -> dict[str, Any]:
     catalog = WSTGCatalog()
+    completion_policy = build_wstg_completion_policy()
+    completion_rows = {item['wstg_id']: item for item in completion_policy['rows']}
     rows: dict[str, dict[str, Any]] = {}
     for test in catalog.tests:
         rows[test.id] = {
@@ -92,8 +96,16 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
             'finding_records': 0,
             'capability_ids': set(),
             'latest_observed_at': None,
+            'completion_claim_supported': bool(completion_rows[test.id]['completion_claim_supported']),
             'completion_claim_allowed': False,
         }
+
+    attestation_qs = WSTGMethodologyAttestation.objects.select_related('evidence_qualification').filter(project=project)
+    if scan_id:
+        attestation_qs = attestation_qs.filter(scan_id=scan_id)
+    latest_attestations: dict[str, WSTGMethodologyAttestation] = {}
+    for attestation in attestation_qs.order_by('wstg_id', '-created_at', '-id'):
+        latest_attestations.setdefault(attestation.wstg_id, attestation)
 
     trusted_evidence_records = 0
     trusted_finding_records = 0
@@ -146,13 +158,41 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
         row = rows[test.id]
         observed = (row['evidence_records'] + row['finding_records']) > 0
         row['has_observation'] = observed
-        if observed and test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING'}:
+        if observed and test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING', 'GAP_NATIVE_SMALL'}:
             row['state'] = 'observed'
+        attestation = latest_attestations.get(test.id)
+        expected_completion = completion_rows[test.id]
+        attestation_valid = bool(
+            attestation
+            and attestation.evidence_qualification.qualified
+            and attestation.policy_version == 'wstg-completion.v1'
+            and attestation.classification == test.classification
+            and attestation.completion_mode == expected_completion['completion_mode']
+        )
+        governed_attested = bool(
+            attestation_valid
+            and attestation.decision == 'completed'
+        )
+        applicability_attested = bool(
+            attestation_valid
+            and attestation.decision in {'completed', 'not_applicable'}
+        )
+        if test.classification == 'CONDITIONAL_NA' and applicability_attested:
+            row['state'] = 'not_applicable' if attestation.decision == 'not_applicable' else 'observed'
+        row['completion_claim_allowed'] = completion_ready(
+            classification=test.classification,
+            has_trusted_observation=observed,
+            governed_attested=governed_attested,
+            applicability_attested=applicability_attested,
+        )
+        row['methodology_completed'] = row['completion_claim_allowed']
+        row['completion_attestation_id'] = str(attestation.id) if attestation_valid else None
         row['capability_ids'] = sorted(row['capability_ids'])
         row['latest_observed_at'] = _iso(row['latest_observed_at'])
         ordered.append(row)
 
     observed_tests = sum(1 for row in ordered if row['has_observation'])
+    completed_tests = sum(1 for row in ordered if row['methodology_completed'])
     auto_assisted = [row for row in ordered if row['classification'] in {'AUTO_EXISTING', 'ASSISTED_EXISTING'}]
     auto_assisted_observed = sum(1 for row in auto_assisted if row['has_observation'])
 
@@ -178,19 +218,21 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
 
     states = Counter(row['state'] for row in ordered)
     return {
-        'contract_version': '1.0',
+        'contract_version': '1.1',
         'methodology': 'WSTG',
         'methodology_version': '4.2',
         'source': 'postgresql',
         'project_id': str(project.id),
         'project_name': project.name,
         'scope_scan_id': str(scan_id) if scan_id else None,
-        'claim_policy': OBSERVATION_ONLY_POLICY,
-        'completion_claim_allowed': COMPLETION_CLAIM_ALLOWED,
+        'claim_policy': COVERAGE_CLAIM_POLICY,
+        'completion_claim_allowed': completed_tests == len(ordered),
         'finding_state_authority': FINDING_STATE_AUTHORITY,
         'summary': {
             'total_tests': len(ordered),
             'observed_tests': observed_tests,
+            'completion_claim_supported_tests': completion_policy['completion_claim_supported_tests'],
+            'methodology_completed_tests': completed_tests,
             'observation_coverage_percent': round((observed_tests / len(ordered)) * 100, 2),
             'auto_assisted_total': len(auto_assisted),
             'auto_assisted_observed': auto_assisted_observed,

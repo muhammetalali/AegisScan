@@ -29,10 +29,19 @@ def test_runner_bootstrap_installs_dedicated_service_without_hosted_fallback():
     assert "ubuntu-latest" not in text
 
 
-def test_runner_bootstrap_refuses_destructive_live_replacement():
+def test_runner_bootstrap_recovers_only_attested_inactive_service_without_reinstall():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "existing approved production runner service is active" in text
-    assert "refusing destructive replacement" in text
+    assert "existing runner installation is not bound to the approved AegisScan production runner marker" in text
+    assert "approved production runner service is inactive; attempting bounded service recovery" in text
+    assert 'systemctl is-enabled --quiet "$service_name" || systemctl enable "$service_name"' in text
+    assert '(cd "$RUNNER_DIR" && ./svc.sh start)' in text
+    assert 'systemctl is-active --quiet "$service_name"' in text
+    existing_branch = text.index('if [ -x "$RUNNER_DIR/config.sh" ]; then')
+    fresh_token_gate = text.index('AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN is required for fresh runner installation')
+    assert existing_branch < fresh_token_gate
+    assert "AEGISSCAN_PRODUCTION_RUNNER_RECOVERY=PASS" in text
+    assert "refusing destructive replacement" not in text
 
 
 def test_runner_bootstrap_provisions_execution_dependencies_from_verified_archive():
@@ -54,5 +63,5 @@ def test_runner_bootstrap_requires_attested_existing_runner_marker():
     assert "runner_labels=$RUNNER_LABELS" in text
     assert "runner_archive_sha256=$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" in text
     assert "root:root:640" in text
-    assert "existing active runner is not bound to the approved AegisScan production runner marker" in text
+    assert "existing runner installation is not bound to the approved AegisScan production runner marker" in text
     assert "marker_matches" in text

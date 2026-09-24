@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+from django.db import transaction
+from django.db.models import Q
+
+from django_project.evidence.models import Evidence
+from enterprise.models import WSTGMethodologyAttestation
+from django_project.projects.models import Project
+from django_project.scans.models import Scan
+from enterprise.models import OrganizationMembership, TenantProject
+
+from .evidence_qualification import EvidenceQualificationError, EvidenceQualificationPolicy, qualify_evidence
+from .wstg_catalog import WSTGCatalog
+from .wstg_completion_policy import build_wstg_completion_policy
+from .wstg_reporting import _trusted_lineage
+
+
+class WSTGAttestationError(ValueError):
+    pass
+
+
+def _sha(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode('utf-8')
+    ).hexdigest()
+
+
+def _project_for_actor(project_id: str, actor_id: str) -> Project:
+    project = Project.objects.filter(
+        Q(id=project_id) & (Q(owner_id=actor_id) | Q(members__id=actor_id))
+    ).distinct().first()
+    if project is None:
+        raise WSTGAttestationError('Project not found or actor is not a member.')
+    link = TenantProject.objects.filter(project=project, organization__is_active=True).first()
+    if link is None:
+        raise WSTGAttestationError('Project is not bound to an active enterprise tenant.')
+    role = (
+        OrganizationMembership.objects.filter(
+            organization_id=link.organization_id,
+            user_id=actor_id,
+            is_active=True,
+            role__in=[
+                OrganizationMembership.Role.OWNER,
+                OrganizationMembership.Role.ADMIN,
+                OrganizationMembership.Role.MANAGER,
+                OrganizationMembership.Role.ANALYST,
+            ],
+        )
+        .values_list('role', flat=True)
+        .first()
+    )
+    if role is None:
+        raise WSTGAttestationError('Actor lacks an active governed analyst-or-higher tenant role.')
+    return project
+
+
+def _lineage_supports_test(evidence: Evidence, wstg_id: str) -> bool:
+    metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
+    lineage = _trusted_lineage(metadata.get('wstg_lineage'), expected_source=evidence.source)
+    if lineage is None:
+        return False
+    return any(item.get('wstg_id') == wstg_id for item in lineage.get('tests', []))
+
+
+def _producer_ref(evidence: Evidence) -> str:
+    metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
+    return str(
+        evidence.collected_by_id
+        or metadata.get('producer_id')
+        or metadata.get('producer_ref')
+        or metadata.get('producer')
+        or ''
+    ).strip()
+
+
+def create_wstg_methodology_attestation(
+    *,
+    project_id: str,
+    actor_id: str,
+    wstg_id: str,
+    evidence_ids: list[str],
+    rationale: str,
+    decision: str = 'completed',
+    scan_id: str | None = None,
+) -> dict[str, Any]:
+    project = _project_for_actor(str(project_id), str(actor_id))
+    try:
+        test = WSTGCatalog().resolve(str(wstg_id))
+    except (KeyError, ValueError) as exc:
+        raise WSTGAttestationError(f'Unknown or invalid WSTG test identity: {wstg_id}') from exc
+    policy = build_wstg_completion_policy()
+    row = next(item for item in policy['rows'] if item['wstg_id'] == test.id)
+    mode = row['completion_mode']
+
+    if test.classification == 'CONDITIONAL_NA':
+        allowed_decisions = {
+            WSTGMethodologyAttestation.Decision.COMPLETED,
+            WSTGMethodologyAttestation.Decision.NOT_APPLICABLE,
+        }
+    else:
+        allowed_decisions = {WSTGMethodologyAttestation.Decision.COMPLETED}
+    if decision not in allowed_decisions:
+        allowed = ','.join(sorted(allowed_decisions))
+        raise WSTGAttestationError(
+            f'{test.id} requires one of decision={allowed}; methodology completion never represents pass/fail.'
+        )
+    reason = str(rationale or '').strip()
+    if len(reason) < 12 or len(reason) > 4000:
+        raise WSTGAttestationError('A governed rationale between 12 and 4000 characters is required.')
+
+    normalized_evidence = sorted({str(item).strip() for item in evidence_ids if str(item).strip()})
+    if not normalized_evidence:
+        raise WSTGAttestationError('At least one evidence record is required for a WSTG methodology attestation.')
+
+    scan = None
+    if scan_id:
+        scan = Scan.objects.filter(pk=scan_id, project=project).first()
+        if scan is None:
+            raise WSTGAttestationError('Attestation scan does not belong to the project.')
+
+    rows = list(
+        Evidence.objects.select_related('scan', 'asset', 'finding')
+        .filter(pk__in=normalized_evidence)
+        .filter(Q(scan__project=project) | Q(asset__project=project) | Q(finding__project=project))
+        .distinct()
+    )
+    if len(rows) != len(normalized_evidence):
+        raise WSTGAttestationError('One or more evidence records are missing or outside the project.')
+    if scan is not None and any(str(item.scan_id or '') != str(scan.id) for item in rows):
+        raise WSTGAttestationError('Scan-scoped attestation evidence must belong to the exact scan.')
+    requires_trusted_lineage = (
+        test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING', 'GAP_NATIVE_SMALL'}
+        or (
+            test.classification == 'CONDITIONAL_NA'
+            and decision == WSTGMethodologyAttestation.Decision.COMPLETED
+        )
+    )
+    if requires_trusted_lineage:
+        unsupported = [str(item.id) for item in rows if not _lineage_supports_test(item, test.id)]
+        if unsupported:
+            raise WSTGAttestationError(
+                f'Evidence does not contain trusted canonical WSTG lineage for {test.id}: {unsupported}'
+            )
+
+    producer_ids = {_producer_ref(item) for item in rows if _producer_ref(item)}
+    if producer_ids and producer_ids == {str(actor_id)}:
+        raise WSTGAttestationError(
+            'WSTG methodology attestation requires separation of duties from the sole evidence producer.'
+        )
+
+    try:
+        qualification = qualify_evidence(
+            project_id=str(project.id),
+            evidence_ids=normalized_evidence,
+            subject_type='wstg_test',
+            subject_id=test.id,
+            requested_by_id=str(actor_id),
+            policy=EvidenceQualificationPolicy(
+                policy_version='wstg-completion-evidence.v1',
+                min_count=1,
+                require_subject=False,
+                require_target=False,
+                require_authorization=False,
+                require_execution=False,
+                require_producer=True,
+            ),
+        )
+    except EvidenceQualificationError as exc:
+        raise WSTGAttestationError(f'WSTG completion evidence qualification failed: {exc}') from exc
+    if not qualification.qualified:
+        raise WSTGAttestationError(
+            'WSTG completion evidence failed qualification: '
+            + ','.join(qualification.evaluation.reason_codes)
+        )
+
+    material = {
+        'policy_version': 'wstg-completion.v1',
+        'project_id': str(project.id),
+        'scan_id': str(scan.id) if scan else None,
+        'wstg_id': test.id,
+        'classification': test.classification,
+        'completion_mode': mode,
+        'decision': decision,
+        'evidence_ids': normalized_evidence,
+        'evidence_qualification_fingerprint': qualification.evaluation.evaluation_fingerprint,
+        'actor_id': str(actor_id),
+        'rationale': reason,
+    }
+    fingerprint = _sha(material)
+
+    with transaction.atomic():
+        attestation, created = WSTGMethodologyAttestation.objects.get_or_create(
+            request_fingerprint=fingerprint,
+            defaults={
+                'project': project,
+                'scan': scan,
+                'created_by_id': actor_id,
+                'evidence_qualification': qualification.evaluation,
+                'wstg_id': test.id,
+                'classification': test.classification,
+                'completion_mode': mode,
+                'decision': decision,
+                'evidence_ids': normalized_evidence,
+                'rationale': reason,
+                'policy_version': 'wstg-completion.v1',
+            },
+        )
+    return {
+        'id': str(attestation.id),
+        'project_id': str(attestation.project_id),
+        'scan_id': str(attestation.scan_id) if attestation.scan_id else None,
+        'wstg_id': attestation.wstg_id,
+        'classification': attestation.classification,
+        'completion_mode': attestation.completion_mode,
+        'decision': attestation.decision,
+        'evidence_ids': list(attestation.evidence_ids),
+        'evidence_qualification_id': str(attestation.evidence_qualification_id),
+        'evidence_qualification_fingerprint': attestation.evidence_qualification.evaluation_fingerprint,
+        'request_fingerprint': attestation.request_fingerprint,
+        'created_by_id': str(attestation.created_by_id),
+        'created_at': attestation.created_at,
+        'replayed': not created,
+    }
