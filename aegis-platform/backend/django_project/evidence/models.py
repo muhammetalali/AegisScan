@@ -379,3 +379,74 @@ class GovernedOASTInteraction(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError('Governed OAST interactions are immutable and cannot be deleted.')
+
+
+class ImmutableWSTGMethodologyAttestationQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError('WSTG methodology attestations are immutable and cannot be updated.')
+
+    def delete(self):
+        raise ValidationError('WSTG methodology attestations are immutable and cannot be deleted.')
+
+    def bulk_create(self, objs, **kwargs):
+        raise ValidationError('WSTG methodology attestations must be created through the governed attestation service.')
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise ValidationError('WSTG methodology attestations are immutable and cannot be updated.')
+
+
+class WSTGMethodologyAttestation(models.Model):
+    """Immutable governed methodology-completion attestation for one WSTG test.
+
+    This record never represents a vulnerability pass/fail verdict. It only proves
+    that a methodology test received the governed review required by its canonical
+    completion policy, bound to a qualified evidence set.
+    """
+
+    class Decision(models.TextChoices):
+        COMPLETED = 'completed', 'Completed'
+        NOT_APPLICABLE = 'not_applicable', 'Not Applicable'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.PROTECT,
+        related_name='wstg_methodology_attestations',
+    )
+    scan = models.ForeignKey(
+        'scans.Scan', on_delete=models.PROTECT, null=True, blank=True,
+        related_name='wstg_methodology_attestations',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        related_name='wstg_methodology_attestations',
+    )
+    evidence_qualification = models.ForeignKey(
+        'enterprise.EvidenceQualificationEvaluation', on_delete=models.PROTECT,
+        related_name='wstg_methodology_attestations',
+    )
+    wstg_id = models.CharField(max_length=64)
+    classification = models.CharField(max_length=32)
+    completion_mode = models.CharField(max_length=48)
+    decision = models.CharField(max_length=24, choices=Decision.choices)
+    evidence_ids = models.JSONField(default=list)
+    rationale = models.TextField()
+    policy_version = models.CharField(max_length=64, default='wstg-completion.v1')
+    request_fingerprint = models.CharField(max_length=64, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = ImmutableWSTGMethodologyAttestationQuerySet.as_manager()
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['project', 'wstg_id', '-created_at'], name='idx_wstg_attest_project'),
+            models.Index(fields=['scan', 'wstg_id', '-created_at'], name='idx_wstg_attest_scan'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError('WSTG methodology attestations are immutable and cannot be updated.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError('WSTG methodology attestations are immutable and cannot be deleted.')
