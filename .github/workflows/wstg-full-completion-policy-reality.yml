@@ -6,6 +6,10 @@ name: WSTG Full Completion Policy Reality
     paths:
       - 'aegis-platform/backend/fastapi_app/services/wstg_completion_policy.py'
       - 'aegis-platform/backend/fastapi_app/services/test_wstg_completion_policy.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_completion_attestation.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_completion_attestation.py'
+      - 'aegis-platform/backend/django_project/evidence/models.py'
+      - 'aegis-platform/backend/django_project/evidence/migrations/0009_wstg_methodology_attestation.py'
       - 'aegis-platform/backend/scripts/wstg_full_completion_policy_reality.py'
       - 'aegis-platform/backend/fastapi_app/services/wstg_capability_mapping.py'
       - 'aegis-platform/backend/resources/methodologies/wstg/v4.2/**'
@@ -45,7 +49,7 @@ jobs:
         working-directory: aegis-platform/backend
         env:
           PYTHONPATH: .
-        run: python -m pytest -q fastapi_app/services/test_wstg_completion_policy.py
+        run: python -m pytest -q fastapi_app/services/test_wstg_completion_policy.py fastapi_app/services/test_wstg_completion_attestation.py
       - name: Prove 97 of 97 completion paths without inventing verdicts
         shell: bash
         run: |
