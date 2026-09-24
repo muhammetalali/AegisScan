@@ -49,19 +49,38 @@ install -d -m 0750 -o "$RUNNER_USER" -g "$RUNNER_USER" "$RUNNER_DIR"
 install -d -m 0750 -o "$RUNNER_USER" -g "$RUNNER_USER" "$RUNNER_WORK"
 install -d -m 0750 -o root -g root /etc/aegisscan
 
+marker_matches() {
+  [ -f "$RUNNER_MARKER" ] || return 1
+  [ "$(stat -c '%U:%G:%a' "$RUNNER_MARKER" 2>/dev/null || true)" = "root:root:640" ] || return 1
+  grep -Fqx "schema=aegisscan.resilience-runner.v1" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_url=$AEGIS_GITHUB_RUNNER_URL" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_name=$RUNNER_NAME" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_labels=$RUNNER_LABELS" "$RUNNER_MARKER" || return 1
+  grep -Fqx "runner_archive_sha256=$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" "$RUNNER_MARKER" || return 1
+}
+
 if [ -x "$RUNNER_DIR/config.sh" ]; then
-  if [ ! -f "$RUNNER_MARKER" ] || \
-     ! grep -Fqx "schema=aegisscan.resilience-runner.v1" "$RUNNER_MARKER" || \
-     ! grep -Fqx "runner_labels=$RUNNER_LABELS" "$RUNNER_MARKER"; then
-    echo "existing resilience runner is not bound to the approved marker" >&2
+  if ! marker_matches; then
+    echo "existing resilience runner is not bound to the approved AegisScan resilience marker" >&2
     exit 1
   fi
   service_name="$(cd "$RUNNER_DIR" && ./svc.sh status 2>/dev/null | sed -n 's/.*\(actions.runner[^ ]*\.service\).*/\1/p' | head -n 1 || true)"
-  [ -n "$service_name" ]
+  if [ -z "$service_name" ]; then
+    echo "approved resilience runner marker exists but the installed service cannot be resolved" >&2
+    exit 1
+  fi
+  if systemctl is-active --quiet "$service_name"; then
+    echo "existing approved resilience runner service is active: $service_name"
+    exit 0
+  fi
+  echo "approved resilience runner service is inactive; attempting bounded service recovery: $service_name"
   systemctl is-enabled --quiet "$service_name" || systemctl enable "$service_name"
   (cd "$RUNNER_DIR" && ./svc.sh start)
+  systemctl is-enabled --quiet "$service_name"
   systemctl is-active --quiet "$service_name"
+  marker_matches
   echo "AEGISSCAN_RESILIENCE_RUNNER_RECOVERY=PASS"
+  echo "runner_service=$service_name"
   exit 0
 fi
 
@@ -79,6 +98,10 @@ curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   "$AEGIS_GITHUB_RUNNER_ARCHIVE_URL" -o "$tmp_archive"
 printf '%s  %s\n' "$AEGIS_GITHUB_RUNNER_ARCHIVE_SHA256" "$tmp_archive" | sha256sum -c -
 tar -xzf "$tmp_archive" -C "$RUNNER_DIR"
+if [ ! -x "$RUNNER_DIR/bin/installdependencies.sh" ]; then
+  echo "verified runner archive is missing bin/installdependencies.sh" >&2
+  exit 1
+fi
 "$RUNNER_DIR/bin/installdependencies.sh"
 chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_DIR" "$RUNNER_WORK"
 
@@ -110,6 +133,7 @@ marker_tmp="$(mktemp /etc/aegisscan/resilience-runner.env.XXXXXX)"
 chmod 0640 "$marker_tmp"
 chown root:root "$marker_tmp"
 mv -f "$marker_tmp" "$RUNNER_MARKER"
+marker_matches
 
 echo "AEGISSCAN_RESILIENCE_RUNNER_BOOTSTRAP=PASS"
 echo "runner_name=$RUNNER_NAME"
