@@ -35,8 +35,11 @@ def test_runner_bootstrap_recovers_only_attested_inactive_service_without_reinst
     assert "existing runner installation is not bound to the approved AegisScan production runner marker" in text
     assert "approved production runner service is inactive; attempting bounded service recovery" in text
     assert 'systemctl is-enabled --quiet "$service_name" || systemctl enable "$service_name"' in text
-    assert './svc.sh start' in text
+    assert '(cd "$RUNNER_DIR" && ./svc.sh start)' in text
     assert 'systemctl is-active --quiet "$service_name"' in text
+    existing_branch = text.index('if [ -x "$RUNNER_DIR/config.sh" ]; then')
+    fresh_token_gate = text.index('AEGIS_GITHUB_RUNNER_REGISTRATION_TOKEN is required for fresh runner installation')
+    assert existing_branch < fresh_token_gate
     assert "AEGISSCAN_PRODUCTION_RUNNER_RECOVERY=PASS" in text
     assert "refusing destructive replacement" not in text
 
