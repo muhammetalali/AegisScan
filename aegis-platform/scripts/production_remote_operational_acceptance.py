@@ -25,7 +25,7 @@ class RemoteOperationalAcceptanceError(RuntimeError):
     pass
 
 
-_FIXTURE_PATH_RE = re.compile(r"^/home/aegisdeploy/\.aegis-e2e/e2e-fixture-[0-9a-f]{32}\.json$")
+_FIXTURE_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+/\.aegis-e2e/e2e-fixture-[0-9a-f]{32}\.json$")
 
 
 def _ssh_base(
@@ -75,7 +75,7 @@ def _transfer_private_fixture(
     remote_path: str,
     local_path: Path,
 ) -> None:
-    if not _FIXTURE_PATH_RE.fullmatch(remote_path):
+    if not _FIXTURE_PATH_RE.fullmatch(remote_path) or ".." in Path(remote_path).parts:
         raise RemoteOperationalAcceptanceError("remote production E2E fixture path is invalid")
     local_path = local_path.resolve()
     if local_path.exists() and local_path.is_symlink():
