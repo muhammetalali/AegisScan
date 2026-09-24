@@ -116,6 +116,7 @@ export const WSTGCoveragePage = () => {
     {summary && <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
       {[
         [t('Observed tests'), `${summary.observed_tests}/${summary.total_tests}`],
+        [t('Completion paths'), `${summary.completion_claim_supported_tests}/${summary.total_tests}`],
         [t('Observation coverage'), `${summary.observation_coverage_percent}%`],
         [t('Auto + assisted'), `${summary.auto_assisted_observed}/${summary.auto_assisted_total}`],
         [t('Trusted evidence'), summary.trusted_evidence_records],
@@ -139,7 +140,7 @@ export const WSTGCoveragePage = () => {
         <div className="relative"><Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder={t('Search WSTG ID, title, capability or classification…')} className="h-11 w-full rounded-xl border bg-background ps-9 pe-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" /></div>
         <select value={state} onChange={e => setState(e.target.value)} className="h-11 rounded-xl border bg-background px-3 text-sm">
           <option value="">{t('All states')}</option>
-          {['observed','not_observed','manual_required','blocked_native_gap','inconclusive'].map(value => <option key={value} value={value}>{labelState(value)}</option>)}
+          {['observed','not_observed','manual_required','inconclusive'].map(value => <option key={value} value={value}>{labelState(value)}</option>)}
         </select>
         <select value={category} onChange={e => setCategory(e.target.value)} className="h-11 rounded-xl border bg-background px-3 text-sm">
           <option value="">{t('All categories')}</option>
