@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import pwd
 import re
 import secrets
 import stat
@@ -242,6 +244,30 @@ approver_password = {approver_password!r}
 release_sha = {release_sha!r}
 
 with transaction.atomic():
+    stale = User.objects.filter(
+        email__startswith='release-e2e-',
+        email__endswith='@aegisscan.local',
+        is_active=True,
+    )
+    for stale_user in stale:
+        old_role = stale_user.role
+        stale_user.is_active = False
+        stale_user.save(update_fields=['is_active'])
+        append_audit(
+            action=AuditLog.Action.USER_UPDATE,
+            result=AuditLog.Result.SUCCESS,
+            resource_type='User',
+            resource_id=str(stale_user.id),
+            resource_repr=stale_user.email,
+            changes={'is_active': {'from': True, 'to': False}, 'role': old_role},
+            metadata={
+                'event': 'stale_release_e2e_identity_deactivated',
+                'release_sha': release_sha,
+            },
+            ip_address='127.0.0.1',
+            user_agent='production-operational-acceptance',
+        )
+
     actor = User.objects.create_user(
         email=actor_email,
         password=actor_password,
@@ -299,7 +325,7 @@ print(json.dumps({{
     if not identity.get("actor_id") or not identity.get("approver_id"):
         raise OperationalAcceptanceError("production E2E identity bootstrap did not return both identities")
 
-    return {
+    fixture = {
         "schema": "aegisscan.production-e2e-fixture.v1",
         "release_sha": release_sha,
         "actor_id": str(identity["actor_id"]),
@@ -310,6 +336,48 @@ print(json.dumps({{
         "approver_password": approver_password,
         "target": "aegis-scan-target",
     }
+    return fixture
+
+
+def _persist_e2e_fixture_for_deploy_user(fixture: dict[str, str]) -> str:
+    try:
+        account = pwd.getpwnam("aegisdeploy")
+    except KeyError as exc:
+        raise OperationalAcceptanceError("trusted deployment account aegisdeploy does not exist") from exc
+
+    directory = Path(account.pw_dir) / ".aegis-e2e"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chown(directory, account.pw_uid, account.pw_gid)
+    os.chmod(directory, 0o700)
+
+    for stale in directory.glob("e2e-fixture-*.json"):
+        try:
+            if stale.is_file() and not stale.is_symlink():
+                stale.unlink()
+        except OSError as exc:
+            raise OperationalAcceptanceError("unable to remove stale production E2E fixture") from exc
+
+    path = directory / f"e2e-fixture-{uuid.uuid4().hex}.json"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            os.fchown(fd, account.pw_uid, account.pw_gid)
+            payload = (json.dumps(fixture, sort_keys=True) + "\n").encode("utf-8")
+            os.write(fd, payload)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise OperationalAcceptanceError("unable to persist private production E2E fixture") from exc
+
+    info = path.stat()
+    if stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != account.pw_uid or info.st_size <= 0:
+        raise OperationalAcceptanceError("private production E2E fixture ownership or mode is invalid")
+    return str(path)
 
 
 def accept(
@@ -333,6 +401,7 @@ def accept(
     alertmanager = _wait_alertmanager(env_file, timeout_seconds=service_timeout_seconds, poll_seconds=poll_seconds)
     backup = _wait_backup(env_file, timeout_seconds=backup_timeout_seconds, poll_seconds=poll_seconds)
     e2e_fixture = _provision_e2e_fixture(env_file, release_sha)
+    e2e_fixture_path = _persist_e2e_fixture_for_deploy_user(e2e_fixture)
     return {
         "schema": "aegisscan.production-operational-acceptance.v1",
         "status": "success",
@@ -342,7 +411,8 @@ def accept(
         "running_services": services,
         "alertmanager": alertmanager,
         "backup": backup,
-        "e2e_fixture": e2e_fixture,
+        "e2e_fixture_path": e2e_fixture_path,
+        "e2e_fixture_provisioned": True,
         "operational_material": {
             "alert_webhook_https": True,
             "backup_endpoint_https": True,
