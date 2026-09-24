@@ -26,7 +26,7 @@ jobs:
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aegisscan-resilience]
     timeout-minutes: 240
     environment: production
 
@@ -113,12 +113,14 @@ jobs:
             *) echo 'Production alert webhook must use HTTPS' >&2; exit 1 ;;
           esac
 
-      - name: Install resilience dependencies
+      - name: Verify provisioned resilience dependencies
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-client
+          for command_name in docker git ssh curl psql pg_restore; do
+            command -v "$command_name" >/dev/null
+          done
+          docker info >/dev/null
           python -m pip install 'boto3>=1.35,<2' 'cryptography>=42,<47'
           psql --version
           pg_restore --version
