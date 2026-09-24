@@ -18,6 +18,7 @@ const stateClass = (state: string) => {
     case 'observed': return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
     case 'manual_required': return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
     case 'inconclusive': return 'border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400'
+    case 'not_applicable': return 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400'
     default: return 'border-border bg-muted/30 text-muted-foreground'
   }
 }
@@ -83,9 +84,9 @@ export const WSTGCoveragePage = () => {
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-primary">
             <ShieldCheck className="h-4 w-4" />OWASP WSTG v4.2
           </div>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">{t('WSTG observation coverage')}</h1>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight">{t('WSTG governed coverage')}</h1>
           <p className="mt-2 max-w-4xl text-sm leading-7 text-muted-foreground">
-            {t('Coverage is derived from trusted persisted evidence and finding lineage. It does not represent a pass, fail, confirmation, closure, or risk disposition decision.')}
+            {t('Coverage is derived from trusted persisted evidence and governed methodology attestations. Completion never represents a pass, fail, finding confirmation, closure, or risk disposition decision.')}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -112,10 +113,11 @@ export const WSTGCoveragePage = () => {
       </label>
     </section>
 
-    {summary && <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+    {summary && <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
       {[
         [t('Observed tests'), `${summary.observed_tests}/${summary.total_tests}`],
         [t('Completion paths'), `${summary.completion_claim_supported_tests}/${summary.total_tests}`],
+        [t('Methodology completed'), `${summary.methodology_completed_tests}/${summary.total_tests}`],
         [t('Observation coverage'), `${summary.observation_coverage_percent}%`],
         [t('Auto + assisted'), `${summary.auto_assisted_observed}/${summary.auto_assisted_total}`],
         [t('Trusted evidence'), summary.trusted_evidence_records],
@@ -139,7 +141,7 @@ export const WSTGCoveragePage = () => {
         <div className="relative"><Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder={t('Search WSTG ID, title, capability or classification…')} className="h-11 w-full rounded-xl border bg-background ps-9 pe-3 text-sm outline-none focus:ring-2 focus:ring-primary/20" /></div>
         <select value={state} onChange={e => setState(e.target.value)} className="h-11 rounded-xl border bg-background px-3 text-sm">
           <option value="">{t('All states')}</option>
-          {['observed','not_observed','manual_required','inconclusive'].map(value => <option key={value} value={value}>{labelState(value)}</option>)}
+          {['observed','not_observed','manual_required','inconclusive','not_applicable'].map(value => <option key={value} value={value}>{labelState(value)}</option>)}
         </select>
         <select value={category} onChange={e => setCategory(e.target.value)} className="h-11 rounded-xl border bg-background px-3 text-sm">
           <option value="">{t('All categories')}</option>
@@ -156,7 +158,7 @@ export const WSTGCoveragePage = () => {
       <div className="border-b px-5 py-4">
         <div className="font-semibold">{coverageQuery.data.project_name}</div>
         <div className="mt-1 text-xs text-muted-foreground">
-          {t('Source')}: PostgreSQL · {t('Claim policy')}: observation-only · {rows.length} {t('tests shown')}
+          {t('Source')}: PostgreSQL · {t('Claim policy')}: {coverageQuery.data.claim_policy} · {rows.length} {t('tests shown')}
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -166,16 +168,18 @@ export const WSTGCoveragePage = () => {
             <th className="px-4 py-3 text-start">{t('Title')}</th>
             <th className="px-4 py-3 text-start">{t('Classification')}</th>
             <th className="px-4 py-3 text-start">{t('State')}</th>
+            <th className="px-4 py-3 text-start">{t('Completion')}</th>
             <th className="px-4 py-3 text-start">{t('Evidence')}</th>
             <th className="px-4 py-3 text-start">{t('Findings')}</th>
             <th className="px-4 py-3 text-start">{t('Capabilities')}</th>
             <th className="px-4 py-3 text-start">{t('Latest observation')}</th>
           </tr></thead>
-          <tbody>{rows.length === 0 ? <tr><td colSpan={8} className="px-6 py-16 text-center text-muted-foreground">{t('No WSTG tests match the selected filters')}</td></tr> : rows.map(item => <tr key={item.wstg_id} className="border-b last:border-0 hover:bg-muted/20">
+          <tbody>{rows.length === 0 ? <tr><td colSpan={9} className="px-6 py-16 text-center text-muted-foreground">{t('No WSTG tests match the selected filters')}</td></tr> : rows.map(item => <tr key={item.wstg_id} className="border-b last:border-0 hover:bg-muted/20">
             <td className="px-4 py-3 font-mono text-xs font-semibold">{item.wstg_id}</td>
             <td className="px-4 py-3 max-w-[360px]"><div className="font-medium">{item.title}</div><div className="mt-1 text-[11px] text-muted-foreground">{item.category}</div></td>
             <td className="px-4 py-3 text-xs">{item.classification}</td>
             <td className="px-4 py-3"><span className={cn('rounded-full border px-2 py-1 text-[11px] font-semibold capitalize', stateClass(item.state))}>{labelState(item.state)}</span></td>
+            <td className="px-4 py-3"><span className={cn('rounded-full border px-2 py-1 text-[11px] font-semibold', item.methodology_completed ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'border-border bg-muted/30 text-muted-foreground')}>{item.methodology_completed ? t('Completed') : t('Pending governance')}</span></td>
             <td className="px-4 py-3 font-semibold">{item.evidence_records}</td>
             <td className="px-4 py-3 font-semibold">{item.finding_records}</td>
             <td className="px-4 py-3"><div className="flex max-w-[280px] flex-wrap gap-1">{item.capability_ids.length ? item.capability_ids.map(value => <span key={value} className="rounded-md border bg-muted/20 px-2 py-1 font-mono text-[10px]">{value}</span>) : <span className="text-xs text-muted-foreground">{t('Not observed')}</span>}</div></td>
