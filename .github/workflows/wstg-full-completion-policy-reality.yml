@@ -1,0 +1,61 @@
+name: WSTG Full Completion Policy Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/wstg_completion_policy.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_completion_policy.py'
+      - 'aegis-platform/backend/scripts/wstg_full_completion_policy_reality.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_capability_mapping.py'
+      - 'aegis-platform/backend/resources/methodologies/wstg/v4.2/**'
+      - '.github/workflows/wstg-full-completion-policy-reality.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aegis-platform/backend/fastapi_app/services/wstg_completion_policy.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_wstg_completion_policy.py'
+      - 'aegis-platform/backend/scripts/wstg_full_completion_policy_reality.py'
+      - 'aegis-platform/backend/fastapi_app/services/wstg_capability_mapping.py'
+      - 'aegis-platform/backend/resources/methodologies/wstg/v4.2/**'
+      - '.github/workflows/wstg-full-completion-policy-reality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wstg-full-completion-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wstg-full-completion-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install backend dependencies
+        run: python -m pip install -r aegis-platform/backend/requirements.txt
+      - name: Test governed WSTG completion policy
+        working-directory: aegis-platform/backend
+        env:
+          PYTHONPATH: .
+        run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -c /dev/null --rootdir=. fastapi_app/services/test_wstg_completion_policy.py
+      - name: Prove 97 of 97 completion paths without inventing verdicts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          PYTHONPATH=aegis-platform/backend             python aegis-platform/backend/scripts/wstg_full_completion_policy_reality.py             | tee artifacts/wstg-full-completion-policy-reality.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wstg-full-completion-policy-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/wstg-full-completion-policy-reality.json
+          if-no-files-found: error
+          retention-days: 30
