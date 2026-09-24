@@ -10,6 +10,7 @@ from django.db.models import Q
 from django_project.evidence.models import Evidence, WSTGMethodologyAttestation
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
+from enterprise.models import OrganizationMembership, TenantProject
 
 from .evidence_qualification import EvidenceQualificationPolicy, qualify_evidence
 from .wstg_catalog import WSTGCatalog
@@ -33,6 +34,26 @@ def _project_for_actor(project_id: str, actor_id: str) -> Project:
     ).distinct().first()
     if project is None:
         raise WSTGAttestationError('Project not found or actor is not a member.')
+    link = TenantProject.objects.filter(project=project, organization__is_active=True).first()
+    if link is None:
+        raise WSTGAttestationError('Project is not bound to an active enterprise tenant.')
+    role = (
+        OrganizationMembership.objects.filter(
+            organization_id=link.organization_id,
+            user_id=actor_id,
+            is_active=True,
+            role__in=[
+                OrganizationMembership.Role.OWNER,
+                OrganizationMembership.Role.ADMIN,
+                OrganizationMembership.Role.MANAGER,
+                OrganizationMembership.Role.ANALYST,
+            ],
+        )
+        .values_list('role', flat=True)
+        .first()
+    )
+    if role is None:
+        raise WSTGAttestationError('Actor lacks an active governed analyst-or-higher tenant role.')
     return project
 
 
