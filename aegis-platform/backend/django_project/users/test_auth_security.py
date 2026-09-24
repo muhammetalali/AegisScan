@@ -141,3 +141,64 @@ def test_refresh_rejects_missing_csrf_token():
 
     assert response.status_code == 403
     assert csrf_token
+
+
+@pytest.mark.django_db
+def test_authenticated_user_can_self_deactivate_with_current_password():
+    password = 'Strong-Test-Password-123!'
+    user = User.objects.create_user(
+        email='self-deactivate@example.invalid',
+        password=password,
+        first_name='Self',
+        last_name='Deactivate',
+    )
+    client = Client(enforce_csrf_checks=True)
+    csrf_token = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    login = client.post(
+        '/api/v1/auth/login/',
+        {'email': user.email, 'password': password},
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+    assert login.status_code == 200
+
+    csrf_token = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    response = client.post(
+        '/api/v1/auth/deactivate-self/',
+        {'password': password},
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 200
+    assert response.json()['deactivated'] is True
+    user.refresh_from_db()
+    assert user.is_active is False
+
+
+@pytest.mark.django_db
+def test_self_deactivation_rejects_wrong_password():
+    password = 'Strong-Test-Password-123!'
+    user = User.objects.create_user(
+        email='self-deactivate-wrong@example.invalid',
+        password=password,
+        first_name='Self',
+        last_name='Reject',
+    )
+    client = Client(enforce_csrf_checks=True)
+    csrf_token = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    login = client.post(
+        '/api/v1/auth/login/',
+        {'email': user.email, 'password': password},
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+    assert login.status_code == 200
+
+    csrf_token = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    response = client.post(
+        '/api/v1/auth/deactivate-self/',
+        {'password': 'Wrong-Password-123!'},
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 400
+    user.refresh_from_db()
+    assert user.is_active is True
