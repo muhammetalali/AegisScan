@@ -45,7 +45,7 @@ jobs:
         working-directory: aegis-platform/backend
         env:
           PYTHONPATH: .
-        run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -c /dev/null --rootdir=. fastapi_app/services/test_wstg_completion_policy.py
+        run: python -m pytest -q fastapi_app/services/test_wstg_completion_policy.py
       - name: Prove 97 of 97 completion paths without inventing verdicts
         shell: bash
         run: |
