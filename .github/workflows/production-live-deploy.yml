@@ -245,6 +245,7 @@ jobs:
             | tee /tmp/aegis-production/cli-platform-status.json
 
       - name: Deactivate one-run E2E identities
+        if: always()
         shell: bash
         env:
           AEGIS_E2E_CLEANUP_ONLY: 'true'
