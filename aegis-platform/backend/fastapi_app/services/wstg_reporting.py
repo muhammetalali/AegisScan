@@ -161,14 +161,20 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
         if observed and test.classification in {'AUTO_EXISTING', 'ASSISTED_EXISTING', 'GAP_NATIVE_SMALL'}:
             row['state'] = 'observed'
         attestation = latest_attestations.get(test.id)
-        governed_attested = bool(
+        expected_completion = completion_rows[test.id]
+        attestation_valid = bool(
             attestation
             and attestation.evidence_qualification.qualified
+            and attestation.policy_version == 'wstg-completion.v1'
+            and attestation.classification == test.classification
+            and attestation.completion_mode == expected_completion['completion_mode']
+        )
+        governed_attested = bool(
+            attestation_valid
             and attestation.decision == 'completed'
         )
         applicability_attested = bool(
-            attestation
-            and attestation.evidence_qualification.qualified
+            attestation_valid
             and attestation.decision in {'completed', 'not_applicable'}
         )
         if test.classification == 'CONDITIONAL_NA' and applicability_attested:
@@ -180,7 +186,7 @@ def build_wstg_project_coverage(project: Project, *, scan_id: str | None = None)
             applicability_attested=applicability_attested,
         )
         row['methodology_completed'] = row['completion_claim_allowed']
-        row['completion_attestation_id'] = str(attestation.id) if attestation else None
+        row['completion_attestation_id'] = str(attestation.id) if attestation_valid else None
         row['capability_ids'] = sorted(row['capability_ids'])
         row['latest_observed_at'] = _iso(row['latest_observed_at'])
         ordered.append(row)
