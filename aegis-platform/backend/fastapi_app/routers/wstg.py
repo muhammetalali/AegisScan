@@ -47,7 +47,7 @@ class WSTGTestCoverage(ContractModel):
     category: str
     title: str
     classification: Literal['AUTO_EXISTING', 'ASSISTED_EXISTING', 'MANUAL_GOVERNED', 'GAP_NATIVE_SMALL', 'CONDITIONAL_NA']
-    state: Literal['observed', 'not_observed', 'manual_required', 'blocked_native_gap', 'inconclusive']
+    state: Literal['observed', 'not_observed', 'manual_required', 'inconclusive']
     has_observation: bool
     evidence_records: int = Field(ge=0)
     finding_records: int = Field(ge=0)
