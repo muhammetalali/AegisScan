@@ -172,6 +172,10 @@ def test_authenticated_user_can_self_deactivate_with_current_password():
     assert response.json()['deactivated'] is True
     user.refresh_from_db()
     assert user.is_active is False
+    audit = AuditLog.objects.get(action=AuditLog.Action.USER_UPDATE, user=user)
+    assert audit.metadata['event'] == 'self_deactivation'
+    assert audit.changes['is_active'] == {'from': True, 'to': False}
+    assert verify_audit_chain()[0] is True
 
 
 @pytest.mark.django_db
