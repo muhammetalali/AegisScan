@@ -140,7 +140,9 @@ def verify() -> dict:
             'planner_status': item.status,
             'provider_capability_ids': list(item.provider_capability_ids),
             'support_service_refs': list(item.support_service_refs),
-            'completion_claim_allowed': False,
+            'completion_claim_supported': True,
+            'completion_claim_mode': 'evidence_plus_governed_attestation',
+            'observation_alone_completion_allowed': False,
         }
 
     browser = wstg_observation_lineage('browser.spa-discovery')
@@ -164,7 +166,9 @@ def verify() -> dict:
         'classification_counts': EXPECTED_CLASSIFICATIONS,
         'cutover_gap_ids': sorted(gap_ids),
         'gap_details': details,
-        'completion_claim_allowed': False,
+        'completion_claim_supported': True,
+        'completion_claim_supported_count': len(gap_ids),
+        'observation_alone_completion_allowed': False,
     }
 
 
