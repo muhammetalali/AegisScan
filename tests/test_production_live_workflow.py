@@ -4,6 +4,7 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/production-live-deploy.yml"
+PROD_COMPOSE = ROOT / "aegis-platform/docker-compose.prod.yml"
 
 
 def _workflow() -> dict:
@@ -70,14 +71,14 @@ def test_live_production_workflow_requires_operational_backup_alertmanager_black
     assert "internal-black-box.log" in text
     assert "Prove installed CLI against internal production" in text
     assert "AEGIS_VERIFY_TLS: 'true'" in text
-    assert "AEGIS_PRODUCTION_E2E_APPROVER_EMAIL" in text
-    assert "AEGIS_PRODUCTION_E2E_APPROVER_PASSWORD" in text
-    assert "AEGIS_PRODUCTION_E2E_GOV_ORG_ID" in text
-    assert "AEGIS_PRODUCTION_E2E_APPROVER_MEMBERSHIP_ID" in text
-    assert "AEGIS_E2E_APPROVER_EMAIL:" in text
-    assert "AEGIS_E2E_APPROVER_PASSWORD:" in text
-    assert "AEGIS_E2E_GOV_ORG_ID:" in text
-    assert "AEGIS_E2E_APPROVER_MEMBERSHIP_ID:" in text
+    assert "Generate one-run governed E2E identities" in text
+    assert "::add-mask::" in text
+    assert "AEGIS_E2E_EPHEMERAL_FIXTURE=true" in text
+    assert "AEGIS_E2E_TARGET=aegis-scan-target" in text
+    assert "Deactivate one-run E2E identities" in text
+    assert "AEGIS_E2E_CLEANUP_ONLY" in text
+    assert "e2e-cleanup.log" in text
+    assert "AEGIS_PRODUCTION_E2E_" not in text
     assert "aegisscan.go-live-evidence.v3" in text
     assert "'deployment_mode': 'internal'" in text
     assert "'network_scope': 'rfc1918-or-ipv6-ula'" in text
@@ -96,3 +97,16 @@ def test_live_production_workflow_has_no_public_hosted_runner_or_public_evidence
     assert "public-acceptance.json" not in text
     assert "against public production" not in text
     assert "Verify public HTTPS" not in text
+
+def test_production_validation_target_is_internal_only_and_explicitly_authorized():
+    data = yaml.safe_load(PROD_COMPOSE.read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+    scan_target = data["services"]["scan_target"]
+    assert scan_target["labels"]["aegisscan.production-validation-target"] == "true"
+    assert "profiles" not in scan_target
+    assert "ports" not in scan_target
+
+    text = PROD_COMPOSE.read_text(encoding="utf-8")
+    assert text.count('ALLOW_SINGLE_LABEL_SCAN_TARGETS: "1"') == 5
+    assert text.count("aegis-scan-target") >= 7
+    assert 'SCANNER_EGRESS_PRIVATE_TARGETS: "${SCANNER_EGRESS_PRIVATE_TARGETS:-},aegis-scan-target"' in text
