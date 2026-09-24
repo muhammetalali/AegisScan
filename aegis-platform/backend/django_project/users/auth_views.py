@@ -7,7 +7,7 @@ from django.utils import timezone
 from django_ratelimit.decorators import ratelimit
 from rest_framework import status
 from rest_framework.exceptions import APIException, Throttled
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
@@ -130,6 +130,31 @@ class LogoutView(APIView):
                 # Logout remains idempotent even when the token is already expired/blacklisted.
                 pass
         response = Response({'message': 'Logged out successfully'})
+        response.delete_cookie(settings.AUTH_ACCESS_COOKIE, path='/')
+        response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path='/')
+        return response
+
+
+class DeactivateSelfView(APIView):
+    """Deactivate the authenticated account while preserving audit and ownership lineage."""
+
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect)
+    def post(self, request):
+        password = str(request.data.get('password') or '')
+        if not password or not request.user.check_password(password):
+            return Response({'detail': 'Current password is invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE)
+        if refresh:
+            try:
+                RefreshToken(refresh).blacklist()
+            except Exception:
+                pass
+        request.user.is_active = False
+        request.user.save(update_fields=['is_active'])
+        response = Response({'deactivated': True})
         response.delete_cookie(settings.AUTH_ACCESS_COOKIE, path='/')
         response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path='/')
         return response
