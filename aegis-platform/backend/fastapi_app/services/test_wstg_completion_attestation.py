@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from django.core.exceptions import ValidationError
 
 from django_project.assets.models import Asset
 from django_project.evidence.models import Evidence
@@ -99,7 +100,11 @@ def test_gap_native_small_can_be_completed_only_through_qualified_governed_attes
     assert 'passed' not in {item['state'] for item in after['tests']}
     assert 'failed' not in {item['state'] for item in after['tests']}
 
-
-@pytest.mark.django_db
-def test_wstg_attestation_is_append_only():
-    assert WSTGMethodologyAttestation.objects.count() == 0
+    record = WSTGMethodologyAttestation.objects.get(pk=attestation['id'])
+    record.rationale = 'attempted mutation must fail'
+    with pytest.raises(ValidationError):
+        record.save()
+    with pytest.raises(ValidationError):
+        WSTGMethodologyAttestation.objects.filter(pk=record.pk).update(rationale='forbidden')
+    with pytest.raises(ValidationError):
+        record.delete()
