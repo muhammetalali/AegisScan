@@ -89,6 +89,31 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _snapshot_private_env(path: Path) -> tuple[bytes, int, int]:
+    _private_file(path)
+    state = path.stat()
+    return path.read_bytes(), state.st_uid, state.st_gid
+
+
+def _restore_private_env(path: Path, snapshot: tuple[bytes, int, int]) -> None:
+    data, uid, gid = snapshot
+    temporary = path.with_name(f".{path.name}.rollback-{os.getpid()}")
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+        os.chown(path, uid, gid)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _execution_profile_environment(environment: dict[str, str]) -> dict[str, str]:
     resolved = dict(environment)
     mode = resolved.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
@@ -411,7 +436,7 @@ def _rollback_application(
     previous_sha: str,
     failed_release_sha: str,
     env_file: Path,
-    deployment_env: dict[str, str],
+    previous_env_snapshot: tuple[bytes, int, int],
     origin: str,
 ) -> None:
     migrations = _migration_changes(previous_sha, failed_release_sha)
@@ -421,7 +446,10 @@ def _rollback_application(
             "restore the pre-deploy backup before rolling application code back. "
             f"changed migrations: {migrations[:20]}"
         )
-    rollback_env = _rollback_execution_environment(deployment_env)
+
+    _restore_private_env(env_file, previous_env_snapshot)
+    previous_env = _load_env_file(env_file)
+    rollback_env = _rollback_execution_environment({**os.environ, **previous_env})
     _checkout(previous_sha)
     _deploy_stack(env_file, rollback_env)
     _execution_plane_acceptance(env_file, rollback_env)
@@ -433,6 +461,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     _assert_clean_repo()
     _ensure_release(release_sha)
     env_values = _load_env_file(env_file)
+    previous_env_snapshot = _snapshot_private_env(env_file)
     deployment_env = _execution_profile_environment({**os.environ, **env_values})
     previous_sha = _current_sha()
     backup = _backup_before_upgrade(env_file, deployment_env)
@@ -454,10 +483,11 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
                     previous_sha=previous_sha,
                     failed_release_sha=release_sha,
                     env_file=env_file,
-                    deployment_env=deployment_env,
+                    previous_env_snapshot=previous_env_snapshot,
                     origin=origin,
                 )
             else:
+                _restore_private_env(env_file, previous_env_snapshot)
                 _checkout(previous_sha)
         raise
 
