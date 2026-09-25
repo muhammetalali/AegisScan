@@ -9,6 +9,7 @@ on:
       - 'aegis-platform/scripts/production_runner_bootstrap.sh'
       - 'aegis-platform/scripts/production_host_reality.py'
       - 'aegis-platform/scripts/production_secret_init.py'
+      - 'aegis-platform/scripts/production_aws_backup_bootstrap.sh'
       - 'aegis-platform/scripts/production_tls_acme.sh'
       - 'aegis-platform/scripts/production_preflight.py'
       - 'aegis-platform/scripts/production_ddns_reconcile.py'
@@ -23,6 +24,7 @@ on:
       - 'tests/test_production_live_workflow.py'
       - 'tests/test_production_runner_bootstrap_contract.py'
       - 'tests/test_production_secret_init.py'
+      - 'tests/test_production_aws_backup_bootstrap.py'
       - 'tests/test_production_ddns_reconcile.py'
       - 'tests/test_production_internal_dns_contract.py'
       - '.github/workflows/production-host-reality.yml'
@@ -55,6 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           sh -n aegis-platform/scripts/production_host_bootstrap.sh
+          sh -n aegis-platform/scripts/production_aws_backup_bootstrap.sh
           sh -n aegis-platform/scripts/production_runner_bootstrap.sh
           sh -n aegis-platform/scripts/production_internal_dns_bootstrap.sh
           sh -n aegis-platform/scripts/production_tls_acme.sh
@@ -68,7 +71,8 @@ jobs:
             tests/test_production_runner_bootstrap_contract.py \
             tests/test_production_ddns_reconcile.py \
             tests/test_production_internal_dns_contract.py \
-            tests/test_production_secret_init.py
+            tests/test_production_secret_init.py \
+            tests/test_production_aws_backup_bootstrap.py
 
       - name: Generate private production secret material
         shell: bash
