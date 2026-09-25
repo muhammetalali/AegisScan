@@ -52,7 +52,7 @@ def test_remote_acceptance_uses_private_dns_and_strict_pinned_ssh(tmp_path: Path
 
     monkeypatch.setattr(remote_ops.remote, "_host", lambda host: host)
     monkeypatch.setattr(remote_ops.remote, "_resolved_enterprise_addresses", lambda *args: ["10.20.30.10"])
-    monkeypatch.setattr(remote_ops.remote, "_require_known_host", lambda *args: None)
+    monkeypatch.setattr(remote_ops.remote, "_require_known_host", lambda *args, **kwargs: "10.20.30.10")
 
     captured = {}
     def fake_run(argv, **kwargs):
@@ -96,8 +96,10 @@ def test_remote_acceptance_uses_private_dns_and_strict_pinned_ssh(tmp_path: Path
     assert "e2e_fixture_path" not in result["operational_acceptance"]
     assert transferred["remote_path"].endswith(".json")
     assert transferred["local_path"] == fixture_output
+    assert transferred["host_key_alias"] == "10.20.30.10"
     argv = captured["argv"]
     assert "StrictHostKeyChecking=yes" in argv
+    assert "HostKeyAlias=10.20.30.10" in argv
     assert "PasswordAuthentication=no" in argv
     assert "KbdInteractiveAuthentication=no" in argv
     assert "BatchMode=yes" in argv
