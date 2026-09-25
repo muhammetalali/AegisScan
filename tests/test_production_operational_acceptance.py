@@ -31,6 +31,20 @@ def _env(tmp_path: Path) -> dict[str, str]:
     }
 
 
+def test_compose_environment_preserves_governed_kali_and_adds_only_requested_profile(monkeypatch):
+    monkeypatch.setattr(ops.os, "environ", {})
+    env = {
+        "AEGIS_RECON_PROVIDER": "default-kali",
+        "COMPOSE_PROFILES": "existing-profile",
+    }
+    resolved = ops._compose_environment(env, extra_profiles={"ci-only"})
+    assert set(resolved["COMPOSE_PROFILES"].split(",")) == {
+        "ci-only",
+        "existing-profile",
+        "kali-recon",
+    }
+
+
 def test_operational_material_requires_https_and_private_backup_secrets(tmp_path: Path):
     env = _env(tmp_path)
     ops._validate_operational_material(env)
