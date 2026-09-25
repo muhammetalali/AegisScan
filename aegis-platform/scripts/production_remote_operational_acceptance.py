@@ -379,27 +379,49 @@ def main() -> int:
     parser.add_argument("--repo-path", default="/opt/aegisscan/AegisScan")
     parser.add_argument("--env-path", default="/etc/aegisscan/production.env")
     parser.add_argument("--timeout-seconds", type=int, default=2400)
-    parser.add_argument("--e2e-fixture-output", type=Path, required=True)
+    parser.add_argument("--e2e-fixture-output", type=Path)
+    parser.add_argument("--cleanup-e2e-scope", action="store_true")
     args = parser.parse_args()
     if args.timeout_seconds < 60 or args.timeout_seconds > 7200:
         print("timeout-seconds must be between 60 and 7200", file=sys.stderr)
         return 2
+    if not args.cleanup_e2e_scope and args.e2e_fixture_output is None:
+        print("--e2e-fixture-output is required unless --cleanup-e2e-scope is used", file=sys.stderr)
+        return 2
     try:
-        result = accept_remote(
-            host=args.host,
-            port=args.port,
-            user=args.user,
-            private_key=args.private_key,
-            known_hosts=args.known_hosts,
-            release_sha=args.release_sha,
-            repo_path=args.repo_path,
-            env_path=args.env_path,
-            timeout_seconds=args.timeout_seconds,
-            e2e_fixture_output=args.e2e_fixture_output,
-        )
+        if args.cleanup_e2e_scope:
+            result = cleanup_remote(
+                host=args.host,
+                port=args.port,
+                user=args.user,
+                private_key=args.private_key,
+                known_hosts=args.known_hosts,
+                release_sha=args.release_sha,
+                repo_path=args.repo_path,
+                env_path=args.env_path,
+                timeout_seconds=args.timeout_seconds,
+            )
+        else:
+            assert args.e2e_fixture_output is not None
+            result = accept_remote(
+                host=args.host,
+                port=args.port,
+                user=args.user,
+                private_key=args.private_key,
+                known_hosts=args.known_hosts,
+                release_sha=args.release_sha,
+                repo_path=args.repo_path,
+                env_path=args.env_path,
+                timeout_seconds=args.timeout_seconds,
+                e2e_fixture_output=args.e2e_fixture_output,
+            )
     except RemoteOperationalAcceptanceError as exc:
         print(json.dumps({
-            "schema": "aegisscan.remote-production-operational-acceptance.v1",
+            "schema": (
+                "aegisscan.remote-production-e2e-scope-cleanup.v1"
+                if args.cleanup_e2e_scope
+                else "aegisscan.remote-production-operational-acceptance.v1"
+            ),
             "status": "failed",
             "error": str(exc),
         }, sort_keys=True), file=sys.stderr)
