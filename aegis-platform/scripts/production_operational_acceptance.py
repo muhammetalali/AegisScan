@@ -642,6 +642,7 @@ def main() -> int:
     parser.add_argument("--service-timeout-seconds", type=int, default=300)
     parser.add_argument("--backup-timeout-seconds", type=int, default=1800)
     parser.add_argument("--poll-seconds", type=int, default=5)
+    parser.add_argument("--cleanup-e2e-scope", action="store_true")
     args = parser.parse_args()
     if not 30 <= args.service_timeout_seconds <= 1800:
         print("service timeout must be between 30 and 1800 seconds", file=sys.stderr)
@@ -653,16 +654,28 @@ def main() -> int:
         print("poll interval must be between 1 and 30 seconds", file=sys.stderr)
         return 2
     try:
-        result = accept(
-            env_file=args.env_file,
-            release_sha=args.release_sha,
-            service_timeout_seconds=args.service_timeout_seconds,
-            backup_timeout_seconds=args.backup_timeout_seconds,
-            poll_seconds=args.poll_seconds,
-        )
+        if args.cleanup_e2e_scope:
+            result = cleanup_e2e_scope(
+                env_file=args.env_file,
+                release_sha=args.release_sha,
+                service_timeout_seconds=args.service_timeout_seconds,
+                poll_seconds=args.poll_seconds,
+            )
+        else:
+            result = accept(
+                env_file=args.env_file,
+                release_sha=args.release_sha,
+                service_timeout_seconds=args.service_timeout_seconds,
+                backup_timeout_seconds=args.backup_timeout_seconds,
+                poll_seconds=args.poll_seconds,
+            )
     except OperationalAcceptanceError as exc:
         print(json.dumps({
-            "schema": "aegisscan.production-operational-acceptance.v1",
+            "schema": (
+                "aegisscan.production-e2e-scope-cleanup.v1"
+                if args.cleanup_e2e_scope
+                else "aegisscan.production-operational-acceptance.v1"
+            ),
             "status": "failed",
             "error": str(exc),
         }, sort_keys=True), file=sys.stderr)
