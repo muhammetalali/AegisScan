@@ -13,6 +13,12 @@ assert SPEC and SPEC.loader
 deploy = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(deploy)
 
+TRUST_PATH = ROOT / "aegis-platform/scripts/production_execution_trust_bootstrap.py"
+TRUST_SPEC = importlib.util.spec_from_file_location("production_execution_trust_bootstrap", TRUST_PATH)
+assert TRUST_SPEC and TRUST_SPEC.loader
+trust = importlib.util.module_from_spec(TRUST_SPEC)
+TRUST_SPEC.loader.exec_module(trust)
+
 
 def _env_file(tmp_path: Path) -> Path:
     path = tmp_path / "production.env"
@@ -251,3 +257,22 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
     assert events.index(("trust", release_sha)) < events.index("preflight")
     assert events.index("preflight") < events.index("deploy")
+
+
+def test_runtime_trust_bootstrap_contract_is_exercised_by_launch_gate():
+    values = {}
+    trust._ensure_tokens(values)
+    assert set(trust.TOKEN_NAMES).issubset(values)
+    assert all(len(values[name]) == 64 for name in trust.TOKEN_NAMES)
+
+    image_id = "sha256:" + "1" * 64
+    manifest = {
+        "runner_version": "0.1.0",
+        "build_commit": "2" * 40,
+        "base_image_digest": "sha256:" + "3" * 64,
+        "tool_manifest_digest": "sha256:" + "4" * 64,
+    }
+    bound = trust._trust_values("RECON", image_id, manifest, b"runtime\n")
+    assert bound["AEGIS_KALI_RECON_IMAGE"] == image_id
+    assert bound["AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST"] == image_id
+    assert bound["AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT"] == "2" * 40
