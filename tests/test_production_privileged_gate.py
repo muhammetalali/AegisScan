@@ -96,6 +96,27 @@ def test_accept_requires_exact_release_before_root_operational_acceptance(monkey
         gate.accept("c" * 40)
 
 
+def test_cleanup_e2e_scope_requires_exact_release_and_fixed_cleanup_contract(monkeypatch):
+    monkeypatch.setattr(gate, "_assert_private_material", lambda: None)
+    monkeypatch.setattr(gate, "_assert_secure_tree", lambda: None)
+    monkeypatch.setattr(gate, "_git", lambda *args, **kwargs: SimpleNamespace(stdout="e" * 40 + "\n"))
+    calls = []
+    monkeypatch.setattr(
+        gate,
+        "_python",
+        lambda script, *args, timeout: calls.append((script, args, timeout)),
+    )
+
+    gate.cleanup_e2e_scope("e" * 40)
+    assert calls[0][0] == "production_operational_acceptance.py"
+    assert "--cleanup-e2e-scope" in calls[0][1]
+    assert "--release-sha" in calls[0][1]
+
+    monkeypatch.setattr(gate, "_git", lambda *args, **kwargs: SimpleNamespace(stdout="f" * 40 + "\n"))
+    with pytest.raises(gate.PrivilegedGateError, match="cleanup release SHA"):
+        gate.cleanup_e2e_scope("e" * 40)
+
+
 def test_gate_installation_and_sudo_caller_contract(monkeypatch):
     monkeypatch.setattr(gate.os, "geteuid", lambda: 0)
     monkeypatch.setenv("SUDO_USER", gate.EXPECTED_SUDO_USER)
