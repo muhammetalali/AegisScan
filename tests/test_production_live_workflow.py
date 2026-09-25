@@ -112,6 +112,30 @@ def test_live_production_workflow_requires_operational_backup_alertmanager_black
     assert "retention-days: 90" in text
 
 
+def test_live_production_workflow_materializes_transport_before_fixture_and_guards_cleanup():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    materialize = text.split(
+        "- name: Materialize pinned SSH and enterprise trust material",
+        1,
+    )[1].split("- name: Install internal acceptance client dependency", 1)[0]
+    assert "/tmp/aegis-production/e2e-fixture.json" not in materialize
+    assert "AEGIS_PROD_TRANSPORT_READY=true" in materialize
+
+    identity_cleanup = text.split(
+        "- name: Deactivate one-run E2E identities",
+        1,
+    )[1].split("- name: Restore fail-closed production scanner scope", 1)[0]
+    assert 'AEGIS_E2E_EPHEMERAL_FIXTURE:-' in identity_cleanup
+    assert "identity cleanup is not required" in identity_cleanup
+
+    scope_cleanup = text.split(
+        "- name: Restore fail-closed production scanner scope",
+        1,
+    )[1].split("- name: Build internal go-live evidence manifest", 1)[0]
+    assert 'AEGIS_PROD_TRANSPORT_READY:-' in scope_cleanup
+    assert "remote scope cleanup is not applicable" in scope_cleanup
+
+
 def test_live_production_workflow_has_no_public_hosted_runner_or_public_evidence_contract():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "runs-on: ubuntu-latest" not in text

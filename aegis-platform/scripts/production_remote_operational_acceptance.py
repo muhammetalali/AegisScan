@@ -35,8 +35,9 @@ def _ssh_base(
     user: str,
     private_key: Path,
     known_hosts: Path,
+    host_key_alias: str | None = None,
 ) -> list[str]:
-    return [
+    argv = [
         "ssh",
         "-T",
         "-i",
@@ -55,6 +56,10 @@ def _ssh_base(
         "StrictHostKeyChecking=yes",
         "-o",
         f"UserKnownHostsFile={known_hosts}",
+    ]
+    if host_key_alias and host_key_alias != remote._known_host_lookup(host, port):
+        argv.extend(["-o", f"HostKeyAlias={host_key_alias}"])
+    argv.extend([
         "-o",
         "ConnectTimeout=15",
         "-o",
@@ -62,7 +67,8 @@ def _ssh_base(
         "-o",
         "ServerAliveCountMax=3",
         f"{user}@{host}",
-    ]
+    ])
+    return argv
 
 
 def _transfer_private_fixture(
@@ -72,6 +78,7 @@ def _transfer_private_fixture(
     user: str,
     private_key: Path,
     known_hosts: Path,
+    host_key_alias: str | None = None,
     remote_path: str,
     local_path: Path,
 ) -> None:
@@ -104,6 +111,11 @@ def _transfer_private_fixture(
         "StrictHostKeyChecking=yes",
         "-o",
         f"UserKnownHostsFile={known_hosts}",
+        *(
+            ["-o", f"HostKeyAlias={host_key_alias}"]
+            if host_key_alias and host_key_alias != remote._known_host_lookup(host, port)
+            else []
+        ),
         "-o",
         "ConnectTimeout=15",
         f"{user}@{host}:{remote_path}",
@@ -137,6 +149,7 @@ def _transfer_private_fixture(
             user=user,
             private_key=private_key,
             known_hosts=known_hosts,
+            host_key_alias=host_key_alias,
         ),
         f"/bin/rm -f -- {shlex.quote(remote_path)}",
     ]
@@ -212,7 +225,12 @@ def accept_remote(
         remote._private_file(private_key, "SSH private key", 64 * 1024)
         remote._private_file(known_hosts, "SSH known-hosts", 1024 * 1024)
         host_addresses = remote._resolved_enterprise_addresses(host, port, "SSH host")
-        remote._require_known_host(host, port, known_hosts)
+        host_key_alias = remote._require_known_host(
+            host,
+            port,
+            known_hosts,
+            resolved_addresses=host_addresses,
+        )
     except remote.RemoteDeployError as exc:
         raise RemoteOperationalAcceptanceError(str(exc)) from exc
 
@@ -224,6 +242,7 @@ def accept_remote(
             user=user,
             private_key=private_key,
             known_hosts=known_hosts,
+            host_key_alias=host_key_alias,
         ),
         command,
     ]
@@ -265,6 +284,7 @@ def accept_remote(
         user=user,
         private_key=private_key,
         known_hosts=known_hosts,
+        host_key_alias=host_key_alias,
         remote_path=remote_fixture_path,
         local_path=e2e_fixture_output,
     )
@@ -308,7 +328,12 @@ def cleanup_remote(
         remote._private_file(private_key, "SSH private key", 64 * 1024)
         remote._private_file(known_hosts, "SSH known-hosts", 1024 * 1024)
         host_addresses = remote._resolved_enterprise_addresses(host, port, "SSH host")
-        remote._require_known_host(host, port, known_hosts)
+        host_key_alias = remote._require_known_host(
+            host,
+            port,
+            known_hosts,
+            resolved_addresses=host_addresses,
+        )
     except remote.RemoteDeployError as exc:
         raise RemoteOperationalAcceptanceError(str(exc)) from exc
 
@@ -324,6 +349,7 @@ def cleanup_remote(
             user=user,
             private_key=private_key,
             known_hosts=known_hosts,
+            host_key_alias=host_key_alias,
         ),
         command,
     ]
