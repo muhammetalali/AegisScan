@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import pwd
@@ -36,7 +37,6 @@ REQUIRED_RUNNING_SERVICES = {
     "prometheus",
     "alertmanager",
     "backup",
-    "scan_target",
 }
 
 
@@ -49,6 +49,7 @@ def _run(
     *,
     timeout: int = 60,
     input_text: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -59,6 +60,7 @@ def _run(
             capture_output=True,
             check=True,
             timeout=timeout,
+            env=env,
         )
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         detail = ""
