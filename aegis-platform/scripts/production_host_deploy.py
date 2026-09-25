@@ -19,6 +19,7 @@ ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLATFORM_DIR = SCRIPT_DIR.parent
 REPO_ROOT = PLATFORM_DIR.parent
+TRUST_BOOTSTRAP = SCRIPT_DIR / "production_execution_trust_bootstrap.py"
 COMPOSE_FILES = (
     "docker-compose.yml",
     "docker-compose.prod.yml",
@@ -117,6 +118,7 @@ def _rollback_execution_environment(environment: dict[str, str]) -> dict[str, st
     """Return an execution environment compatible with pre-M4 releases."""
     safe = dict(environment)
     safe["AEGIS_RECON_PROVIDER"] = "legacy"
+    safe["AEGIS_RECON_LEGACY_DISABLED"] = "false"
     safe["AEGIS_KALI_RECON_CANARY_BPS"] = "0"
     return _execution_profile_environment(safe)
 
@@ -211,6 +213,25 @@ def _migration_changes(previous_sha: str, release_sha: str) -> list[str]:
         for line in output.splitlines()
         if "/migrations/" in line and line.strip().endswith(".py")
     ]
+
+
+def _prepare_execution_trust(env_file: Path, release_sha: str) -> dict[str, str]:
+    if not TRUST_BOOTSTRAP.is_file():
+        raise DeployError(f"production execution trust bootstrap is unavailable: {TRUST_BOOTSTRAP}")
+    _run(
+        [
+            sys.executable,
+            str(TRUST_BOOTSTRAP),
+            "--env-file",
+            str(env_file),
+            "--release-sha",
+            release_sha,
+        ],
+        cwd=REPO_ROOT,
+        capture=False,
+        timeout=21600,
+    )
+    return _load_env_file(env_file)
 
 
 def _preflight(env_file: Path, deployment_env: dict[str, str]) -> None:
@@ -414,12 +435,13 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     env_values = _load_env_file(env_file)
     deployment_env = _execution_profile_environment({**os.environ, **env_values})
     previous_sha = _current_sha()
-    _preflight(env_file, deployment_env)
     backup = _backup_before_upgrade(env_file, deployment_env)
 
     _checkout(release_sha)
     deployment_attempted = False
     try:
+        env_values = _prepare_execution_trust(env_file, release_sha)
+        deployment_env = _execution_profile_environment({**os.environ, **env_values})
         _preflight(env_file, deployment_env)
         deployment_attempted = True
         _deploy_stack(env_file, deployment_env)
