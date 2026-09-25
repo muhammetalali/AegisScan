@@ -48,7 +48,7 @@ def test_aws_backup_bootstrap_never_prints_service_secret_and_rolls_back_failed_
     text = _text()
     assert 'aws iam create-access-key --user-name "$IAM_USER" --output json >"$TMP_DIR/access-key.json"' in text
     assert 'aws iam delete-access-key --user-name "$IAM_USER" --access-key-id "$NEW_ACCESS_KEY_ID"' in text
-    assert 'printf '%s\\n' "$SERVICE_SECRET_KEY"' not in text
+    assert "printf '%s\\n' \"$SERVICE_SECRET_KEY\"" not in text
     assert 'echo "$SERVICE_SECRET_KEY"' not in text
     assert "SecretAccessKey" in text
     assert "HOST_MATERIAL_CREATED=0" in text
