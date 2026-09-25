@@ -281,6 +281,93 @@ def accept_remote(
     }
 
 
+def cleanup_remote(
+    *,
+    host: str,
+    port: int,
+    user: str,
+    private_key: Path,
+    known_hosts: Path,
+    release_sha: str,
+    repo_path: str,
+    env_path: str,
+    timeout_seconds: int,
+) -> dict[str, object]:
+    try:
+        host = remote._host(host)
+        if port < 1 or port > 65535:
+            raise remote.RemoteDeployError("SSH port must be between 1 and 65535")
+        if not remote.USER_RE.fullmatch(user):
+            raise remote.RemoteDeployError("SSH user is invalid")
+        if not remote.SHA_RE.fullmatch(release_sha):
+            raise remote.RemoteDeployError("release SHA must be exactly 40 lowercase hexadecimal characters")
+        repo_path = remote._remote_path(repo_path, "remote repo path")
+        env_path = remote._remote_path(env_path, "remote env path")
+        private_key = private_key.resolve()
+        known_hosts = known_hosts.resolve()
+        remote._private_file(private_key, "SSH private key", 64 * 1024)
+        remote._private_file(known_hosts, "SSH known-hosts", 1024 * 1024)
+        host_addresses = remote._resolved_enterprise_addresses(host, port, "SSH host")
+        remote._require_known_host(host, port, known_hosts)
+    except remote.RemoteDeployError as exc:
+        raise RemoteOperationalAcceptanceError(str(exc)) from exc
+
+    command = _remote_cleanup_command(
+        repo_path=repo_path,
+        env_path=env_path,
+        release_sha=release_sha,
+    )
+    argv = [
+        *_ssh_base(
+            host=host,
+            port=port,
+            user=user,
+            private_key=private_key,
+            known_hosts=known_hosts,
+        ),
+        command,
+    ]
+    try:
+        result = subprocess.run(
+            argv,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()[-8000:]
+        raise RemoteOperationalAcceptanceError(
+            f"remote E2E scope cleanup failed with exit {exc.returncode}: {detail}"
+        ) from exc
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise RemoteOperationalAcceptanceError(f"remote E2E scope cleanup failed: {exc}") from exc
+
+    payload = None
+    for line in reversed([line.strip() for line in result.stdout.splitlines() if line.strip()]):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if candidate.get("schema") == "aegisscan.production-e2e-scope-cleanup.v1":
+            payload = candidate
+            break
+    if not isinstance(payload, dict) or payload.get("status") != "success":
+        raise RemoteOperationalAcceptanceError("remote host did not return successful E2E scope cleanup")
+    if payload.get("release_sha") != release_sha:
+        raise RemoteOperationalAcceptanceError("remote E2E scope cleanup release SHA mismatch")
+
+    return {
+        "schema": "aegisscan.remote-production-e2e-scope-cleanup.v1",
+        "status": "success",
+        "deployment_mode": "internal",
+        "host": host,
+        "host_resolved_addresses": host_addresses,
+        "release_sha": release_sha,
+        "scope_cleanup": payload,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True)
