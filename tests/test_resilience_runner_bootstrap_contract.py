@@ -42,3 +42,14 @@ def test_resilience_runner_recovery_requires_full_attested_marker():
 def test_resilience_runner_rejects_verified_archive_without_dependency_installer():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "verified runner archive is missing bin/installdependencies.sh" in text
+
+
+def test_resilience_runner_download_recovers_from_stalls_without_restarting_archive():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "download_runner_archive()" in text
+    assert "--continue-at -" in text
+    assert "--connect-timeout 30" in text
+    assert "--speed-limit 1024 --speed-time 60" in text
+    assert "max_attempts=8" in text
+    assert "resuming partial archive" in text
+    assert "--progress-bar" in text
