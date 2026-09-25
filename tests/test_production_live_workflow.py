@@ -112,6 +112,16 @@ def test_live_production_workflow_requires_operational_backup_alertmanager_black
     assert "retention-days: 90" in text
 
 
+def test_live_production_workflow_preserves_and_validates_ssh_private_key():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    materialize = text.split(
+        "- name: Materialize pinned SSH and enterprise trust material",
+        1,
+    )[1].split("- name: Install internal acceptance client dependency", 1)[0]
+    assert """printf '%s\\n' "$PROD_SSH_PRIVATE_KEY" > /tmp/aegis-production/id""" in materialize
+    assert "ssh-keygen -y -f /tmp/aegis-production/id >/dev/null" in materialize
+
+
 def test_live_production_workflow_materializes_transport_before_fixture_and_guards_cleanup():
     text = WORKFLOW.read_text(encoding="utf-8")
     materialize = text.split(
