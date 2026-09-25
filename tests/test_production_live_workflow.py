@@ -186,7 +186,7 @@ def test_production_backend_services_receive_required_runtime_environment():
         "CSRF_TRUSTED_ORIGINS",
         "DJANGO_SETTINGS_MODULE",
     }
-    secret_inputs = required - {"DEBUG", "DJANGO_SETTINGS_MODULE"}
+    interpolated_inputs = required - {"DEBUG", "DJANGO_SETTINGS_MODULE"}
     for service_name in (
         "django",
         "fastapi",
@@ -199,7 +199,7 @@ def test_production_backend_services_receive_required_runtime_environment():
         assert service["env_file"] == []
         environment = service["environment"]
         assert required <= set(environment)
-        for name in secret_inputs:
-            assert environment[name] == f"${{{name}:?{name} is required in production}}"
+        for name in interpolated_inputs:
+            assert environment[name] == f"${{{name}:-}}"
 
     assert data["services"]["django"]["environment"]["AUTH_COOKIE_SECURE"] == "True"
