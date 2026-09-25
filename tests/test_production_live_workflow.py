@@ -206,14 +206,16 @@ def test_production_backend_services_receive_required_runtime_environment():
     assert data["services"]["django"]["environment"]["AUTH_COOKIE_SECURE"] == "True"
 
 
+
 def test_django_healthcheck_uses_configured_allowed_host_instead_of_localhost():
     data = yaml.safe_load(BASE_COMPOSE.read_text(encoding="utf-8"))
     assert isinstance(data, dict)
 
     test = data["services"]["django"]["healthcheck"]["test"]
-    assert test[0] == "CMD-SHELL"
-    command = test[1]
-    assert "$${ALLOWED_HOSTS%%,*}" in command
-    assert 'Host: $$health_host' in command
-    assert "http://127.0.0.1:8000/health/" in command
-    assert "http://localhost:8000/health/" not in command
+    assert test[:3] == ["CMD", "python", "-c"]
+    script = test[3]
+    assert "ALLOWED_HOSTS" in script
+    assert "split(',')[0]" in script
+    assert "headers={'Host':h}" in script
+    assert "127.0.0.1" in script
+    assert "localhost:8000" not in script
