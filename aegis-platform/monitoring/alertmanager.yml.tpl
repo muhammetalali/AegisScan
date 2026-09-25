@@ -12,6 +12,4 @@ route:
       repeat_interval: 15m
 receivers:
   - name: aegis-production
-    webhook_configs:
-      - url: '__ALERT_WEBHOOK_URL__'
-        send_resolved: true
+__ALERT_WEBHOOK_CONFIG__

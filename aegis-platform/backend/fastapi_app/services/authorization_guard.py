@@ -52,9 +52,19 @@ def _requested_scan_target(scan: Scan) -> str:
     )
 
 
-def _require_worker_egress(target: str, *, url: bool = False) -> tuple[bool, str]:
+def _require_worker_egress(
+    target: str,
+    *,
+    url: bool = False,
+    approved_target: str = '',
+) -> tuple[bool, str]:
     try:
-        require_authorized_target(target, url=url, resolve_dns=True)
+        require_authorized_target(
+            target,
+            url=url,
+            resolve_dns=True,
+            approved_target=approved_target or None,
+        )
     except ScopeAuthorizationError as exc:
         return False, f'Execution blocked: {exc}'
     return True, ''
@@ -95,7 +105,11 @@ def require_bound_scan_authorization(scan_id: str) -> tuple[Scan | None, str, As
         is_url_scan = scan.scan_type == Scan.Type.URL
 
     if needs_egress_check:
-        ok, reason = _require_worker_egress(authorized_target, url=is_url_scan)
+        ok, reason = _require_worker_egress(
+            authorized_target,
+            url=is_url_scan,
+            approved_target=authorized_target,
+        )
         if not ok:
             return None, reason, None
     return scan, authorized_target, decision
@@ -145,6 +159,7 @@ def require_bound_validation_authorization(validation) -> tuple[Asset | None, st
     ok, reason = _require_worker_egress(
         decision.target_snapshot,
         url=(validation.target_type or '').strip().lower() == 'url',
+        approved_target=decision.target_snapshot,
     )
     if not ok:
         return None, reason, None
@@ -167,7 +182,11 @@ def revalidate_bound_authorization(scan: Scan, decision: AssetAuthorization) -> 
         target = decision.target_snapshot
 
     if needs_egress_check:
-        ok, reason = _require_worker_egress(target, url=is_url_scan)
+        ok, reason = _require_worker_egress(
+            target,
+            url=is_url_scan,
+            approved_target=decision.target_snapshot,
+        )
         if not ok:
             return False, reason.replace('Execution blocked: ', 'Execution blocked before evidence persistence: ', 1)
     return True, ''

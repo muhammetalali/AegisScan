@@ -11,7 +11,7 @@ AWS_REGION="${AEGIS_AWS_REGION:-eu-central-1}"
 IAM_USER="aegisscan-prod-backup"
 POLICY_NAME="AegisScanProductionBackup"
 BACKUP_PREFIX="aegisscan/postgres"
-DOMAIN="${AEGIS_PRODUCTION_DOMAIN:-}"
+DOMAIN="${AEGIS_PRODUCTION_DOMAIN:-aegis-prod.aegis.internal}"
 AUTHORIZED_TARGETS="${AEGIS_AUTHORIZED_SCAN_TARGETS:-}"
 ALERT_WEBHOOK_FILE="${AEGIS_ALERT_WEBHOOK_FILE:-}"
 
@@ -30,10 +30,10 @@ case "$AWS_REGION" in
   ''|*[!a-z0-9-]*) fail "AEGIS_AWS_REGION must contain only lowercase letters, digits and hyphens" ;;
 esac
 
-[ -n "$DOMAIN" ] || fail "AEGIS_PRODUCTION_DOMAIN is required"
-[ -n "$AUTHORIZED_TARGETS" ] || fail "AEGIS_AUTHORIZED_SCAN_TARGETS is required"
-[ -n "$ALERT_WEBHOOK_FILE" ] || fail "AEGIS_ALERT_WEBHOOK_FILE is required"
-[ -f "$ALERT_WEBHOOK_FILE" ] || fail "AEGIS_ALERT_WEBHOOK_FILE does not exist"
+[ -n "$DOMAIN" ] || fail "AEGIS_PRODUCTION_DOMAIN must not be empty"
+if [ -n "$ALERT_WEBHOOK_FILE" ] && [ ! -f "$ALERT_WEBHOOK_FILE" ]; then
+  fail "AEGIS_ALERT_WEBHOOK_FILE does not exist"
+fi
 
 python3 - "$SECRET_INIT" "$DOMAIN" "$AUTHORIZED_TARGETS" "$ALERT_WEBHOOK_FILE" <<'PY'
 import importlib.util
@@ -49,12 +49,13 @@ spec.loader.exec_module(module)
 
 module._validate_domain(sys.argv[2])
 module._validate_targets([sys.argv[3]])
-raw = module._private_source(Path(sys.argv[4]), max_bytes=8192)
-try:
-    webhook = raw.decode("utf-8").strip()
-except UnicodeDecodeError as exc:
-    raise SystemExit("AEGIS_ALERT_WEBHOOK_FILE must be UTF-8") from exc
-module._validate_https_origin(webhook, "alert webhook")
+if sys.argv[4]:
+    raw = module._private_source(Path(sys.argv[4]), max_bytes=8192)
+    try:
+        webhook = raw.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise SystemExit("AEGIS_ALERT_WEBHOOK_FILE must be UTF-8") from exc
+    module._validate_https_origin(webhook, "alert webhook")
 PY
 
 export AWS_PAGER=""
@@ -337,8 +338,12 @@ if spec is None or spec.loader is None:
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-alert_raw = module._private_source(Path(os.environ["AEGIS_ALERT_FILE"]), max_bytes=8192)
-alert_webhook = alert_raw.decode("utf-8").strip()
+alert_webhook = ""
+alert_file = os.environ["AEGIS_ALERT_FILE"].strip()
+if alert_file:
+    alert_raw = module._private_source(Path(alert_file), max_bytes=8192)
+    alert_webhook = alert_raw.decode("utf-8").strip()
+
 result = module.initialize(
     domain=os.environ["AEGIS_DOMAIN"],
     authorized_targets=[os.environ["AEGIS_TARGETS"]],
