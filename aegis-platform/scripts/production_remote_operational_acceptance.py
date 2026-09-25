@@ -168,6 +168,22 @@ def _remote_command(*, repo_path: str, env_path: str, release_sha: str) -> str:
     )
 
 
+def _remote_cleanup_command(*, repo_path: str, env_path: str, release_sha: str) -> str:
+    if repo_path != remote.PRODUCTION_REPO_PATH:
+        raise RemoteOperationalAcceptanceError(
+            f"production repository path must be {remote.PRODUCTION_REPO_PATH}"
+        )
+    if env_path != remote.PRODUCTION_ENV_PATH:
+        raise RemoteOperationalAcceptanceError(
+            f"production environment path must be {remote.PRODUCTION_ENV_PATH}"
+        )
+    q = shlex.quote
+    return (
+        f"sudo -n {q(remote.PRIVILEGED_GATE)} cleanup-e2e-scope "
+        f"--release-sha {q(release_sha)}"
+    )
+
+
 def accept_remote(
     *,
     host: str,
