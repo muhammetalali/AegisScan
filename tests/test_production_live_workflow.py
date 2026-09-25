@@ -165,3 +165,41 @@ def test_production_validation_target_is_internal_only_and_explicitly_authorized
     assert "ALLOW_SINGLE_LABEL_SCAN_TARGETS" not in text
     assert "aegis-scan-target" not in text
     assert 'SCANNER_EGRESS_PRIVATE_TARGETS: "${SCANNER_EGRESS_PRIVATE_TARGETS:-},aegis-scan-target"' not in text
+
+
+def test_production_backend_services_receive_required_runtime_environment():
+    data = yaml.load(PROD_COMPOSE.read_text(encoding="utf-8"), Loader=ComposeLoader)
+    assert isinstance(data, dict)
+
+    required = {
+        "DEBUG",
+        "SECRET_KEY",
+        "JWT_SECRET_KEY",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "CELERY_BROKER_URL",
+        "CELERY_RESULT_BACKEND",
+        "CREDENTIAL_VAULT_KEYS",
+        "CREDENTIAL_FINGERPRINT_KEY",
+        "ALLOWED_HOSTS",
+        "CORS_ALLOWED_ORIGINS",
+        "CSRF_TRUSTED_ORIGINS",
+        "DJANGO_SETTINGS_MODULE",
+    }
+    secret_inputs = required - {"DEBUG", "DJANGO_SETTINGS_MODULE"}
+    for service_name in (
+        "django",
+        "fastapi",
+        "celery_worker",
+        "scanner_worker",
+        "browser_worker",
+        "celery_beat",
+    ):
+        service = data["services"][service_name]
+        assert service["env_file"] == []
+        environment = service["environment"]
+        assert required <= set(environment)
+        for name in secret_inputs:
+            assert environment[name] == f"${{{name}:?{name} is required in production}}"
+
+    assert data["services"]["django"]["environment"]["AUTH_COOKIE_SECURE"] == "True"
