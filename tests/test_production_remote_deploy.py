@@ -106,6 +106,28 @@ def test_known_host_lookup_requires_exact_host_and_port(tmp_path: Path, monkeypa
         remote._require_known_host("deploy.internal", 22, known)
 
 
+def test_known_host_lookup_accepts_only_existing_resolved_private_pin(tmp_path: Path, monkeypatch):
+    known = _private(tmp_path / "known_hosts", "10.20.30.10 ssh-ed25519 AAAA\n")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        lookup = argv[2]
+        calls.append(lookup)
+        if lookup == "10.20.30.10":
+            return SimpleNamespace(returncode=0, stdout="10.20.30.10 ssh-ed25519 AAAA\n")
+        return SimpleNamespace(returncode=1, stdout="")
+
+    monkeypatch.setattr(remote.subprocess, "run", fake_run)
+    alias = remote._require_known_host(
+        "deploy.internal",
+        22,
+        known,
+        resolved_addresses=["10.20.30.10"],
+    )
+    assert alias == "10.20.30.10"
+    assert calls[:3] == ["deploy.internal", "[deploy.internal]:22", "10.20.30.10"]
+
+
 def test_remote_command_is_fail_closed_and_uses_installed_privileged_gate():
     command = remote._remote_command(
         repo_path="/opt/aegisscan/AegisScan",
@@ -139,7 +161,7 @@ def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(t
     key = _private(tmp_path / "id_ed25519", "private")
     known = _private(tmp_path / "known_hosts", "deploy.internal ssh-ed25519 AAAA\n")
     _private_dns(monkeypatch)
-    monkeypatch.setattr(remote, "_require_known_host", lambda *args, **kwargs: None)
+    monkeypatch.setattr(remote, "_require_known_host", lambda *args, **kwargs: "10.20.30.10")
 
     captured = {}
 
@@ -174,6 +196,7 @@ def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(t
     assert result["origin_resolved_addresses"] == ["10.20.30.20"]
     assert result["release_sha"] == "b" * 40
     assert "StrictHostKeyChecking=yes" in argv
+    assert "HostKeyAlias=10.20.30.10" in argv
     assert "PasswordAuthentication=no" in argv
     assert "KbdInteractiveAuthentication=no" in argv
     assert "BatchMode=yes" in argv
