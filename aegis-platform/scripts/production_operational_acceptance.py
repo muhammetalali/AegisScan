@@ -396,7 +396,7 @@ with transaction.atomic():
             resource_type='User',
             resource_id=str(stale_user.id),
             resource_repr=stale_user.email,
-            changes={'is_active': {'from': True, 'to': False}, 'role': old_role},
+            changes={{'is_active': {{'from': True, 'to': False}}, 'role': old_role}},
             metadata={
                 'event': 'stale_release_e2e_identity_deactivated',
                 'release_sha': release_sha,
