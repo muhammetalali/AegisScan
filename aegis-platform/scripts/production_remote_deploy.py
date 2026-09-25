@@ -126,20 +126,48 @@ def _origin(value: str) -> str:
     return f"https://{url_host}{port_part}"
 
 
-def _require_known_host(host: str, port: int, known_hosts: Path) -> None:
-    lookup = host if port == 22 else f"[{host}]:{port}"
-    try:
-        result = subprocess.run(
-            ["ssh-keygen", "-F", lookup, "-f", str(known_hosts)],
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=15,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise RemoteDeployError(f"unable to validate pinned SSH host key: {exc}") from exc
-    if result.returncode != 0 or not result.stdout.strip():
-        raise RemoteDeployError(f"SSH known-hosts does not contain a pinned entry for {lookup}")
+def _known_host_lookup(host: str, port: int) -> str:
+    return host if port == 22 else f"[{host}]:{port}"
+
+
+def _require_known_host(
+    host: str,
+    port: int,
+    known_hosts: Path,
+    *,
+    resolved_addresses: list[str] | tuple[str, ...] = (),
+) -> str:
+    primary = _known_host_lookup(host, port)
+    candidates = [primary]
+    if port == 22:
+        candidates.append(f"[{host}]:22")
+    for address in resolved_addresses:
+        lookup = _known_host_lookup(address, port)
+        if lookup not in candidates:
+            candidates.append(lookup)
+        if port == 22:
+            bracketed = f"[{address}]:22"
+            if bracketed not in candidates:
+                candidates.append(bracketed)
+
+    for lookup in candidates:
+        try:
+            result = subprocess.run(
+                ["ssh-keygen", "-F", lookup, "-f", str(known_hosts)],
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            raise RemoteDeployError(f"unable to validate pinned SSH host key: {exc}") from exc
+        if result.returncode == 0 and result.stdout.strip():
+            return lookup
+
+    raise RemoteDeployError(
+        "SSH known-hosts does not contain a pinned entry for the production host "
+        "or any of its resolved private addresses"
+    )
 
 
 def _remote_path(value: str, name: str) -> str:
@@ -203,7 +231,12 @@ def deploy(
     env_path = _remote_path(env_path, "remote env path")
     _private_file(private_key, "SSH private key", 64 * 1024)
     _private_file(known_hosts, "SSH known-hosts", 1024 * 1024)
-    _require_known_host(host, port, known_hosts)
+    host_key_alias = _require_known_host(
+        host,
+        port,
+        known_hosts,
+        resolved_addresses=ssh_addresses,
+    )
 
     command = _remote_command(
         repo_path=repo_path,
@@ -230,6 +263,11 @@ def deploy(
         "StrictHostKeyChecking=yes",
         "-o",
         f"UserKnownHostsFile={known_hosts}",
+        *(
+            ["-o", f"HostKeyAlias={host_key_alias}"]
+            if host_key_alias != _known_host_lookup(host, port)
+            else []
+        ),
         "-o",
         "ConnectTimeout=15",
         "-o",
