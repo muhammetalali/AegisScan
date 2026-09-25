@@ -38,6 +38,7 @@ def valid_environment(tmp_path: Path) -> dict[str, str]:
         "ALLOWED_HOSTS": "security.example.com",
         "CORS_ALLOWED_ORIGINS": "https://security.example.com",
         "CSRF_TRUSTED_ORIGINS": "https://security.example.com",
+        "AEGIS_SCAN_SCOPE_MODE": "asset-authorization",
         "AUTHORIZED_SCAN_TARGETS": "authorized.example.com,203.0.113.10",
         "AEGIS_RECON_PROVIDER": "default-kali",
         "AEGIS_RECON_LEGACY_DISABLED": "true",
@@ -95,7 +96,6 @@ def test_rejects_webhook_credentials_fragment_and_link_local_destination(tmp_pat
         "https://user:pass@alerts.example.com/hook",
         "https://alerts.example.com/hook#secret",
         "https://169.254.169.254/hook",
-        "",
     ):
         environment = valid_environment(tmp_path)
         environment["ALERT_WEBHOOK_URL"] = webhook
@@ -233,3 +233,17 @@ def test_default_kali_rejects_missing_retirement_lock(tmp_path: Path):
     environment["AEGIS_RECON_LEGACY_DISABLED"] = "false"
     failures = preflight.validate(environment, tmp_path, check_tls=False)
     assert "AEGIS_RECON_LEGACY_DISABLED must be explicitly true after M6 retirement" in failures
+
+
+def test_asset_authorization_scope_allows_empty_static_targets_and_webhook(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    environment["AUTHORIZED_SCAN_TARGETS"] = ""
+    environment["ALERT_WEBHOOK_URL"] = ""
+    assert preflight.validate(environment, tmp_path, check_tls=False) == []
+
+
+def test_preflight_rejects_missing_asset_authorization_scope_mode(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    environment.pop("AEGIS_SCAN_SCOPE_MODE")
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert any("AEGIS_SCAN_SCOPE_MODE" in failure for failure in failures)

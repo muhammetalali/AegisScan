@@ -64,6 +64,7 @@ def test_secret_init_generates_private_vault_material(tmp_path: Path):
     }
 
     assert values["DATABASE_URL"].startswith("postgresql://aegis:")
+    assert values["AEGIS_SCAN_SCOPE_MODE"] == "asset-authorization"
     assert values["AUTHORIZED_SCAN_TARGETS"] == "authorized.example.com"
     assert Path(result["s3_credentials_file"]).is_file()
     assert Path(result["backup_encryption_key_file"]).is_file()
@@ -100,3 +101,33 @@ def test_secret_init_main_emits_structured_failure(monkeypatch, capsys, tmp_path
     assert '"schema": "aegisscan.production-secret-init.v1"' in captured.err
     assert '"status": "failed"' in captured.err
     assert '"error": "synthetic-secret-init-failure"' in captured.err
+
+
+def test_secret_init_supports_ddns_default_scope_without_static_targets_or_webhook(tmp_path: Path):
+    source = tmp_path / "s3-source.json"
+    source.write_text(
+        '{"access_key_id":"proof-access","secret_access_key":"proof-secret"}',
+        encoding="utf-8",
+    )
+    source.chmod(0o600)
+    env_file = tmp_path / "production.env"
+    secrets_dir = tmp_path / "secrets"
+
+    result = MODULE.initialize(
+        domain=MODULE.DEFAULT_PRODUCTION_DOMAIN,
+        authorized_targets=[],
+        alert_webhook="",
+        backup_endpoint="https://backups.example.com",
+        backup_bucket="aegisscan-production-backups",
+        backup_region="us-east-1",
+        s3_credentials_source=source,
+        output_env=env_file,
+        secrets_dir=secrets_dir,
+    )
+
+    values = _parse_env(env_file)
+    assert result["domain"] == "aegis-prod.aegis.internal"
+    assert values["ALLOWED_HOSTS"] == "aegis-prod.aegis.internal"
+    assert values["AEGIS_SCAN_SCOPE_MODE"] == "asset-authorization"
+    assert values["AUTHORIZED_SCAN_TARGETS"] == ""
+    assert values["ALERT_WEBHOOK_URL"] == ""

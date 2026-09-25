@@ -3,16 +3,20 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import os
 import stat
 from pathlib import Path
 from urllib.parse import urlparse
 
-TOKEN = "__ALERT_WEBHOOK_URL__"
+TOKEN = "__ALERT_WEBHOOK_CONFIG__"
 
 
 def validate_url(value: str, allow_http: bool = False) -> str:
-    parsed = urlparse(value.strip())
+    value = value.strip()
+    if any(ch in value for ch in "\r\n\x00"):
+        raise ValueError("ALERT_WEBHOOK_URL contains invalid control characters")
+    parsed = urlparse(value)
     allowed = {"https"} | ({"http"} if allow_http else set())
     if (
         parsed.scheme not in allowed
@@ -51,17 +55,31 @@ def validate_url(value: str, allow_http: bool = False) -> str:
             "production alert webhook must not use loopback, link-local, "
             "unspecified, multicast, or metadata endpoints"
         )
-    return value.strip()
+    return value
 
 
-def render(template: Path, output: Path, webhook_url: str, allow_http: bool = False) -> None:
-    url = validate_url(webhook_url, allow_http)
+def render(template: Path, output: Path, webhook_url: str = "", allow_http: bool = False) -> None:
     source = template.read_text(encoding="utf-8")
     if source.count(TOKEN) != 1:
-        raise ValueError("alertmanager template must contain exactly one webhook token")
+        raise ValueError("alertmanager template must contain exactly one webhook config token")
+
+    url = webhook_url.strip()
+    if url:
+        url = validate_url(url, allow_http)
+        webhook_config = (
+            "    webhook_configs:\n"
+            f"      - url: {json.dumps(url)}\n"
+            "        send_resolved: true"
+        )
+    else:
+        webhook_config = (
+            "    # No external receiver configured. Alerts remain visible and "
+            "queryable in the internal Alertmanager control plane."
+        )
+
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".partial")
-    temporary.write_text(source.replace(TOKEN, url), encoding="utf-8")
+    temporary.write_text(source.replace(TOKEN, webhook_config), encoding="utf-8")
     temporary.chmod(stat.S_IRUSR | stat.S_IWUSR)
     os.replace(temporary, output)
 
@@ -72,10 +90,12 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--allow-http-for-test", action="store_true")
     args = parser.parse_args()
-    webhook = os.environ.get("ALERT_WEBHOOK_URL", "")
-    if not webhook:
-        parser.error("ALERT_WEBHOOK_URL is required")
-    render(args.template, args.output, webhook, args.allow_http_for_test)
+    render(
+        args.template,
+        args.output,
+        os.environ.get("ALERT_WEBHOOK_URL", ""),
+        args.allow_http_for_test,
+    )
     return 0
 
 

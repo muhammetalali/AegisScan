@@ -56,13 +56,14 @@ def test_aws_backup_bootstrap_never_prints_service_secret_and_rolls_back_failed_
     assert "partial AegisScan production material exists; refusing to overwrite or rotate secrets" in text
 
 
-def test_aws_backup_bootstrap_requires_authenticated_aws_and_private_operator_inputs():
+def test_aws_backup_bootstrap_requires_authenticated_aws_and_supports_governed_defaults():
     text = _text()
     assert "aws sts get-caller-identity" in text
     assert "AWS authentication is not ready. Run 'aws login --remote' and retry." in text
-    assert "AEGIS_PRODUCTION_DOMAIN is required" in text
-    assert "AEGIS_AUTHORIZED_SCAN_TARGETS is required" in text
-    assert "AEGIS_ALERT_WEBHOOK_FILE is required" in text
+    assert 'DOMAIN="${AEGIS_PRODUCTION_DOMAIN:-aegis-prod.aegis.internal}"' in text
+    assert "AEGIS_AUTHORIZED_SCAN_TARGETS is required" not in text
+    assert "AEGIS_ALERT_WEBHOOK_FILE is required" not in text
+    assert 'if [ -n "$ALERT_WEBHOOK_FILE" ]' in text
     assert "module._private_source(Path(sys.argv[4]), max_bytes=8192)" in text
     assert "module._validate_https_origin(webhook, \"alert webhook\")" in text
 

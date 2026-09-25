@@ -143,3 +143,42 @@ def test_worker_allows_private_dns_only_with_explicit_cidr(monkeypatch):
     assert bound_scan.id == scan.id
     assert target == 'internal.example'
     assert bound_decision.id == decision.id
+
+
+@pytest.mark.django_db
+def test_bound_asset_authorization_supplies_dynamic_exact_private_ip_scope(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    user = User.objects.create_user(email='guard-dynamic-scope@example.invalid', password='Strong-Test-Password-123!')
+    project = Project.objects.create(name='Guard Dynamic Scope', slug='guard-dynamic-scope', owner=user)
+    asset = Asset.objects.create(
+        project=project,
+        owner=user,
+        name='Private approved IP',
+        slug='private-approved-ip',
+        type=Asset.Type.IP_ADDRESS,
+        configuration={'host': '10.10.20.30'},
+    )
+    decision = AssetAuthorization.objects.create(
+        asset=asset,
+        actor=user,
+        authorized=True,
+        target_snapshot='10.10.20.30',
+        reason='governed exact private target',
+    )
+    scan = Scan.objects.create(
+        project=project,
+        name='Dynamic private target',
+        scan_type=Scan.Type.IP,
+        asset=asset,
+        authorization_decision=decision,
+        engines=['nmap'],
+        config={'target': '10.10.20.30'},
+        initiated_by=user,
+        status=Scan.Status.QUEUED,
+    )
+    bound_scan, target, bound_decision = require_bound_scan_authorization(str(scan.id))
+    assert bound_scan is not None
+    assert bound_scan.id == scan.id
+    assert target == '10.10.20.30'
+    assert bound_decision is not None
+    assert bound_decision.id == decision.id

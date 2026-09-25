@@ -18,6 +18,7 @@ from urllib.parse import quote, urlparse
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$")
 BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 TRUTHY = {"1", "true", "yes", "on"}
+DEFAULT_PRODUCTION_DOMAIN = "aegis-prod.aegis.internal"
 
 
 class SecretInitError(RuntimeError):
@@ -39,7 +40,7 @@ def _private_source(path: Path, *, max_bytes: int) -> bytes:
 def _validate_domain(value: str) -> str:
     domain = value.strip().rstrip(".").lower()
     if not DOMAIN_RE.fullmatch(domain):
-        raise SecretInitError("domain must be an explicit public DNS hostname")
+        raise SecretInitError("domain must be an explicit DNS hostname")
     return domain
 
 
@@ -90,8 +91,6 @@ def _validate_targets(values: list[str]) -> list[str]:
             ):
                 raise SecretInitError(f"unsafe authorized scan target: {target}")
             targets.append(target)
-    if not targets:
-        raise SecretInitError("at least one explicit authorized scan target is required")
     return sorted(set(targets))
 
 
@@ -148,7 +147,9 @@ def initialize(
 ) -> dict[str, str]:
     domain = _validate_domain(domain)
     targets = _validate_targets(authorized_targets)
-    alert_webhook = _validate_https_origin(alert_webhook, "alert webhook")
+    alert_webhook = alert_webhook.strip()
+    if alert_webhook:
+        alert_webhook = _validate_https_origin(alert_webhook, "alert webhook")
     backup_endpoint = _validate_https_origin(backup_endpoint, "backup endpoint")
     backup_bucket = _validate_bucket(backup_bucket)
     backup_region = backup_region.strip()
@@ -203,6 +204,7 @@ def initialize(
         "CSRF_TRUSTED_ORIGINS": f"https://{domain}",
         "FRONTEND_URL": f"https://{domain}",
         "AUTH_COOKIE_SECURE": "True",
+        "AEGIS_SCAN_SCOPE_MODE": "asset-authorization",
         "AUTHORIZED_SCAN_TARGETS": ",".join(targets),
         "ALERT_WEBHOOK_URL": alert_webhook,
         "PROMETHEUS_RETENTION": "15d",
@@ -241,9 +243,11 @@ def initialize(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--domain", required=True)
-    parser.add_argument("--authorized-target", action="append", required=True, dest="authorized_targets")
-    parser.add_argument("--alert-webhook", required=True)
+    parser.add_argument("--domain", default=DEFAULT_PRODUCTION_DOMAIN)
+    parser.add_argument("--authorized-target", action="append", default=[], dest="authorized_targets")
+    alert_group = parser.add_mutually_exclusive_group()
+    alert_group.add_argument("--alert-webhook", default="")
+    alert_group.add_argument("--alert-webhook-file", type=Path)
     parser.add_argument("--backup-endpoint", required=True)
     parser.add_argument("--backup-bucket", required=True)
     parser.add_argument("--backup-region", default="us-east-1")
@@ -253,10 +257,18 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        alert_webhook = args.alert_webhook
+        if args.alert_webhook_file is not None:
+            raw_alert = _private_source(args.alert_webhook_file.resolve(), max_bytes=8192)
+            try:
+                alert_webhook = raw_alert.decode("utf-8").strip()
+            except UnicodeDecodeError as exc:
+                raise SecretInitError("alert webhook file must be valid UTF-8") from exc
+
         result = initialize(
             domain=args.domain,
             authorized_targets=args.authorized_targets,
-            alert_webhook=args.alert_webhook,
+            alert_webhook=alert_webhook,
             backup_endpoint=args.backup_endpoint,
             backup_bucket=args.backup_bucket,
             backup_region=args.backup_region,

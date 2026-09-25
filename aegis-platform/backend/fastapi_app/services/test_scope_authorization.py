@@ -186,3 +186,51 @@ def test_network_scanner_adapters_enforce_worker_dns_egress(monkeypatch):
         ('approved.example', {'resolve_dns': True}),
         ('10.20.0.0/16', {'resolve_dns': True}),
     ]
+
+
+def test_bound_snapshot_authorizes_exact_private_ip_without_static_allowlist(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    assert scope.require_authorized_target(
+        '10.23.45.67',
+        resolve_dns=True,
+        approved_target='10.23.45.67',
+    ) == ('10.23.45.67',)
+
+
+def test_bound_snapshot_does_not_expand_to_different_target(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    with pytest.raises(scope.ScopeAuthorizationError, match='outside the server-side authorized scan scope'):
+        scope.require_authorized_target(
+            '10.23.45.68',
+            resolve_dns=True,
+            approved_target='10.23.45.67',
+        )
+
+
+def test_bound_hostname_snapshot_preserves_private_dns_rebinding_guard(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('10.23.45.67')],
+    )
+    with pytest.raises(scope.ScopeAuthorizationError, match='non-global destination'):
+        scope.require_authorized_target(
+            'internal.example',
+            resolve_dns=True,
+            approved_target='internal.example',
+        )
+
+
+def test_bound_hostname_snapshot_allows_public_resolution_without_static_allowlist(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('93.184.216.34')],
+    )
+    assert scope.require_authorized_target(
+        'approved.example',
+        resolve_dns=True,
+        approved_target='approved.example',
+    ) == ('93.184.216.34',)

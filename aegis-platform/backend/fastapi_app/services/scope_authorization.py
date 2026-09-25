@@ -240,28 +240,57 @@ def is_target_authorized(target: str, *, resolve_dns: bool = False) -> bool:
     return True
 
 
+def _approved_snapshot_matches(target: str, approved_target: str | None) -> bool:
+    """Return whether an immutable bound authorization snapshot exactly covers target.
+
+    This is intentionally exact-scope only. Wildcards are never inferred from a
+    database decision, and private DNS destinations still require an explicit
+    IP/CIDR entry in AUTHORIZED_SCAN_TARGETS so DNS rebinding cannot expand the
+    approved egress boundary.
+    """
+    if not approved_target:
+        return False
+
+    target_network = _target_network(target)
+    approved_network = _target_network(approved_target)
+    if target_network is not None or approved_network is not None:
+        return (
+            target_network is not None
+            and approved_network is not None
+            and target_network == approved_network
+        )
+
+    try:
+        return _canonical_hostname(target) == _canonical_hostname(approved_target)
+    except ScopeAuthorizationError:
+        return False
+
+
 def require_authorized_target(
     target: str,
     *,
     url: bool = False,
     resolve_dns: bool = False,
+    approved_target: str | None = None,
 ) -> tuple[str, ...]:
+    """Require target to be covered by static scope or an exact bound snapshot."""
+    snapshot_authorized = _approved_snapshot_matches(target, approved_target)
     network_target = _target_network(target)
     if network_target is not None:
         if url:
             raise ScopeAuthorizationError('URL scan targets cannot be CIDR networks')
-        if not is_target_authorized(target):
+        if not snapshot_authorized and not is_target_authorized(target):
             raise ScopeAuthorizationError(
                 'Target is outside the server-side authorized scan scope. '
-                'Configure AUTHORIZED_SCAN_TARGETS before starting a real security run.'
+                'Bind a current AssetAuthorization decision or configure AUTHORIZED_SCAN_TARGETS.'
             )
         return (str(network_target),) if resolve_dns else ()
 
     host = _canonical_hostname(target, require_http_scheme=url)
-    if not is_target_authorized(target):
+    if not snapshot_authorized and not is_target_authorized(target):
         raise ScopeAuthorizationError(
             'Target is outside the server-side authorized scan scope. '
-            'Configure AUTHORIZED_SCAN_TARGETS before starting a real security run.'
+            'Bind a current AssetAuthorization decision or configure AUTHORIZED_SCAN_TARGETS.'
         )
     if not resolve_dns:
         return ()

@@ -69,7 +69,7 @@ services:
     container_name: aegis-alertmanager
     restart: unless-stopped
     environment:
-      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:?ALERT_WEBHOOK_URL is required for monitoring}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       AEGIS_ALLOW_HTTP_ALERT_WEBHOOK: ${AEGIS_ALLOW_HTTP_ALERT_WEBHOOK:-false}
     volumes:
       - alertmanager_data:/alertmanager

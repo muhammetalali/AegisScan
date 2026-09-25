@@ -104,7 +104,10 @@ def _is_unsafe_delivery_host(hostname: str) -> bool:
 
 
 def _check_alert_webhook(value: str, failures: list[str]) -> None:
-    parsed = urlparse(value.strip())
+    value = value.strip()
+    if not value:
+        return
+    parsed = urlparse(value)
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -349,9 +352,18 @@ def validate(environment: dict[str, str], tls_dir: Path, check_tls: bool = True)
         origins = _items(environment.get(name, ""))
         if not origins or any(urlparse(origin).scheme != "https" or not urlparse(origin).hostname for origin in origins):
             failures.append(f"{name} must contain explicit HTTPS origins")
+    scope_mode = environment.get("AEGIS_SCAN_SCOPE_MODE", "").strip()
+    if scope_mode != "asset-authorization":
+        failures.append(
+            "AEGIS_SCAN_SCOPE_MODE must be asset-authorization so executable scope "
+            "comes from current immutable AssetAuthorization decisions"
+        )
     targets = _items(environment.get("AUTHORIZED_SCAN_TARGETS", ""))
-    if not targets or any(_is_forbidden_scan_target(target) for target in targets):
-        failures.append("AUTHORIZED_SCAN_TARGETS must be explicit and exclude wildcard, loopback, link-local and CI targets")
+    if any(_is_forbidden_scan_target(target) for target in targets):
+        failures.append(
+            "AUTHORIZED_SCAN_TARGETS may be empty or contain supplemental explicit targets, "
+            "but must exclude wildcard, loopback, link-local and CI targets"
+        )
     _check_alert_webhook(environment.get("ALERT_WEBHOOK_URL", ""), failures)
     _check_recon_provider_rollout(environment, failures)
     _check_remote_backup(environment, failures)
