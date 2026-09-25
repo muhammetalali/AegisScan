@@ -203,24 +203,102 @@ def _current_sha() -> str:
     return _run(["git", "-c", f"safe.directory={REPO_ROOT}", "rev-parse", "HEAD"], timeout=30).stdout.strip()
 
 
-def _running_services(env_file: Path) -> set[str]:
-    result = _run(_compose(env_file, "ps", "--status", "running", "--services"), timeout=60)
+def _running_services(
+    env_file: Path,
+    *,
+    environment: dict[str, str] | None = None,
+) -> set[str]:
+    result = _run(
+        _compose(env_file, "ps", "--status", "running", "--services"),
+        timeout=60,
+        env=environment,
+    )
     return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
 
-def _wait_required_services(env_file: Path, *, timeout_seconds: int, poll_seconds: int) -> list[str]:
+def _wait_required_services(
+    env_file: Path,
+    *,
+    timeout_seconds: int,
+    poll_seconds: int,
+    environment: dict[str, str] | None = None,
+    required_services: set[str] | None = None,
+) -> list[str]:
+    required = required_services or REQUIRED_RUNNING_SERVICES
     deadline = time.monotonic() + timeout_seconds
     last: set[str] = set()
     while time.monotonic() < deadline:
         try:
-            last = _running_services(env_file)
+            last = _running_services(env_file, environment=environment)
         except OperationalAcceptanceError:
             last = set()
-        if REQUIRED_RUNNING_SERVICES <= last:
+        if required <= last:
             return sorted(last)
         time.sleep(poll_seconds)
-    missing = sorted(REQUIRED_RUNNING_SERVICES - last)
+    missing = sorted(required - last)
     raise OperationalAcceptanceError(f"required production services did not become running: {missing}")
+
+
+def _container_environment(container: str) -> dict[str, str]:
+    result = _run(
+        ["docker", "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", container],
+        timeout=30,
+    )
+    values: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            values[key] = value
+    return values
+
+
+def _activate_e2e_scope(
+    env_file: Path,
+    env: dict[str, str],
+    *,
+    timeout_seconds: int,
+    poll_seconds: int,
+) -> tuple[str, dict[str, str], list[str]]:
+    profile_env = _compose_environment(env, extra_profiles={"ci-only"})
+    _run(
+        _compose(env_file, "--profile", "ci-only", "up", "-d", "scan_target"),
+        timeout=300,
+        env=profile_env,
+    )
+    target_ip = _validation_target_ip()
+    runtime_env = dict(profile_env)
+    runtime_env["AUTHORIZED_SCAN_TARGETS"] = _append_csv(env.get("AUTHORIZED_SCAN_TARGETS", ""), target_ip)
+    runtime_env["SCANNER_EGRESS_PRIVATE_TARGETS"] = _append_csv(
+        env.get("SCANNER_EGRESS_PRIVATE_TARGETS", ""),
+        target_ip,
+    )
+    _run(
+        _compose(env_file, "--profile", "ci-only", "up", "-d"),
+        timeout=900,
+        env=runtime_env,
+    )
+    services = _wait_required_services(
+        env_file,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=poll_seconds,
+        environment=runtime_env,
+        required_services=REQUIRED_RUNNING_SERVICES | {"scan_target"},
+    )
+    fastapi_env = _container_environment("aegis-fastapi")
+    egress_env = _container_environment("aegis-scanner-egress")
+    if target_ip not in {
+        item.strip()
+        for item in fastapi_env.get("AUTHORIZED_SCAN_TARGETS", "").split(",")
+        if item.strip()
+    }:
+        raise OperationalAcceptanceError("production E2E target was not bound to the API authorization scope")
+    if target_ip not in {
+        item.strip()
+        for item in egress_env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").split(",")
+        if item.strip()
+    }:
+        raise OperationalAcceptanceError("production E2E target was not bound to the scanner egress scope")
+    return target_ip, runtime_env, services
 
 
 def _wait_alertmanager(env_file: Path, *, timeout_seconds: int, poll_seconds: int) -> dict[str, object]:
