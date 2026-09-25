@@ -143,7 +143,7 @@ def test_automatic_rollback_is_blocked_when_schema_changed(tmp_path: Path, monke
             previous_sha="a" * 40,
             failed_release_sha="b" * 40,
             env_file=env_file,
-            deployment_env={},
+            previous_env_snapshot=deploy._snapshot_private_env(env_file),
             origin="https://security.example.com",
         )
 
@@ -161,13 +161,19 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
     )
     monkeypatch.setattr(deploy, "_accept", lambda origin: events.append(("accept", origin)))
 
+    snapshot = deploy._snapshot_private_env(env_file)
+    original = env_file.read_bytes()
+    env_file.write_text("DEBUG=False\nAEGIS_RECON_PROVIDER=default-kali\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
     deploy._rollback_application(
         previous_sha="a" * 40,
         failed_release_sha="b" * 40,
         env_file=env_file,
-        deployment_env={},
+        previous_env_snapshot=snapshot,
         origin="https://security.example.com",
     )
+    assert env_file.read_bytes() == original
     assert events == [
         ("checkout", "a" * 40),
         ("deploy", None),
@@ -175,6 +181,75 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
         ("accept", "https://security.example.com"),
     ]
 
+
+
+
+def test_failed_preflight_restores_exact_previous_env_and_checkout(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    original = env_file.read_bytes()
+    previous_sha = "a" * 40
+    release_sha = "b" * 40
+    checkouts = []
+
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
+    monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_current_sha", lambda: previous_sha)
+    monkeypatch.setattr(
+        deploy,
+        "_backup_before_upgrade",
+        lambda *_args: {"performed": False, "reason": "first-deploy"},
+    )
+    monkeypatch.setattr(deploy, "_checkout", lambda sha: checkouts.append(sha))
+
+    def prepare(path, _sha):
+        path.write_text(
+            "DEBUG=False\nAEGIS_RECON_PROVIDER=default-kali\nAEGIS_RECON_LEGACY_DISABLED=true\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o600)
+        return deploy._load_env_file(path)
+
+    monkeypatch.setattr(deploy, "_prepare_execution_trust", prepare)
+    monkeypatch.setattr(
+        deploy,
+        "_preflight",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("preflight failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        deploy.deploy(release_sha, env_file, "https://security.example.com")
+
+    assert checkouts == [release_sha, previous_sha]
+    assert env_file.read_bytes() == original
+    assert env_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_schema_blocked_rollback_keeps_new_release_env_bound(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    snapshot = deploy._snapshot_private_env(env_file)
+    env_file.write_text(
+        "DEBUG=False\nAEGIS_RECON_PROVIDER=default-kali\nAEGIS_RECON_LEGACY_DISABLED=true\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    new_env = env_file.read_bytes()
+
+    monkeypatch.setattr(
+        deploy,
+        "_migration_changes",
+        lambda *_: ["backend/app/migrations/0002_change.py"],
+    )
+
+    with pytest.raises(deploy.DeployError, match="automatic rollback blocked"):
+        deploy._rollback_application(
+            previous_sha="a" * 40,
+            failed_release_sha="b" * 40,
+            env_file=env_file,
+            previous_env_snapshot=snapshot,
+            origin="https://security.example.com",
+        )
+
+    assert env_file.read_bytes() == new_env
 
 def test_execution_profile_environment_activates_governed_kali_for_default_and_active_canary():
     base = {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"}
