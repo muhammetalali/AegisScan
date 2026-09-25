@@ -292,7 +292,6 @@ with open(target, "x", encoding="utf-8") as handle:
 os.chmod(target, 0o600)
 PY
 
-SERVICE_ACCESS_KEY="$(python3 - "$TMP_DIR/s3-credentials.json" -c '' 2>/dev/null || true)"
 SERVICE_ACCESS_KEY="$(python3 - "$TMP_DIR/s3-credentials.json" <<'PY'
 import json,sys
 print(json.load(open(sys.argv[1], encoding="utf-8"))["access_key_id"])
