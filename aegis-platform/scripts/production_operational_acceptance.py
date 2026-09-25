@@ -518,6 +518,65 @@ def _persist_e2e_fixture_for_deploy_user(fixture: dict[str, str]) -> str:
     return str(path)
 
 
+def cleanup_e2e_scope(
+    *,
+    env_file: Path,
+    release_sha: str,
+    service_timeout_seconds: int = 300,
+    poll_seconds: int = 5,
+) -> dict[str, object]:
+    if not SHA_RE.fullmatch(release_sha):
+        raise OperationalAcceptanceError("release SHA must be exactly 40 lowercase hexadecimal characters")
+    env_file = env_file.resolve()
+    env = _load_env(env_file)
+    if _current_sha() != release_sha:
+        raise OperationalAcceptanceError("production host checkout does not match the cleanup release SHA")
+
+    profile_env = _compose_environment(env, extra_profiles={"ci-only"})
+    _run(
+        _compose(env_file, "--profile", "ci-only", "stop", "scan_target"),
+        timeout=120,
+        env=profile_env,
+    )
+    _run(
+        _compose(env_file, "--profile", "ci-only", "rm", "-f", "-s", "scan_target"),
+        timeout=120,
+        env=profile_env,
+    )
+
+    normal_env = _compose_environment(env)
+    _run(
+        _compose(env_file, "up", "-d", "--remove-orphans"),
+        timeout=900,
+        env=normal_env,
+    )
+    services = _wait_required_services(
+        env_file,
+        timeout_seconds=service_timeout_seconds,
+        poll_seconds=poll_seconds,
+        environment=normal_env,
+    )
+    if "scan_target" in _running_services(env_file, environment=normal_env):
+        raise OperationalAcceptanceError("production E2E target remained active after cleanup")
+
+    fastapi_env = _container_environment("aegis-fastapi")
+    egress_env = _container_environment("aegis-scanner-egress")
+    if fastapi_env.get("AUTHORIZED_SCAN_TARGETS", "").strip() != env.get("AUTHORIZED_SCAN_TARGETS", "").strip():
+        raise OperationalAcceptanceError("API authorization scope was not restored after production E2E")
+    if egress_env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").strip() != env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").strip():
+        raise OperationalAcceptanceError("scanner egress scope was not restored after production E2E")
+
+    return {
+        "schema": "aegisscan.production-e2e-scope-cleanup.v1",
+        "status": "success",
+        "release_sha": release_sha,
+        "scan_target_stopped": True,
+        "authorization_scope_restored": True,
+        "scanner_egress_scope_restored": True,
+        "running_services": services,
+    }
+
+
 def accept(
     *,
     env_file: Path,
