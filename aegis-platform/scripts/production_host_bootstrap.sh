@@ -52,7 +52,7 @@ esac
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl gnupg git openssl ufw fail2ban jq \
+  ca-certificates curl gnupg git openssl ufw fail2ban jq sudo python3 \
   postgresql-client certbot bind9 bind9-utils dnsutils
 
 install -m 0755 -d /etc/apt/keyrings
@@ -119,6 +119,39 @@ install -d -m 0700 /etc/aegisscan
 install -d -m 0700 /etc/aegisscan/secrets
 install -d -m 0700 /var/lib/aegisscan
 install -d -m 0700 /var/lib/aegisscan/backups
+
+DEPLOY_USER="aegisdeploy"
+if ! id -u "$DEPLOY_USER" >/dev/null 2>&1; then
+  useradd --create-home --user-group --shell /bin/bash "$DEPLOY_USER"
+fi
+DEPLOY_HOME="$(getent passwd "$DEPLOY_USER" | awk -F: '{print $6}')"
+DEPLOY_SHELL="$(getent passwd "$DEPLOY_USER" | awk -F: '{print $7}')"
+if [ -z "$DEPLOY_HOME" ] || [ ! -d "$DEPLOY_HOME" ]; then
+  echo "production deploy user home is unavailable: $DEPLOY_USER" >&2
+  exit 1
+fi
+case "$DEPLOY_SHELL" in
+  */false|*/nologin|'')
+    echo "production deploy user requires an interactive SSH-capable shell: $DEPLOY_USER" >&2
+    exit 1
+    ;;
+esac
+DEPLOY_GROUP="$(id -gn "$DEPLOY_USER")"
+install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" "$DEPLOY_HOME/.ssh"
+touch "$DEPLOY_HOME/.ssh/authorized_keys"
+chown "$DEPLOY_USER:$DEPLOY_GROUP" "$DEPLOY_HOME/.ssh/authorized_keys"
+chmod 0600 "$DEPLOY_HOME/.ssh/authorized_keys"
+
+install -o root -g root -m 0755 \
+  "$SCRIPT_DIR/production_privileged_gate.py" \
+  /usr/local/sbin/aegisscan-production-gate
+cat >/etc/sudoers.d/aegisscan-production-gate <<'EOF'
+aegisdeploy ALL=(root) NOPASSWD: /usr/local/sbin/aegisscan-production-gate
+EOF
+chown root:root /etc/sudoers.d/aegisscan-production-gate
+chmod 0440 /etc/sudoers.d/aegisscan-production-gate
+visudo -cf /etc/sudoers.d/aegisscan-production-gate >/dev/null
+/usr/local/sbin/aegisscan-production-gate --help | grep -q 'cleanup-e2e-scope'
 
 if [ "$CONFIGURE_INTERNAL_DNS" -eq 1 ]; then
   AEGIS_DDNS_INTERFACE="$INTERFACE" \
