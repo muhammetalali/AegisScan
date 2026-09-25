@@ -328,7 +328,12 @@ def cleanup_remote(
         remote._private_file(private_key, "SSH private key", 64 * 1024)
         remote._private_file(known_hosts, "SSH known-hosts", 1024 * 1024)
         host_addresses = remote._resolved_enterprise_addresses(host, port, "SSH host")
-        remote._require_known_host(host, port, known_hosts)
+        host_key_alias = remote._require_known_host(
+            host,
+            port,
+            known_hosts,
+            resolved_addresses=host_addresses,
+        )
     except remote.RemoteDeployError as exc:
         raise RemoteOperationalAcceptanceError(str(exc)) from exc
 
@@ -344,6 +349,7 @@ def cleanup_remote(
             user=user,
             private_key=private_key,
             known_hosts=known_hosts,
+            host_key_alias=host_key_alias,
         ),
         command,
     ]
