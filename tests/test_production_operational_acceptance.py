@@ -92,8 +92,13 @@ def test_accept_binds_release_and_emits_sanitized_operational_evidence(monkeypat
         "approver_id": "approver-1",
         "approver_email": "approver@example.invalid",
         "approver_password": "secret-approver-password",
-        "target": "aegis-scan-target",
+        "target": "172.31.0.9",
     }
+    monkeypatch.setattr(
+        ops,
+        "_activate_e2e_scope",
+        lambda *args, **kwargs: ("172.31.0.9", {"AUTHORIZED_SCAN_TARGETS": "security.example,172.31.0.9"}, sorted(ops.REQUIRED_RUNNING_SERVICES | {"scan_target"})),
+    )
     monkeypatch.setattr(ops, "_provision_e2e_fixture", lambda *args, **kwargs: fixture)
     monkeypatch.setattr(
         ops,
@@ -108,7 +113,8 @@ def test_accept_binds_release_and_emits_sanitized_operational_evidence(monkeypat
     assert result["backup"]["backup_id"] == "bk-real"
     assert result["e2e_fixture_provisioned"] is True
     assert result["e2e_fixture_path"].endswith(".json")
-    assert "scan_target" in result["required_services"]
+    assert "scan_target" not in result["required_services"]
+    assert result["e2e_scope"]["authorization_transient"] is True
     encoded = json.dumps(result)
     assert "alerts.internal" not in encoded
     assert "backup.internal" not in encoded
@@ -131,10 +137,15 @@ def test_e2e_fixture_bootstrap_uses_scoped_roles_and_never_prints_passwords(monk
         return SimpleNamespace(stdout='{"actor_id":"a-1","approver_id":"b-1"}\n')
 
     monkeypatch.setattr(ops, "_run", fake_run)
-    fixture = ops._provision_e2e_fixture(env_file, "c" * 40)
+    fixture = ops._provision_e2e_fixture(
+        env_file,
+        "c" * 40,
+        "172.31.0.9",
+        environment={"PATH": "/usr/bin"},
+    )
 
     assert fixture["schema"] == "aegisscan.production-e2e-fixture.v1"
-    assert fixture["target"] == "aegis-scan-target"
+    assert fixture["target"] == "172.31.0.9"
     assert len(fixture["actor_password"]) >= 24
     assert len(fixture["approver_password"]) >= 24
     script = captured["input_text"]
