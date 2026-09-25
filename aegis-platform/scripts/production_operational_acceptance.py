@@ -148,6 +148,57 @@ def _compose(env_file: Path, *args: str) -> list[str]:
     return argv
 
 
+def _compose_environment(env: dict[str, str], *, extra_profiles: set[str] | None = None) -> dict[str, str]:
+    resolved = dict(os.environ)
+    resolved.update(env)
+    profiles = {item.strip() for item in resolved.get("COMPOSE_PROFILES", "").split(",") if item.strip()}
+    mode = resolved.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
+    try:
+        canary_bps = int(resolved.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip())
+    except ValueError:
+        canary_bps = 0
+    if mode in {"default-kali", "kali"} or (mode == "canary" and canary_bps > 0):
+        profiles.add("kali-recon")
+    if extra_profiles:
+        profiles.update(extra_profiles)
+    if profiles:
+        resolved["COMPOSE_PROFILES"] = ",".join(sorted(profiles))
+    else:
+        resolved.pop("COMPOSE_PROFILES", None)
+    return resolved
+
+
+def _append_csv(value: str, item: str) -> str:
+    entries = [entry.strip() for entry in value.split(",") if entry.strip()]
+    if item not in entries:
+        entries.append(item)
+    return ",".join(entries)
+
+
+def _validation_target_ip() -> str:
+    result = _run(
+        ["docker", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}", "aegis-scan-target"],
+        timeout=30,
+    )
+    addresses = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(addresses) != 1:
+        raise OperationalAcceptanceError("production E2E target must have exactly one isolated container address")
+    try:
+        address = ipaddress.ip_address(addresses[0])
+    except ValueError as exc:
+        raise OperationalAcceptanceError("production E2E target returned an invalid container address") from exc
+    if (
+        not isinstance(address, ipaddress.IPv4Address)
+        or not address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+    ):
+        raise OperationalAcceptanceError("production E2E target must use an isolated private IPv4 container address")
+    return str(address)
+
+
 def _current_sha() -> str:
     return _run(["git", "-c", f"safe.directory={REPO_ROOT}", "rev-parse", "HEAD"], timeout=30).stdout.strip()
 
