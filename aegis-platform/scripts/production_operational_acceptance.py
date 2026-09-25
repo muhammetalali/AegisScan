@@ -397,10 +397,10 @@ with transaction.atomic():
             resource_id=str(stale_user.id),
             resource_repr=stale_user.email,
             changes={{'is_active': {{'from': True, 'to': False}}, 'role': old_role}},
-            metadata={
+            metadata={{
                 'event': 'stale_release_e2e_identity_deactivated',
                 'release_sha': release_sha,
-            },
+            }},
             ip_address='127.0.0.1',
             user_agent='production-operational-acceptance',
         )
