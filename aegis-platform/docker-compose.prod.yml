@@ -1,3 +1,18 @@
+x-backend-production-environment: &backend-production-environment
+  DEBUG: "False"
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required in production}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required in production}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required in production}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required in production}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:?CELERY_BROKER_URL is required in production}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:?CELERY_RESULT_BACKEND is required in production}
+  CREDENTIAL_VAULT_KEYS: ${CREDENTIAL_VAULT_KEYS:?CREDENTIAL_VAULT_KEYS is required in production}
+  CREDENTIAL_FINGERPRINT_KEY: ${CREDENTIAL_FINGERPRINT_KEY:?CREDENTIAL_FINGERPRINT_KEY is required in production}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required in production}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required in production}
+  CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:?CSRF_TRUSTED_ORIGINS is required in production}
+  DJANGO_SETTINGS_MODULE: django_project.settings
+
 services:
   nginx:
     ports:
@@ -20,7 +35,7 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     environment:
-      DEBUG: "False"
+      <<: *backend-production-environment
       AUTH_COOKIE_SECURE: "True"
 
   fastapi:
@@ -32,6 +47,7 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     environment:
+      <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
     depends_on: !override
       django: {condition: service_started}
@@ -53,9 +69,9 @@ services:
     read_only: true
     tmpfs: [/tmp]
     environment:
+      <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
-      DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on: !override
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
@@ -76,9 +92,9 @@ services:
     read_only: true
     tmpfs: [/tmp]
     environment:
+      <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
-      DJANGO_SETTINGS_MODULE: django_project.settings
       AEGIS_RECON_PROVIDER: ${AEGIS_RECON_PROVIDER:-default-kali}
       AEGIS_RECON_LEGACY_DISABLED: "true"
       AEGIS_KALI_RECON_CANARY_BPS: ${AEGIS_KALI_RECON_CANARY_BPS:-0}
@@ -287,17 +303,8 @@ services:
     read_only: true
     tmpfs: [/tmp]
     environment:
-      DEBUG: "False"
-      SECRET_KEY: ${SECRET_KEY:-}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
-      DATABASE_URL: ${DATABASE_URL:-}
-      REDIS_URL: ${REDIS_URL:-}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-}
-      CREDENTIAL_VAULT_KEYS: ${CREDENTIAL_VAULT_KEYS:-}
-      CREDENTIAL_FINGERPRINT_KEY: ${CREDENTIAL_FINGERPRINT_KEY:-}
+      <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
-      DJANGO_SETTINGS_MODULE: django_project.settings
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
       XDG_CONFIG_HOME: /tmp/.config
@@ -315,8 +322,8 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     environment:
+      <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production}
-      DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on: !override
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
