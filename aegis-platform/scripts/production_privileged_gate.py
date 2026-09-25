@@ -312,8 +312,12 @@ def main() -> int:
         _assert_installed_gate()
         if args.action == "deploy":
             deploy(args.release_sha, args.origin)
-        else:
+        elif args.action == "accept":
             accept(args.release_sha)
+        elif args.action == "cleanup-e2e-scope":
+            cleanup_e2e_scope(args.release_sha)
+        else:
+            raise PrivilegedGateError(f"unsupported privileged action: {args.action}")
     except PrivilegedGateError as exc:
         print(
             json.dumps(
