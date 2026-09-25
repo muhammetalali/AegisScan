@@ -51,7 +51,7 @@ azure-mgmt-resource>=26.0,<27.0
 azure-mgmt-resource-subscriptions>=1.0,<2.0
 azure-mgmt-network>=32.0,<33.0
 google-cloud-asset>=3.25
-semgrep>=1.90
+semgrep==1.177.0
 pytest>=7.4
 pytest-django>=4.8
 pytest-asyncio>=0.23
