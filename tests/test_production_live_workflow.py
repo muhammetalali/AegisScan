@@ -96,6 +96,9 @@ def test_live_production_workflow_requires_operational_backup_alertmanager_black
     assert "Deactivate one-run E2E identities" in text
     assert "AEGIS_E2E_CLEANUP_ONLY" in text
     assert "e2e-cleanup.log" in text
+    assert "Restore fail-closed production scanner scope" in text
+    assert "--cleanup-e2e-scope" in text
+    assert "e2e-scope-cleanup.json" in text
     assert "rm -f /tmp/aegis-production/e2e-fixture.json" in text
     assert "AEGIS_PRODUCTION_E2E_" not in text
     assert "aegisscan.go-live-evidence.v3" in text
@@ -121,11 +124,10 @@ def test_production_validation_target_is_internal_only_and_explicitly_authorized
     data = yaml.load(PROD_COMPOSE.read_text(encoding="utf-8"), Loader=ComposeLoader)
     assert isinstance(data, dict)
     scan_target = data["services"]["scan_target"]
-    assert scan_target["labels"]["aegisscan.production-validation-target"] == "true"
-    assert "profiles" not in scan_target
+    assert scan_target["profiles"] == ["ci-only"]
     assert "ports" not in scan_target
 
     text = PROD_COMPOSE.read_text(encoding="utf-8")
-    assert text.count('ALLOW_SINGLE_LABEL_SCAN_TARGETS: "1"') == 5
-    assert text.count("aegis-scan-target") >= 7
-    assert 'SCANNER_EGRESS_PRIVATE_TARGETS: "${SCANNER_EGRESS_PRIVATE_TARGETS:-},aegis-scan-target"' in text
+    assert "ALLOW_SINGLE_LABEL_SCAN_TARGETS" not in text
+    assert "aegis-scan-target" not in text
+    assert 'SCANNER_EGRESS_PRIVATE_TARGETS: "${SCANNER_EGRESS_PRIVATE_TARGETS:-},aegis-scan-target"' not in text
