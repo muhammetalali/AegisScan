@@ -115,7 +115,7 @@ jobs:
           set -euo pipefail
           umask 077
           install -d -m 0700 /tmp/aegis-production
-          printf '%s' "$PROD_SSH_PRIVATE_KEY" > /tmp/aegis-production/id
+          printf '%s\n' "$PROD_SSH_PRIVATE_KEY" > /tmp/aegis-production/id
           printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > /tmp/aegis-production/known_hosts
           printf '%s\n' "$PROD_ENTERPRISE_CA_BUNDLE" > /tmp/aegis-production/enterprise-ca.pem
           chmod 0600 \
@@ -123,6 +123,7 @@ jobs:
             /tmp/aegis-production/known_hosts \
             /tmp/aegis-production/enterprise-ca.pem
           test -s /tmp/aegis-production/id
+          ssh-keygen -y -f /tmp/aegis-production/id >/dev/null
           test -s /tmp/aegis-production/known_hosts
           test -s /tmp/aegis-production/enterprise-ca.pem
           python - <<'PY'
