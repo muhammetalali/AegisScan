@@ -28,7 +28,7 @@ RUN apt-get update \
         ca-certificates=20260601 \
         coreutils=9.10-1 \
         jq=1.8.2-1 \
-        libexpat1=2.8.3-1 \
+        libexpat1=2.8.4-1 \
         libffi8=3.8.0-2 \
         libjq1=1.8.2-1 \
         libncursesw6=6.6+20260608-2 \

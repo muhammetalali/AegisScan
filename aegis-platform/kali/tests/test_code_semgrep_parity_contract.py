@@ -120,6 +120,27 @@ class GovernedSemgrepParityContractTests(unittest.TestCase):
         self.assertEqual(MODULE.LISTEN_HOST, "127.0.0.1")
         self.assertEqual(MODULE.CAPABILITY_ID, "code.semgrep")
 
+    def test_legacy_runtime_semgrep_pin_matches_governed_manifest(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        requirements = (repo_root / "aegis-platform" / "backend" / "requirements.txt").read_text(
+            encoding="utf-8"
+        )
+        dockerfile = (repo_root / "aegis-platform" / "backend" / "Dockerfile.django").read_text(
+            encoding="utf-8"
+        )
+        manifest = (repo_root / "aegis-platform" / "kali" / "tool-manifest.json").read_text(
+            encoding="utf-8"
+        )
+
+        import json
+
+        semgrep_version = json.loads(manifest)["tools"]["semgrep"]["version"]
+        self.assertIn(f"semgrep=={semgrep_version}", requirements)
+        self.assertNotIn(
+            "python -m pip install --no-cache-dir semgrep ",
+            dockerfile,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

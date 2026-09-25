@@ -111,7 +111,7 @@ RUN ln -sf /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && python -m pip install --no-cache-dir semgrep checkov==3.3.16
+    && python -m pip install --no-cache-dir checkov==3.3.16
 
 # Python's httpx package installs a console script named `httpx`, which can overwrite
 # the ProjectDiscovery binary copied earlier. Restore the governed scanner binary
