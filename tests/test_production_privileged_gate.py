@@ -125,3 +125,16 @@ def test_gate_installation_and_sudo_caller_contract(monkeypatch):
     monkeypatch.setenv("SUDO_USER", "unexpected")
     with pytest.raises(gate.PrivilegedGateError, match="rejected sudo caller"):
         gate._assert_invocation_identity()
+
+
+def test_host_bootstrap_installs_current_gate_and_sudo_boundary():
+    bootstrap = (ROOT / "aegis-platform/scripts/production_host_bootstrap.sh").read_text(encoding="utf-8")
+    assert 'DEPLOY_USER="aegisdeploy"' in bootstrap
+    assert "useradd --create-home --user-group --shell /bin/bash" in bootstrap
+    assert "production_privileged_gate.py" in bootstrap
+    assert "/usr/local/sbin/aegisscan-production-gate" in bootstrap
+    assert "/etc/sudoers.d/aegisscan-production-gate" in bootstrap
+    assert "NOPASSWD: /usr/local/sbin/aegisscan-production-gate" in bootstrap
+    assert "visudo -cf /etc/sudoers.d/aegisscan-production-gate" in bootstrap
+    assert "cleanup-e2e-scope" in bootstrap
+    assert "authorized_keys" in bootstrap
