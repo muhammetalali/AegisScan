@@ -203,3 +203,51 @@ def test_execution_profile_environment_keeps_explicit_kali_runtime_available_for
         "AEGIS_KALI_RECON_CANARY_BPS": "0",
     })
     assert resolved["COMPOSE_PROFILES"] == "kali-recon"
+
+
+def test_rollback_environment_unlocks_pre_m6_legacy_recon():
+    rollback = deploy._rollback_execution_environment({
+        "AEGIS_RECON_PROVIDER": "default-kali",
+        "AEGIS_RECON_LEGACY_DISABLED": "true",
+        "AEGIS_KALI_RECON_CANARY_BPS": "0",
+    })
+    assert rollback["AEGIS_RECON_PROVIDER"] == "legacy"
+    assert rollback["AEGIS_RECON_LEGACY_DISABLED"] == "false"
+    assert rollback["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
+
+
+def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    release_sha = "b" * 40
+    events = []
+
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: events.append("clean"))
+    monkeypatch.setattr(deploy, "_ensure_release", lambda sha: events.append(("ensure", sha)))
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release_sha)
+    monkeypatch.setattr(
+        deploy,
+        "_backup_before_upgrade",
+        lambda *_args: events.append("backup") or {"performed": False, "reason": "first-deploy"},
+    )
+    monkeypatch.setattr(deploy, "_checkout", lambda sha: events.append(("checkout", sha)))
+
+    def prepare(path, sha):
+        events.append(("trust", sha))
+        values = deploy._load_env_file(path)
+        values["AEGIS_RECON_PROVIDER"] = "default-kali"
+        values["AEGIS_RECON_LEGACY_DISABLED"] = "true"
+        return values
+
+    monkeypatch.setattr(deploy, "_prepare_execution_trust", prepare)
+    monkeypatch.setattr(deploy, "_preflight", lambda *_args: events.append("preflight"))
+    monkeypatch.setattr(deploy, "_deploy_stack", lambda *_args: events.append("deploy"))
+    monkeypatch.setattr(deploy, "_execution_plane_acceptance", lambda *_args: events.append("execution"))
+    monkeypatch.setattr(deploy, "_accept", lambda *_args: events.append("accept"))
+
+    result = deploy.deploy(release_sha, env_file, "https://security.example.com")
+
+    assert result["status"] == "success"
+    assert events.index("backup") < events.index(("checkout", release_sha))
+    assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
+    assert events.index(("trust", release_sha)) < events.index("preflight")
+    assert events.index("preflight") < events.index("deploy")
