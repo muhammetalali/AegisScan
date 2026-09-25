@@ -110,7 +110,7 @@ def test_remote_acceptance_rejects_missing_success_or_release_mismatch(tmp_path:
     known = _private(tmp_path / "known_hosts", "deploy.internal ssh-ed25519 AAAA\n")
     monkeypatch.setattr(remote_ops.remote, "_host", lambda host: host)
     monkeypatch.setattr(remote_ops.remote, "_resolved_enterprise_addresses", lambda *args: ["10.20.30.10"])
-    monkeypatch.setattr(remote_ops.remote, "_require_known_host", lambda *args: None)
+    monkeypatch.setattr(remote_ops.remote, "_require_known_host", lambda *args, **kwargs: None)
 
     monkeypatch.setattr(
         remote_ops.subprocess,
@@ -151,7 +151,7 @@ def test_remote_cleanup_restores_scope_over_strict_pinned_ssh(tmp_path: Path, mo
 
     monkeypatch.setattr(remote_ops.remote, "_host", lambda host: host)
     monkeypatch.setattr(remote_ops.remote, "_resolved_enterprise_addresses", lambda *args: ["10.20.30.10"])
-    monkeypatch.setattr(remote_ops.remote, "_require_known_host", lambda *args: None)
+    monkeypatch.setattr(remote_ops.remote, "_require_known_host", lambda *args, **kwargs: None)
 
     captured = {}
     def fake_run(argv, **kwargs):
