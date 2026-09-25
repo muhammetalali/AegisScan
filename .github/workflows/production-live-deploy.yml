@@ -258,6 +258,22 @@ jobs:
           python aegis-platform/e2e/external_black_box_e2e.py \
             2>&1 | tee /tmp/aegis-production/e2e-cleanup.log
           rm -f /tmp/aegis-production/e2e-fixture.json
+
+      - name: Restore fail-closed production scanner scope
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/production_remote_operational_acceptance.py \
+            --host "$PROD_SSH_HOST" \
+            --port "$PROD_SSH_PORT" \
+            --user "$PROD_SSH_USER" \
+            --private-key /tmp/aegis-production/id \
+            --known-hosts /tmp/aegis-production/known_hosts \
+            --release-sha "$GITHUB_SHA" \
+            --cleanup-e2e-scope \
+            | tee /tmp/aegis-production/e2e-scope-cleanup.json
+
       - name: Build internal go-live evidence manifest
         if: success()
         shell: bash
@@ -283,6 +299,7 @@ jobs:
               'internal-black-box.log',
               'cli-platform-status.json',
               'e2e-cleanup.log',
+              'e2e-scope-cleanup.json',
           ]
           digests = {}
           for name in evidence_files:
@@ -357,6 +374,7 @@ jobs:
             /tmp/aegis-production/internal-black-box.log
             /tmp/aegis-production/cli-platform-status.json
             /tmp/aegis-production/e2e-cleanup.log
+            /tmp/aegis-production/e2e-scope-cleanup.json
             /tmp/aegis-production/manifest.json
           if-no-files-found: error
           retention-days: 90
