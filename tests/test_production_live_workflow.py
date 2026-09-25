@@ -7,6 +7,22 @@ WORKFLOW = ROOT / ".github/workflows/production-live-deploy.yml"
 PROD_COMPOSE = ROOT / "aegis-platform/docker-compose.prod.yml"
 
 
+class ComposeLoader(yaml.SafeLoader):
+    """Parse Docker Compose override tags without weakening SafeLoader."""
+
+
+def _construct_compose_tag(loader: ComposeLoader, node):
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    return loader.construct_scalar(node)
+
+
+ComposeLoader.add_constructor("!reset", _construct_compose_tag)
+ComposeLoader.add_constructor("!override", _construct_compose_tag)
+
+
 def _workflow() -> dict:
     data = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     assert isinstance(data, dict)
@@ -102,7 +118,7 @@ def test_live_production_workflow_has_no_public_hosted_runner_or_public_evidence
     assert "Verify public HTTPS" not in text
 
 def test_production_validation_target_is_internal_only_and_explicitly_authorized():
-    data = yaml.safe_load(PROD_COMPOSE.read_text(encoding="utf-8"))
+    data = yaml.load(PROD_COMPOSE.read_text(encoding="utf-8"), Loader=ComposeLoader)
     assert isinstance(data, dict)
     scan_target = data["services"]["scan_target"]
     assert scan_target["labels"]["aegisscan.production-validation-target"] == "true"
