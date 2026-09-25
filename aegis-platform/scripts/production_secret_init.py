@@ -185,6 +185,13 @@ def initialize(
     credential_fingerprint_key = secrets.token_urlsafe(48)
     postgres_password = secrets.token_urlsafe(48)
     postgres_password_url = quote(postgres_password, safe="")
+    provider_tokens = {
+        "AEGIS_KALI_RECON_AUTH_TOKEN": secrets.token_hex(32),
+        "AEGIS_KALI_NETWORK_AUTH_TOKEN": secrets.token_hex(32),
+        "AEGIS_KALI_MASSCAN_AUTH_TOKEN": secrets.token_hex(32),
+        "AEGIS_KALI_WEB_AUTH_TOKEN": secrets.token_hex(32),
+        "AEGIS_KALI_CODE_AUTH_TOKEN": secrets.token_hex(32),
+    }
 
     env = {
         "DEBUG": "False",
@@ -207,6 +214,27 @@ def initialize(
         "AEGIS_SCAN_SCOPE_MODE": "asset-authorization",
         "AUTHORIZED_SCAN_TARGETS": ",".join(targets),
         "ALERT_WEBHOOK_URL": alert_webhook,
+        "AEGIS_RECON_PROVIDER": "default-kali",
+        "AEGIS_RECON_LEGACY_DISABLED": "true",
+        "AEGIS_KALI_RECON_CANARY_BPS": "0",
+        "AEGIS_KALI_RECON_URL": "http://127.0.0.1:18765",
+        "AEGIS_NMAP_PROVIDER": "default-kali",
+        "AEGIS_NMAP_LEGACY_DISABLED": "true",
+        "AEGIS_KALI_NMAP_CANARY_BPS": "0",
+        "AEGIS_KALI_NETWORK_URL": "http://127.0.0.1:18766",
+        "AEGIS_MASSCAN_PROVIDER": "default-kali",
+        "AEGIS_MASSCAN_LEGACY_DISABLED": "true",
+        "AEGIS_KALI_MASSCAN_CANARY_BPS": "0",
+        "AEGIS_KALI_MASSCAN_URL": "http://127.0.0.1:18767",
+        "AEGIS_NUCLEI_PROVIDER": "default-kali",
+        "AEGIS_NUCLEI_LEGACY_DISABLED": "true",
+        "AEGIS_KALI_NUCLEI_CANARY_BPS": "0",
+        "AEGIS_KALI_WEB_URL": "http://127.0.0.1:18770",
+        "AEGIS_SEMGREP_PROVIDER": "default-kali",
+        "AEGIS_SEMGREP_LEGACY_DISABLED": "true",
+        "AEGIS_KALI_SEMGREP_CANARY_BPS": "0",
+        "AEGIS_KALI_CODE_URL": "http://127.0.0.1:18771",
+        **provider_tokens,
         "PROMETHEUS_RETENTION": "15d",
         "AEGIS_REMOTE_BACKUP_ENABLED": "true",
         "AEGIS_BACKUP_S3_ENDPOINT": backup_endpoint.rstrip("/"),
