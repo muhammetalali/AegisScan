@@ -354,7 +354,13 @@ def _wait_backup(env_file: Path, *, timeout_seconds: int, poll_seconds: int) -> 
 
 
 
-def _provision_e2e_fixture(env_file: Path, release_sha: str) -> dict[str, str]:
+def _provision_e2e_fixture(
+    env_file: Path,
+    release_sha: str,
+    target: str,
+    *,
+    environment: dict[str, str],
+) -> dict[str, str]:
     unique = uuid.uuid4().hex[:16]
     actor_email = f"release-e2e-{unique}@aegisscan.local"
     actor_password = f"Aegis-E2E-{unique}-!9-{secrets.token_urlsafe(24)}"
@@ -445,6 +451,7 @@ print(json.dumps({{
         ),
         timeout=60,
         input_text=bootstrap,
+        env=environment,
     )
     lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if not lines:
@@ -465,7 +472,7 @@ print(json.dumps({{
         "approver_id": str(identity["approver_id"]),
         "approver_email": approver_email,
         "approver_password": approver_password,
-        "target": "aegis-scan-target",
+        "target": target,
     }
     return fixture
 
@@ -531,7 +538,18 @@ def accept(
     services = _wait_required_services(env_file, timeout_seconds=service_timeout_seconds, poll_seconds=poll_seconds)
     alertmanager = _wait_alertmanager(env_file, timeout_seconds=service_timeout_seconds, poll_seconds=poll_seconds)
     backup = _wait_backup(env_file, timeout_seconds=backup_timeout_seconds, poll_seconds=poll_seconds)
-    e2e_fixture = _provision_e2e_fixture(env_file, release_sha)
+    target_ip, e2e_environment, services = _activate_e2e_scope(
+        env_file,
+        env,
+        timeout_seconds=service_timeout_seconds,
+        poll_seconds=poll_seconds,
+    )
+    e2e_fixture = _provision_e2e_fixture(
+        env_file,
+        release_sha,
+        target_ip,
+        environment=e2e_environment,
+    )
     e2e_fixture_path = _persist_e2e_fixture_for_deploy_user(e2e_fixture)
     return {
         "schema": "aegisscan.production-operational-acceptance.v1",
@@ -544,6 +562,11 @@ def accept(
         "backup": backup,
         "e2e_fixture_path": e2e_fixture_path,
         "e2e_fixture_provisioned": True,
+        "e2e_scope": {
+            "profile": "ci-only",
+            "target_isolated": True,
+            "authorization_transient": True,
+        },
         "operational_material": {
             "alert_webhook_https": True,
             "backup_endpoint_https": True,
