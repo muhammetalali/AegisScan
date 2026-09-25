@@ -274,6 +274,25 @@ def accept(release_sha: str) -> None:
     _assert_secure_tree()
 
 
+def cleanup_e2e_scope(release_sha: str) -> None:
+    release_sha = _release_sha(release_sha)
+    _assert_private_material()
+    _assert_secure_tree()
+    current = _git("rev-parse", "HEAD").stdout.strip()
+    if current != release_sha:
+        raise PrivilegedGateError("production host checkout does not match the cleanup release SHA")
+    _python(
+        "production_operational_acceptance.py",
+        "--env-file",
+        str(ENV_FILE),
+        "--release-sha",
+        release_sha,
+        "--cleanup-e2e-scope",
+        timeout=1800,
+    )
+    _assert_secure_tree()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -281,6 +300,8 @@ def main() -> int:
     deploy_parser = subparsers.add_parser("deploy")
     deploy_parser.add_argument("--release-sha", required=True)
     deploy_parser.add_argument("--origin", required=True)
+    cleanup_parser = subparsers.add_parser("cleanup-e2e-scope")
+    cleanup_parser.add_argument("--release-sha", required=True)
 
     accept_parser = subparsers.add_parser("accept")
     accept_parser.add_argument("--release-sha", required=True)
