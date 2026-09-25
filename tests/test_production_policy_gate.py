@@ -33,13 +33,14 @@ def valid_model():
         'postgres': {'environment': {'POSTGRES_PASSWORD': 'non-default-secret'}, 'networks': {'default': {}, 'backup_db': {}}},
         'redis': {}, 'frontend': {},
         'django': hardened_service(volumes=[{'type':'volume','source':'media_data'}]),
-        'fastapi': hardened_service(environment={'AUTHORIZED_SCAN_TARGETS':'security.example'}),
+        'fastapi': hardened_service(environment={'AEGIS_SCAN_SCOPE_MODE':'asset-authorization','AUTHORIZED_SCAN_TARGETS':'security.example'}),
         'celery_worker': hardened_service(
-            environment={'AUTHORIZED_SCAN_TARGETS':'security.example'},
+            environment={'AEGIS_SCAN_SCOPE_MODE':'asset-authorization','AUTHORIZED_SCAN_TARGETS':'security.example'},
             command='celery -A fastapi_app.celery_app worker -Q default',
         ),
         'scanner_worker': scanner_handoff_service(
             environment={
+                'AEGIS_SCAN_SCOPE_MODE':'asset-authorization',
                 'AUTHORIZED_SCAN_TARGETS':'security.example',
                 'AEGIS_RECON_PROVIDER':'default-kali',
                 'AEGIS_RECON_LEGACY_DISABLED':'true',
@@ -53,6 +54,7 @@ def valid_model():
         ),
         'browser_worker': hardened_service(
             environment={
+                'AEGIS_SCAN_SCOPE_MODE':'asset-authorization',
                 'AUTHORIZED_SCAN_TARGETS':'security.example',
                 'SECRET_KEY':'production-secret-key-value',
                 'JWT_SECRET_KEY':'production-jwt-key-value',
@@ -72,7 +74,7 @@ def valid_model():
             environment={'SCANNER_EGRESS_PRIVATE_TARGETS':''},
         ),
         'kali_recon': {'image': f'ghcr.io/aegisscan/kali-recon@{_IMAGE_DIGEST}'},
-        'celery_beat': hardened_service(environment={'AUTHORIZED_SCAN_TARGETS':'security.example'}),
+        'celery_beat': hardened_service(environment={'AEGIS_SCAN_SCOPE_MODE':'asset-authorization','AUTHORIZED_SCAN_TARGETS':'security.example'}),
         'backup': hardened_service(
             user='10001:10001',
             networks={'backup_db': {}, 'backup_egress': {}},
@@ -101,6 +103,20 @@ def kali_model(*, image=f'ghcr.io/aegisscan/kali-recon@{_IMAGE_DIGEST}', expecte
 
 def test_accepts_hardened_resolved_production_model():
     assert MODULE.validate(valid_model()) == []
+
+
+def test_accepts_asset_authorization_scope_with_empty_static_projection():
+    model = valid_model()
+    for name in ('fastapi', 'celery_worker', 'scanner_worker', 'browser_worker', 'celery_beat'):
+        model['services'][name]['environment']['AUTHORIZED_SCAN_TARGETS'] = ''
+    assert MODULE.validate(model) == []
+
+
+def test_rejects_missing_asset_authorization_scope_mode():
+    model = valid_model()
+    model['services']['scanner_worker']['environment']['AEGIS_SCAN_SCOPE_MODE'] = ''
+    failures = MODULE.validate(model)
+    assert any('current immutable AssetAuthorization decisions' in item for item in failures)
 
 
 def test_accepts_kali_recon_digest_qualified_image_bound_to_expected_digest():

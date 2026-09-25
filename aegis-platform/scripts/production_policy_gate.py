@@ -157,9 +157,17 @@ def validate(model: dict) -> list[str]:
 
     for name in ('fastapi', 'celery_worker', 'scanner_worker', 'browser_worker', 'celery_beat'):
         environment = services.get(name, {}).get('environment') or {}
+        scope_mode = str(environment.get('AEGIS_SCAN_SCOPE_MODE', '')).strip()
+        if scope_mode != 'asset-authorization':
+            failures.append(
+                f'{name} must derive executable scope from current immutable AssetAuthorization decisions'
+            )
+
         allowed = str(environment.get('AUTHORIZED_SCAN_TARGETS', '')).strip()
-        if not allowed or allowed == 'aegis-scan-target':
-            failures.append(f'{name} uses an absent or CI fixture authorization scope')
+        supplemental = [item.strip() for item in allowed.split(',') if item.strip()]
+        if any(item in {'aegis-scan-target', '*', '**', '*.*'} for item in supplemental):
+            failures.append(f'{name} uses a CI fixture or wildcard supplemental authorization scope')
+
         allow_single_label = str(environment.get('ALLOW_SINGLE_LABEL_SCAN_TARGETS', '')).strip().lower()
         if allow_single_label in _TRUTHY:
             failures.append(f'{name} enables single-label scanner targets in production')

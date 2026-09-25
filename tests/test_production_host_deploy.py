@@ -13,6 +13,12 @@ assert SPEC and SPEC.loader
 deploy = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(deploy)
 
+TRUST_PATH = ROOT / "aegis-platform/scripts/production_execution_trust_bootstrap.py"
+TRUST_SPEC = importlib.util.spec_from_file_location("production_execution_trust_bootstrap", TRUST_PATH)
+assert TRUST_SPEC and TRUST_SPEC.loader
+trust = importlib.util.module_from_spec(TRUST_SPEC)
+TRUST_SPEC.loader.exec_module(trust)
+
 
 def _env_file(tmp_path: Path) -> Path:
     path = tmp_path / "production.env"
@@ -137,7 +143,7 @@ def test_automatic_rollback_is_blocked_when_schema_changed(tmp_path: Path, monke
             previous_sha="a" * 40,
             failed_release_sha="b" * 40,
             env_file=env_file,
-            deployment_env={},
+            previous_env_snapshot=deploy._snapshot_private_env(env_file),
             origin="https://security.example.com",
         )
 
@@ -155,13 +161,19 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
     )
     monkeypatch.setattr(deploy, "_accept", lambda origin: events.append(("accept", origin)))
 
+    snapshot = deploy._snapshot_private_env(env_file)
+    original = env_file.read_bytes()
+    env_file.write_text("DEBUG=False\nAEGIS_RECON_PROVIDER=default-kali\n", encoding="utf-8")
+    env_file.chmod(0o600)
+
     deploy._rollback_application(
         previous_sha="a" * 40,
         failed_release_sha="b" * 40,
         env_file=env_file,
-        deployment_env={},
+        previous_env_snapshot=snapshot,
         origin="https://security.example.com",
     )
+    assert env_file.read_bytes() == original
     assert events == [
         ("checkout", "a" * 40),
         ("deploy", None),
@@ -169,6 +181,75 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
         ("accept", "https://security.example.com"),
     ]
 
+
+
+
+def test_failed_preflight_restores_exact_previous_env_and_checkout(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    original = env_file.read_bytes()
+    previous_sha = "a" * 40
+    release_sha = "b" * 40
+    checkouts = []
+
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
+    monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_current_sha", lambda: previous_sha)
+    monkeypatch.setattr(
+        deploy,
+        "_backup_before_upgrade",
+        lambda *_args: {"performed": False, "reason": "first-deploy"},
+    )
+    monkeypatch.setattr(deploy, "_checkout", lambda sha: checkouts.append(sha))
+
+    def prepare(path, _sha):
+        path.write_text(
+            "DEBUG=False\nAEGIS_RECON_PROVIDER=default-kali\nAEGIS_RECON_LEGACY_DISABLED=true\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o600)
+        return deploy._load_env_file(path)
+
+    monkeypatch.setattr(deploy, "_prepare_execution_trust", prepare)
+    monkeypatch.setattr(
+        deploy,
+        "_preflight",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("preflight failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        deploy.deploy(release_sha, env_file, "https://security.example.com")
+
+    assert checkouts == [release_sha, previous_sha]
+    assert env_file.read_bytes() == original
+    assert env_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_schema_blocked_rollback_keeps_new_release_env_bound(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    snapshot = deploy._snapshot_private_env(env_file)
+    env_file.write_text(
+        "DEBUG=False\nAEGIS_RECON_PROVIDER=default-kali\nAEGIS_RECON_LEGACY_DISABLED=true\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    new_env = env_file.read_bytes()
+
+    monkeypatch.setattr(
+        deploy,
+        "_migration_changes",
+        lambda *_: ["backend/app/migrations/0002_change.py"],
+    )
+
+    with pytest.raises(deploy.DeployError, match="automatic rollback blocked"):
+        deploy._rollback_application(
+            previous_sha="a" * 40,
+            failed_release_sha="b" * 40,
+            env_file=env_file,
+            previous_env_snapshot=snapshot,
+            origin="https://security.example.com",
+        )
+
+    assert env_file.read_bytes() == new_env
 
 def test_execution_profile_environment_activates_governed_kali_for_default_and_active_canary():
     base = {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"}
@@ -203,3 +284,70 @@ def test_execution_profile_environment_keeps_explicit_kali_runtime_available_for
         "AEGIS_KALI_RECON_CANARY_BPS": "0",
     })
     assert resolved["COMPOSE_PROFILES"] == "kali-recon"
+
+
+def test_rollback_environment_unlocks_pre_m6_legacy_recon():
+    rollback = deploy._rollback_execution_environment({
+        "AEGIS_RECON_PROVIDER": "default-kali",
+        "AEGIS_RECON_LEGACY_DISABLED": "true",
+        "AEGIS_KALI_RECON_CANARY_BPS": "0",
+    })
+    assert rollback["AEGIS_RECON_PROVIDER"] == "legacy"
+    assert rollback["AEGIS_RECON_LEGACY_DISABLED"] == "false"
+    assert rollback["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
+
+
+def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    release_sha = "b" * 40
+    events = []
+
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: events.append("clean"))
+    monkeypatch.setattr(deploy, "_ensure_release", lambda sha: events.append(("ensure", sha)))
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release_sha)
+    monkeypatch.setattr(
+        deploy,
+        "_backup_before_upgrade",
+        lambda *_args: events.append("backup") or {"performed": False, "reason": "first-deploy"},
+    )
+    monkeypatch.setattr(deploy, "_checkout", lambda sha: events.append(("checkout", sha)))
+
+    def prepare(path, sha):
+        events.append(("trust", sha))
+        values = deploy._load_env_file(path)
+        values["AEGIS_RECON_PROVIDER"] = "default-kali"
+        values["AEGIS_RECON_LEGACY_DISABLED"] = "true"
+        return values
+
+    monkeypatch.setattr(deploy, "_prepare_execution_trust", prepare)
+    monkeypatch.setattr(deploy, "_preflight", lambda *_args: events.append("preflight"))
+    monkeypatch.setattr(deploy, "_deploy_stack", lambda *_args: events.append("deploy"))
+    monkeypatch.setattr(deploy, "_execution_plane_acceptance", lambda *_args: events.append("execution"))
+    monkeypatch.setattr(deploy, "_accept", lambda *_args: events.append("accept"))
+
+    result = deploy.deploy(release_sha, env_file, "https://security.example.com")
+
+    assert result["status"] == "success"
+    assert events.index("backup") < events.index(("checkout", release_sha))
+    assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
+    assert events.index(("trust", release_sha)) < events.index("preflight")
+    assert events.index("preflight") < events.index("deploy")
+
+
+def test_runtime_trust_bootstrap_contract_is_exercised_by_launch_gate():
+    values = {}
+    trust._ensure_tokens(values)
+    assert set(trust.TOKEN_NAMES).issubset(values)
+    assert all(len(values[name]) == 64 for name in trust.TOKEN_NAMES)
+
+    image_id = "sha256:" + "1" * 64
+    manifest = {
+        "runner_version": "0.1.0",
+        "build_commit": "2" * 40,
+        "base_image_digest": "sha256:" + "3" * 64,
+        "tool_manifest_digest": "sha256:" + "4" * 64,
+    }
+    bound = trust._trust_values("RECON", image_id, manifest, b"runtime\n")
+    assert bound["AEGIS_KALI_RECON_IMAGE"] == image_id
+    assert bound["AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST"] == image_id
+    assert bound["AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT"] == "2" * 40

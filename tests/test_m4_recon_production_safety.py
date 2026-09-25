@@ -147,12 +147,22 @@ def test_zero_bps_execution_plane_acceptance_does_not_require_kali_provider(tmp_
 
 def test_automatic_rollback_passes_only_safe_environment_to_runtime_acceptance(tmp_path: Path, monkeypatch):
     env_file = tmp_path / "production.env"
-    env_file.write_text("placeholder=true\n", encoding="utf-8")
-    environment = {
-        "AEGIS_RECON_PROVIDER": "canary",
-        "AEGIS_KALI_RECON_CANARY_BPS": "2500",
-        "COMPOSE_PROFILES": "monitoring,kali-recon",
-    }
+    env_file.write_text(
+        "AEGIS_RECON_PROVIDER=canary\n"
+        "AEGIS_RECON_LEGACY_DISABLED=true\n"
+        "AEGIS_KALI_RECON_CANARY_BPS=2500\n"
+        "COMPOSE_PROFILES=monitoring,kali-recon\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    snapshot = deploy._snapshot_private_env(env_file)
+    env_file.write_text(
+        "AEGIS_RECON_PROVIDER=default-kali\n"
+        "AEGIS_RECON_LEGACY_DISABLED=true\n"
+        "AEGIS_KALI_RECON_CANARY_BPS=0\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
     observed: dict[str, dict[str, str]] = {}
 
     monkeypatch.setattr(deploy, "_migration_changes", lambda *_: [])
@@ -173,11 +183,15 @@ def test_automatic_rollback_passes_only_safe_environment_to_runtime_acceptance(t
         previous_sha="a" * 40,
         failed_release_sha="b" * 40,
         env_file=env_file,
-        deployment_env=environment,
+        previous_env_snapshot=snapshot,
         origin="https://security.example.com",
     )
 
+    restored = deploy._load_env_file(env_file)
+    assert restored["AEGIS_RECON_PROVIDER"] == "canary"
+    assert restored["AEGIS_KALI_RECON_CANARY_BPS"] == "2500"
     for key in ("deploy", "acceptance"):
         assert observed[key]["AEGIS_RECON_PROVIDER"] == "legacy"
+        assert observed[key]["AEGIS_RECON_LEGACY_DISABLED"] == "false"
         assert observed[key]["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
         assert observed[key]["COMPOSE_PROFILES"] == "monitoring"

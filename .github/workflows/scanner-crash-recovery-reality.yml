@@ -7,6 +7,7 @@ name: Scanner Crash Recovery Reality
       - 'aegis-platform/backend/**'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.ci.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
       - '.github/workflows/scanner-crash-recovery-reality.yml'
   push:
     branches: [main]
@@ -14,6 +15,7 @@ name: Scanner Crash Recovery Reality
       - 'aegis-platform/backend/**'
       - 'aegis-platform/docker-compose.yml'
       - 'aegis-platform/docker-compose.ci.yml'
+      - 'aegis-platform/docker-compose.prod.yml'
       - '.github/workflows/scanner-crash-recovery-reality.yml'
   workflow_dispatch:
 

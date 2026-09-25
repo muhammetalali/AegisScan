@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import stat
+import re
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -66,6 +67,21 @@ def test_secret_init_generates_private_vault_material(tmp_path: Path):
     assert values["DATABASE_URL"].startswith("postgresql://aegis:")
     assert values["AEGIS_SCAN_SCOPE_MODE"] == "asset-authorization"
     assert values["AUTHORIZED_SCAN_TARGETS"] == "authorized.example.com"
+    assert values["AEGIS_RECON_PROVIDER"] == "default-kali"
+    assert values["AEGIS_RECON_LEGACY_DISABLED"] == "true"
+    assert values["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
+    assert values["AEGIS_NMAP_PROVIDER"] == "default-kali"
+    assert values["AEGIS_MASSCAN_PROVIDER"] == "default-kali"
+    assert values["AEGIS_NUCLEI_PROVIDER"] == "default-kali"
+    assert values["AEGIS_SEMGREP_PROVIDER"] == "default-kali"
+    for name in (
+        "AEGIS_KALI_RECON_AUTH_TOKEN",
+        "AEGIS_KALI_NETWORK_AUTH_TOKEN",
+        "AEGIS_KALI_MASSCAN_AUTH_TOKEN",
+        "AEGIS_KALI_WEB_AUTH_TOKEN",
+        "AEGIS_KALI_CODE_AUTH_TOKEN",
+    ):
+        assert re.fullmatch(r"[0-9a-f]{64}", values[name])
     assert Path(result["s3_credentials_file"]).is_file()
     assert Path(result["backup_encryption_key_file"]).is_file()
 

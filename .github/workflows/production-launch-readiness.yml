@@ -6,6 +6,7 @@ on:
     paths:
       - 'aegis-platform/scripts/production_preflight.py'
       - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'aegis-platform/scripts/production_execution_trust_bootstrap.py'
       - 'aegis-platform/scripts/production_remote_deploy.py'
       - 'aegis-platform/scripts/production_resilience_backup.py'
       - 'aegis-platform/scripts/production_governance_gate.py'
@@ -25,6 +26,7 @@ on:
       - 'tests/test_production_preflight.py'
       - 'tests/test_production_secret_init.py'
       - 'tests/test_production_host_deploy.py'
+      - 'tests/test_production_execution_trust_bootstrap.py'
       - 'tests/test_production_remote_deploy.py'
       - 'tests/test_production_resilience_backup.py'
       - 'tests/test_production_resilience_workflow.py'
@@ -99,6 +101,7 @@ jobs:
             tests/test_production_preflight.py \
             tests/test_production_secret_init.py \
             tests/test_production_host_deploy.py \
+            tests/test_production_execution_trust_bootstrap.py \
             tests/test_production_remote_deploy.py \
             tests/test_production_resilience_backup.py \
             tests/test_production_resilience_workflow.py \
