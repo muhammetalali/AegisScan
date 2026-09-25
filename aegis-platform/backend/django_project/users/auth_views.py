@@ -4,16 +4,18 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django.utils import timezone
+from django.db import transaction
 from django_ratelimit.decorators import ratelimit
 from rest_framework import status
 from rest_framework.exceptions import APIException, Throttled
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from django_project.audit.services import client_ip_from_request
+from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit, client_ip_from_request
 from .auth_audit import record_login_event
 from .serializers import UserSerializer, UserCreateSerializer
 
@@ -130,6 +132,44 @@ class LogoutView(APIView):
                 # Logout remains idempotent even when the token is already expired/blacklisted.
                 pass
         response = Response({'message': 'Logged out successfully'})
+        response.delete_cookie(settings.AUTH_ACCESS_COOKIE, path='/')
+        response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path='/')
+        return response
+
+
+class DeactivateSelfView(APIView):
+    """Deactivate the authenticated account while preserving audit and ownership lineage."""
+
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect)
+    def post(self, request):
+        password = str(request.data.get('password') or '')
+        if not password or not request.user.check_password(password):
+            return Response({'detail': 'Current password is invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE)
+        if refresh:
+            try:
+                RefreshToken(refresh).blacklist()
+            except Exception:
+                pass
+        with transaction.atomic():
+            request.user.is_active = False
+            request.user.save(update_fields=['is_active'])
+            append_audit(
+                user=request.user,
+                action=AuditLog.Action.USER_UPDATE,
+                result=AuditLog.Result.SUCCESS,
+                resource_type='User',
+                resource_id=str(request.user.id),
+                resource_repr=request.user.email,
+                changes={'is_active': {'from': True, 'to': False}},
+                metadata={'event': 'self_deactivation'},
+                ip_address=client_ip_from_request(request),
+                user_agent=str(request.META.get('HTTP_USER_AGENT', ''))[:2000],
+            )
+        response = Response({'deactivated': True})
         response.delete_cookie(settings.AUTH_ACCESS_COOKIE, path='/')
         response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path='/')
         return response

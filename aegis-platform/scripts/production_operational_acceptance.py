@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
+import os
+import pwd
 import re
+import secrets
 import stat
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -39,15 +44,23 @@ class OperationalAcceptanceError(RuntimeError):
     pass
 
 
-def _run(argv: list[str], *, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+def _run(
+    argv: list[str],
+    *,
+    timeout: int = 60,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             argv,
             cwd=PLATFORM_DIR,
             text=True,
+            input=input_text,
             capture_output=True,
             check=True,
             timeout=timeout,
+            env=env,
         )
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         detail = ""
@@ -135,28 +148,157 @@ def _compose(env_file: Path, *args: str) -> list[str]:
     return argv
 
 
+def _compose_environment(env: dict[str, str], *, extra_profiles: set[str] | None = None) -> dict[str, str]:
+    resolved = dict(os.environ)
+    resolved.update(env)
+    profiles = {item.strip() for item in resolved.get("COMPOSE_PROFILES", "").split(",") if item.strip()}
+    mode = resolved.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
+    try:
+        canary_bps = int(resolved.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip())
+    except ValueError:
+        canary_bps = 0
+    if mode in {"default-kali", "kali"} or (mode == "canary" and canary_bps > 0):
+        profiles.add("kali-recon")
+    if extra_profiles:
+        profiles.update(extra_profiles)
+    if profiles:
+        resolved["COMPOSE_PROFILES"] = ",".join(sorted(profiles))
+    else:
+        resolved.pop("COMPOSE_PROFILES", None)
+    return resolved
+
+
+def _append_csv(value: str, item: str) -> str:
+    entries = [entry.strip() for entry in value.split(",") if entry.strip()]
+    if item not in entries:
+        entries.append(item)
+    return ",".join(entries)
+
+
+def _validation_target_ip() -> str:
+    result = _run(
+        ["docker", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}", "aegis-scan-target"],
+        timeout=30,
+    )
+    addresses = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(addresses) != 1:
+        raise OperationalAcceptanceError("production E2E target must have exactly one isolated container address")
+    try:
+        address = ipaddress.ip_address(addresses[0])
+    except ValueError as exc:
+        raise OperationalAcceptanceError("production E2E target returned an invalid container address") from exc
+    if (
+        not isinstance(address, ipaddress.IPv4Address)
+        or not address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+    ):
+        raise OperationalAcceptanceError("production E2E target must use an isolated private IPv4 container address")
+    return str(address)
+
+
 def _current_sha() -> str:
     return _run(["git", "-c", f"safe.directory={REPO_ROOT}", "rev-parse", "HEAD"], timeout=30).stdout.strip()
 
 
-def _running_services(env_file: Path) -> set[str]:
-    result = _run(_compose(env_file, "ps", "--status", "running", "--services"), timeout=60)
+def _running_services(
+    env_file: Path,
+    *,
+    environment: dict[str, str] | None = None,
+) -> set[str]:
+    result = _run(
+        _compose(env_file, "ps", "--status", "running", "--services"),
+        timeout=60,
+        env=environment,
+    )
     return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
 
-def _wait_required_services(env_file: Path, *, timeout_seconds: int, poll_seconds: int) -> list[str]:
+def _wait_required_services(
+    env_file: Path,
+    *,
+    timeout_seconds: int,
+    poll_seconds: int,
+    environment: dict[str, str] | None = None,
+    required_services: set[str] | None = None,
+) -> list[str]:
+    required = required_services or REQUIRED_RUNNING_SERVICES
     deadline = time.monotonic() + timeout_seconds
     last: set[str] = set()
     while time.monotonic() < deadline:
         try:
-            last = _running_services(env_file)
+            last = _running_services(env_file, environment=environment)
         except OperationalAcceptanceError:
             last = set()
-        if REQUIRED_RUNNING_SERVICES <= last:
+        if required <= last:
             return sorted(last)
         time.sleep(poll_seconds)
-    missing = sorted(REQUIRED_RUNNING_SERVICES - last)
+    missing = sorted(required - last)
     raise OperationalAcceptanceError(f"required production services did not become running: {missing}")
+
+
+def _container_environment(container: str) -> dict[str, str]:
+    result = _run(
+        ["docker", "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", container],
+        timeout=30,
+    )
+    values: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            values[key] = value
+    return values
+
+
+def _activate_e2e_scope(
+    env_file: Path,
+    env: dict[str, str],
+    *,
+    timeout_seconds: int,
+    poll_seconds: int,
+) -> tuple[str, dict[str, str], list[str]]:
+    profile_env = _compose_environment(env, extra_profiles={"ci-only"})
+    _run(
+        _compose(env_file, "--profile", "ci-only", "up", "-d", "scan_target"),
+        timeout=300,
+        env=profile_env,
+    )
+    target_ip = _validation_target_ip()
+    runtime_env = dict(profile_env)
+    runtime_env["AUTHORIZED_SCAN_TARGETS"] = _append_csv(env.get("AUTHORIZED_SCAN_TARGETS", ""), target_ip)
+    runtime_env["SCANNER_EGRESS_PRIVATE_TARGETS"] = _append_csv(
+        env.get("SCANNER_EGRESS_PRIVATE_TARGETS", ""),
+        target_ip,
+    )
+    _run(
+        _compose(env_file, "--profile", "ci-only", "up", "-d"),
+        timeout=900,
+        env=runtime_env,
+    )
+    services = _wait_required_services(
+        env_file,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=poll_seconds,
+        environment=runtime_env,
+        required_services=REQUIRED_RUNNING_SERVICES | {"scan_target"},
+    )
+    fastapi_env = _container_environment("aegis-fastapi")
+    egress_env = _container_environment("aegis-scanner-egress")
+    if target_ip not in {
+        item.strip()
+        for item in fastapi_env.get("AUTHORIZED_SCAN_TARGETS", "").split(",")
+        if item.strip()
+    }:
+        raise OperationalAcceptanceError("production E2E target was not bound to the API authorization scope")
+    if target_ip not in {
+        item.strip()
+        for item in egress_env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").split(",")
+        if item.strip()
+    }:
+        raise OperationalAcceptanceError("production E2E target was not bound to the scanner egress scope")
+    return target_ip, runtime_env, services
 
 
 def _wait_alertmanager(env_file: Path, *, timeout_seconds: int, poll_seconds: int) -> dict[str, object]:
@@ -211,6 +353,230 @@ def _wait_backup(env_file: Path, *, timeout_seconds: int, poll_seconds: int) -> 
     raise OperationalAcceptanceError(f"remote encrypted backup did not become healthy: {last_error[-1000:]}")
 
 
+
+def _provision_e2e_fixture(
+    env_file: Path,
+    release_sha: str,
+    target: str,
+    *,
+    environment: dict[str, str],
+) -> dict[str, str]:
+    unique = uuid.uuid4().hex[:16]
+    actor_email = f"release-e2e-{unique}@aegisscan.local"
+    actor_password = f"Aegis-E2E-{unique}-!9-{secrets.token_urlsafe(24)}"
+    approver_email = f"release-e2e-approver-{unique}@aegisscan.local"
+    approver_password = f"Aegis-E2E-Approver-{unique}-!7-{secrets.token_urlsafe(24)}"
+
+    bootstrap = f"""
+import json
+from django.db import transaction
+from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit
+from django_project.users.models import User, UserRole
+
+actor_email = {actor_email!r}
+actor_password = {actor_password!r}
+approver_email = {approver_email!r}
+approver_password = {approver_password!r}
+release_sha = {release_sha!r}
+
+with transaction.atomic():
+    stale = User.objects.filter(
+        email__startswith='release-e2e-',
+        email__endswith='@aegisscan.local',
+        is_active=True,
+    )
+    for stale_user in stale:
+        old_role = stale_user.role
+        stale_user.is_active = False
+        stale_user.save(update_fields=['is_active'])
+        append_audit(
+            action=AuditLog.Action.USER_UPDATE,
+            result=AuditLog.Result.SUCCESS,
+            resource_type='User',
+            resource_id=str(stale_user.id),
+            resource_repr=stale_user.email,
+            changes={{'is_active': {{'from': True, 'to': False}}, 'role': old_role}},
+            metadata={{
+                'event': 'stale_release_e2e_identity_deactivated',
+                'release_sha': release_sha,
+            }},
+            ip_address='127.0.0.1',
+            user_agent='production-operational-acceptance',
+        )
+
+    actor = User.objects.create_user(
+        email=actor_email,
+        password=actor_password,
+        first_name='Release',
+        last_name='E2E Actor',
+        role=UserRole.SECURITY_MANAGER,
+    )
+    approver = User.objects.create_user(
+        email=approver_email,
+        password=approver_password,
+        first_name='Release',
+        last_name='E2E Approver',
+        role=UserRole.VIEWER,
+    )
+    for user, purpose in ((actor, 'actor'), (approver, 'approver')):
+        append_audit(
+            action=AuditLog.Action.USER_CREATE,
+            result=AuditLog.Result.SUCCESS,
+            resource_type='User',
+            resource_id=str(user.id),
+            resource_repr=user.email,
+            metadata={{
+                'event': 'release_e2e_identity_created',
+                'purpose': purpose,
+                'release_sha': release_sha,
+            }},
+            ip_address='127.0.0.1',
+            user_agent='production-operational-acceptance',
+        )
+print(json.dumps({{
+    'actor_id': str(actor.id),
+    'approver_id': str(approver.id),
+}}, sort_keys=True))
+"""
+    result = _run(
+        _compose(
+            env_file,
+            "exec",
+            "-T",
+            "django",
+            "python",
+            "manage.py",
+            "shell",
+        ),
+        timeout=60,
+        input_text=bootstrap,
+        env=environment,
+    )
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise OperationalAcceptanceError("production E2E identity bootstrap returned no result")
+    try:
+        identity = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise OperationalAcceptanceError("production E2E identity bootstrap returned invalid JSON") from exc
+    if not identity.get("actor_id") or not identity.get("approver_id"):
+        raise OperationalAcceptanceError("production E2E identity bootstrap did not return both identities")
+
+    fixture = {
+        "schema": "aegisscan.production-e2e-fixture.v1",
+        "release_sha": release_sha,
+        "actor_id": str(identity["actor_id"]),
+        "actor_email": actor_email,
+        "actor_password": actor_password,
+        "approver_id": str(identity["approver_id"]),
+        "approver_email": approver_email,
+        "approver_password": approver_password,
+        "target": target,
+    }
+    return fixture
+
+
+def _persist_e2e_fixture_for_deploy_user(fixture: dict[str, str]) -> str:
+    try:
+        account = pwd.getpwnam("aegisdeploy")
+    except KeyError as exc:
+        raise OperationalAcceptanceError("trusted deployment account aegisdeploy does not exist") from exc
+
+    directory = Path(account.pw_dir) / ".aegis-e2e"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chown(directory, account.pw_uid, account.pw_gid)
+    os.chmod(directory, 0o700)
+
+    for stale in directory.glob("e2e-fixture-*.json"):
+        try:
+            if stale.is_file() and not stale.is_symlink():
+                stale.unlink()
+        except OSError as exc:
+            raise OperationalAcceptanceError("unable to remove stale production E2E fixture") from exc
+
+    path = directory / f"e2e-fixture-{uuid.uuid4().hex}.json"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            os.fchown(fd, account.pw_uid, account.pw_gid)
+            payload = (json.dumps(fixture, sort_keys=True) + "\n").encode("utf-8")
+            os.write(fd, payload)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise OperationalAcceptanceError("unable to persist private production E2E fixture") from exc
+
+    info = path.stat()
+    if stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != account.pw_uid or info.st_size <= 0:
+        raise OperationalAcceptanceError("private production E2E fixture ownership or mode is invalid")
+    return str(path)
+
+
+def cleanup_e2e_scope(
+    *,
+    env_file: Path,
+    release_sha: str,
+    service_timeout_seconds: int = 300,
+    poll_seconds: int = 5,
+) -> dict[str, object]:
+    if not SHA_RE.fullmatch(release_sha):
+        raise OperationalAcceptanceError("release SHA must be exactly 40 lowercase hexadecimal characters")
+    env_file = env_file.resolve()
+    env = _load_env(env_file)
+    if _current_sha() != release_sha:
+        raise OperationalAcceptanceError("production host checkout does not match the cleanup release SHA")
+
+    profile_env = _compose_environment(env, extra_profiles={"ci-only"})
+    _run(
+        _compose(env_file, "--profile", "ci-only", "stop", "scan_target"),
+        timeout=120,
+        env=profile_env,
+    )
+    _run(
+        _compose(env_file, "--profile", "ci-only", "rm", "-f", "-s", "scan_target"),
+        timeout=120,
+        env=profile_env,
+    )
+
+    normal_env = _compose_environment(env)
+    _run(
+        _compose(env_file, "up", "-d", "--remove-orphans"),
+        timeout=900,
+        env=normal_env,
+    )
+    services = _wait_required_services(
+        env_file,
+        timeout_seconds=service_timeout_seconds,
+        poll_seconds=poll_seconds,
+        environment=normal_env,
+    )
+    if "scan_target" in _running_services(env_file, environment=normal_env):
+        raise OperationalAcceptanceError("production E2E target remained active after cleanup")
+
+    fastapi_env = _container_environment("aegis-fastapi")
+    egress_env = _container_environment("aegis-scanner-egress")
+    if fastapi_env.get("AUTHORIZED_SCAN_TARGETS", "").strip() != env.get("AUTHORIZED_SCAN_TARGETS", "").strip():
+        raise OperationalAcceptanceError("API authorization scope was not restored after production E2E")
+    if egress_env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").strip() != env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").strip():
+        raise OperationalAcceptanceError("scanner egress scope was not restored after production E2E")
+
+    return {
+        "schema": "aegisscan.production-e2e-scope-cleanup.v1",
+        "status": "success",
+        "release_sha": release_sha,
+        "scan_target_stopped": True,
+        "authorization_scope_restored": True,
+        "scanner_egress_scope_restored": True,
+        "running_services": services,
+    }
+
+
 def accept(
     *,
     env_file: Path,
@@ -231,6 +597,19 @@ def accept(
     services = _wait_required_services(env_file, timeout_seconds=service_timeout_seconds, poll_seconds=poll_seconds)
     alertmanager = _wait_alertmanager(env_file, timeout_seconds=service_timeout_seconds, poll_seconds=poll_seconds)
     backup = _wait_backup(env_file, timeout_seconds=backup_timeout_seconds, poll_seconds=poll_seconds)
+    target_ip, e2e_environment, services = _activate_e2e_scope(
+        env_file,
+        env,
+        timeout_seconds=service_timeout_seconds,
+        poll_seconds=poll_seconds,
+    )
+    e2e_fixture = _provision_e2e_fixture(
+        env_file,
+        release_sha,
+        target_ip,
+        environment=e2e_environment,
+    )
+    e2e_fixture_path = _persist_e2e_fixture_for_deploy_user(e2e_fixture)
     return {
         "schema": "aegisscan.production-operational-acceptance.v1",
         "status": "success",
@@ -240,6 +619,13 @@ def accept(
         "running_services": services,
         "alertmanager": alertmanager,
         "backup": backup,
+        "e2e_fixture_path": e2e_fixture_path,
+        "e2e_fixture_provisioned": True,
+        "e2e_scope": {
+            "profile": "ci-only",
+            "target_isolated": True,
+            "authorization_transient": True,
+        },
         "operational_material": {
             "alert_webhook_https": True,
             "backup_endpoint_https": True,
@@ -256,6 +642,7 @@ def main() -> int:
     parser.add_argument("--service-timeout-seconds", type=int, default=300)
     parser.add_argument("--backup-timeout-seconds", type=int, default=1800)
     parser.add_argument("--poll-seconds", type=int, default=5)
+    parser.add_argument("--cleanup-e2e-scope", action="store_true")
     args = parser.parse_args()
     if not 30 <= args.service_timeout_seconds <= 1800:
         print("service timeout must be between 30 and 1800 seconds", file=sys.stderr)
@@ -267,16 +654,28 @@ def main() -> int:
         print("poll interval must be between 1 and 30 seconds", file=sys.stderr)
         return 2
     try:
-        result = accept(
-            env_file=args.env_file,
-            release_sha=args.release_sha,
-            service_timeout_seconds=args.service_timeout_seconds,
-            backup_timeout_seconds=args.backup_timeout_seconds,
-            poll_seconds=args.poll_seconds,
-        )
+        if args.cleanup_e2e_scope:
+            result = cleanup_e2e_scope(
+                env_file=args.env_file,
+                release_sha=args.release_sha,
+                service_timeout_seconds=args.service_timeout_seconds,
+                poll_seconds=args.poll_seconds,
+            )
+        else:
+            result = accept(
+                env_file=args.env_file,
+                release_sha=args.release_sha,
+                service_timeout_seconds=args.service_timeout_seconds,
+                backup_timeout_seconds=args.backup_timeout_seconds,
+                poll_seconds=args.poll_seconds,
+            )
     except OperationalAcceptanceError as exc:
         print(json.dumps({
-            "schema": "aegisscan.production-operational-acceptance.v1",
+            "schema": (
+                "aegisscan.production-e2e-scope-cleanup.v1"
+                if args.cleanup_e2e_scope
+                else "aegisscan.production-operational-acceptance.v1"
+            ),
             "status": "failed",
             "error": str(exc),
         }, sort_keys=True), file=sys.stderr)

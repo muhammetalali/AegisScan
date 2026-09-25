@@ -6,7 +6,7 @@ from uuid import UUID
 
 from asgiref.sync import sync_to_async
 from django.db.models import Q
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from django.utils import timezone
 
@@ -27,6 +27,10 @@ router = APIRouter()
 class OrgCreate(BaseModel):
     name: str = Field(min_length=2, max_length=200)
     slug: str = Field(min_length=2, max_length=220, pattern=r'^[a-z0-9-]+$')
+
+class OrgMemberCreate(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    role: str = Field(default='admin', pattern=r'^(admin|manager|analyst|auditor|viewer)$')
 class TwinCreate(BaseModel):
     project_id: UUID
     name: str
@@ -76,6 +80,98 @@ async def create_organization(body: OrgCreate, user=Depends(__import__('fastapi_
         from django_project.users.models import User
         u=User.objects.get(pk=str(user.get('user_id'))); org=Organization.objects.create(name=body.name,slug=body.slug,owner=u); OrganizationMembership.objects.create(organization=org,user=u,role=OrganizationMembership.Role.OWNER); return {'id':str(org.id),'name':org.name,'slug':org.slug,'role':OrganizationMembership.Role.OWNER}
     return await sync_to_async(create)()
+
+@router.post('/organizations/{organization_id}/members', status_code=201)
+async def add_organization_member(
+    request: Request,
+    organization_id: UUID,
+    body: OrgMemberCreate,
+    user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user),
+):
+    actor_id = str(user.get('user_id') or '')
+    if not actor_id:
+        raise HTTPException(status_code=401, detail='Authenticated user id is missing')
+    client_ip = request.client.host if request.client and request.client.host else '127.0.0.1'
+
+    def add_member():
+        import ipaddress
+        from django.db import transaction
+        from django_project.audit.models import AuditLog
+        from django_project.audit.services import append_audit
+        from django_project.users.models import User
+
+        try:
+            ipaddress.ip_address(client_ip)
+            audit_ip = client_ip
+        except ValueError:
+            audit_ip = '127.0.0.1'
+
+        organization = Organization.objects.filter(pk=organization_id, is_active=True).first()
+        if organization is None:
+            raise HTTPException(status_code=404, detail='Organization not found')
+        authorized = OrganizationMembership.objects.filter(
+            organization=organization,
+            user_id=actor_id,
+            role__in=[OrganizationMembership.Role.OWNER, OrganizationMembership.Role.ADMIN],
+            is_active=True,
+            user__is_active=True,
+        ).exists()
+        if not authorized:
+            raise HTTPException(status_code=403, detail='Organization administration permission required')
+
+        target = User.objects.filter(email__iexact=body.email.strip(), is_active=True).first()
+        if target is None:
+            raise HTTPException(status_code=404, detail='Active organization member user not found')
+        if str(target.id) == actor_id:
+            raise HTTPException(status_code=400, detail='Use the existing owner membership for the current user')
+
+        existing = OrganizationMembership.objects.filter(organization=organization, user=target).first()
+        if existing is not None:
+            if existing.is_active and existing.role == body.role:
+                return {
+                    'id': str(existing.id),
+                    'organization_id': str(organization.id),
+                    'user_id': str(target.id),
+                    'email': target.email,
+                    'role': existing.role,
+                    'created': False,
+                }
+            raise HTTPException(status_code=409, detail='Organization membership already exists with different state or role')
+
+        with transaction.atomic():
+            membership = OrganizationMembership.objects.create(
+                organization=organization,
+                user=target,
+                role=body.role,
+                is_active=True,
+            )
+            append_audit(
+                user_id=actor_id,
+                action=AuditLog.Action.USER_PERMISSION_CHANGE,
+                result=AuditLog.Result.SUCCESS,
+                resource_type='OrganizationMembership',
+                resource_id=str(membership.id),
+                resource_repr=f'{target.email} in {organization.slug}',
+                changes={
+                    'organization_id': str(organization.id),
+                    'member_user_id': str(target.id),
+                    'role': membership.role,
+                    'is_active': True,
+                },
+                metadata={'event': 'organization_member_added'},
+                ip_address=audit_ip,
+                user_agent='fastapi-enterprise-membership',
+            )
+        return {
+            'id': str(membership.id),
+            'organization_id': str(organization.id),
+            'user_id': str(target.id),
+            'email': target.email,
+            'role': membership.role,
+            'created': True,
+        }
+
+    return await sync_to_async(add_member)()
 
 @router.post('/projects/{project_id}/tenant')
 async def bind_project_tenant(project_id: UUID, organization_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):

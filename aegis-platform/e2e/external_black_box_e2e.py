@@ -5,7 +5,7 @@ import json,os,sys,time,uuid
 from pathlib import Path
 from typing import Any
 import requests
-BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip()
+BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}
 def require(response:requests.Response,expected:set[int],label:str)->dict[str,Any]|list[Any]:
  if response.status_code not in expected: raise RuntimeError(f'{label} failed: HTTP {response.status_code}: {response.text[:1000]}')
  if not response.text:return {}
@@ -48,27 +48,45 @@ def prove_detection_response(session:requests.Session,email:str,password:str)->s
  final=http(session,'GET',f'{API_V1}/security-events/{event_id}','Resolved security event retrieval',{200},timeout=20)
  if final.get('status')!='resolved':raise RuntimeError(f'Terminal security event state was not durable: {final!r}')
  print(f'security_event_id={event_id}'); print(f'notification_id={delivered.get("id")}'); return str(event_id)
+def _deactivate_ephemeral_account(email:str,password:str,label:str)->None:
+ session=requests.Session(); session.verify=VERIFY_TLS; token=csrf(session); headers={'X-CSRFToken':token,'Referer':f'{BASE_URL}/'}
+ http(session,'POST',f'{DJANGO_URL}/auth/login/',f'{label} login for cleanup',{200},json={'email':email,'password':password},headers=headers,timeout=20)
+ token=csrf(session); headers['X-CSRFToken']=token
+ http(session,'POST',f'{DJANGO_URL}/auth/deactivate-self/',f'{label} self-deactivation',{200},json={'password':password},headers=headers,timeout=20)
+
 def main()->int:
+ if CLEANUP_ONLY:
+  if not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):
+   print('EXTERNAL_E2E_CLEANUP=SKIPPED_NO_FIXTURE'); return 0
+  _deactivate_ephemeral_account(E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD,'Governance approver')
+  _deactivate_ephemeral_account(E2E_EMAIL,E2E_PASSWORD,'E2E actor')
+  print('EXTERNAL_E2E_CLEANUP=PASS'); return 0
  session=requests.Session(); session.verify=VERIFY_TLS; http(session,'GET',f'{API_URL}/ready','FastAPI readiness',{200},timeout=15); http(session,'GET',f'{API_URL}/health','FastAPI health',{200},timeout=15)
- csrf_token=csrf(session); unique=uuid.uuid4().hex[:12]; email=E2E_EMAIL or f'e2e-{unique}@aegisscan.local'; password=E2E_PASSWORD or f'Aegis-E2E-{unique}-StrongPass!9'; headers={'X-CSRFToken':csrf_token,'Referer':f'{BASE_URL}/'}
+ csrf_token=csrf(session); unique=uuid.uuid4().hex[:12]; email=E2E_EMAIL or f'e2e-{unique}@aegisscan.local'; password=E2E_PASSWORD or f'Aegis-E2E-{unique}-StrongPass!9'; approver_email=E2E_APPROVER_EMAIL or f'e2e-approver-{unique}@aegisscan.local'; approver_password=E2E_APPROVER_PASSWORD or f'Aegis-E2E-Approver-{unique}-StrongPass!7'; headers={'X-CSRFToken':csrf_token,'Referer':f'{BASE_URL}/'}
  if not (E2E_EMAIL and E2E_PASSWORD): http(session,'POST',f'{DJANGO_URL}/auth/register/','User registration',{201},json={'email':email,'first_name':'E2E','last_name':'Harness','password':password,'password_confirm':password},headers=headers,timeout=20)
+ approver_bootstrap=requests.Session(); approver_bootstrap.verify=VERIFY_TLS; approver_bootstrap_token=csrf(approver_bootstrap); approver_bootstrap_headers={'X-CSRFToken':approver_bootstrap_token,'Referer':f'{BASE_URL}/'}
+ if not (E2E_APPROVER_EMAIL and E2E_APPROVER_PASSWORD): http(approver_bootstrap,'POST',f'{DJANGO_URL}/auth/register/','Governance approver registration',{201},json={'email':approver_email,'first_name':'E2E','last_name':'Approver','password':approver_password,'password_confirm':approver_password},headers=approver_bootstrap_headers,timeout=20)
  csrf_token=csrf(session); headers['X-CSRFToken']=csrf_token; http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)
  project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20); project_id=project['id']
  created_organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
  if not isinstance(created_organization,dict) or not created_organization.get('id'):raise RuntimeError(f'Tenant creation did not return id: {created_organization!r}')
- if not all([E2E_GOV_ORG_ID,E2E_APPROVER_MEMBERSHIP_ID,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):raise RuntimeError('A3 external E2E requires a separately provisioned governance approver and tenant.')
- organization_id=E2E_GOV_ORG_ID
+ organization_id=E2E_GOV_ORG_ID or str(created_organization['id'])
+ approver_membership_id=E2E_APPROVER_MEMBERSHIP_ID
+ if not approver_membership_id:
+  membership=http(session,'POST',f'{API_V1}/enterprise/organizations/{organization_id}/members','Governance approver organization membership',{201},json={'email':approver_email,'role':'admin'},timeout=20)
+  approver_membership_id=membership.get('id') if isinstance(membership,dict) else None
+  if not approver_membership_id:raise RuntimeError(f'Governance approver membership did not return id: {membership!r}')
  binding=http(session,'POST',f'{API_V1}/enterprise/projects/{project_id}/tenant','Project tenant binding',{200},params={'organization_id':organization_id},timeout=20)
  if binding.get('organization_id')!=organization_id:raise RuntimeError(f'Project tenant binding did not persist: {binding!r}')
- grant=http(session,'POST',f'{API_V1}/assurance/governance/responsibilities/grants','Governed authorization responsibility grant',{200},json={'organization_id':organization_id,'membership_id':E2E_APPROVER_MEMBERSHIP_ID,'responsibility':'authorization_approver','scope_kind':'project','project_id':project_id,'reason':'Independent CI asset authorization approval duty.','idempotency_key':f'e2e-authorization-responsibility-{unique}'},timeout=20)
- if grant.get('membership_id')!=E2E_APPROVER_MEMBERSHIP_ID or grant.get('responsibility')!='authorization_approver':raise RuntimeError(f'Authorization responsibility grant did not persist: {grant!r}')
+ grant=http(session,'POST',f'{API_V1}/assurance/governance/responsibilities/grants','Governed authorization responsibility grant',{200},json={'organization_id':organization_id,'membership_id':approver_membership_id,'responsibility':'authorization_approver','scope_kind':'project','project_id':project_id,'reason':'Independent CI asset authorization approval duty.','idempotency_key':f'e2e-authorization-responsibility-{unique}'},timeout=20)
+ if grant.get('membership_id')!=approver_membership_id or grant.get('responsibility')!='authorization_approver':raise RuntimeError(f'Authorization responsibility grant did not persist: {grant!r}')
  asset=http(session,'POST',f'{API_V1}/assets/','Nmap asset creation',{201},json={'project_id':project_id,'name':f'External Nmap target {unique}','type':'ip_address','description':'Real E2E target','environment':'development','criticality':'medium','configuration':{'host':TARGET},'tags':['e2e','nmap']},timeout=20); asset_id=asset.get('id') if isinstance(asset,dict) else None
  if not asset_id:raise RuntimeError(f'Asset creation did not return id: {asset!r}')
  proposal=http(session,'POST',f'{API_V1}/assets/{asset_id}/authorization','Submit governed Nmap authorization',{202},json={'authorized':True,'reason':'CI controlled real scanner target'},timeout=20)
  governed_request=proposal.get('governed_action') if isinstance(proposal,dict) else None
  if not isinstance(governed_request,dict) or governed_request.get('action_id')!='asset.authorization.approve':raise RuntimeError(f'Authorization proposal contract invalid: {proposal!r}')
  approver=requests.Session(); approver.verify=VERIFY_TLS; approver_token=csrf(approver); approver_headers={'X-CSRFToken':approver_token,'Referer':f'{BASE_URL}/'}
- http(approver,'POST',f'{DJANGO_URL}/auth/login/','Governance approver login',{200},json={'email':E2E_APPROVER_EMAIL,'password':E2E_APPROVER_PASSWORD},headers=approver_headers,timeout=20)
+ http(approver,'POST',f'{DJANGO_URL}/auth/login/','Governance approver login',{200},json={'email':approver_email,'password':approver_password},headers=approver_headers,timeout=20)
  authorization_execution=http(approver,'POST',f'{API_V1}/assurance/governance/actions/execute','Execute governed Nmap authorization',{200},json={'action_id':'asset.authorization.approve','project_id':project_id,'entity_type':'asset','entity_id':asset_id,'expected_version':governed_request['expected_version'],'idempotency_key':f'e2e-authorization-execute-{unique}','request_id':governed_request['request_id'],'parameters':governed_request['parameters']},timeout=20)
  authorization_result=authorization_execution.get('result') if isinstance(authorization_execution,dict) else None
  authorization_decision_id=authorization_result.get('authorization_decision_id') if isinstance(authorization_result,dict) else None

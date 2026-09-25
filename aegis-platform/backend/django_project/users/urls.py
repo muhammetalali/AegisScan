@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .auth_views import LoginView, RegisterView, RefreshView, LogoutView, csrf_view
+from .auth_views import LoginView, RegisterView, RefreshView, LogoutView, DeactivateSelfView, csrf_view
 from .views import UserViewSet, TeamViewSet, APIKeyViewSet, UserSessionViewSet
 
 router = DefaultRouter()
@@ -15,5 +15,6 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='logout'),
     path('csrf/', csrf_view, name='csrf'),
     path('register/', RegisterView.as_view(), name='register'),
+    path('deactivate-self/', DeactivateSelfView.as_view(), name='deactivate_self'),
     path('', include(router.urls)),
 ]
