@@ -9,7 +9,6 @@ name: External Identity Live Contract Reality
       - '.github/workflows/external-identity-live-contract-reality.yml'
       - '.github/workflows/external-identity-live-provider-reality.yml'
       - 'tests/test_live_provider_request_lifecycle.py'
-      - 'tests/test_live_provider_request_lifecycle.py'
   push:
     branches: [main]
     paths:
@@ -17,6 +16,7 @@ name: External Identity Live Contract Reality
       - 'tests/test_external_identity_live_reality.py'
       - '.github/workflows/external-identity-live-contract-reality.yml'
       - '.github/workflows/external-identity-live-provider-reality.yml'
+      - 'tests/test_live_provider_request_lifecycle.py'
   workflow_dispatch:
 
 permissions:
