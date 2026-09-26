@@ -19,3 +19,17 @@ def test_legacy_vulnerability_route_cannot_fall_through_to_spa() -> None:
 
     assert "location /vulnerabilities/" in config
     assert "proxy_pass http://fastapi/api/v1/vulnerabilities/;" in config
+
+
+def test_fastapi_upstream_keepalive_is_enabled_in_http_and_tls_gateways() -> None:
+    root = Path(__file__).parents[1]
+    for relative in (
+        "aegis-platform/docker/nginx.conf",
+        "aegis-platform/docker/nginx-ssl.conf",
+    ):
+        config = (root / relative).read_text(encoding="utf-8")
+        assert "upstream fastapi {" in config
+        assert "server fastapi:8001;" in config
+        assert "keepalive 64;" in config
+        assert "proxy_http_version 1.1;" in config
+        assert 'proxy_set_header Connection "";' in config
