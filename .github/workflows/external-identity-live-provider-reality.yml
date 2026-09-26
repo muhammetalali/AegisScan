@@ -44,7 +44,19 @@ jobs:
           cache: pip
           cache-dependency-path: aegis-platform/backend/requirements.txt
 
+      - name: Detect external-identity request
+        id: request
+        shell: bash
+        run: |
+          if [ -f .github/live-acceptance-requests/external-identity.json ]; then
+            echo "execute=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "execute=false" >> "$GITHUB_OUTPUT"
+            echo "External identity request absent; treating this push as cleanup-only." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Authorize exact-main external identity acceptance
+        if: steps.request.outputs.execute == 'true'
         shell: bash
         env:
           AEGIS_EVENT_BEFORE: ${{ github.event.before }}
@@ -66,6 +78,7 @@ jobs:
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
 
       - name: Wait for exact-SHA Required CI Governance
+        if: steps.request.outputs.execute == 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -80,9 +93,11 @@ jobs:
             --poll-seconds 15
 
       - name: Install live identity dependencies
+        if: steps.request.outputs.execute == 'true'
         run: python -m pip install requests cryptography defusedxml
 
       - name: Require at least one complete external identity binding
+        if: steps.request.outputs.execute == 'true'
         id: configured
         shell: bash
         run: |
@@ -109,6 +124,7 @@ jobs:
           echo "Configured external identity surfaces: $count" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Materialize protected identity material
+        if: steps.request.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -124,6 +140,7 @@ jobs:
           fi
 
       - name: Execute real read-only external identity validation
+        if: steps.request.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -146,6 +163,7 @@ jobs:
           python aegis-platform/backend/scripts/external_identity_live_reality.py "${args[@]}"
 
       - name: Prove secret-safe immutable identity evidence
+        if: steps.request.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -168,6 +186,7 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@v4
+        if: steps.request.outputs.execute == 'true'
         with:
           name: external-identity-live-proof-${{ github.sha }}
           path: ${{ runner.temp }}/external-identity/proof.json
