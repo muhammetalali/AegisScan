@@ -80,11 +80,12 @@ def test_tenant_environment_replaces_stale_identity_with_governed_fixture(monkey
         "AEGIS_E2E_PASSWORD": "fixture-secret",
         "AEGIS_E2E_APPROVER_EMAIL": "capacity-approver@example.test",
         "AEGIS_E2E_APPROVER_PASSWORD": "fixture-approver-secret",
-        "AEGIS_E2E_GOV_ORG_ID": "11111111-1111-1111-1111-111111111111",
-        "AEGIS_E2E_APPROVER_MEMBERSHIP_ID": "22222222-2222-2222-2222-222222222222",
     }
     env = capacity._tenant_environment(7, state_root=tmp_path, fixture=fixture)
     for key, value in fixture.items():
         assert env[key] == value
     assert env["AEGIS_E2E_EMAIL"] != "stale@example.test"
     assert env["AEGIS_E2E_STATE_PATH"].endswith("tenant-7.json")
+    assert env["AEGIS_E2E_CAPACITY_MODE"] == "true"
+    assert "AEGIS_E2E_GOV_ORG_ID" not in env
+    assert "AEGIS_E2E_APPROVER_MEMBERSHIP_ID" not in env
