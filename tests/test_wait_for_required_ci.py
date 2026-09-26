@@ -136,3 +136,36 @@ def test_wait_fails_if_live_main_moves_during_poll(monkeypatch):
             timeout_seconds=10,
             poll_seconds=1,
         )
+
+
+def test_live_execution_workflows_remain_lifecycle_only_to_avoid_ci_barrier_deadlock():
+    policy = __import__("json").loads(
+        (ROOT / ".github/governance/required-ci-policy.json").read_text(encoding="utf-8")
+    )
+    lifecycle = set(policy["lifecycle_only_workflows"])
+    assert {
+        "Cloud Live Provider Reality",
+        "External Identity Live Provider Reality",
+        "Internal Production Deploy and Acceptance",
+    } <= lifecycle
+
+
+def test_wait_fails_closed_if_main_moves_while_waiting(monkeypatch):
+    monkeypatch.setattr(gate, "_live_branch_sha", lambda *_args, **_kwargs: "b" * 40)
+    monkeypatch.setattr(
+        gate,
+        "_api_json",
+        lambda *_args, **_kwargs: pytest.fail("workflow API must not be queried after main moves"),
+    )
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0.0)
+    with pytest.raises(gate.RequiredCIGateError, match="live branch main moved"):
+        gate.wait_for_required_ci(
+            repo="owner/repo",
+            token="token",
+            sha=SHA,
+            branch="main",
+            workflow_name="Required CI Governance",
+            event="push",
+            timeout_seconds=10,
+            poll_seconds=1,
+        )
