@@ -212,6 +212,7 @@ jobs:
           AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
           FRONTEND_URL=${FRONTEND_URL}
           AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          AEGIS_NMAP_LEGACY_DISABLED=${AEGIS_NMAP_LEGACY_DISABLED}
           SEMGREP_CONFIG=${SEMGREP_CONFIG}
           LOG_LEVEL=${LOG_LEVEL}
           POSTGRES_DB=${POSTGRES_DB}
@@ -296,9 +297,16 @@ jobs:
           SCANNER_EGRESS_PRIVATE_TARGETS="aegis-scan-target,$TARGET_IP" \
             docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml up -d --force-recreate fastapi celery_worker scanner_worker celery_beat kali_network nginx
           for attempt in $(seq 1 60); do
-            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then exit 0; fi
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then
+              if docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml exec -T scanner_worker python -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=2)); assert d.get('status')=='ok' and d.get('profile')=='network'" >/dev/null 2>&1; then
+                echo 'Platform and governed Kali Nmap provider are ready.'
+                exit 0
+              fi
+            fi
             sleep 2
           done
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml logs --tail=200 scanner_worker scanner_egress kali_network fastapi
           exit 1
       - name: Exercise concurrent tenants, PostgreSQL, Celery scanner queue, Kali and controlled recovery
         shell: bash
