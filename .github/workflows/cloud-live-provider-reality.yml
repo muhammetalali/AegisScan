@@ -46,7 +46,19 @@ jobs:
             pyproject.toml
             aegis-platform/backend/requirements.txt
 
+      - name: Detect live-provider request
+        id: request
+        shell: bash
+        run: |
+          if [ -f .github/live-acceptance-requests/cloud-providers.json ]; then
+            echo "execute=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "execute=false" >> "$GITHUB_OUTPUT"
+            echo "Cloud live-provider request absent; treating this push as cleanup-only." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Authorize exact-main live-provider acceptance
+        if: steps.request.outputs.execute == 'true'
         shell: bash
         env:
           AEGIS_EVENT_BEFORE: ${{ github.event.before }}
@@ -59,6 +71,7 @@ jobs:
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
 
       - name: Wait for exact-SHA Required CI Governance
+        if: steps.request.outputs.execute == 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -73,12 +86,14 @@ jobs:
             --poll-seconds 15
 
       - name: Install exact cloud runtime dependencies
+        if: steps.request.outputs.execute == 'true'
         run: |
           set -euo pipefail
           python -m pip install -e '.[dev]'
           python -m pip install -r aegis-platform/backend/requirements.txt
 
       - name: Require at least one complete live-provider binding
+        if: steps.request.outputs.execute == 'true'
         id: configured
         shell: bash
         run: |
@@ -105,6 +120,7 @@ jobs:
           echo "Configured live providers: $count" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Execute and validate configured live providers
+        if: steps.request.outputs.execute == 'true'
         working-directory: aegis-platform/backend
         shell: bash
         run: |
@@ -142,6 +158,7 @@ jobs:
           test "$(find "$RUNNER_TEMP/cloud-live-proof" -name '*-proof.json' -type f | wc -l)" -eq "${{ steps.configured.outputs.count }}"
 
       - name: Prove artifacts contain no raw credential material
+        if: steps.request.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -164,6 +181,7 @@ jobs:
           PY
 
       - uses: actions/upload-artifact@v4
+        if: steps.request.outputs.execute == 'true'
         with:
           name: cloud-live-provider-proof-${{ github.sha }}
           path: ${{ runner.temp }}/cloud-live-proof/*-proof.json
