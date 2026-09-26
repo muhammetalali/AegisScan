@@ -48,7 +48,7 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      test: ["CMD", "python", "-c", "import http.client,os; h=os.environ.get('ALLOWED_HOSTS','').split(',')[0].strip(); assert h, 'ALLOWED_HOSTS is empty'; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5); c.request('GET','/health/',headers={'Host':h}); r=c.getresponse(); assert r.status < 400, r.status"]
       interval: 30s
       timeout: 10s
       retries: 3

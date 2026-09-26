@@ -5,6 +5,7 @@ import yaml
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/production-live-deploy.yml"
 PROD_COMPOSE = ROOT / "aegis-platform/docker-compose.prod.yml"
+BASE_COMPOSE = ROOT / "aegis-platform/docker-compose.yml"
 
 
 class ComposeLoader(yaml.SafeLoader):
@@ -203,3 +204,18 @@ def test_production_backend_services_receive_required_runtime_environment():
             assert environment[name] == f"${{{name}:-}}"
 
     assert data["services"]["django"]["environment"]["AUTH_COOKIE_SECURE"] == "True"
+
+
+
+def test_django_healthcheck_uses_configured_allowed_host_instead_of_localhost():
+    data = yaml.safe_load(BASE_COMPOSE.read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+
+    test = data["services"]["django"]["healthcheck"]["test"]
+    assert test[:3] == ["CMD", "python", "-c"]
+    script = test[3]
+    assert "ALLOWED_HOSTS" in script
+    assert "split(',')[0]" in script
+    assert "headers={'Host':h}" in script
+    assert "127.0.0.1" in script
+    assert "localhost:8000" not in script
