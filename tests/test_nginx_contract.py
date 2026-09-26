@@ -27,7 +27,7 @@ def _server_blocks(config: str) -> list[str]:
 
 def _location_blocks(config: str) -> list[str]:
     blocks: list[str] = []
-    for match in re.finditer(r"(?m)^\\s*location\\s+[^\\n{]+\\{", config):
+    for match in re.finditer(r"(?m)^\s*location\s+[^\n{]+\{", config):
         start = match.start()
         brace = config.find("{", match.start(), match.end())
         depth = 0
