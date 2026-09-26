@@ -131,6 +131,11 @@ def main()->int:
  auth_id=matching[0].get('result_data',{}).get('authorization_decision_id');
  if not auth_id:raise RuntimeError(f'Nmap execution lost authorization provenance: {matching[0]}')
  if str(auth_id)!=str(authorization_decision_id):raise RuntimeError(f'Nmap execution authorization lineage mismatch: expected={authorization_decision_id} actual={auth_id}')
+ if CAPACITY_MODE:
+  lineage=matching[0].get('result_data',{}); routing=lineage.get('provider_routing') or {}; runtime=lineage.get('runtime_provenance') or {}
+  if routing.get('selected_provider')!='kali' or routing.get('mode')!='default-kali':raise RuntimeError(f'Capacity Nmap did not use default Kali provider: {lineage!r}')
+  if runtime.get('provider')!='aegis-kali-network' or runtime.get('profile')!='network':raise RuntimeError(f'Capacity Nmap Kali runtime provenance invalid: {lineage!r}')
+  print('CAPACITY_KALI_NMAP_PROVIDER=PASS')
  if STATE_PATH:
   state={'project_id':project_id,'asset_id':asset_id,'capability_id':'network.nmap','depth':'quick','idempotency_key':idempotency_key,'correlation_id':correlation_id,'scan_id':scan_id,'execution_contract':contract,'execution_contract_fingerprint':execution.get('execution_contract_fingerprint'),'policy_version':execution.get('policy_version')}
   state_path=Path(STATE_PATH); state_path.parent.mkdir(parents=True,exist_ok=True); state_path.write_text(json.dumps(state,sort_keys=True,indent=2),encoding='utf-8')
