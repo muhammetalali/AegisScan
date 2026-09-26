@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "aegisscan.release-capacity-reality.v1"
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 QUEUES = ("default", "scanners", "browser")
 EPHEMERAL_IDENTITY_KEYS = (
     "AEGIS_E2E_EMAIL",
@@ -360,7 +362,9 @@ def main() -> int:
     state_root.mkdir(parents=True, exist_ok=True)
     log_root.mkdir(parents=True, exist_ok=True)
 
-    source_sha = os.getenv("GITHUB_SHA", "").strip()
+    source_sha = os.getenv("AEGIS_EXACT_HEAD", os.getenv("GITHUB_SHA", "")).strip().lower()
+    if not SHA_RE.fullmatch(source_sha):
+        raise SystemExit("exact source SHA must be 40 lowercase hexadecimal characters")
     tenant_results, samples, max_running = _wait_tenants(
         script=e2e_script,
         tenant_count=args.tenants,
