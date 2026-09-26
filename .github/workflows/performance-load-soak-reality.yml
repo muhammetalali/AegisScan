@@ -361,6 +361,7 @@ jobs:
         run: |
           set -euo pipefail
           tenants=3
+          if [ "${AEGIS_PERFORMANCE_PROFILE:-ci}" = "release" ]; then tenants=6; fi
           python aegis-platform/scripts/release_capacity_reality.py \
             --compose-root aegis-platform \
             --e2e-script aegis-platform/e2e/external_black_box_e2e.py \
