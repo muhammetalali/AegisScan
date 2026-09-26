@@ -60,3 +60,53 @@ async def test_stage_warmup_excludes_connection_ramp_from_measured_latency(monke
     # Cold requests above are ~25ms; the measured steady-state requests should
     # remain far below that because ramp samples are intentionally not counted.
     assert result['latency_ms']['p95'] < 15.0
+
+
+class _ContendedAsyncClient:
+    instances = 0
+    limits = []
+
+    def __init__(self, *args, **kwargs):
+        type(self).instances += 1
+        type(self).limits.append(kwargs["limits"])
+        self._pool_lock = asyncio.Lock()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, path):
+        # A single shared client serializes on this synthetic pool lock. With
+        # one client per worker the same lock is private and requests remain
+        # genuinely concurrent.
+        async with self._pool_lock:
+            await asyncio.sleep(0.004)
+        return _Response()
+
+
+@pytest.mark.asyncio
+async def test_stage_uses_one_persistent_connection_pool_per_concurrent_worker(monkeypatch):
+    _ContendedAsyncClient.instances = 0
+    _ContendedAsyncClient.limits = []
+    monkeypatch.setattr(load_reality.httpx, "AsyncClient", _ContendedAsyncClient)
+
+    result = await load_reality.run_stage(
+        "http://fixture.invalid",
+        ["/health", "/ready"],
+        concurrency=8,
+        duration=0.08,
+        request_timeout=1.0,
+        warmup_seconds=0.03,
+    )
+
+    assert _ContendedAsyncClient.instances == 8
+    assert len(_ContendedAsyncClient.limits) == 8
+    assert all(limit.max_connections == 1 for limit in _ContendedAsyncClient.limits)
+    assert all(limit.max_keepalive_connections == 1 for limit in _ContendedAsyncClient.limits)
+    assert result["requests"] > 0
+    assert result["failures"] == 0
+    assert result["error_rate"] == 0.0
+    assert result["latency_ms"]["p95"] < 20.0
+

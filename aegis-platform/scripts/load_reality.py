@@ -47,12 +47,23 @@ async def run_stage(
     measure_at=stage_started+warmup_seconds
     stop_at=measure_at+duration
 
-    async with httpx.AsyncClient(base_url=base_url,timeout=request_timeout,limits=httpx.Limits(max_connections=concurrency,max_keepalive_connections=concurrency)) as client:
-        async def worker(worker_id: int):
-            nonlocal warmup_requests
-            local: list[Sample]=[]
-            local_warmup=0
-            index=worker_id
+    async def worker(worker_id: int):
+        nonlocal warmup_requests
+        local: list[Sample]=[]
+        local_warmup=0
+        index=worker_id
+
+        # Model independent concurrent clients instead of funneling every
+        # worker through one shared httpx connection-pool lock. Each worker
+        # owns one persistent HTTP/1.1 connection and reuses it for the whole
+        # stage, which preserves real concurrency without counting client-side
+        # pool contention as application latency.
+        limits=httpx.Limits(max_connections=1,max_keepalive_connections=1)
+        async with httpx.AsyncClient(
+            base_url=base_url,
+            timeout=request_timeout,
+            limits=limits,
+        ) as client:
             while time.monotonic()<stop_at:
                 path=paths[index%len(paths)]
                 index+=1
@@ -70,12 +81,13 @@ async def run_stage(
                     local.append(Sample(path,status,latency_ms,ok))
                 else:
                     local_warmup+=1
-            async with lock:
-                samples.extend(local)
-                warmup_requests+=local_warmup
 
-        await asyncio.gather(*(worker(i) for i in range(concurrency)))
-        elapsed=max(0.001,time.monotonic()-measure_at)
+        async with lock:
+            samples.extend(local)
+            warmup_requests+=local_warmup
+
+    await asyncio.gather(*(worker(i) for i in range(concurrency)))
+    elapsed=max(0.001,time.monotonic()-measure_at)
 
     latencies=[sample.latency_ms for sample in samples]
     failures=sum(1 for sample in samples if not sample.ok)
