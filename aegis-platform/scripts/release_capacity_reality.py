@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -38,6 +39,7 @@ def _run(
     cwd: Path | None = None,
     timeout: float = 30,
     check: bool = True,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -47,6 +49,7 @@ def _run(
             text=True,
             capture_output=True,
             timeout=timeout,
+            input=input_text,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         detail = ""
@@ -55,11 +58,17 @@ def _run(
         raise CapacityRealityError(f"command failed: {argv!r}: {detail or exc}") from exc
 
 
-def _compose(compose_root: Path, *args: str, timeout: float = 30) -> subprocess.CompletedProcess[str]:
+def _compose(
+    compose_root: Path,
+    *args: str,
+    timeout: float = 30,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     return _run(
         ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.ci.yml", *args],
         cwd=compose_root,
         timeout=timeout,
+        input_text=input_text,
     )
 
 
@@ -131,10 +140,143 @@ def sample_runtime(compose_root: Path, *, running_tenants: int) -> dict[str, Any
     }
 
 
-def _tenant_environment(index: int, *, state_root: Path) -> dict[str, str]:
+def provision_tenant_fixture(compose_root: Path, index: int) -> dict[str, str]:
+    token = secrets.token_hex(8)
+    email = f"capacity-operator-{index}-{token}@aegisscan.local"
+    password = "Aegis-Capacity-" + secrets.token_urlsafe(24)
+    approver_email = f"capacity-approver-{index}-{token}@aegisscan.local"
+    approver_password = "Aegis-Capacity-Approver-" + secrets.token_urlsafe(24)
+    org_slug = f"capacity-governance-{index}-{token}"
+    payload = {
+        "email": email,
+        "password": password,
+        "approver_email": approver_email,
+        "approver_password": approver_password,
+        "org_slug": org_slug,
+    }
+    encoded = {key: json.dumps(value) for key, value in payload.items()}
+    script = f"""
+import json
+from django.contrib.auth import get_user_model
+from django_project.users.models import UserRole
+from enterprise.models import Organization, OrganizationMembership
+
+User = get_user_model()
+email = {encoded["email"]}
+password = {encoded["password"]}
+approver_email = {encoded["approver_email"]}
+approver_password = {encoded["approver_password"]}
+org_slug = {encoded["org_slug"]}
+
+user, _ = User.objects.get_or_create(
+    email=email,
+    defaults={{
+        "first_name": "Capacity",
+        "last_name": "Operator",
+        "role": UserRole.SECURITY_MANAGER,
+        "is_active": True,
+        "is_verified": True,
+    }},
+)
+user.role = UserRole.SECURITY_MANAGER
+user.is_active = True
+user.is_verified = True
+user.set_password(password)
+user.save()
+assert user.has_permission("project.create") and user.has_permission("scan.create")
+
+approver, _ = User.objects.get_or_create(
+    email=approver_email,
+    defaults={{
+        "first_name": "Capacity",
+        "last_name": "Approver",
+        "role": UserRole.SECURITY_MANAGER,
+        "is_active": True,
+        "is_verified": True,
+    }},
+)
+approver.role = UserRole.SECURITY_MANAGER
+approver.is_active = True
+approver.is_verified = True
+approver.set_password(approver_password)
+approver.save()
+
+org, _ = Organization.objects.get_or_create(
+    slug=org_slug,
+    defaults={{"name": f"Capacity Governance {{org_slug}}", "owner": user, "is_active": True}},
+)
+org.owner = user
+org.is_active = True
+org.save(update_fields=["owner", "is_active", "updated_at"])
+
+operator_membership, _ = OrganizationMembership.objects.get_or_create(
+    organization=org,
+    user=user,
+    defaults={{"role": OrganizationMembership.Role.OWNER, "is_active": True}},
+)
+operator_membership.role = OrganizationMembership.Role.OWNER
+operator_membership.is_active = True
+operator_membership.save(update_fields=["role", "is_active"])
+
+approver_membership, _ = OrganizationMembership.objects.get_or_create(
+    organization=org,
+    user=approver,
+    defaults={{"role": OrganizationMembership.Role.ADMIN, "is_active": True}},
+)
+approver_membership.role = OrganizationMembership.Role.ADMIN
+approver_membership.is_active = True
+approver_membership.save(update_fields=["role", "is_active"])
+
+print("CAPACITY_FIXTURE=" + json.dumps({{
+    "organization_id": str(org.id),
+    "approver_membership_id": str(approver_membership.id),
+}}, sort_keys=True))
+"""
+    result = _compose(
+        compose_root,
+        "exec",
+        "-T",
+        "django",
+        "python",
+        "manage.py",
+        "shell",
+        timeout=90,
+        input_text=script,
+    )
+    line = next(
+        (item for item in reversed(result.stdout.splitlines()) if item.startswith("CAPACITY_FIXTURE=")),
+        "",
+    )
+    if not line:
+        raise CapacityRealityError("governance fixture provisioning returned no fixture marker")
+    try:
+        identifiers = json.loads(line.split("=", 1)[1])
+    except json.JSONDecodeError as exc:
+        raise CapacityRealityError("governance fixture marker was not valid JSON") from exc
+    organization_id = str(identifiers.get("organization_id") or "").strip()
+    membership_id = str(identifiers.get("approver_membership_id") or "").strip()
+    if not organization_id or not membership_id:
+        raise CapacityRealityError("governance fixture identifiers are incomplete")
+    return {
+        "AEGIS_E2E_EMAIL": email,
+        "AEGIS_E2E_PASSWORD": password,
+        "AEGIS_E2E_APPROVER_EMAIL": approver_email,
+        "AEGIS_E2E_APPROVER_PASSWORD": approver_password,
+        "AEGIS_E2E_GOV_ORG_ID": organization_id,
+        "AEGIS_E2E_APPROVER_MEMBERSHIP_ID": membership_id,
+    }
+
+
+def _tenant_environment(
+    index: int,
+    *,
+    state_root: Path,
+    fixture: dict[str, str],
+) -> dict[str, str]:
     env = os.environ.copy()
     for key in EPHEMERAL_IDENTITY_KEYS:
         env.pop(key, None)
+    env.update(fixture)
     env["AEGIS_E2E_STATE_PATH"] = str(state_root / f"tenant-{index}.json")
     return env
 
@@ -145,12 +287,13 @@ def launch_tenant(
     script: Path,
     state_root: Path,
     log_root: Path,
+    fixture: dict[str, str],
 ) -> tuple[subprocess.Popen[str], Any, Path]:
     log_path = log_root / f"tenant-{index}.log"
     handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         [sys.executable, str(script)],
-        env=_tenant_environment(index, state_root=state_root),
+        env=_tenant_environment(index, state_root=state_root, fixture=fixture),
         stdout=handle,
         stderr=subprocess.STDOUT,
         text=True,
@@ -168,8 +311,18 @@ def _wait_tenants(
     timeout_seconds: float,
     sample_interval: float,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    fixtures = [
+        provision_tenant_fixture(compose_root, index)
+        for index in range(tenant_count)
+    ]
     processes = [
-        launch_tenant(index, script=script, state_root=state_root, log_root=log_root)
+        launch_tenant(
+            index,
+            script=script,
+            state_root=state_root,
+            log_root=log_root,
+            fixture=fixtures[index],
+        )
         for index in range(tenant_count)
     ]
     samples: list[dict[str, Any]] = []
@@ -221,6 +374,7 @@ def prove_recovery(
     readiness_timeout: float,
     e2e_timeout: float,
 ) -> dict[str, Any]:
+    fixture = provision_tenant_fixture(compose_root, 10_000)
     _compose(
         compose_root,
         "restart",
@@ -251,6 +405,7 @@ def prove_recovery(
         script=script,
         state_root=state_root,
         log_root=log_root,
+        fixture=fixture,
     )
     try:
         return_code = process.wait(timeout=e2e_timeout)
