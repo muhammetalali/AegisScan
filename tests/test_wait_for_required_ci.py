@@ -56,6 +56,7 @@ def test_wait_returns_only_completed_success(monkeypatch):
             _payload(_run(status="completed", conclusion="success", id=12)),
         ]
     )
+    monkeypatch.setattr(gate, "_live_branch_sha", lambda *_args, **_kwargs: SHA)
     monkeypatch.setattr(gate, "_api_json", lambda *_args, **_kwargs: next(responses))
     ticks = iter([0.0, 0.0, 1.0, 1.0, 2.0])
     monkeypatch.setattr(gate.time, "monotonic", lambda: next(ticks))
@@ -77,6 +78,7 @@ def test_wait_returns_only_completed_success(monkeypatch):
 
 
 def test_wait_fails_closed_on_unsuccessful_terminal_run(monkeypatch):
+    monkeypatch.setattr(gate, "_live_branch_sha", lambda *_args, **_kwargs: SHA)
     monkeypatch.setattr(
         gate,
         "_api_json",
@@ -107,6 +109,27 @@ def test_wait_rejects_invalid_sha_without_api_call(monkeypatch):
             repo="owner/repo",
             token="token",
             sha="bad",
+            branch="main",
+            workflow_name="Required CI Governance",
+            event="push",
+            timeout_seconds=10,
+            poll_seconds=1,
+        )
+
+
+def test_wait_fails_if_live_main_moves_during_poll(monkeypatch):
+    monkeypatch.setattr(gate, "_live_branch_sha", lambda *_args, **_kwargs: "b" * 40)
+    monkeypatch.setattr(
+        gate,
+        "_api_json",
+        lambda *_args, **_kwargs: pytest.fail("workflow API must not be queried after main moved"),
+    )
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0.0)
+    with pytest.raises(gate.RequiredCIGateError, match="live branch main moved"):
+        gate.wait_for_required_ci(
+            repo="owner/repo",
+            token="token",
+            sha=SHA,
             branch="main",
             workflow_name="Required CI Governance",
             event="push",
