@@ -70,12 +70,21 @@ def test_build_report_fails_closed_when_concurrency_or_recovery_is_missing():
     assert report["proof"]["controlled_recovery"] is False
 
 
-def test_tenant_environment_removes_fixed_fixture_credentials(monkeypatch, tmp_path):
-    monkeypatch.setenv("AEGIS_E2E_EMAIL", "fixed@example.test")
-    monkeypatch.setenv("AEGIS_E2E_PASSWORD", "secret")
-    monkeypatch.setenv("AEGIS_E2E_APPROVER_EMAIL", "approver@example.test")
-    monkeypatch.setenv("AEGIS_E2E_APPROVER_PASSWORD", "secret-2")
-    env = capacity._tenant_environment(7, state_root=tmp_path)
-    for key in capacity.EPHEMERAL_IDENTITY_KEYS:
-        assert key not in env
+def test_tenant_environment_replaces_stale_identity_with_governed_fixture(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_E2E_EMAIL", "stale@example.test")
+    monkeypatch.setenv("AEGIS_E2E_PASSWORD", "stale-secret")
+    monkeypatch.setenv("AEGIS_E2E_APPROVER_EMAIL", "stale-approver@example.test")
+    monkeypatch.setenv("AEGIS_E2E_APPROVER_PASSWORD", "stale-secret-2")
+    fixture = {
+        "AEGIS_E2E_EMAIL": "capacity@example.test",
+        "AEGIS_E2E_PASSWORD": "fixture-secret",
+        "AEGIS_E2E_APPROVER_EMAIL": "capacity-approver@example.test",
+        "AEGIS_E2E_APPROVER_PASSWORD": "fixture-approver-secret",
+        "AEGIS_E2E_GOV_ORG_ID": "11111111-1111-1111-1111-111111111111",
+        "AEGIS_E2E_APPROVER_MEMBERSHIP_ID": "22222222-2222-2222-2222-222222222222",
+    }
+    env = capacity._tenant_environment(7, state_root=tmp_path, fixture=fixture)
+    for key, value in fixture.items():
+        assert env[key] == value
+    assert env["AEGIS_E2E_EMAIL"] != "stale@example.test"
     assert env["AEGIS_E2E_STATE_PATH"].endswith("tenant-7.json")
