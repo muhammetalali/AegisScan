@@ -156,6 +156,7 @@ def _run(
     cwd: Path = REPO_ROOT,
     capture: bool = True,
     timeout: int = 3600,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -166,6 +167,7 @@ def _run(
             capture_output=capture,
             check=True,
             timeout=timeout,
+            input=input_text,
         )
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()[-4000:]
@@ -237,22 +239,30 @@ def _python(script: str, *args: str, timeout: int) -> None:
     _run(["/usr/bin/python3", str(path), *args], capture=False, timeout=timeout)
 
 
+def _release_deployer(release_sha: str, origin: str) -> None:
+    """Use the verified candidate orchestrator while backup still sees the old checkout."""
+    relative = "aegis-platform/scripts/production_host_deploy.py"
+    source = _git("show", f"{release_sha}:{relative}").stdout
+    if not source.strip():
+        raise PrivilegedGateError("candidate deployment orchestrator is empty")
+    launcher = (
+        "import sys; path=sys.argv.pop(1); source=sys.stdin.read(); sys.argv[0]=path; "
+        "exec(compile(source,path,'exec'), {'__name__':'__main__','__file__':path})"
+    )
+    _run(
+        ["/usr/bin/python3", "-c", launcher, str(REPO_ROOT / relative),
+         "--release-sha", release_sha, "--env-file", str(ENV_FILE), "--origin", origin],
+        input_text=source, capture=False, timeout=21600,
+    )
+
+
 def deploy(release_sha: str, origin: str) -> None:
     release_sha = _release_sha(release_sha)
     origin = _origin(origin)
     _assert_private_material()
     _prepare_release(release_sha)
     _python("production_host_reality.py", "--env-file", str(ENV_FILE), timeout=900)
-    _python(
-        "production_host_deploy.py",
-        "--release-sha",
-        release_sha,
-        "--env-file",
-        str(ENV_FILE),
-        "--origin",
-        origin,
-        timeout=21600,
-    )
+    _release_deployer(release_sha, origin)
     _assert_secure_tree()
 
 
@@ -293,6 +303,24 @@ def cleanup_e2e_scope(release_sha: str) -> None:
     _assert_secure_tree()
 
 
+def resilience(release_sha: str, action: str, origin: str = "") -> None:
+    release_sha = _release_sha(release_sha)
+    if action not in {"backup", "recover-services"}:
+        raise PrivilegedGateError("unsupported resilience action")
+    _assert_private_material()
+    _assert_secure_tree()
+    _assert_expected_remote()
+    if _git("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        raise PrivilegedGateError("production checkout has tracked local modifications")
+    if _git("rev-parse", "HEAD").stdout.strip() != release_sha:
+        raise PrivilegedGateError("production host checkout does not match the resilience release SHA")
+    args = ["--release-sha", release_sha, "--env-file", str(ENV_FILE), "--action", action]
+    if action == "recover-services":
+        args += ["--origin", _origin(origin)]
+    _python("production_host_resilience.py", *args, timeout=14400)
+    _assert_secure_tree()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -305,6 +333,11 @@ def main() -> int:
 
     accept_parser = subparsers.add_parser("accept")
     accept_parser.add_argument("--release-sha", required=True)
+    backup_parser = subparsers.add_parser("backup")
+    backup_parser.add_argument("--release-sha", required=True)
+    recovery_parser = subparsers.add_parser("recover-services")
+    recovery_parser.add_argument("--release-sha", required=True)
+    recovery_parser.add_argument("--origin", required=True)
 
     args = parser.parse_args()
     try:
@@ -316,6 +349,8 @@ def main() -> int:
             accept(args.release_sha)
         elif args.action == "cleanup-e2e-scope":
             cleanup_e2e_scope(args.release_sha)
+        elif args.action in {"backup", "recover-services"}:
+            resilience(args.release_sha, args.action, getattr(args, "origin", ""))
         else:
             raise PrivilegedGateError(f"unsupported privileged action: {args.action}")
     except PrivilegedGateError as exc:
