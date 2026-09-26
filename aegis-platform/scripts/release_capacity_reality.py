@@ -146,91 +146,42 @@ def provision_tenant_fixture(compose_root: Path, index: int) -> dict[str, str]:
     password = "Aegis-Capacity-" + secrets.token_urlsafe(24)
     approver_email = f"capacity-approver-{index}-{token}@aegisscan.local"
     approver_password = "Aegis-Capacity-Approver-" + secrets.token_urlsafe(24)
-    org_slug = f"capacity-governance-{index}-{token}"
     payload = {
         "email": email,
         "password": password,
         "approver_email": approver_email,
         "approver_password": approver_password,
-        "org_slug": org_slug,
     }
     encoded = {key: json.dumps(value) for key, value in payload.items()}
     script = f"""
-import json
 from django.contrib.auth import get_user_model
 from django_project.users.models import UserRole
-from enterprise.models import Organization, OrganizationMembership
 
 User = get_user_model()
-email = {encoded["email"]}
-password = {encoded["password"]}
-approver_email = {encoded["approver_email"]}
-approver_password = {encoded["approver_password"]}
-org_slug = {encoded["org_slug"]}
 
-user, _ = User.objects.get_or_create(
-    email=email,
-    defaults={{
-        "first_name": "Capacity",
-        "last_name": "Operator",
-        "role": UserRole.SECURITY_MANAGER,
-        "is_active": True,
-        "is_verified": True,
-    }},
-)
-user.role = UserRole.SECURITY_MANAGER
-user.is_active = True
-user.is_verified = True
-user.set_password(password)
-user.save()
-assert user.has_permission("project.create") and user.has_permission("scan.create")
+def upsert(email, password, first_name, last_name):
+    user, _ = User.objects.get_or_create(
+        email=email,
+        defaults={{
+            "first_name": first_name,
+            "last_name": last_name,
+            "role": UserRole.SECURITY_MANAGER,
+            "is_active": True,
+            "is_verified": True,
+        }},
+    )
+    user.first_name = first_name
+    user.last_name = last_name
+    user.role = UserRole.SECURITY_MANAGER
+    user.is_active = True
+    user.is_verified = True
+    user.set_password(password)
+    user.save()
+    assert user.has_permission("project.create") and user.has_permission("scan.create")
 
-approver, _ = User.objects.get_or_create(
-    email=approver_email,
-    defaults={{
-        "first_name": "Capacity",
-        "last_name": "Approver",
-        "role": UserRole.SECURITY_MANAGER,
-        "is_active": True,
-        "is_verified": True,
-    }},
-)
-approver.role = UserRole.SECURITY_MANAGER
-approver.is_active = True
-approver.is_verified = True
-approver.set_password(approver_password)
-approver.save()
-
-org, _ = Organization.objects.get_or_create(
-    slug=org_slug,
-    defaults={{"name": f"Capacity Governance {{org_slug}}", "owner": user, "is_active": True}},
-)
-org.owner = user
-org.is_active = True
-org.save(update_fields=["owner", "is_active", "updated_at"])
-
-operator_membership, _ = OrganizationMembership.objects.get_or_create(
-    organization=org,
-    user=user,
-    defaults={{"role": OrganizationMembership.Role.OWNER, "is_active": True}},
-)
-operator_membership.role = OrganizationMembership.Role.OWNER
-operator_membership.is_active = True
-operator_membership.save(update_fields=["role", "is_active"])
-
-approver_membership, _ = OrganizationMembership.objects.get_or_create(
-    organization=org,
-    user=approver,
-    defaults={{"role": OrganizationMembership.Role.ADMIN, "is_active": True}},
-)
-approver_membership.role = OrganizationMembership.Role.ADMIN
-approver_membership.is_active = True
-approver_membership.save(update_fields=["role", "is_active"])
-
-print("CAPACITY_FIXTURE=" + json.dumps({{
-    "organization_id": str(org.id),
-    "approver_membership_id": str(approver_membership.id),
-}}, sort_keys=True))
+upsert({encoded["email"]}, {encoded["password"]}, "Capacity", "Operator")
+upsert({encoded["approver_email"]}, {encoded["approver_password"]}, "Capacity", "Approver")
+print("CAPACITY_FIXTURE_READY")
 """
     result = _compose(
         compose_root,
@@ -243,29 +194,14 @@ print("CAPACITY_FIXTURE=" + json.dumps({{
         timeout=90,
         input_text=script,
     )
-    line = next(
-        (item for item in reversed(result.stdout.splitlines()) if item.startswith("CAPACITY_FIXTURE=")),
-        "",
-    )
-    if not line:
-        raise CapacityRealityError("governance fixture provisioning returned no fixture marker")
-    try:
-        identifiers = json.loads(line.split("=", 1)[1])
-    except json.JSONDecodeError as exc:
-        raise CapacityRealityError("governance fixture marker was not valid JSON") from exc
-    organization_id = str(identifiers.get("organization_id") or "").strip()
-    membership_id = str(identifiers.get("approver_membership_id") or "").strip()
-    if not organization_id or not membership_id:
-        raise CapacityRealityError("governance fixture identifiers are incomplete")
+    if "CAPACITY_FIXTURE_READY" not in result.stdout:
+        raise CapacityRealityError("governed actor provisioning returned no ready marker")
     return {
         "AEGIS_E2E_EMAIL": email,
         "AEGIS_E2E_PASSWORD": password,
         "AEGIS_E2E_APPROVER_EMAIL": approver_email,
         "AEGIS_E2E_APPROVER_PASSWORD": approver_password,
-        "AEGIS_E2E_GOV_ORG_ID": organization_id,
-        "AEGIS_E2E_APPROVER_MEMBERSHIP_ID": membership_id,
     }
-
 
 def _tenant_environment(
     index: int,
@@ -278,6 +214,7 @@ def _tenant_environment(
         env.pop(key, None)
     env.update(fixture)
     env["AEGIS_E2E_STATE_PATH"] = str(state_root / f"tenant-{index}.json")
+    env["AEGIS_E2E_CAPACITY_MODE"] = "true"
     return env
 
 
