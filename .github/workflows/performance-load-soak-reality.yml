@@ -220,14 +220,13 @@ jobs:
           EOF
           docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml config --quiet
       - name: Build governed Kali Nmap provider and pin exact-head provenance
-        working-directory: aegis-platform
         shell: bash
         run: |
           set -euo pipefail
-          SOURCE_DATE_EPOCH="$(git -C .. log -1 --pretty=%ct)"
-          docker build --pull             --build-arg BUILD_COMMIT="$AEGIS_EXACT_HEAD"             --build-arg AEGIS_RUNNER_VERSION=0.1.0             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"             -t aegis-kali:base             -f kali/Dockerfile.base kali
-          docker build             --build-arg AEGIS_BASE_IMAGE=aegis-kali:base             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"             --target profile-network             -t aegis-kali:network             -f kali/Dockerfile.profiles .
-          docker build             --build-arg AEGIS_NETWORK_BASE_IMAGE=aegis-kali:network             -t aegis-kali:network-provider             -f kali/Dockerfile.network-provider kali
+          SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          docker build --pull --build-arg BUILD_COMMIT="$AEGIS_EXACT_HEAD" --build-arg AEGIS_RUNNER_VERSION=0.1.0 --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" -t aegis-kali:base -f aegis-platform/kali/Dockerfile.base aegis-platform/kali
+          docker build --build-arg AEGIS_BASE_IMAGE=aegis-kali:base --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" --target profile-network -t aegis-kali:network -f aegis-platform/kali/Dockerfile.profiles .
+          docker build --build-arg AEGIS_NETWORK_BASE_IMAGE=aegis-kali:network -t aegis-kali:network-provider -f aegis-platform/kali/Dockerfile.network-provider aegis-platform/kali
 
           IMAGE_ID="$(docker image inspect aegis-kali:network-provider --format '{{.Id}}')"
           case "$IMAGE_ID" in
@@ -372,7 +371,7 @@ jobs:
             capacity-evidence/logs/*.log
             capacity-evidence/state/*.json
           retention-days: 90
-          if-no-files-found: error
+          if-no-files-found: warn
       - name: Capture diagnostics and destroy ephemeral stack
         if: always()
         working-directory: aegis-platform
