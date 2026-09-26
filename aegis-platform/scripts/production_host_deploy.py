@@ -295,8 +295,6 @@ def _backup_before_upgrade(env_file: Path, deployment_env: dict[str, str]) -> di
             "--rm",
             "--no-deps",
             "backup",
-            "python",
-            "/app/scripts/remote_backup_service.py",
             "once",
         ),
         cwd=PLATFORM_DIR,
