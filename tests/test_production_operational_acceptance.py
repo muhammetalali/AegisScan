@@ -62,6 +62,32 @@ def test_operational_material_requires_https_and_private_backup_secrets(tmp_path
         ops._validate_operational_material(env)
 
 
+def test_cleanup_is_repeatable_and_preserves_production_scope(monkeypatch, tmp_path):
+    release = "a" * 40
+    env = {"AUTHORIZED_SCAN_TARGETS": "security.internal", "SCANNER_EGRESS_PRIVATE_TARGETS": "10.20.30.40"}
+    monkeypatch.setattr(ops, "_load_env", lambda _: dict(env))
+    monkeypatch.setattr(ops, "_current_sha", lambda: release)
+    commands = []
+    monkeypatch.setattr(ops, "_run", lambda argv, **kw: commands.append((argv, kw)))
+    monkeypatch.setattr(ops, "_wait_required_services", lambda *a, **kw: sorted(ops.REQUIRED_RUNNING_SERVICES))
+    monkeypatch.setattr(ops, "_running_services", lambda *a, **kw: ops.REQUIRED_RUNNING_SERVICES)
+    monkeypatch.setattr(ops, "_container_environment", lambda _: dict(env))
+    for _ in range(2):
+        result = ops.cleanup_e2e_scope(env_file=tmp_path / "production.env", release_sha=release)
+        assert result["scan_target_stopped"] is True
+        assert result["authorization_scope_restored"] is True
+    restores = [(argv, kw) for argv, kw in commands if "--remove-orphans" in argv]
+    assert len(restores) == 2
+    assert all(kw["env"]["AUTHORIZED_SCAN_TARGETS"] == env["AUTHORIZED_SCAN_TARGETS"] for _, kw in restores)
+    assert all("ci-only" not in kw["env"].get("COMPOSE_PROFILES", "") for _, kw in restores)
+
+    commands.clear()
+    monkeypatch.setattr(ops, "_current_sha", lambda: "b" * 40)
+    with pytest.raises(ops.OperationalAcceptanceError, match="cleanup release SHA"):
+        ops.cleanup_e2e_scope(env_file=tmp_path / "production.env", release_sha=release)
+    assert not commands
+
+
 def test_alertmanager_and_backup_probes_require_real_success(monkeypatch, tmp_path: Path):
     env_file = tmp_path / "production.env"
     env_file.write_text("X=1\n")
