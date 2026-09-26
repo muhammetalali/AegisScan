@@ -75,7 +75,7 @@ def test_live_workflows_wait_for_exact_sha_required_ci_before_live_execution():
         )
         assert authorization_index < barrier_index < names.index(next_step_name)
         barrier = steps[barrier_index]
-        assert barrier["env"]["GITHUB_TOKEN"] == "\${{ github.token }}"
+        assert barrier["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
         assert "scripts/ci/wait_for_required_ci.py" in barrier["run"]
         assert '--sha "$GITHUB_SHA"' in barrier["run"]
         assert "--branch main" in barrier["run"]
