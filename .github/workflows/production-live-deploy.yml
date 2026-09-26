@@ -162,6 +162,7 @@ jobs:
             | tee /tmp/aegis-production/deploy.json
 
       - name: Prove Alertmanager and committed encrypted remote backup on production host
+        id: operational_acceptance
         shell: bash
         run: |
           set -euo pipefail
@@ -267,12 +268,22 @@ jobs:
       - name: Restore fail-closed production scanner scope
         if: always()
         shell: bash
+        env:
+          AEGIS_OPERATIONAL_OUTCOME: ${{ steps.operational_acceptance.outcome }}
         run: |
           set -euo pipefail
           if [ "${AEGIS_PROD_TRANSPORT_READY:-}" != "true" ]; then
             echo 'Protected SSH/CA material was not fully materialized; remote scope cleanup is not applicable.'
             exit 0
           fi
+          case "${AEGIS_OPERATIONAL_OUTCOME:-}" in
+            success|failure|cancelled) ;;
+            skipped|'')
+              echo 'Operational acceptance never started; this run did not activate an E2E scope.'
+              exit 0
+              ;;
+            *) echo 'Unexpected operational acceptance outcome' >&2; exit 1 ;;
+          esac
           python aegis-platform/scripts/production_remote_operational_acceptance.py \
             --host "$PROD_SSH_HOST" \
             --port "$PROD_SSH_PORT" \

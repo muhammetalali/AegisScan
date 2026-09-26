@@ -1,5 +1,8 @@
 from pathlib import Path
+import os
+import subprocess
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).parents[1]
@@ -145,6 +148,31 @@ def test_live_production_workflow_materializes_transport_before_fixture_and_guar
     )[1].split("- name: Build internal go-live evidence manifest", 1)[0]
     assert 'AEGIS_PROD_TRANSPORT_READY:-' in scope_cleanup
     assert "remote scope cleanup is not applicable" in scope_cleanup
+
+
+@pytest.mark.parametrize("outcome,expected", [
+    ("skipped", False), ("", False), ("success", True),
+    ("failure", True), ("cancelled", True),
+])
+def test_scope_cleanup_runs_only_after_operational_acceptance_started(tmp_path, outcome, expected):
+    steps = _workflow()["jobs"]["deploy-and-accept"]["steps"]
+    acceptance = next(step for step in steps if step.get("id") == "operational_acceptance")
+    cleanup = next(step for step in steps if step.get("name") == "Restore fail-closed production scanner scope")
+    assert steps.index(acceptance) < steps.index(cleanup)
+    assert cleanup["if"] == "always()"
+    assert cleanup["env"]["AEGIS_OPERATIONAL_OUTCOME"] == "${{ steps.operational_acceptance.outcome }}"
+    executable = tmp_path / "python"
+    executable.write_text('#!/bin/sh\nprintf "cleanup-called\\n"\n', encoding="utf-8")
+    executable.chmod(0o700)
+    script = cleanup["run"].replace("/tmp/aegis-production", str(tmp_path))
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env={
+        **os.environ, "PATH": str(tmp_path) + ":" + os.environ["PATH"],
+        "AEGIS_OPERATIONAL_OUTCOME": outcome, "AEGIS_PROD_TRANSPORT_READY": "true",
+        "PROD_SSH_HOST": "unused", "PROD_SSH_PORT": "22", "PROD_SSH_USER": "unused",
+        "GITHUB_SHA": "a" * 40,
+    })
+    assert result.returncode == 0, result.stderr
+    assert ("cleanup-called" in result.stdout) is expected
 
 
 def test_live_production_workflow_has_no_public_hosted_runner_or_public_evidence_contract():

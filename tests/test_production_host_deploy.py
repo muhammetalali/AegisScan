@@ -215,11 +215,12 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
 
 
 
-def test_failed_preflight_restores_exact_previous_env_and_checkout(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("same_release", [False, True])
+def test_failed_preflight_restores_exact_previous_env_and_checkout(tmp_path: Path, monkeypatch, same_release):
     env_file = _env_file(tmp_path)
     original = env_file.read_bytes()
     previous_sha = "a" * 40
-    release_sha = "b" * 40
+    release_sha = previous_sha if same_release else "b" * 40
     checkouts = []
 
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
@@ -250,9 +251,24 @@ def test_failed_preflight_restores_exact_previous_env_and_checkout(tmp_path: Pat
     with pytest.raises(RuntimeError, match="preflight failed"):
         deploy.deploy(release_sha, env_file, "https://security.example.com")
 
-    assert checkouts == [release_sha, previous_sha]
+    assert checkouts == ([release_sha] if same_release else [release_sha, previous_sha])
     assert env_file.read_bytes() == original
     assert env_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_failed_backup_leaves_checkout_and_private_environment_untouched(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    original = env_file.read_bytes()
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
+    monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_current_sha", lambda: "a" * 40)
+    def fail_backup(*args):
+        raise deploy.DeployError("backup failed")
+    monkeypatch.setattr(deploy, "_backup_before_upgrade", fail_backup)
+    monkeypatch.setattr(deploy, "_checkout", lambda _sha: pytest.fail("checkout before backup"))
+    with pytest.raises(deploy.DeployError, match="backup failed"):
+        deploy.deploy("b" * 40, env_file, "https://security.internal")
+    assert env_file.read_bytes() == original
 
 
 def test_schema_blocked_rollback_keeps_new_release_env_bound(tmp_path: Path, monkeypatch):
@@ -317,15 +333,23 @@ def test_execution_profile_environment_keeps_explicit_kali_runtime_available_for
     assert resolved["COMPOSE_PROFILES"] == "kali-recon"
 
 
-def test_rollback_environment_unlocks_pre_m6_legacy_recon():
+def test_rollback_preserves_retired_legacy_protection():
     rollback = deploy._rollback_execution_environment({
         "AEGIS_RECON_PROVIDER": "default-kali",
         "AEGIS_RECON_LEGACY_DISABLED": "true",
         "AEGIS_KALI_RECON_CANARY_BPS": "0",
     })
+    assert rollback["AEGIS_RECON_PROVIDER"] == "default-kali"
+    assert rollback["AEGIS_RECON_LEGACY_DISABLED"] == "true"
+    assert rollback["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
+    assert "kali-recon" in rollback["COMPOSE_PROFILES"].split(",")
+
+
+def test_rollback_only_defaults_missing_pre_m4_fields():
+    rollback = deploy._rollback_execution_environment({})
     assert rollback["AEGIS_RECON_PROVIDER"] == "legacy"
     assert rollback["AEGIS_RECON_LEGACY_DISABLED"] == "false"
-    assert rollback["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
+    assert "COMPOSE_PROFILES" not in rollback
 
 
 def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: Path, monkeypatch):

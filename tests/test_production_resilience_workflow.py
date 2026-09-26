@@ -77,3 +77,15 @@ def test_resilience_chaining_preserves_exact_release_sha():
     assert 'test "$(git rev-parse origin/main)" = "$RELEASE_SHA"' in text
     assert '--release-sha "$RELEASE_SHA"' in text
     assert "aegisscan-production-resilience-${{ env.RELEASE_SHA }}" in text
+
+
+def test_resilience_includes_service_recovery_and_validates_openssh_key():
+    data = _workflow()
+    steps = data['jobs']['resilience-acceptance']['steps']
+    recovery = next(s for s in steps if s.get('name') == 'Recover the production API and verify HTTPS and scanner health')
+    assert '--action recover-services' in recovery['run']
+    assert '--release-sha "$RELEASE_SHA"' in recovery['run']
+    text = WORKFLOW.read_text()
+    assert "printf '%s\\n' \"$PROD_SSH_PRIVATE_KEY\"" in text
+    assert 'ssh-keygen -y -f /tmp/aegis-resilience/id >/dev/null' in text
+    assert "'service-recovery.json'," in text

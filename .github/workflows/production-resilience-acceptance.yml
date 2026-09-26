@@ -44,6 +44,7 @@ jobs:
 
     env:
       RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      PROD_ORIGIN: ${{ secrets.AEGIS_PRODUCTION_ORIGIN }}
       PROD_SSH_HOST: ${{ secrets.AEGIS_PRODUCTION_SSH_HOST }}
       PROD_SSH_PORT: ${{ vars.AEGIS_PRODUCTION_SSH_PORT || '22' }}
       PROD_SSH_USER: ${{ secrets.AEGIS_PRODUCTION_SSH_USER }}
@@ -92,7 +93,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             BACKUP_ENDPOINT             BACKUP_REGION             BACKUP_BUCKET             BACKUP_PREFIX             BACKUP_ADDRESSING_STYLE             BACKUP_CREDENTIALS_JSON             BACKUP_ENCRYPTION_KEY_B64             ALERT_WEBHOOK_URL; do
+          for name in             PROD_ORIGIN             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             BACKUP_ENDPOINT             BACKUP_REGION             BACKUP_BUCKET             BACKUP_PREFIX             BACKUP_ADDRESSING_STYLE             BACKUP_CREDENTIALS_JSON             BACKUP_ENCRYPTION_KEY_B64             ALERT_WEBHOOK_URL; do
             value="${!name:-}"
             if [ -z "$value" ]; then
               echo "Required protected production material is missing: $name" >&2
@@ -131,11 +132,12 @@ jobs:
           set -euo pipefail
           umask 077
           install -d -m 0700 /tmp/aegis-resilience /tmp/aegis-resilience/recovery
-          printf '%s' "$PROD_SSH_PRIVATE_KEY" > /tmp/aegis-resilience/id
+          printf '%s\n' "$PROD_SSH_PRIVATE_KEY" > /tmp/aegis-resilience/id
           printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > /tmp/aegis-resilience/known_hosts
           printf '%s' "$BACKUP_CREDENTIALS_JSON" > /tmp/aegis-resilience/s3.json
           printf '%s' "$BACKUP_ENCRYPTION_KEY_B64" | base64 --decode > /tmp/aegis-resilience/backup.key
           chmod 0600             /tmp/aegis-resilience/id             /tmp/aegis-resilience/known_hosts             /tmp/aegis-resilience/s3.json             /tmp/aegis-resilience/backup.key
+          ssh-keygen -y -f /tmp/aegis-resilience/id >/dev/null
           test "$(stat -c '%s' /tmp/aegis-resilience/backup.key)" = 32
           python - <<'PY'
           import json
@@ -210,6 +212,16 @@ jobs:
           set -euo pipefail
           sh aegis-platform/scripts/verify_postgres_restore.sh             /tmp/aegis-resilience/recovery/production.dump             | tee /tmp/aegis-resilience/postgres-restore.txt
           grep -q 'RESTORE_VERIFICATION=PASS' /tmp/aegis-resilience/postgres-restore.txt
+
+      - name: Recover the production API and verify HTTPS and scanner health
+        shell: bash
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/production_resilience_backup.py \
+            --host "$PROD_SSH_HOST" --port "$PROD_SSH_PORT" --user "$PROD_SSH_USER" \
+            --private-key /tmp/aegis-resilience/id --known-hosts /tmp/aegis-resilience/known_hosts \
+            --release-sha "$RELEASE_SHA" --action recover-services --origin "$PROD_ORIGIN" \
+            | tee /tmp/aegis-resilience/service-recovery.json
 
       - name: Build hardened Alertmanager runtime
         working-directory: aegis-platform
@@ -334,6 +346,7 @@ jobs:
               'remote-backup.json',
               'remote-restore.json',
               'postgres-restore.txt',
+              'service-recovery.json',
               'external-alert-delivery.json',
               'alertmanager-metrics.txt',
           ]
@@ -383,6 +396,7 @@ jobs:
           path: |
             /tmp/aegis-resilience/remote-backup.json
             /tmp/aegis-resilience/remote-restore.json
+            /tmp/aegis-resilience/service-recovery.json
             /tmp/aegis-resilience/postgres-restore.txt
             /tmp/aegis-resilience/external-alert-delivery.json
             /tmp/aegis-resilience/alertmanager-metrics.txt

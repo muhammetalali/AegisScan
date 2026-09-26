@@ -152,6 +152,7 @@ chown root:root /etc/sudoers.d/aegisscan-production-gate
 chmod 0440 /etc/sudoers.d/aegisscan-production-gate
 visudo -cf /etc/sudoers.d/aegisscan-production-gate >/dev/null
 /usr/local/sbin/aegisscan-production-gate --help | grep -q 'cleanup-e2e-scope'
+/usr/local/sbin/aegisscan-production-gate --help | grep -q 'recover-services'
 
 if [ "$CONFIGURE_INTERNAL_DNS" -eq 1 ]; then
   AEGIS_DDNS_INTERFACE="$INTERFACE" \
