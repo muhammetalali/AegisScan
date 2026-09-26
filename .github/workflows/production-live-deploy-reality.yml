@@ -6,6 +6,14 @@ name: Production Live Deploy Reality
     paths:
       - '.github/workflows/production-live-deploy.yml'
       - '.github/workflows/production-live-deploy-reality.yml'
+      - '.github/workflows/cloud-live-provider-reality.yml'
+      - '.github/workflows/external-identity-live-provider-reality.yml'
+      - 'scripts/ci/wait_for_required_ci.py'
+      - 'tests/test_wait_for_required_ci.py'
+      - '.github/workflows/cloud-live-provider-reality.yml'
+      - '.github/workflows/external-identity-live-provider-reality.yml'
+      - 'scripts/ci/wait_for_required_ci.py'
+      - 'tests/test_wait_for_required_ci.py'
       - '.github/deployment-requests/internal-production.json'
       - 'aegis-platform/scripts/production_deploy_request.py'
       - 'aegis-platform/scripts/production_privileged_gate.py'
@@ -65,7 +73,8 @@ jobs:
             aegis-platform/scripts/production_privileged_gate.py \
             aegis-platform/scripts/production_remote_deploy.py \
             aegis-platform/scripts/production_operational_acceptance.py \
-            aegis-platform/scripts/production_remote_operational_acceptance.py
+            aegis-platform/scripts/production_remote_operational_acceptance.py \
+            scripts/ci/wait_for_required_ci.py
 
       - name: Prove fail-closed live deployment contracts
         run: |
@@ -75,7 +84,8 @@ jobs:
             tests/test_production_remote_deploy.py \
             tests/test_production_operational_acceptance.py \
             tests/test_production_remote_operational_acceptance.py \
-            tests/test_production_live_workflow.py
+            tests/test_production_live_workflow.py \
+            tests/test_wait_for_required_ci.py
 
       - name: Reject insecure transport or broad automatic deployment
         shell: bash
@@ -86,6 +96,7 @@ jobs:
           grep -q "environment: production" "$workflow"
           grep -q "production_deploy_request.py" "$workflow"
           grep -q "production_remote_operational_acceptance.py" "$workflow"
+          grep -q "wait_for_required_ci.py" "$workflow"
           grep -q "aegisscan-production-gate" aegis-platform/scripts/production_remote_deploy.py
           grep -q "remote.PRIVILEGED_GATE" aegis-platform/scripts/production_remote_operational_acceptance.py
           ! grep -q "sudo -n python3" aegis-platform/scripts/production_remote_deploy.py
