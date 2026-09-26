@@ -116,6 +116,27 @@ def _verify_runs(*, root: Path, release_sha: str, repository: str) -> dict[str, 
             raise ReleaseClosureError(f"{name} workflow run id is invalid")
         if not isinstance(attempt, int) or attempt <= 0:
             raise ReleaseClosureError(f"{name} workflow run attempt is invalid")
+        jobs = run.get("jobs")
+        if not isinstance(jobs, list) or not jobs:
+            raise ReleaseClosureError(f"{name} has no executed job evidence")
+        for job in jobs:
+            if (
+                not isinstance(job, dict)
+                or job.get("run_id") != run_id
+                or job.get("run_attempt") != attempt
+                or job.get("head_sha") != release_sha
+                or job.get("status") != "completed"
+                or job.get("conclusion") != "success"
+                or not job.get("steps")
+            ):
+                raise ReleaseClosureError(f"{name} contains missing, skipped, failed or mismatched job evidence")
+        required_job = {
+            "Internal Production Deploy and Acceptance": "deploy-and-accept",
+            "Production Resilience Acceptance": "resilience-acceptance",
+            "Final Internal Production Governance": "final-governance",
+        }.get(name)
+        if required_job and required_job not in {job.get("name") for job in jobs}:
+            raise ReleaseClosureError(f"{name} did not execute required job {required_job}")
         normalized[name] = {
             "run_id": run_id,
             "run_attempt": attempt,
@@ -172,12 +193,25 @@ def _verify_production_governance(root: Path, release_sha: str) -> dict[str, Any
     }
 
 
-def _verify_supply_chain(root: Path) -> dict[str, str]:
+def _verify_supply_chain(root: Path, release_sha: str, repository: str, run_id: int) -> dict[str, str]:
     digests: dict[str, str] = {}
     for component in ("django", "fastapi", "frontend"):
         for suffix in ("cdx.json", "provenance.json"):
             name = f"{component}.{suffix}"
             path = _unique(root, name, "supply-chain release evidence")
+            payload = _load_json(path, name)
+            if suffix == "cdx.json":
+                if payload.get("bomFormat") != "CycloneDX" or not payload.get("components"):
+                    raise ReleaseClosureError(f"{name} is not a populated CycloneDX SBOM")
+            else:
+                source = (payload.get("invocation") or {}).get("configSource") or {}
+                if (
+                    (source.get("digest") or {}).get("sha1") != release_sha
+                    or source.get("uri") != f"git+https://github.com/{repository}@refs/heads/main"
+                    or source.get("entryPoint") != REQUIRED_RUNS["Supply Chain Release"][0]
+                    or (payload.get("builder") or {}).get("id") != f"https://github.com/{repository}/actions/runs/{run_id}"
+                ):
+                    raise ReleaseClosureError(f"{name} provenance does not match the exact release build")
             digests[name] = _sha256_file(path)
     return dict(sorted(digests.items()))
 
@@ -253,7 +287,7 @@ def build_manifest(
     acceptance = _verify_final_acceptance(evidence_root, release_sha)
     governance = _verify_final_governance(evidence_root, release_sha)
     production = _verify_production_governance(evidence_root, release_sha)
-    supply_chain = _verify_supply_chain(evidence_root)
+    supply_chain = _verify_supply_chain(evidence_root, release_sha, repository, runs["Supply Chain Release"]["run_id"])
 
     payload: dict[str, Any] = {
         "schema": SCHEMA,

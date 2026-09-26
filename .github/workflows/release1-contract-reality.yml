@@ -1,0 +1,45 @@
+name: Release 1 Contract Reality
+
+'on':
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/release1-closure.yml'
+      - '.github/workflows/release1-contract-reality.yml'
+      - '.github/deployment-requests/internal-production.json'
+      - 'scripts/ci/release1_closure.py'
+      - 'tests/test_release1_closure.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release1-closure.yml'
+      - '.github/workflows/release1-contract-reality.yml'
+      - '.github/deployment-requests/internal-production.json'
+      - 'scripts/ci/release1_closure.py'
+      - 'tests/test_release1_closure.py'
+
+permissions:
+  contents: read
+
+env:
+  AEGIS_RELEASE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  release-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_RELEASE_SHA }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Prove Release 1 closure contract
+        run: |
+          python -m py_compile scripts/ci/release1_closure.py tests/test_release1_closure.py
+          python -m pip install pytest==9.1.1 pyyaml==6.0.2
+          pytest -q tests/test_release1_closure.py
+
