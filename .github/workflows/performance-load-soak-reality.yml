@@ -40,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       DEBUG: 'False'
       SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
       DATABASE_URL: 'postgresql://aegis:aegis@127.0.0.1:5432/aegisdb'
@@ -70,6 +71,11 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+          fetch-depth: 0
+      - name: Prove exact source checkout
+        run: test "$(git rev-parse HEAD)" = "$AEGIS_EXACT_HEAD"
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -130,6 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       POSTGRES_DB: aegisdb
       POSTGRES_USER: aegis
       POSTGRES_PASSWORD: aegis
@@ -159,16 +166,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
           fetch-depth: 0
       - name: Prove exact checkout and release dispatch target
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$AEGIS_EXACT_HEAD"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.profile }}" = "release" ]; then
             test "$GITHUB_REF" = "refs/heads/main"
             git fetch --no-tags origin main
-            test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+            test "$(git rev-parse origin/main)" = "$AEGIS_EXACT_HEAD"
           fi
       - uses: actions/setup-python@v6
         with:
@@ -293,7 +301,7 @@ jobs:
           capacity=json.loads(Path('release-capacity-reality.json').read_text())
           performance=json.loads(Path('release-performance-reality.json').read_text())
           assert capacity['schema']=='aegisscan.release-capacity-reality.v1'
-          assert capacity['source_sha']==os.environ['GITHUB_SHA']
+          assert capacity['source_sha']==os.environ['AEGIS_EXACT_HEAD']
           assert capacity['passed'] is True
           assert capacity['proof']['multi_tenant_e2e'] is True
           assert capacity['proof']['postgres_contention_observed'] is True
@@ -310,7 +318,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-performance-capacity-soak-${{ github.sha }}-${{ github.run_id }}
+          name: release-performance-capacity-soak-${{ env.AEGIS_EXACT_HEAD }}-${{ github.run_id }}
           path: |
             release-capacity-reality.json
             release-performance-reality.json
