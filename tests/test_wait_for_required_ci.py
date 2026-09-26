@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).parents[1]
+PATH = ROOT / "scripts/ci/wait_for_required_ci.py"
+SPEC = importlib.util.spec_from_file_location("wait_for_required_ci", PATH)
+assert SPEC and SPEC.loader
+gate = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(gate)
+
+SHA = "a" * 40
+
+
+def _payload(*runs):
+    return {"workflow_runs": list(runs)}
+
+
+def _run(**changes):
+    payload = {
+        "id": 10,
+        "name": "Required CI Governance",
+        "head_sha": SHA,
+        "head_branch": "main",
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "run_attempt": 1,
+    }
+    payload.update(changes)
+    return payload
+
+
+def test_selects_latest_exact_sha_main_push_run():
+    selected = gate._select_run(
+        _payload(
+            _run(id=8, run_attempt=1),
+            _run(id=9, run_attempt=2),
+            _run(id=11, head_sha="b" * 40),
+        ),
+        sha=SHA,
+        branch="main",
+        workflow_name="Required CI Governance",
+        event="push",
+    )
+    assert selected["id"] == 9
+
+
+def test_wait_returns_only_completed_success(monkeypatch):
+    responses = iter(
+        [
+            _payload(_run(status="in_progress", conclusion=None)),
+            _payload(_run(status="completed", conclusion="success", id=12)),
+        ]
+    )
+    monkeypatch.setattr(gate, "_live_branch_sha", lambda *_args, **_kwargs: SHA)
+    monkeypatch.setattr(gate, "_api_json", lambda *_args, **_kwargs: next(responses))
+    ticks = iter([0.0, 0.0, 1.0, 1.0, 2.0])
+    monkeypatch.setattr(gate.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(gate.time, "sleep", lambda _seconds: None)
+
+    result = gate.wait_for_required_ci(
+        repo="owner/repo",
+        token="token",
+        sha=SHA,
+        branch="main",
+        workflow_name="Required CI Governance",
+        event="push",
+        timeout_seconds=10,
+        poll_seconds=1,
+    )
+    assert result["status"] == "success"
+    assert result["run_id"] == 12
+    assert result["release_sha"] == SHA
+
+
+def test_wait_fails_closed_on_unsuccessful_terminal_run(monkeypatch):
+    monkeypatch.setattr(gate, "_live_branch_sha", lambda *_args, **_kwargs: SHA)
+    monkeypatch.setattr(
+        gate,
+        "_api_json",
+        lambda *_args, **_kwargs: _payload(_run(conclusion="failure")),
+    )
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0.0)
+    with pytest.raises(gate.RequiredCIGateError, match="completed without success"):
+        gate.wait_for_required_ci(
+            repo="owner/repo",
+            token="token",
+            sha=SHA,
+            branch="main",
+            workflow_name="Required CI Governance",
+            event="push",
+            timeout_seconds=10,
+            poll_seconds=1,
+        )
+
+
+def test_wait_rejects_invalid_sha_without_api_call(monkeypatch):
+    monkeypatch.setattr(
+        gate,
+        "_api_json",
+        lambda *_args, **_kwargs: pytest.fail("API must not be called"),
+    )
+    with pytest.raises(gate.RequiredCIGateError, match="40 lowercase hexadecimal"):
+        gate.wait_for_required_ci(
+            repo="owner/repo",
+            token="token",
+            sha="bad",
+            branch="main",
+            workflow_name="Required CI Governance",
+            event="push",
+            timeout_seconds=10,
+            poll_seconds=1,
+        )
+
+
+def test_wait_fails_if_live_main_moves_during_poll(monkeypatch):
+    monkeypatch.setattr(gate, "_live_branch_sha", lambda *_args, **_kwargs: "b" * 40)
+    monkeypatch.setattr(
+        gate,
+        "_api_json",
+        lambda *_args, **_kwargs: pytest.fail("workflow API must not be queried after main moved"),
+    )
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0.0)
+    with pytest.raises(gate.RequiredCIGateError, match="live branch main moved"):
+        gate.wait_for_required_ci(
+            repo="owner/repo",
+            token="token",
+            sha=SHA,
+            branch="main",
+            workflow_name="Required CI Governance",
+            event="push",
+            timeout_seconds=10,
+            poll_seconds=1,
+        )
+
+
+def test_live_execution_workflows_remain_lifecycle_only_to_avoid_ci_barrier_deadlock():
+    policy = json.loads(
+        (ROOT / ".github/governance/required-ci-policy.json").read_text(encoding="utf-8")
+    )
+    lifecycle = set(policy["lifecycle_only_workflows"])
+    assert {
+        "Cloud Live Provider Reality",
+        "External Identity Live Provider Reality",
+        "Internal Production Deploy and Acceptance",
+    } <= lifecycle
+

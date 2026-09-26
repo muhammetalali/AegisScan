@@ -18,11 +18,12 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   live-provider-reality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     environment: production
     env:
       AEGIS_AWS_CLOUD_TARGET: ${{ secrets.AEGIS_AWS_CLOUD_TARGET }}
@@ -56,6 +57,20 @@ jobs:
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+
+      - name: Wait for exact-SHA Required CI Governance
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ci/wait_for_required_ci.py \
+            --sha "$GITHUB_SHA" \
+            --branch main \
+            --workflow-name "Required CI Governance" \
+            --event push \
+            --timeout-seconds 4500 \
+            --poll-seconds 15
 
       - name: Install exact cloud runtime dependencies
         run: |
