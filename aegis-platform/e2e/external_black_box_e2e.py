@@ -137,7 +137,8 @@ def main()->int:
   if runtime.get('provider')!='aegis-kali-network' or runtime.get('profile')!='network':raise RuntimeError(f'Capacity Nmap Kali runtime provenance invalid: {lineage!r}')
   print('CAPACITY_KALI_NMAP_PROVIDER=PASS')
  if STATE_PATH:
-  state={'project_id':project_id,'asset_id':asset_id,'capability_id':'network.nmap','depth':'quick','idempotency_key':idempotency_key,'correlation_id':correlation_id,'scan_id':scan_id,'execution_contract':contract,'execution_contract_fingerprint':execution.get('execution_contract_fingerprint'),'policy_version':execution.get('policy_version')}
+  result_data=matching[0].get('result_data',{}) if isinstance(matching[0],dict) else {}
+  state={'project_id':project_id,'asset_id':asset_id,'capability_id':'network.nmap','depth':'quick','idempotency_key':idempotency_key,'correlation_id':correlation_id,'scan_id':scan_id,'execution_contract':contract,'execution_contract_fingerprint':execution.get('execution_contract_fingerprint'),'policy_version':execution.get('policy_version'),'provider_routing':result_data.get('provider_routing'),'runtime_provenance':result_data.get('runtime_provenance')}
   state_path=Path(STATE_PATH); state_path.parent.mkdir(parents=True,exist_ok=True); state_path.write_text(json.dumps(state,sort_keys=True,indent=2),encoding='utf-8')
  print('EXTERNAL_REAL_E2E=PASS'); print(f'project_id={project_id}'); print(f'asset_id={asset_id}'); print(f'scan_id={scan_id}'); print(f'finding_id={finding_id}'); print(f'evidence_count={len(scanner_evidence)}'); print(f'authorization_decision_id={auth_id}'); print(f'target={TARGET}'); print(f'governed_contract_fingerprint={execution.get("execution_contract_fingerprint")}'); return 0
 if __name__=='__main__':
