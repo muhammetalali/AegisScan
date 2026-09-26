@@ -5,7 +5,7 @@ import json,os,sys,time,uuid
 from pathlib import Path
 from typing import Any
 import requests
-BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}
+BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}; CAPACITY_MODE=os.getenv('AEGIS_E2E_CAPACITY_MODE','').lower() in {'1','true','yes','on'}
 def require(response:requests.Response,expected:set[int],label:str)->dict[str,Any]|list[Any]:
  if response.status_code not in expected: raise RuntimeError(f'{label} failed: HTTP {response.status_code}: {response.text[:1000]}')
  if not response.text:return {}
@@ -61,6 +61,8 @@ def main()->int:
   _deactivate_ephemeral_account(E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD,'Governance approver')
   _deactivate_ephemeral_account(E2E_EMAIL,E2E_PASSWORD,'E2E actor')
   print('EXTERNAL_E2E_CLEANUP=PASS'); return 0
+ if CAPACITY_MODE and not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):
+  raise RuntimeError('Capacity mode requires pre-provisioned actor and approver credentials')
  session=requests.Session(); session.verify=VERIFY_TLS; http(session,'GET',f'{API_URL}/ready','FastAPI readiness',{200},timeout=15); http(session,'GET',f'{API_URL}/health','FastAPI health',{200},timeout=15)
  csrf_token=csrf(session); unique=uuid.uuid4().hex[:12]; email=E2E_EMAIL or f'e2e-{unique}@aegisscan.local'; password=E2E_PASSWORD or f'Aegis-E2E-{unique}-StrongPass!9'; approver_email=E2E_APPROVER_EMAIL or f'e2e-approver-{unique}@aegisscan.local'; approver_password=E2E_APPROVER_PASSWORD or f'Aegis-E2E-Approver-{unique}-StrongPass!7'; headers={'X-CSRFToken':csrf_token,'Referer':f'{BASE_URL}/'}
  if not (E2E_EMAIL and E2E_PASSWORD): http(session,'POST',f'{DJANGO_URL}/auth/register/','User registration',{201},json={'email':email,'first_name':'E2E','last_name':'Harness','password':password,'password_confirm':password},headers=headers,timeout=20)
@@ -92,7 +94,10 @@ def main()->int:
  authorization_decision_id=authorization_result.get('authorization_decision_id') if isinstance(authorization_result,dict) else None
  if not authorization_decision_id:raise RuntimeError(f'Governed authorization execution did not return a durable decision: {authorization_execution!r}')
  if authorization_execution.get('request_id')!=governed_request['request_id']:raise RuntimeError(f'Governed authorization lost request lineage: {authorization_execution!r}')
- prove_detection_response(session,email,password)
+ if CAPACITY_MODE:
+  print('CAPACITY_IDENTITY_DETECTION=SKIPPED_BOUNDED_MODE')
+ else:
+  prove_detection_response(session,email,password)
  idempotency_key=f'e2e-governed-{unique}'; correlation_id=f'e2e-corr-{unique}'
  execution=http(session,'POST',f'{API_V1}/capabilities/network.nmap/execute','Governed Nmap capability execution',{202},json={'project_id':project_id,'asset_id':asset_id,'depth':'quick','options':{},'credential_refs':[],'idempotency_key':idempotency_key,'correlation_id':correlation_id},timeout=20)
  if not isinstance(execution,dict):raise RuntimeError(f'Governed execution response invalid: {execution!r}')
