@@ -242,7 +242,7 @@ jobs:
           )"
           echo "::add-mask::$AUTH_TOKEN"
           echo "AEGIS_KALI_NETWORK_AUTH_TOKEN=$AUTH_TOKEN" >> "$GITHUB_ENV"
-          echo "AEGIS_KALI_NETWORK_IMAGE=aegis-kali:network-provider" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_NETWORK_IMAGE=$IMAGE_ID" >> "$GITHUB_ENV"
           echo "AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
           python - <<'PY' >> "$GITHUB_ENV"
           import hashlib, json, os
