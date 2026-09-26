@@ -21,7 +21,27 @@ permissions:
   actions: read
 
 jobs:
+  request-routing:
+    runs-on: ubuntu-latest
+    outputs:
+      execute: ${{ steps.resolve.outputs.execute }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve cloud live-provider request lifecycle
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          execute=true
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ ! -f .github/live-acceptance-requests/cloud-providers.json ]; then
+            execute=false
+            echo 'Cloud live-provider request was removed; treating this as cleanup-only.'
+          fi
+          echo "execute=$execute" >> "$GITHUB_OUTPUT"
+
   live-provider-reality:
+    needs: request-routing
+    if: needs.request-routing.outputs.execute == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: production
