@@ -108,6 +108,37 @@ def test_backup_skips_only_when_postgres_is_not_running(tmp_path: Path, monkeypa
     }
 
 
+def test_backup_invocation_uses_backup_entrypoint_command_only(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    monkeypatch.setattr(deploy, "_running_services", lambda *_: {"postgres"})
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return SimpleNamespace(
+            stdout=json.dumps(
+                {
+                    "status": "success",
+                    "backup_id": "backup-entrypoint-proof",
+                    "manifest_key": "m.json",
+                    "manifest_version_id": "v1",
+                }
+            )
+            + "\n"
+        )
+
+    monkeypatch.setattr(deploy, "_run", fake_run)
+
+    result = deploy._backup_before_upgrade(env_file, {})
+
+    assert result["performed"] is True
+    assert calls
+    backup_run = calls[0]
+    assert backup_run[-2:] == ["backup", "once"]
+    assert "/app/scripts/remote_backup_service.py" not in backup_run
+    assert "python" not in backup_run[-4:]
+
+
 def test_backup_requires_durable_success_payload(tmp_path: Path, monkeypatch):
     env_file = _env_file(tmp_path)
     monkeypatch.setattr(deploy, "_running_services", lambda *_: {"postgres"})
