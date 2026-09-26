@@ -59,6 +59,7 @@ def test_deploy_uses_only_fixed_root_owned_contract_paths(monkeypatch):
         "_python",
         lambda script, *args, timeout: calls.append(("python", script, args, timeout)),
     )
+    monkeypatch.setattr(gate, "_release_deployer", lambda sha, origin: calls.append(("candidate", sha, origin)))
 
     release = "b" * 40
     gate.deploy(release, "https://10.20.30.40")
@@ -68,11 +69,7 @@ def test_deploy_uses_only_fixed_root_owned_contract_paths(monkeypatch):
     deploy = calls[2]
     assert reality[1] == "production_host_reality.py"
     assert str(gate.ENV_FILE) in reality[2]
-    assert deploy[1] == "production_host_deploy.py"
-    assert "--release-sha" in deploy[2]
-    assert release in deploy[2]
-    assert "--origin" in deploy[2]
-    assert "https://10.20.30.40" in deploy[2]
+    assert deploy == ("candidate", release, "https://10.20.30.40")
     assert calls[-1] == ("secure",)
 
 
@@ -138,3 +135,33 @@ def test_host_bootstrap_installs_current_gate_and_sudo_boundary():
     assert "visudo -cf /etc/sudoers.d/aegisscan-production-gate" in bootstrap
     assert "cleanup-e2e-scope" in bootstrap
     assert "authorized_keys" in bootstrap
+
+
+def test_candidate_orchestrator_executes_verified_source_without_checking_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    calls = []
+    def git(*args, **kw):
+        calls.append(args)
+        return SimpleNamespace(stdout="from pathlib import Path\nPath(__file__).parents[2].joinpath('candidate-ran').write_text(__file__)\n")
+    monkeypatch.setattr(gate, "_git", git)
+    original_run = gate._run
+    monkeypatch.setattr(gate, "_run", lambda argv, **kw: original_run(argv, cwd=tmp_path, **kw))
+    gate._release_deployer("b" * 40, "https://security.internal")
+    assert (tmp_path / "candidate-ran").read_text() == str(tmp_path / "aegis-platform/scripts/production_host_deploy.py")
+    assert calls == [("show", "b" * 40 + ":aegis-platform/scripts/production_host_deploy.py")]
+
+
+@pytest.mark.parametrize("action", ["backup", "recover-services"])
+def test_resilience_actions_require_exact_checkout_and_fixed_host_script(monkeypatch, action):
+    for name in ("_assert_private_material", "_assert_secure_tree", "_assert_expected_remote"):
+        monkeypatch.setattr(gate, name, lambda: None)
+    monkeypatch.setattr(gate, "_git", lambda *args, **kw: SimpleNamespace(stdout="" if args[0] == "status" else "a" * 40))
+    calls = []
+    monkeypatch.setattr(gate, "_python", lambda *args, **kw: calls.append(args))
+    gate.resilience("a" * 40, action, "https://security.internal")
+    assert calls[0][0] == "production_host_resilience.py"
+    assert action in calls[0]
+    calls.clear()
+    with pytest.raises(gate.PrivilegedGateError, match="resilience release SHA"):
+        gate.resilience("b" * 40, action, "https://security.internal")
+    assert not calls
