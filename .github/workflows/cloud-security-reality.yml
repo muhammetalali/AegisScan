@@ -18,8 +18,6 @@ name: Cloud Security Reality
       - '.github/workflows/cloud-security-reality.yml'
       - '.github/workflows/cloud-live-provider-reality.yml'
       - 'tests/test_live_provider_request_lifecycle.py'
-      - '.github/workflows/cloud-live-provider-reality.yml'
-      - 'tests/test_live_provider_request_lifecycle.py'
   push:
     branches: [main]
     paths:
@@ -33,6 +31,8 @@ name: Cloud Security Reality
       - 'aegis-platform/backend/requirements.txt'
       - 'aegis-platform/backend/Dockerfile.django'
       - '.github/workflows/cloud-security-reality.yml'
+      - '.github/workflows/cloud-live-provider-reality.yml'
+      - 'tests/test_live_provider_request_lifecycle.py'
   workflow_dispatch:
 
 concurrency:
