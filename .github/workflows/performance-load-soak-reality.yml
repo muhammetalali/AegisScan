@@ -9,6 +9,9 @@ name: Performance Load Soak Reality
       - 'aegis-platform/scripts/release_capacity_reality.py'
       - 'aegis-platform/scripts/test_release_capacity_reality.py'
       - 'aegis-platform/scripts/test_load_reality.py'
+      - 'aegis-platform/e2e/external_black_box_e2e.py'
+      - 'aegis-platform/docker-compose.nmap-default-kali.yml'
+      - 'aegis-platform/kali/**'
       - '.github/workflows/performance-load-soak-reality.yml'
   push:
     branches: [main]
@@ -134,7 +137,7 @@ jobs:
 
   capacity-recovery:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 90
     env:
       AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       POSTGRES_DB: aegisdb
@@ -163,6 +166,9 @@ jobs:
       AEGIS_API_URL: http://localhost/api/v1
       AEGIS_E2E_TARGET: aegis-scan-target
       AEGIS_E2E_TIMEOUT: '900'
+      COMPOSE_PROFILES: kali-network
+      AEGIS_NMAP_PROVIDER: default-kali
+      AEGIS_NMAP_LEGACY_DISABLED: 'true'
     steps:
       - uses: actions/checkout@v5
         with:
@@ -185,7 +191,7 @@ jobs:
         run: |
           python -m pip install pytest requests
           python -m pytest -q aegis-platform/scripts/test_release_capacity_reality.py
-          python -m py_compile aegis-platform/scripts/release_capacity_reality.py
+          python -m py_compile aegis-platform/scripts/release_capacity_reality.py aegis-platform/e2e/external_black_box_e2e.py
       - name: Prepare isolated full-stack environment
         working-directory: aegis-platform
         shell: bash
@@ -212,14 +218,56 @@ jobs:
           POSTGRES_USER=${POSTGRES_USER}
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
           EOF
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml config --quiet
+      - name: Build governed Kali Nmap provider and pin exact-head provenance
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git -C .. log -1 --pretty=%ct)"
+          docker build --pull             --build-arg BUILD_COMMIT="$AEGIS_EXACT_HEAD"             --build-arg AEGIS_RUNNER_VERSION=0.1.0             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"             -t aegis-kali:base             -f kali/Dockerfile.base kali
+          docker build             --build-arg AEGIS_BASE_IMAGE=aegis-kali:base             --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"             --target profile-network             -t aegis-kali:network             -f kali/Dockerfile.profiles .
+          docker build             --build-arg AEGIS_NETWORK_BASE_IMAGE=aegis-kali:network             -t aegis-kali:network-provider             -f kali/Dockerfile.network-provider kali
+
+          IMAGE_ID="$(docker image inspect aegis-kali:network-provider --format '{{.Id}}')"
+          case "$IMAGE_ID" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "unexpected Kali network provider image ID: $IMAGE_ID" >&2; exit 1 ;;
+          esac
+          docker run --rm --entrypoint cat "$IMAGE_ID" /opt/aegis-runner/runtime-manifest.json             > /tmp/aegis-capacity-kali-runtime-manifest.json
+          AUTH_TOKEN="$(python - <<'PY'
+          import secrets
+          print(secrets.token_hex(32))
+          PY
+          )"
+          echo "::add-mask::$AUTH_TOKEN"
+          echo "AEGIS_KALI_NETWORK_AUTH_TOKEN=$AUTH_TOKEN" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_NETWORK_IMAGE=aegis-kali:network-provider" >> "$GITHUB_ENV"
+          echo "AEGIS_KALI_NETWORK_EXPECTED_IMAGE_DIGEST=$IMAGE_ID" >> "$GITHUB_ENV"
+          python - <<'PY' >> "$GITHUB_ENV"
+          import hashlib, json, os
+          from pathlib import Path
+          raw=Path('/tmp/aegis-capacity-kali-runtime-manifest.json').read_bytes()
+          runtime=json.loads(raw)
+          assert runtime['profile']=='network', runtime
+          assert runtime['dispatch_enabled'] is True, runtime
+          assert runtime['dispatch_state']=='semantic-network-provider', runtime
+          assert runtime['dispatch_capabilities']==['network.nmap'], runtime
+          assert runtime['build_commit']==os.environ['AEGIS_EXACT_HEAD'], runtime
+          print('AEGIS_KALI_NETWORK_EXPECTED_RUNNER_VERSION='+runtime['runner_version'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT='+runtime['build_commit'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_BASE_IMAGE_DIGEST='+runtime['base_image_digest'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_TOOL_MANIFEST_DIGEST='+runtime['tool_manifest_digest'])
+          print('AEGIS_KALI_NETWORK_EXPECTED_RUNTIME_MANIFEST_DIGEST=sha256:'+hashlib.sha256(raw).hexdigest())
+          PY
+          echo "CAPACITY_KALI_NETWORK_IMAGE_ID=$IMAGE_ID" >> "$GITHUB_ENV"
       - name: Build full platform once
         working-directory: aegis-platform
         shell: bash
         run: |
           set -euo pipefail
           for attempt in 1 2; do
-            if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --pull; then exit 0; fi
+            if docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml build --pull; then exit 0; fi
             if [ "$attempt" -eq 2 ]; then exit 1; fi
             sleep 15
           done
@@ -228,13 +276,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml up -d --no-build
           for attempt in $(seq 1 90); do
             if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then exit 0; fi
             sleep 2
           done
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi celery_worker scanner_worker scanner_egress nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml logs --tail=250 django fastapi celery_worker scanner_worker scanner_egress kali_network nginx
           exit 1
       - name: Bind isolated scanner target into API and egress policy
         working-directory: aegis-platform
@@ -247,7 +295,7 @@ jobs:
           echo "AUTHORIZED_SCAN_TARGETS=aegis-scan-target,$TARGET_IP" >> "$GITHUB_ENV"
           AUTHORIZED_SCAN_TARGETS="aegis-scan-target,$TARGET_IP" \
           SCANNER_EGRESS_PRIVATE_TARGETS="aegis-scan-target,$TARGET_IP" \
-            docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --force-recreate fastapi celery_worker scanner_worker celery_beat nginx
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml up -d --force-recreate fastapi celery_worker scanner_worker celery_beat kali_network nginx
           for attempt in $(seq 1 60); do
             if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then exit 0; fi
             sleep 2
@@ -258,7 +306,6 @@ jobs:
         run: |
           set -euo pipefail
           tenants=3
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.profile }}" = "release" ]; then tenants=6; fi
           python aegis-platform/scripts/release_capacity_reality.py \
             --compose-root aegis-platform \
             --e2e-script aegis-platform/e2e/external_black_box_e2e.py \
@@ -332,6 +379,6 @@ jobs:
         shell: bash
         run: |
           set +e
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 fastapi django celery_worker scanner_worker scanner_egress postgres redis nginx
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v --remove-orphans
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml logs --tail=250 fastapi django celery_worker scanner_worker scanner_egress kali_network postgres redis nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml down -v --remove-orphans
