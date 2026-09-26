@@ -90,6 +90,34 @@ def wait_ready(base_url: str, *, timeout_seconds: float) -> float:
     raise CapacityRealityError(f"platform did not recover readiness within {timeout_seconds}s")
 
 
+def wait_kali_provider(compose_root: Path, *, timeout_seconds: float) -> float:
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    probe = (
+        "import json,urllib.request; "
+        "d=json.load(urllib.request.urlopen('http://127.0.0.1:18766/healthz',timeout=2)); "
+        "assert d.get('status')=='ok' and d.get('profile')=='network'"
+    )
+    last_error = ""
+    while time.monotonic() < deadline:
+        try:
+            _compose(
+                compose_root,
+                "exec",
+                "-T",
+                "scanner_worker",
+                "python",
+                "-c",
+                probe,
+                timeout=10,
+            )
+            return round(time.monotonic() - started, 3)
+        except CapacityRealityError as exc:
+            last_error = str(exc)
+            time.sleep(2)
+    raise CapacityRealityError(f"Kali network provider did not recover readiness: {last_error[-1000:]}")
+
+
 def _last_int(value: str, label: str) -> int:
     lines = [line.strip() for line in value.splitlines() if line.strip()]
     if not lines:
@@ -337,9 +365,11 @@ def prove_recovery(
         "fastapi",
         "celery_worker",
         "scanner_worker",
+        "kali_network",
         timeout=120,
     )
     recovery_seconds = wait_ready(base_url, timeout_seconds=readiness_timeout)
+    kali_recovery_seconds = wait_kali_provider(compose_root, timeout_seconds=readiness_timeout)
     running = _compose(
         compose_root,
         "ps",
@@ -349,10 +379,11 @@ def prove_recovery(
         "fastapi",
         "celery_worker",
         "scanner_worker",
+        "kali_network",
         timeout=30,
     )
     services = {line.strip() for line in running.stdout.splitlines() if line.strip()}
-    required = {"fastapi", "celery_worker", "scanner_worker"}
+    required = {"fastapi", "celery_worker", "scanner_worker", "kali_network"}
     if not required.issubset(services):
         raise CapacityRealityError(f"recovered services missing: {sorted(required - services)}")
 
@@ -392,6 +423,7 @@ def prove_recovery(
     return {
         "services": sorted(services),
         "readiness_seconds": recovery_seconds,
+        "kali_provider_readiness_seconds": kali_recovery_seconds,
         "post_recovery_e2e_pass": True,
         "kali_provider_proven": True,
         "state": str(state_path),
