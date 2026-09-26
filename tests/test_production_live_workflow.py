@@ -7,6 +7,8 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/production-live-deploy.yml"
+CLOUD_LIVE_WORKFLOW = ROOT / ".github/workflows/cloud-live-provider-reality.yml"
+IDENTITY_LIVE_WORKFLOW = ROOT / ".github/workflows/external-identity-live-provider-reality.yml"
 PROD_COMPOSE = ROOT / "aegis-platform/docker-compose.prod.yml"
 BASE_COMPOSE = ROOT / "aegis-platform/docker-compose.yml"
 
@@ -47,6 +49,43 @@ def test_live_production_workflow_has_only_manual_or_one_time_main_request_trigg
     assert deploy["if"] == "github.ref == 'refs/heads/main'"
     assert deploy["runs-on"] == ["self-hosted", "linux", "x64", "aegisscan-production"]
     assert data["concurrency"]["cancel-in-progress"] is False
+
+
+
+def test_live_workflows_wait_for_exact_sha_required_ci_before_live_execution():
+    cases = [
+        (WORKFLOW, "deploy-and-accept", "Validate protected internal production material"),
+        (CLOUD_LIVE_WORKFLOW, "live-provider-reality", "Install exact cloud runtime dependencies"),
+        (IDENTITY_LIVE_WORKFLOW, "external-identity-live", "Install live identity dependencies"),
+    ]
+    for workflow_path, job_name, next_step_name in cases:
+        data = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        assert data["permissions"]["contents"] == "read"
+        assert data["permissions"]["actions"] == "read"
+        steps = data["jobs"][job_name]["steps"]
+        names = [step.get("name") for step in steps]
+        barrier_index = names.index("Wait for exact-SHA Required CI Governance")
+        authorization_index = next(
+            index
+            for index, name in enumerate(names)
+            if name and (
+                "Authorize exact-main" in name
+                or "Require explicit bounded production authorization" in name
+            )
+        )
+        assert authorization_index < barrier_index < names.index(next_step_name)
+        barrier = steps[barrier_index]
+        assert barrier["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+        assert "scripts/ci/wait_for_required_ci.py" in barrier["run"]
+        assert '--sha "$GITHUB_SHA"' in barrier["run"]
+        assert "--branch main" in barrier["run"]
+        assert '--workflow-name "Required CI Governance"' in barrier["run"]
+        assert "--event push" in barrier["run"]
+
+    cloud = yaml.safe_load(CLOUD_LIVE_WORKFLOW.read_text(encoding="utf-8"))
+    identity = yaml.safe_load(IDENTITY_LIVE_WORKFLOW.read_text(encoding="utf-8"))
+    assert cloud["jobs"]["live-provider-reality"]["timeout-minutes"] >= 90
+    assert identity["jobs"]["external-identity-live"]["timeout-minutes"] >= 90
 
 
 def test_live_production_workflow_pins_python_312_in_isolated_venv():
