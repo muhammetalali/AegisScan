@@ -65,7 +65,7 @@ def _compose(
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return _run(
-        ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.ci.yml", *args],
+        ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.ci.yml", "-f", "docker-compose.nmap-default-kali.yml", *args],
         cwd=compose_root,
         timeout=timeout,
         input_text=input_text,
