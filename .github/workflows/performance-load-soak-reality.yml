@@ -395,3 +395,4 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml ps
           docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml logs --tail=250 fastapi django celery_worker scanner_worker scanner_egress kali_network postgres redis nginx
           docker compose -f docker-compose.yml -f docker-compose.ci.yml -f docker-compose.nmap-default-kali.yml down -v --remove-orphans
+          exit 0
