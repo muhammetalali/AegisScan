@@ -1,0 +1,10 @@
+{
+  "schema": "aegisscan.live-acceptance-request.v1",
+  "request_id": "release-performance-20260926-2214-c1b911b8",
+  "scope": "release-performance",
+  "confirm": "VALIDATE",
+  "requested_branch": "main",
+  "requested_base_sha": "c1b911b80935ba413e7cb10e3aa668e8a32ef9b7",
+  "requested_at": "2026-09-26T22:14:00Z",
+  "expires_at": "2026-09-27T00:14:00Z"
+}
