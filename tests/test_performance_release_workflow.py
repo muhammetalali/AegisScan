@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -53,5 +55,21 @@ def test_release_profile_expands_capacity_and_soak_without_relaxing_thresholds()
     assert '--min-rps "$min_rps"' in text
 
 
-def test_release_request_file_is_not_committed_until_authorization():
-    assert not (ROOT / REQUEST_PATH).exists()
+def test_optional_release_request_is_governed_when_present():
+    request_path = ROOT / REQUEST_PATH
+    if not request_path.exists():
+        return
+
+    payload = json.loads(request_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "aegisscan.live-acceptance-request.v1"
+    assert payload["scope"] == "release-performance"
+    assert payload["confirm"] == "VALIDATE"
+    assert payload["requested_branch"] == "main"
+
+    requested_base_sha = payload["requested_base_sha"]
+    assert len(requested_base_sha) == 40
+    assert all(ch in "0123456789abcdef" for ch in requested_base_sha)
+
+    requested_at = datetime.fromisoformat(payload["requested_at"].replace("Z", "+00:00"))
+    expires_at = datetime.fromisoformat(payload["expires_at"].replace("Z", "+00:00"))
+    assert expires_at > requested_at
