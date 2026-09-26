@@ -4,14 +4,42 @@ import re
 from pathlib import Path
 
 
+def _server_blocks(config: str) -> list[str]:
+    blocks: list[str] = []
+    for match in re.finditer(r"(?m)^\s*server\s*\{", config):
+        start = match.start()
+        brace = config.find("{", match.start(), match.end())
+        depth = 0
+        for index in range(brace, len(config)):
+            char = config[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    blocks.append(config[start : index + 1])
+                    break
+        else:
+            raise AssertionError("unterminated nginx server block")
+    return blocks
+
+
 def test_nginx_location_directives_are_unique_per_server() -> None:
-    """Reject duplicate locations before Nginx enters a restart loop in CI."""
+    """Reject duplicate locations inside one server without conflating sibling servers."""
     config = (Path(__file__).parents[1] / "aegis-platform/docker/nginx.conf").read_text()
-    locations = re.findall(r"^\s*location\s+([^\s{]+(?:\s+[^\s{]+)?)\s*\{", config, re.MULTILINE)
+    blocks = _server_blocks(config)
+    assert blocks
 
-    duplicates = sorted({location for location in locations if locations.count(location) > 1})
-
-    assert duplicates == []
+    for block in blocks:
+        locations = re.findall(
+            r"^\s*location\s+([^\s{]+(?:\s+[^\s{]+)?)\s*\{",
+            block,
+            re.MULTILINE,
+        )
+        duplicates = sorted(
+            {location for location in locations if locations.count(location) > 1}
+        )
+        assert duplicates == []
 
 
 def test_legacy_vulnerability_route_cannot_fall_through_to_spa() -> None:
