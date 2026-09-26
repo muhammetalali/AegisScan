@@ -11,6 +11,9 @@ name: Performance Load Soak Reality
       - 'aegis-platform/scripts/test_load_reality.py'
       - 'aegis-platform/e2e/external_black_box_e2e.py'
       - 'aegis-platform/docker-compose.nmap-default-kali.yml'
+      - 'aegis-platform/docker/nginx.conf'
+      - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'tests/test_nginx_contract.py'
       - 'aegis-platform/kali/**'
       - '.github/workflows/performance-load-soak-reality.yml'
   push:
@@ -190,7 +193,7 @@ jobs:
       - name: Prove capacity evidence contract
         run: |
           python -m pip install pytest requests 'httpx>=0.26'
-          python -m pytest -q aegis-platform/scripts/test_release_capacity_reality.py
+          python -m pytest -q aegis-platform/scripts/test_release_capacity_reality.py tests/test_nginx_contract.py
           python -m py_compile aegis-platform/scripts/release_capacity_reality.py aegis-platform/e2e/external_black_box_e2e.py
       - name: Prepare isolated full-stack environment
         working-directory: aegis-platform
