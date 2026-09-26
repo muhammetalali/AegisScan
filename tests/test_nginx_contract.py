@@ -83,6 +83,7 @@ def test_fastapi_upstream_keepalive_is_enabled_in_http_and_tls_gateways() -> Non
         assert "proxy_http_version 1.1;" in config
         assert 'proxy_set_header Connection "";' in config
 
+
 def test_http_proxy_locations_redeclare_connection_keepalive_header() -> None:
     root = Path(__file__).parents[1]
     for relative in (
