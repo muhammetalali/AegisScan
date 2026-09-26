@@ -36,6 +36,7 @@ def test_performance_release_request_is_bounded_to_exact_main_and_live_authoriza
     assert 'test "$GITHUB_REF" = "refs/heads/main"' in script
     assert 'test "$(git rev-parse origin/main)" = "$AEGIS_EXACT_HEAD"' in script
     assert 'git diff --name-only "$before" "$AEGIS_EXACT_HEAD"' in script
+    assert '[ -f .github/live-acceptance-requests/performance.json ]' in script
     assert "AEGIS_PERFORMANCE_PROFILE=$profile" in script
 
 
