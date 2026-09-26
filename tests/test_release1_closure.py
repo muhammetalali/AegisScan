@@ -26,6 +26,11 @@ def _write(path: Path, payload) -> Path:
 
 def _run(name: str, path: str, events: set[str], run_id: int) -> dict:
     event = sorted(events)[0]
+    job_name = {
+        "Internal Production Deploy and Acceptance": "deploy-and-accept",
+        "Production Resilience Acceptance": "resilience-acceptance",
+        "Final Internal Production Governance": "final-governance",
+    }.get(name, "contract")
     return {
         "id": run_id,
         "name": name,
@@ -38,6 +43,11 @@ def _run(name: str, path: str, events: set[str], run_id: int) -> dict:
         "run_attempt": 1,
         "updated_at": "2026-09-22T16:00:00Z",
         "repository": {"full_name": REPO},
+        "jobs": [{
+            "id": run_id * 10, "run_id": run_id, "run_attempt": 1,
+            "head_sha": SHA, "name": job_name, "status": "completed", "conclusion": "success",
+            "steps": [{"name": "accept", "status": "completed", "conclusion": "success"}],
+        }],
     }
 
 
@@ -82,8 +92,15 @@ def _fixture(tmp_path: Path):
         },
     )
     for component in ("django", "fastapi", "frontend"):
-        _write(evidence / f"{component}.cdx.json", {"bomFormat": "CycloneDX", "component": component})
-        _write(evidence / f"{component}.provenance.json", {"component": component, "release_sha": SHA})
+        _write(evidence / f"{component}.cdx.json", {"bomFormat": "CycloneDX", "components": [{"name": component}]})
+        supply_run_id = list(REQUIRED_RUNS).index("Supply Chain Release") + 1
+        _write(evidence / f"{component}.provenance.json", {
+            "builder": {"id": f"https://github.com/{REPO}/actions/runs/{supply_run_id}"},
+            "invocation": {"configSource": {
+                "uri": f"git+https://github.com/{REPO}@refs/heads/main",
+                "digest": {"sha1": SHA}, "entryPoint": ".github/workflows/supply-chain-release.yml",
+            }},
+        })
 
     repository_state = _write(
         tmp_path / "repository-state.json",
@@ -218,3 +235,57 @@ def test_release1_closure_rejects_stale_production_governance(tmp_path: Path):
             branch_hygiene=branch_hygiene,
             output=tmp_path / "release1.json",
         )
+
+
+@pytest.mark.parametrize('mutation', ['missing', 'skipped', 'wrong_attempt', 'wrong_sha', 'wrong_name'])
+def test_closure_rejects_green_workflow_without_required_executed_job(tmp_path, mutation):
+    metadata, evidence, state, hygiene = _fixture(tmp_path)
+    path = next(p for p in metadata.glob('*.json') if json.loads(p.read_text())['name'] == 'Final Internal Production Governance')
+    run = json.loads(path.read_text())
+    if mutation == 'missing':
+        run.pop('jobs')
+    else:
+        field, value = {
+            'skipped': ('conclusion', 'skipped'), 'wrong_attempt': ('run_attempt', 2),
+            'wrong_sha': ('head_sha', 'f' * 40), 'wrong_name': ('name', 'contract-only'),
+        }[mutation]
+        run['jobs'][0][field] = value
+    _write(path, run)
+    with pytest.raises(ReleaseClosureError, match='job'):
+        build_manifest(release_sha=SHA, repository=REPO, metadata_root=metadata,
+                       evidence_root=evidence, repository_state=state, branch_hygiene=hygiene,
+                       output=tmp_path / 'closure.json')
+
+
+def test_closure_rejects_other_release_provenance(tmp_path):
+    metadata, evidence, state, hygiene = _fixture(tmp_path)
+    path = evidence / 'django.provenance.json'
+    provenance = json.loads(path.read_text())
+    provenance['invocation']['configSource']['digest']['sha1'] = 'f' * 40
+    _write(path, provenance)
+    with pytest.raises(ReleaseClosureError, match='provenance does not match'):
+        build_manifest(release_sha=SHA, repository=REPO, metadata_root=metadata,
+                       evidence_root=evidence, repository_state=state, branch_hygiene=hygiene,
+                       output=tmp_path / 'closure.json')
+
+
+def test_contract_success_cannot_be_reported_as_actual_release_closure(tmp_path):
+    import os
+    import subprocess
+    import yaml
+    root = Path(__file__).parents[1]
+    live = yaml.safe_load((root / '.github/workflows/release1-closure.yml').read_text())
+    contract = yaml.safe_load((root / '.github/workflows/release1-contract-reality.yml').read_text())
+    assert set(live['on']) == {'workflow_run', 'workflow_dispatch'}
+    assert set(contract['on']) == {'pull_request', 'push'}
+    result = live['jobs']['release-result']
+    assert result['if'] == 'always()'
+    assert set(result['needs']) == {'release-contract', 'release1-closure'}
+    script = result['steps'][0]['run']
+    for outcome in ['skipped', 'failure', 'cancelled', 'success']:
+        summary = tmp_path / f'{outcome}.txt'
+        proc = subprocess.run(['bash', '-c', script], env={**os.environ,
+            'CONTRACT_RESULT': 'success', 'CLOSURE_RESULT': outcome,
+            'GITHUB_STEP_SUMMARY': str(summary)}, capture_output=True, text=True)
+        assert (proc.returncode == 0) is (outcome == 'success')
+        assert ('AEGISSCAN_RELEASE_1=CLOSED' in summary.read_text()) is (outcome == 'success')
