@@ -304,7 +304,7 @@ jobs:
           assert capacity['source_sha']==os.environ['AEGIS_EXACT_HEAD']
           assert capacity['passed'] is True
           assert capacity['proof']['multi_tenant_e2e'] is True
-          assert capacity['proof']['postgres_contention_observed'] is True
+          assert capacity['proof']['postgres_concurrent_activity_observed'] is True
           assert capacity['proof']['celery_broker_observed'] is True
           assert capacity['proof']['kali_scanner_concurrency_exercised'] is True
           assert capacity['proof']['controlled_recovery'] is True
