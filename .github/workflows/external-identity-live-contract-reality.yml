@@ -8,6 +8,8 @@ name: External Identity Live Contract Reality
       - 'tests/test_external_identity_live_reality.py'
       - '.github/workflows/external-identity-live-contract-reality.yml'
       - '.github/workflows/external-identity-live-provider-reality.yml'
+      - 'tests/test_live_provider_request_lifecycle.py'
+      - 'tests/test_live_provider_request_lifecycle.py'
   push:
     branches: [main]
     paths:
@@ -41,6 +43,9 @@ jobs:
         run: python -m py_compile aegis-platform/backend/scripts/external_identity_live_reality.py
       - name: Run fail-closed identity contract suite
         run: python -m pytest -q tests/test_external_identity_live_reality.py
+      - name: Prove live-provider request lifecycle contract
+        run: python -m pytest -q tests/test_live_provider_request_lifecycle.py
+
       - name: Prove live workflow remains read-only and governed
         shell: bash
         run: |
