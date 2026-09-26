@@ -49,6 +49,17 @@ def _api_json(path: str, token: str) -> Any:
         raise RequiredCIGateError(f"GitHub API request failed: {exc}") from exc
 
 
+def _live_branch_sha(repo: str, branch: str, token: str) -> str:
+    encoded = urllib.parse.quote(branch, safe="")
+    payload = _api_json(f"/repos/{repo}/branches/{encoded}", token)
+    if not isinstance(payload, dict):
+        raise RequiredCIGateError("GitHub branch response is not an object")
+    sha = str((payload.get("commit") or {}).get("sha") or "")
+    if not SHA_RE.fullmatch(sha):
+        raise RequiredCIGateError(f"live branch {branch!r} returned an invalid SHA")
+    return sha
+
+
 def _select_run(
     payload: dict[str, Any],
     *,
@@ -108,6 +119,11 @@ def wait_for_required_ci(
     deadline = time.monotonic() + timeout_seconds
     last_summary: dict[str, Any] | None = None
     while time.monotonic() < deadline:
+        live_sha = _live_branch_sha(repo, branch, token)
+        if live_sha != sha:
+            raise RequiredCIGateError(
+                f"live branch {branch} moved while waiting for CI: expected {sha}, actual {live_sha}"
+            )
         query = urllib.parse.urlencode(
             {
                 "head_sha": sha,
