@@ -1,20 +1,6 @@
 name: Release 1 Closure
 
 'on':
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/release1-closure.yml'
-      - '.github/deployment-requests/internal-production.json'
-      - 'scripts/ci/release1_closure.py'
-      - 'tests/test_release1_closure.py'
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/release1-closure.yml'
-      - '.github/deployment-requests/internal-production.json'
-      - 'scripts/ci/release1_closure.py'
-      - 'tests/test_release1_closure.py'
   workflow_run:
     workflows: ['Final Internal Production Governance']
     types: [completed]
@@ -53,7 +39,7 @@ jobs:
       - name: Prove Release 1 closure contract
         run: |
           python -m py_compile scripts/ci/release1_closure.py tests/test_release1_closure.py
-          python -m pip install pytest==9.1.1
+          python -m pip install pytest==9.1.1 pyyaml==6.0.2
           pytest -q tests/test_release1_closure.py
 
   release1-closure:
@@ -194,6 +180,26 @@ jobs:
           print(json.dumps({name: run['id'] for name, run in selected.items()}, sort_keys=True))
           PY
 
+      - name: Capture executed jobs for every selected run attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PYJOBS'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          for path in Path('/tmp/release1/metadata').glob('*.json'):
+              run = json.loads(path.read_text())
+              endpoint = f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100"
+              pages = json.loads(subprocess.check_output(['gh', 'api', '--paginate', '--slurp', endpoint], text=True))
+              jobs = [job for page in pages for job in page['jobs']]
+              if not pages or len(jobs) != pages[0]['total_count']:
+                  raise SystemExit('incomplete workflow job evidence')
+              run['jobs'] = jobs
+              path.write_text(json.dumps(run, sort_keys=True, indent=2) + '\n')
+          PYJOBS
+
       - name: Download immutable release evidence
         shell: bash
         run: |
@@ -278,3 +284,23 @@ jobs:
             /tmp/release1/branch-hygiene.json
           if-no-files-found: error
           retention-days: 180
+
+  release-result:
+    name: Release 1 actual closure result
+    if: always()
+    needs: [release-contract, release1-closure]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Reject skipped or failed release closure
+        env:
+          CONTRACT_RESULT: ${{ needs.release-contract.result }}
+          CLOSURE_RESULT: ${{ needs.release1-closure.result }}
+        run: |
+          set -euo pipefail
+          if [ "$CONTRACT_RESULT" != success ] || [ "$CLOSURE_RESULT" != success ]; then
+            echo "AEGISSCAN_RELEASE_1=NOT_CLOSED (contract=$CONTRACT_RESULT, closure=$CLOSURE_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo 'AEGISSCAN_RELEASE_1=CLOSED' >> "$GITHUB_STEP_SUMMARY"
