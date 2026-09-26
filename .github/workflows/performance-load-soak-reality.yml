@@ -23,6 +23,9 @@ name: Performance Load Soak Reality
       - 'aegis-platform/scripts/load_reality.py'
       - 'aegis-platform/scripts/release_capacity_reality.py'
       - 'aegis-platform/scripts/test_release_capacity_reality.py'
+      - 'aegis-platform/docker/nginx.conf'
+      - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'tests/test_nginx_contract.py'
       - '.github/workflows/performance-load-soak-reality.yml'
 
   workflow_dispatch:
