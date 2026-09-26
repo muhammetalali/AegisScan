@@ -290,11 +290,30 @@ def _wait_tenants(
     results: list[dict[str, Any]] = []
     for index, (process, _, log_path) in enumerate(processes):
         content = log_path.read_text(encoding="utf-8", errors="replace")
+        state_path = state_root / f"tenant-{index}.json"
+        state: dict[str, Any] = {}
+        if state_path.is_file():
+            try:
+                loaded = json.loads(state_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    state = loaded
+            except (OSError, json.JSONDecodeError):
+                state = {}
+        routing = state.get("provider_routing") if isinstance(state.get("provider_routing"), dict) else {}
+        runtime = state.get("runtime_provenance") if isinstance(state.get("runtime_provenance"), dict) else {}
+        kali_provider_proven = (
+            routing.get("mode") == "default-kali"
+            and routing.get("selected_provider") == "kali"
+            and runtime.get("provider") == "aegis-kali-network"
+            and runtime.get("profile") == "network"
+        )
         results.append(
             {
                 "tenant": index,
                 "return_code": int(process.returncode or 0),
                 "external_e2e_pass": "EXTERNAL_REAL_E2E=PASS" in content,
+                "kali_provider_proven": kali_provider_proven,
+                "state": str(state_path),
                 "log": str(log_path),
             }
         )
@@ -353,12 +372,29 @@ def prove_recovery(
     finally:
         handle.close()
     content = log_path.read_text(encoding="utf-8", errors="replace")
-    if return_code != 0 or "EXTERNAL_REAL_E2E=PASS" not in content:
-        raise CapacityRealityError("post-recovery scanner E2E did not pass")
+    state_path = state_root / "tenant-10000.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CapacityRealityError("post-recovery scanner state evidence is missing or invalid") from exc
+    routing = state.get("provider_routing") if isinstance(state, dict) else {}
+    runtime = state.get("runtime_provenance") if isinstance(state, dict) else {}
+    kali_provider_proven = (
+        isinstance(routing, dict)
+        and isinstance(runtime, dict)
+        and routing.get("mode") == "default-kali"
+        and routing.get("selected_provider") == "kali"
+        and runtime.get("provider") == "aegis-kali-network"
+        and runtime.get("profile") == "network"
+    )
+    if return_code != 0 or "EXTERNAL_REAL_E2E=PASS" not in content or not kali_provider_proven:
+        raise CapacityRealityError("post-recovery default-Kali scanner E2E did not pass")
     return {
         "services": sorted(services),
         "readiness_seconds": recovery_seconds,
         "post_recovery_e2e_pass": True,
+        "kali_provider_proven": True,
+        "state": str(state_path),
         "log": str(log_path),
     }
 
@@ -383,7 +419,7 @@ def build_report(
     }
     tenant_pass = (
         len(tenant_results) >= minimum_tenants
-        and all(item.get("return_code") == 0 and item.get("external_e2e_pass") is True for item in tenant_results)
+        and all(item.get("return_code") == 0 and item.get("external_e2e_pass") is True and item.get("kali_provider_proven") is True for item in tenant_results)
     )
     concurrency_pass = max_running_tenants >= minimum_tenants
     postgres_pass = max_pg >= minimum_postgres_connections
@@ -391,7 +427,7 @@ def build_report(
         set((sample.get("celery_queue_depths") or {}).keys()) == set(QUEUES)
         for sample in samples
     )
-    recovery_pass = recovery.get("post_recovery_e2e_pass") is True
+    recovery_pass = recovery.get("post_recovery_e2e_pass") is True and recovery.get("kali_provider_proven") is True
     passed = all((tenant_pass, concurrency_pass, postgres_pass, broker_observed, recovery_pass))
     return {
         "schema": SCHEMA,
