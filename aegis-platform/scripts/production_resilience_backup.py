@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,12 @@ from production_remote_deploy import (
     _private_file,
     _remote_path,
     _require_known_host,
+    _resolved_enterprise_addresses,
+    _known_host_lookup,
+    _origin,
+    PRIVILEGED_GATE,
+    PRODUCTION_REPO_PATH,
+    PRODUCTION_ENV_PATH,
 )
 
 
@@ -23,33 +30,16 @@ class ResilienceError(RuntimeError):
     pass
 
 
-def _remote_command(*, repo_path: str, env_path: str, release_sha: str) -> str:
-    return " && ".join(
-        [
-            f"cd {repo_path}",
-            'test -z "$(git status --porcelain --untracked-files=no)"',
-            "git fetch --no-tags origin main",
-            f"test \"$(git rev-parse HEAD)\" = {release_sha}",
-            f"git merge-base --is-ancestor {release_sha} origin/main",
-            (
-                "sudo -n docker compose "
-                f"--env-file {env_path} "
-                "-f aegis-platform/docker-compose.yml "
-                "-f aegis-platform/docker-compose.prod.yml "
-                "-f aegis-platform/docker-compose.backup.yml "
-                "ps --status running --services | grep -qx postgres"
-            ),
-            (
-                "sudo -n docker compose "
-                f"--env-file {env_path} "
-                "-f aegis-platform/docker-compose.yml "
-                "-f aegis-platform/docker-compose.prod.yml "
-                "-f aegis-platform/docker-compose.backup.yml "
-                "run --rm --no-deps backup "
-                "python /app/scripts/remote_backup_service.py once"
-            ),
-        ]
-    )
+def _remote_command(*, repo_path: str, env_path: str, release_sha: str,
+                    action: str = "backup", origin: str = "") -> str:
+    if repo_path != PRODUCTION_REPO_PATH or env_path != PRODUCTION_ENV_PATH:
+        raise ResilienceError("resilience requires the fixed production repository and environment")
+    if action not in {"backup", "recover-services"}:
+        raise ResilienceError("unsupported resilience action")
+    command = f"sudo -n {shlex.quote(PRIVILEGED_GATE)} {action} --release-sha {shlex.quote(release_sha)}"
+    if action == "recover-services":
+        command += f" --origin {shlex.quote(_origin(origin))}"
+    return command
 
 
 def trigger(
@@ -63,6 +53,8 @@ def trigger(
     repo_path: str,
     env_path: str,
     timeout_seconds: int,
+    action: str = "backup",
+    origin: str = "",
 ) -> dict[str, object]:
     host = _host(host)
     if port < 1 or port > 65535:
@@ -75,12 +67,13 @@ def trigger(
     env_path = _remote_path(env_path, "remote env path")
     _private_file(private_key, "SSH private key", 64 * 1024)
     _private_file(known_hosts, "SSH known-hosts", 1024 * 1024)
-    _require_known_host(host, port, known_hosts)
+    addresses = _resolved_enterprise_addresses(host, port, "SSH host")
+    host_key_alias = _require_known_host(host, port, known_hosts, resolved_addresses=addresses)
 
     command = _remote_command(
         repo_path=repo_path,
         env_path=env_path,
-        release_sha=release_sha,
+        release_sha=release_sha, action=action, origin=origin,
     )
     argv = [
         "ssh",
@@ -101,6 +94,8 @@ def trigger(
         "StrictHostKeyChecking=yes",
         "-o",
         f"UserKnownHostsFile={known_hosts}",
+        *(["-o", f"HostKeyAlias={host_key_alias}"]
+          if host_key_alias and host_key_alias != _known_host_lookup(host, port) else []),
         "-o",
         "ConnectTimeout=15",
         "-o",
@@ -134,6 +129,17 @@ def trigger(
             candidate = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(candidate, dict) or candidate.get("release_sha") != release_sha:
+            continue
+        if action == "recover-services":
+            if (candidate.get("schema") == "aegisscan.production-service-recovery.v1"
+                and candidate.get("status") == "success"
+                and candidate.get("https_acceptance") is True
+                and candidate.get("execution_plane_healthy") is True
+                and candidate.get("restarted_services") == ["fastapi"]):
+                payload = candidate
+                break
+            continue
         if (
             candidate.get("status") == "success"
             and candidate.get("backup_id")
@@ -145,21 +151,21 @@ def trigger(
             break
 
     if payload is None:
-        raise ResilienceError(
-            "remote host did not return a durable versioned backup success record"
-        )
+        raise ResilienceError("remote host did not return a durable versioned backup or recovery success record")
 
     return {
-        "schema": "aegisscan.production-resilience-backup.v1",
+        "schema": f"aegisscan.production-resilience-{'backup' if action == 'backup' else 'recovery'}.v1",
         "status": "success",
         "host": host,
         "release_sha": release_sha,
-        "backup": payload,
+        "backup" if action == "backup" else "recovery": payload,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--action", choices=["backup", "recover-services"], default="backup")
+    parser.add_argument("--origin", default="")
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", type=int, default=22)
     parser.add_argument("--user", required=True)
@@ -189,7 +195,7 @@ def main() -> int:
             release_sha=args.release_sha,
             repo_path=args.repo_path,
             env_path=args.env_path,
-            timeout_seconds=args.timeout_seconds,
+            timeout_seconds=args.timeout_seconds, action=args.action, origin=args.origin,
         )
     except (ResilienceError, RemoteDeployError) as exc:
         print(json.dumps({

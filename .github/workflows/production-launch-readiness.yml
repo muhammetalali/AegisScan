@@ -6,6 +6,7 @@ on:
     paths:
       - 'aegis-platform/scripts/production_preflight.py'
       - 'aegis-platform/scripts/production_host_deploy.py'
+      - 'aegis-platform/scripts/production_host_resilience.py'
       - 'aegis-platform/scripts/production_execution_trust_bootstrap.py'
       - 'aegis-platform/scripts/production_remote_deploy.py'
       - 'aegis-platform/scripts/production_resilience_backup.py'
