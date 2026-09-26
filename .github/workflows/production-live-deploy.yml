@@ -14,6 +14,7 @@ name: Internal Production Deploy and Acceptance
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: aegisscan-internal-production
@@ -77,6 +78,20 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
           printf 'production_release_sha=%s\n' "$GITHUB_SHA"
+
+      - name: Wait for exact-SHA Required CI Governance
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ci/wait_for_required_ci.py \
+            --sha "$GITHUB_SHA" \
+            --branch main \
+            --workflow-name "Required CI Governance" \
+            --event push \
+            --timeout-seconds 4500 \
+            --poll-seconds 15
 
       - name: Validate protected internal production material
         shell: bash
