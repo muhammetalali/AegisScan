@@ -140,11 +140,11 @@ def _execution_profile_environment(environment: dict[str, str]) -> dict[str, str
 
 
 def _rollback_execution_environment(environment: dict[str, str]) -> dict[str, str]:
-    """Return an execution environment compatible with pre-M4 releases."""
+    """Restore the previous policy; only unset pre-M4 fields receive legacy defaults."""
     safe = dict(environment)
-    safe["AEGIS_RECON_PROVIDER"] = "legacy"
-    safe["AEGIS_RECON_LEGACY_DISABLED"] = "false"
-    safe["AEGIS_KALI_RECON_CANARY_BPS"] = "0"
+    safe.setdefault("AEGIS_RECON_PROVIDER", "legacy")
+    safe.setdefault("AEGIS_RECON_LEGACY_DISABLED", "false")
+    safe.setdefault("AEGIS_KALI_RECON_CANARY_BPS", "0")
     return _execution_profile_environment(safe)
 
 
@@ -464,9 +464,9 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     previous_sha = _current_sha()
     backup = _backup_before_upgrade(env_file, deployment_env)
 
-    _checkout(release_sha)
     deployment_attempted = False
     try:
+        _checkout(release_sha)
         env_values = _prepare_execution_trust(env_file, release_sha)
         deployment_env = _execution_profile_environment({**os.environ, **env_values})
         _preflight(env_file, deployment_env)
@@ -475,8 +475,8 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         _execution_plane_acceptance(env_file, deployment_env)
         _accept(origin)
     except BaseException:
-        if previous_sha != release_sha:
-            if deployment_attempted:
+        if deployment_attempted:
+            if previous_sha != release_sha:
                 _rollback_application(
                     previous_sha=previous_sha,
                     failed_release_sha=release_sha,
@@ -484,8 +484,9 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
                     previous_env_snapshot=previous_env_snapshot,
                     origin=origin,
                 )
-            else:
-                _restore_private_env(env_file, previous_env_snapshot)
+        else:
+            _restore_private_env(env_file, previous_env_snapshot)
+            if previous_sha != release_sha:
                 _checkout(previous_sha)
         raise
 
