@@ -16,6 +16,10 @@ name: Cloud Security Reality
       - 'aegis-platform/backend/requirements.txt'
       - 'aegis-platform/backend/Dockerfile.django'
       - '.github/workflows/cloud-security-reality.yml'
+      - '.github/workflows/cloud-live-provider-reality.yml'
+      - 'tests/test_live_provider_request_lifecycle.py'
+      - '.github/workflows/cloud-live-provider-reality.yml'
+      - 'tests/test_live_provider_request_lifecycle.py'
   push:
     branches: [main]
     paths:
@@ -133,6 +137,9 @@ jobs:
             fastapi_app/routers/test_cloud_capability_api.py \
             django_project/evidence/test_cloud_security_plane.py \
             django_project/evidence/test_cloud_native_delivery.py
+
+      - name: Prove live-provider request lifecycle contract
+        run: python -m pytest -q tests/test_live_provider_request_lifecycle.py
 
       - name: Prove explicit provider SDK surfaces
         working-directory: aegis-platform/backend
