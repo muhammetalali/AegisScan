@@ -6,6 +6,8 @@ name: Performance Load Soak Reality
     paths:
       - 'aegis-platform/backend/**'
       - 'aegis-platform/scripts/load_reality.py'
+      - 'aegis-platform/scripts/release_capacity_reality.py'
+      - 'aegis-platform/scripts/test_release_capacity_reality.py'
       - 'aegis-platform/scripts/test_load_reality.py'
       - '.github/workflows/performance-load-soak-reality.yml'
   push:
@@ -13,7 +15,18 @@ name: Performance Load Soak Reality
     paths:
       - 'aegis-platform/backend/**'
       - 'aegis-platform/scripts/load_reality.py'
+      - 'aegis-platform/scripts/release_capacity_reality.py'
+      - 'aegis-platform/scripts/test_release_capacity_reality.py'
       - '.github/workflows/performance-load-soak-reality.yml'
+
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'ci uses bounded gates; release executes the extended final soak on exact main SHA'
+        required: true
+        default: ci
+        type: choice
+        options: [ci, release]
 
 permissions:
   contents: read
@@ -112,3 +125,205 @@ jobs:
         run: |
           if [ -f /tmp/aegis-load-api.pid ]; then kill "$(cat /tmp/aegis-load-api.pid)" 2>/dev/null || true; fi
           cat /tmp/aegis-load-api.log 2>/dev/null || true
+
+  capacity-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      POSTGRES_DB: aegisdb
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis
+      DATABASE_URL: postgresql://aegis:aegis@postgres:5432/aegisdb
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
+      JWT_SECRET_KEY: ci-only-jwt-signing-key-0123456789abcdef0123456789abcdef
+      DEBUG: 'False'
+      SECURE_SSL_REDIRECT: 'False'
+      ALLOWED_HOSTS: localhost,127.0.0.1,nginx
+      CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
+      CSRF_TRUSTED_ORIGINS: http://localhost,http://127.0.0.1,http://nginx
+      AUTH_COOKIE_SECURE: 'False'
+      AUTHORIZED_SCAN_TARGETS: aegis-scan-target
+      SCANNER_EGRESS_PRIVATE_TARGETS: aegis-scan-target
+      SEMGREP_CONFIG: /app/e2e/semgrep-ci.yml
+      FRONTEND_URL: http://localhost
+      LOG_LEVEL: INFO
+      AEGIS_BASE_URL: http://localhost
+      AEGIS_DJANGO_URL: http://localhost/api/v1
+      AEGIS_FASTAPI_URL: http://localhost
+      AEGIS_API_URL: http://localhost/api/v1
+      AEGIS_E2E_TARGET: aegis-scan-target
+      AEGIS_E2E_TIMEOUT: '900'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Prove exact checkout and release dispatch target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.profile }}" = "release" ]; then
+            test "$GITHUB_REF" = "refs/heads/main"
+            git fetch --no-tags origin main
+            test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          fi
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove capacity evidence contract
+        run: |
+          python -m pip install pytest requests
+          python -m pytest -q aegis-platform/scripts/test_release_capacity_reality.py
+          python -m py_compile aegis-platform/scripts/release_capacity_reality.py
+      - name: Prepare isolated full-stack environment
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backend/.env <<EOF
+          DEBUG=${DEBUG}
+          SECRET_KEY=${SECRET_KEY}
+          JWT_SECRET_KEY=${JWT_SECRET_KEY}
+          SECURE_SSL_REDIRECT=${SECURE_SSL_REDIRECT}
+          ALLOWED_HOSTS=${ALLOWED_HOSTS}
+          CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+          CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+          DATABASE_URL=${DATABASE_URL}
+          REDIS_URL=${REDIS_URL}
+          CELERY_BROKER_URL=${CELERY_BROKER_URL}
+          CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+          AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
+          FRONTEND_URL=${FRONTEND_URL}
+          AUTHORIZED_SCAN_TARGETS=${AUTHORIZED_SCAN_TARGETS}
+          SEMGREP_CONFIG=${SEMGREP_CONFIG}
+          LOG_LEVEL=${LOG_LEVEL}
+          POSTGRES_DB=${POSTGRES_DB}
+          POSTGRES_USER=${POSTGRES_USER}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          EOF
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+      - name: Build full platform once
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --pull; then exit 0; fi
+            if [ "$attempt" -eq 2 ]; then exit 1; fi
+            sleep 15
+          done
+      - name: Start full platform and wait for readiness
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 django fastapi celery_worker scanner_worker scanner_egress nginx
+          exit 1
+      - name: Bind isolated scanner target into API and egress policy
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_IP="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-scan-target)"
+          test -n "$TARGET_IP"
+          echo "AEGIS_MASSCAN_TARGET=$TARGET_IP" >> "$GITHUB_ENV"
+          echo "AUTHORIZED_SCAN_TARGETS=aegis-scan-target,$TARGET_IP" >> "$GITHUB_ENV"
+          AUTHORIZED_SCAN_TARGETS="aegis-scan-target,$TARGET_IP" \
+          SCANNER_EGRESS_PRIVATE_TARGETS="aegis-scan-target,$TARGET_IP" \
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --force-recreate fastapi celery_worker scanner_worker celery_beat nginx
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost/ready >/dev/null && curl -fsS http://localhost/health >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Exercise concurrent tenants, PostgreSQL, Celery scanner queue, Kali and controlled recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          tenants=3
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.profile }}" = "release" ]; then tenants=6; fi
+          python aegis-platform/scripts/release_capacity_reality.py \
+            --compose-root aegis-platform \
+            --e2e-script aegis-platform/e2e/external_black_box_e2e.py \
+            --base-url http://localhost \
+            --tenants "$tenants" \
+            --tenant-timeout-seconds 1200 \
+            --sample-interval-seconds 2 \
+            --minimum-postgres-connections 2 \
+            --output release-capacity-reality.json \
+            --evidence-dir capacity-evidence
+      - name: Execute measured saturation and soak profile after recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          stages=(--stage 20:30 --stage 50:30 --stage 100:30 --stage 25:120)
+          min_requests=1200
+          min_rps=5
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.profile }}" = "release" ]; then
+            stages=(--stage 30:120 --stage 75:180 --stage 125:180 --stage 50:900)
+            min_requests=5000
+            min_rps=10
+          fi
+          python aegis-platform/scripts/load_reality.py \
+            --base-url http://localhost \
+            --path /health --path /ready \
+            "${stages[@]}" \
+            --stage-warmup-seconds 3 \
+            --max-p95-ms 750 \
+            --max-error-rate 0.01 \
+            --min-rps "$min_rps" \
+            --min-requests "$min_requests" \
+            --output release-performance-reality.json
+      - name: Validate immutable exact-SHA performance evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          capacity=json.loads(Path('release-capacity-reality.json').read_text())
+          performance=json.loads(Path('release-performance-reality.json').read_text())
+          assert capacity['schema']=='aegisscan.release-capacity-reality.v1'
+          assert capacity['source_sha']==os.environ['GITHUB_SHA']
+          assert capacity['passed'] is True
+          assert capacity['proof']['multi_tenant_e2e'] is True
+          assert capacity['proof']['postgres_contention_observed'] is True
+          assert capacity['proof']['celery_broker_observed'] is True
+          assert capacity['proof']['kali_scanner_concurrency_exercised'] is True
+          assert capacity['proof']['controlled_recovery'] is True
+          assert performance['schema']=='aegisscan.performance-reality.v1'
+          assert performance['passed'] is True
+          assert performance['summary']['requests'] > 0
+          assert performance['summary']['worst_stage_p95_ms'] <= performance['thresholds']['max_p95_ms']
+          print('RELEASE_PERFORMANCE_CAPACITY_SOAK=PASS')
+          PY
+      - name: Upload release performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-performance-capacity-soak-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            release-capacity-reality.json
+            release-performance-reality.json
+            capacity-evidence/logs/*.log
+            capacity-evidence/state/*.json
+          retention-days: 90
+          if-no-files-found: error
+      - name: Capture diagnostics and destroy ephemeral stack
+        if: always()
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set +e
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=250 fastapi django celery_worker scanner_worker scanner_egress postgres redis nginx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v --remove-orphans
