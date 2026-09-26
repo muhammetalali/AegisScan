@@ -82,7 +82,7 @@ def test_resolved_policy_rejects_legacy_and_zero_bps_canary():
         assert any("must be default-kali after M6" in item for item in failures)
 
 
-def test_rollback_environment_forces_pre_m4_compatible_legacy_mode():
+def test_rollback_environment_preserves_previous_canary_policy():
     environment = {
         "AEGIS_RECON_PROVIDER": "canary",
         "AEGIS_KALI_RECON_CANARY_BPS": "2500",
@@ -90,9 +90,9 @@ def test_rollback_environment_forces_pre_m4_compatible_legacy_mode():
         "UNRELATED_VALUE": "preserved",
     }
     rollback = deploy._rollback_execution_environment(environment)
-    assert rollback["AEGIS_RECON_PROVIDER"] == "legacy"
-    assert rollback["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
-    assert rollback["COMPOSE_PROFILES"] == "monitoring"
+    assert rollback["AEGIS_RECON_PROVIDER"] == "canary"
+    assert rollback["AEGIS_KALI_RECON_CANARY_BPS"] == "2500"
+    assert set(rollback["COMPOSE_PROFILES"].split(",")) == {"monitoring", "kali-recon"}
     assert rollback["UNRELATED_VALUE"] == "preserved"
 
 
@@ -145,7 +145,7 @@ def test_zero_bps_execution_plane_acceptance_does_not_require_kali_provider(tmp_
     assert "canary-rollback-zero" in command
 
 
-def test_automatic_rollback_passes_only_safe_environment_to_runtime_acceptance(tmp_path: Path, monkeypatch):
+def test_automatic_rollback_uses_the_exact_restored_policy_for_runtime_acceptance(tmp_path: Path, monkeypatch):
     env_file = tmp_path / "production.env"
     env_file.write_text(
         "AEGIS_RECON_PROVIDER=canary\n"
@@ -191,7 +191,7 @@ def test_automatic_rollback_passes_only_safe_environment_to_runtime_acceptance(t
     assert restored["AEGIS_RECON_PROVIDER"] == "canary"
     assert restored["AEGIS_KALI_RECON_CANARY_BPS"] == "2500"
     for key in ("deploy", "acceptance"):
-        assert observed[key]["AEGIS_RECON_PROVIDER"] == "legacy"
-        assert observed[key]["AEGIS_RECON_LEGACY_DISABLED"] == "false"
-        assert observed[key]["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
-        assert observed[key]["COMPOSE_PROFILES"] == "monitoring"
+        assert observed[key]["AEGIS_RECON_PROVIDER"] == restored["AEGIS_RECON_PROVIDER"]
+        assert observed[key]["AEGIS_RECON_LEGACY_DISABLED"] == restored["AEGIS_RECON_LEGACY_DISABLED"] == "true"
+        assert observed[key]["AEGIS_KALI_RECON_CANARY_BPS"] == restored["AEGIS_KALI_RECON_CANARY_BPS"]
+        assert set(observed[key]["COMPOSE_PROFILES"].split(",")) == {"monitoring", "kali-recon"}

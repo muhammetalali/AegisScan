@@ -146,10 +146,10 @@ def test_default_kali_execution_plane_acceptance_proves_routing_and_attestation(
         deploy._execution_plane_acceptance(env_file, environment, attempts=1)
 
 
-def test_default_kali_rollback_forces_legacy_and_removes_provider_profile():
+def test_default_kali_rollback_preserves_previous_governed_provider_profile():
     environment = _default_kali_environment()
     environment["COMPOSE_PROFILES"] = "monitoring,kali-recon"
     rollback = deploy._rollback_execution_environment(environment)
-    assert rollback["AEGIS_RECON_PROVIDER"] == "legacy"
+    assert rollback["AEGIS_RECON_PROVIDER"] == "default-kali"
     assert rollback["AEGIS_KALI_RECON_CANARY_BPS"] == "0"
-    assert rollback["COMPOSE_PROFILES"] == "monitoring"
+    assert set(rollback["COMPOSE_PROFILES"].split(",")) == {"monitoring", "kali-recon"}
