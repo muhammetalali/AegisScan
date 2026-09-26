@@ -463,7 +463,7 @@ def build_report(
         "proof": {
             "multi_tenant_e2e": tenant_pass,
             "max_concurrent_tenants": max_running_tenants,
-            "postgres_contention_observed": postgres_pass,
+            "postgres_concurrent_activity_observed": postgres_pass,
             "max_postgres_connections": max_pg,
             "celery_broker_observed": broker_observed,
             "max_queue_depths": queue_max,
