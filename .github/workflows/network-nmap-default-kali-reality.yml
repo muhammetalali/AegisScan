@@ -87,6 +87,7 @@ jobs:
           assert env['AEGIS_NMAP_PROVIDER']=='default-kali', env
           assert str(env['AEGIS_KALI_NMAP_CANARY_BPS'])=='0', env
           assert env['AEGIS_KALI_NETWORK_URL']=='http://127.0.0.1:18766', env
+          assert env['AEGIS_KALI_NETWORK_IMAGE']==provider['image'], (env,provider)
           assert rollback['services']['scanner_worker']['environment']['AEGIS_NMAP_PROVIDER']=='legacy'
           for key in (
               'AEGIS_KALI_NETWORK_AUTH_TOKEN',
