@@ -61,6 +61,7 @@ async def test_stage_warmup_excludes_connection_ramp_from_measured_latency(monke
     # remain far below that because ramp samples are intentionally not counted.
     assert result['latency_ms']['p95'] < 15.0
 
+
 class _ContendedAsyncClient:
     instances = 0
     limits = []
