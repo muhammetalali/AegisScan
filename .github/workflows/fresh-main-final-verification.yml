@@ -1,0 +1,244 @@
+name: Fresh Main Final Verification
+
+'on':
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Exact Release 1 SHA to verify across every final evidence plane'
+        required: true
+        type: string
+      confirm:
+        description: 'Type VERIFY to execute zero-drift final verification'
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: fresh-main-final-verification-${{ inputs.release_sha }}
+  cancel-in-progress: false
+
+jobs:
+  fresh-main-final-verification:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_sha }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require exact current main and immutable Release 1 tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "VERIFY"
+          case "$RELEASE_SHA" in
+            *[!0-9a-f]*|'') echo 'release_sha must be lowercase hexadecimal' >&2; exit 1 ;;
+          esac
+          test "${#RELEASE_SHA}" -eq 40
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          install -d -m 0700 /tmp/aegis-final/metadata /tmp/aegis-final/evidence artifacts
+          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" \
+            --json tagName,targetCommitish,isDraft,isPrerelease,url \
+            > /tmp/aegis-final/release.json
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/v1.0.0" \
+            > /tmp/aegis-final/release-tag.json
+
+      - name: Require zero open pull requests and capture repository state
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY" > /tmp/aegis-final/repository.json
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --slurp > /tmp/aegis-final/open-pr-pages.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          repo=json.loads(Path('/tmp/aegis-final/repository.json').read_text())
+          pages=json.loads(Path('/tmp/aegis-final/open-pr-pages.json').read_text())
+          pulls=[item for page in pages for item in page]
+          state={
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'default_branch': repo.get('default_branch'),
+              'main_sha': os.environ['RELEASE_SHA'],
+              'open_pr_count': len(pulls),
+          }
+          Path('/tmp/aegis-final/repository-state.json').write_text(
+              json.dumps(state, sort_keys=True, indent=2)+'\n'
+          )
+          if pulls:
+              raise SystemExit(f'fresh-main final verification requires zero open PRs: {[p.get("number") for p in pulls]}')
+          PY
+
+      - name: Resolve successful exact-SHA final workflow runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" \
+            > /tmp/aegis-final/runs.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          sha=os.environ['RELEASE_SHA']
+          repo=os.environ['GITHUB_REPOSITORY']
+          runs=json.loads(Path('/tmp/aegis-final/runs.json').read_text()).get('workflow_runs') or []
+          required={
+              'required_ci': ('Required CI Governance', '.github/workflows/required-ci-governance.yml', {'push'}),
+              'release_closure': ('Release 1 Closure', '.github/workflows/release1-closure.yml', {'workflow_run','workflow_dispatch'}),
+              'provider_closure': ('External Provider Acceptance Closure', '.github/workflows/external-provider-acceptance-closure.yml', {'workflow_dispatch'}),
+              'performance': ('Performance Load Soak Reality', '.github/workflows/performance-load-soak-reality.yml', {'workflow_dispatch'}),
+              'hygiene': ('Final Project Hygiene', '.github/workflows/final-project-hygiene.yml', {'workflow_dispatch'}),
+          }
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              for key,(name,path,events) in required.items():
+                  candidates=[
+                      run for run in runs
+                      if run.get('name')==name
+                      and run.get('path')==path
+                      and run.get('event') in events
+                      and run.get('status')=='completed'
+                      and run.get('conclusion')=='success'
+                      and run.get('head_sha')==sha
+                      and run.get('head_branch')=='main'
+                      and (run.get('repository') or {}).get('full_name')==repo
+                  ]
+                  if not candidates:
+                      raise SystemExit(f'no successful exact-SHA final workflow run: {name}')
+                  candidates.sort(key=lambda r:(str(r.get('updated_at') or ''),int(r.get('run_attempt') or 0),int(r.get('id') or 0)),reverse=True)
+                  run=candidates[0]
+                  Path(f'/tmp/aegis-final/metadata/{key}.json').write_text(
+                      json.dumps(run,sort_keys=True,indent=2)+'\n'
+                  )
+                  env.write(f'{key.upper()}_RUN_ID={run["id"]}\n')
+          PY
+
+      - name: Download exact final decision artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 \
+            /tmp/aegis-final/evidence/release \
+            /tmp/aegis-final/evidence/providers \
+            /tmp/aegis-final/evidence/performance \
+            /tmp/aegis-final/evidence/hygiene
+
+          gh run download "$RELEASE_CLOSURE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "aegisscan-release1-closure-$RELEASE_SHA" \
+            --dir /tmp/aegis-final/evidence/release
+          gh run download "$PROVIDER_CLOSURE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "aegisscan-external-provider-closure-$RELEASE_SHA" \
+            --dir /tmp/aegis-final/evidence/providers
+          gh run download "$PERFORMANCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "release-performance-acceptance-$RELEASE_SHA" \
+            --dir /tmp/aegis-final/evidence/performance
+          gh run download "$HYGIENE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "aegisscan-final-project-hygiene-$RELEASE_SHA" \
+            --dir /tmp/aegis-final/evidence/hygiene
+
+      - name: Normalize downloaded final evidence paths fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          root = Path('/tmp/aegis-final/evidence')
+          canonical = Path('/tmp/aegis-final/canonical')
+          expected = {
+              'release': ('release1-closure.json', 'release1-closure.sha256'),
+              'providers': ('external-provider-acceptance-closure.json', 'external-provider-acceptance-closure.sha256'),
+              'performance': ('release-performance-acceptance.json', 'release-performance-acceptance.sha256'),
+              'hygiene': ('final-project-hygiene.json', 'final-project-hygiene.sha256'),
+          }
+          for group, names in expected.items():
+              source_root = root / group
+              for name in names:
+                  matches = [
+                      path for path in source_root.rglob(name)
+                      if path.is_file() and not path.is_symlink()
+                  ]
+                  if len(matches) != 1:
+                      raise SystemExit(
+                          f'{group}/{name}: expected exactly one regular evidence file, found {len(matches)}'
+                      )
+                  target = canonical / group / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(matches[0], target)
+          PY
+
+      - name: Build zero-drift fresh-main verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/fresh_main_final_verification.py \
+            --release-sha "$RELEASE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-state /tmp/aegis-final/repository-state.json \
+            --release-metadata /tmp/aegis-final/release.json \
+            --release-tag-metadata /tmp/aegis-final/release-tag.json \
+            --required-ci-run /tmp/aegis-final/metadata/required_ci.json \
+            --release-closure-run /tmp/aegis-final/metadata/release_closure.json \
+            --provider-closure-run /tmp/aegis-final/metadata/provider_closure.json \
+            --performance-run /tmp/aegis-final/metadata/performance.json \
+            --hygiene-run /tmp/aegis-final/metadata/hygiene.json \
+            --release-closure /tmp/aegis-final/canonical/release/release1-closure.json \
+            --release-closure-sha256 /tmp/aegis-final/canonical/release/release1-closure.sha256 \
+            --provider-closure /tmp/aegis-final/canonical/providers/external-provider-acceptance-closure.json \
+            --provider-closure-sha256 /tmp/aegis-final/canonical/providers/external-provider-acceptance-closure.sha256 \
+            --performance-acceptance /tmp/aegis-final/canonical/performance/release-performance-acceptance.json \
+            --performance-acceptance-sha256 /tmp/aegis-final/canonical/performance/release-performance-acceptance.sha256 \
+            --hygiene /tmp/aegis-final/canonical/hygiene/final-project-hygiene.json \
+            --hygiene-sha256 /tmp/aegis-final/canonical/hygiene/final-project-hygiene.sha256 \
+            --output artifacts/fresh-main-final-verification.json
+          sha256sum artifacts/fresh-main-final-verification.json > artifacts/fresh-main-final-verification.sha256
+          sha256sum -c artifacts/fresh-main-final-verification.sha256
+
+      - name: Prove zero-drift final decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload=json.loads(Path('artifacts/fresh-main-final-verification.json').read_text())
+          assert payload['schema']=='aegisscan.fresh-main-final-verification.v1'
+          assert payload['status']=='success'
+          assert payload['decision']=='VERIFIED'
+          assert payload['release_sha']==os.environ['RELEASE_SHA']==payload['main_sha']
+          assert payload['open_pr_count']==0
+          assert all(payload['controls'].values())
+          print('AEGISSCAN_FRESH_MAIN_FINAL=VERIFIED')
+          PY
+
+      - name: Retain fresh-main final evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-fresh-main-final-${{ env.RELEASE_SHA }}
+          path: |
+            artifacts/fresh-main-final-verification.json
+            artifacts/fresh-main-final-verification.sha256
+            /tmp/aegis-final/repository-state.json
+            /tmp/aegis-final/release.json
+            /tmp/aegis-final/release-tag.json
+            /tmp/aegis-final/metadata/
+          if-no-files-found: error
+          retention-days: 365
