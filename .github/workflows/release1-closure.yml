@@ -22,6 +22,7 @@ concurrency:
 
 env:
   AEGIS_RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.event_name == 'workflow_dispatch' && inputs.release_sha || github.event.pull_request.head.sha || github.sha }}
+  AEGIS_RELEASE_TAG: v1.0.0
 
 jobs:
   release-contract:
@@ -272,6 +273,71 @@ jobs:
           print('AEGISSCAN_RELEASE_1=CLOSED')
           PY
 
+      - name: Publish immutable GitHub Release 1 evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json=/tmp/release1/github-release.json
+          tag_ref=/tmp/release1/github-release-tag.json
+          existing=false
+
+          if gh release view "$AEGIS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --json tagName,targetCommitish,isDraft,isPrerelease,url > "$release_json" 2>/dev/null; then
+            existing=true
+          else
+            gh release create "$AEGIS_RELEASE_TAG" \
+              artifacts/release1-closure.json \
+              artifacts/release1-closure.sha256 \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$AEGIS_RELEASE_SHA" \
+              --title "AegisScan Release 1" \
+              --notes "Exact-SHA production release. Closure evidence is attached and cryptographically hashed."
+            gh release view "$AEGIS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --json tagName,targetCommitish,isDraft,isPrerelease,url > "$release_json"
+          fi
+
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/$AEGIS_RELEASE_TAG" > "$tag_ref"
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          release = json.loads(Path('/tmp/release1/github-release.json').read_text(encoding='utf-8'))
+          tag = json.loads(Path('/tmp/release1/github-release-tag.json').read_text(encoding='utf-8'))
+          expected_sha = os.environ['AEGIS_RELEASE_SHA']
+          expected_tag = os.environ['AEGIS_RELEASE_TAG']
+
+          if release.get('tagName') != expected_tag:
+              raise SystemExit('GitHub Release tag mismatch')
+          if release.get('targetCommitish') != expected_sha:
+              raise SystemExit('GitHub Release target is not the exact Release 1 SHA')
+          if release.get('isDraft') or release.get('isPrerelease'):
+              raise SystemExit('Release 1 must be a final non-draft, non-prerelease GitHub Release')
+          obj = tag.get('object') or {}
+          if obj.get('type') != 'commit' or obj.get('sha') != expected_sha:
+              raise SystemExit('Release 1 tag does not point directly to the exact release commit')
+          if not str(release.get('url') or '').startswith('https://github.com/'):
+              raise SystemExit('GitHub Release URL is missing')
+          PY
+
+          rm -rf /tmp/release1/published-assets
+          mkdir -p /tmp/release1/published-assets
+          gh release download "$AEGIS_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern release1-closure.json \
+            --pattern release1-closure.sha256 \
+            --dir /tmp/release1/published-assets
+          cmp artifacts/release1-closure.json /tmp/release1/published-assets/release1-closure.json
+          cmp artifacts/release1-closure.sha256 /tmp/release1/published-assets/release1-closure.sha256
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          release = json.loads(Path('/tmp/release1/github-release.json').read_text(encoding='utf-8'))
+          print(f"**GitHub Release:** {release['url']}")
+          PY
+
       - name: Retain Release 1 closure evidence
         uses: actions/upload-artifact@v4
         with:
@@ -282,6 +348,8 @@ jobs:
             /tmp/release1/metadata/
             /tmp/release1/repository-state.json
             /tmp/release1/branch-hygiene.json
+            /tmp/release1/github-release.json
+            /tmp/release1/github-release-tag.json
           if-no-files-found: error
           retention-days: 180
 
