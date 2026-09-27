@@ -289,5 +289,9 @@ def test_fresh_main_workflow_downloads_all_final_decision_artifacts():
     assert "release-performance-acceptance.sha256" in text
     assert "final-project-hygiene.sha256" in text
     assert "aegisscan-final-project-hygiene-$RELEASE_SHA" in text
+    assert "Normalize downloaded final evidence paths fail closed" in text
+    assert "expected exactly one regular evidence file" in text
+    assert "/tmp/aegis-final/canonical/release/release1-closure.json" in text
+    assert "/tmp/aegis-final/canonical/performance/release-performance-acceptance.sha256" in text
     assert "fresh_main_final_verification.py" in text
     assert "AEGISSCAN_FRESH_MAIN_FINAL=VERIFIED" in text
