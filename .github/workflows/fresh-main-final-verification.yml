@@ -168,9 +168,13 @@ jobs:
             --performance-run /tmp/aegis-final/metadata/performance.json \
             --hygiene-run /tmp/aegis-final/metadata/hygiene.json \
             --release-closure /tmp/aegis-final/evidence/release/release1-closure.json \
+            --release-closure-sha256 /tmp/aegis-final/evidence/release/release1-closure.sha256 \
             --provider-closure /tmp/aegis-final/evidence/providers/external-provider-acceptance-closure.json \
+            --provider-closure-sha256 /tmp/aegis-final/evidence/providers/external-provider-acceptance-closure.sha256 \
             --performance-acceptance /tmp/aegis-final/evidence/performance/release-performance-acceptance.json \
+            --performance-acceptance-sha256 /tmp/aegis-final/evidence/performance/release-performance-acceptance.sha256 \
             --hygiene /tmp/aegis-final/evidence/hygiene/final-project-hygiene.json \
+            --hygiene-sha256 /tmp/aegis-final/evidence/hygiene/final-project-hygiene.sha256 \
             --output artifacts/fresh-main-final-verification.json
           sha256sum artifacts/fresh-main-final-verification.json > artifacts/fresh-main-final-verification.sha256
           sha256sum -c artifacts/fresh-main-final-verification.sha256
