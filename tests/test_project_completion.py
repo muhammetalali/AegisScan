@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,20 @@ def _write(path: Path, payload: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def _refresh_verification_integrity(path: Path) -> Path:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("verification_sha256", None)
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload["verification_sha256"] = hashlib.sha256(raw).hexdigest()
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    checksum = path.with_suffix(".sha256")
+    checksum.write_text(
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n",
+        encoding="utf-8",
+    )
+    return checksum
 
 
 def _fixture(tmp_path: Path):
@@ -68,14 +83,14 @@ def _fixture(tmp_path: Path):
                 "zero_open_prs": True,
                 "zero_sha_drift": True,
             },
-            "verification_sha256": "b" * 64,
         },
     )
-    return state, release, tag, run, verification
+    verification_sha256 = _refresh_verification_integrity(verification)
+    return state, release, tag, run, verification, verification_sha256
 
 
 def _build(tmp_path: Path):
-    state, release, tag, run, verification = _fixture(tmp_path)
+    state, release, tag, run, verification, verification_sha256 = _fixture(tmp_path)
     return build_completion(
         release_sha=SHA,
         repository=REPO,
@@ -84,6 +99,7 @@ def _build(tmp_path: Path):
         release_tag_metadata=tag,
         verification_run_metadata=run,
         fresh_verification=verification,
+        fresh_verification_sha256=verification_sha256,
         output=tmp_path / "completion.json",
     )
 
@@ -104,21 +120,23 @@ def test_project_completion_requires_authoritative_fresh_main_verification(tmp_p
 
 
 def test_project_completion_rejects_missing_provider_acceptance_control(tmp_path: Path):
-    state, release, tag, run, verification = _fixture(tmp_path)
+    state, release, tag, run, verification, verification_sha256 = _fixture(tmp_path)
     value = json.loads(verification.read_text())
     value["controls"]["external_providers_accepted"] = False
     verification.write_text(json.dumps(value))
+    verification_sha256 = _refresh_verification_integrity(verification)
     with pytest.raises(ProjectCompletionError, match="not authoritative"):
         build_completion(
             release_sha=SHA, repository=REPO, repository_state=state,
             release_metadata=release, release_tag_metadata=tag,
             verification_run_metadata=run, fresh_verification=verification,
+            fresh_verification_sha256=verification_sha256,
             output=tmp_path / "completion.json",
         )
 
 
 def test_project_completion_rejects_verification_run_from_other_sha(tmp_path: Path):
-    state, release, tag, run, verification = _fixture(tmp_path)
+    state, release, tag, run, verification, verification_sha256 = _fixture(tmp_path)
     value = json.loads(run.read_text())
     value["head_sha"] = "f" * 40
     run.write_text(json.dumps(value))
@@ -127,12 +145,13 @@ def test_project_completion_rejects_verification_run_from_other_sha(tmp_path: Pa
             release_sha=SHA, repository=REPO, repository_state=state,
             release_metadata=release, release_tag_metadata=tag,
             verification_run_metadata=run, fresh_verification=verification,
+            fresh_verification_sha256=verification_sha256,
             output=tmp_path / "completion.json",
         )
 
 
 def test_project_completion_rejects_release_tag_drift(tmp_path: Path):
-    state, release, tag, run, verification = _fixture(tmp_path)
+    state, release, tag, run, verification, verification_sha256 = _fixture(tmp_path)
     value = json.loads(release.read_text())
     value["targetCommitish"] = "e" * 40
     release.write_text(json.dumps(value))
@@ -141,6 +160,24 @@ def test_project_completion_rejects_release_tag_drift(tmp_path: Path):
             release_sha=SHA, repository=REPO, repository_state=state,
             release_metadata=release, release_tag_metadata=tag,
             verification_run_metadata=run, fresh_verification=verification,
+            fresh_verification_sha256=verification_sha256,
+            output=tmp_path / "completion.json",
+        )
+
+
+def test_project_completion_rejects_tampered_fresh_main_companion_digest(tmp_path: Path):
+    state, release, tag, run, verification, verification_sha256 = _fixture(tmp_path)
+    verification_sha256.write_text(f'{"0" * 64}  {verification.name}\n', encoding="utf-8")
+    with pytest.raises(ProjectCompletionError, match="companion SHA256 mismatch"):
+        build_completion(
+            release_sha=SHA,
+            repository=REPO,
+            repository_state=state,
+            release_metadata=release,
+            release_tag_metadata=tag,
+            verification_run_metadata=run,
+            fresh_verification=verification,
+            fresh_verification_sha256=verification_sha256,
             output=tmp_path / "completion.json",
         )
 
@@ -155,6 +192,10 @@ def test_project_completion_workflow_runs_only_after_verified_fresh_main_and_pub
     job = workflow["jobs"]["project-completion"]
     assert "github.event.workflow_run.conclusion == 'success'" in job["if"]
     text = path.read_text(encoding="utf-8")
+    assert "Normalize downloaded fresh-main evidence fail closed" in text
+    assert "expected exactly one regular evidence file" in text
+    assert "--fresh-verification-sha256" in text
+    assert "fresh-main-final-verification.sha256" in text
     assert "project_completion.py" in text
     assert "AEGISSCAN_PROJECT=COMPLETE" in text
     assert "gh release upload v1.0.0" in text
