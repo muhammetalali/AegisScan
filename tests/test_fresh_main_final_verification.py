@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ci.fresh_main_final_verification import FinalVerificationError, build_verification
+from scripts.ci.fresh_main_final_verification import (
+    FinalVerificationError,
+    _require_companion_sha256,
+    build_verification,
+)
 
 SHA = "a" * 40
 REPO = "muhammetalali/AegisScan"
@@ -16,6 +20,13 @@ def _write(path: Path, payload: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def _companion(path: Path) -> Path:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    checksum = path.with_suffix(".sha256")
+    checksum.write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+    return checksum
 
 
 def _run(tmp_path: Path, key: str, name: str, workflow_path: str, event: str, run_id: int) -> Path:
@@ -108,11 +119,12 @@ def _fixture(tmp_path: Path):
             extra={"open_pr_count": 0, "safe_branch_candidates_after": []},
         ),
     }
-    return state, release, tag, runs, decisions
+    checksums = {name: _companion(path) for name, path in decisions.items()}
+    return state, release, tag, runs, decisions, checksums
 
 
 def _build(tmp_path: Path):
-    state, release, tag, runs, decisions = _fixture(tmp_path)
+    state, release, tag, runs, decisions, checksums = _fixture(tmp_path)
     return build_verification(
         release_sha=SHA,
         repository=REPO,
@@ -125,11 +137,24 @@ def _build(tmp_path: Path):
         performance_run=runs["performance"],
         hygiene_run=runs["hygiene"],
         release_closure=decisions["release_closure"],
+        release_closure_sha256=checksums["release_closure"],
         provider_closure=decisions["provider_closure"],
+        provider_closure_sha256=checksums["provider_closure"],
         performance_acceptance=decisions["performance"],
+        performance_acceptance_sha256=checksums["performance"],
         hygiene=decisions["hygiene"],
+        hygiene_sha256=checksums["hygiene"],
         output=tmp_path / "verification.json",
     )
+
+
+def test_companion_sha256_rejects_mismatched_evidence(tmp_path: Path):
+    data = tmp_path / "evidence.json"
+    data.write_text('{"ok":true}\n', encoding="utf-8")
+    checksum = tmp_path / "evidence.sha256"
+    checksum.write_text(f'{"0" * 64}  evidence.json\n', encoding="utf-8")
+    with pytest.raises(FinalVerificationError, match="companion SHA256 mismatch"):
+        _require_companion_sha256(data, checksum, "fixture evidence")
 
 
 def test_fresh_main_final_verification_requires_all_exact_sha_planes(tmp_path: Path):
@@ -151,7 +176,7 @@ def test_fresh_main_final_verification_requires_all_exact_sha_planes(tmp_path: P
 
 
 def test_final_verification_rejects_main_sha_drift(tmp_path: Path):
-    state, release, tag, runs, decisions = _fixture(tmp_path)
+    state, release, tag, runs, decisions, checksums = _fixture(tmp_path)
     value = json.loads(state.read_text())
     value["main_sha"] = "f" * 40
     state.write_text(json.dumps(value))
@@ -162,14 +187,18 @@ def test_final_verification_rejects_main_sha_drift(tmp_path: Path):
             required_ci_run=runs["required_ci"], release_closure_run=runs["release_closure"],
             provider_closure_run=runs["provider_closure"], performance_run=runs["performance"],
             hygiene_run=runs["hygiene"], release_closure=decisions["release_closure"],
+        release_closure_sha256=checksums["release_closure"],
             provider_closure=decisions["provider_closure"],
-            performance_acceptance=decisions["performance"], hygiene=decisions["hygiene"],
+        provider_closure_sha256=checksums["provider_closure"],
+            performance_acceptance=decisions["performance"],
+        performance_acceptance_sha256=checksums["performance"], hygiene=decisions["hygiene"],
+        hygiene_sha256=checksums["hygiene"],
             output=tmp_path / "verification.json",
         )
 
 
 def test_final_verification_rejects_non_release_performance_profile(tmp_path: Path):
-    state, release, tag, runs, decisions = _fixture(tmp_path)
+    state, release, tag, runs, decisions, checksums = _fixture(tmp_path)
     value = json.loads(decisions["performance"].read_text())
     value["profile"] = "ci"
     decisions["performance"].write_text(json.dumps(value))
@@ -180,14 +209,18 @@ def test_final_verification_rejects_non_release_performance_profile(tmp_path: Pa
             required_ci_run=runs["required_ci"], release_closure_run=runs["release_closure"],
             provider_closure_run=runs["provider_closure"], performance_run=runs["performance"],
             hygiene_run=runs["hygiene"], release_closure=decisions["release_closure"],
+        release_closure_sha256=checksums["release_closure"],
             provider_closure=decisions["provider_closure"],
-            performance_acceptance=decisions["performance"], hygiene=decisions["hygiene"],
+        provider_closure_sha256=checksums["provider_closure"],
+            performance_acceptance=decisions["performance"],
+        performance_acceptance_sha256=checksums["performance"], hygiene=decisions["hygiene"],
+        hygiene_sha256=checksums["hygiene"],
             output=tmp_path / "verification.json",
         )
 
 
 def test_final_verification_rejects_tag_drift(tmp_path: Path):
-    state, release, tag, runs, decisions = _fixture(tmp_path)
+    state, release, tag, runs, decisions, checksums = _fixture(tmp_path)
     value = json.loads(tag.read_text())
     value["object"]["sha"] = "e" * 40
     tag.write_text(json.dumps(value))
@@ -198,14 +231,18 @@ def test_final_verification_rejects_tag_drift(tmp_path: Path):
             required_ci_run=runs["required_ci"], release_closure_run=runs["release_closure"],
             provider_closure_run=runs["provider_closure"], performance_run=runs["performance"],
             hygiene_run=runs["hygiene"], release_closure=decisions["release_closure"],
+        release_closure_sha256=checksums["release_closure"],
             provider_closure=decisions["provider_closure"],
-            performance_acceptance=decisions["performance"], hygiene=decisions["hygiene"],
+        provider_closure_sha256=checksums["provider_closure"],
+            performance_acceptance=decisions["performance"],
+        performance_acceptance_sha256=checksums["performance"], hygiene=decisions["hygiene"],
+        hygiene_sha256=checksums["hygiene"],
             output=tmp_path / "verification.json",
         )
 
 
 def test_final_verification_rejects_tampered_embedded_decision_digest(tmp_path: Path):
-    state, release, tag, runs, decisions = _fixture(tmp_path)
+    state, release, tag, runs, decisions, checksums = _fixture(tmp_path)
     value = json.loads(decisions["provider_closure"].read_text())
     value["controls"]["tampered"] = True
     decisions["provider_closure"].write_text(json.dumps(value))
@@ -216,8 +253,12 @@ def test_final_verification_rejects_tampered_embedded_decision_digest(tmp_path: 
             required_ci_run=runs["required_ci"], release_closure_run=runs["release_closure"],
             provider_closure_run=runs["provider_closure"], performance_run=runs["performance"],
             hygiene_run=runs["hygiene"], release_closure=decisions["release_closure"],
+        release_closure_sha256=checksums["release_closure"],
             provider_closure=decisions["provider_closure"],
-            performance_acceptance=decisions["performance"], hygiene=decisions["hygiene"],
+        provider_closure_sha256=checksums["provider_closure"],
+            performance_acceptance=decisions["performance"],
+        performance_acceptance_sha256=checksums["performance"], hygiene=decisions["hygiene"],
+        hygiene_sha256=checksums["hygiene"],
             output=tmp_path / "verification.json",
         )
 
@@ -233,6 +274,10 @@ def test_fresh_main_workflow_downloads_all_final_decision_artifacts():
     assert "aegisscan-release1-closure-$RELEASE_SHA" in text
     assert "aegisscan-external-provider-closure-$RELEASE_SHA" in text
     assert "release-performance-acceptance-$RELEASE_SHA" in text
+    assert "release1-closure.sha256" in text
+    assert "external-provider-acceptance-closure.sha256" in text
+    assert "release-performance-acceptance.sha256" in text
+    assert "final-project-hygiene.sha256" in text
     assert "aegisscan-final-project-hygiene-$RELEASE_SHA" in text
     assert "fresh_main_final_verification.py" in text
     assert "AEGISSCAN_FRESH_MAIN_FINAL=VERIFIED" in text
