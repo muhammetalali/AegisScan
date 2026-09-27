@@ -75,11 +75,15 @@ def test_tenant_environment_replaces_stale_identity_with_governed_fixture(monkey
     monkeypatch.setenv("AEGIS_E2E_PASSWORD", "stale-secret")
     monkeypatch.setenv("AEGIS_E2E_APPROVER_EMAIL", "stale-approver@example.test")
     monkeypatch.setenv("AEGIS_E2E_APPROVER_PASSWORD", "stale-secret-2")
+    monkeypatch.setenv("AEGIS_E2E_ACCESS_TOKEN", "stale.actor.token")
+    monkeypatch.setenv("AEGIS_E2E_APPROVER_ACCESS_TOKEN", "stale.approver.token")
     fixture = {
         "AEGIS_E2E_EMAIL": "capacity@example.test",
         "AEGIS_E2E_PASSWORD": "fixture-secret",
         "AEGIS_E2E_APPROVER_EMAIL": "capacity-approver@example.test",
         "AEGIS_E2E_APPROVER_PASSWORD": "fixture-approver-secret",
+        "AEGIS_E2E_ACCESS_TOKEN": "fixture.actor.token",
+        "AEGIS_E2E_APPROVER_ACCESS_TOKEN": "fixture.approver.token",
     }
     env = capacity._tenant_environment(7, state_root=tmp_path, fixture=fixture)
     for key, value in fixture.items():
@@ -89,3 +93,38 @@ def test_tenant_environment_replaces_stale_identity_with_governed_fixture(monkey
     assert env["AEGIS_E2E_CAPACITY_MODE"] == "true"
     assert "AEGIS_E2E_GOV_ORG_ID" not in env
     assert "AEGIS_E2E_APPROVER_MEMBERSHIP_ID" not in env
+
+
+
+def test_parse_fixture_authorization_requires_two_real_jwt_shapes():
+    parsed = capacity._parse_fixture_authorization(
+        'noise\nCAPACITY_FIXTURE_READY={"actor_access":"aaa.bbb.ccc","approver_access":"ddd.eee.fff"}\n'
+    )
+    assert parsed == {
+        "AEGIS_E2E_ACCESS_TOKEN": "aaa.bbb.ccc",
+        "AEGIS_E2E_APPROVER_ACCESS_TOKEN": "ddd.eee.fff",
+    }
+
+
+def test_parse_fixture_authorization_fails_closed_on_missing_or_malformed_tokens():
+    for output in (
+        "",
+        "CAPACITY_FIXTURE_READY={}",
+        'CAPACITY_FIXTURE_READY={"actor_access":"not-a-jwt","approver_access":"ddd.eee.fff"}',
+    ):
+        try:
+            capacity._parse_fixture_authorization(output)
+        except capacity.CapacityRealityError:
+            pass
+        else:
+            raise AssertionError(f"malformed fixture authorization was accepted: {output!r}")
+
+
+def test_capacity_black_box_uses_preprovisioned_jwt_and_preserves_normal_login_path():
+    text = (Path(__file__).parents[1] / "e2e" / "external_black_box_e2e.py").read_text(encoding="utf-8")
+    assert "AEGIS_E2E_ACCESS_TOKEN" in text
+    assert "AEGIS_E2E_APPROVER_ACCESS_TOKEN" in text
+    assert "CAPACITY_ACTOR_AUTH=PREPROVISIONED_JWT" in text
+    assert "CAPACITY_APPROVER_AUTH=PREPROVISIONED_JWT" in text
+    assert "Governance approver login" in text
+    assert "f'{DJANGO_URL}/auth/login/'" in text
