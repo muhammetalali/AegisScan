@@ -5,7 +5,7 @@ import json,os,sys,time,uuid
 from pathlib import Path
 from typing import Any
 import requests
-BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}; CAPACITY_MODE=os.getenv('AEGIS_E2E_CAPACITY_MODE','').lower() in {'1','true','yes','on'}
+BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_ACCESS_TOKEN=os.getenv('AEGIS_E2E_ACCESS_TOKEN'); E2E_APPROVER_ACCESS_TOKEN=os.getenv('AEGIS_E2E_APPROVER_ACCESS_TOKEN'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}; CAPACITY_MODE=os.getenv('AEGIS_E2E_CAPACITY_MODE','').lower() in {'1','true','yes','on'}
 def require(response:requests.Response,expected:set[int],label:str)->dict[str,Any]|list[Any]:
  if response.status_code not in expected: raise RuntimeError(f'{label} failed: HTTP {response.status_code}: {response.text[:1000]}')
  if not response.text:return {}
@@ -61,14 +61,18 @@ def main()->int:
   _deactivate_ephemeral_account(E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD,'Governance approver')
   _deactivate_ephemeral_account(E2E_EMAIL,E2E_PASSWORD,'E2E actor')
   print('EXTERNAL_E2E_CLEANUP=PASS'); return 0
- if CAPACITY_MODE and not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):
-  raise RuntimeError('Capacity mode requires pre-provisioned actor and approver credentials')
- session=requests.Session(); session.verify=VERIFY_TLS; http(session,'GET',f'{API_URL}/ready','FastAPI readiness',{200},timeout=15); http(session,'GET',f'{API_URL}/health','FastAPI health',{200},timeout=15)
+ if CAPACITY_MODE and not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD,E2E_ACCESS_TOKEN,E2E_APPROVER_ACCESS_TOKEN]):
+  raise RuntimeError('Capacity mode requires pre-provisioned actor/approver credentials and access tokens')
+ session=requests.Session(); session.verify=VERIFY_TLS
+ if CAPACITY_MODE: session.headers['Authorization']=f'Bearer {E2E_ACCESS_TOKEN}'
+ http(session,'GET',f'{API_URL}/ready','FastAPI readiness',{200},timeout=15); http(session,'GET',f'{API_URL}/health','FastAPI health',{200},timeout=15)
  csrf_token=csrf(session); unique=uuid.uuid4().hex[:12]; email=E2E_EMAIL or f'e2e-{unique}@aegisscan.local'; password=E2E_PASSWORD or f'Aegis-E2E-{unique}-StrongPass!9'; approver_email=E2E_APPROVER_EMAIL or f'e2e-approver-{unique}@aegisscan.local'; approver_password=E2E_APPROVER_PASSWORD or f'Aegis-E2E-Approver-{unique}-StrongPass!7'; headers={'X-CSRFToken':csrf_token,'Referer':f'{BASE_URL}/'}
  if not (E2E_EMAIL and E2E_PASSWORD): http(session,'POST',f'{DJANGO_URL}/auth/register/','User registration',{201},json={'email':email,'first_name':'E2E','last_name':'Harness','password':password,'password_confirm':password},headers=headers,timeout=20)
  approver_bootstrap=requests.Session(); approver_bootstrap.verify=VERIFY_TLS; approver_bootstrap_token=csrf(approver_bootstrap); approver_bootstrap_headers={'X-CSRFToken':approver_bootstrap_token,'Referer':f'{BASE_URL}/'}
  if not (E2E_APPROVER_EMAIL and E2E_APPROVER_PASSWORD): http(approver_bootstrap,'POST',f'{DJANGO_URL}/auth/register/','Governance approver registration',{201},json={'email':approver_email,'first_name':'E2E','last_name':'Approver','password':approver_password,'password_confirm':approver_password},headers=approver_bootstrap_headers,timeout=20)
- csrf_token=csrf(session); headers['X-CSRFToken']=csrf_token; http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)
+ csrf_token=csrf(session); headers['X-CSRFToken']=csrf_token
+ if CAPACITY_MODE: print('CAPACITY_ACTOR_AUTH=PREPROVISIONED_JWT')
+ else: http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)
  project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20); project_id=project['id']
  created_organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
  if not isinstance(created_organization,dict) or not created_organization.get('id'):raise RuntimeError(f'Tenant creation did not return id: {created_organization!r}')
@@ -87,8 +91,11 @@ def main()->int:
  proposal=http(session,'POST',f'{API_V1}/assets/{asset_id}/authorization','Submit governed Nmap authorization',{202},json={'authorized':True,'reason':'CI controlled real scanner target'},timeout=20)
  governed_request=proposal.get('governed_action') if isinstance(proposal,dict) else None
  if not isinstance(governed_request,dict) or governed_request.get('action_id')!='asset.authorization.approve':raise RuntimeError(f'Authorization proposal contract invalid: {proposal!r}')
- approver=requests.Session(); approver.verify=VERIFY_TLS; approver_token=csrf(approver); approver_headers={'X-CSRFToken':approver_token,'Referer':f'{BASE_URL}/'}
- http(approver,'POST',f'{DJANGO_URL}/auth/login/','Governance approver login',{200},json={'email':approver_email,'password':approver_password},headers=approver_headers,timeout=20)
+ approver=requests.Session(); approver.verify=VERIFY_TLS
+ if CAPACITY_MODE: approver.headers['Authorization']=f'Bearer {E2E_APPROVER_ACCESS_TOKEN}'
+ approver_token=csrf(approver); approver_headers={'X-CSRFToken':approver_token,'Referer':f'{BASE_URL}/'}
+ if CAPACITY_MODE: print('CAPACITY_APPROVER_AUTH=PREPROVISIONED_JWT')
+ else: http(approver,'POST',f'{DJANGO_URL}/auth/login/','Governance approver login',{200},json={'email':approver_email,'password':approver_password},headers=approver_headers,timeout=20)
  authorization_execution=http(approver,'POST',f'{API_V1}/assurance/governance/actions/execute','Execute governed Nmap authorization',{200},json={'action_id':'asset.authorization.approve','project_id':project_id,'entity_type':'asset','entity_id':asset_id,'expected_version':governed_request['expected_version'],'idempotency_key':f'e2e-authorization-execute-{unique}','request_id':governed_request['request_id'],'parameters':governed_request['parameters']},timeout=20)
  authorization_result=authorization_execution.get('result') if isinstance(authorization_execution,dict) else None
  authorization_decision_id=authorization_result.get('authorization_decision_id') if isinstance(authorization_result,dict) else None
