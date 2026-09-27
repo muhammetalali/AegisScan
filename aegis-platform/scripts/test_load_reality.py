@@ -110,3 +110,23 @@ async def test_stage_uses_one_persistent_connection_pool_per_concurrent_worker(m
     assert result["error_rate"] == 0.0
     assert result["latency_ms"]["p95"] < 20.0
 
+def test_parse_args_binds_exact_source_sha(monkeypatch):
+    sha = "a" * 40
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["load_reality.py", "--base-url", "http://fixture.invalid", "--source-sha", sha],
+    )
+    args = load_reality.parse_args()
+    assert args.source_sha == sha
+
+
+def test_parse_args_rejects_noncanonical_source_sha(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["load_reality.py", "--base-url", "http://fixture.invalid", "--source-sha", "A" * 40],
+    )
+    with pytest.raises(SystemExit):
+        load_reality.parse_args()
+

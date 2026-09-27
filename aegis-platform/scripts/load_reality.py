@@ -161,6 +161,7 @@ async def main_async(args) -> int:
     passed=requests>=args.min_requests and error_rate<=args.max_error_rate and p95<=args.max_p95_ms and minimum_rps>=args.min_rps
     report={
         'schema':'aegisscan.performance-reality.v1',
+        'source_sha':args.source_sha,
         'base_url':args.base_url,
         'paths':args.path,
         'stages':stages,
@@ -184,6 +185,7 @@ async def main_async(args) -> int:
 def parse_args():
     parser=argparse.ArgumentParser()
     parser.add_argument('--base-url',required=True)
+    parser.add_argument('--source-sha',default='')
     parser.add_argument('--path',action='append',default=[])
     parser.add_argument('--stage',action='append',default=[])
     parser.add_argument('--request-timeout',type=float,default=5.0)
@@ -194,6 +196,8 @@ def parse_args():
     parser.add_argument('--min-requests',type=int,default=100)
     parser.add_argument('--output',default='performance-reality.json')
     args=parser.parse_args()
+    if args.source_sha and (len(args.source_sha) != 40 or any(ch not in '0123456789abcdef' for ch in args.source_sha)):
+        parser.error('--source-sha must be exactly 40 lowercase hexadecimal characters')
     if not args.path:
         args.path=['/health','/ready']
     if not args.stage:

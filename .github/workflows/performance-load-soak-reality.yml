@@ -7,6 +7,7 @@ name: Performance Load Soak Reality
       - 'aegis-platform/backend/**'
       - 'aegis-platform/scripts/load_reality.py'
       - 'aegis-platform/scripts/release_capacity_reality.py'
+      - 'scripts/ci/release_performance_acceptance.py'
       - 'aegis-platform/scripts/test_release_capacity_reality.py'
       - 'aegis-platform/scripts/test_load_reality.py'
       - 'aegis-platform/e2e/external_black_box_e2e.py'
@@ -23,6 +24,7 @@ name: Performance Load Soak Reality
       - 'aegis-platform/backend/**'
       - 'aegis-platform/scripts/load_reality.py'
       - 'aegis-platform/scripts/release_capacity_reality.py'
+      - 'scripts/ci/release_performance_acceptance.py'
       - 'aegis-platform/scripts/test_release_capacity_reality.py'
       - 'aegis-platform/docker/nginx.conf'
       - 'aegis-platform/docker/nginx-ssl.conf'
@@ -129,7 +131,7 @@ jobs:
           python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 5:5             --stage-warmup-seconds 0             --max-p95-ms 1000 --max-error-rate 0.02 --min-rps 1 --min-requests 20             --output /tmp/warmup.json
       - name: Load capacity and soak reality
         run: |
-          python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 10:15 --stage 30:20 --stage 60:20 --stage 25:90             --stage-warmup-seconds 2             --max-p95-ms 500 --max-error-rate 0.01 --min-rps 5 --min-requests 500             --output performance-reality.json
+          python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --source-sha "$AEGIS_EXACT_HEAD"             --path /health --path /ready             --stage 10:15 --stage 30:20 --stage 60:20 --stage 25:90             --stage-warmup-seconds 2             --max-p95-ms 500 --max-error-rate 0.01 --min-rps 5 --min-requests 500             --output performance-reality.json
       - name: Upload performance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -386,6 +388,7 @@ jobs:
           fi
           python aegis-platform/scripts/load_reality.py \
             --base-url http://localhost \
+            --source-sha "$AEGIS_EXACT_HEAD" \
             --path /health --path /ready \
             "${stages[@]}" \
             --stage-warmup-seconds 3 \
@@ -412,11 +415,49 @@ jobs:
           assert capacity['proof']['kali_scanner_concurrency_exercised'] is True
           assert capacity['proof']['controlled_recovery'] is True
           assert performance['schema']=='aegisscan.performance-reality.v1'
+          assert performance['source_sha']==os.environ['AEGIS_EXACT_HEAD']
           assert performance['passed'] is True
           assert performance['summary']['requests'] > 0
           assert performance['summary']['worst_stage_p95_ms'] <= performance['thresholds']['max_p95_ms']
           print('RELEASE_PERFORMANCE_CAPACITY_SOAK=PASS')
           PY
+      - name: Build immutable final release performance acceptance
+        if: env.AEGIS_PERFORMANCE_PROFILE == 'release'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/release_performance_acceptance.py \
+            --release-sha "$AEGIS_EXACT_HEAD" \
+            --profile "$AEGIS_PERFORMANCE_PROFILE" \
+            --capacity release-capacity-reality.json \
+            --performance release-performance-reality.json \
+            --output release-performance-acceptance.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload=json.loads(Path('release-performance-acceptance.json').read_text())
+          assert payload['schema']=='aegisscan.release-performance-acceptance.v1'
+          assert payload['status']=='success'
+          assert payload['decision']=='ACCEPTED'
+          assert payload['profile']=='release'
+          assert payload['release_sha']==os.environ['AEGIS_EXACT_HEAD']
+          assert all(payload['controls'].values())
+          print('AEGISSCAN_RELEASE_PERFORMANCE=ACCEPTED')
+          PY
+
+      - name: Upload final release performance acceptance
+        if: env.AEGIS_PERFORMANCE_PROFILE == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-performance-acceptance-${{ env.AEGIS_EXACT_HEAD }}
+          path: |
+            release-performance-acceptance.json
+            release-capacity-reality.json
+            release-performance-reality.json
+          retention-days: 180
+          if-no-files-found: error
+
       - name: Upload release performance evidence
         if: always()
         uses: actions/upload-artifact@v4
