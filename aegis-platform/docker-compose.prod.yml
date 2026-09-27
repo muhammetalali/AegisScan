@@ -88,6 +88,10 @@ services:
         AEGIS_RETIRE_SEMGREP: "1"
         AEGIS_RETIRE_MASSCAN: "1"
     env_file: !reset []
+    # The named Semgrep workspace is created root-owned. Grant CHOWN only to
+    # the root bootstrap; scanner-worker-entrypoint drops it from the bounding
+    # set before the unprivileged Celery worker starts.
+    cap_add: !override [NET_RAW, SETUID, SETGID, SETPCAP, CHOWN]
     volumes: !override
       - semgrep_workspace:/var/lib/aegis-semgrep
     read_only: true

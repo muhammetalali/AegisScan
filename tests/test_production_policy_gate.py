@@ -46,11 +46,12 @@ def valid_model():
                 'AEGIS_RECON_LEGACY_DISABLED':'true',
                 'AEGIS_KALI_RECON_CANARY_BPS':'0',
                 'AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST':_IMAGE_DIGEST,
+                'AEGIS_SEMGREP_WORKSPACE_ROOT':'/var/lib/aegis-semgrep',
             },
             command='sh /app/scanner-worker-entrypoint.sh',
             user='0:0',
             network_mode='service:scanner_egress',
-            cap_add=['NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'],
+            cap_add=['NET_RAW', 'SETUID', 'SETGID', 'SETPCAP', 'CHOWN'],
         ),
         'browser_worker': hardened_service(
             environment={
@@ -181,6 +182,27 @@ def test_rejects_internal_ports_bind_mounts_fixture_scope_and_ci_target():
     assert not any('scan_target is active' in item for item in MODULE.validate(model))
 
 
+def test_semgrep_workspace_requires_bounded_chown_bootstrap_capability():
+    model = valid_model()
+    model['services']['scanner_worker']['cap_add'].remove('CHOWN')
+    failures = MODULE.validate(model)
+    assert any('configured workspace contract' in item for item in failures)
+
+
+def test_rejects_chown_without_audited_semgrep_workspace_contract():
+    model = valid_model()
+    del model['services']['scanner_worker']['environment']['AEGIS_SEMGREP_WORKSPACE_ROOT']
+    failures = MODULE.validate(model)
+    assert any('configured workspace contract' in item for item in failures)
+
+
+def test_rejects_unaudited_semgrep_workspace_root():
+    model = valid_model()
+    model['services']['scanner_worker']['environment']['AEGIS_SEMGREP_WORKSPACE_ROOT'] = '/tmp/semgrep'
+    failures = MODULE.validate(model)
+    assert any('unaudited Semgrep workspace root' in item for item in failures)
+
+
 def test_rejects_scanner_privilege_or_namespace_regressions():
     model = valid_model()
     model['services']['celery_worker']['cap_add'] = ['NET_RAW']
@@ -270,7 +292,7 @@ def test_scanner_handoff_ends_nonroot_with_only_net_raw_and_scanners_queue():
     assert '--caps=cap_setpcap,cap_setuid,cap_setgid,cap_net_raw+eip' in entrypoint
     assert '--inh=cap_net_raw' in entrypoint
     assert '--user=aegis' in entrypoint
-    assert entrypoint.index('--addamb=cap_net_raw') < entrypoint.index('--drop=cap_setuid,cap_setgid,cap_setpcap')
+    assert entrypoint.index('--addamb=cap_net_raw') < entrypoint.index('--drop=cap_chown,cap_setuid,cap_setgid,cap_setpcap')
     assert '--caps=cap_net_raw+eip' in entrypoint
     assert '-Q scanners' in entrypoint
     assert 'cap_net_admin' not in entrypoint

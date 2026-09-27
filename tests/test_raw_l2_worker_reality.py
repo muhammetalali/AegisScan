@@ -9,6 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_COMPOSE = ROOT / "aegis-platform" / "docker-compose.yml"
+PROD_COMPOSE = ROOT / "aegis-platform" / "docker-compose.prod.yml"
 ENTRYPOINT = ROOT / "aegis-platform" / "backend" / "scanner-worker-entrypoint.sh"
 DOCKERFILE = ROOT / "aegis-platform" / "backend" / "Dockerfile.django"
 CELERY_APP = ROOT / "aegis-platform" / "backend" / "fastapi_app" / "celery_app.py"
@@ -59,6 +60,16 @@ def test_compose_separates_raw_worker_from_network_administration() -> None:
             assert "/run/docker.sock" not in str(volume)
 
 
+def test_production_scanner_grants_chown_only_for_semgrep_volume_bootstrap() -> None:
+    text = PROD_COMPOSE.read_text(encoding="utf-8")
+    scanner = text.split("  scanner_worker:", 1)[1].split("\n  kali_network:", 1)[0]
+
+    assert "cap_add: !override [NET_RAW, SETUID, SETGID, SETPCAP, CHOWN]" in scanner
+    assert "AEGIS_SEMGREP_WORKSPACE_ROOT: /var/lib/aegis-semgrep" in scanner
+    # Base compose remains least-privilege for non-production usage.
+    assert "CHOWN" not in _compose()["services"]["scanner_worker"]["cap_add"]
+
+
 def test_scanner_entrypoint_locks_privileges_after_capability_handoff() -> None:
     text = ENTRYPOINT.read_text(encoding="utf-8")
     executable = "\n".join(
@@ -69,10 +80,10 @@ def test_scanner_entrypoint_locks_privileges_after_capability_handoff() -> None:
     assert "--user=aegis" in executable
     assert "--inh=cap_net_raw" in executable
     assert "--addamb=cap_net_raw" in executable
-    assert "--drop=cap_setuid,cap_setgid,cap_setpcap" in executable
+    assert "--drop=cap_chown,cap_setuid,cap_setgid,cap_setpcap" in executable
     assert "--caps=cap_net_raw+eip" in executable
     assert "setpriv --no-new-privs -- celery" in executable
-    assert executable.index("--drop=cap_setuid,cap_setgid,cap_setpcap") < executable.index("setpriv --no-new-privs")
+    assert executable.index("--drop=cap_chown,cap_setuid,cap_setgid,cap_setpcap") < executable.index("setpriv --no-new-privs")
     assert "cap_net_admin" not in executable
     assert "-q scanners" in executable
 

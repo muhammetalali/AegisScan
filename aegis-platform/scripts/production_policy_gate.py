@@ -15,7 +15,8 @@ INTERNAL_SERVICES = {
 HARDENED_SERVICES = {'django', 'fastapi', 'celery_worker', 'scanner_worker', 'browser_worker', 'scanner_egress', 'celery_beat', 'backup'}
 NO_NEW_PRIVILEGES_SERVICES = HARDENED_SERVICES - {'scanner_worker'}
 _TRUTHY = {'1', 'true', 'yes', 'on'}
-_SCANNER_BOOTSTRAP_CAPS = {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
+_SCANNER_BASE_BOOTSTRAP_CAPS = {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
+_SCANNER_SEMGREP_BOOTSTRAP_CAPS = _SCANNER_BASE_BOOTSTRAP_CAPS | {'CHOWN'}
 _BACKUP_SECRET_TARGETS = {'/run/secrets/s3-credentials.json', '/run/secrets/encryption.key'}
 _IMAGE_DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
 
@@ -202,11 +203,21 @@ def validate(model: dict) -> list[str]:
             failures.append(f'browser_worker is missing required production runtime variable {required}')
 
     scanner_worker = services.get('scanner_worker', {})
+    scanner_env = scanner_worker.get('environment') or {}
+    semgrep_workspace_root = str(scanner_env.get('AEGIS_SEMGREP_WORKSPACE_ROOT', '')).strip()
+    if semgrep_workspace_root and semgrep_workspace_root != '/var/lib/aegis-semgrep':
+        failures.append('scanner_worker uses an unaudited Semgrep workspace root')
+    expected_scanner_caps = (
+        _SCANNER_SEMGREP_BOOTSTRAP_CAPS
+        if semgrep_workspace_root == '/var/lib/aegis-semgrep'
+        else _SCANNER_BASE_BOOTSTRAP_CAPS
+    )
     scanner_caps = _tokens(scanner_worker.get('cap_add'))
-    if scanner_caps != _SCANNER_BOOTSTRAP_CAPS:
+    if scanner_caps != expected_scanner_caps:
+        expected = ','.join(sorted(expected_scanner_caps))
         failures.append(
             'scanner_worker bootstrap capabilities must be exactly '
-            'NET_RAW,SETUID,SETGID,SETPCAP before the non-root handoff'
+            f'{expected} for the configured workspace contract before the non-root handoff'
         )
     if 'NET_ADMIN' in scanner_caps:
         failures.append('scanner_worker must not receive NET_ADMIN; egress policy belongs to scanner_egress')
@@ -222,7 +233,6 @@ def validate(model: dict) -> list[str]:
     if 'scanner-worker-entrypoint.sh' not in _command_text(scanner_worker):
         failures.append('scanner_worker does not use the audited non-root capability handoff launcher')
 
-    scanner_env = scanner_worker.get('environment') or {}
     _validate_recon_image_binding(services, scanner_env, failures)
 
     egress = services.get('scanner_egress', {})

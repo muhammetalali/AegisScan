@@ -21,6 +21,8 @@ if [ -n "${AEGIS_SEMGREP_WORKSPACE_ROOT:-}" ]; then
         echo "AEGIS_SEMGREP_WORKSPACE_ROOT must be /var/lib/aegis-semgrep" >&2
         exit 126
     fi
+    # Production grants CAP_CHOWN only for this named-volume ownership handoff.
+    # It is removed from the capability bounding set before Celery starts.
     mkdir -p /var/lib/aegis-semgrep
     chown 10001:10001 /var/lib/aegis-semgrep
     chmod 0700 /var/lib/aegis-semgrep
@@ -48,7 +50,8 @@ python -m fastapi_app.services.semgrep_retirement_preflight
 # must pin the loopback governed Masscan provider before the worker starts.
 python -m fastapi_app.services.masscan_retirement_preflight
 
-# Docker starts this bootstrap with only NET_RAW + SETUID/SETGID/SETPCAP.
+# Docker starts this bootstrap with NET_RAW + SETUID/SETGID/SETPCAP; production
+# adds CHOWN only long enough to initialize the Semgrep named volume above.
 # SETPCAP must remain available until CAP_NET_RAW has been moved into the
 # ambient set and the temporary bootstrap caps have been removed from the
 # bounding set. Only after that bounded handoff do we set no_new_privs, so the
@@ -63,6 +66,6 @@ exec capsh \
     --user=aegis \
     --caps=cap_setpcap,cap_net_raw+eip \
     --addamb=cap_net_raw \
-    --drop=cap_setuid,cap_setgid,cap_setpcap \
+    --drop=cap_chown,cap_setuid,cap_setgid,cap_setpcap \
     --caps=cap_net_raw+eip \
     -- -c 'exec setpriv --no-new-privs -- celery -A fastapi_app.celery_app worker -l info -c "${SCANNER_WORKER_CONCURRENCY:-2}" -Q scanners'
