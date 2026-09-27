@@ -238,10 +238,10 @@ def upsert(email, password, first_name, last_name):
 
 operator = upsert({encoded["email"]}, {encoded["password"]}, "Capacity", "Operator")
 approver = upsert({encoded["approver_email"]}, {encoded["approver_password"]}, "Capacity", "Approver")
-print("CAPACITY_FIXTURE_READY=" + json.dumps({{
-    "actor_access": str(RefreshToken.for_user(operator).access_token),
-    "approver_access": str(RefreshToken.for_user(approver).access_token),
-}}, separators=(",", ":")))
+print("CAPACITY_FIXTURE_READY=" + json.dumps(dict(
+    actor_access=str(RefreshToken.for_user(operator).access_token),
+    approver_access=str(RefreshToken.for_user(approver).access_token),
+), separators=(",", ":")))
 """
     result = _compose(
         compose_root,
