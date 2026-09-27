@@ -117,14 +117,14 @@ jobs:
           from pathlib import Path
           import yaml
 
-          def verify(path: str) -> None:
+          def verify(path: str, expected_scanner_caps: set[str]) -> None:
               data = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
               services = data['services']
               scanner = services['scanner_worker']
               browser = services['browser_worker']
               general = services['celery_worker']
               egress = services['scanner_egress']
-              assert set(scanner.get('cap_add') or []) == {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'}
+              assert set(scanner.get('cap_add') or []) == expected_scanner_caps
               assert scanner.get('cap_drop') == ['ALL']
               assert 'NET_ADMIN' not in (scanner.get('cap_add') or [])
               assert 'no-new-privileges:true' not in (scanner.get('security_opt') or [])
@@ -144,8 +144,14 @@ jobs:
               for name in ('scanner_worker', 'browser_worker', 'celery_worker', 'scanner_egress'):
                   rendered = repr(services[name].get('volumes') or [])
                   assert 'docker.sock' not in rendered
-          verify('/tmp/aegis-ci-compose.yml')
-          verify('/tmp/aegis-prod-compose.yml')
+          verify(
+              '/tmp/aegis-ci-compose.yml',
+              {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP'},
+          )
+          verify(
+              '/tmp/aegis-prod-compose.yml',
+              {'NET_RAW', 'SETUID', 'SETGID', 'SETPCAP', 'CHOWN'},
+          )
           print('RAW_L2_COMPOSE_BOUNDARY=PASS')
           PY
 
