@@ -46,3 +46,13 @@ def test_cloud_binding_preflight_fails_fast_before_ci_wait_and_dependency_instal
     install = text.index("- name: Install exact cloud runtime dependencies")
     execute = text.index("- name: Execute and validate configured live providers")
     assert authorize < binding < wait < install < execute
+
+
+def test_identity_binding_preflight_fails_fast_before_ci_wait_and_dependency_install():
+    text = IDENTITY.read_text(encoding="utf-8")
+    authorize = text.index("- name: Authorize exact-main external identity acceptance")
+    binding = text.index("- name: Require at least one complete external identity binding")
+    wait = text.index("- name: Wait for exact-SHA Required CI Governance")
+    install = text.index("- name: Install live identity dependencies")
+    execute = text.index("- name: Execute real read-only external identity validation")
+    assert authorize < binding < wait < install < execute
