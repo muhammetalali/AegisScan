@@ -42,8 +42,8 @@ class BranchHygieneClassificationTests(unittest.TestCase):
         self.assertEqual(category, "recent_merged")
         self.assertFalse(deletable)
 
-    def test_aged_merged_chatgpt_a_codex_and_sol_worker_are_candidates(self):
-        for name in ("chatgpt-a/old", "codex/old", "sol-worker/old"):
+    def test_aged_merged_chatgpt_a_unified_codex_and_sol_worker_are_candidates(self):
+        for name in ("chatgpt-a/old", "chatgpt-unified/old", "codex/old", "sol-worker/old"):
             category, deletable, _ = classify(name)
             self.assertEqual(category, "safe_merged_candidate")
             self.assertTrue(deletable)

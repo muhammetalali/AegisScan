@@ -1,0 +1,155 @@
+name: Final Project Hygiene
+
+'on':
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Exact published Release 1 SHA to clean without SHA drift'
+        required: true
+        type: string
+      confirm:
+        description: 'Type CLEAN to apply fail-closed merged-branch hygiene'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: final-project-hygiene-${{ inputs.release_sha }}
+  cancel-in-progress: false
+
+jobs:
+  final-project-hygiene:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_sha }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require explicit exact published main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "CLEAN"
+          case "$RELEASE_SHA" in
+            *[!0-9a-f]*|'') echo 'release_sha must be lowercase hexadecimal' >&2; exit 1 ;;
+          esac
+          test "${#RELEASE_SHA}" -eq 40
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          install -d -m 0700 /tmp/aegis-final-hygiene artifacts
+          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" \
+            --json tagName,targetCommitish,isDraft,isPrerelease,url \
+            > /tmp/aegis-final-hygiene/release.json
+
+      - name: Require zero open pull requests on exact release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY" > /tmp/aegis-final-hygiene/repository.json
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --slurp > /tmp/aegis-final-hygiene/open-pr-pages.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          repo=json.loads(Path('/tmp/aegis-final-hygiene/repository.json').read_text())
+          pages=json.loads(Path('/tmp/aegis-final-hygiene/open-pr-pages.json').read_text())
+          pulls=[item for page in pages for item in page]
+          state={
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'default_branch': repo.get('default_branch'),
+              'main_sha': os.environ['RELEASE_SHA'],
+              'open_pr_count': len(pulls),
+          }
+          Path('/tmp/aegis-final-hygiene/repository-state.json').write_text(
+              json.dumps(state, sort_keys=True, indent=2)+'\n'
+          )
+          if pulls:
+              raise SystemExit(f'final hygiene requires zero open PRs; found {[p.get("number") for p in pulls]}')
+          PY
+
+      - name: Apply live-revalidated safe merged branch cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/admin/branch_hygiene_admin.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --mode apply \
+            --min-age-hours 24 \
+            --include-chatgpt-b \
+            --output /tmp/aegis-final-hygiene/branch-apply.json
+
+      - name: Re-plan after cleanup and require zero safe candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/admin/branch_hygiene_admin.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --mode plan \
+            --min-age-hours 24 \
+            --include-chatgpt-b \
+            --output /tmp/aegis-final-hygiene/branch-post-plan.json
+
+      - name: Build final project hygiene decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/final_project_hygiene.py \
+            --release-sha "$RELEASE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repo-root . \
+            --repository-state /tmp/aegis-final-hygiene/repository-state.json \
+            --apply-result /tmp/aegis-final-hygiene/branch-apply.json \
+            --post-plan /tmp/aegis-final-hygiene/branch-post-plan.json \
+            --release-metadata /tmp/aegis-final-hygiene/release.json \
+            --output artifacts/final-project-hygiene.json
+          sha256sum artifacts/final-project-hygiene.json > artifacts/final-project-hygiene.sha256
+          sha256sum -c artifacts/final-project-hygiene.sha256
+
+      - name: Prove final hygiene decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload=json.loads(Path('artifacts/final-project-hygiene.json').read_text())
+          assert payload['schema']=='aegisscan.final-project-hygiene.v1'
+          assert payload['status']=='success'
+          assert payload['decision']=='CLEAN'
+          assert payload['release_sha']==os.environ['RELEASE_SHA']
+          assert payload['open_pr_count']==0
+          assert payload['safe_branch_candidates_after']==[]
+          assert all(payload['controls'].values())
+          print('AEGISSCAN_FINAL_HYGIENE=CLEAN')
+          PY
+
+      - name: Retain final hygiene evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-final-project-hygiene-${{ env.RELEASE_SHA }}
+          path: |
+            artifacts/final-project-hygiene.json
+            artifacts/final-project-hygiene.sha256
+            /tmp/aegis-final-hygiene/repository-state.json
+            /tmp/aegis-final-hygiene/branch-apply.json
+            /tmp/aegis-final-hygiene/branch-post-plan.json
+            /tmp/aegis-final-hygiene/release.json
+          if-no-files-found: error
+          retention-days: 180
