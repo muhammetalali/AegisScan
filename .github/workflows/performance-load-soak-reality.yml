@@ -445,6 +445,8 @@ jobs:
           assert all(payload['controls'].values())
           print('AEGISSCAN_RELEASE_PERFORMANCE=ACCEPTED')
           PY
+          sha256sum release-performance-acceptance.json > release-performance-acceptance.sha256
+          sha256sum -c release-performance-acceptance.sha256
 
       - name: Upload final release performance acceptance
         if: env.AEGIS_PERFORMANCE_PROFILE == 'release'
@@ -453,6 +455,7 @@ jobs:
           name: release-performance-acceptance-${{ env.AEGIS_EXACT_HEAD }}
           path: |
             release-performance-acceptance.json
+            release-performance-acceptance.sha256
             release-capacity-reality.json
             release-performance-reality.json
           retention-days: 180
