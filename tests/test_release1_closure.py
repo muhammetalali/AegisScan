@@ -269,6 +269,31 @@ def test_closure_rejects_other_release_provenance(tmp_path):
                        output=tmp_path / 'closure.json')
 
 
+
+def test_release_workflow_publishes_exact_sha_immutable_github_release_only_after_closure():
+    import yaml
+    root = Path(__file__).parents[1]
+    workflow = yaml.safe_load((root / '.github/workflows/release1-closure.yml').read_text(encoding='utf-8'))
+    assert workflow['env']['AEGIS_RELEASE_TAG'] == 'v1.0.0'
+    steps = workflow['jobs']['release1-closure']['steps']
+    names = [step.get('name') for step in steps]
+    prove = names.index('Prove Release 1 decision')
+    publish = names.index('Publish immutable GitHub Release 1 evidence')
+    retain = names.index('Retain Release 1 closure evidence')
+    assert prove < publish < retain
+    script = steps[publish]['run']
+    assert 'gh release create "$AEGIS_RELEASE_TAG"' in script
+    assert '--target "$AEGIS_RELEASE_SHA"' in script
+    assert 'release1-closure.json' in script
+    assert 'release1-closure.sha256' in script
+    assert "obj.get('type') != 'commit'" in script
+    assert "obj.get('sha') != expected_sha" in script
+    assert "release.get('targetCommitish') != expected_sha" in script
+    assert 'isDraft' in script and 'isPrerelease' in script
+    assert 'cmp artifacts/release1-closure.json' in script
+    assert 'cmp artifacts/release1-closure.sha256' in script
+
+
 def test_contract_success_cannot_be_reported_as_actual_release_closure(tmp_path):
     import os
     import subprocess
