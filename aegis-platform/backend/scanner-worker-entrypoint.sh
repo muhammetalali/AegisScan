@@ -50,7 +50,8 @@ python -m fastapi_app.services.semgrep_retirement_preflight
 # must pin the loopback governed Masscan provider before the worker starts.
 python -m fastapi_app.services.masscan_retirement_preflight
 
-# Docker starts this bootstrap with only NET_RAW + SETUID/SETGID/SETPCAP.
+# Docker starts this bootstrap with NET_RAW + SETUID/SETGID/SETPCAP; production
+# adds CHOWN only long enough to initialize the Semgrep named volume above.
 # SETPCAP must remain available until CAP_NET_RAW has been moved into the
 # ambient set and the temporary bootstrap caps have been removed from the
 # bounding set. Only after that bounded handoff do we set no_new_privs, so the
