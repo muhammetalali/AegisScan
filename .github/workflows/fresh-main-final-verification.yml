@@ -152,6 +152,38 @@ jobs:
             --name "aegisscan-final-project-hygiene-$RELEASE_SHA" \
             --dir /tmp/aegis-final/evidence/hygiene
 
+      - name: Normalize downloaded final evidence paths fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          root = Path('/tmp/aegis-final/evidence')
+          canonical = Path('/tmp/aegis-final/canonical')
+          expected = {
+              'release': ('release1-closure.json', 'release1-closure.sha256'),
+              'providers': ('external-provider-acceptance-closure.json', 'external-provider-acceptance-closure.sha256'),
+              'performance': ('release-performance-acceptance.json', 'release-performance-acceptance.sha256'),
+              'hygiene': ('final-project-hygiene.json', 'final-project-hygiene.sha256'),
+          }
+          for group, names in expected.items():
+              source_root = root / group
+              for name in names:
+                  matches = [
+                      path for path in source_root.rglob(name)
+                      if path.is_file() and not path.is_symlink()
+                  ]
+                  if len(matches) != 1:
+                      raise SystemExit(
+                          f'{group}/{name}: expected exactly one regular evidence file, found {len(matches)}'
+                      )
+                  target = canonical / group / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(matches[0], target)
+          PY
+
       - name: Build zero-drift fresh-main verification
         shell: bash
         run: |
@@ -167,14 +199,14 @@ jobs:
             --provider-closure-run /tmp/aegis-final/metadata/provider_closure.json \
             --performance-run /tmp/aegis-final/metadata/performance.json \
             --hygiene-run /tmp/aegis-final/metadata/hygiene.json \
-            --release-closure /tmp/aegis-final/evidence/release/release1-closure.json \
-            --release-closure-sha256 /tmp/aegis-final/evidence/release/release1-closure.sha256 \
-            --provider-closure /tmp/aegis-final/evidence/providers/external-provider-acceptance-closure.json \
-            --provider-closure-sha256 /tmp/aegis-final/evidence/providers/external-provider-acceptance-closure.sha256 \
-            --performance-acceptance /tmp/aegis-final/evidence/performance/release-performance-acceptance.json \
-            --performance-acceptance-sha256 /tmp/aegis-final/evidence/performance/release-performance-acceptance.sha256 \
-            --hygiene /tmp/aegis-final/evidence/hygiene/final-project-hygiene.json \
-            --hygiene-sha256 /tmp/aegis-final/evidence/hygiene/final-project-hygiene.sha256 \
+            --release-closure /tmp/aegis-final/canonical/release/release1-closure.json \
+            --release-closure-sha256 /tmp/aegis-final/canonical/release/release1-closure.sha256 \
+            --provider-closure /tmp/aegis-final/canonical/providers/external-provider-acceptance-closure.json \
+            --provider-closure-sha256 /tmp/aegis-final/canonical/providers/external-provider-acceptance-closure.sha256 \
+            --performance-acceptance /tmp/aegis-final/canonical/performance/release-performance-acceptance.json \
+            --performance-acceptance-sha256 /tmp/aegis-final/canonical/performance/release-performance-acceptance.sha256 \
+            --hygiene /tmp/aegis-final/canonical/hygiene/final-project-hygiene.json \
+            --hygiene-sha256 /tmp/aegis-final/canonical/hygiene/final-project-hygiene.sha256 \
             --output artifacts/fresh-main-final-verification.json
           sha256sum artifacts/fresh-main-final-verification.json > artifacts/fresh-main-final-verification.sha256
           sha256sum -c artifacts/fresh-main-final-verification.sha256
