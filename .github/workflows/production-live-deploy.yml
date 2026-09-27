@@ -17,7 +17,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: aegisscan-internal-production
+  group: aegisscan-internal-production-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:

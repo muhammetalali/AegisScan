@@ -48,6 +48,7 @@ def test_live_production_workflow_has_only_manual_or_one_time_main_request_trigg
     assert deploy["environment"] == "production"
     assert deploy["if"] == "github.ref == 'refs/heads/main'"
     assert deploy["runs-on"] == ["self-hosted", "linux", "x64", "aegisscan-production"]
+    assert data["concurrency"]["group"] == "aegisscan-internal-production-${{ github.sha }}"
     assert data["concurrency"]["cancel-in-progress"] is False
 
 
