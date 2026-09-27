@@ -1,0 +1,10 @@
+{
+  "schema": "aegisscan.live-acceptance-request.v1",
+  "request_id": "external-identity-live-20260927-031948-6f13f222",
+  "scope": "external-identity",
+  "confirm": "VALIDATE",
+  "requested_branch": "main",
+  "requested_base_sha": "6f13f222d250c7ce846e491964f898f2b4aa3a4c",
+  "requested_at": "2026-09-27T03:19:48Z",
+  "expires_at": "2026-09-27T11:19:48Z"
+}
