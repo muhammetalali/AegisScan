@@ -144,6 +144,29 @@ jobs:
             --name "aegisscan-fresh-main-final-$RELEASE_SHA" \
             --dir /tmp/aegis-completion/verification
 
+      - name: Normalize downloaded fresh-main evidence fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          source = Path('/tmp/aegis-completion/verification')
+          target = Path('/tmp/aegis-completion/canonical')
+          for name in ('fresh-main-final-verification.json', 'fresh-main-final-verification.sha256'):
+              matches = [
+                  path for path in source.rglob(name)
+                  if path.is_file() and not path.is_symlink()
+              ]
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f'{name}: expected exactly one regular evidence file, found {len(matches)}'
+                  )
+              target.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(matches[0], target / name)
+          PY
+
       - name: Build terminal PROJECT_COMPLETE attestation
         shell: bash
         run: |
@@ -155,7 +178,8 @@ jobs:
             --release-metadata /tmp/aegis-completion/release.json \
             --release-tag-metadata /tmp/aegis-completion/release-tag.json \
             --verification-run-metadata /tmp/aegis-completion/verification-run.json \
-            --fresh-verification /tmp/aegis-completion/verification/fresh-main-final-verification.json \
+            --fresh-verification /tmp/aegis-completion/canonical/fresh-main-final-verification.json \
+            --fresh-verification-sha256 /tmp/aegis-completion/canonical/fresh-main-final-verification.sha256 \
             --output artifacts/aegisscan-project-completion.json
           sha256sum artifacts/aegisscan-project-completion.json > artifacts/aegisscan-project-completion.sha256
           sha256sum -c artifacts/aegisscan-project-completion.sha256
@@ -235,5 +259,7 @@ jobs:
             /tmp/aegis-completion/release.json
             /tmp/aegis-completion/release-tag.json
             /tmp/aegis-completion/verification-run.json
+            /tmp/aegis-completion/canonical/fresh-main-final-verification.json
+            /tmp/aegis-completion/canonical/fresh-main-final-verification.sha256
           if-no-files-found: error
           retention-days: 365
