@@ -73,3 +73,19 @@ def test_optional_release_request_is_governed_when_present():
     requested_at = datetime.fromisoformat(payload["requested_at"].replace("Z", "+00:00"))
     expires_at = datetime.fromisoformat(payload["expires_at"].replace("Z", "+00:00"))
     assert expires_at > requested_at
+
+
+def test_release_profile_emits_separate_immutable_acceptance_artifact():
+    data = _workflow()
+    steps = data["jobs"]["capacity-recovery"]["steps"]
+    names = [step.get("name") for step in steps]
+    build = steps[names.index("Build immutable final release performance acceptance")]
+    upload = steps[names.index("Upload final release performance acceptance")]
+    assert build["if"] == "env.AEGIS_PERFORMANCE_PROFILE == 'release'"
+    assert upload["if"] == "env.AEGIS_PERFORMANCE_PROFILE == 'release'"
+    assert "release_performance_acceptance.py" in build["run"]
+    assert '--profile "$AEGIS_PERFORMANCE_PROFILE"' in build["run"]
+    assert "AEGISSCAN_RELEASE_PERFORMANCE=ACCEPTED" in build["run"]
+    assert upload["with"]["name"] == "release-performance-acceptance-${{ env.AEGIS_EXACT_HEAD }}"
+    assert upload["with"]["retention-days"] == 180
+    assert "release-performance-acceptance.json" in upload["with"]["path"]
