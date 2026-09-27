@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import http.client
 import importlib.util
+import io
 import json
 from pathlib import Path
 
@@ -149,4 +151,75 @@ def test_live_execution_workflows_remain_lifecycle_only_to_avoid_ci_barrier_dead
         "External Identity Live Provider Reality",
         "Internal Production Deploy and Acceptance",
     } <= lifecycle
+
+class _Response:
+    def __init__(self, payload: bytes | None = None, error: BaseException | None = None):
+        self.payload = payload or b""
+        self.error = error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        if self.error is not None:
+            raise self.error
+        return self.payload
+
+
+def test_api_json_retries_incomplete_read_then_recovers(monkeypatch):
+    calls = iter(
+        [
+            _Response(error=http.client.IncompleteRead(b'{"workflow_runs":', 10)),
+            _Response(payload=b'{"workflow_runs": []}'),
+        ]
+    )
+    sleeps = []
+    monkeypatch.setattr(gate.urllib.request, "urlopen", lambda *_args, **_kwargs: next(calls))
+    monkeypatch.setattr(gate.time, "sleep", lambda value: sleeps.append(value))
+
+    result = gate._api_json("/repos/owner/repo/actions/runs", "token")
+
+    assert result == {"workflow_runs": []}
+    assert sleeps == [1.0]
+
+
+def test_api_json_retries_transient_disconnect_exhaustion_and_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        gate.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(error=http.client.RemoteDisconnected("peer closed")),
+    )
+    sleeps = []
+    monkeypatch.setattr(gate.time, "sleep", lambda value: sleeps.append(value))
+
+    with pytest.raises(gate.RequiredCIGateError, match="after 4 transient attempts"):
+        gate._api_json("/repos/owner/repo/actions/runs", "token")
+
+    assert sleeps == [1.0, 2.0, 4.0]
+
+
+def test_api_json_does_not_retry_nontransient_http_error(monkeypatch):
+    error = gate.urllib.error.HTTPError(
+        "https://api.github.com/test",
+        403,
+        "forbidden",
+        {},
+        io.BytesIO(b'{"message":"forbidden"}'),
+    )
+    calls = {"count": 0}
+
+    def fail(*_args, **_kwargs):
+        calls["count"] += 1
+        raise error
+
+    monkeypatch.setattr(gate.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(gate.time, "sleep", lambda _value: pytest.fail("must not retry 403"))
+
+    with pytest.raises(gate.RequiredCIGateError, match="HTTP 403"):
+        gate._api_json("/repos/owner/repo/actions/runs", "token")
+
+    assert calls["count"] == 1
 
