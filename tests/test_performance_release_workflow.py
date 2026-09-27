@@ -53,6 +53,8 @@ def test_release_profile_expands_capacity_and_soak_without_relaxing_thresholds()
     assert '--max-error-rate 0.01' in text
     assert '--min-requests "$min_requests"' in text
     assert '--min-rps "$min_rps"' in text
+    assert '--source-sha "$AEGIS_EXACT_HEAD"' in text
+    assert "assert performance['source_sha']==os.environ['AEGIS_EXACT_HEAD']" in text
 
 
 def test_optional_release_request_is_governed_when_present():
