@@ -45,6 +45,7 @@ def _fixture(tmp_path: Path):
         tmp_path / "release-performance-reality.json",
         {
             "schema": "aegisscan.performance-reality.v1",
+            "source_sha": SHA,
             "passed": True,
             "stages": [
                 {"concurrency": 30, "duration_seconds": 120.0},
@@ -86,6 +87,7 @@ def test_release_performance_acceptance_requires_extended_exact_sha_profile(tmp_
     assert payload["release_sha"] == SHA
     assert payload["profile"] == "release"
     assert payload["capacity"]["minimum_tenants"] == 6
+    assert payload["performance"]["source_sha"] == SHA
     assert payload["performance"]["stage_concurrency"] == [30, 75, 125, 50]
     assert payload["performance"]["final_soak_duration_seconds"] >= 850
     assert all(payload["controls"].values())
@@ -133,3 +135,18 @@ def test_release_acceptance_rejects_three_tenant_capacity(tmp_path: Path):
             performance_path=performance,
             output=tmp_path / "acceptance.json",
         )
+
+def test_release_acceptance_rejects_cross_sha_performance_evidence(tmp_path: Path):
+    capacity, performance = _fixture(tmp_path)
+    payload = json.loads(performance.read_text())
+    payload["source_sha"] = "f" * 40
+    performance.write_text(json.dumps(payload))
+    with pytest.raises(PerformanceAcceptanceError, match="source_sha"):
+        build_acceptance(
+            release_sha=SHA,
+            profile="release",
+            capacity_path=capacity,
+            performance_path=performance,
+            output=tmp_path / "acceptance.json",
+        )
+
