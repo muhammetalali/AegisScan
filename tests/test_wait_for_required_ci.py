@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import importlib.util
 import json
 from pathlib import Path
@@ -150,3 +151,92 @@ def test_live_execution_workflows_remain_lifecycle_only_to_avoid_ci_barrier_dead
         "Internal Production Deploy and Acceptance",
     } <= lifecycle
 
+
+
+class _JSONResponse:
+    def __init__(self, payload: bytes | None = None, error: BaseException | None = None):
+        self.payload = payload
+        self.error = error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, *_args, **_kwargs):
+        if self.error is not None:
+            raise self.error
+        return self.payload or b""
+
+
+def test_api_json_retries_incomplete_read_then_succeeds(monkeypatch):
+    responses = iter(
+        [
+            _JSONResponse(error=http.client.IncompleteRead(b'{"workflow_runs":', 10)),
+            _JSONResponse(payload=b'{"workflow_runs": []}'),
+        ]
+    )
+    monkeypatch.setattr(gate.urllib.request, "urlopen", lambda *_args, **_kwargs: next(responses))
+    sleeps = []
+    monkeypatch.setattr(gate.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = gate._api_json(
+        "/repos/owner/repo/actions/runs",
+        "token",
+        max_attempts=3,
+        retry_base_seconds=0.25,
+    )
+
+    assert payload == {"workflow_runs": []}
+    assert sleeps == [0.25]
+
+
+def test_api_json_retries_transient_http_but_fails_closed_on_permanent_http(monkeypatch):
+    transient = gate.urllib.error.HTTPError(
+        url="https://api.github.com/test",
+        code=503,
+        msg="Service Unavailable",
+        hdrs={},
+        fp=None,
+    )
+    permanent = gate.urllib.error.HTTPError(
+        url="https://api.github.com/test",
+        code=403,
+        msg="Forbidden",
+        hdrs={},
+        fp=None,
+    )
+    responses = iter([transient, _JSONResponse(payload=b'{"ok": true}')])
+
+    def transient_then_success(*_args, **_kwargs):
+        item = next(responses)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    monkeypatch.setattr(gate.urllib.request, "urlopen", transient_then_success)
+    monkeypatch.setattr(gate.time, "sleep", lambda _seconds: None)
+    assert gate._api_json("/test", "token", max_attempts=2, retry_base_seconds=0)["ok"] is True
+
+    monkeypatch.setattr(
+        gate.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(permanent),
+    )
+    with pytest.raises(gate.RequiredCIGateError, match="HTTP 403"):
+        gate._api_json("/test", "token", max_attempts=3, retry_base_seconds=0)
+
+
+def test_api_json_exhausts_transient_transport_retries(monkeypatch):
+    monkeypatch.setattr(
+        gate.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            http.client.RemoteDisconnected("peer closed connection")
+        ),
+    )
+    monkeypatch.setattr(gate.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(gate.RequiredCIGateError, match="after 3 attempts"):
+        gate._api_json("/test", "token", max_attempts=3, retry_base_seconds=0)
