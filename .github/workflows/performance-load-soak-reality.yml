@@ -131,7 +131,7 @@ jobs:
           python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 5:5             --stage-warmup-seconds 0             --max-p95-ms 1000 --max-error-rate 0.02 --min-rps 1 --min-requests 20             --output /tmp/warmup.json
       - name: Load capacity and soak reality
         run: |
-          python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --path /health --path /ready             --stage 10:15 --stage 30:20 --stage 60:20 --stage 25:90             --stage-warmup-seconds 2             --max-p95-ms 500 --max-error-rate 0.01 --min-rps 5 --min-requests 500             --output performance-reality.json
+          python aegis-platform/scripts/load_reality.py             --base-url http://127.0.0.1:8001             --source-sha "$AEGIS_EXACT_HEAD"             --path /health --path /ready             --stage 10:15 --stage 30:20 --stage 60:20 --stage 25:90             --stage-warmup-seconds 2             --max-p95-ms 500 --max-error-rate 0.01 --min-rps 5 --min-requests 500             --output performance-reality.json
       - name: Upload performance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -388,6 +388,7 @@ jobs:
           fi
           python aegis-platform/scripts/load_reality.py \
             --base-url http://localhost \
+            --source-sha "$AEGIS_EXACT_HEAD" \
             --path /health --path /ready \
             "${stages[@]}" \
             --stage-warmup-seconds 3 \
@@ -414,6 +415,7 @@ jobs:
           assert capacity['proof']['kali_scanner_concurrency_exercised'] is True
           assert capacity['proof']['controlled_recovery'] is True
           assert performance['schema']=='aegisscan.performance-reality.v1'
+          assert performance['source_sha']==os.environ['AEGIS_EXACT_HEAD']
           assert performance['passed'] is True
           assert performance['summary']['requests'] > 0
           assert performance['summary']['worst_stage_p95_ms'] <= performance['thresholds']['max_p95_ms']
