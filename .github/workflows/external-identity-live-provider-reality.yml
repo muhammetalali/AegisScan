@@ -81,25 +81,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
 
-      - name: Wait for exact-SHA Required CI Governance
-        if: steps.request.outputs.execute == 'true'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python scripts/ci/wait_for_required_ci.py \
-            --sha "$GITHUB_SHA" \
-            --branch main \
-            --workflow-name "Required CI Governance" \
-            --event push \
-            --timeout-seconds 4500 \
-            --poll-seconds 15
-
-      - name: Install live identity dependencies
-        if: steps.request.outputs.execute == 'true'
-        run: python -m pip install requests cryptography defusedxml
-
       - name: Require at least one complete external identity binding
         if: steps.request.outputs.execute == 'true'
         id: configured
@@ -126,6 +107,25 @@ jobs:
           fi
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Configured external identity surfaces: $count" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for exact-SHA Required CI Governance
+        if: steps.request.outputs.execute == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ci/wait_for_required_ci.py \
+            --sha "$GITHUB_SHA" \
+            --branch main \
+            --workflow-name "Required CI Governance" \
+            --event push \
+            --timeout-seconds 4500 \
+            --poll-seconds 15
+
+      - name: Install live identity dependencies
+        if: steps.request.outputs.execute == 'true'
+        run: python -m pip install requests cryptography defusedxml
 
       - name: Materialize protected identity material
         if: steps.request.outputs.execute == 'true'
