@@ -116,6 +116,18 @@ def test_live_production_workflow_requires_bounded_authorization_pinned_ssh_ente
     assert "PasswordAuthentication=yes" not in text
 
 
+
+def test_live_production_workflow_reclaims_only_non_durable_storage_before_deploy():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "Reclaim bounded non-durable production storage" in text
+    assert "production_storage_reclaim.py" in text
+    assert "--minimum-free-gib 60" in text
+    assert "--target-free-gib 68" in text
+    assert "storage-reclaim.json" in text
+    assert text.index("Reclaim bounded non-durable production storage") < text.index("Deploy exact main SHA through private enterprise perimeter")
+    assert "'storage_volume_prune_performed': storage['volume_prune_performed']" in text
+
+
 def test_live_production_workflow_requires_operational_backup_alertmanager_black_box_and_cli_acceptance():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "production_remote_operational_acceptance.py" in text
