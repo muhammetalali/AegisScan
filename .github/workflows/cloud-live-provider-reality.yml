@@ -74,28 +74,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
 
-      - name: Wait for exact-SHA Required CI Governance
-        if: steps.request.outputs.execute == 'true'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python scripts/ci/wait_for_required_ci.py \
-            --sha "$GITHUB_SHA" \
-            --branch main \
-            --workflow-name "Required CI Governance" \
-            --event push \
-            --timeout-seconds 4500 \
-            --poll-seconds 15
-
-      - name: Install exact cloud runtime dependencies
-        if: steps.request.outputs.execute == 'true'
-        run: |
-          set -euo pipefail
-          python -m pip install -e '.[dev]'
-          python -m pip install -r aegis-platform/backend/requirements.txt
-
       - name: Require at least one complete live-provider binding
         if: steps.request.outputs.execute == 'true'
         id: configured
@@ -122,6 +100,28 @@ jobs:
           fi
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Configured live providers: $count" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for exact-SHA Required CI Governance
+        if: steps.request.outputs.execute == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/ci/wait_for_required_ci.py \
+            --sha "$GITHUB_SHA" \
+            --branch main \
+            --workflow-name "Required CI Governance" \
+            --event push \
+            --timeout-seconds 4500 \
+            --poll-seconds 15
+
+      - name: Install exact cloud runtime dependencies
+        if: steps.request.outputs.execute == 'true'
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m pip install -r aegis-platform/backend/requirements.txt
 
       - name: Execute and validate configured live providers
         if: steps.request.outputs.execute == 'true'
