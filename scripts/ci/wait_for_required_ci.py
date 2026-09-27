@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
+import socket
 import sys
 import time
 import urllib.error
@@ -27,6 +29,19 @@ def _required_env(name: str) -> str:
     return value
 
 
+TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
+API_ATTEMPTS = 4
+API_RETRY_SECONDS = 1.0
+
+
+def _retry_delay(exc: urllib.error.HTTPError | None, attempt: int) -> float:
+    if exc is not None:
+        raw = str(exc.headers.get("Retry-After", "") or "").strip()
+        if raw.isdigit():
+            return min(10.0, max(0.0, float(raw)))
+    return min(10.0, API_RETRY_SECONDS * (2 ** max(0, attempt - 1)))
+
+
 def _api_json(path: str, token: str) -> Any:
     request = urllib.request.Request(
         f"{API_ROOT}{path}",
@@ -37,16 +52,40 @@ def _api_json(path: str, token: str) -> Any:
             "User-Agent": "AegisScan-live-ci-barrier",
         },
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RequiredCIGateError(
-            f"GitHub API request failed: HTTP {exc.code}: {body[:500]}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise RequiredCIGateError(f"GitHub API request failed: {exc}") from exc
+    last_error: BaseException | None = None
+    for attempt in range(1, API_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                raw = response.read()
+            return json.loads(raw.decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code not in TRANSIENT_HTTP_CODES:
+                body = exc.read().decode("utf-8", errors="replace")
+                raise RequiredCIGateError(
+                    f"GitHub API request failed: HTTP {exc.code}: {body[:500]}"
+                ) from exc
+            last_error = exc
+            if attempt == API_ATTEMPTS:
+                break
+            time.sleep(_retry_delay(exc, attempt))
+        except (
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+            TimeoutError,
+            socket.timeout,
+            ConnectionResetError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as exc:
+            last_error = exc
+            if attempt == API_ATTEMPTS:
+                break
+            time.sleep(_retry_delay(None, attempt))
+    raise RequiredCIGateError(
+        f"GitHub API request failed after {API_ATTEMPTS} transient attempts: "
+        f"{type(last_error).__name__}: {last_error}"
+    ) from last_error
 
 
 def _live_branch_sha(repo: str, branch: str, token: str) -> str:
