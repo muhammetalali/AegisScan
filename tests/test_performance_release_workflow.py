@@ -91,3 +91,5 @@ def test_release_profile_emits_separate_immutable_acceptance_artifact():
     assert upload["with"]["name"] == "release-performance-acceptance-${{ env.AEGIS_EXACT_HEAD }}"
     assert upload["with"]["retention-days"] == 180
     assert "release-performance-acceptance.json" in upload["with"]["path"]
+    assert "release-performance-acceptance.sha256" in upload["with"]["path"]
+    assert "sha256sum release-performance-acceptance.json > release-performance-acceptance.sha256" in text
