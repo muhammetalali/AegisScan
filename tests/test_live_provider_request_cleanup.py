@@ -36,3 +36,13 @@ def test_external_identity_request_deletion_is_cleanup_only_but_manual_dispatch_
     assert text.count("if: steps.request.outputs.execute == 'true'") >= 8
     assert "Require at least one complete external identity binding" in text
     assert "Execute real read-only external identity validation" in text
+
+
+def test_cloud_binding_preflight_fails_fast_before_ci_wait_and_dependency_install():
+    text = CLOUD.read_text(encoding="utf-8")
+    authorize = text.index("- name: Authorize exact-main live-provider acceptance")
+    binding = text.index("- name: Require at least one complete live-provider binding")
+    wait = text.index("- name: Wait for exact-SHA Required CI Governance")
+    install = text.index("- name: Install exact cloud runtime dependencies")
+    execute = text.index("- name: Execute and validate configured live providers")
+    assert authorize < binding < wait < install < execute
