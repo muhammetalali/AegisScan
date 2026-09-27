@@ -39,6 +39,39 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _require_companion_sha256(data_path: Path, checksum_path: Path, label: str) -> str:
+    if not data_path.is_file():
+        raise ProjectCompletionError(f"{label} evidence file is missing")
+    if not checksum_path.is_file() or checksum_path.stat().st_size <= 0 or checksum_path.stat().st_size > 4096:
+        raise ProjectCompletionError(f"{label} companion SHA256 file is missing or has invalid size")
+    try:
+        raw = checksum_path.read_text(encoding="utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise ProjectCompletionError(f"{label} companion SHA256 is not UTF-8 text") from exc
+    parts = raw.split()
+    if len(parts) != 2 or not SHA256_RE.fullmatch(parts[0]):
+        raise ProjectCompletionError(f"{label} companion SHA256 format is invalid")
+    referenced = parts[1].lstrip("*")
+    if Path(referenced).name != data_path.name:
+        raise ProjectCompletionError(f"{label} companion SHA256 references the wrong evidence file")
+    actual = _sha256(data_path)
+    if actual != parts[0]:
+        raise ProjectCompletionError(f"{label} companion SHA256 mismatch")
+    return actual
+
+
+def _require_embedded_verification_digest(value: dict[str, Any]) -> None:
+    supplied = str(value.get("verification_sha256") or "")
+    if not SHA256_RE.fullmatch(supplied):
+        raise ProjectCompletionError("fresh-main verification embedded digest is missing or invalid")
+    unsigned = dict(value)
+    unsigned.pop("verification_sha256", None)
+    raw = json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    expected = hashlib.sha256(raw).hexdigest()
+    if supplied != expected:
+        raise ProjectCompletionError("fresh-main verification embedded digest mismatch")
+
+
 def build_completion(
     *,
     release_sha: str,
@@ -48,6 +81,7 @@ def build_completion(
     release_tag_metadata: Path,
     verification_run_metadata: Path,
     fresh_verification: Path,
+    fresh_verification_sha256: Path,
     output: Path,
 ) -> dict[str, Any]:
     release_sha = release_sha.strip().lower()
@@ -115,6 +149,13 @@ def build_completion(
     ):
         raise ProjectCompletionError("fresh-main final verification is not authoritative")
 
+    _require_embedded_verification_digest(verification)
+    artifact_digest = _require_companion_sha256(
+        fresh_verification,
+        fresh_verification_sha256,
+        "fresh-main final verification",
+    )
+
     required_final_controls = {
         "release1_released",
         "external_providers_accepted",
@@ -129,7 +170,6 @@ def build_completion(
     }:
         raise ProjectCompletionError("fresh-main verification is missing required final controls")
 
-    artifact_digest = _sha256(fresh_verification)
     payload: dict[str, Any] = {
         "schema": SCHEMA,
         "status": "success",
@@ -179,6 +219,7 @@ def main() -> int:
     parser.add_argument("--release-tag-metadata", type=Path, required=True)
     parser.add_argument("--verification-run-metadata", type=Path, required=True)
     parser.add_argument("--fresh-verification", type=Path, required=True)
+    parser.add_argument("--fresh-verification-sha256", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -190,6 +231,7 @@ def main() -> int:
             release_tag_metadata=args.release_tag_metadata,
             verification_run_metadata=args.verification_run_metadata,
             fresh_verification=args.fresh_verification,
+            fresh_verification_sha256=args.fresh_verification_sha256,
             output=args.output,
         )
     except ProjectCompletionError as exc:
