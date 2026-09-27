@@ -1,0 +1,239 @@
+name: AegisScan Project Completion
+
+'on':
+  workflow_run:
+    workflows: ['Fresh Main Final Verification']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Exact verified Release 1 SHA to attest as project complete'
+        required: true
+        type: string
+      confirm:
+        description: 'Type COMPLETE to issue the terminal project attestation'
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: aegisscan-project-completion-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.release_sha }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.release_sha }}
+
+jobs:
+  project-completion:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/main' &&
+       inputs.confirm == 'COMPLETE')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TRIGGER_VERIFICATION_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_SHA }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require exact current main and final Release 1 object
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RELEASE_SHA" in
+            *[!0-9a-f]*|'') echo 'release SHA must be lowercase hexadecimal' >&2; exit 1 ;;
+          esac
+          test "${#RELEASE_SHA}" -eq 40
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          install -d -m 0700 /tmp/aegis-completion/verification artifacts
+          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" \
+            --json tagName,targetCommitish,isDraft,isPrerelease,url \
+            > /tmp/aegis-completion/release.json
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/v1.0.0" \
+            > /tmp/aegis-completion/release-tag.json
+
+      - name: Recheck zero open PRs at terminal decision time
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY" > /tmp/aegis-completion/repository.json
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --slurp > /tmp/aegis-completion/open-pr-pages.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          repo=json.loads(Path('/tmp/aegis-completion/repository.json').read_text())
+          pages=json.loads(Path('/tmp/aegis-completion/open-pr-pages.json').read_text())
+          pulls=[item for page in pages for item in page]
+          state={
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'default_branch': repo.get('default_branch'),
+              'main_sha': os.environ['RELEASE_SHA'],
+              'open_pr_count': len(pulls),
+          }
+          Path('/tmp/aegis-completion/repository-state.json').write_text(
+              json.dumps(state,sort_keys=True,indent=2)+'\n'
+          )
+          if pulls:
+              raise SystemExit(f'project completion requires zero open PRs: {[p.get("number") for p in pulls]}')
+          PY
+
+      - name: Resolve authoritative fresh-main verification run
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$TRIGGER_VERIFICATION_RUN_ID" ]; then
+            run_id="$TRIGGER_VERIFICATION_RUN_ID"
+          else
+            gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" \
+              > /tmp/aegis-completion/runs.json
+            run_id="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          runs=json.loads(Path('/tmp/aegis-completion/runs.json').read_text()).get('workflow_runs') or []
+          candidates=[
+              run for run in runs
+              if run.get('name')=='Fresh Main Final Verification'
+              and run.get('path')=='.github/workflows/fresh-main-final-verification.yml'
+              and run.get('event')=='workflow_dispatch'
+              and run.get('status')=='completed'
+              and run.get('conclusion')=='success'
+              and run.get('head_sha')==os.environ['RELEASE_SHA']
+              and run.get('head_branch')=='main'
+              and (run.get('repository') or {}).get('full_name')==os.environ['GITHUB_REPOSITORY']
+          ]
+          if not candidates:
+              raise SystemExit('no successful exact-SHA Fresh Main Final Verification run found')
+          candidates.sort(key=lambda r:(str(r.get('updated_at') or ''),int(r.get('run_attempt') or 0),int(r.get('id') or 0)),reverse=True)
+          print(candidates[0]['id'])
+          PY
+            )"
+          fi
+          case "$run_id" in ''|*[!0-9]*) echo 'fresh-main verification run ID is invalid' >&2; exit 1 ;; esac
+          test "$run_id" -gt 0
+          echo "VERIFICATION_RUN_ID=$run_id" >> "$GITHUB_ENV"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+            > /tmp/aegis-completion/verification-run.json
+
+      - name: Download immutable fresh-main final evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$VERIFICATION_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "aegisscan-fresh-main-final-$RELEASE_SHA" \
+            --dir /tmp/aegis-completion/verification
+
+      - name: Build terminal PROJECT_COMPLETE attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/project_completion.py \
+            --release-sha "$RELEASE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-state /tmp/aegis-completion/repository-state.json \
+            --release-metadata /tmp/aegis-completion/release.json \
+            --release-tag-metadata /tmp/aegis-completion/release-tag.json \
+            --verification-run-metadata /tmp/aegis-completion/verification-run.json \
+            --fresh-verification /tmp/aegis-completion/verification/fresh-main-final-verification.json \
+            --output artifacts/aegisscan-project-completion.json
+          sha256sum artifacts/aegisscan-project-completion.json > artifacts/aegisscan-project-completion.sha256
+          sha256sum -c artifacts/aegisscan-project-completion.sha256
+
+      - name: Prove terminal project decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload=json.loads(Path('artifacts/aegisscan-project-completion.json').read_text())
+          assert payload['schema']=='aegisscan.project-completion.v1'
+          assert payload['status']=='success'
+          assert payload['decision']=='PROJECT_COMPLETE'
+          assert payload['project']=='AegisScan'
+          assert payload['release_sha']==payload['main_sha']==os.environ['RELEASE_SHA']
+          assert payload['open_pr_count']==0
+          assert all(payload['controls'].values())
+          print('AEGISSCAN_PROJECT=COMPLETE')
+          PY
+
+      - name: Publish completion attestation on immutable Release 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" --json assets \
+            > /tmp/aegis-completion/release-assets.json
+          asset_state="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          payload=json.loads(Path('/tmp/aegis-completion/release-assets.json').read_text())
+          names={asset.get('name') for asset in payload.get('assets') or []}
+          required={'aegisscan-project-completion.json','aegisscan-project-completion.sha256'}
+          present=required & names
+          print('none' if not present else 'complete' if present == required else 'partial')
+          PY
+          )"
+          case "$asset_state" in
+            none)
+              gh release upload v1.0.0 \
+                artifacts/aegisscan-project-completion.json \
+                artifacts/aegisscan-project-completion.sha256 \
+                --repo "$GITHUB_REPOSITORY"
+              ;;
+            complete)
+              ;;
+            partial)
+              echo 'Release 1 contains a partial project-completion asset set; refusing overwrite' >&2
+              exit 1
+              ;;
+            *)
+              echo "unexpected completion asset state: $asset_state" >&2
+              exit 1
+              ;;
+          esac
+
+          rm -rf /tmp/aegis-completion/published
+          mkdir -p /tmp/aegis-completion/published
+          gh release download v1.0.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern aegisscan-project-completion.json \
+            --pattern aegisscan-project-completion.sha256 \
+            --dir /tmp/aegis-completion/published
+          cmp artifacts/aegisscan-project-completion.json /tmp/aegis-completion/published/aegisscan-project-completion.json
+          cmp artifacts/aegisscan-project-completion.sha256 /tmp/aegis-completion/published/aegisscan-project-completion.sha256
+
+      - name: Retain terminal completion evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-project-completion-${{ env.RELEASE_SHA }}
+          path: |
+            artifacts/aegisscan-project-completion.json
+            artifacts/aegisscan-project-completion.sha256
+            /tmp/aegis-completion/repository-state.json
+            /tmp/aegis-completion/release.json
+            /tmp/aegis-completion/release-tag.json
+            /tmp/aegis-completion/verification-run.json
+          if-no-files-found: error
+          retention-days: 365
