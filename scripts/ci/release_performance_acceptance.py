@@ -88,6 +88,7 @@ def build_acceptance(
     )
     perf_checks = {
         "schema": performance.get("schema") == "aegisscan.performance-reality.v1",
+        "source_sha": performance.get("source_sha") == release_sha,
         "passed": performance.get("passed") is True,
         "min_requests": int(thresholds.get("min_requests") or 0) >= 5000,
         "min_rps": float(thresholds.get("min_rps") or 0) >= 10.0,
@@ -120,6 +121,7 @@ def build_acceptance(
             "controlled_recovery": True,
         },
         "performance": {
+            "source_sha": performance["source_sha"],
             "stage_concurrency": stage_concurrency,
             "requests": summary["requests"],
             "worst_stage_p95_ms": summary["worst_stage_p95_ms"],
