@@ -21,6 +21,8 @@ if [ -n "${AEGIS_SEMGREP_WORKSPACE_ROOT:-}" ]; then
         echo "AEGIS_SEMGREP_WORKSPACE_ROOT must be /var/lib/aegis-semgrep" >&2
         exit 126
     fi
+    # Production grants CAP_CHOWN only for this named-volume ownership handoff.
+    # It is removed from the capability bounding set before Celery starts.
     mkdir -p /var/lib/aegis-semgrep
     chown 10001:10001 /var/lib/aegis-semgrep
     chmod 0700 /var/lib/aegis-semgrep
@@ -63,6 +65,6 @@ exec capsh \
     --user=aegis \
     --caps=cap_setpcap,cap_net_raw+eip \
     --addamb=cap_net_raw \
-    --drop=cap_setuid,cap_setgid,cap_setpcap \
+    --drop=cap_chown,cap_setuid,cap_setgid,cap_setpcap \
     --caps=cap_net_raw+eip \
     -- -c 'exec setpriv --no-new-privs -- celery -A fastapi_app.celery_app worker -l info -c "${SCANNER_WORKER_CONCURRENCY:-2}" -Q scanners'
