@@ -75,11 +75,15 @@ def test_tenant_environment_replaces_stale_identity_with_governed_fixture(monkey
     monkeypatch.setenv("AEGIS_E2E_PASSWORD", "stale-secret")
     monkeypatch.setenv("AEGIS_E2E_APPROVER_EMAIL", "stale-approver@example.test")
     monkeypatch.setenv("AEGIS_E2E_APPROVER_PASSWORD", "stale-secret-2")
+    monkeypatch.setenv("AEGIS_E2E_ACCESS_TOKEN", "stale-actor-token")
+    monkeypatch.setenv("AEGIS_E2E_APPROVER_ACCESS_TOKEN", "stale-approver-token")
     fixture = {
         "AEGIS_E2E_EMAIL": "capacity@example.test",
         "AEGIS_E2E_PASSWORD": "fixture-secret",
         "AEGIS_E2E_APPROVER_EMAIL": "capacity-approver@example.test",
         "AEGIS_E2E_APPROVER_PASSWORD": "fixture-approver-secret",
+        "AEGIS_E2E_ACCESS_TOKEN": "actor-access-token",
+        "AEGIS_E2E_APPROVER_ACCESS_TOKEN": "approver-access-token",
     }
     env = capacity._tenant_environment(7, state_root=tmp_path, fixture=fixture)
     for key, value in fixture.items():
@@ -89,3 +93,31 @@ def test_tenant_environment_replaces_stale_identity_with_governed_fixture(monkey
     assert env["AEGIS_E2E_CAPACITY_MODE"] == "true"
     assert "AEGIS_E2E_GOV_ORG_ID" not in env
     assert "AEGIS_E2E_APPROVER_MEMBERSHIP_ID" not in env
+
+
+def test_capacity_black_box_uses_preissued_auth_without_relaxing_login_security():
+    source = Path(__file__).parents[1] / "e2e" / "external_black_box_e2e.py"
+    text = source.read_text(encoding="utf-8")
+    assert "AEGIS_E2E_ACCESS_TOKEN" in text
+    assert "AEGIS_E2E_APPROVER_ACCESS_TOKEN" in text
+    assert "CAPACITY_ACTOR_AUTH=PREISSUED_TOKEN" in text
+    assert "CAPACITY_APPROVER_AUTH=PREISSUED_TOKEN" in text
+    assert "if not CAPACITY_MODE: http(session,'POST',f'{DJANGO_URL}/auth/login/'" in text
+    assert "if not CAPACITY_MODE: http(approver,'POST',f'{DJANGO_URL}/auth/login/'" in text
+
+
+def test_capacity_fixture_contract_scrubs_and_replaces_preissued_tokens(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_E2E_ACCESS_TOKEN", "stale-actor")
+    monkeypatch.setenv("AEGIS_E2E_APPROVER_ACCESS_TOKEN", "stale-approver")
+    fixture = {
+        "AEGIS_E2E_EMAIL": "capacity@example.test",
+        "AEGIS_E2E_PASSWORD": "fixture-secret",
+        "AEGIS_E2E_APPROVER_EMAIL": "capacity-approver@example.test",
+        "AEGIS_E2E_APPROVER_PASSWORD": "fixture-approver-secret",
+        "AEGIS_E2E_ACCESS_TOKEN": "fresh-actor-token",
+        "AEGIS_E2E_APPROVER_ACCESS_TOKEN": "fresh-approver-token",
+    }
+    env = capacity._tenant_environment(8, state_root=tmp_path, fixture=fixture)
+    assert env["AEGIS_E2E_ACCESS_TOKEN"] == "fresh-actor-token"
+    assert env["AEGIS_E2E_APPROVER_ACCESS_TOKEN"] == "fresh-approver-token"
+    assert env["AEGIS_E2E_CAPACITY_MODE"] == "true"

@@ -22,6 +22,8 @@ EPHEMERAL_IDENTITY_KEYS = (
     "AEGIS_E2E_PASSWORD",
     "AEGIS_E2E_APPROVER_EMAIL",
     "AEGIS_E2E_APPROVER_PASSWORD",
+    "AEGIS_E2E_ACCESS_TOKEN",
+    "AEGIS_E2E_APPROVER_ACCESS_TOKEN",
     "AEGIS_E2E_GOV_ORG_ID",
     "AEGIS_E2E_APPROVER_MEMBERSHIP_ID",
     "AEGIS_E2E_EPHEMERAL_FIXTURE",
@@ -182,7 +184,9 @@ def provision_tenant_fixture(compose_root: Path, index: int) -> dict[str, str]:
     }
     encoded = {key: json.dumps(value) for key, value in payload.items()}
     script = f"""
+import json
 from django.contrib.auth import get_user_model
+from rest_framework_simplejwt.tokens import RefreshToken
 from django_project.users.models import UserRole
 
 User = get_user_model()
@@ -206,10 +210,15 @@ def upsert(email, password, first_name, last_name):
     user.set_password(password)
     user.save()
     assert user.has_permission("project.create") and user.has_permission("scan.create")
+    return user
 
-upsert({encoded["email"]}, {encoded["password"]}, "Capacity", "Operator")
-upsert({encoded["approver_email"]}, {encoded["approver_password"]}, "Capacity", "Approver")
-print("CAPACITY_FIXTURE_READY")
+actor = upsert({encoded["email"]}, {encoded["password"]}, "Capacity", "Operator")
+approver = upsert({encoded["approver_email"]}, {encoded["approver_password"]}, "Capacity", "Approver")
+issued = {{
+    "AEGIS_E2E_ACCESS_TOKEN": str(RefreshToken.for_user(actor).access_token),
+    "AEGIS_E2E_APPROVER_ACCESS_TOKEN": str(RefreshToken.for_user(approver).access_token),
+}}
+print("CAPACITY_FIXTURE_JSON=" + json.dumps(issued, separators=(",", ":")))
 """
     result = _compose(
         compose_root,
@@ -222,13 +231,25 @@ print("CAPACITY_FIXTURE_READY")
         timeout=90,
         input_text=script,
     )
-    if "CAPACITY_FIXTURE_READY" not in result.stdout:
-        raise CapacityRealityError("governed actor provisioning returned no ready marker")
+    marker = "CAPACITY_FIXTURE_JSON="
+    payload_line = next((line for line in result.stdout.splitlines() if line.startswith(marker)), None)
+    if payload_line is None:
+        raise CapacityRealityError("governed actor provisioning returned no token marker")
+    try:
+        issued = json.loads(payload_line[len(marker):])
+    except json.JSONDecodeError as exc:
+        raise CapacityRealityError("governed actor provisioning returned invalid token evidence") from exc
+    actor_token = str(issued.get("AEGIS_E2E_ACCESS_TOKEN") or "")
+    approver_token = str(issued.get("AEGIS_E2E_APPROVER_ACCESS_TOKEN") or "")
+    if not actor_token or not approver_token:
+        raise CapacityRealityError("governed actor provisioning returned incomplete access tokens")
     return {
         "AEGIS_E2E_EMAIL": email,
         "AEGIS_E2E_PASSWORD": password,
         "AEGIS_E2E_APPROVER_EMAIL": approver_email,
         "AEGIS_E2E_APPROVER_PASSWORD": approver_password,
+        "AEGIS_E2E_ACCESS_TOKEN": actor_token,
+        "AEGIS_E2E_APPROVER_ACCESS_TOKEN": approver_token,
     }
 
 def _tenant_environment(
