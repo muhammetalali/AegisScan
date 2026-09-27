@@ -201,7 +201,17 @@ def test_final_verification_rejects_non_release_performance_profile(tmp_path: Pa
     state, release, tag, runs, decisions, checksums = _fixture(tmp_path)
     value = json.loads(decisions["performance"].read_text())
     value["profile"] = "ci"
+    unsigned = dict(value)
+    unsigned.pop("acceptance_sha256", None)
+    raw = json.dumps(
+        unsigned,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    value["acceptance_sha256"] = hashlib.sha256(raw).hexdigest()
     decisions["performance"].write_text(json.dumps(value))
+    checksums["performance"] = _companion(decisions["performance"])
     with pytest.raises(FinalVerificationError, match="final release profile"):
         build_verification(
             release_sha=SHA, repository=REPO, repository_state=state,
