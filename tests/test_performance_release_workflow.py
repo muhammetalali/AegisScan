@@ -79,6 +79,7 @@ def test_optional_release_request_is_governed_when_present():
 
 def test_release_profile_emits_separate_immutable_acceptance_artifact():
     data = _workflow()
+    text = WORKFLOW.read_text(encoding="utf-8")
     steps = data["jobs"]["capacity-recovery"]["steps"]
     names = [step.get("name") for step in steps]
     build = steps[names.index("Build immutable final release performance acceptance")]
