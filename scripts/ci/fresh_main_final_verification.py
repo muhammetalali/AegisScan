@@ -39,6 +39,27 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _require_companion_sha256(data_path: Path, checksum_path: Path, label: str) -> str:
+    if not data_path.is_file():
+        raise FinalVerificationError(f"{label} evidence file is missing")
+    if not checksum_path.is_file() or checksum_path.stat().st_size <= 0 or checksum_path.stat().st_size > 4096:
+        raise FinalVerificationError(f"{label} companion SHA256 file is missing or has invalid size")
+    try:
+        raw = checksum_path.read_text(encoding="utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise FinalVerificationError(f"{label} companion SHA256 is not UTF-8 text") from exc
+    parts = raw.split()
+    if len(parts) != 2 or not SHA256_RE.fullmatch(parts[0]):
+        raise FinalVerificationError(f"{label} companion SHA256 format is invalid")
+    referenced = parts[1].lstrip("*")
+    if Path(referenced).name != data_path.name:
+        raise FinalVerificationError(f"{label} companion SHA256 references the wrong evidence file")
+    actual = _sha256(data_path)
+    if actual != parts[0]:
+        raise FinalVerificationError(f"{label} companion SHA256 mismatch")
+    return actual
+
+
 def _require_embedded_digest(value: dict[str, Any], *, field: str, label: str) -> None:
     supplied = str(value.get(field) or "")
     if not SHA256_RE.fullmatch(supplied):
@@ -125,9 +146,13 @@ def build_verification(
     performance_run: Path,
     hygiene_run: Path,
     release_closure: Path,
+    release_closure_sha256: Path,
     provider_closure: Path,
+    provider_closure_sha256: Path,
     performance_acceptance: Path,
+    performance_acceptance_sha256: Path,
     hygiene: Path,
+    hygiene_sha256: Path,
     output: Path,
 ) -> dict[str, Any]:
     release_sha = release_sha.strip().lower()
@@ -264,10 +289,18 @@ def build_verification(
     )
 
     artifacts = {
-        "release1-closure.json": _sha256(release_closure),
-        "external-provider-acceptance-closure.json": _sha256(provider_closure),
-        "release-performance-acceptance.json": _sha256(performance_acceptance),
-        "final-project-hygiene.json": _sha256(hygiene),
+        "release1-closure.json": _require_companion_sha256(
+            release_closure, release_closure_sha256, "Release 1 closure"
+        ),
+        "external-provider-acceptance-closure.json": _require_companion_sha256(
+            provider_closure, provider_closure_sha256, "external provider closure"
+        ),
+        "release-performance-acceptance.json": _require_companion_sha256(
+            performance_acceptance, performance_acceptance_sha256, "release performance acceptance"
+        ),
+        "final-project-hygiene.json": _require_companion_sha256(
+            hygiene, hygiene_sha256, "final project hygiene"
+        ),
     }
     if not all(SHA256_RE.fullmatch(value) for value in artifacts.values()):
         raise FinalVerificationError("final evidence digest generation failed")
@@ -316,9 +349,13 @@ def main() -> int:
     parser.add_argument("--performance-run", type=Path, required=True)
     parser.add_argument("--hygiene-run", type=Path, required=True)
     parser.add_argument("--release-closure", type=Path, required=True)
+    parser.add_argument("--release-closure-sha256", type=Path, required=True)
     parser.add_argument("--provider-closure", type=Path, required=True)
+    parser.add_argument("--provider-closure-sha256", type=Path, required=True)
     parser.add_argument("--performance-acceptance", type=Path, required=True)
+    parser.add_argument("--performance-acceptance-sha256", type=Path, required=True)
     parser.add_argument("--hygiene", type=Path, required=True)
+    parser.add_argument("--hygiene-sha256", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -334,9 +371,13 @@ def main() -> int:
             performance_run=args.performance_run,
             hygiene_run=args.hygiene_run,
             release_closure=args.release_closure,
+            release_closure_sha256=args.release_closure_sha256,
             provider_closure=args.provider_closure,
+            provider_closure_sha256=args.provider_closure_sha256,
             performance_acceptance=args.performance_acceptance,
+            performance_acceptance_sha256=args.performance_acceptance_sha256,
             hygiene=args.hygiene,
+            hygiene_sha256=args.hygiene_sha256,
             output=args.output,
         )
     except FinalVerificationError as exc:
