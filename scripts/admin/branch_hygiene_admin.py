@@ -21,7 +21,7 @@ from typing import Any
 
 API_ROOT = "https://api.github.com"
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-AUTO_PREFIXES = ("chatgpt-a/", "codex/", "sol-worker/")
+AUTO_PREFIXES = ("chatgpt-a/", "chatgpt-unified/", "codex/", "sol-worker/")
 B_PREFIX = "chatgpt-b/"
 PROTECTED_PREFIXES = ("archive/", "backup/")
 
