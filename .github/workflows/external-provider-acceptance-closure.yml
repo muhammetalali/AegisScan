@@ -1,0 +1,172 @@
+name: External Provider Acceptance Closure
+
+'on':
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Exact released main SHA whose live provider evidence must be closed'
+        required: true
+        type: string
+      confirm:
+        description: 'Type CLOSE to evaluate real Cloud and External Identity evidence'
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: external-provider-acceptance-closure-${{ inputs.release_sha }}
+  cancel-in-progress: false
+
+jobs:
+  provider-closure:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_sha }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Require explicit exact released main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "CLOSE"
+          case "$RELEASE_SHA" in
+            *[!0-9a-f]*|'') echo 'release_sha must be lowercase hexadecimal' >&2; exit 1 ;;
+          esac
+          test "${#RELEASE_SHA}" -eq 40
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+
+          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" \
+            --json tagName,targetCommitish,isDraft,isPrerelease > /tmp/aegis-provider-release.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          release = json.loads(Path('/tmp/aegis-provider-release.json').read_text(encoding='utf-8'))
+          assert release['tagName'] == 'v1.0.0'
+          assert release['targetCommitish'] == os.environ['RELEASE_SHA']
+          assert release['isDraft'] is False
+          assert release['isPrerelease'] is False
+          PY
+
+      - name: Resolve successful exact-SHA live provider runs with executed jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 /tmp/aegis-provider/metadata /tmp/aegis-provider/cloud /tmp/aegis-provider/identity artifacts
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$RELEASE_SHA&per_page=100" > /tmp/aegis-provider/runs.json
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          sha = os.environ['RELEASE_SHA']
+          repo = os.environ['GITHUB_REPOSITORY']
+          runs = json.loads(Path('/tmp/aegis-provider/runs.json').read_text(encoding='utf-8')).get('workflow_runs') or []
+          required = {
+              'cloud': ('Cloud Live Provider Reality', '.github/workflows/cloud-live-provider-reality.yml'),
+              'identity': ('External Identity Live Provider Reality', '.github/workflows/external-identity-live-provider-reality.yml'),
+          }
+
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              for key, (name, path) in required.items():
+                  candidates = [
+                      run for run in runs
+                      if run.get('name') == name
+                      and run.get('path') == path
+                      and run.get('status') == 'completed'
+                      and run.get('conclusion') == 'success'
+                      and run.get('head_sha') == sha
+                      and run.get('head_branch') == 'main'
+                      and run.get('event') in {'push', 'workflow_dispatch'}
+                      and (run.get('repository') or {}).get('full_name') == repo
+                  ]
+                  if not candidates:
+                      raise SystemExit(f'no successful exact-SHA live provider run found: {name}')
+                  candidates.sort(key=lambda r: (str(r.get('updated_at') or ''), int(r.get('run_attempt') or 0), int(r.get('id') or 0)), reverse=True)
+                  run = candidates[0]
+                  endpoint = f"/repos/{repo}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100"
+                  jobs_payload = json.loads(subprocess.check_output(['gh', 'api', endpoint], text=True))
+                  jobs = jobs_payload.get('jobs') or []
+                  if len(jobs) != jobs_payload.get('total_count'):
+                      raise SystemExit(f'incomplete executed-job evidence for {name}')
+                  run['jobs'] = jobs
+                  Path(f'/tmp/aegis-provider/metadata/{key}.json').write_text(
+                      json.dumps(run, sort_keys=True, indent=2) + '\n',
+                      encoding='utf-8',
+                  )
+                  env.write(f'{key.upper()}_RUN_ID={run["id"]}\n')
+          PY
+
+      - name: Download exact live provider proof artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$CLOUD_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "cloud-live-provider-proof-$RELEASE_SHA" \
+            --dir /tmp/aegis-provider/cloud
+          gh run download "$IDENTITY_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "external-identity-live-proof-$RELEASE_SHA" \
+            --dir /tmp/aegis-provider/identity
+
+      - name: Build exact-SHA external provider acceptance closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/external_provider_acceptance_closure.py \
+            --release-sha "$RELEASE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --cloud-run-metadata /tmp/aegis-provider/metadata/cloud.json \
+            --identity-run-metadata /tmp/aegis-provider/metadata/identity.json \
+            --cloud-evidence-root /tmp/aegis-provider/cloud \
+            --identity-evidence-root /tmp/aegis-provider/identity \
+            --output artifacts/external-provider-acceptance-closure.json
+          sha256sum artifacts/external-provider-acceptance-closure.json > artifacts/external-provider-acceptance-closure.sha256
+          sha256sum -c artifacts/external-provider-acceptance-closure.sha256
+
+      - name: Prove provider closure decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload = json.loads(Path('artifacts/external-provider-acceptance-closure.json').read_text(encoding='utf-8'))
+          assert payload['schema'] == 'aegisscan.external-provider-acceptance-closure.v1'
+          assert payload['status'] == 'success'
+          assert payload['decision'] == 'ACCEPTED'
+          assert payload['release_sha'] == os.environ['RELEASE_SHA']
+          assert all(payload['controls'].values())
+          assert len(payload['closure_sha256']) == 64
+          print('AEGISSCAN_EXTERNAL_PROVIDERS=ACCEPTED')
+          PY
+
+      - name: Retain provider closure evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-external-provider-closure-${{ env.RELEASE_SHA }}
+          path: |
+            artifacts/external-provider-acceptance-closure.json
+            artifacts/external-provider-acceptance-closure.sha256
+            /tmp/aegis-provider/metadata/
+          if-no-files-found: error
+          retention-days: 180
