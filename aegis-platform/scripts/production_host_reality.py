@@ -186,7 +186,7 @@ def _validate_compose(env_file: Path) -> None:
     _run(argv, timeout=120)
 
 
-def validate(env_file: Path) -> dict[str, object]:
+def validate(env_file: Path, *, defer_disk_capacity: bool = False) -> dict[str, object]:
     if platform.system() != "Linux":
         raise HostValidationError("production host must run Linux")
     if platform.machine() not in {"x86_64", "amd64"}:
@@ -206,7 +206,8 @@ def validate(env_file: Path) -> dict[str, object]:
     if memory < MIN_MEMORY_BYTES:
         raise HostValidationError(f"host memory is below the 7 GiB production minimum: {memory}")
     disk = _disk_free_bytes(PLATFORM_DIR)
-    if disk < MIN_DISK_BYTES:
+    disk_capacity_satisfied = disk >= MIN_DISK_BYTES
+    if not disk_capacity_satisfied and not defer_disk_capacity:
         raise HostValidationError(f"host free disk is below the 60 GiB production minimum: {disk}")
     if not _kernel_ipv4_forward():
         raise HostValidationError("net.ipv4.ip_forward must be enabled for scanner egress isolation")
@@ -235,6 +236,11 @@ def validate(env_file: Path) -> dict[str, object]:
             "cpu_count": cpu_count,
             "memory_bytes": memory,
             "free_disk_bytes": disk,
+            "minimum_free_disk_bytes": MIN_DISK_BYTES,
+            "disk_capacity_satisfied": disk_capacity_satisfied,
+            "disk_capacity_deferred_to_privileged_reclaim": bool(
+                defer_disk_capacity and not disk_capacity_satisfied
+            ),
             "ipv4_forward": True,
         },
         "runtime": {
@@ -251,9 +257,20 @@ def validate(env_file: Path) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, required=True)
+    parser.add_argument(
+        "--defer-disk-capacity",
+        action="store_true",
+        help=(
+            "Defer only the disk-capacity floor to the root-owned privileged deploy "
+            "reclaim gate; all other host reality checks remain mandatory."
+        ),
+    )
     args = parser.parse_args()
     try:
-        result = validate(args.env_file.resolve())
+        result = validate(
+            args.env_file.resolve(),
+            defer_disk_capacity=args.defer_disk_capacity,
+        )
     except HostValidationError as exc:
         print(
             json.dumps(
