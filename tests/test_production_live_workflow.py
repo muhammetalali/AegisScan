@@ -7,6 +7,7 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/production-live-deploy.yml"
+REALITY_WORKFLOW = ROOT / ".github/workflows/production-live-deploy-reality.yml"
 CLOUD_LIVE_WORKFLOW = ROOT / ".github/workflows/cloud-live-provider-reality.yml"
 IDENTITY_LIVE_WORKFLOW = ROOT / ".github/workflows/external-identity-live-provider-reality.yml"
 PROD_COMPOSE = ROOT / "aegis-platform/docker-compose.prod.yml"
@@ -127,6 +128,12 @@ def test_live_production_workflow_reclaims_only_non_durable_storage_before_deplo
     assert "storage-reclaim.json" in text
     assert text.index("Reclaim bounded non-durable production storage") < text.index("Deploy exact main SHA through private enterprise perimeter")
     assert "'storage_volume_prune_performed': storage['volume_prune_performed']" in text
+
+    reality = REALITY_WORKFLOW.read_text(encoding="utf-8")
+    assert "'aegis-platform/scripts/production_storage_reclaim.py'" in reality
+    assert "'tests/test_production_storage_reclaim.py'" in reality
+    assert "aegis-platform/scripts/production_storage_reclaim.py \\" in reality
+    assert "tests/test_production_storage_reclaim.py \\" in reality
 
 
 def test_live_production_workflow_requires_operational_backup_alertmanager_black_box_and_cli_acceptance():
