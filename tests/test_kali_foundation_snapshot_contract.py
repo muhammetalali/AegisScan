@@ -13,7 +13,7 @@ def test_kali_foundation_uses_snapshot_repository_for_exact_package_lock() -> No
     assert "Suites: kali-last-snapshot" in text
     assert " kali-last-snapshot " in text
     assert "apt-get update" in text
-    assert "ca-certificates=20260601" in text
+    assert "ca-certificates=20260816" in text
     assert "openssl=3.6.3-1" in text
     assert "procps=2:4.0.6-3" in text
     assert "python3=3.14.7-3" in text
