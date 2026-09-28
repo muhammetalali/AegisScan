@@ -241,7 +241,7 @@ def _python(script: str, *args: str, timeout: int) -> None:
 
 def _release_python(script: str, release_sha: str, *args: str, timeout: int) -> None:
     """Execute a verified Python helper from the exact candidate release without checking it out."""
-    if not re.fullmatch(r"[a-z0-9_]+\\.py", script):
+    if not re.fullmatch(r"[a-z0-9_]+\.py", script):
         raise PrivilegedGateError("candidate Python helper name is invalid")
     relative = f"aegis-platform/scripts/{script}"
     source = _git("show", f"{release_sha}:{relative}").stdout
