@@ -20,10 +20,20 @@ LABEL org.opencontainers.image.revision=${BUILD_COMMIT} \
 RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown" \
     && test "$SOURCE_DATE_EPOCH" -gt 0
 
-# Foundation packages are pinned to exact versions. Package-manager logs,
-# caches, and user login accounting are removed/disabled because they contain
-# execution-time state that must not influence the immutable runner image.
-RUN apt-get update \
+# Foundation packages are pinned to exact versions. The immutable base image
+# is intentionally paired with Kali's point-release snapshot repository so an
+# apt metadata refresh cannot invalidate those pins as kali-rolling advances.
+# Package-manager logs, caches, and user login accounting are removed/disabled
+# because they contain execution-time state that must not influence the image.
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/kali.sources ]; then \
+        sed -i 's/^Suites: kali-rolling$/Suites: kali-last-snapshot/' /etc/apt/sources.list.d/kali.sources; \
+        grep -Fxq 'Suites: kali-last-snapshot' /etc/apt/sources.list.d/kali.sources; \
+    else \
+        sed -i 's/ kali-rolling / kali-last-snapshot /' /etc/apt/sources.list; \
+        grep -Eq '^[[:space:]]*deb .* kali-last-snapshot ' /etc/apt/sources.list; \
+    fi; \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates=20260601 \
         coreutils=9.10-1 \
