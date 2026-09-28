@@ -125,13 +125,18 @@ def test_live_production_workflow_reclaims_only_non_durable_storage_before_deplo
     assert "production_storage_reclaim.py" in text
     assert "--minimum-free-gib 60" in text
     assert "--target-free-gib 68" in text
+    assert "--defer-on-docker-unavailable" in text
     assert "storage-reclaim.json" in text
     assert text.index("Reclaim bounded non-durable production storage") < text.index("Deploy exact main SHA through private enterprise perimeter")
-    assert "'storage_volume_prune_performed': storage['volume_prune_performed']" in text
+    assert "'storage_volume_prune_performed': host_storage['volume_prune_performed']" in text
+    assert "aegisscan.production-host-storage-reclaim.v1" in text
+    assert "runner_storage_deferred_to_privileged_deploy" in text
 
     reality = REALITY_WORKFLOW.read_text(encoding="utf-8")
     assert "'aegis-platform/scripts/production_storage_reclaim.py'" in reality
+    assert "'aegis-platform/scripts/production_host_deploy.py'" in reality
     assert "'tests/test_production_storage_reclaim.py'" in reality
+    assert "'tests/test_production_host_deploy.py'" in reality
     assert "aegis-platform/scripts/production_storage_reclaim.py \\" in reality
     assert "tests/test_production_storage_reclaim.py \\" in reality
 
