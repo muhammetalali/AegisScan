@@ -78,6 +78,7 @@ def reclaim(
     path: Path = DEFAULT_PATH,
     minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES,
     target_free_bytes: int = DEFAULT_TARGET_FREE_BYTES,
+    defer_on_docker_unavailable: bool = False,
 ) -> dict[str, object]:
     path = path.resolve()
     if minimum_free_bytes <= 0:
@@ -97,6 +98,7 @@ def reclaim(
         "reclaimed_bytes": 0,
         "stages": [],
         "volume_prune_performed": False,
+        "deferred_to_privileged_deploy": False,
     }
 
     if before >= target_free_bytes:
@@ -107,6 +109,12 @@ def reclaim(
         _docker_ready()
         result["docker_df_before"] = _docker_df()
     except StorageReclaimError as exc:
+        if defer_on_docker_unavailable:
+            result["mode"] = "deferred-to-privileged-production-deploy"
+            result["docker_reclaim_available"] = False
+            result["docker_reclaim_error"] = str(exc)
+            result["deferred_to_privileged_deploy"] = True
+            return result
         if before < minimum_free_bytes:
             raise StorageReclaimError(
                 "free disk is below the production minimum and Docker reclaim is unavailable: "
@@ -196,6 +204,11 @@ def main() -> int:
         type=int,
         default=DEFAULT_TARGET_FREE_BYTES // GIB,
     )
+    parser.add_argument(
+        "--defer-on-docker-unavailable",
+        action="store_true",
+        help="Defer the hard capacity gate to the privileged production deploy when the runner cannot access Docker.",
+    )
     args = parser.parse_args()
 
     try:
@@ -203,6 +216,7 @@ def main() -> int:
             path=args.path,
             minimum_free_bytes=args.minimum_free_gib * GIB,
             target_free_bytes=args.target_free_gib * GIB,
+            defer_on_docker_unavailable=args.defer_on_docker_unavailable,
         )
     except StorageReclaimError as exc:
         print(

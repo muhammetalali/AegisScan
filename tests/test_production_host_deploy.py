@@ -98,6 +98,41 @@ def test_migration_change_detection_filters_only_migrations(monkeypatch):
     ]
 
 
+def test_privileged_storage_reclaim_restores_target_without_volume_prune(monkeypatch):
+    free = {"value": 50 * deploy.GIB}
+    commands = []
+
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: free["value"])
+    monkeypatch.setattr(deploy, "_docker_df", lambda: "docker-df")
+
+    def fake_run(argv, **kwargs):
+        commands.append(list(argv))
+        if argv[:3] == ["docker", "builder", "prune"]:
+            free["value"] += 10 * deploy.GIB
+        elif argv[:3] == ["docker", "container", "prune"]:
+            free["value"] += 4 * deploy.GIB
+        elif argv[:3] == ["docker", "image", "prune"]:
+            free["value"] += 5 * deploy.GIB
+        return SimpleNamespace(stdout="ok\n")
+
+    monkeypatch.setattr(deploy, "_run", fake_run)
+    result = deploy._host_storage_reclaim()
+
+    assert result["status"] == "success"
+    assert result["after_free_bytes"] >= 68 * deploy.GIB
+    assert result["volume_prune_performed"] is False
+    assert all("volume" not in token for argv in commands for token in argv)
+
+
+def test_privileged_storage_reclaim_fails_closed_below_minimum(monkeypatch):
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 50 * deploy.GIB)
+    monkeypatch.setattr(deploy, "_docker_df", lambda: "docker-df")
+    monkeypatch.setattr(deploy, "_run", lambda *args, **kwargs: SimpleNamespace(stdout="ok\n"))
+
+    with pytest.raises(deploy.DeployError, match="still below the production minimum"):
+        deploy._host_storage_reclaim()
+
+
 def test_backup_skips_only_when_postgres_is_not_running(tmp_path: Path, monkeypatch):
     env_file = _env_file(tmp_path)
     monkeypatch.setattr(deploy, "_running_services", lambda *_: set())
@@ -228,6 +263,11 @@ def test_failed_preflight_restores_exact_previous_env_and_checkout(tmp_path: Pat
     monkeypatch.setattr(deploy, "_current_sha", lambda: previous_sha)
     monkeypatch.setattr(
         deploy,
+        "_host_storage_reclaim",
+        lambda: {"schema": "aegisscan.production-host-storage-reclaim.v1", "status": "success"},
+    )
+    monkeypatch.setattr(
+        deploy,
         "_backup_before_upgrade",
         lambda *_args: {"performed": False, "reason": "first-deploy"},
     )
@@ -262,6 +302,11 @@ def test_failed_backup_leaves_checkout_and_private_environment_untouched(tmp_pat
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
     monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
     monkeypatch.setattr(deploy, "_current_sha", lambda: "a" * 40)
+    monkeypatch.setattr(
+        deploy,
+        "_host_storage_reclaim",
+        lambda: {"schema": "aegisscan.production-host-storage-reclaim.v1", "status": "success"},
+    )
     def fail_backup(*args):
         raise deploy.DeployError("backup failed")
     monkeypatch.setattr(deploy, "_backup_before_upgrade", fail_backup)
@@ -362,6 +407,14 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     monkeypatch.setattr(deploy, "_current_sha", lambda: release_sha)
     monkeypatch.setattr(
         deploy,
+        "_host_storage_reclaim",
+        lambda: events.append("storage") or {
+            "schema": "aegisscan.production-host-storage-reclaim.v1",
+            "status": "success",
+        },
+    )
+    monkeypatch.setattr(
+        deploy,
         "_backup_before_upgrade",
         lambda *_args: events.append("backup") or {"performed": False, "reason": "first-deploy"},
     )
@@ -383,7 +436,8 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     result = deploy.deploy(release_sha, env_file, "https://security.example.com")
 
     assert result["status"] == "success"
-    assert events.index("backup") < events.index(("checkout", release_sha))
+    assert events.index("backup") < events.index("storage")
+    assert events.index("storage") < events.index(("checkout", release_sha))
     assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
     assert events.index(("trust", release_sha)) < events.index("preflight")
     assert events.index("preflight") < events.index("deploy")

@@ -56,6 +56,29 @@ def test_docker_unavailable_is_tolerated_only_when_minimum_capacity_is_preserved
     assert result["stages"] == []
 
 
+def test_docker_unavailable_can_explicitly_defer_to_privileged_deploy(monkeypatch, tmp_path):
+    monkeypatch.setattr(reclaim, "_free_bytes", lambda path: 44 * reclaim.GIB)
+    monkeypatch.setattr(
+        reclaim,
+        "_docker_ready",
+        lambda: (_ for _ in ()).throw(reclaim.StorageReclaimError("docker access denied")),
+    )
+
+    result = reclaim.reclaim(
+        path=tmp_path,
+        minimum_free_bytes=60 * reclaim.GIB,
+        target_free_bytes=68 * reclaim.GIB,
+        defer_on_docker_unavailable=True,
+    )
+
+    assert result["status"] == "success"
+    assert result["mode"] == "deferred-to-privileged-production-deploy"
+    assert result["after_free_bytes"] == 44 * reclaim.GIB
+    assert result["docker_reclaim_available"] is False
+    assert result["deferred_to_privileged_deploy"] is True
+    assert result["volume_prune_performed"] is False
+
+
 def test_docker_unavailable_fails_closed_below_minimum(monkeypatch, tmp_path):
     monkeypatch.setattr(reclaim, "_free_bytes", lambda path: 59 * reclaim.GIB)
     monkeypatch.setattr(

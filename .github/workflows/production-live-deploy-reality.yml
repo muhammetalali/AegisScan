@@ -15,12 +15,14 @@ name: Production Live Deploy Reality
       - 'aegis-platform/scripts/production_privileged_gate.py'
       - 'aegis-platform/scripts/production_host_resilience.py'
       - 'aegis-platform/scripts/production_remote_deploy.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
       - 'aegis-platform/scripts/production_storage_reclaim.py'
       - 'aegis-platform/scripts/production_operational_acceptance.py'
       - 'aegis-platform/scripts/production_remote_operational_acceptance.py'
       - 'tests/test_production_deploy_request.py'
       - 'tests/test_production_privileged_gate.py'
       - 'tests/test_production_remote_deploy.py'
+      - 'tests/test_production_host_deploy.py'
       - 'tests/test_production_storage_reclaim.py'
       - 'tests/test_production_operational_acceptance.py'
       - 'tests/test_production_remote_operational_acceptance.py'
@@ -39,12 +41,14 @@ name: Production Live Deploy Reality
       - 'aegis-platform/scripts/production_privileged_gate.py'
       - 'aegis-platform/scripts/production_host_resilience.py'
       - 'aegis-platform/scripts/production_remote_deploy.py'
+      - 'aegis-platform/scripts/production_host_deploy.py'
       - 'aegis-platform/scripts/production_storage_reclaim.py'
       - 'aegis-platform/scripts/production_operational_acceptance.py'
       - 'aegis-platform/scripts/production_remote_operational_acceptance.py'
       - 'tests/test_production_deploy_request.py'
       - 'tests/test_production_privileged_gate.py'
       - 'tests/test_production_remote_deploy.py'
+      - 'tests/test_production_host_deploy.py'
       - 'tests/test_production_storage_reclaim.py'
       - 'tests/test_production_operational_acceptance.py'
       - 'tests/test_production_remote_operational_acceptance.py'
@@ -76,6 +80,7 @@ jobs:
             aegis-platform/scripts/production_deploy_request.py \
             aegis-platform/scripts/production_privileged_gate.py \
             aegis-platform/scripts/production_remote_deploy.py \
+            aegis-platform/scripts/production_host_deploy.py \
             aegis-platform/scripts/production_storage_reclaim.py \
             aegis-platform/scripts/production_operational_acceptance.py \
             aegis-platform/scripts/production_remote_operational_acceptance.py \
@@ -87,6 +92,7 @@ jobs:
             tests/test_production_deploy_request.py \
             tests/test_production_privileged_gate.py \
             tests/test_production_remote_deploy.py \
+            tests/test_production_host_deploy.py \
             tests/test_production_storage_reclaim.py \
             tests/test_production_operational_acceptance.py \
             tests/test_production_remote_operational_acceptance.py \
