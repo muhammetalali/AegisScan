@@ -167,6 +167,20 @@ def test_host_reality_requires_production_resource_floor(tmp_path: Path, monkeyp
         reality.validate(env_file)
 
 
+def test_host_reality_keeps_disk_floor_strict_by_default(tmp_path: Path, monkeypatch):
+    env_file = tmp_path / "production.env"
+    env_file.write_text("A=B\\n", encoding="utf-8")
+    monkeypatch.setattr(reality.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(reality.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT)
+    monkeypatch.setattr(reality, "_memory_bytes", lambda: reality.MIN_MEMORY_BYTES + 1)
+    monkeypatch.setattr(reality, "_disk_free_bytes", lambda _: reality.MIN_DISK_BYTES - 1)
+
+    with pytest.raises(reality.HostValidationError, match="60 GiB"):
+        reality.validate(env_file)
+
+
 def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: Path, monkeypatch):
     env_file = tmp_path / "production.env"
     env_file.write_text("A=B\n", encoding="utf-8")
@@ -215,3 +229,10 @@ def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: 
     assert ("cap", "NET_ADMIN") in events
     assert ("netns", True) in events
     assert ("compose", env_file) in events
+
+    monkeypatch.setattr(reality, "_disk_free_bytes", lambda _: reality.MIN_DISK_BYTES - 1)
+    deferred = reality.validate(env_file, defer_disk_capacity=True)
+    assert deferred["host"]["free_disk_bytes"] == reality.MIN_DISK_BYTES - 1
+    assert deferred["host"]["minimum_free_disk_bytes"] == reality.MIN_DISK_BYTES
+    assert deferred["host"]["disk_capacity_satisfied"] is False
+    assert deferred["host"]["disk_capacity_deferred_to_privileged_reclaim"] is True

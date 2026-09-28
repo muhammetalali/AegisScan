@@ -261,7 +261,16 @@ def deploy(release_sha: str, origin: str) -> None:
     origin = _origin(origin)
     _assert_private_material()
     _prepare_release(release_sha)
-    _python("production_host_reality.py", "--env-file", str(ENV_FILE), timeout=900)
+    # The unprivileged workflow cannot reclaim Docker storage. Validate every
+    # other host invariant here, then let the candidate's root-owned deploy
+    # orchestrator enforce the 60 GiB floor after bounded Docker reclaim.
+    _python(
+        "production_host_reality.py",
+        "--env-file",
+        str(ENV_FILE),
+        "--defer-disk-capacity",
+        timeout=900,
+    )
     _release_deployer(release_sha, origin)
     _assert_secure_tree()
 
