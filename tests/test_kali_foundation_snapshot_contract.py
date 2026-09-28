@@ -41,7 +41,7 @@ def test_kali_foundation_switches_to_official_last_snapshot_before_refresh() -> 
 
 def test_kali_foundation_rejects_rolling_suite_after_snapshot_switch() -> None:
     text = DOCKERFILE.read_text(encoding="utf-8")
-    assert "! grep -R -E" in text
+    assert "! grep -Eq" in text
     assert "kali-rolling" in text
     assert "/etc/apt/sources.list.d" in text
 
