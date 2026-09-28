@@ -46,8 +46,14 @@ def test_kali_foundation_rejects_rolling_suite_after_snapshot_switch() -> None:
     assert "kali-rolling" in text
     assert "/etc/apt/sources.list.d" in text
 
-def test_web_profile_uses_kali_snapshot_tls_perl_version() -> None:
+def test_web_profile_vendors_abi_matched_tls_perl_package_immutably() -> None:
     text = PROFILES.read_text(encoding="utf-8")
-    assert "libnet-ssleay-perl=1.96-1" in text
+    assert "snapshot.debian.org/archive/debian/20260902T000000Z" in text
+    assert "libnet-ssleay-perl_1.96-2_amd64.deb" in text
+    assert "sha256:72981b62a6d2b999a35d0f2836fde79689e9020f9fe1fd57139c52259d4c405d" in text
+    assert "/tmp/libnet-ssleay-perl.deb" in text
+    assert "dpkg-query -W -f='\${Version}' libnet-ssleay-perl" in text
+    assert '= "1.96-2"' in text
+    assert "libnet-ssleay-perl=1.96-1" not in text
     assert "libnet-ssleay-perl=1.96-2" not in text
 
