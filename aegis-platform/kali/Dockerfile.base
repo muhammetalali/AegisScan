@@ -9,6 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     AEGIS_BUILD_COMMIT=${BUILD_COMMIT} \
     AEGIS_BASE_IMAGE_DIGEST=sha256:c6d78f57ebfdd9fec428a8b04f74876e66fddd08dfd328c076224a552e7332a3 \
     AEGIS_RUNNER_PROFILE=base \
+    AEGIS_KALI_APT_SUITE=kali-last-snapshot \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -20,53 +21,38 @@ LABEL org.opencontainers.image.revision=${BUILD_COMMIT} \
 RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown" \
     && test "$SOURCE_DATE_EPOCH" -gt 0
 
-# Foundation packages are pinned to exact versions. Package-manager logs,
-# caches, and user login accounting are removed/disabled because they contain
-# execution-time state that must not influence the immutable runner image.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+# Foundation packages are pinned at the direct dependency boundary. Before
+# reading metadata, APT is switched fail-closed from the moving kali-rolling
+# suite to Kali's official point-release kali-last-snapshot suite.
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/kali.sources ]; then \
+        sed -i -E 's/^Suites:[[:space:]]+kali-rolling[[:space:]]*$/Suites: kali-last-snapshot/' /etc/apt/sources.list.d/kali.sources; \
+        grep -Eq '^Suites:[[:space:]]+kali-last-snapshot[[:space:]]*$' /etc/apt/sources.list.d/kali.sources; \
+        ! grep -Eq '^Suites:[[:space:]]+kali-rolling([[:space:]]|$)' /etc/apt/sources.list.d/kali.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+        sed -i -E 's/(^deb[[:space:]]+[^[:space:]]+[[:space:]]+)kali-rolling([[:space:]])/\1kali-last-snapshot\2/' /etc/apt/sources.list; \
+        grep -Eq '^deb[[:space:]]+[^[:space:]]+[[:space:]]+kali-last-snapshot[[:space:]]' /etc/apt/sources.list; \
+        ! grep -Eq '^[[:space:]]*deb[[:space:]]+[^[:space:]]+[[:space:]]+kali-rolling([[:space:]]|$)' /etc/apt/sources.list; \
+    else \
+        echo 'Kali APT source configuration is missing; refusing repository fallback' >&2; \
+        exit 1; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
         ca-certificates=20260601 \
         coreutils=9.10-1 \
         jq=1.8.2-1 \
-        libexpat1=2.8.4-1 \
-        libffi8=3.8.0-2 \
-        libjq1=1.8.2-1 \
-        libncursesw6=6.6+20260608-2 \
-        libonig5=6.9.10-1+b1 \
-        libproc2-1=2:4.0.6-3 \
-        libpython3-stdlib=3.14.7-3 \
-        libpython3.14-minimal=3.14.7-3 \
-        libpython3.14-stdlib=3.14.7-3 \
-        libreadline8t64=8.3-4 \
-        libsqlite3-0=3.53.4-2 \
-        media-types=14.0.0 \
-        netbase=6.6 \
-        openssl=3.6.3-1 \
         procps=2:4.0.6-3 \
         python3=3.14.7-3 \
-        python3-minimal=3.14.7-3 \
-        python3.14=3.14.7-3 \
-        python3.14-minimal=3.14.7-3 \
-        readline-common=8.3-4 \
-        tini=0.19.0-6+b2 \
-    && test "$(dpkg-query -W -f='${Version}' python3)" = "3.14.7-3" \
-    && test "$(dpkg-query -W -f='${Version}' tini)" = "0.19.0-6+b2" \
-    && test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1" \
-    && rm -rf \
-        /var/lib/apt/lists/* \
-        /var/cache/apt/archives/* \
-        /var/cache/debconf/*-old \
-        /var/cache/ldconfig/aux-cache \
-        /var/log/apt/* \
-        /var/log/dpkg.log \
-        /var/log/alternatives.log \
-        /var/log/faillog \
-        /var/log/lastlog \
-    && find /etc /usr /var -xdev \
-        ! -path /etc/hosts \
-        ! -path /etc/hostname \
-        ! -path /etc/resolv.conf \
-        -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+        tini=0.19.0-6+b2; \
+    test "$(dpkg-query -W -f='${Version}' ca-certificates)" = "20260601"; \
+    test "$(dpkg-query -W -f='${Version}' coreutils)" = "9.10-1"; \
+    test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1"; \
+    test "$(dpkg-query -W -f='${Version}' procps)" = "2:4.0.6-3"; \
+    test "$(dpkg-query -W -f='${Version}' python3)" = "3.14.7-3"; \
+    test "$(dpkg-query -W -f='${Version}' tini)" = "0.19.0-6+b2"; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/debconf/*-old /var/cache/ldconfig/aux-cache /var/log/apt/* /var/log/dpkg.log /var/log/alternatives.log /var/log/faillog /var/log/lastlog; \
+    find /etc /usr /var -xdev ! -path /etc/hosts ! -path /etc/hostname ! -path /etc/resolv.conf -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 RUN groupadd --gid 10001 aegis \
     && useradd --no-log-init --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
@@ -81,7 +67,7 @@ RUN groupadd --gid 10001 aegis \
 
 COPY runner /opt/aegis-runner
 RUN chmod 0755 /opt/aegis-runner/runner.py /opt/aegis-runner/entrypoint.sh \
-    && python3 -c 'import json,os,pathlib,subprocess; p=["ca-certificates","coreutils","jq","procps","python3","tini"]; v={x:subprocess.check_output(["dpkg-query","-W","-f=${Version}",x],text=True).strip() for x in p}; d={"runtime":"aegis-kali","runner_version":os.environ["AEGIS_RUNNER_VERSION"],"profile":os.environ["AEGIS_RUNNER_PROFILE"],"base_image_digest":os.environ["AEGIS_BASE_IMAGE_DIGEST"],"build_commit":os.environ["AEGIS_BUILD_COMMIT"],"foundation_packages":v}; pathlib.Path("/opt/aegis-runner/runtime-manifest.json").write_text(json.dumps(d,sort_keys=True,separators=(",",":"))+"\n")' \
+    && python3 -c 'import json,os,pathlib,subprocess; p=["ca-certificates","coreutils","jq","procps","python3","tini"]; v={x:subprocess.check_output(["dpkg-query","-W","-f=${Version}",x],text=True).strip() for x in p}; d={"runtime":"aegis-kali","runner_version":os.environ["AEGIS_RUNNER_VERSION"],"profile":os.environ["AEGIS_RUNNER_PROFILE"],"base_image_digest":os.environ["AEGIS_BASE_IMAGE_DIGEST"],"build_commit":os.environ["AEGIS_BUILD_COMMIT"],"apt_suite":os.environ["AEGIS_KALI_APT_SUITE"],"foundation_packages":v}; pathlib.Path("/opt/aegis-runner/runtime-manifest.json").write_text(json.dumps(d,sort_keys=True,separators=(",",":"))+"\n")' \
     && chmod 0444 /opt/aegis-runner/runtime-manifest.json \
     && find /opt/aegis-runner -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
