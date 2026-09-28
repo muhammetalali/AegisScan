@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -26,6 +27,10 @@ COMPOSE_FILES = (
     "docker-compose.monitoring.yml",
     "docker-compose.backup.yml",
 )
+GIB = 1024 ** 3
+PRODUCTION_MINIMUM_FREE_BYTES = 60 * GIB
+PRODUCTION_TARGET_FREE_BYTES = 68 * GIB
+MAX_STORAGE_DIAGNOSTIC_BYTES = 16 * 1024
 
 
 class DeployError(RuntimeError):
@@ -49,6 +54,105 @@ def _run(
         capture_output=capture,
         timeout=timeout,
     )
+
+
+def _free_bytes(path: Path = PLATFORM_DIR) -> int:
+    if not path.exists():
+        raise DeployError(f"production storage path does not exist: {path}")
+    return shutil.disk_usage(path).free
+
+
+def _docker_df() -> str:
+    result = _run(["docker", "system", "df"], cwd=PLATFORM_DIR, timeout=60)
+    return result.stdout.strip()[-MAX_STORAGE_DIAGNOSTIC_BYTES:]
+
+
+def _storage_stage(name: str, argv: list[str]) -> dict[str, object]:
+    before = _free_bytes()
+    result = _run(argv, cwd=PLATFORM_DIR, timeout=1800)
+    after = _free_bytes()
+    return {
+        "name": name,
+        "argv": argv,
+        "before_free_bytes": before,
+        "after_free_bytes": after,
+        "reclaimed_bytes": max(0, after - before),
+        "stdout_tail": result.stdout.strip()[-4000:],
+    }
+
+
+def _host_storage_reclaim(
+    *,
+    minimum_free_bytes: int = PRODUCTION_MINIMUM_FREE_BYTES,
+    target_free_bytes: int = PRODUCTION_TARGET_FREE_BYTES,
+) -> dict[str, object]:
+    if minimum_free_bytes <= 0:
+        raise DeployError("production minimum free bytes must be positive")
+    if target_free_bytes < minimum_free_bytes:
+        raise DeployError("production target free bytes must be greater than or equal to the minimum")
+
+    before = _free_bytes()
+    result: dict[str, object] = {
+        "schema": "aegisscan.production-host-storage-reclaim.v1",
+        "status": "success",
+        "minimum_free_bytes": minimum_free_bytes,
+        "target_free_bytes": target_free_bytes,
+        "before_free_bytes": before,
+        "after_free_bytes": before,
+        "reclaimed_bytes": 0,
+        "stages": [],
+        "volume_prune_performed": False,
+    }
+    if before >= target_free_bytes:
+        result["mode"] = "noop-capacity-already-sufficient"
+        return result
+
+    try:
+        _run(["docker", "info"], cwd=PLATFORM_DIR, timeout=60)
+        result["docker_df_before"] = _docker_df()
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise DeployError(f"privileged Docker storage reclaim is unavailable: {exc}") from exc
+
+    stages = [
+        ("aged-build-cache", ["docker", "builder", "prune", "--all", "--force", "--filter", "until=24h"]),
+        ("aged-stopped-containers", ["docker", "container", "prune", "--force", "--filter", "until=24h"]),
+        ("aged-unused-images", ["docker", "image", "prune", "--all", "--force", "--filter", "until=24h"]),
+    ]
+    stage_results: list[dict[str, object]] = []
+    for name, argv in stages:
+        stage_results.append(_storage_stage(name, argv))
+        if _free_bytes() >= target_free_bytes:
+            break
+
+    if _free_bytes() < minimum_free_bytes:
+        aggressive = [
+            ("all-build-cache", ["docker", "builder", "prune", "--all", "--force"]),
+            ("all-stopped-containers", ["docker", "container", "prune", "--force"]),
+            ("all-unused-images", ["docker", "image", "prune", "--all", "--force"]),
+        ]
+        for name, argv in aggressive:
+            stage_results.append(_storage_stage(name, argv))
+            if _free_bytes() >= target_free_bytes:
+                break
+
+    after = _free_bytes()
+    result["stages"] = stage_results
+    result["after_free_bytes"] = after
+    result["reclaimed_bytes"] = max(0, after - before)
+    result["docker_df_after"] = _docker_df()
+    result["mode"] = (
+        "target-restored"
+        if after >= target_free_bytes
+        else "minimum-restored"
+        if after >= minimum_free_bytes
+        else "insufficient-reclaim"
+    )
+    if after < minimum_free_bytes:
+        raise DeployError(
+            "privileged bounded Docker reclaim completed without touching volumes, "
+            f"but free disk is still below the production minimum: {after} < {minimum_free_bytes}"
+        )
+    return result
 
 
 def _private_file(path: Path, *, max_bytes: int = 1024 * 1024) -> None:
@@ -463,6 +567,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     deployment_env = _execution_profile_environment({**os.environ, **env_values})
     previous_sha = _current_sha()
     backup = _backup_before_upgrade(env_file, deployment_env)
+    storage_reclaim = _host_storage_reclaim()
 
     deployment_attempted = False
     try:
@@ -497,6 +602,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         "release_sha": release_sha,
         "public_origin": origin,
         "pre_deploy_backup": backup,
+        "storage_reclaim": storage_reclaim,
     }
     print(json.dumps(result, sort_keys=True))
     return result
