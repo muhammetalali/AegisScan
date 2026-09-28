@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 DOCKERFILE = ROOT / "aegis-platform/kali/Dockerfile.base"
+PROFILES = ROOT / "aegis-platform/kali/Dockerfile.profiles"
 
 
 def test_kali_foundation_pins_direct_dependency_boundary() -> None:
@@ -44,4 +45,9 @@ def test_kali_foundation_rejects_rolling_suite_after_snapshot_switch() -> None:
     assert "! grep -Eq" in text
     assert "kali-rolling" in text
     assert "/etc/apt/sources.list.d" in text
+
+def test_web_profile_uses_kali_snapshot_tls_perl_version() -> None:
+    text = PROFILES.read_text(encoding="utf-8")
+    assert "libnet-ssleay-perl=1.96-1" in text
+    assert "libnet-ssleay-perl=1.96-2" not in text
 
