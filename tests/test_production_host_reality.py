@@ -229,3 +229,10 @@ def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: 
     assert ("cap", "NET_ADMIN") in events
     assert ("netns", True) in events
     assert ("compose", env_file) in events
+
+    monkeypatch.setattr(reality, "_disk_free_bytes", lambda _: reality.MIN_DISK_BYTES - 1)
+    deferred = reality.validate(env_file, defer_disk_capacity=True)
+    assert deferred["host"]["free_disk_bytes"] == reality.MIN_DISK_BYTES - 1
+    assert deferred["host"]["minimum_free_disk_bytes"] == reality.MIN_DISK_BYTES
+    assert deferred["host"]["disk_capacity_satisfied"] is False
+    assert deferred["host"]["disk_capacity_deferred_to_privileged_reclaim"] is True
