@@ -111,6 +111,12 @@ RUN chmod 0755 /opt/aegis-runner/recon_service.py /opt/aegis-runner/amass_manage
 USER 10001:10001
 
 FROM profile-common AS profile-web
+# Kali last-snapshot currently omits the Net::SSLeay binary during the Perl
+# 5.42 transition. Import exactly one ABI-compatible Debian binary by immutable
+# snapshot URL and digest; no Debian repository is enabled in the image.
+ADD --checksum=sha256:72981b62a6d2b999a35d0f2836fde79689e9020f9fe1fd57139c52259d4c405d \
+    https://snapshot.debian.org/archive/debian/20260902T000000Z/pool/main/libn/libnet-ssleay-perl/libnet-ssleay-perl_1.96-2_amd64.deb \
+    /tmp/libnet-ssleay-perl.deb
 ENV AEGIS_RUNNER_PROFILE=web \
     NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates \
     AEGIS_WORDLIST_ROOT=/opt/aegis-wordlists
@@ -118,7 +124,10 @@ LABEL io.aegisscan.runner.profile=web
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       curl=8.21.0-2 gobuster=3.8.2-1 ffuf=2.2.1-1 dirb=2.22+dfsg-7 wafw00f=2.4.2-1 \
-      perl=5.42.3-1 libjson-perl=4.10000-1 libxml-writer-perl=0.900-2 libnet-ssleay-perl=1.96-1 \
+      perl=5.42.3-1 libjson-perl=4.10000-1 libxml-writer-perl=0.900-2 \
+      /tmp/libnet-ssleay-perl.deb \
+    && test "$(dpkg-query -W -f='${Version}' libnet-ssleay-perl)" = "1.96-2" \
+    && rm -f /tmp/libnet-ssleay-perl.deb \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/apt/* /var/log/dpkg.log
 COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
 COPY --from=go-tools /go/bin/httpx /usr/local/bin/httpx
