@@ -103,8 +103,21 @@ def reclaim(
         result["mode"] = "noop-capacity-already-sufficient"
         return result
 
-    _docker_ready()
-    result["docker_df_before"] = _docker_df()
+    try:
+        _docker_ready()
+        result["docker_df_before"] = _docker_df()
+    except StorageReclaimError as exc:
+        if before < minimum_free_bytes:
+            raise StorageReclaimError(
+                "free disk is below the production minimum and Docker reclaim is unavailable: "
+                f"{before} < {minimum_free_bytes}: {exc}"
+            ) from exc
+        result["mode"] = "minimum-preserved-docker-unavailable"
+        result["docker_reclaim_available"] = False
+        result["docker_reclaim_error"] = str(exc)
+        return result
+
+    result["docker_reclaim_available"] = True
 
     stages: list[tuple[str, list[str]]] = [
         (

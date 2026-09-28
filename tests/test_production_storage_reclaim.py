@@ -32,6 +32,49 @@ def test_noop_when_capacity_is_already_above_target(monkeypatch, tmp_path):
     assert result["stages"] == []
 
 
+def test_docker_unavailable_is_tolerated_only_when_minimum_capacity_is_preserved(monkeypatch, tmp_path):
+    monkeypatch.setattr(reclaim, "_free_bytes", lambda path: 64 * reclaim.GIB)
+    monkeypatch.setattr(
+        reclaim,
+        "_docker_ready",
+        lambda: (_ for _ in ()).throw(reclaim.StorageReclaimError("docker access denied")),
+    )
+
+    result = reclaim.reclaim(
+        path=tmp_path,
+        minimum_free_bytes=60 * reclaim.GIB,
+        target_free_bytes=68 * reclaim.GIB,
+    )
+
+    assert result["status"] == "success"
+    assert result["mode"] == "minimum-preserved-docker-unavailable"
+    assert result["after_free_bytes"] == 64 * reclaim.GIB
+    assert result["reclaimed_bytes"] == 0
+    assert result["docker_reclaim_available"] is False
+    assert result["docker_reclaim_error"] == "docker access denied"
+    assert result["volume_prune_performed"] is False
+    assert result["stages"] == []
+
+
+def test_docker_unavailable_fails_closed_below_minimum(monkeypatch, tmp_path):
+    monkeypatch.setattr(reclaim, "_free_bytes", lambda path: 59 * reclaim.GIB)
+    monkeypatch.setattr(
+        reclaim,
+        "_docker_ready",
+        lambda: (_ for _ in ()).throw(reclaim.StorageReclaimError("docker access denied")),
+    )
+
+    with pytest.raises(
+        reclaim.StorageReclaimError,
+        match="below the production minimum and Docker reclaim is unavailable",
+    ):
+        reclaim.reclaim(
+            path=tmp_path,
+            minimum_free_bytes=60 * reclaim.GIB,
+            target_free_bytes=68 * reclaim.GIB,
+        )
+
+
 def test_reclaim_uses_only_non_volume_docker_prunes(monkeypatch, tmp_path):
     free = {"value": 50 * reclaim.GIB}
     commands = []
