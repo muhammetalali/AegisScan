@@ -69,6 +69,7 @@ def test_deploy_uses_only_fixed_root_owned_contract_paths(monkeypatch):
     deploy = calls[2]
     assert reality[1] == "production_host_reality.py"
     assert str(gate.ENV_FILE) in reality[2]
+    assert "--defer-disk-capacity" in reality[2]
     assert deploy == ("candidate", release, "https://10.20.30.40")
     assert calls[-1] == ("secure",)
 
