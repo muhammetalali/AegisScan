@@ -20,45 +20,27 @@ LABEL org.opencontainers.image.revision=${BUILD_COMMIT} \
 RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown" \
     && test "$SOURCE_DATE_EPOCH" -gt 0
 
-# Foundation packages are pinned to exact versions. The immutable base image
-# is intentionally paired with Kali's point-release snapshot repository so an
-# apt metadata refresh cannot invalidate those pins as kali-rolling advances.
-# Package-manager logs, caches, and user login accounting are removed/disabled
-# because they contain execution-time state that must not influence the image.
-RUN set -eux; \
-    if [ -f /etc/apt/sources.list.d/kali.sources ]; then \
-        sed -i 's/^Suites: kali-rolling$/Suites: kali-last-snapshot/' /etc/apt/sources.list.d/kali.sources; \
-        grep -Fxq 'Suites: kali-last-snapshot' /etc/apt/sources.list.d/kali.sources; \
-    else \
-        sed -i 's/ kali-rolling / kali-last-snapshot /' /etc/apt/sources.list; \
-        grep -Eq '^[[:space:]]*deb .* kali-last-snapshot ' /etc/apt/sources.list; \
-    fi; \
-    apt-get update \
+# Foundation packages are pinned at the direct dependency boundary. The base
+# image is digest-pinned and Kali Rolling is the authoritative repository for
+# these packages; transitive libraries are intentionally resolved by APT from
+# the same signed repository so the image cannot combine stale partial locks
+# with a newer dependency graph.
+RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates=20260816 \
+        ca-certificates=20260601 \
         coreutils=9.10-1 \
         jq=1.8.2-1 \
         procps=2:4.0.6-3 \
         python3=3.14.7-3 \
         tini=0.19.0-6+b2 \
+    && test "$(dpkg-query -W -f='${Version}' ca-certificates)" = "20260601" \
+    && test "$(dpkg-query -W -f='${Version}' coreutils)" = "9.10-1" \
+    && test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1" \
+    && test "$(dpkg-query -W -f='${Version}' procps)" = "2:4.0.6-3" \
     && test "$(dpkg-query -W -f='${Version}' python3)" = "3.14.7-3" \
     && test "$(dpkg-query -W -f='${Version}' tini)" = "0.19.0-6+b2" \
-    && test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1" \
-    && rm -rf \
-        /var/lib/apt/lists/* \
-        /var/cache/apt/archives/* \
-        /var/cache/debconf/*-old \
-        /var/cache/ldconfig/aux-cache \
-        /var/log/apt/* \
-        /var/log/dpkg.log \
-        /var/log/alternatives.log \
-        /var/log/faillog \
-        /var/log/lastlog \
-    && find /etc /usr /var -xdev \
-        ! -path /etc/hosts \
-        ! -path /etc/hostname \
-        ! -path /etc/resolv.conf \
-        -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/debconf/*-old /var/cache/ldconfig/aux-cache /var/log/apt/* /var/log/dpkg.log /var/log/alternatives.log /var/log/faillog /var/log/lastlog \
+    && find /etc /usr /var -xdev ! -path /etc/hosts ! -path /etc/hostname ! -path /etc/resolv.conf -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 RUN groupadd --gid 10001 aegis \
     && useradd --no-log-init --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
