@@ -56,8 +56,10 @@ def test_deploy_uses_only_fixed_root_owned_contract_paths(monkeypatch):
     monkeypatch.setattr(gate, "_assert_secure_tree", lambda: calls.append(("secure",)))
     monkeypatch.setattr(
         gate,
-        "_python",
-        lambda script, *args, timeout: calls.append(("python", script, args, timeout)),
+        "_release_python",
+        lambda script, sha, *args, timeout: calls.append(
+            ("release-python", script, sha, args, timeout)
+        ),
     )
     monkeypatch.setattr(gate, "_release_deployer", lambda sha, origin: calls.append(("candidate", sha, origin)))
 
@@ -67,9 +69,11 @@ def test_deploy_uses_only_fixed_root_owned_contract_paths(monkeypatch):
     assert calls[0] == ("prepare", release)
     reality = calls[1]
     deploy = calls[2]
+    assert reality[0] == "release-python"
     assert reality[1] == "production_host_reality.py"
-    assert str(gate.ENV_FILE) in reality[2]
-    assert "--defer-disk-capacity" in reality[2]
+    assert reality[2] == release
+    assert str(gate.ENV_FILE) in reality[3]
+    assert "--defer-disk-capacity" in reality[3]
     assert deploy == ("candidate", release, "https://10.20.30.40")
     assert calls[-1] == ("secure",)
 
@@ -138,18 +142,50 @@ def test_host_bootstrap_installs_current_gate_and_sudo_boundary():
     assert "authorized_keys" in bootstrap
 
 
-def test_candidate_orchestrator_executes_verified_source_without_checking_out(tmp_path, monkeypatch):
+def test_candidate_helpers_execute_verified_source_without_checking_out(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
     calls = []
+
     def git(*args, **kw):
         calls.append(args)
-        return SimpleNamespace(stdout="from pathlib import Path\nPath(__file__).parents[2].joinpath('candidate-ran').write_text(__file__)\n")
+        return SimpleNamespace(
+            stdout=(
+                "from pathlib import Path\n"
+                "Path(__file__).parents[2].joinpath('candidate-ran').write_text(__file__)\n"
+            )
+        )
+
     monkeypatch.setattr(gate, "_git", git)
     original_run = gate._run
     monkeypatch.setattr(gate, "_run", lambda argv, **kw: original_run(argv, cwd=tmp_path, **kw))
-    gate._release_deployer("b" * 40, "https://security.internal")
-    assert (tmp_path / "candidate-ran").read_text() == str(tmp_path / "aegis-platform/scripts/production_host_deploy.py")
-    assert calls == [("show", "b" * 40 + ":aegis-platform/scripts/production_host_deploy.py")]
+
+    release = "b" * 40
+    gate._release_python(
+        "production_host_reality.py",
+        release,
+        "--env-file",
+        "/etc/aegisscan/production.env",
+        "--defer-disk-capacity",
+        timeout=900,
+    )
+    assert (tmp_path / "candidate-ran").read_text() == str(
+        tmp_path / "aegis-platform/scripts/production_host_reality.py"
+    )
+    assert calls == [
+        ("show", release + ":aegis-platform/scripts/production_host_reality.py")
+    ]
+
+    calls.clear()
+    gate._release_deployer(release, "https://security.internal")
+    assert (tmp_path / "candidate-ran").read_text() == str(
+        tmp_path / "aegis-platform/scripts/production_host_deploy.py"
+    )
+    assert calls == [
+        ("show", release + ":aegis-platform/scripts/production_host_deploy.py")
+    ]
+
+    with pytest.raises(gate.PrivilegedGateError, match="helper name"):
+        gate._release_python("../escape.py", release, timeout=60)
 
 
 @pytest.mark.parametrize("action", ["backup", "recover-services"])
