@@ -239,20 +239,38 @@ def _python(script: str, *args: str, timeout: int) -> None:
     _run(["/usr/bin/python3", str(path), *args], capture=False, timeout=timeout)
 
 
-def _release_deployer(release_sha: str, origin: str) -> None:
-    """Use the verified candidate orchestrator while backup still sees the old checkout."""
-    relative = "aegis-platform/scripts/production_host_deploy.py"
+def _release_python(script: str, release_sha: str, *args: str, timeout: int) -> None:
+    """Execute a verified Python helper from the exact candidate release without checking it out."""
+    if not re.fullmatch(r"[a-z0-9_]+\.py", script):
+        raise PrivilegedGateError("candidate Python helper name is invalid")
+    relative = f"aegis-platform/scripts/{script}"
     source = _git("show", f"{release_sha}:{relative}").stdout
     if not source.strip():
-        raise PrivilegedGateError("candidate deployment orchestrator is empty")
+        raise PrivilegedGateError(f"candidate Python helper is empty: {script}")
     launcher = (
         "import sys; path=sys.argv.pop(1); source=sys.stdin.read(); sys.argv[0]=path; "
         "exec(compile(source,path,'exec'), {'__name__':'__main__','__file__':path})"
     )
     _run(
-        ["/usr/bin/python3", "-c", launcher, str(REPO_ROOT / relative),
-         "--release-sha", release_sha, "--env-file", str(ENV_FILE), "--origin", origin],
-        input_text=source, capture=False, timeout=21600,
+        ["/usr/bin/python3", "-c", launcher, str(REPO_ROOT / relative), *args],
+        input_text=source,
+        capture=False,
+        timeout=timeout,
+    )
+
+
+def _release_deployer(release_sha: str, origin: str) -> None:
+    """Use the verified candidate orchestrator while backup still sees the old checkout."""
+    _release_python(
+        "production_host_deploy.py",
+        release_sha,
+        "--release-sha",
+        release_sha,
+        "--env-file",
+        str(ENV_FILE),
+        "--origin",
+        origin,
+        timeout=21600,
     )
 
 
@@ -264,8 +282,9 @@ def deploy(release_sha: str, origin: str) -> None:
     # The unprivileged workflow cannot reclaim Docker storage. Validate every
     # other host invariant here, then let the candidate's root-owned deploy
     # orchestrator enforce the 60 GiB floor after bounded Docker reclaim.
-    _python(
+    _release_python(
         "production_host_reality.py",
+        release_sha,
         "--env-file",
         str(ENV_FILE),
         "--defer-disk-capacity",
