@@ -170,6 +170,7 @@ jobs:
             --path /opt/aegisscan/AegisScan/aegis-platform \
             --minimum-free-gib 60 \
             --target-free-gib 68 \
+            --defer-on-docker-unavailable \
             | tee /tmp/aegis-production/storage-reclaim.json
 
       - name: Deploy exact main SHA through private enterprise perimeter
@@ -359,14 +360,21 @@ jobs:
               raise SystemExit('production storage reclaim evidence mismatch')
           if storage.get('volume_prune_performed') is not False:
               raise SystemExit('production storage reclaim must never prune volumes')
-          if int(storage.get('after_free_bytes') or 0) < 60 * 1024**3:
-              raise SystemExit('production storage reclaim did not preserve the 60 GiB minimum')
-
           deployment = json.loads((root / 'deploy.json').read_text(encoding='utf-8'))
           if deployment.get('schema') != 'aegisscan.remote-production-deploy.v1' or deployment.get('status') != 'success':
               raise SystemExit('remote deployment evidence mismatch')
           if deployment.get('release_sha') != os.environ['AEGIS_RELEASE_SHA']:
               raise SystemExit('remote deployment release SHA mismatch')
+          remote_deployment = deployment.get('remote_deployment') or {}
+          host_storage = remote_deployment.get('storage_reclaim') or {}
+          if host_storage.get('schema') != 'aegisscan.production-host-storage-reclaim.v1':
+              raise SystemExit('privileged production-host storage reclaim evidence is missing')
+          if host_storage.get('status') != 'success' or host_storage.get('volume_prune_performed') is not False:
+              raise SystemExit('privileged production-host storage reclaim evidence is invalid')
+          if int(host_storage.get('after_free_bytes') or 0) < 60 * 1024**3:
+              raise SystemExit('privileged production-host storage reclaim did not restore the 60 GiB minimum')
+          if int(storage.get('after_free_bytes') or 0) < 60 * 1024**3 and storage.get('deferred_to_privileged_deploy') is not True:
+              raise SystemExit('runner-side storage below minimum was not explicitly deferred to privileged deploy')
 
           operational = json.loads((root / 'operational-acceptance.json').read_text(encoding='utf-8'))
           if operational.get('schema') != 'aegisscan.remote-production-operational-acceptance.v1' or operational.get('status') != 'success':
@@ -403,9 +411,10 @@ jobs:
               'run_attempt': os.environ['AEGIS_RUN_ATTEMPT'],
               'internal_origin': os.environ['AEGIS_INTERNAL_ORIGIN'],
               'enterprise_ca_sha256': ca_sha256,
-              'storage_after_free_bytes': storage['after_free_bytes'],
-              'storage_reclaimed_bytes': storage['reclaimed_bytes'],
-              'storage_volume_prune_performed': storage['volume_prune_performed'],
+              'storage_after_free_bytes': host_storage['after_free_bytes'],
+              'storage_reclaimed_bytes': host_storage['reclaimed_bytes'],
+              'storage_volume_prune_performed': host_storage['volume_prune_performed'],
+              'runner_storage_deferred_to_privileged_deploy': bool(storage.get('deferred_to_privileged_deploy')),
               'alertmanager_status': alertmanager['status'],
               'backup_status': backup['status'],
               'backup_id': backup['backup_id'],
