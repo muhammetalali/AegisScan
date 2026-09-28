@@ -24,6 +24,8 @@ jobs:
           set -euo pipefail
           ! grep -R --line-number --fixed-strings 'shell=True' aegis-platform/backend/fastapi_app/services/native_tool_runtime.py aegis-platform/backend/fastapi_app/tasks/native_capabilities.py
           ! grep -R --line-number 'additional_args\|arbitrary_flags' aegis-platform/backend/fastapi_app/services/native_tool_runtime.py
+      - name: Prove bounded Python dependency retry contract
+        run: python tests/test_docker_dependency_retry_contract.py
       - name: Build scanner image with native capabilities
         run: docker build -f aegis-platform/backend/Dockerfile.django -t aegisscan-native-capability:ci aegis-platform/backend
       - name: Prove packaged binaries and native argv runtime
