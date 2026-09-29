@@ -194,3 +194,14 @@ def test_e2e_fixture_bootstrap_uses_scoped_roles_and_never_prints_passwords(monk
     assert "stale_release_e2e_identity_deactivated" in script
     assert fixture["actor_password"] in script
     assert fixture["actor_password"] not in captured.get("stdout", "")
+
+
+def test_required_services_include_full_production_execution_plane():
+    assert {
+        "scanner_worker",
+        "kali_recon",
+        "kali_network",
+        "kali_masscan",
+        "kali_web",
+        "kali_code",
+    } <= ops.REQUIRED_RUNNING_SERVICES

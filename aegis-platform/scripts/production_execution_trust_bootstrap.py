@@ -11,6 +11,7 @@ import secrets
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -18,6 +19,8 @@ SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RUNNER_VERSION = "0.1.0"
+BUILD_TIMEOUT_SECONDS = 3600
+BUILD_ATTEMPTS = 3
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PLATFORM_DIR = SCRIPT_DIR.parent
@@ -26,8 +29,10 @@ REPO_ROOT = PLATFORM_DIR.parent
 PROFILE_TARGETS = {
     "recon": "profile-recon",
     "network": "profile-network",
-    "web": "profile-web",
     "code": "profile-code",
+    # Keep the most network-heavy profile last so an interrupted build preserves
+    # the maximum amount of verified release work for a bounded retry.
+    "web": "profile-web",
 }
 
 PROVIDER_SPECS = {
@@ -211,79 +216,143 @@ def _validate_release(release_sha: str) -> tuple[str, str]:
     return current, epoch
 
 
+def _build_with_retry(
+    argv: list[str],
+    *,
+    label: str,
+    attempts: int = BUILD_ATTEMPTS,
+    timeout_seconds: int = BUILD_TIMEOUT_SECONDS,
+) -> None:
+    if attempts < 1:
+        raise TrustBootstrapError("build attempts must be positive")
+    if timeout_seconds < 60:
+        raise TrustBootstrapError("build timeout must be at least 60 seconds")
+    for attempt in range(1, attempts + 1):
+        print(
+            json.dumps(
+                {
+                    "event": "production-kali-build-attempt",
+                    "label": label,
+                    "attempt": attempt,
+                    "attempts": attempts,
+                    "timeout_seconds": timeout_seconds,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        try:
+            _run(argv, capture=False, timeout=timeout_seconds)
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            if attempt >= attempts:
+                raise
+            print(
+                json.dumps(
+                    {
+                        "event": "production-kali-build-retry",
+                        "label": label,
+                        "attempt": attempt,
+                        "error_type": type(exc).__name__,
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(attempt * 15)
+
+
 def _build_images(release_sha: str, source_date_epoch: str) -> dict[str, str]:
     short = release_sha[:12]
     base_tag = f"aegis-kali-production:base-{short}"
 
-    _run(
-        [
-            "docker",
-            "build",
-            "--pull",
-            "--no-cache",
-            "--build-arg",
-            f"BUILD_COMMIT={release_sha}",
-            "--build-arg",
-            f"AEGIS_RUNNER_VERSION={RUNNER_VERSION}",
-            "--build-arg",
-            f"SOURCE_DATE_EPOCH={source_date_epoch}",
-            "-t",
-            base_tag,
-            "-f",
-            str(PLATFORM_DIR / "kali" / "Dockerfile.base"),
-            str(PLATFORM_DIR / "kali"),
-        ],
-        capture=False,
-    )
+    if _verified_base_tag(base_tag, release_sha) is None:
+        _build_with_retry(
+            [
+                "docker",
+                "build",
+                "--pull",
+                "--build-arg",
+                f"BUILD_COMMIT={release_sha}",
+                "--build-arg",
+                f"AEGIS_RUNNER_VERSION={RUNNER_VERSION}",
+                "--build-arg",
+                f"SOURCE_DATE_EPOCH={source_date_epoch}",
+                "-t",
+                base_tag,
+                "-f",
+                str(PLATFORM_DIR / "kali" / "Dockerfile.base"),
+                str(PLATFORM_DIR / "kali"),
+            ],
+            label="base",
+        )
+        if _verified_base_tag(base_tag, release_sha) is None:
+            raise TrustBootstrapError("base image build completed without a verifiable exact-release image")
+    else:
+        print(json.dumps({"event": "production-kali-image-reuse", "tag": base_tag}, sort_keys=True), flush=True)
 
     profile_tags: dict[str, str] = {}
     for profile, target in PROFILE_TARGETS.items():
         tag = f"aegis-kali-production:profile-{profile}-{short}"
-        _run(
-            [
-                "docker",
-                "build",
-                "--no-cache",
-                "--build-arg",
-                f"AEGIS_BASE_IMAGE={base_tag}",
-                "--build-arg",
-                f"SOURCE_DATE_EPOCH={source_date_epoch}",
-                "--target",
-                target,
-                "-t",
-                tag,
-                "-f",
-                str(PLATFORM_DIR / "kali" / "Dockerfile.profiles"),
-                str(REPO_ROOT),
-            ],
-            capture=False,
-        )
+        if _verified_runtime_tag(tag, release_sha, expected_profile=profile) is None:
+            _build_with_retry(
+                [
+                    "docker",
+                    "build",
+                    "--build-arg",
+                    f"AEGIS_BASE_IMAGE={base_tag}",
+                    "--build-arg",
+                    f"SOURCE_DATE_EPOCH={source_date_epoch}",
+                    "--target",
+                    target,
+                    "-t",
+                    tag,
+                    "-f",
+                    str(PLATFORM_DIR / "kali" / "Dockerfile.profiles"),
+                    str(REPO_ROOT),
+                ],
+                label=f"profile-{profile}",
+            )
+            if _verified_runtime_tag(tag, release_sha, expected_profile=profile) is None:
+                raise TrustBootstrapError(
+                    f"profile image build completed without a verifiable exact-release image: {profile}"
+                )
+        else:
+            print(json.dumps({"event": "production-kali-image-reuse", "tag": tag}, sort_keys=True), flush=True)
         profile_tags[profile] = tag
 
     final_tags: dict[str, str] = {}
     for prefix, spec in PROVIDER_SPECS.items():
-        profile_tag = profile_tags[str(spec["profile"])]
+        profile = str(spec["profile"])
+        profile_tag = profile_tags[profile]
         dockerfile = spec["dockerfile"]
         if dockerfile is None:
             final_tags[prefix] = profile_tag
             continue
 
         tag = f"aegis-kali-production:{spec['service_tag']}-{short}"
-        _run(
-            [
-                "docker",
-                "build",
-                "--no-cache",
-                "--build-arg",
-                f"{spec['base_arg']}={profile_tag}",
-                "-t",
-                tag,
-                "-f",
-                str(PLATFORM_DIR / "kali" / str(dockerfile)),
-                str(PLATFORM_DIR / "kali"),
-            ],
-            capture=False,
-        )
+        if _verified_runtime_tag(tag, release_sha, expected_profile=profile) is None:
+            _build_with_retry(
+                [
+                    "docker",
+                    "build",
+                    "--build-arg",
+                    f"{spec['base_arg']}={profile_tag}",
+                    "-t",
+                    tag,
+                    "-f",
+                    str(PLATFORM_DIR / "kali" / str(dockerfile)),
+                    str(PLATFORM_DIR / "kali"),
+                ],
+                label=str(spec["service_tag"]),
+            )
+            if _verified_runtime_tag(tag, release_sha, expected_profile=profile) is None:
+                raise TrustBootstrapError(
+                    f"provider image build completed without a verifiable exact-release image: {prefix}"
+                )
+        else:
+            print(json.dumps({"event": "production-kali-image-reuse", "tag": tag}, sort_keys=True), flush=True)
         final_tags[prefix] = tag
 
     return final_tags
@@ -329,6 +398,65 @@ def _manifest(image_id: str, release_sha: str) -> tuple[dict[str, object], bytes
         if not SHA256_RE.fullmatch(str(payload.get(field, ""))):
             raise TrustBootstrapError(f"runtime manifest field {field} is not an immutable sha256 digest")
     return payload, raw
+
+
+def _optional_image_id(tag: str) -> str | None:
+    try:
+        return _image_id(tag)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").lower()
+        if "no such image" in detail or "no such object" in detail:
+            return None
+        raise
+
+
+def _image_labels(image_id: str) -> dict[str, str]:
+    raw = _run(
+        ["docker", "image", "inspect", image_id, "--format", "{{json .Config.Labels}}"],
+        timeout=120,
+    ).stdout.strip()
+    try:
+        labels = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise TrustBootstrapError(f"Docker image labels are invalid JSON for {image_id}") from exc
+    if not isinstance(labels, dict):
+        raise TrustBootstrapError(f"Docker image labels are invalid for {image_id}")
+    return {str(key): str(value) for key, value in labels.items()}
+
+
+def _verified_base_tag(tag: str, release_sha: str) -> str | None:
+    image_id = _optional_image_id(tag)
+    if image_id is None:
+        return None
+    labels = _image_labels(image_id)
+    expected = {
+        "org.opencontainers.image.revision": release_sha,
+        "io.aegisscan.runner.version": RUNNER_VERSION,
+        "io.aegisscan.runner.profile": "base",
+    }
+    mismatched = {
+        key: labels.get(key)
+        for key, value in expected.items()
+        if labels.get(key) != value
+    }
+    if mismatched:
+        raise TrustBootstrapError(
+            f"existing exact-release base tag failed immutable label verification: {tag}"
+        )
+    return image_id
+
+
+def _verified_runtime_tag(tag: str, release_sha: str, *, expected_profile: str) -> str | None:
+    image_id = _optional_image_id(tag)
+    if image_id is None:
+        return None
+    manifest, _raw = _manifest(image_id, release_sha)
+    if manifest.get("profile") != expected_profile:
+        raise TrustBootstrapError(
+            f"existing exact-release image profile mismatch for {tag}: "
+            f"{manifest.get('profile')!r} != {expected_profile!r}"
+        )
+    return image_id
 
 
 def _trust_values(prefix: str, image_id: str, manifest: dict[str, object], raw: bytes) -> dict[str, str]:

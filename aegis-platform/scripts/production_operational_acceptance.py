@@ -37,6 +37,15 @@ REQUIRED_RUNNING_SERVICES = {
     "prometheus",
     "alertmanager",
     "backup",
+    # Production acceptance must prove the actual scanner execution plane, not
+    # only the API/control plane. This also catches a failed provider restart
+    # immediately after the transient ci-only scope is applied.
+    "scanner_worker",
+    "kali_recon",
+    "kali_network",
+    "kali_masscan",
+    "kali_web",
+    "kali_code",
 }
 
 

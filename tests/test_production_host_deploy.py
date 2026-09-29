@@ -552,3 +552,14 @@ def test_interrupted_same_release_restores_tracked_checkout_and_private_env(tmp_
 def test_deployment_signal_handler_raises_controlled_interrupt():
     with pytest.raises(deploy.DeploymentInterrupted, match="SIGTERM"):
         deploy._deployment_signal_handler(deploy.signal.SIGTERM, None)
+
+
+def test_storage_floor_fails_before_service_mutation(monkeypatch):
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 59 * deploy.GIB)
+    with pytest.raises(deploy.DeployError, match="60 GiB safety floor"):
+        deploy._assert_storage_floor("execution-trust-bootstrap")
+
+
+def test_storage_floor_accepts_exact_minimum(monkeypatch):
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 60 * deploy.GIB)
+    assert deploy._assert_storage_floor("application-image-build") == 60 * deploy.GIB
