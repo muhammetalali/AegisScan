@@ -219,6 +219,7 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
     events = []
     monkeypatch.setattr(deploy, "_migration_changes", lambda *_: [])
     monkeypatch.setattr(deploy, "_checkout", lambda sha: events.append(("checkout", sha)))
+    monkeypatch.setattr(deploy, "_build_stack", lambda *_: events.append(("build", None)))
     monkeypatch.setattr(deploy, "_deploy_stack", lambda *args, **kwargs: events.append(("deploy", None)))
     monkeypatch.setattr(
         deploy,
@@ -242,6 +243,7 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
     assert env_file.read_bytes() == original
     assert events == [
         ("checkout", "a" * 40),
+        ("build", None),
         ("deploy", None),
         ("execution-plane", None),
         ("accept", "https://security.example.com"),
@@ -259,6 +261,7 @@ def test_failed_preflight_restores_exact_previous_env_and_checkout(tmp_path: Pat
     checkouts = []
 
     monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
+    monkeypatch.setattr(deploy, "_restore_tracked_checkout", lambda _sha: None)
     monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
     monkeypatch.setattr(deploy, "_current_sha", lambda: previous_sha)
     monkeypatch.setattr(
@@ -429,6 +432,7 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
 
     monkeypatch.setattr(deploy, "_prepare_execution_trust", prepare)
     monkeypatch.setattr(deploy, "_preflight", lambda *_args: events.append("preflight"))
+    monkeypatch.setattr(deploy, "_build_stack", lambda *_args: events.append("build"))
     monkeypatch.setattr(deploy, "_deploy_stack", lambda *_args: events.append("deploy"))
     monkeypatch.setattr(deploy, "_execution_plane_acceptance", lambda *_args: events.append("execution"))
     monkeypatch.setattr(deploy, "_accept", lambda *_args: events.append("accept"))
@@ -440,7 +444,7 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     assert events.index("storage") < events.index(("checkout", release_sha))
     assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
     assert events.index(("trust", release_sha)) < events.index("preflight")
-    assert events.index("preflight") < events.index("deploy")
+    assert events.index("preflight") < events.index("build") < events.index("deploy")
 
 
 def test_runtime_trust_bootstrap_contract_is_exercised_by_launch_gate():
@@ -526,6 +530,7 @@ def test_interrupted_same_release_restores_tracked_checkout_and_private_env(tmp_
         lambda path, sha: deploy._load_env_file(path),
     )
     monkeypatch.setattr(deploy, "_preflight", lambda *_: None)
+    monkeypatch.setattr(deploy, "_build_stack", lambda *_: {})
     monkeypatch.setattr(
         deploy,
         "_deploy_stack",
@@ -563,3 +568,134 @@ def test_storage_floor_fails_before_service_mutation(monkeypatch):
 def test_storage_floor_accepts_exact_minimum(monkeypatch):
     monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 60 * deploy.GIB)
     assert deploy._assert_storage_floor("application-image-build") == 60 * deploy.GIB
+
+
+def test_production_28_capacity_recovers_before_start_without_pruning_images_or_volumes(tmp_path, monkeypatch):
+    free = {"value": 87996936192}
+    calls = []
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: free["value"])
+    monkeypatch.setattr(deploy, "_docker_df", lambda: "storage-summary")
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if "build" in argv:
+            free["value"] = 63833497600  # Exact observed Production #28 failure.
+        elif argv[:3] == ["docker", "builder", "prune"] and "--filter" not in argv:
+            free["value"] += 2 * deploy.GIB
+        elif "up" in argv:
+            assert free["value"] >= deploy.PRODUCTION_MINIMUM_FREE_BYTES
+        return SimpleNamespace(stdout="cache reclaimed\n")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    env_file = _env_file(tmp_path)
+    result = deploy._build_stack(env_file, {})
+    deploy._deploy_stack(env_file, {})
+
+    assert result["before_free_bytes"] == 63833497600
+    assert result["after_free_bytes"] == 63833497600 + 2 * deploy.GIB
+    assert result["remaining_deficit_bytes"] == 0
+    assert result["status"] == "success"
+    assert len(calls) == 4
+    assert calls[1] == ["docker", "builder", "prune", "--all", "--force", "--filter", "until=24h"]
+    assert calls[2] == ["docker", "builder", "prune", "--all", "--force"]
+    assert "up" in calls[3] and "--no-build" in calls[3]
+    assert all(argv[:3] not in (["docker", "image", "prune"], ["docker", "container", "prune"],
+                              ["docker", "volume", "prune"], ["docker", "system", "prune"])
+               for argv in calls)
+
+
+def test_unrecoverable_build_capacity_does_not_start_services(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 63833497600)
+    monkeypatch.setattr(deploy, "_docker_df", lambda: "storage-summary")
+    calls = []
+    monkeypatch.setattr(deploy, "_run", lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(stdout=""))
+    with pytest.raises(deploy.DeployError, match="60 GiB safety floor"):
+        deploy._build_stack(_env_file(tmp_path), {})
+    assert not any("up" in argv for argv in calls)
+    evidence = json.loads(capsys.readouterr().out)
+    assert evidence["status"] == "insufficient-capacity"
+    assert evidence["remaining_deficit_bytes"] == 591011840
+    assert evidence["volume_prune_performed"] is False
+
+
+def test_healthy_build_preserves_resumable_cache(monkeypatch, capsys):
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 61 * deploy.GIB)
+    monkeypatch.setattr(deploy, "_run", lambda *_args, **_kwargs: pytest.fail("healthy build must preserve cache"))
+    result = deploy._post_build_storage("execution-trust-bootstrap")
+    assert result["stages"] == []
+    assert result["reclaimed_bytes"] == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "success"
+
+
+def test_trust_build_also_recovers_capacity_before_preflight(tmp_path, monkeypatch):
+    free = {"value": 59 * deploy.GIB}
+    calls = []
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: free["value"])
+    monkeypatch.setattr(deploy, "_docker_df", lambda: "storage-summary")
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:3] == ["docker", "builder", "prune"]:
+            free["value"] = 65 * deploy.GIB
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    env_file = _env_file(tmp_path)
+    values = deploy._prepare_execution_trust(env_file, "b" * 40)
+    assert values == deploy._load_env_file(env_file)
+    assert len(calls) == 2  # Trust helper, then aged cache; full cache is unnecessary.
+    assert free["value"] >= deploy.PRODUCTION_MINIMUM_FREE_BYTES
+
+
+@pytest.mark.parametrize("same_release", [False, True])
+def test_build_failure_restores_checkout_and_env_without_redeploying_running_services(tmp_path, monkeypatch, same_release):
+    env_file = _env_file(tmp_path)
+    original = env_file.read_bytes()
+    previous_sha = "a" * 40
+    release_sha = previous_sha if same_release else "b" * 40
+    checkouts = []
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
+    monkeypatch.setattr(deploy, "_restore_tracked_checkout", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_current_sha", lambda: previous_sha)
+    monkeypatch.setattr(deploy, "_backup_before_upgrade", lambda *_: {"performed": False})
+    monkeypatch.setattr(deploy, "_host_storage_reclaim", lambda: {})
+    monkeypatch.setattr(deploy, "_checkout", lambda sha: checkouts.append(sha))
+
+    def prepare(path, _sha):
+        path.write_text("DEBUG=False\nAEGIS_RECON_PROVIDER=default-kali\n", encoding="utf-8")
+        return deploy._load_env_file(path)
+
+    monkeypatch.setattr(deploy, "_prepare_execution_trust", prepare)
+    monkeypatch.setattr(deploy, "_preflight", lambda *_: None)
+    monkeypatch.setattr(deploy, "_build_stack", lambda *_: (_ for _ in ()).throw(deploy.DeployError("build capacity failed")))
+    monkeypatch.setattr(deploy, "_deploy_stack", lambda *_: pytest.fail("build failure must not change services"))
+    monkeypatch.setattr(deploy, "_rollback_application", lambda **_: pytest.fail("untouched services need no rollback"))
+
+    with pytest.raises(deploy.DeployError, match="build capacity failed"):
+        deploy.deploy(release_sha, env_file, "https://security.example.com")
+    assert env_file.read_bytes() == original
+    assert env_file.stat().st_mode & 0o777 == 0o600
+    assert checkouts == ([release_sha] if same_release else [release_sha, previous_sha])
+
+
+def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
+    monkeypatch.setattr(deploy, "_restore_tracked_checkout", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_current_sha", lambda: "a" * 40)
+    monkeypatch.setattr(deploy, "_backup_before_upgrade", lambda *_: {"performed": False})
+    monkeypatch.setattr(deploy, "_host_storage_reclaim", lambda: {})
+    monkeypatch.setattr(deploy, "_checkout", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_prepare_execution_trust", lambda path, _sha: deploy._load_env_file(path))
+    monkeypatch.setattr(deploy, "_preflight", lambda *_: None)
+    monkeypatch.setattr(deploy, "_build_stack", lambda *_: {})
+    original_failure = deploy.DeployError("scanner service failed")
+    monkeypatch.setattr(deploy, "_deploy_stack", lambda *_: (_ for _ in ()).throw(original_failure))
+    monkeypatch.setattr(deploy, "_rollback_application", lambda **_: (_ for _ in ()).throw(deploy.DeployError("rollback capacity failed")))
+    with pytest.raises(deploy.DeployError) as exc:
+        deploy.deploy("b" * 40, env_file, "https://security.example.com")
+    assert "scanner service failed" in str(exc.value)
+    assert "rollback capacity failed" in str(exc.value)
+    assert exc.value.__cause__ is original_failure
