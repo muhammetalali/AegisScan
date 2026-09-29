@@ -581,6 +581,11 @@ def _restore_tracked_checkout(sha: str) -> None:
     """Discard only tracked mutations created after the clean deployment boundary."""
     if not SHA_RE.fullmatch(sha):
         raise DeployError("checkout restore SHA must be exactly 40 lowercase hexadecimal characters")
+    dirty = _git("status", "--porcelain", "--untracked-files=no").stdout.strip()
+    if not dirty:
+        return
+    if _current_sha() != sha:
+        raise DeployError("dirty checkout no longer matches the interrupted release SHA")
     _git("reset", "--hard", sha, capture=False)
     if _current_sha() != sha:
         raise DeployError("tracked checkout restore changed the release SHA unexpectedly")
