@@ -85,6 +85,40 @@ def _assert_storage_floor(stage: str) -> int:
     return free
 
 
+def _recover_post_build_storage_floor() -> dict[str, object]:
+    """Reclaim only disposable BuildKit cache when a successful build crosses the floor."""
+    before = _free_bytes()
+    result: dict[str, object] = {
+        "schema": "aegisscan.production-post-build-storage-reclaim.v1",
+        "status": "success",
+        "before_free_bytes": before,
+        "after_free_bytes": before,
+        "reclaimed_bytes": 0,
+        "stages": [],
+        "image_prune_performed": False,
+        "volume_prune_performed": False,
+    }
+    if before >= PRODUCTION_MINIMUM_FREE_BYTES:
+        result["mode"] = "noop-floor-preserved"
+        return result
+
+    stage = _storage_stage(
+        "post-build-cache",
+        ["docker", "builder", "prune", "--all", "--force"],
+    )
+    after = _free_bytes()
+    result["stages"] = [stage]
+    result["after_free_bytes"] = after
+    result["reclaimed_bytes"] = max(0, after - before)
+    result["mode"] = (
+        "floor-restored"
+        if after >= PRODUCTION_MINIMUM_FREE_BYTES
+        else "insufficient-cache-reclaim"
+    )
+    _assert_storage_floor("application-image-build-cache-reclaim")
+    return result
+
+
 def _docker_df() -> str:
     result = _run(["docker", "system", "df"], cwd=PLATFORM_DIR, timeout=60)
     return result.stdout.strip()[-MAX_STORAGE_DIAGNOSTIC_BYTES:]
@@ -454,7 +488,7 @@ def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
         capture=False,
         timeout=7200,
     )
-    _assert_storage_floor("application-image-build")
+    _recover_post_build_storage_floor()
     _run(
         _compose(env_file, "up", "-d", "--remove-orphans"),
         cwd=PLATFORM_DIR,
