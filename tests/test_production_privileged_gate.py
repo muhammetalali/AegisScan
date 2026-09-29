@@ -139,6 +139,7 @@ def test_host_bootstrap_installs_current_gate_and_sudo_boundary():
     assert "NOPASSWD: /usr/local/sbin/aegisscan-production-gate" in bootstrap
     assert "visudo -cf /etc/sudoers.d/aegisscan-production-gate" in bootstrap
     assert "cleanup-e2e-scope" in bootstrap
+    assert "repair-checkout" in bootstrap
     assert "authorized_keys" in bootstrap
 
 
@@ -202,3 +203,40 @@ def test_resilience_actions_require_exact_checkout_and_fixed_host_script(monkeyp
     with pytest.raises(gate.PrivilegedGateError, match="resilience release SHA"):
         gate.resilience("b" * 40, action, "https://security.internal")
     assert not calls
+
+
+def test_repair_checkout_is_exact_sha_bounded_and_restores_only_tracked_state(monkeypatch):
+    release = "a" * 40
+    events = []
+    status_calls = {"count": 0}
+
+    monkeypatch.setattr(gate, "_assert_secure_tree", lambda: events.append(("secure",)))
+    monkeypatch.setattr(gate, "_assert_expected_remote", lambda: events.append(("remote",)))
+    monkeypatch.setattr(gate, "_assert_release_on_main", lambda sha: events.append(("main", sha)))
+
+    def git(*args, **kwargs):
+        events.append(("git", args))
+        if args[:2] == ("rev-parse", "HEAD"):
+            return SimpleNamespace(stdout=release + "\n")
+        if args and args[0] == "status":
+            status_calls["count"] += 1
+            return SimpleNamespace(stdout=" M aegis-platform/backend/example.py\n" if status_calls["count"] == 1 else "")
+        if args[:2] == ("reset", "--hard"):
+            assert args[2] == release
+            return SimpleNamespace(stdout="")
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(gate, "_git", git)
+    gate.repair_checkout(release)
+
+    assert ("main", release) in events
+    assert ("git", ("reset", "--hard", release)) in events
+    assert status_calls["count"] == 2
+
+
+def test_repair_checkout_refuses_mismatched_head(monkeypatch):
+    monkeypatch.setattr(gate, "_assert_secure_tree", lambda: None)
+    monkeypatch.setattr(gate, "_assert_expected_remote", lambda: None)
+    monkeypatch.setattr(gate, "_git", lambda *args, **kwargs: SimpleNamespace(stdout="b" * 40 + "\n"))
+    with pytest.raises(gate.PrivilegedGateError, match="HEAD to match"):
+        gate.repair_checkout("a" * 40)
