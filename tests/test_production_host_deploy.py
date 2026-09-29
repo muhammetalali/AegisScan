@@ -503,3 +503,52 @@ def test_acceptance_preserves_original_failure_when_diagnostics_fail(tmp_path, m
     assert 'scanner_worker is not running' in str(failure.value)
     assert 'state unavailable' in str(failure.value)
     assert 'secret-value' not in str(failure.value)
+
+
+def test_interrupted_same_release_restores_tracked_checkout_and_private_env(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    release = "a" * 40
+    events = []
+
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
+    monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release)
+    monkeypatch.setattr(deploy, "_backup_before_upgrade", lambda *_: {"performed": False})
+    monkeypatch.setattr(
+        deploy,
+        "_host_storage_reclaim",
+        lambda: {"schema": "aegisscan.production-host-storage-reclaim.v1", "status": "success"},
+    )
+    monkeypatch.setattr(deploy, "_checkout", lambda sha: events.append(("checkout", sha)))
+    monkeypatch.setattr(
+        deploy,
+        "_prepare_execution_trust",
+        lambda path, sha: deploy._load_env_file(path),
+    )
+    monkeypatch.setattr(deploy, "_preflight", lambda *_: None)
+    monkeypatch.setattr(
+        deploy,
+        "_deploy_stack",
+        lambda *_: (_ for _ in ()).throw(deploy.DeploymentInterrupted("cancelled")),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_restore_tracked_checkout",
+        lambda sha: events.append(("restore-checkout", sha)),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_restore_private_env",
+        lambda path, snapshot: events.append(("restore-env", path)),
+    )
+
+    with pytest.raises(deploy.DeploymentInterrupted, match="cancelled"):
+        deploy.deploy(release, env_file, "https://security.example.com")
+
+    assert ("restore-checkout", release) in events
+    assert ("restore-env", env_file) in events
+
+
+def test_deployment_signal_handler_raises_controlled_interrupt():
+    with pytest.raises(deploy.DeploymentInterrupted, match="SIGTERM"):
+        deploy._deployment_signal_handler(deploy.signal.SIGTERM, None)
