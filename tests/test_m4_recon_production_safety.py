@@ -167,6 +167,7 @@ def test_automatic_rollback_uses_the_exact_restored_policy_for_runtime_acceptanc
 
     monkeypatch.setattr(deploy, "_migration_changes", lambda *_: [])
     monkeypatch.setattr(deploy, "_build_stack", lambda *_: {})
+    monkeypatch.setattr(deploy, "_assert_storage_floor", lambda _stage: 60 * deploy.GIB)
     monkeypatch.setattr(deploy, "_checkout", lambda *_: None)
     monkeypatch.setattr(deploy, "_accept", lambda *_: None)
     monkeypatch.setattr(

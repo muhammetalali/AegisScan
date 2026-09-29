@@ -220,6 +220,7 @@ def test_automatic_rollback_redeploys_previous_release_without_migrations(tmp_pa
     monkeypatch.setattr(deploy, "_migration_changes", lambda *_: [])
     monkeypatch.setattr(deploy, "_checkout", lambda sha: events.append(("checkout", sha)))
     monkeypatch.setattr(deploy, "_build_stack", lambda *_: events.append(("build", None)))
+    monkeypatch.setattr(deploy, "_assert_storage_floor", lambda _stage: 60 * deploy.GIB)
     monkeypatch.setattr(deploy, "_deploy_stack", lambda *args, **kwargs: events.append(("deploy", None)))
     monkeypatch.setattr(
         deploy,
@@ -433,6 +434,7 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     monkeypatch.setattr(deploy, "_prepare_execution_trust", prepare)
     monkeypatch.setattr(deploy, "_preflight", lambda *_args: events.append("preflight"))
     monkeypatch.setattr(deploy, "_build_stack", lambda *_args: events.append("build"))
+    monkeypatch.setattr(deploy, "_assert_storage_floor", lambda _stage: 60 * deploy.GIB)
     monkeypatch.setattr(deploy, "_deploy_stack", lambda *_args: events.append("deploy"))
     monkeypatch.setattr(deploy, "_execution_plane_acceptance", lambda *_args: events.append("execution"))
     monkeypatch.setattr(deploy, "_accept", lambda *_args: events.append("accept"))
@@ -531,6 +533,7 @@ def test_interrupted_same_release_restores_tracked_checkout_and_private_env(tmp_
     )
     monkeypatch.setattr(deploy, "_preflight", lambda *_: None)
     monkeypatch.setattr(deploy, "_build_stack", lambda *_: {})
+    monkeypatch.setattr(deploy, "_assert_storage_floor", lambda _stage: 60 * deploy.GIB)
     monkeypatch.setattr(
         deploy,
         "_deploy_stack",
@@ -691,6 +694,7 @@ def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypa
     monkeypatch.setattr(deploy, "_prepare_execution_trust", lambda path, _sha: deploy._load_env_file(path))
     monkeypatch.setattr(deploy, "_preflight", lambda *_: None)
     monkeypatch.setattr(deploy, "_build_stack", lambda *_: {})
+    monkeypatch.setattr(deploy, "_assert_storage_floor", lambda _stage: 60 * deploy.GIB)
     original_failure = deploy.DeployError("scanner service failed")
     monkeypatch.setattr(deploy, "_deploy_stack", lambda *_: (_ for _ in ()).throw(original_failure))
     monkeypatch.setattr(deploy, "_rollback_application", lambda **_: (_ for _ in ()).throw(deploy.DeployError("rollback capacity failed")))
@@ -699,3 +703,27 @@ def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypa
     assert "scanner service failed" in str(exc.value)
     assert "rollback capacity failed" in str(exc.value)
     assert exc.value.__cause__ is original_failure
+
+
+def test_capacity_loss_after_build_restores_state_before_any_service_change(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    original = env_file.read_bytes()
+    checkouts = []
+    monkeypatch.setattr(deploy, "_assert_clean_repo", lambda: None)
+    monkeypatch.setattr(deploy, "_restore_tracked_checkout", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_ensure_release", lambda _sha: None)
+    monkeypatch.setattr(deploy, "_current_sha", lambda: "a" * 40)
+    monkeypatch.setattr(deploy, "_backup_before_upgrade", lambda *_: {"performed": False})
+    monkeypatch.setattr(deploy, "_host_storage_reclaim", lambda: {})
+    monkeypatch.setattr(deploy, "_checkout", lambda sha: checkouts.append(sha))
+    monkeypatch.setattr(deploy, "_prepare_execution_trust", lambda path, _sha: deploy._load_env_file(path))
+    monkeypatch.setattr(deploy, "_preflight", lambda *_: None)
+    monkeypatch.setattr(deploy, "_build_stack", lambda *_: {"after_free_bytes": 60 * deploy.GIB})
+    # Another writer consumes capacity between successful build and start.
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 59 * deploy.GIB)
+    monkeypatch.setattr(deploy, "_deploy_stack", lambda *_: pytest.fail("capacity loss must precede service mutation"))
+    monkeypatch.setattr(deploy, "_rollback_application", lambda **_: pytest.fail("services were never changed"))
+    with pytest.raises(deploy.DeployError, match="before-service-start"):
+        deploy.deploy("b" * 40, env_file, "https://security.example.com")
+    assert checkouts == ["b" * 40, "a" * 40]
+    assert env_file.read_bytes() == original

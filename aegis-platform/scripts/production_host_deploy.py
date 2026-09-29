@@ -502,7 +502,6 @@ def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, ob
 
 
 def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
-    _assert_storage_floor("before-service-start")
     _run(
         _compose(env_file, "up", "-d", "--no-build", "--remove-orphans"),
         cwd=PLATFORM_DIR,
@@ -674,6 +673,7 @@ def _rollback_application(
     rollback_env = _rollback_execution_environment({**os.environ, **previous_env})
     _checkout(previous_sha)
     _build_stack(env_file, rollback_env)
+    _assert_storage_floor("before-service-start")
     _deploy_stack(env_file, rollback_env)
     _execution_plane_acceptance(env_file, rollback_env)
     _accept(origin)
@@ -697,6 +697,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         deployment_env = _execution_profile_environment({**os.environ, **env_values})
         _preflight(env_file, deployment_env)
         build_storage = _build_stack(env_file, deployment_env)
+        _assert_storage_floor("before-service-start")
         # Build failures have not changed the running services. Restore only
         # checkout/env in that case; a rollback rebuild can fail for the same
         # capacity reason and conceal the original failure.
