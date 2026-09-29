@@ -171,6 +171,44 @@ jobs:
             sleep 15
           done
 
+      - name: Prove production Semgrep workspace ownership handoff
+        working-directory: aegis-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml images -q scanner_worker)"
+          if [ -z "$image_id" ]; then
+            image_id="$(docker image inspect aegis-platform-scanner_worker --format '{{.Id}}')"
+          fi
+          docker run --rm -i --network none --read-only --user 0:0 \
+            --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+            --cap-add SETPCAP --cap-add NET_RAW \
+            --tmpfs /var/lib/aegis-semgrep:rw,mode=0755 \
+            --entrypoint python "$image_id" - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+
+          root = Path('/var/lib/aegis-semgrep')
+          script = Path('/app/scanner-worker-entrypoint.sh').read_text()
+          bootstrap = script.split('python -m fastapi_app.services.nmap_retirement_preflight', 1)[0]
+          assert bootstrap != script
+          env = {**os.environ, 'AEGIS_SEMGREP_WORKSPACE_ROOT': str(root)}
+          # Reproduce the previous failure with the production capability set.
+          subprocess.run(['chown', '10001:10001', str(root)], check=True)
+          old = subprocess.run(['chmod', '0700', str(root)], capture_output=True)
+          assert old.returncode != 0, 'negative control unexpectedly has FOWNER'
+          subprocess.run(['chown', '0:0', str(root)], check=True)
+          # First boot and restart must both finish with the exact ownership/mode.
+          for _ in range(2):
+              subprocess.run(['sh', '-ec', bootstrap], env=env, check=True)
+              info = root.stat()
+              assert (info.st_uid, info.st_gid, info.st_mode & 0o777) == (10001, 10001, 0o700)
+          bad = subprocess.run(['sh', '-ec', bootstrap], env={**env, 'AEGIS_SEMGREP_WORKSPACE_ROOT': '/tmp/other'})
+          assert bad.returncode == 126
+          print('PRODUCTION_SEMGREP_WORKSPACE_HANDOFF=PASS')
+          PY
+
       - name: Start real isolated scanner stack
         working-directory: aegis-platform
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build

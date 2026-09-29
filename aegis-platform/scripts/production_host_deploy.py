@@ -439,6 +439,36 @@ def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
     )
 
 
+def _scanner_worker_state(env_file: Path, deployment_env: dict[str, str]) -> str:
+    """Collect bounded state only: never dump container config, env or raw logs."""
+    try:
+        result = _run(
+            _compose(env_file, "ps", "--all", "--quiet", "scanner_worker"),
+            cwd=PLATFORM_DIR, env=deployment_env, timeout=10,
+        )
+        ids = result.stdout.split()
+        if not ids:
+            return "no scanner_worker container"
+        if len(ids) > 4 or any(not re.fullmatch(r"[0-9a-f]{12,64}", cid) for cid in ids):
+            return "invalid scanner_worker container IDs"
+        result = _run(
+            ["docker", "inspect", "--format",
+             "status={{.State.Status}} exit={{.State.ExitCode}} "
+             "oom={{.State.OOMKilled}} restarting={{.State.Restarting}} "
+             "restarts={{.RestartCount}}", *ids],
+            cwd=PLATFORM_DIR, env=deployment_env, timeout=10,
+        )
+        lines = result.stdout.strip().splitlines()
+        pattern = r"status=[a-z]+ exit=-?[0-9]+ oom=(true|false) restarting=(true|false) restarts=[0-9]+"
+        if not lines or any(not re.fullmatch(pattern, line) for line in lines):
+            return "unrecognized scanner_worker state"
+        return "; ".join(lines)[:1024]
+    except (OSError, subprocess.SubprocessError):
+        # Diagnostics must not replace the original acceptance failure or expose
+        # stderr from Docker/Compose, which may contain environment values.
+        return "scanner_worker state unavailable"
+
+
 def _execution_plane_acceptance(
     env_file: Path,
     deployment_env: dict[str, str],
@@ -509,7 +539,8 @@ def _execution_plane_acceptance(
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             last_error = str(exc)[-2000:]
             time.sleep(3)
-    raise DeployError(f"Recon execution-plane acceptance did not become healthy: {last_error}")
+    state = _scanner_worker_state(env_file, deployment_env)
+    raise DeployError(f"Recon execution-plane acceptance did not become healthy: {last_error}; {state}")
 
 
 def _accept(origin: str, attempts: int = 40) -> None:
