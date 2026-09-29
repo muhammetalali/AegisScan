@@ -138,3 +138,76 @@ def test_production_compose_accepts_empty_static_target_projection():
     assert "AUTHORIZED_SCAN_TARGETS:?AUTHORIZED_SCAN_TARGETS is required in production" not in text
     assert text.count("AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}") >= 5
     assert "AEGIS_SCAN_SCOPE_MODE: ${AEGIS_SCAN_SCOPE_MODE:-asset-authorization}" in text
+
+
+def test_build_retry_retries_timeout_without_disabling_cache(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), dict(kwargs)))
+        if len(calls) == 1:
+            raise trust.subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(trust, "_run", fake_run)
+    monkeypatch.setattr(trust.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    trust._build_with_retry(
+        ["docker", "build", "-t", "proof", "."],
+        label="proof",
+        attempts=2,
+        timeout_seconds=60,
+    )
+
+    assert len(calls) == 2
+    assert sleeps == [15]
+    assert all("--no-cache" not in argv for argv, _kwargs in calls)
+
+
+def test_build_images_reuses_verified_exact_release_tags(monkeypatch):
+    release_sha = "a" * 40
+    short = release_sha[:12]
+    expected = {
+        "RECON": f"aegis-kali-production:profile-recon-{short}",
+        "NETWORK": f"aegis-kali-production:network-provider-{short}",
+        "MASSCAN": f"aegis-kali-production:masscan-provider-{short}",
+        "WEB": f"aegis-kali-production:web-provider-{short}",
+        "CODE": f"aegis-kali-production:code-provider-{short}",
+    }
+
+    monkeypatch.setattr(trust, "_verified_base_tag", lambda *_args, **_kwargs: "sha256:" + "1" * 64)
+    monkeypatch.setattr(
+        trust,
+        "_verified_runtime_tag",
+        lambda *_args, **_kwargs: "sha256:" + "2" * 64,
+    )
+    monkeypatch.setattr(
+        trust,
+        "_build_with_retry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("verified image must be reused")),
+    )
+
+    assert trust._build_images(release_sha, "1790000000") == expected
+
+
+def test_existing_exact_release_tag_fails_closed_on_manifest_profile_mismatch(monkeypatch):
+    image_id = "sha256:" + "1" * 64
+    monkeypatch.setattr(trust, "_optional_image_id", lambda _tag: image_id)
+    monkeypatch.setattr(
+        trust,
+        "_manifest",
+        lambda *_args: (
+            {
+                "runner_version": trust.RUNNER_VERSION,
+                "build_commit": "b" * 40,
+                "base_image_digest": "sha256:" + "2" * 64,
+                "tool_manifest_digest": "sha256:" + "3" * 64,
+                "profile": "network",
+            },
+            b"{}\n",
+        ),
+    )
+
+    with pytest.raises(trust.TrustBootstrapError, match="profile mismatch"):
+        trust._verified_runtime_tag("tag", "b" * 40, expected_profile="web")
