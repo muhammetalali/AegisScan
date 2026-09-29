@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import ipaddress
 import json
 import os
@@ -12,6 +13,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -201,6 +203,70 @@ def _remote_command(
     )
 
 
+def _stream_remote_deploy(argv: list[str], *, timeout_seconds: int) -> dict[str, object] | None:
+    tail: deque[str] = deque(maxlen=512)
+    payload: dict[str, object] | None = None
+    try:
+        process = subprocess.Popen(
+            argv,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+        )
+    except FileNotFoundError as exc:
+        raise RemoteDeployError(f"remote production deployment failed: {exc}") from exc
+
+    if process.stdout is None:
+        process.kill()
+        process.wait()
+        raise RemoteDeployError("remote production deployment did not expose a readable output stream")
+
+    def pump() -> None:
+        nonlocal payload
+        for line in process.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            stripped = line.strip()
+            if not stripped:
+                continue
+            tail.append(stripped)
+            try:
+                candidate = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("schema") == "aegisscan.production-deploy.v1"
+            ):
+                payload = candidate
+
+    reader = threading.Thread(target=pump, name="aegisscan-production-ssh-output", daemon=True)
+    reader.start()
+    try:
+        returncode = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.wait()
+        reader.join(timeout=5)
+        detail = "\n".join(tail)
+        suffix = f": {detail[-8000:]}" if detail else ""
+        raise RemoteDeployError(
+            f"remote production deployment timed out after {timeout_seconds} seconds{suffix}"
+        ) from exc
+
+    reader.join(timeout=5)
+    if reader.is_alive():
+        raise RemoteDeployError("remote production deployment output stream did not terminate cleanly")
+    if returncode != 0:
+        detail = "\n".join(tail)
+        suffix = f": {detail[-8000:]}" if detail else ""
+        raise RemoteDeployError(
+            f"remote production deployment failed with exit {returncode}{suffix}"
+        )
+    return payload
+
+
 def deploy(
     *,
     host: str,
@@ -277,34 +343,7 @@ def deploy(
         f"{user}@{host}",
         command,
     ]
-    try:
-        result = subprocess.run(
-            argv,
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-        )
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip()
-        if len(detail) > 8000:
-            detail = detail[-8000:]
-        raise RemoteDeployError(
-            f"remote production deployment failed with exit {exc.returncode}: {detail}"
-        ) from exc
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise RemoteDeployError(f"remote production deployment failed: {exc}") from exc
-
-    result_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    deploy_payload = None
-    for line in reversed(result_lines):
-        try:
-            candidate = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if candidate.get("schema") == "aegisscan.production-deploy.v1":
-            deploy_payload = candidate
-            break
+    deploy_payload = _stream_remote_deploy(argv, timeout_seconds=timeout_seconds)
     if not isinstance(deploy_payload, dict) or deploy_payload.get("status") != "success":
         raise RemoteDeployError("remote host did not return a successful production deployment record")
 
