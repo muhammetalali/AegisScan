@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -164,18 +165,35 @@ def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(t
     monkeypatch.setattr(remote, "_require_known_host", lambda *args, **kwargs: "10.20.30.10")
 
     captured = {}
+    output = {
+        "text": "host-check=PASS\n"
+        + json.dumps(
+            {
+                "schema": "aegisscan.production-deploy.v1",
+                "status": "success",
+                "release_sha": "b" * 40,
+            }
+        )
+        + "\n"
+    }
 
-    def fake_run(argv, **kwargs):
-        captured["argv"] = argv
-        captured["kwargs"] = kwargs
-        payload = {
-            "schema": "aegisscan.production-deploy.v1",
-            "status": "success",
-            "release_sha": "b" * 40,
-        }
-        return SimpleNamespace(stdout="host-check=PASS\n" + json.dumps(payload) + "\n")
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+            self.stdout = io.StringIO(output["text"])
+            self.returncode = 0
+            self.killed = False
 
-    monkeypatch.setattr(remote.subprocess, "run", fake_run)
+        def wait(self, timeout=None):
+            captured["timeout"] = timeout
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+    monkeypatch.setattr(remote.subprocess, "Popen", FakePopen)
     result = remote.deploy(
         host="deploy.internal",
         port=22,
@@ -200,13 +218,12 @@ def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(t
     assert "PasswordAuthentication=no" in argv
     assert "KbdInteractiveAuthentication=no" in argv
     assert "BatchMode=yes" in argv
-    assert captured["kwargs"]["capture_output"] is True
+    assert captured["kwargs"]["stdout"] is remote.subprocess.PIPE
+    assert captured["kwargs"]["stderr"] is remote.subprocess.STDOUT
+    assert captured["kwargs"]["text"] is True
+    assert captured["timeout"] == 120
 
-    monkeypatch.setattr(
-        remote.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(stdout='{"status":"success"}\n'),
-    )
+    output["text"] = '{"status":"success"}\n'
     with pytest.raises(remote.RemoteDeployError, match="successful production deployment record"):
         remote.deploy(
             host="deploy.internal",
@@ -220,6 +237,25 @@ def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(t
             env_path="/etc/aegisscan/production.env",
             timeout_seconds=120,
         )
+
+
+def test_streaming_remote_deploy_kills_ssh_on_timeout(monkeypatch):
+    class TimeoutPopen:
+        def __init__(self, _argv, **_kwargs):
+            self.stdout = io.StringIO("build-progress\n")
+            self.killed = False
+
+        def wait(self, timeout=None):
+            if not self.killed:
+                raise remote.subprocess.TimeoutExpired(["ssh"], timeout)
+            return -9
+
+        def kill(self):
+            self.killed = True
+
+    monkeypatch.setattr(remote.subprocess, "Popen", TimeoutPopen)
+    with pytest.raises(remote.RemoteDeployError, match="timed out after 60 seconds"):
+        remote._stream_remote_deploy(["ssh"], timeout_seconds=60)
 
 
 def test_non_default_port_known_hosts_lookup_is_bracketed(tmp_path: Path):
