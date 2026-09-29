@@ -200,12 +200,30 @@ def _assert_expected_remote() -> None:
         raise PrivilegedGateError(f"production repository origin mismatch: {remote!r}")
 
 
-def _prepare_release(release_sha: str) -> None:
-    _assert_secure_tree()
-    _assert_expected_remote()
-    status = _git("status", "--porcelain", "--untracked-files=no").stdout.strip()
-    if status:
-        raise PrivilegedGateError("production checkout has tracked local modifications")
+def _tracked_changes() -> list[str]:
+    raw = _git("status", "--porcelain=v1", "--untracked-files=no").stdout
+    lines = [line.rstrip("\n") for line in raw.splitlines() if line.strip()]
+    if len(lines) > 200:
+        raise PrivilegedGateError("production checkout has too many tracked local modifications to diagnose safely")
+    for line in lines:
+        if len(line) > 1024 or any(ord(ch) < 32 or ord(ch) == 127 for ch in line):
+            raise PrivilegedGateError("production checkout returned an unsafe tracked-change record")
+    return lines
+
+
+def _assert_clean_checkout() -> None:
+    changes = _tracked_changes()
+    if changes:
+        preview = changes[:20]
+        suffix = " (truncated)" if len(changes) > len(preview) else ""
+        raise PrivilegedGateError(
+            "production checkout has tracked local modifications: "
+            + json.dumps(preview, sort_keys=True)
+            + suffix
+        )
+
+
+def _assert_release_on_main(release_sha: str) -> None:
     _git("fetch", "--no-tags", "--prune", "origin", "main", capture=False)
     _git("cat-file", "-e", f"{release_sha}^{{commit}}")
     ancestor = subprocess.run(
@@ -230,6 +248,13 @@ def _prepare_release(release_sha: str) -> None:
     )
     if ancestor.returncode != 0:
         raise PrivilegedGateError("release SHA is not contained in origin/main")
+
+
+def _prepare_release(release_sha: str) -> None:
+    _assert_secure_tree()
+    _assert_expected_remote()
+    _assert_clean_checkout()
+    _assert_release_on_main(release_sha)
     _assert_secure_tree()
 
 
@@ -294,6 +319,32 @@ def deploy(release_sha: str, origin: str) -> None:
     _assert_secure_tree()
 
 
+def repair_checkout(release_sha: str) -> None:
+    """Restore only tracked files to the already-checked-out approved release.
+
+    This is intentionally narrower than a general git reset: the caller cannot
+    choose a branch, fetch target, path, or arbitrary ref, and untracked runtime
+    artifacts are preserved.
+    """
+    release_sha = _release_sha(release_sha)
+    _assert_secure_tree()
+    _assert_expected_remote()
+    current = _git("rev-parse", "HEAD").stdout.strip()
+    if current != release_sha:
+        raise PrivilegedGateError(
+            "production checkout repair requires HEAD to match the requested release SHA"
+        )
+    _assert_release_on_main(release_sha)
+    changes = _tracked_changes()
+    if not changes:
+        return
+    _git("reset", "--hard", release_sha, capture=False)
+    if _git("rev-parse", "HEAD").stdout.strip() != release_sha:
+        raise PrivilegedGateError("production checkout repair changed the release SHA unexpectedly")
+    _assert_clean_checkout()
+    _assert_secure_tree()
+
+
 def accept(release_sha: str) -> None:
     release_sha = _release_sha(release_sha)
     _assert_private_material()
@@ -338,8 +389,7 @@ def resilience(release_sha: str, action: str, origin: str = "") -> None:
     _assert_private_material()
     _assert_secure_tree()
     _assert_expected_remote()
-    if _git("status", "--porcelain", "--untracked-files=no").stdout.strip():
-        raise PrivilegedGateError("production checkout has tracked local modifications")
+    _assert_clean_checkout()
     if _git("rev-parse", "HEAD").stdout.strip() != release_sha:
         raise PrivilegedGateError("production host checkout does not match the resilience release SHA")
     args = ["--release-sha", release_sha, "--env-file", str(ENV_FILE), "--action", action]
@@ -358,6 +408,8 @@ def main() -> int:
     deploy_parser.add_argument("--origin", required=True)
     cleanup_parser = subparsers.add_parser("cleanup-e2e-scope")
     cleanup_parser.add_argument("--release-sha", required=True)
+    repair_parser = subparsers.add_parser("repair-checkout")
+    repair_parser.add_argument("--release-sha", required=True)
 
     accept_parser = subparsers.add_parser("accept")
     accept_parser.add_argument("--release-sha", required=True)
@@ -377,6 +429,8 @@ def main() -> int:
             accept(args.release_sha)
         elif args.action == "cleanup-e2e-scope":
             cleanup_e2e_scope(args.release_sha)
+        elif args.action == "repair-checkout":
+            repair_checkout(args.release_sha)
         elif args.action in {"backup", "recover-services"}:
             resilience(args.release_sha, args.action, getattr(args, "origin", ""))
         else:
