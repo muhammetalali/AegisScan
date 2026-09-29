@@ -75,6 +75,16 @@ def _free_bytes(path: Path = PLATFORM_DIR) -> int:
     return shutil.disk_usage(path).free
 
 
+def _assert_storage_floor(stage: str) -> int:
+    free = _free_bytes()
+    if free < PRODUCTION_MINIMUM_FREE_BYTES:
+        raise DeployError(
+            "production free disk fell below the 60 GiB safety floor "
+            f"after {stage}: {free} < {PRODUCTION_MINIMUM_FREE_BYTES}"
+        )
+    return free
+
+
 def _docker_df() -> str:
     result = _run(["docker", "system", "df"], cwd=PLATFORM_DIR, timeout=60)
     return result.stdout.strip()[-MAX_STORAGE_DIAGNOSTIC_BYTES:]
@@ -373,6 +383,7 @@ def _prepare_execution_trust(env_file: Path, release_sha: str) -> dict[str, str]
         capture=False,
         timeout=21600,
     )
+    _assert_storage_floor("execution-trust-bootstrap")
     return _load_env_file(env_file)
 
 
@@ -443,6 +454,7 @@ def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
         capture=False,
         timeout=7200,
     )
+    _assert_storage_floor("application-image-build")
     _run(
         _compose(env_file, "up", "-d", "--remove-orphans"),
         cwd=PLATFORM_DIR,
