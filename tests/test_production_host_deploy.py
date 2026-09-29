@@ -460,3 +460,46 @@ def test_runtime_trust_bootstrap_contract_is_exercised_by_launch_gate():
     assert bound["AEGIS_KALI_RECON_IMAGE"] == image_id
     assert bound["AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST"] == image_id
     assert bound["AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT"] == "2" * 40
+
+
+def test_scanner_state_reports_only_allowlisted_runtime_fields(tmp_path, monkeypatch):
+    commands = []
+
+    def run(argv, **kwargs):
+        commands.append(argv)
+        if argv[:2] == ['docker', 'inspect']:
+            return SimpleNamespace(stdout='status=restarting exit=1 oom=false restarting=true restarts=7\n')
+        return SimpleNamespace(stdout='a' * 64 + '\n')
+
+    monkeypatch.setattr(deploy, '_run', run)
+    result = deploy._scanner_worker_state(tmp_path / 'production.env', {})
+    assert result == 'status=restarting exit=1 oom=false restarting=true restarts=7'
+    assert commands[0][-4:] == ['ps', '--all', '--quiet', 'scanner_worker']
+    assert commands[1][2] == '--format'
+    assert '.Config' not in commands[1][3]
+    assert '.State.Error' not in commands[1][3]
+
+
+@pytest.mark.parametrize('output', ['', 'not-a-container secret-value'])
+def test_scanner_state_rejects_missing_or_invalid_container_ids(tmp_path, monkeypatch, output):
+    commands = []
+    def run(argv, **kwargs):
+        commands.append(argv)
+        return SimpleNamespace(stdout=output)
+    monkeypatch.setattr(deploy, '_run', run)
+    result = deploy._scanner_worker_state(tmp_path / 'production.env', {})
+    assert len(commands) == 1
+    assert 'secret-value' not in result
+
+
+def test_acceptance_preserves_original_failure_when_diagnostics_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy, '_running_services', lambda *_: set())
+    monkeypatch.setattr(deploy.time, 'sleep', lambda *_: None)
+    def run(*args, **kwargs):
+        raise deploy.subprocess.CalledProcessError(1, ['docker'], stderr='secret-value')
+    monkeypatch.setattr(deploy, '_run', run)
+    with pytest.raises(deploy.DeployError) as failure:
+        deploy._execution_plane_acceptance(tmp_path / 'production.env', {}, attempts=1)
+    assert 'scanner_worker is not running' in str(failure.value)
+    assert 'state unavailable' in str(failure.value)
+    assert 'secret-value' not in str(failure.value)

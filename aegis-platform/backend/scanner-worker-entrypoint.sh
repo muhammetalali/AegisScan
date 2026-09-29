@@ -25,7 +25,10 @@ if [ -n "${AEGIS_SEMGREP_WORKSPACE_ROOT:-}" ]; then
     # It is removed from the capability bounding set before Celery starts.
     mkdir -p /var/lib/aegis-semgrep
     chown 10001:10001 /var/lib/aegis-semgrep
-    chmod 0700 /var/lib/aegis-semgrep
+    # After chown, root is no longer the owner and deliberately has no FOWNER.
+    # Change mode as the owner, including when reusing an existing volume.
+    setpriv --reuid=10001 --regid=10001 --clear-groups --no-new-privs -- \
+        chmod 0700 /var/lib/aegis-semgrep
 fi
 
 # M6 Nmap retirement is fail-closed at worker startup. Historical parity/reference
