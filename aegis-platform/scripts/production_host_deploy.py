@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -35,6 +36,18 @@ MAX_STORAGE_DIAGNOSTIC_BYTES = 16 * 1024
 
 class DeployError(RuntimeError):
     pass
+
+
+class DeploymentInterrupted(DeployError):
+    pass
+
+
+def _deployment_signal_handler(signum, _frame) -> None:
+    try:
+        name = signal.Signals(signum).name
+    except ValueError:
+        name = str(signum)
+    raise DeploymentInterrupted(f"production deployment interrupted by {name}")
 
 
 def _run(
@@ -564,6 +577,16 @@ def _checkout(sha: str) -> None:
     _git("checkout", "--detach", sha, capture=False)
 
 
+def _restore_tracked_checkout(sha: str) -> None:
+    """Discard only tracked mutations created after the clean deployment boundary."""
+    if not SHA_RE.fullmatch(sha):
+        raise DeployError("checkout restore SHA must be exactly 40 lowercase hexadecimal characters")
+    _git("reset", "--hard", sha, capture=False)
+    if _current_sha() != sha:
+        raise DeployError("tracked checkout restore changed the release SHA unexpectedly")
+    _assert_clean_repo()
+
+
 def _rollback_application(
     *,
     previous_sha: str,
@@ -611,6 +634,10 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         _execution_plane_acceptance(env_file, deployment_env)
         _accept(origin)
     except BaseException:
+        # The repository was proven clean before this attempt. Any tracked
+        # mutation now belongs to the interrupted/failed deployment and must
+        # not poison the next fail-closed rollout.
+        _restore_tracked_checkout(release_sha)
         if deployment_attempted:
             if previous_sha != release_sha:
                 _rollback_application(
@@ -620,6 +647,8 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
                     previous_env_snapshot=previous_env_snapshot,
                     origin=origin,
                 )
+            else:
+                _restore_private_env(env_file, previous_env_snapshot)
         else:
             _restore_private_env(env_file, previous_env_snapshot)
             if previous_sha != release_sha:
@@ -645,6 +674,12 @@ def main() -> int:
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--origin", required=True)
     args = parser.parse_args()
+    handled_signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        handled_signals.append(signal.SIGHUP)
+    previous_handlers = {sig: signal.getsignal(sig) for sig in handled_signals}
+    for sig in handled_signals:
+        signal.signal(sig, _deployment_signal_handler)
     try:
         deploy(args.release_sha, args.env_file.resolve(), args.origin.strip())
     except (DeployError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -654,6 +689,9 @@ def main() -> int:
             "error": str(exc),
         }, sort_keys=True), file=sys.stderr)
         return 1
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
     return 0
 
 
