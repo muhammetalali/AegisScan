@@ -120,3 +120,21 @@ def test_rejects_expired_overlong_unknown_or_nonmain_requests(tmp_path: Path):
             event_name="push", ref="refs/heads/feature", current_sha=HEAD, event_before=BASE,
             confirm="", request_file=_request(tmp_path / "branch.json"), now=NOW,
         )
+
+
+def test_committed_deployment_request_passes_the_real_authorization_gate():
+    path = ROOT / ".github/deployment-requests/internal-production.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    base = payload["requested_base_sha"]
+    head = HEAD if base != HEAD else "c" * 40
+    # Freeze at the request's issue time so historical requests remain testable.
+    issued_at = datetime.fromisoformat(payload["requested_at"].replace("Z", "+00:00"))
+    result = request.authorize(
+        event_name="push", ref="refs/heads/main", current_sha=head, event_before=base,
+        confirm="", request_file=path, now=issued_at,
+    )
+    assert result["authorized"] is True
+    assert result["deployment_mode"] == "internal"
+    assert result["authorization_mode"] == "one-time-main-push"
+    assert result["requested_base_sha"] == base
+    assert result["request_id"] == payload["request_id"]
