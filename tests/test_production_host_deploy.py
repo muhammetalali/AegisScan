@@ -936,13 +936,14 @@ def test_deploy_stack_recovers_post_build_floor_before_service_mutation(tmp_path
     )
 
     monkeypatch.setattr(deploy, "_assert_storage_floor", lambda _stage: 60 * deploy.GIB)
+    monkeypatch.setattr(deploy, "_validate_nginx_config", lambda *_: events.append(("validate-nginx-config",)))
     deploy._build_stack(env_file, {})
     deploy._deploy_stack(env_file, {})
 
     assert events == [
         ("docker", "compose", "build", "--pull"),
         ("recover-post-build-storage",),
-        ("docker", "compose", "run", "--rm", "--no-deps", "nginx", "nginx", "-t"),
+        ("validate-nginx-config",),
         ("docker", "compose", "up", "-d", "--no-build", "--remove-orphans"),
         ("docker", "compose", "up", "-d", "--no-build", "--no-deps", "--force-recreate", "nginx"),
     ]
@@ -952,17 +953,20 @@ def test_invalid_gateway_config_stops_build_boundary_before_service_start(tmp_pa
     calls = []
     monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
     monkeypatch.setattr(deploy, "_post_build_storage", lambda _stage: {"status": "success"})
+    monkeypatch.setattr(
+        deploy,
+        "_run",
+        lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(stdout=""),
+    )
 
-    def run(argv, **kwargs):
-        calls.append(argv)
-        if argv[-3:] == ["nginx", "nginx", "-t"]:
-            raise subprocess.CalledProcessError(1, argv, stderr="invalid gateway configuration")
-        return SimpleNamespace(stdout="")
+    def reject_nginx_config(*_args):
+        raise subprocess.CalledProcessError(1, ["docker", "run", "nginx", "-t"], stderr="invalid gateway configuration")
 
-    monkeypatch.setattr(deploy, "_run", run)
+    monkeypatch.setattr(deploy, "_validate_nginx_config", reject_nginx_config)
     with pytest.raises(subprocess.CalledProcessError):
         deploy._build_stack(_env_file(tmp_path), {})
-    assert not any("up" in argv for argv in calls)
+    assert calls == [["docker", "compose", "build", "--pull"]]
+
 
 
 def test_reconcile_internal_alert_receiver_bootstraps_private_material(tmp_path: Path, monkeypatch):
