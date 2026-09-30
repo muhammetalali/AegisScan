@@ -727,3 +727,69 @@ def test_capacity_loss_after_build_restores_state_before_any_service_change(tmp_
         deploy.deploy("b" * 40, env_file, "https://security.example.com")
     assert checkouts == ["b" * 40, "a" * 40]
     assert env_file.read_bytes() == original
+
+def test_post_build_storage_reclaim_uses_build_cache_only(monkeypatch):
+    free = {"value": 59 * deploy.GIB}
+    commands = []
+    monkeypatch.setattr(deploy, "_docker_df", lambda: "storage-summary")
+
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: free["value"])
+
+    def fake_run(argv, **kwargs):
+        commands.append(list(argv))
+        if argv == ["docker", "builder", "prune", "--all", "--force"]:
+            free["value"] = 61 * deploy.GIB
+        return SimpleNamespace(stdout="reclaimed\n")
+
+    monkeypatch.setattr(deploy, "_run", fake_run)
+    result = deploy._post_build_storage("application-image-build")
+
+    assert result["mode"] == "floor-restored"
+    assert result["before_free_bytes"] == 59 * deploy.GIB
+    assert result["after_free_bytes"] == 61 * deploy.GIB
+    assert result["image_prune_performed"] is False
+    assert result["volume_prune_performed"] is False
+    assert commands == [
+        ["docker", "builder", "prune", "--all", "--force", "--filter", "until=24h"],
+        ["docker", "builder", "prune", "--all", "--force"],
+    ]
+
+
+def test_post_build_storage_reclaim_remains_fail_closed_when_cache_is_insufficient(monkeypatch):
+    monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 59 * deploy.GIB)
+    monkeypatch.setattr(deploy, "_docker_df", lambda: "storage-summary")
+    monkeypatch.setattr(deploy, "_run", lambda *args, **kwargs: SimpleNamespace(stdout="nothing to reclaim\n"))
+
+    with pytest.raises(deploy.DeployError, match="60 GiB safety floor"):
+        deploy._post_build_storage("application-image-build")
+
+
+def test_deploy_stack_recovers_post_build_floor_before_service_mutation(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    events = []
+
+    monkeypatch.setattr(
+        deploy,
+        "_compose",
+        lambda _env, *args: ["docker", "compose", *args],
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_run",
+        lambda argv, **kwargs: events.append(tuple(argv)) or SimpleNamespace(stdout=""),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_post_build_storage",
+        lambda _stage: events.append(("recover-post-build-storage",)) or {},
+    )
+
+    monkeypatch.setattr(deploy, "_assert_storage_floor", lambda _stage: 60 * deploy.GIB)
+    deploy._build_stack(env_file, {})
+    deploy._deploy_stack(env_file, {})
+
+    assert events == [
+        ("docker", "compose", "build", "--pull"),
+        ("recover-post-build-storage",),
+        ("docker", "compose", "up", "-d", "--no-build", "--remove-orphans"),
+    ]

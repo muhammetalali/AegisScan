@@ -115,6 +115,7 @@ def _post_build_storage(stage: str) -> dict[str, object]:
     before = _free_bytes()
     result: dict[str, object] = {
         "event": "production-build-storage-checkpoint",
+        "schema": "aegisscan.production-post-build-storage-reclaim.v1",
         "stage": stage,
         "minimum_free_bytes": PRODUCTION_MINIMUM_FREE_BYTES,
         "before_free_bytes": before,
@@ -143,6 +144,11 @@ def _post_build_storage(stage: str) -> dict[str, object]:
     result["reclaimed_bytes"] = max(0, after - before)
     result["remaining_deficit_bytes"] = max(0, PRODUCTION_MINIMUM_FREE_BYTES - after)
     result["status"] = "success" if after >= PRODUCTION_MINIMUM_FREE_BYTES else "insufficient-capacity"
+    result["mode"] = (
+        "noop-floor-preserved" if before >= PRODUCTION_MINIMUM_FREE_BYTES and after >= PRODUCTION_MINIMUM_FREE_BYTES
+        else "floor-restored" if after >= PRODUCTION_MINIMUM_FREE_BYTES
+        else "insufficient-cache-reclaim"
+    )
     print(json.dumps(result, sort_keys=True), flush=True)
     _assert_storage_floor(stage)
     return result

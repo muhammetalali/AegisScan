@@ -7,6 +7,11 @@ name: Internal Production Deploy and Acceptance
         description: 'Type DEPLOY to run the protected internal production rollout from main'
         required: true
         type: string
+      repair_checkout:
+        description: 'Restore tracked host files to its current approved HEAD before deployment; preserve local changes first'
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -177,6 +182,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          repair_args=()
+          if [ "${{ github.event_name }}" = 'workflow_dispatch' ] && [ "${{ inputs.repair_checkout }}" = 'true' ]; then
+            repair_args+=(--repair-current-checkout)
+          fi
           python aegis-platform/scripts/production_remote_deploy.py \
             --host "$PROD_SSH_HOST" \
             --port "$PROD_SSH_PORT" \
@@ -185,6 +194,7 @@ jobs:
             --known-hosts /tmp/aegis-production/known_hosts \
             --release-sha "$GITHUB_SHA" \
             --origin "$AEGIS_LIVE_ORIGIN" \
+            "${repair_args[@]}" \
             | tee /tmp/aegis-production/deploy.json
 
       - name: Prove Alertmanager and committed encrypted remote backup on production host
