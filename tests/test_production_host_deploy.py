@@ -1012,3 +1012,48 @@ def test_reconcile_internal_alert_receiver_migrates_explicit_external_override(t
     assert values["ALERT_WEBHOOK_URL"] == "https://security.example.com:8443/_aegis/alerts"
     assert values["AEGIS_ALERT_RECEIVER_TOKEN_FILE"] == str(token)
     assert token.is_file()
+
+
+def test_private_alert_delivery_network_uses_versioned_name():
+    compose = (ROOT / "aegis-platform/docker-compose.monitoring.yml").read_text(encoding="utf-8")
+    assert "alert_delivery_v2" in compose
+    assert "  alert_delivery_v2:\n    internal: true" in compose
+    assert "  alert_delivery:\n" not in compose
+
+
+def test_legacy_alert_delivery_network_is_removed_only_after_it_is_empty(monkeypatch):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[1:3] == ["network", "ls"]:
+            return SimpleNamespace(stdout="0123456789ab\\n")
+        if argv[1:3] == ["network", "inspect"]:
+            return SimpleNamespace(stdout='{"prometheus": {"Name": "aegis-prometheus"}}')
+        if argv[1:3] == ["network", "rm"]:
+            return SimpleNamespace(stdout="0123456789ab")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(deploy, "_run", run)
+    result = deploy._retire_legacy_alert_delivery_network()
+
+    assert result == {"status": "removed", "removed": True, "active_endpoints": 0}
+    assert calls[-1] == ["docker", "network", "rm", "0123456789ab"]
+
+
+def test_legacy_alert_delivery_network_with_live_endpoints_is_preserved(monkeypatch):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[1:3] == ["network", "ls"]:
+            return SimpleNamespace(stdout="0123456789ab\\n")
+        if argv[1:3] == ["network", "inspect"]:
+            return SimpleNamespace(stdout='{"aegis-nginx": {"Name": "aegis-nginx"}}')
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(deploy, "_run", run)
+    with pytest.raises(deploy.DeployError, match="still has active endpoints after private network acceptance: 1"):
+        deploy._retire_legacy_alert_delivery_network()
+
+    assert not any(argv[1:3] == ["network", "rm"] for argv in calls)
