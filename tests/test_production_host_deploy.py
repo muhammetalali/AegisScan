@@ -696,7 +696,7 @@ def test_production_28_capacity_recovers_before_start_without_pruning_images_or_
 def test_validate_nginx_config_uses_isolated_docker_run(tmp_path: Path, monkeypatch):
     env_file = _env_file(tmp_path)
     nginx_config = tmp_path / "nginx.conf"
-    nginx_config.write_text("events {}\\nhttp {}\\n", encoding="utf-8")
+    nginx_config.write_text("events {}\nhttp {}\n", encoding="utf-8")
     tls_dir = tmp_path / "ssl"
     tls_dir.mkdir()
     calls = []
