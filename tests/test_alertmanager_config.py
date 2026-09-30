@@ -129,6 +129,7 @@ def test_alertmanager_entrypoint_combines_public_and_enterprise_ca_trust():
 
 def test_internal_alert_delivery_network_is_isolated_and_receiver_fails_closed():
     compose = MONITORING_COMPOSE.read_text(encoding="utf-8")
-    assert "alert_delivery:\n    internal: true" in compose
+    assert "alert_delivery_v2:\n    internal: true" in compose
+    assert "  alert_delivery:\n" not in compose
     assert 'AEGIS_ALERT_RECEIVER_ALLOW_STANDBY: ${AEGIS_ALERT_RECEIVER_ALLOW_STANDBY:-false}' in compose
     assert "8443:8443" not in compose
