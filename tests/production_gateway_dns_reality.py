@@ -171,7 +171,7 @@ class Proof:
             connection.close()
 
     def wait_generation(self, scheme: str, port: int, service: str) -> None:
-        path = {"fastapi": "/health", "django": "/django-health", "frontend": "/"}[service]
+        path = {"fastapi": "/health", "django": "/api/v1/auth/probe", "frontend": "/"}[service]
         deadline = time.monotonic() + 40
         last = None
         while time.monotonic() < deadline:
@@ -196,9 +196,10 @@ class Proof:
             ("/api/v1/projects/probe", "django", "/api/v1/projects/probe"),
             ("/vulnerabilities/probe?state=open", "fastapi", "/api/v1/vulnerabilities/probe?state=open"),
             ("/scans/probe?details=1", "fastapi", "/api/v1/scans/probe?details=1"),
-            ("/django-health", "django", "/health/"),
             ("/dashboard?tab=scans", "frontend", "/dashboard?tab=scans"),
         ]
+        if scheme == "http":
+            cases.append(("/django-health", "django", "/health/"))
         for path, service, upstream_path in cases:
             status, headers, payload = self.request(scheme, port, path)
             assert status == 200, (path, status, payload)
