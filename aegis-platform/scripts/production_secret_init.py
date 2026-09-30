@@ -148,8 +148,9 @@ def initialize(
     domain = _validate_domain(domain)
     targets = _validate_targets(authorized_targets)
     alert_webhook = alert_webhook.strip()
-    if alert_webhook:
-        alert_webhook = _validate_https_origin(alert_webhook, "alert webhook")
+    if not alert_webhook:
+        raise SecretInitError("alert webhook is required for production")
+    alert_webhook = _validate_https_origin(alert_webhook, "alert webhook")
     backup_endpoint = _validate_https_origin(backup_endpoint, "backup endpoint")
     backup_bucket = _validate_bucket(backup_bucket)
     backup_region = backup_region.strip()
@@ -273,7 +274,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--domain", default=DEFAULT_PRODUCTION_DOMAIN)
     parser.add_argument("--authorized-target", action="append", default=[], dest="authorized_targets")
-    alert_group = parser.add_mutually_exclusive_group()
+    alert_group = parser.add_mutually_exclusive_group(required=True)
     alert_group.add_argument("--alert-webhook", default="")
     alert_group.add_argument("--alert-webhook-file", type=Path)
     parser.add_argument("--backup-endpoint", required=True)

@@ -62,8 +62,8 @@ def test_aws_backup_bootstrap_requires_authenticated_aws_and_supports_governed_d
     assert "AWS authentication is not ready. Run 'aws login --remote' and retry." in text
     assert 'DOMAIN="${AEGIS_PRODUCTION_DOMAIN:-aegis-prod.aegis.internal}"' in text
     assert "AEGIS_AUTHORIZED_SCAN_TARGETS is required" not in text
-    assert "AEGIS_ALERT_WEBHOOK_FILE is required" not in text
-    assert 'if [ -n "$ALERT_WEBHOOK_FILE" ]' in text
+    assert "AEGIS_ALERT_WEBHOOK_FILE is required" in text
+    assert '[ -n "$ALERT_WEBHOOK_FILE" ] || fail "AEGIS_ALERT_WEBHOOK_FILE is required"' in text
     assert "module._private_source(Path(sys.argv[4]), max_bytes=8192)" in text
     assert "module._validate_https_origin(webhook, \"alert webhook\")" in text
 

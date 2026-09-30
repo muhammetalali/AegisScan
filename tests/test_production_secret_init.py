@@ -7,6 +7,8 @@ import re
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import pytest
+
 
 PATH = Path(__file__).parents[1] / "aegis-platform/scripts/production_secret_init.py"
 SPEC = spec_from_file_location("production_secret_init", PATH)
@@ -119,31 +121,23 @@ def test_secret_init_main_emits_structured_failure(monkeypatch, capsys, tmp_path
     assert '"error": "synthetic-secret-init-failure"' in captured.err
 
 
-def test_secret_init_supports_ddns_default_scope_without_static_targets_or_webhook(tmp_path: Path):
+def test_secret_init_rejects_missing_production_alert_webhook(tmp_path: Path):
     source = tmp_path / "s3-source.json"
     source.write_text(
         '{"access_key_id":"proof-access","secret_access_key":"proof-secret"}',
         encoding="utf-8",
     )
     source.chmod(0o600)
-    env_file = tmp_path / "production.env"
-    secrets_dir = tmp_path / "secrets"
 
-    result = MODULE.initialize(
-        domain=MODULE.DEFAULT_PRODUCTION_DOMAIN,
-        authorized_targets=[],
-        alert_webhook="",
-        backup_endpoint="https://backups.example.com",
-        backup_bucket="aegisscan-production-backups",
-        backup_region="us-east-1",
-        s3_credentials_source=source,
-        output_env=env_file,
-        secrets_dir=secrets_dir,
-    )
-
-    values = _parse_env(env_file)
-    assert result["domain"] == "aegis-prod.aegis.internal"
-    assert values["ALLOWED_HOSTS"] == "aegis-prod.aegis.internal"
-    assert values["AEGIS_SCAN_SCOPE_MODE"] == "asset-authorization"
-    assert values["AUTHORIZED_SCAN_TARGETS"] == ""
-    assert values["ALERT_WEBHOOK_URL"] == ""
+    with pytest.raises(MODULE.SecretInitError, match="alert webhook is required for production"):
+        MODULE.initialize(
+            domain=MODULE.DEFAULT_PRODUCTION_DOMAIN,
+            authorized_targets=[],
+            alert_webhook="",
+            backup_endpoint="https://backups.example.com",
+            backup_bucket="aegisscan-production-backups",
+            backup_region="us-east-1",
+            s3_credentials_source=source,
+            output_env=tmp_path / "production.env",
+            secrets_dir=tmp_path / "secrets",
+        )

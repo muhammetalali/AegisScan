@@ -235,11 +235,12 @@ def test_default_kali_rejects_missing_retirement_lock(tmp_path: Path):
     assert "AEGIS_RECON_LEGACY_DISABLED must be explicitly true after M6 retirement" in failures
 
 
-def test_asset_authorization_scope_allows_empty_static_targets_and_webhook(tmp_path: Path):
+def test_asset_authorization_scope_rejects_missing_production_alert_webhook(tmp_path: Path):
     environment = valid_environment(tmp_path)
     environment["AUTHORIZED_SCAN_TARGETS"] = ""
     environment["ALERT_WEBHOOK_URL"] = ""
-    assert preflight.validate(environment, tmp_path, check_tls=False) == []
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert any("ALERT_WEBHOOK_URL" in failure for failure in failures)
 
 
 def test_preflight_rejects_missing_asset_authorization_scope_mode(tmp_path: Path):

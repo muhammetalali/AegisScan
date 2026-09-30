@@ -31,9 +31,8 @@ case "$AWS_REGION" in
 esac
 
 [ -n "$DOMAIN" ] || fail "AEGIS_PRODUCTION_DOMAIN must not be empty"
-if [ -n "$ALERT_WEBHOOK_FILE" ] && [ ! -f "$ALERT_WEBHOOK_FILE" ]; then
-  fail "AEGIS_ALERT_WEBHOOK_FILE does not exist"
-fi
+[ -n "$ALERT_WEBHOOK_FILE" ] || fail "AEGIS_ALERT_WEBHOOK_FILE is required"
+[ -f "$ALERT_WEBHOOK_FILE" ] || fail "AEGIS_ALERT_WEBHOOK_FILE does not exist"
 
 python3 - "$SECRET_INIT" "$DOMAIN" "$AUTHORIZED_TARGETS" "$ALERT_WEBHOOK_FILE" <<'PY'
 import importlib.util
@@ -49,13 +48,12 @@ spec.loader.exec_module(module)
 
 module._validate_domain(sys.argv[2])
 module._validate_targets([sys.argv[3]])
-if sys.argv[4]:
-    raw = module._private_source(Path(sys.argv[4]), max_bytes=8192)
-    try:
-        webhook = raw.decode("utf-8").strip()
-    except UnicodeDecodeError as exc:
-        raise SystemExit("AEGIS_ALERT_WEBHOOK_FILE must be UTF-8") from exc
-    module._validate_https_origin(webhook, "alert webhook")
+raw = module._private_source(Path(sys.argv[4]), max_bytes=8192)
+try:
+    webhook = raw.decode("utf-8").strip()
+except UnicodeDecodeError as exc:
+    raise SystemExit("AEGIS_ALERT_WEBHOOK_FILE must be UTF-8") from exc
+module._validate_https_origin(webhook, "alert webhook")
 PY
 
 export AWS_PAGER=""

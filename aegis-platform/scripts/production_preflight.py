@@ -106,6 +106,7 @@ def _is_unsafe_delivery_host(hostname: str) -> bool:
 def _check_alert_webhook(value: str, failures: list[str]) -> None:
     value = value.strip()
     if not value:
+        failures.append("ALERT_WEBHOOK_URL must be configured as an explicit HTTPS destination for production")
         return
     parsed = urlparse(value)
     if (
