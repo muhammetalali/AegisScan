@@ -211,9 +211,15 @@ jobs:
           gh run download "$RESILIENCE_RUN_ID" \
             --repo "$GITHUB_REPOSITORY" \
             --dir /tmp/aegis-governance/resilience
-          gh run download "$SUPPLY_CHAIN_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir /tmp/aegis-governance/supply-chain
+          # Require each evidence ZIP separately; Docker build records are not ZIP evidence.
+          for component in django fastapi frontend; do
+            artifact_name="supply-chain-$component-$RELEASE_SHA"
+            install -d -m 0700 "/tmp/aegis-governance/supply-chain/$artifact_name"
+            gh run download "$SUPPLY_CHAIN_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$artifact_name" \
+              --dir "/tmp/aegis-governance/supply-chain/$artifact_name"
+          done
 
       - name: Resolve approved internal production origin from immutable go-live evidence
         shell: bash
