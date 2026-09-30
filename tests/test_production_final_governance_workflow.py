@@ -1,5 +1,11 @@
 from pathlib import Path
 
+import json
+import os
+import subprocess
+import zipfile
+
+import pytest
 import yaml
 
 ROOT = Path(__file__).parents[1]
@@ -97,3 +103,92 @@ def test_final_governance_auto_chain_is_fail_closed_to_exact_repo_main_and_succe
     assert "{'push', 'workflow_dispatch'}" in text
     assert "{'push'}" in text
     assert "aegisscan-final-internal-governance-${{ env.RELEASE_SHA }}" in text
+
+
+@pytest.mark.parametrize("workflow", ["governance", "closure"])
+@pytest.mark.parametrize("missing_component", [False, True])
+def test_evidence_download_requires_all_exact_release_supply_artifacts_and_skips_build_records(
+    tmp_path, workflow, missing_component
+):
+    """Execute the real shell steps against a CLI fixture with ZIPs and a raw build record."""
+    release = "a" * 40
+    inventory = {}
+    for run_id in ("1", "2", "11", "12", "13"):
+        archive = tmp_path / f"run-{run_id}.zip"
+        with zipfile.ZipFile(archive, "w") as stream:
+            stream.writestr("manifest.json", "{}")
+        inventory[run_id] = {f"evidence-{run_id}": str(archive)}
+    inventory["3"] = {}
+    expected = [f"supply-chain-{component}-{release}" for component in ("django", "fastapi", "frontend")]
+    for component, name in zip(("django", "fastapi", "frontend"), expected):
+        if missing_component and component == "fastapi":
+            continue
+        archive = tmp_path / f"{component}.zip"
+        with zipfile.ZipFile(archive, "w") as stream:
+            stream.writestr(f"{component}.cdx.json", "{}")
+            stream.writestr(f"{component}.provenance.json", "{}")
+        inventory["3"][name] = str(archive)
+    raw = tmp_path / "build.dockerbuild"
+    raw.write_bytes(b"Docker build record: deliberately not a ZIP")
+    inventory["3"]["owner~repo~record.dockerbuild"] = str(raw)
+    fixture = tmp_path / "inventory.json"
+    fixture.write_text(json.dumps(inventory))
+    trace = tmp_path / "trace.jsonl"
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    cli = binary / "gh"
+    cli.write_text('''#!/usr/bin/env python3
+import json, os, sys, zipfile
+from pathlib import Path
+args = sys.argv[1:]
+if args[0] == 'api':
+    print('{}')
+    sys.exit(0)
+assert args[:2] == ['run', 'download'], args
+run_id = args[2]
+available = json.loads(Path(os.environ['GH_FIXTURE']).read_text())[run_id]
+names = [args[i+1] for i, arg in enumerate(args) if arg == '--name']
+selected = names or list(available)
+if any(name not in available for name in selected):
+    sys.exit('required artifact missing')
+with open(os.environ['GH_TRACE'], 'a') as stream:
+    stream.write(json.dumps({'run': run_id, 'selected': selected}) + '\\n')
+root = Path(args[args.index('--dir') + 1])
+for name in selected:
+    with zipfile.ZipFile(available[name]) as archive:
+        archive.extractall(root / name)
+''')
+    cli.chmod(0o755)
+    if workflow == "governance":
+        steps = _workflow()["jobs"]["final-governance"]["steps"]
+        title = "Download independently captured workflow metadata and evidence"
+        prefix = "/tmp/aegis-governance"
+    else:
+        data = yaml.safe_load((ROOT / ".github/workflows/release1-closure.yml").read_text())
+        steps = data["jobs"]["release1-closure"]["steps"]
+        title = "Download immutable release evidence"
+        prefix = "/tmp/release1"
+    root = tmp_path / "output"
+    script = next(step["run"] for step in steps if step.get("name") == title).replace(prefix, str(root))
+    env = {
+        **os.environ, "PATH": f"{binary}:{os.environ['PATH']}",
+        "GH_FIXTURE": str(fixture), "GH_TRACE": str(trace),
+        "GITHUB_REPOSITORY": "owner/repo", "RELEASE_SHA": release, "AEGIS_RELEASE_SHA": release,
+        "LIVE_DEPLOY_RUN_ID": "1", "RESILIENCE_RUN_ID": "2", "SUPPLY_CHAIN_RUN_ID": "3",
+        "FINAL_ACCEPTANCE_RUN_ID": "11", "FINAL_GOVERNANCE_RUN_ID": "12",
+        "FINAL_PRODUCTION_GOVERNANCE_RUN_ID": "13",
+    }
+    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    if missing_component:
+        assert result.returncode != 0
+        assert "required artifact missing" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        calls = [json.loads(line) for line in trace.read_text().splitlines()]
+        supply = [call for call in calls if call["run"] == "3"]
+        assert len(supply) == 3
+        assert all(len(call["selected"]) == 1 for call in supply)
+        assert [call["selected"][0] for call in supply] == expected
+        for component in ("django", "fastapi", "frontend"):
+            assert len(list(root.rglob(f"{component}.cdx.json"))) == 1
+            assert len(list(root.rglob(f"{component}.provenance.json"))) == 1

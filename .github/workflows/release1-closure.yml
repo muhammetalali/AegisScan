@@ -209,7 +209,21 @@ jobs:
             name="${pair%%:*}"
             run_id="${pair#*:}"
             mkdir -p "/tmp/release1/evidence/$name"
-            gh run download "$run_id"               --repo "$GITHUB_REPOSITORY"               --dir "/tmp/release1/evidence/$name"
+            if [ "$name" = supply-chain ]; then
+              # One exact artifact per command makes a missing component fail immediately.
+              for component in django fastapi frontend; do
+                artifact_name="supply-chain-$component-$AEGIS_RELEASE_SHA"
+                mkdir -p "/tmp/release1/evidence/$name/$artifact_name"
+                gh run download "$run_id" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --name "$artifact_name" \
+                  --dir "/tmp/release1/evidence/$name/$artifact_name"
+              done
+            else
+              gh run download "$run_id" \
+                --repo "$GITHUB_REPOSITORY" \
+                --dir "/tmp/release1/evidence/$name"
+            fi
           done
 
       - name: Capture exact repository state
