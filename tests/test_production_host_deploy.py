@@ -669,6 +669,8 @@ def test_production_28_capacity_recovers_before_start_without_pruning_images_or_
             assert free["value"] >= deploy.PRODUCTION_MINIMUM_FREE_BYTES
         return SimpleNamespace(stdout="cache reclaimed\n")
 
+    validation_calls = []
+    monkeypatch.setattr(deploy, "_validate_nginx_config", lambda env, values: validation_calls.append((env, values)))
     monkeypatch.setattr(deploy, "_run", run)
     env_file = _env_file(tmp_path)
     result = deploy._build_stack(env_file, {})
@@ -678,15 +680,79 @@ def test_production_28_capacity_recovers_before_start_without_pruning_images_or_
     assert result["after_free_bytes"] == 63833497600 + 2 * deploy.GIB
     assert result["remaining_deficit_bytes"] == 0
     assert result["status"] == "success"
-    assert len(calls) == 6
+    assert len(calls) == 5
     assert calls[1] == ["docker", "builder", "prune", "--all", "--force", "--filter", "until=24h"]
     assert calls[2] == ["docker", "builder", "prune", "--all", "--force"]
-    assert calls[3][-3:] == ["nginx", "nginx", "-t"]
-    assert "up" in calls[4] and "--no-build" in calls[4]
-    assert calls[5][-3:] == ["--no-deps", "--force-recreate", "nginx"]
+    assert validation_calls == [(env_file, {})]
+    assert "up" in calls[3] and "--no-build" in calls[3]
+    assert calls[4][-3:] == ["--no-deps", "--force-recreate", "nginx"]
     assert all(argv[:3] not in (["docker", "image", "prune"], ["docker", "container", "prune"],
                               ["docker", "volume", "prune"], ["docker", "system", "prune"])
                for argv in calls)
+
+
+
+
+def test_validate_nginx_config_uses_isolated_docker_run(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    nginx_config = tmp_path / "nginx.conf"
+    nginx_config.write_text("events {}\\nhttp {}\\n", encoding="utf-8")
+    tls_dir = tmp_path / "ssl"
+    tls_dir.mkdir()
+    calls = []
+
+    monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if "config" in argv:
+            return SimpleNamespace(
+                stdout=json.dumps(
+                    {
+                        "services": {
+                            "nginx": {
+                                "image": "nginx:1.30.5-alpine",
+                                "volumes": [
+                                    {
+                                        "type": "bind",
+                                        "source": str(nginx_config),
+                                        "target": "/etc/nginx/nginx.conf",
+                                        "read_only": True,
+                                    },
+                                    {
+                                        "type": "bind",
+                                        "source": str(tls_dir),
+                                        "target": "/etc/nginx/ssl",
+                                        "read_only": True,
+                                    },
+                                    {
+                                        "type": "volume",
+                                        "source": "aegis-platform_static_data",
+                                        "target": "/usr/share/nginx/html/static",
+                                    },
+                                ],
+                            }
+                        }
+                    }
+                )
+            )
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    deploy._validate_nginx_config(env_file, {})
+
+    assert len(calls) == 2
+    assert calls[0][:3] == ["docker", "compose", "config"] or calls[0][2:4] == ["config", "--format"]
+    isolated = calls[1]
+    assert isolated[:3] == ["docker", "run", "--rm"]
+    assert isolated[isolated.index("--network") + 1] == "none"
+    assert isolated[isolated.index("--entrypoint") + 1] == "nginx"
+    assert "nginx:1.30.5-alpine" in isolated
+    assert isolated[-2:] == ["nginx:1.30.5-alpine", "-t"]
+    assert not any(argv[:2] == ["docker", "compose"] and "run" in argv for argv in calls)
+    assert any(str(nginx_config) in arg for arg in isolated)
+    assert any(str(tls_dir) in arg for arg in isolated)
+
 
 
 def test_unrecoverable_build_capacity_does_not_start_services(tmp_path, monkeypatch, capsys):
