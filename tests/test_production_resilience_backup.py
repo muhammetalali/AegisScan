@@ -291,6 +291,7 @@ def test_recovery_requires_actual_https_and_execution_plane_health(tmp_path, mon
             'baseline_events': 1.0, 'current_events': 2.0,
             'proof_alertname': 'AegisProductionAlertDeliveryAcceptance',
             'proof_release_sha': 'a' * 40, 'audit_payload_sha256': 'f' * 64,
+            'proof_acceptance_id': 'c' * 32,
         },
     )
     result = host.execute(action='recover-services', release_sha='a' * 40, env_file=tmp_path / 'env', origin='https://security.internal')
@@ -324,6 +325,7 @@ def test_trigger_recovery_requires_authenticated_internal_alert_delivery(tmp_pat
             "receiver": "internal",
             "proof_alertname": "AegisProductionAlertDeliveryAcceptance",
             "proof_release_sha": release,
+            "proof_acceptance_id": "c" * 32,
             "audit_payload_sha256": "e" * 64,
         },
     }
@@ -335,6 +337,12 @@ def test_trigger_recovery_requires_authenticated_internal_alert_delivery(tmp_pat
     )
     assert result["recovery"]["alert_delivery"]["authenticated"] is True
 
+    for attempt in ("", "invalid", "C" * 32):
+        invalid = {**good, "alert_delivery": {**good["alert_delivery"], "proof_acceptance_id": attempt}}
+        monkeypatch.setattr(resilience.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(invalid)+"\n"))
+        with pytest.raises(resilience.ResilienceError, match="durable versioned backup or recovery success"):
+            resilience.trigger(host="security.example.com", port=22, user="aegis", private_key=key, known_hosts=known, release_sha=release, repo_path="/opt/aegisscan/AegisScan", env_path="/etc/aegisscan/production.env", timeout_seconds=120, action="recover-services", origin="https://security.example.com")
+
     bad = dict(good)
     bad["alert_delivery"] = {"status": "success", "authenticated": False, "transport": "https", "receiver": "internal"}
     monkeypatch.setattr(resilience.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(bad)+"\n"))
@@ -344,3 +352,15 @@ def test_trigger_recovery_requires_authenticated_internal_alert_delivery(tmp_pat
             release_sha=release, repo_path="/opt/aegisscan/AegisScan", env_path="/etc/aegisscan/production.env",
             timeout_seconds=120, action="recover-services", origin="https://security.example.com",
         )
+
+
+def test_remote_failure_preserves_host_diagnostic_over_generic_gate_stderr(tmp_path, monkeypatch):
+    key = _private(tmp_path / "id", "private")
+    known = _private(tmp_path / "known_hosts", "security.example.com ssh-ed25519 AAAA\n")
+    monkeypatch.setattr(resilience, "_require_known_host", lambda *args, **kwargs: None)
+    monkeypatch.setattr(resilience, "_resolved_enterprise_addresses", lambda *args: ["10.20.30.40"])
+    def fail(argv, **_kwargs):
+        raise resilience.subprocess.CalledProcessError(1, argv, output=json.dumps({"status": "failed", "error": "authenticated internal alert delivery did not reach the receiver: baseline=1 current=1"}) + "\n", stderr="generic privileged gate command failure")
+    monkeypatch.setattr(resilience.subprocess, "run", fail)
+    with pytest.raises(resilience.ResilienceError, match="baseline=1 current=1"):
+        resilience.trigger(host="security.example.com", port=22, user="aegis", private_key=key, known_hosts=known, release_sha="b" * 40, repo_path="/opt/aegisscan/AegisScan", env_path="/etc/aegisscan/production.env", timeout_seconds=120, action="recover-services", origin="https://security.example.com")

@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "release2-evidencejson-20260930182504Z",
+  "request_id": "release2-resilience-alertnonce-20260930T202654Z",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "b9c39ec85ecd176c5c36ecdb46c8af67516ceb63",
-  "requested_at": "2026-09-30T18:25:04Z",
-  "expires_at": "2026-10-01T18:25:04Z"
+  "requested_base_sha": "e7a4e68d7a04025fc132e0b43c2e06c10cc67449",
+  "requested_at": "2026-09-30T20:26:54Z",
+  "expires_at": "2026-10-01T20:26:54Z"
 }

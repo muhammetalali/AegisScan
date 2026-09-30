@@ -517,6 +517,7 @@ def test_alert_delivery_acceptance_binds_success_to_exact_audit_evidence(tmp_pat
         raise AssertionError(name)
 
     proof_sha = "f" * 64
+    monkeypatch.setattr(deploy.secrets, "token_hex", lambda _size: "c" * 32)
     monkeypatch.setattr(deploy, "_alert_receiver_metric", metric)
     monkeypatch.setattr(
         deploy,
@@ -533,6 +534,33 @@ def test_alert_delivery_acceptance_binds_success_to_exact_audit_evidence(tmp_pat
     assert result["audit_payload_sha256"] == proof_sha
     assert result["proof_release_sha"] == "b" * 40
     assert result["proof_alertname"] == "AegisProductionAlertDeliveryAcceptance"
+    assert result["proof_acceptance_id"] == "c" * 32
+
+
+def test_repeated_release_alert_acceptance_uses_independent_attempts(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    ids = iter(["a" * 32, "b" * 32])
+    counts = iter([7.0, 8.0, 8.0, 9.0])
+    sent = []
+    monkeypatch.setattr(deploy.secrets, "token_hex", lambda _size: next(ids))
+    monkeypatch.setattr(deploy, "_alert_receiver_metric", lambda _e, _d, name: next(counts) if name == "aegis_alert_receiver_events_total" else 0.0)
+    monkeypatch.setattr(deploy, "_run", lambda argv, **_kw: sent.append(argv[-1]) or SimpleNamespace(stdout=""))
+    monkeypatch.setattr(deploy, "_alert_receiver_delivery_evidence", lambda _e, _d, _sha, attempt: {"payload_sha256": "f" * 64, "acceptance_ids": [attempt], "status": "firing"})
+    monkeypatch.setattr(deploy.time, "sleep", lambda _seconds: None)
+    first = deploy._alert_delivery_acceptance(env_file, {}, "c" * 40, attempts=1)
+    second = deploy._alert_delivery_acceptance(env_file, {}, "c" * 40, attempts=1)
+    assert first["proof_acceptance_id"] != second["proof_acceptance_id"]
+    assert first["proof_acceptance_id"] in sent[0]
+    assert second["proof_acceptance_id"] in sent[1]
+    assert first["proof_release_sha"] == second["proof_release_sha"] == "c" * 40
+
+
+@pytest.mark.parametrize("state,ids", [("resolved", ["c" * 32]), ("firing", ["d" * 32])])
+def test_alert_delivery_evidence_rejects_resolved_or_stale_attempt(tmp_path, monkeypatch, state, ids):
+    payload = {"status": state, "alertnames": ["AegisProductionAlertDeliveryAcceptance"], "release_shas": ["b" * 40], "acceptance_ids": ids, "payload_sha256": "f" * 64}
+    monkeypatch.setattr(deploy, "_run", lambda *_a, **_kw: SimpleNamespace(stdout=json.dumps(payload)))
+    with pytest.raises(deploy.DeployError, match="mismatched delivery audit evidence"):
+        deploy._alert_receiver_delivery_evidence(_env_file(tmp_path), {}, "b" * 40, "c" * 32)
 
 
 def test_runtime_trust_bootstrap_contract_is_exercised_by_launch_gate():

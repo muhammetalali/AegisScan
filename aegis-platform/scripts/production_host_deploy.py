@@ -863,6 +863,7 @@ def _alert_receiver_delivery_evidence(
     env_file: Path,
     deployment_env: dict[str, str],
     release_sha: str,
+    acceptance_id: str,
 ) -> dict[str, object] | None:
     script = (
         "import json; from collections import deque; from pathlib import Path; "
@@ -871,8 +872,10 @@ def _alert_receiver_delivery_evidence(
         "items=[]; "
         "target='AegisProductionAlertDeliveryAcceptance'; "
         f"release={release_sha!r}; "
+        f"acceptance={acceptance_id!r}; "
         "[(items.append(x)) for x in (json.loads(line) for line in lines) "
-        "if target in x.get('alertnames',[]) and release in x.get('release_shas',[])]; "
+        "if target in x.get('alertnames',[]) and release in x.get('release_shas',[]) "
+        "and acceptance in x.get('acceptance_ids',[]) and x.get('status')=='firing']; "
         "print(json.dumps(items[-1] if items else {},sort_keys=True))"
     )
     result = _run(
@@ -893,6 +896,8 @@ def _alert_receiver_delivery_evidence(
     if (
         "AegisProductionAlertDeliveryAcceptance" not in payload.get("alertnames", [])
         or release_sha not in payload.get("release_shas", [])
+        or acceptance_id not in payload.get("acceptance_ids", [])
+        or payload.get("status") != "firing"
         or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("payload_sha256", "")))
     ):
         raise DeployError("alert receiver returned mismatched delivery audit evidence")
@@ -906,6 +911,7 @@ def _alert_delivery_acceptance(
     *,
     attempts: int = 40,
 ) -> dict[str, object]:
+    acceptance_id = secrets.token_hex(16)
     baseline = _alert_receiver_metric(env_file, deployment_env, "aegis_alert_receiver_events_total")
     unauthorized_before = _alert_receiver_metric(
         env_file, deployment_env, "aegis_alert_receiver_unauthorized_total"
@@ -920,6 +926,7 @@ def _alert_delivery_acceptance(
             "service": "aegisscan",
             "severity": "critical",
             "release_sha": release_sha,
+            "acceptance_id": acceptance_id,
         },
         "annotations": {"summary": "AegisScan authenticated internal alert delivery acceptance"},
         "startsAt": now.isoformat().replace("+00:00", "Z"),
@@ -943,7 +950,7 @@ def _alert_delivery_acceptance(
         time.sleep(2)
         last = _alert_receiver_metric(env_file, deployment_env, "aegis_alert_receiver_events_total")
         if last > baseline:
-            evidence = _alert_receiver_delivery_evidence(env_file, deployment_env, release_sha)
+            evidence = _alert_receiver_delivery_evidence(env_file, deployment_env, release_sha, acceptance_id)
             if evidence is None:
                 continue
             unauthorized_after = _alert_receiver_metric(
@@ -963,6 +970,7 @@ def _alert_delivery_acceptance(
                 "receiver": "internal",
                 "proof_alertname": "AegisProductionAlertDeliveryAcceptance",
                 "proof_release_sha": release_sha,
+                "proof_acceptance_id": acceptance_id,
                 "audit_payload_sha256": evidence["payload_sha256"],
             }
     raise DeployError(

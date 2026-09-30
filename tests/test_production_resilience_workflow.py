@@ -72,6 +72,7 @@ def test_resilience_workflow_reuses_authenticated_internal_alert_delivery_proof(
     assert "delivery.get('proof_alertname') != 'AegisProductionAlertDeliveryAcceptance'" in text
     assert "delivery.get('proof_release_sha') != payload.get('release_sha')" in text
     assert "audit_payload_sha256" in text
+    assert "proof_acceptance_id" in text
     assert "external-alert-delivery.json" in text
     assert "aegis_alert_receiver_events_total" in text
     assert "curl -k" not in text

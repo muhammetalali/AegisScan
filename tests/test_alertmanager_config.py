@@ -3,6 +3,7 @@ import stat
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "aegis-platform/scripts/render_alertmanager_config.py"
@@ -132,3 +133,14 @@ def test_internal_alert_delivery_network_is_isolated_and_receiver_fails_closed()
     assert "alert_delivery_v2:\n    internal: true" in compose
     assert 'AEGIS_ALERT_RECEIVER_ALLOW_STANDBY: ${AEGIS_ALERT_RECEIVER_ALLOW_STANDBY:-false}' in compose
     assert "8443:8443" not in compose
+
+
+def test_acceptance_alerts_have_attempt_scoped_fast_grouping():
+    template = ROOT / "aegis-platform/monitoring/alertmanager.yml.tpl"
+    config = yaml.safe_load(template.read_text().replace("__ALERT_WEBHOOK_CONFIG__", ""))
+    route = config["route"]["routes"][0]
+    assert route["matchers"] == ['alertname="AegisProductionAlertDeliveryAcceptance"']
+    assert {"release_sha", "acceptance_id"}.issubset(route["group_by"])
+    assert route["group_wait"] == "1s"
+    assert route["group_interval"] == "5s"
+    assert config["route"]["routes"][1]["matchers"] == ['severity="critical"']
