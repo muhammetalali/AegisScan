@@ -116,6 +116,16 @@ def trigger(
         )
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
+        # The installed gate emits its generic failure on stderr, while the
+        # host helper emits the actionable structured failure on stdout.
+        for line in reversed((exc.stdout or "").splitlines()):
+            try:
+                failure = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(failure, dict) and failure.get("status") == "failed" and isinstance(failure.get("error"), str):
+                detail = failure["error"]
+                break
         if len(detail) > 8000:
             detail = detail[-8000:]
         raise ResilienceError(
@@ -146,6 +156,7 @@ def trigger(
                 and delivery.get("receiver") == "internal"
                 and delivery.get("proof_alertname") == "AegisProductionAlertDeliveryAcceptance"
                 and delivery.get("proof_release_sha") == release_sha
+                and re.fullmatch(r"[0-9a-f]{32}", str(delivery.get("proof_acceptance_id", "")))
                 and re.fullmatch(r"[0-9a-f]{64}", str(delivery.get("audit_payload_sha256", "")))):
                 payload = candidate
                 break

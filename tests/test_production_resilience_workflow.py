@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import yaml
 
@@ -72,6 +73,7 @@ def test_resilience_workflow_reuses_authenticated_internal_alert_delivery_proof(
     assert "delivery.get('proof_alertname') != 'AegisProductionAlertDeliveryAcceptance'" in text
     assert "delivery.get('proof_release_sha') != payload.get('release_sha')" in text
     assert "audit_payload_sha256" in text
+    assert "proof_acceptance_id" in text
     assert "external-alert-delivery.json" in text
     assert "aegis_alert_receiver_events_total" in text
     assert "curl -k" not in text
@@ -111,3 +113,29 @@ def test_resilience_includes_service_recovery_and_validates_openssh_key():
     assert "printf '%s\\n' \"$PROD_SSH_PRIVATE_KEY\"" in text
     assert 'ssh-keygen -y -f /tmp/aegis-resilience/id >/dev/null' in text
     assert "'service-recovery.json'," in text
+
+
+def test_restore_evidence_preserves_its_declared_schema_and_status(tmp_path, monkeypatch):
+    steps = _workflow()['jobs']['resilience-acceptance']['steps']
+    step = next(s for s in steps if s.get('name') == 'Trigger fresh exact-release backup and host-owned restore drill')
+    source = step['run'].split("python - <<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+    source = source.replace('/tmp/aegis-resilience', str(tmp_path))
+    verification = {
+        'status': 'success', 'postgres_restore_verified': True,
+        'network_scope': 'isolated-backup-db',
+        'plaintext_scope': 'ephemeral-backup-container-tmpfs',
+        'postgres_image_id': 'sha256:' + 'a' * 64,
+        'backup_id': 'backup-1', 'manifest_version_id': 'manifest-1',
+        'object_version_id': 'object-1', 'source_sha256': 'b' * 64,
+    }
+    backup = {**verification, 'restore_verification': verification}
+    (tmp_path / 'remote-backup.json').write_text(json.dumps({
+        'schema': 'aegisscan.production-resilience-backup.v1', 'status': 'success', 'backup': backup,
+    }) + '\n')
+    monkeypatch.setenv('GITHUB_ENV', str(tmp_path / 'github-env'))
+    exec(compile(source, '<restore-evidence-step>', 'exec'), {})
+    record = json.loads((tmp_path / 'remote-restore.json').read_text())
+    assert record['schema'] == 'aegisscan.production-host-restore-verification.v1'
+    assert record['status'] == 'restored-and-verified-on-production-host'
+    assert record['source_sha256'] == verification['source_sha256']
+    assert record['postgres_restore_verified'] is True

@@ -72,6 +72,7 @@ def test_receiver_rejects_unauthorized_and_records_minimal_authenticated_audit(t
                 "service": "aegisscan",
                 "severity": "critical",
                 "release_sha": "a" * 40,
+                "acceptance_id": "c" * 32,
             },
             "annotations": {"summary": "do-not-persist-this-secret-value"},
         }],
@@ -94,6 +95,7 @@ def test_receiver_rejects_unauthorized_and_records_minimal_authenticated_audit(t
         assert record["alertnames"] == ["AegisCritical"]
         assert record["severities"] == ["critical"]
         assert record["release_shas"] == ["a" * 40]
+        assert record["acceptance_ids"] == ["c" * 32]
         assert len(record["payload_sha256"]) == 64
         assert "do-not-persist-this-secret-value" not in audit
 

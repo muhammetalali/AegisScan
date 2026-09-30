@@ -79,6 +79,7 @@ class ReceiverState:
             'services': _safe_label_set(alerts, 'service'),
             'severities': _safe_label_set(alerts, 'severity'),
             'release_shas': _safe_label_set(alerts, 'release_sha'),
+            'acceptance_ids': _safe_label_set(alerts, 'acceptance_id'),
             'payload_sha256': hashlib.sha256(raw).hexdigest(),
         }
         line = (json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')

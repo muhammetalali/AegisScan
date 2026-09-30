@@ -160,9 +160,9 @@ jobs:
               assert verification.get(name) == backup.get(name), (name, backup, verification)
 
           legacy_restore_evidence = {
+              **verification,
               'schema': 'aegisscan.production-host-restore-verification.v1',
               'status': 'restored-and-verified-on-production-host',
-              **verification,
           }
           Path('/tmp/aegis-resilience/remote-restore.json').write_text(
               json.dumps(legacy_restore_evidence, sort_keys=True) + '\n', encoding='utf-8'
@@ -217,6 +217,8 @@ jobs:
               or delivery.get('receiver') != 'internal'
               or delivery.get('proof_alertname') != 'AegisProductionAlertDeliveryAcceptance'
               or delivery.get('proof_release_sha') != payload.get('release_sha')
+              or len(str(delivery.get('proof_acceptance_id', ''))) != 32
+              or any(ch not in '0123456789abcdef' for ch in str(delivery.get('proof_acceptance_id', '')))
               or len(str(delivery.get('audit_payload_sha256', ''))) != 64
               or any(ch not in '0123456789abcdef' for ch in str(delivery.get('audit_payload_sha256', '')))
               or current <= baseline
@@ -227,6 +229,7 @@ jobs:
               'authenticated':True, 'transport':'https', 'receiver':'internal',
               'proof_alertname':delivery['proof_alertname'],
               'proof_release_sha':delivery['proof_release_sha'],
+              'proof_acceptance_id':delivery['proof_acceptance_id'],
               'audit_payload_sha256':delivery['audit_payload_sha256'],
           }
           Path('/tmp/aegis-resilience/external-alert-delivery.json').write_text(
