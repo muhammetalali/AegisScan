@@ -50,6 +50,7 @@ jobs:
       PROD_SSH_USER: ${{ secrets.AEGIS_PRODUCTION_SSH_USER }}
       PROD_SSH_PRIVATE_KEY: ${{ secrets.AEGIS_PRODUCTION_SSH_PRIVATE_KEY }}
       PROD_SSH_KNOWN_HOSTS: ${{ secrets.AEGIS_PRODUCTION_SSH_KNOWN_HOSTS }}
+      PROD_ENTERPRISE_CA_BUNDLE: ${{ secrets.AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE }}
       BACKUP_ENDPOINT: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_ENDPOINT }}
       BACKUP_REGION: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_REGION || 'us-east-1' }}
       BACKUP_BUCKET: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_BUCKET }}
@@ -93,7 +94,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in             PROD_ORIGIN             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             BACKUP_ENDPOINT             BACKUP_REGION             BACKUP_BUCKET             BACKUP_PREFIX             BACKUP_ADDRESSING_STYLE             BACKUP_CREDENTIALS_JSON             BACKUP_ENCRYPTION_KEY_B64             ALERT_WEBHOOK_URL; do
+          for name in             PROD_ORIGIN             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             PROD_ENTERPRISE_CA_BUNDLE             BACKUP_ENDPOINT             BACKUP_REGION             BACKUP_BUCKET             BACKUP_PREFIX             BACKUP_ADDRESSING_STYLE             BACKUP_CREDENTIALS_JSON             BACKUP_ENCRYPTION_KEY_B64             ALERT_WEBHOOK_URL; do
             value="${!name:-}"
             if [ -z "$value" ]; then
               echo "Required protected production material is missing: $name" >&2
@@ -136,7 +137,8 @@ jobs:
           printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > /tmp/aegis-resilience/known_hosts
           printf '%s' "$BACKUP_CREDENTIALS_JSON" > /tmp/aegis-resilience/s3.json
           printf '%s' "$BACKUP_ENCRYPTION_KEY_B64" | base64 --decode > /tmp/aegis-resilience/backup.key
-          chmod 0600             /tmp/aegis-resilience/id             /tmp/aegis-resilience/known_hosts             /tmp/aegis-resilience/s3.json             /tmp/aegis-resilience/backup.key
+          printf '%s\n' "$PROD_ENTERPRISE_CA_BUNDLE" > /tmp/aegis-resilience/enterprise-ca.pem
+          chmod 0600             /tmp/aegis-resilience/id             /tmp/aegis-resilience/known_hosts             /tmp/aegis-resilience/s3.json             /tmp/aegis-resilience/backup.key             /tmp/aegis-resilience/enterprise-ca.pem
           ssh-keygen -y -f /tmp/aegis-resilience/id >/dev/null
           test "$(stat -c '%s' /tmp/aegis-resilience/backup.key)" = 32
           python - <<'PY'
@@ -146,6 +148,8 @@ jobs:
           assert isinstance(payload, dict)
           assert payload.get('access_key_id')
           assert payload.get('secret_access_key')
+          import ssl
+          ssl.create_default_context(cafile='/tmp/aegis-resilience/enterprise-ca.pem')
           PY
 
       - name: Trigger fresh exact-release remote encrypted backup
@@ -247,7 +251,7 @@ jobs:
         run: |
           set -euo pipefail
           docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true
-          docker run -d             --name aegis-resilience-alertmanager             --read-only             --cap-drop ALL             --security-opt no-new-privileges:true             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16777216,uid=10003,gid=10003,mode=0700             --tmpfs /alertmanager:rw,nosuid,nodev,noexec,size=16777216,uid=10003,gid=10003,mode=0700             -p 127.0.0.1:19093:9093             -e ALERT_WEBHOOK_URL="$ALERT_WEBHOOK_URL"             aegis-alertmanager:resilience
+          docker run -d             --name aegis-resilience-alertmanager             --read-only             --cap-drop ALL             --security-opt no-new-privileges:true             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16777216,uid=10003,gid=10003,mode=0700             --tmpfs /alertmanager:rw,nosuid,nodev,noexec,size=16777216,uid=10003,gid=10003,mode=0700             -p 127.0.0.1:19093:9093             -e ALERT_WEBHOOK_URL="$ALERT_WEBHOOK_URL"             -e AEGIS_ENTERPRISE_CA_BUNDLE=/run/aegis/enterprise-ca.pem             -v /tmp/aegis-resilience/enterprise-ca.pem:/run/aegis/enterprise-ca.pem:ro             aegis-alertmanager:resilience
 
           cleanup() { docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true; }
           trap cleanup EXIT

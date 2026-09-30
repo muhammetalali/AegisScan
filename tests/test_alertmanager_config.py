@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).parents[1] / "aegis-platform/scripts/render_alertmanager_config.py"
+ROOT = Path(__file__).parents[1]
+SCRIPT = ROOT / "aegis-platform/scripts/render_alertmanager_config.py"
+ENTRYPOINT = ROOT / "aegis-platform/docker/alertmanager/entrypoint.sh"
+PROD_COMPOSE = ROOT / "aegis-platform/docker-compose.prod.yml"
 SPEC = importlib.util.spec_from_file_location("render_alertmanager_config", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
@@ -84,3 +87,13 @@ def test_renderer_allows_http_only_for_explicit_loopback_tests(tmp_path):
             "http://alerts.example.com/aegis",
             allow_http=True,
         )
+
+
+def test_alertmanager_entrypoint_combines_public_and_enterprise_ca_trust():
+    entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
+    compose = PROD_COMPOSE.read_text(encoding="utf-8")
+    assert 'AEGIS_ENTERPRISE_CA_BUNDLE' in entrypoint
+    assert 'cat /etc/ssl/certs/ca-certificates.crt "$enterprise_ca" > /tmp/aegis-ca-bundle.pem' in entrypoint
+    assert 'export SSL_CERT_FILE=/tmp/aegis-ca-bundle.pem' in entrypoint
+    assert 'AEGIS_ENTERPRISE_CA_BUNDLE: /run/aegis/enterprise-ca.pem' in compose
+    assert '/etc/aegisscan/enterprise-ca.pem:/run/aegis/enterprise-ca.pem:ro' in compose

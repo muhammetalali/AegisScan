@@ -53,6 +53,9 @@ def test_resilience_workflow_uses_real_alertmanager_external_route():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "aegis-alertmanager:resilience" in text
     assert "ALERT_WEBHOOK_URL" in text
+    assert "AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE" in text
+    assert "AEGIS_ENTERPRISE_CA_BUNDLE=/run/aegis/enterprise-ca.pem" in text
+    assert "/tmp/aegis-resilience/enterprise-ca.pem:/run/aegis/enterprise-ca.pem:ro" in text
     assert "/api/v2/alerts" in text
     assert "alertmanager_notifications_total" in text
     assert "alertmanager_notifications_failed_total" in text

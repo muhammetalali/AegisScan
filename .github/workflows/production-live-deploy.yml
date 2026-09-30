@@ -215,7 +215,7 @@ jobs:
               raise SystemExit('BACKUP_CREDENTIALS_JSON must contain access_key_id and secret_access_key')
 
           try:
-              encryption_key = base64.b64decode(os.environ['BACKUP_ENCRYPTION_KEY_B64'], validate=True)
+              encryption_key = base64.b64decode(os.environ['BACKUP_ENCRYPTION_KEY_B64'].strip(), validate=True)
           except (binascii.Error, ValueError) as exc:
               raise SystemExit('BACKUP_ENCRYPTION_KEY_B64 is not valid base64') from exc
           if len(encryption_key) != 32:

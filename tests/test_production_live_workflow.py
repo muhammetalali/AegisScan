@@ -294,6 +294,12 @@ def test_production_validation_target_is_internal_only_and_explicitly_authorized
     assert 'SCANNER_EGRESS_PRIVATE_TARGETS: "${SCANNER_EGRESS_PRIVATE_TARGETS:-},aegis-scan-target"' not in text
 
 
+def test_production_alertmanager_receives_enterprise_ca_without_replacing_public_trust():
+    text = PROD_COMPOSE.read_text(encoding="utf-8")
+    assert "AEGIS_ENTERPRISE_CA_BUNDLE: /run/aegis/enterprise-ca.pem" in text
+    assert "/etc/aegisscan/enterprise-ca.pem:/run/aegis/enterprise-ca.pem:ro" in text
+
+
 def test_production_backend_services_receive_required_runtime_environment():
     data = yaml.load(PROD_COMPOSE.read_text(encoding="utf-8"), Loader=ComposeLoader)
     assert isinstance(data, dict)

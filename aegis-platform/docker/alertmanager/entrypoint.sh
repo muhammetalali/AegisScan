@@ -15,6 +15,18 @@ case "${AEGIS_ALLOW_HTTP_ALERT_WEBHOOK:-false}" in
 esac
 
 umask 077
+enterprise_ca="${AEGIS_ENTERPRISE_CA_BUNDLE:-}"
+if [ -n "$enterprise_ca" ]; then
+  case "$enterprise_ca" in
+    /*) ;;
+    *) echo "AEGIS_ENTERPRISE_CA_BUNDLE must be an absolute path" >&2; exit 2 ;;
+  esac
+  [ -r "$enterprise_ca" ] || { echo "enterprise CA bundle is not readable" >&2; exit 2; }
+  cat /etc/ssl/certs/ca-certificates.crt "$enterprise_ca" > /tmp/aegis-ca-bundle.pem
+  chmod 0600 /tmp/aegis-ca-bundle.pem
+  export SSL_CERT_FILE=/tmp/aegis-ca-bundle.pem
+fi
+
 python3 /usr/local/lib/aegis/render_alertmanager_config.py \
   --template /etc/aegis-alertmanager/alertmanager.yml.tpl \
   --output /tmp/alertmanager.yml \
