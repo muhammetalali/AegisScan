@@ -689,6 +689,52 @@ def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
     _assert_storage_floor("service-start")
 
 
+
+def _retire_legacy_alert_delivery_network() -> dict[str, object]:
+    """Remove the pre-v2 public Compose network only after private cutover acceptance."""
+    project = "aegis-platform"
+    network = "alert_delivery"
+    listed = _run(
+        [
+            "docker", "network", "ls",
+            "--filter", f"label=com.docker.compose.project={project}",
+            "--filter", f"label=com.docker.compose.network={network}",
+            "--format", "{{.ID}}",
+        ],
+        cwd=PLATFORM_DIR,
+        timeout=30,
+    )
+    network_ids = listed.stdout.split()
+    if not network_ids:
+        return {"status": "already-absent", "removed": False}
+    if len(network_ids) != 1 or any(not re.fullmatch(r"[0-9a-f]{12,64}", item) for item in network_ids):
+        raise DeployError("legacy alert delivery network discovery was ambiguous")
+
+    network_id = network_ids[0]
+    inspected = _run(
+        ["docker", "network", "inspect", "--format", "{{json .Containers}}", network_id],
+        cwd=PLATFORM_DIR,
+        timeout=30,
+    )
+    try:
+        endpoints = json.loads(inspected.stdout)
+    except json.JSONDecodeError as exc:
+        raise DeployError("legacy alert delivery network endpoint state was invalid") from exc
+    if endpoints is None:
+        endpoints = {}
+    if not isinstance(endpoints, dict):
+        raise DeployError("legacy alert delivery network endpoint state was unrecognized")
+    if endpoints:
+        raise DeployError(
+            "legacy alert delivery network still has active endpoints after private network acceptance: "
+            f"{len(endpoints)}"
+        )
+
+    _run(["docker", "network", "rm", network_id], cwd=PLATFORM_DIR, timeout=30)
+    return {"status": "removed", "removed": True, "active_endpoints": 0}
+
+
+
 def _scanner_worker_state(env_file: Path, deployment_env: dict[str, str]) -> str:
     """Collect bounded state only: never dump container config, env or raw logs."""
     try:
@@ -1001,6 +1047,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     deployment_attempted = False
     repo_mutation_attempted = False
     alert_delivery: dict[str, object] = {}
+    legacy_alert_network_cleanup: dict[str, object] = {"status": "not-needed", "removed": False}
     backup: dict[str, str | bool] = {}
     storage_reclaim: dict[str, object] = {}
     build_storage: dict[str, object] = {}
@@ -1025,6 +1072,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         _execution_plane_acceptance(env_file, deployment_env)
         _accept(origin)
         alert_delivery = _alert_delivery_acceptance(env_file, deployment_env, release_sha)
+        legacy_alert_network_cleanup = _retire_legacy_alert_delivery_network()
     except BaseException as failure:
         if repo_mutation_attempted:
             # The repository was proven clean before this attempt. Any tracked
@@ -1075,6 +1123,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         "storage_reclaim": storage_reclaim,
         "application_build_storage": build_storage,
         "alert_delivery": alert_delivery,
+        "legacy_alert_network_cleanup": legacy_alert_network_cleanup,
     }
     print(json.dumps(result, sort_keys=True))
     return result

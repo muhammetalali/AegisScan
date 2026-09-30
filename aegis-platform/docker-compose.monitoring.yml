@@ -13,7 +13,7 @@ services:
     networks:
       default: {}
       observability: {}
-      alert_delivery:
+      alert_delivery_v2:
         aliases:
           - ${AEGIS_PRODUCTION_DOMAIN:-aegis-prod.aegis.internal}
     depends_on:
@@ -89,7 +89,7 @@ services:
     pids_limit: 64
     mem_limit: 128m
     cpus: 0.25
-    networks: [alert_delivery]
+    networks: [alert_delivery_v2]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/ready',timeout=2); assert r.status==200"]
       interval: 10s
@@ -115,7 +115,7 @@ services:
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    networks: [alert_delivery]
+    networks: [alert_delivery_v2]
     depends_on:
       alert_receiver: {condition: service_healthy}
 
@@ -139,7 +139,7 @@ services:
     security_opt: [no-new-privileges:true]
     networks:
       - observability
-      - alert_delivery
+      - alert_delivery_v2
     depends_on:
       alertmanager: {condition: service_started}
       blackbox-exporter: {condition: service_started}
@@ -149,7 +149,7 @@ services:
 networks:
   observability:
     internal: true
-  alert_delivery:
+  alert_delivery_v2:
     internal: true
 
 volumes:

@@ -144,7 +144,7 @@ jobs:
           required = {'prometheus', 'alertmanager', 'alert_receiver', 'blackbox-exporter', 'postgres-exporter', 'redis-exporter'}
           assert required <= set(services), set(services)
           assert config['networks']['observability'].get('internal') is True
-          assert config['networks']['alert_delivery'].get('internal') is True
+          assert config['networks']['alert_delivery_v2'].get('internal') is True
 
           for name in required:
               service = services[name]
@@ -154,8 +154,8 @@ jobs:
               assert 'no-new-privileges:true' in service.get('security_opt', []), (name, service.get('security_opt'))
 
           assert 'observability' not in services['alertmanager']['networks']
-          assert set(services['alert_receiver']['networks']) == {'alert_delivery'}
-          assert {'observability', 'alert_delivery'} <= set(services['prometheus']['networks'])
+          assert set(services['alert_receiver']['networks']) == {'alert_delivery_v2'}
+          assert {'observability', 'alert_delivery_v2'} <= set(services['prometheus']['networks'])
           assert set(services['blackbox-exporter']['networks']) == {'observability'}
           assert set(services['postgres-exporter']['networks']) == {'observability'}
           assert set(services['redis-exporter']['networks']) == {'observability'}
@@ -182,7 +182,7 @@ jobs:
           RECEIVER_UID="$(id -u)"
           RECEIVER_GID="$(id -g)"
           OBS_NET="${COMPOSE_PROJECT_NAME}_observability"
-          DELIVERY_NET="${COMPOSE_PROJECT_NAME}_alert_delivery"
+          DELIVERY_NET="${COMPOSE_PROJECT_NAME}_alert_delivery_v2"
           COMPOSE="docker compose -f docker-compose.yml -f docker-compose.monitoring.yml"
 
           cleanup() {
