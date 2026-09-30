@@ -97,7 +97,6 @@ jobs:
             --domain security.example.com \
             --authorized-target 203.0.113.10 \
             --authorized-target authorized.example.com \
-            --alert-webhook https://alerts.example.com/aegis \
             --backup-endpoint https://backups.example.com \
             --backup-bucket aegisscan-production-backups \
             --backup-region eu-central-1 \
@@ -108,6 +107,9 @@ jobs:
           test "$(stat -c '%a' /tmp/aegis-runtime/secrets/s3-credentials.json)" = 600
           test "$(stat -c '%a' /tmp/aegis-runtime/secrets/backup-encryption.key)" = 600
           test "$(stat -c '%s' /tmp/aegis-runtime/secrets/backup-encryption.key)" = 32
+          test "$(stat -c '%a' /tmp/aegis-runtime/secrets/alert-receiver-token)" = 600
+          grep -q '^ALERT_WEBHOOK_URL=https://security.example.com:8443/_aegis/alerts$' /tmp/aegis-runtime/production.env
+          grep -q '^AEGIS_PRODUCTION_DOMAIN=security.example.com$' /tmp/aegis-runtime/production.env
           cat >>/tmp/aegis-runtime/production.env <<'EOF'
           AEGIS_RECON_PROVIDER=default-kali
           AEGIS_RECON_LEGACY_DISABLED=true
