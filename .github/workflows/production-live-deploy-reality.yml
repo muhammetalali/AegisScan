@@ -24,6 +24,11 @@ name: Production Live Deploy Reality
       - 'tests/test_production_remote_deploy.py'
       - 'tests/test_production_host_deploy.py'
       - 'tests/production_build_cache_reality.py'
+      - 'tests/production_gateway_dns_reality.py'
+      - 'tests/test_nginx_contract.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'aegis-platform/docker/nginx.conf'
       - 'tests/test_production_storage_reclaim.py'
       - 'tests/test_production_operational_acceptance.py'
       - 'tests/test_production_remote_operational_acceptance.py'
@@ -51,6 +56,11 @@ name: Production Live Deploy Reality
       - 'tests/test_production_remote_deploy.py'
       - 'tests/test_production_host_deploy.py'
       - 'tests/production_build_cache_reality.py'
+      - 'tests/production_gateway_dns_reality.py'
+      - 'tests/test_nginx_contract.py'
+      - 'aegis-platform/docker-compose.yml'
+      - 'aegis-platform/docker/nginx-ssl.conf'
+      - 'aegis-platform/docker/nginx.conf'
       - 'tests/test_production_storage_reclaim.py'
       - 'tests/test_production_operational_acceptance.py'
       - 'tests/test_production_remote_operational_acceptance.py'
@@ -65,7 +75,7 @@ concurrency:
 jobs:
   production-live-deploy-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
@@ -86,7 +96,8 @@ jobs:
             aegis-platform/scripts/production_storage_reclaim.py \
             aegis-platform/scripts/production_operational_acceptance.py \
             aegis-platform/scripts/production_remote_operational_acceptance.py \
-            scripts/ci/wait_for_required_ci.py
+            scripts/ci/wait_for_required_ci.py \
+            tests/production_gateway_dns_reality.py
 
       - name: Prove fail-closed live deployment contracts
         run: |
@@ -99,10 +110,14 @@ jobs:
             tests/test_production_operational_acceptance.py \
             tests/test_production_remote_operational_acceptance.py \
             tests/test_production_live_workflow.py \
-            tests/test_wait_for_required_ci.py
+            tests/test_wait_for_required_ci.py \
+            tests/test_nginx_contract.py
 
       - name: Prove real Docker cache reclaim preserves candidate, rollback and data
         run: python tests/production_build_cache_reality.py
+
+      - name: Prove gateway recovers real upstream IP changes over verified HTTPS and HTTP
+        run: python tests/production_gateway_dns_reality.py
 
       - name: Reject insecure transport or broad automatic deployment
         shell: bash

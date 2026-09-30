@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -598,10 +599,12 @@ def test_production_28_capacity_recovers_before_start_without_pruning_images_or_
     assert result["after_free_bytes"] == 63833497600 + 2 * deploy.GIB
     assert result["remaining_deficit_bytes"] == 0
     assert result["status"] == "success"
-    assert len(calls) == 4
+    assert len(calls) == 6
     assert calls[1] == ["docker", "builder", "prune", "--all", "--force", "--filter", "until=24h"]
     assert calls[2] == ["docker", "builder", "prune", "--all", "--force"]
-    assert "up" in calls[3] and "--no-build" in calls[3]
+    assert calls[3][-3:] == ["nginx", "nginx", "-t"]
+    assert "up" in calls[4] and "--no-build" in calls[4]
+    assert calls[5][-3:] == ["--no-deps", "--force-recreate", "nginx"]
     assert all(argv[:3] not in (["docker", "image", "prune"], ["docker", "container", "prune"],
                               ["docker", "volume", "prune"], ["docker", "system", "prune"])
                for argv in calls)
@@ -791,5 +794,24 @@ def test_deploy_stack_recovers_post_build_floor_before_service_mutation(tmp_path
     assert events == [
         ("docker", "compose", "build", "--pull"),
         ("recover-post-build-storage",),
+        ("docker", "compose", "run", "--rm", "--no-deps", "nginx", "nginx", "-t"),
         ("docker", "compose", "up", "-d", "--no-build", "--remove-orphans"),
+        ("docker", "compose", "up", "-d", "--no-build", "--no-deps", "--force-recreate", "nginx"),
     ]
+
+
+def test_invalid_gateway_config_stops_build_boundary_before_service_start(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
+    monkeypatch.setattr(deploy, "_post_build_storage", lambda _stage: {"status": "success"})
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[-3:] == ["nginx", "nginx", "-t"]:
+            raise subprocess.CalledProcessError(1, argv, stderr="invalid gateway configuration")
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    with pytest.raises(subprocess.CalledProcessError):
+        deploy._build_stack(_env_file(tmp_path), {})
+    assert not any("up" in argv for argv in calls)

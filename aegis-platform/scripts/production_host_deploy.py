@@ -504,7 +504,16 @@ def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, ob
         capture=False,
         timeout=7200,
     )
-    return _post_build_storage("application-image-build")
+    storage = _post_build_storage("application-image-build")
+    # Validate the gateway image and mounted TLS config before replacing services.
+    _run(
+        _compose(env_file, "run", "--rm", "--no-deps", "nginx", "nginx", "-t"),
+        cwd=PLATFORM_DIR,
+        env=deployment_env,
+        capture=False,
+        timeout=180,
+    )
+    return storage
 
 
 def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
@@ -514,6 +523,15 @@ def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
         env=deployment_env,
         capture=False,
         timeout=1800,
+    )
+    # Git checkout replaces config inodes; a retained file bind mount can still
+    # expose the old config. Recreate only the gateway after application startup.
+    _run(
+        _compose(env_file, "up", "-d", "--no-build", "--no-deps", "--force-recreate", "nginx"),
+        cwd=PLATFORM_DIR,
+        env=deployment_env,
+        capture=False,
+        timeout=180,
     )
     _assert_storage_floor("service-start")
 
