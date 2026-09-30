@@ -1035,7 +1035,7 @@ def test_legacy_alert_delivery_network_is_removed_only_after_it_is_empty(monkeyp
         if argv[1:3] == ["network", "ls"]:
             return SimpleNamespace(stdout="0123456789ab\n")
         if argv[1:3] == ["network", "inspect"]:
-            return SimpleNamespace(stdout='{"prometheus": {"Name": "aegis-prometheus"}}')
+            return SimpleNamespace(stdout="{}")
         if argv[1:3] == ["network", "rm"]:
             return SimpleNamespace(stdout="0123456789ab")
         raise AssertionError(argv)
