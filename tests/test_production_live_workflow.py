@@ -53,6 +53,22 @@ def test_live_production_workflow_has_only_manual_or_one_time_main_request_trigg
     assert data["concurrency"]["cancel-in-progress"] is False
 
 
+def test_checkout_repair_is_explicit_manual_opt_in_and_uses_protected_transport():
+    data = _workflow()
+    repair_input = data["on"]["workflow_dispatch"]["inputs"]["repair_checkout"]
+    assert repair_input["type"] == "boolean"
+    assert repair_input["default"] is False
+    steps = data["jobs"]["deploy-and-accept"]["steps"]
+    deploy = next(step for step in steps if step.get("name") == "Deploy exact main SHA through private enterprise perimeter")
+    script = deploy["run"]
+    assert '[ "${{ github.event_name }}" = \'workflow_dispatch\' ]' in script
+    assert '[ "${{ inputs.repair_checkout }}" = \'true\' ]' in script
+    assert "repair_args=()" in script
+    assert "repair_args+=(--repair-current-checkout)" in script
+    assert '--private-key /tmp/aegis-production/id' in script
+    assert '--known-hosts /tmp/aegis-production/known_hosts' in script
+
+
 
 def test_live_workflows_wait_for_exact_sha_required_ci_before_live_execution():
     cases = [

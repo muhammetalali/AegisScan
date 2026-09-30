@@ -203,7 +203,12 @@ def _remote_command(
     )
 
 
-def _stream_remote_deploy(argv: list[str], *, timeout_seconds: int) -> dict[str, object] | None:
+def _stream_remote_deploy(
+    argv: list[str],
+    *,
+    timeout_seconds: int,
+    payload_schema: str = "aegisscan.production-deploy.v1",
+) -> dict[str, object] | None:
     tail: deque[str] = deque(maxlen=512)
     payload: dict[str, object] | None = None
     try:
@@ -237,7 +242,7 @@ def _stream_remote_deploy(argv: list[str], *, timeout_seconds: int) -> dict[str,
                 continue
             if (
                 isinstance(candidate, dict)
-                and candidate.get("schema") == "aegisscan.production-deploy.v1"
+                and candidate.get("schema") == payload_schema
             ):
                 payload = candidate
 
@@ -267,6 +272,35 @@ def _stream_remote_deploy(argv: list[str], *, timeout_seconds: int) -> dict[str,
     return payload
 
 
+def _repair_current_checkout(ssh_argv: list[str], *, timeout_seconds: int) -> dict[str, object]:
+    """Use only the installed gate's bounded repair of the existing approved HEAD."""
+    command = (
+        f"/usr/bin/git -c safe.directory={PRODUCTION_REPO_PATH} "
+        f"-c core.hooksPath=/dev/null -C {PRODUCTION_REPO_PATH} rev-parse HEAD"
+    )
+    try:
+        current = subprocess.run(
+            [*ssh_argv, command], check=True, text=True, capture_output=True, timeout=30,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RemoteDeployError("unable to read current production HEAD over pinned SSH") from exc
+    if not SHA_RE.fullmatch(current):
+        raise RemoteDeployError("production checkout returned an invalid current HEAD")
+    payload = _stream_remote_deploy(
+        [*ssh_argv, f"sudo -n {PRIVILEGED_GATE} repair-checkout --release-sha {current}"],
+        timeout_seconds=min(timeout_seconds, 900),
+        payload_schema="aegisscan.production-privileged-gate.v1",
+    )
+    if (
+        not isinstance(payload, dict)
+        or payload.get("status") != "success"
+        or payload.get("action") != "repair-checkout"
+        or payload.get("release_sha") != current
+    ):
+        raise RemoteDeployError("installed gate did not prove repair of the current production HEAD")
+    return payload
+
+
 def deploy(
     *,
     host: str,
@@ -279,6 +313,7 @@ def deploy(
     repo_path: str,
     env_path: str,
     timeout_seconds: int,
+    repair_current_checkout: bool = False,
 ) -> dict[str, object]:
     host = _host(host)
     if port < 1 or port > 65535:
@@ -343,6 +378,9 @@ def deploy(
         f"{user}@{host}",
         command,
     ]
+    checkout_repair = None
+    if repair_current_checkout:
+        checkout_repair = _repair_current_checkout(argv[:-1], timeout_seconds=timeout_seconds)
     deploy_payload = _stream_remote_deploy(argv, timeout_seconds=timeout_seconds)
     if not isinstance(deploy_payload, dict) or deploy_payload.get("status") != "success":
         raise RemoteDeployError("remote host did not return a successful production deployment record")
@@ -359,6 +397,7 @@ def deploy(
         "origin_resolved_addresses": origin_addresses,
         "network_scope": "rfc1918-or-ipv6-ula",
         "remote_deployment": deploy_payload,
+        "checkout_repair": checkout_repair,
     }
 
 
@@ -374,6 +413,10 @@ def main() -> int:
     parser.add_argument("--repo-path", default="/opt/aegisscan/AegisScan")
     parser.add_argument("--env-path", default="/etc/aegisscan/production.env")
     parser.add_argument("--timeout-seconds", type=int, default=14400)
+    parser.add_argument(
+        "--repair-current-checkout", action="store_true",
+        help="Explicitly restore tracked files to the existing approved HEAD through the installed gate",
+    )
     args = parser.parse_args()
 
     if args.timeout_seconds < 60 or args.timeout_seconds > 21600:
@@ -396,6 +439,7 @@ def main() -> int:
             repo_path=args.repo_path,
             env_path=args.env_path,
             timeout_seconds=args.timeout_seconds,
+            repair_current_checkout=args.repair_current_checkout,
         )
     except RemoteDeployError as exc:
         print(json.dumps({

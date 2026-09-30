@@ -23,6 +23,7 @@ name: Production Live Deploy Reality
       - 'tests/test_production_privileged_gate.py'
       - 'tests/test_production_remote_deploy.py'
       - 'tests/test_production_host_deploy.py'
+      - 'tests/production_build_cache_reality.py'
       - 'tests/test_production_storage_reclaim.py'
       - 'tests/test_production_operational_acceptance.py'
       - 'tests/test_production_remote_operational_acceptance.py'
@@ -49,6 +50,7 @@ name: Production Live Deploy Reality
       - 'tests/test_production_privileged_gate.py'
       - 'tests/test_production_remote_deploy.py'
       - 'tests/test_production_host_deploy.py'
+      - 'tests/production_build_cache_reality.py'
       - 'tests/test_production_storage_reclaim.py'
       - 'tests/test_production_operational_acceptance.py'
       - 'tests/test_production_remote_operational_acceptance.py'
@@ -98,6 +100,9 @@ jobs:
             tests/test_production_remote_operational_acceptance.py \
             tests/test_production_live_workflow.py \
             tests/test_wait_for_required_ci.py
+
+      - name: Prove real Docker cache reclaim preserves candidate, rollback and data
+        run: python tests/production_build_cache_reality.py
 
       - name: Reject insecure transport or broad automatic deployment
         shell: bash

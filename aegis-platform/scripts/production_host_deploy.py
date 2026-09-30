@@ -85,40 +85,6 @@ def _assert_storage_floor(stage: str) -> int:
     return free
 
 
-def _recover_post_build_storage_floor() -> dict[str, object]:
-    """Reclaim only disposable BuildKit cache when a successful build crosses the floor."""
-    before = _free_bytes()
-    result: dict[str, object] = {
-        "schema": "aegisscan.production-post-build-storage-reclaim.v1",
-        "status": "success",
-        "before_free_bytes": before,
-        "after_free_bytes": before,
-        "reclaimed_bytes": 0,
-        "stages": [],
-        "image_prune_performed": False,
-        "volume_prune_performed": False,
-    }
-    if before >= PRODUCTION_MINIMUM_FREE_BYTES:
-        result["mode"] = "noop-floor-preserved"
-        return result
-
-    stage = _storage_stage(
-        "post-build-cache",
-        ["docker", "builder", "prune", "--all", "--force"],
-    )
-    after = _free_bytes()
-    result["stages"] = [stage]
-    result["after_free_bytes"] = after
-    result["reclaimed_bytes"] = max(0, after - before)
-    result["mode"] = (
-        "floor-restored"
-        if after >= PRODUCTION_MINIMUM_FREE_BYTES
-        else "insufficient-cache-reclaim"
-    )
-    _assert_storage_floor("application-image-build-cache-reclaim")
-    return result
-
-
 def _docker_df() -> str:
     result = _run(["docker", "system", "df"], cwd=PLATFORM_DIR, timeout=60)
     return result.stdout.strip()[-MAX_STORAGE_DIAGNOSTIC_BYTES:]
@@ -136,6 +102,56 @@ def _storage_stage(name: str, argv: list[str]) -> dict[str, object]:
         "reclaimed_bytes": max(0, after - before),
         "stdout_tail": result.stdout.strip()[-4000:],
     }
+
+
+def _post_build_storage(stage: str) -> dict[str, object]:
+    """Recover build scratch space without pruning candidate or rollback images.
+
+    Images just exported by a build have no containers yet. The general host
+    reclaimer's image/container pruning is therefore unsafe at this boundary.
+    Keep recent cache for resumable builds unless the measured hard floor needs
+    recovery, and remeasure instead of trusting Docker's reclaimed-byte count.
+    """
+    before = _free_bytes()
+    result: dict[str, object] = {
+        "event": "production-build-storage-checkpoint",
+        "schema": "aegisscan.production-post-build-storage-reclaim.v1",
+        "stage": stage,
+        "minimum_free_bytes": PRODUCTION_MINIMUM_FREE_BYTES,
+        "before_free_bytes": before,
+        "stages": [],
+        "image_prune_performed": False,
+        "container_prune_performed": False,
+        "volume_prune_performed": False,
+    }
+    if before < PRODUCTION_MINIMUM_FREE_BYTES:
+        result["docker_df_before"] = _docker_df()
+        stages = [
+            _storage_stage(
+                "aged-build-cache",
+                ["docker", "builder", "prune", "--all", "--force", "--filter", "until=24h"],
+            )
+        ]
+        if _free_bytes() < PRODUCTION_MINIMUM_FREE_BYTES:
+            stages.append(
+                _storage_stage("all-build-cache", ["docker", "builder", "prune", "--all", "--force"])
+            )
+        result["stages"] = stages
+        result["docker_df_after"] = _docker_df()
+
+    after = _free_bytes()
+    result["after_free_bytes"] = after
+    result["reclaimed_bytes"] = max(0, after - before)
+    result["remaining_deficit_bytes"] = max(0, PRODUCTION_MINIMUM_FREE_BYTES - after)
+    result["status"] = "success" if after >= PRODUCTION_MINIMUM_FREE_BYTES else "insufficient-capacity"
+    result["mode"] = (
+        "noop-floor-preserved" if before >= PRODUCTION_MINIMUM_FREE_BYTES and after >= PRODUCTION_MINIMUM_FREE_BYTES
+        else "floor-restored" if after >= PRODUCTION_MINIMUM_FREE_BYTES
+        else "insufficient-cache-reclaim"
+    )
+    print(json.dumps(result, sort_keys=True), flush=True)
+    _assert_storage_floor(stage)
+    return result
 
 
 def _host_storage_reclaim(
@@ -417,7 +433,7 @@ def _prepare_execution_trust(env_file: Path, release_sha: str) -> dict[str, str]
         capture=False,
         timeout=21600,
     )
-    _assert_storage_floor("execution-trust-bootstrap")
+    _post_build_storage("execution-trust-bootstrap")
     return _load_env_file(env_file)
 
 
@@ -480,7 +496,7 @@ def _backup_before_upgrade(env_file: Path, deployment_env: dict[str, str]) -> di
     }
 
 
-def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
+def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, object]:
     _run(
         _compose(env_file, "build", "--pull"),
         cwd=PLATFORM_DIR,
@@ -488,14 +504,18 @@ def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
         capture=False,
         timeout=7200,
     )
-    _recover_post_build_storage_floor()
+    return _post_build_storage("application-image-build")
+
+
+def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
     _run(
-        _compose(env_file, "up", "-d", "--remove-orphans"),
+        _compose(env_file, "up", "-d", "--no-build", "--remove-orphans"),
         cwd=PLATFORM_DIR,
         env=deployment_env,
         capture=False,
         timeout=1800,
     )
+    _assert_storage_floor("service-start")
 
 
 def _scanner_worker_state(env_file: Path, deployment_env: dict[str, str]) -> str:
@@ -658,6 +678,8 @@ def _rollback_application(
     previous_env = _load_env_file(env_file)
     rollback_env = _rollback_execution_environment({**os.environ, **previous_env})
     _checkout(previous_sha)
+    _build_stack(env_file, rollback_env)
+    _assert_storage_floor("before-service-start")
     _deploy_stack(env_file, rollback_env)
     _execution_plane_acceptance(env_file, rollback_env)
     _accept(origin)
@@ -680,24 +702,35 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         env_values = _prepare_execution_trust(env_file, release_sha)
         deployment_env = _execution_profile_environment({**os.environ, **env_values})
         _preflight(env_file, deployment_env)
+        build_storage = _build_stack(env_file, deployment_env)
+        _assert_storage_floor("before-service-start")
+        # Build failures have not changed the running services. Restore only
+        # checkout/env in that case; a rollback rebuild can fail for the same
+        # capacity reason and conceal the original failure.
         deployment_attempted = True
         _deploy_stack(env_file, deployment_env)
         _execution_plane_acceptance(env_file, deployment_env)
         _accept(origin)
-    except BaseException:
+    except BaseException as failure:
         # The repository was proven clean before this attempt. Any tracked
         # mutation now belongs to the interrupted/failed deployment and must
         # not poison the next fail-closed rollout.
         _restore_tracked_checkout(release_sha)
         if deployment_attempted:
             if previous_sha != release_sha:
-                _rollback_application(
-                    previous_sha=previous_sha,
-                    failed_release_sha=release_sha,
-                    env_file=env_file,
-                    previous_env_snapshot=previous_env_snapshot,
-                    origin=origin,
-                )
+                try:
+                    _rollback_application(
+                        previous_sha=previous_sha,
+                        failed_release_sha=release_sha,
+                        env_file=env_file,
+                        previous_env_snapshot=previous_env_snapshot,
+                        origin=origin,
+                    )
+                except Exception as rollback_failure:
+                    raise DeployError(
+                        f"production deployment failed: {failure}; "
+                        f"automatic rollback also failed: {rollback_failure}"
+                    ) from failure
             else:
                 _restore_private_env(env_file, previous_env_snapshot)
         else:
@@ -714,6 +747,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         "public_origin": origin,
         "pre_deploy_backup": backup,
         "storage_reclaim": storage_reclaim,
+        "application_build_storage": build_storage,
     }
     print(json.dumps(result, sort_keys=True))
     return result

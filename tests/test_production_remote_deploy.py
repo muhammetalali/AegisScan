@@ -264,3 +264,101 @@ def test_non_default_port_known_hosts_lookup_is_bracketed(tmp_path: Path):
         "[deploy.internal]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
     )
     assert "[deploy.internal]:2222" in known.read_text(encoding="utf-8")
+
+
+def test_checkout_repair_uses_only_current_head_and_installed_gate(monkeypatch):
+    current = "a" * 40
+    prefix = ["ssh", "-o", "StrictHostKeyChecking=yes", "aegisdeploy@deploy.internal"]
+    calls = []
+    monkeypatch.setattr(
+        remote.subprocess, "run",
+        lambda argv, **kwargs: calls.append((argv, kwargs)) or SimpleNamespace(stdout=current + "\n"),
+    )
+
+    def stream(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return {
+            "schema": "aegisscan.production-privileged-gate.v1",
+            "status": "success", "action": "repair-checkout", "release_sha": current,
+        }
+
+    monkeypatch.setattr(remote, "_stream_remote_deploy", stream)
+    result = remote._repair_current_checkout(prefix, timeout_seconds=14400)
+    assert result["release_sha"] == current
+    assert calls[0][0][:-1] == calls[1][0][:-1] == prefix
+    assert calls[0][0][-1].endswith("rev-parse HEAD")
+    assert calls[1][0][-1] == (
+        "sudo -n /usr/local/sbin/aegisscan-production-gate repair-checkout --release-sha " + current
+    )
+    assert calls[1][1]["timeout_seconds"] == 900
+    assert calls[1][1]["payload_schema"] == "aegisscan.production-privileged-gate.v1"
+
+
+@pytest.mark.parametrize("current", ["main", "a" * 40 + "\nextra", "a" * 40 + ";id"])
+def test_checkout_repair_rejects_invalid_head_before_privileged_action(monkeypatch, current):
+    monkeypatch.setattr(remote.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout=current))
+    monkeypatch.setattr(remote, "_stream_remote_deploy", lambda *_args, **_kwargs: pytest.fail("invalid HEAD reached gate"))
+    with pytest.raises(remote.RemoteDeployError, match="invalid current HEAD"):
+        remote._repair_current_checkout(["ssh"], timeout_seconds=120)
+
+
+@pytest.mark.parametrize("record", [
+    None,
+    {"status": "failed", "action": "repair-checkout", "release_sha": "a" * 40},
+    {"status": "success", "action": "deploy", "release_sha": "a" * 40},
+    {"status": "success", "action": "repair-checkout", "release_sha": "b" * 40},
+])
+def test_checkout_repair_requires_gate_proof_for_the_existing_head(monkeypatch, record):
+    monkeypatch.setattr(remote.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout="a" * 40))
+    monkeypatch.setattr(remote, "_stream_remote_deploy", lambda *_args, **_kwargs: record)
+    with pytest.raises(remote.RemoteDeployError, match="did not prove repair"):
+        remote._repair_current_checkout(["ssh"], timeout_seconds=120)
+
+
+def test_opted_in_repair_precedes_deployment_and_preserves_ssh_pins(tmp_path, monkeypatch):
+    key = _private(tmp_path / "id", "private")
+    known = _private(tmp_path / "known_hosts", "private pin")
+    _private_dns(monkeypatch)
+    monkeypatch.setattr(remote, "_require_known_host", lambda *_args, **_kwargs: "10.20.30.10")
+    events = []
+
+    def repair(argv, **kwargs):
+        events.append(("repair", argv))
+        return {"status": "success", "action": "repair-checkout", "release_sha": "a" * 40}
+
+    def stream(argv, **kwargs):
+        events.append(("deploy", argv))
+        return {"schema": "aegisscan.production-deploy.v1", "status": "success", "release_sha": "b" * 40}
+
+    monkeypatch.setattr(remote, "_repair_current_checkout", repair)
+    monkeypatch.setattr(remote, "_stream_remote_deploy", stream)
+    result = remote.deploy(
+        host="deploy.internal", port=22, user="aegisdeploy", private_key=key, known_hosts=known,
+        release_sha="b" * 40, origin="https://security.internal",
+        repo_path=remote.PRODUCTION_REPO_PATH, env_path=remote.PRODUCTION_ENV_PATH,
+        timeout_seconds=120, repair_current_checkout=True,
+    )
+    assert [event[0] for event in events] == ["repair", "deploy"]
+    assert events[0][1] == events[1][1][:-1]
+    assert "HostKeyAlias=10.20.30.10" in events[0][1]
+    assert "StrictHostKeyChecking=yes" in events[0][1]
+    assert result["checkout_repair"]["release_sha"] == "a" * 40
+
+
+def test_failed_checkout_repair_prevents_deployment(tmp_path, monkeypatch):
+    key = _private(tmp_path / "id", "private")
+    known = _private(tmp_path / "known_hosts", "private pin")
+    _private_dns(monkeypatch)
+    monkeypatch.setattr(remote, "_require_known_host", lambda *_args, **_kwargs: "deploy.internal")
+    monkeypatch.setattr(
+        remote, "_repair_current_checkout",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(remote.RemoteDeployError("repair denied")),
+    )
+    monkeypatch.setattr(remote, "_stream_remote_deploy", lambda *_args, **_kwargs: pytest.fail("repair failure reached deploy"))
+    with pytest.raises(remote.RemoteDeployError, match="repair denied"):
+        remote.deploy(
+            host="deploy.internal", port=22, user="aegisdeploy", private_key=key, known_hosts=known,
+            release_sha="b" * 40, origin="https://security.internal",
+            repo_path=remote.PRODUCTION_REPO_PATH, env_path=remote.PRODUCTION_ENV_PATH,
+            timeout_seconds=120, repair_current_checkout=True,
+        )
