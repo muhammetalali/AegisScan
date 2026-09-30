@@ -25,12 +25,17 @@ class ReceiverConfigError(RuntimeError):
 
 
 def _private_token(path: Path) -> bytes:
-    if not path.is_absolute() or not path.is_file():
+    if not path.is_absolute():
         raise ReceiverConfigError('alert receiver token file must be an existing absolute path')
-    info = path.stat()
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise ReceiverConfigError('alert receiver token file must be mode 0600 or stricter')
-    token = path.read_bytes().strip()
+    try:
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode):
+            raise ReceiverConfigError('alert receiver token file must be an existing absolute path')
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise ReceiverConfigError('alert receiver token file must be mode 0600 or stricter')
+        token = path.read_bytes().strip()
+    except OSError as exc:
+        raise ReceiverConfigError('alert receiver token file is not readable') from exc
     if len(token) < 32 or len(token) > 512 or any(ch in token for ch in b'\r\n\x00'):
         raise ReceiverConfigError('alert receiver token has invalid length or control characters')
     return token

@@ -49,6 +49,17 @@ def test_receiver_requires_private_token_file(tmp_path: Path):
         receiver._private_token(token)
 
 
+def test_receiver_converts_token_io_failure_to_structured_config_error(tmp_path: Path, monkeypatch):
+    token = _token(tmp_path)
+
+    def unreadable(_self):
+        raise PermissionError("synthetic token read denial")
+
+    monkeypatch.setattr(receiver.Path, "read_bytes", unreadable)
+    with pytest.raises(receiver.ReceiverConfigError, match="not readable"):
+        receiver._private_token(token)
+
+
 def test_receiver_rejects_unauthorized_and_records_minimal_authenticated_audit(tmp_path: Path):
     server, thread, state = _server(tmp_path)
     base = f"http://127.0.0.1:{server.server_address[1]}"

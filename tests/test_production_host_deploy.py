@@ -326,6 +326,7 @@ def test_failed_backup_leaves_checkout_and_private_environment_untouched(tmp_pat
     with pytest.raises(deploy.DeployError, match="backup failed"):
         deploy.deploy("b" * 40, env_file, "https://security.internal")
     assert env_file.read_bytes() == original
+    assert not deploy.ALERT_RECEIVER_TOKEN_PATH.exists()
 
 
 def test_schema_blocked_rollback_keeps_new_release_env_bound(tmp_path: Path, monkeypatch):
@@ -784,6 +785,9 @@ def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypa
     assert "scanner service failed" in str(exc.value)
     assert "rollback capacity failed" in str(exc.value)
     assert exc.value.__cause__ is original_failure
+    # A failed rollback may leave the new stack partially running. Retain the
+    # private token rather than breaking its authenticated receiver mid-failure.
+    assert deploy.ALERT_RECEIVER_TOKEN_PATH.is_file()
 
 
 def test_capacity_loss_after_build_restores_state_before_any_service_change(tmp_path, monkeypatch):
