@@ -1027,7 +1027,7 @@ def test_legacy_alert_delivery_network_is_removed_only_after_it_is_empty(monkeyp
     def run(argv, **kwargs):
         calls.append(list(argv))
         if argv[1:3] == ["network", "ls"]:
-            return SimpleNamespace(stdout="0123456789ab\\n")
+            return SimpleNamespace(stdout="0123456789ab\n")
         if argv[1:3] == ["network", "inspect"]:
             return SimpleNamespace(stdout='{"prometheus": {"Name": "aegis-prometheus"}}')
         if argv[1:3] == ["network", "rm"]:
@@ -1047,7 +1047,7 @@ def test_legacy_alert_delivery_network_with_live_endpoints_is_preserved(monkeypa
     def run(argv, **kwargs):
         calls.append(list(argv))
         if argv[1:3] == ["network", "ls"]:
-            return SimpleNamespace(stdout="0123456789ab\\n")
+            return SimpleNamespace(stdout="0123456789ab\n")
         if argv[1:3] == ["network", "inspect"]:
             return SimpleNamespace(stdout='{"aegis-nginx": {"Name": "aegis-nginx"}}')
         raise AssertionError(argv)
