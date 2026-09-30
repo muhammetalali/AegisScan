@@ -49,8 +49,8 @@ def test_live_production_workflow_has_only_manual_or_one_time_main_request_trigg
     assert readiness["runs-on"] == ["self-hosted", "linux", "x64", "aegisscan-resilience"]
     assert readiness["timeout-minutes"] == 10
     assert "AEGISSCAN_RESILIENCE_RUNNER_READINESS=PASS" in readiness["steps"][0]["run"]
-    assert "postgres:16-alpine psql --version" in readiness["steps"][0]["run"]
-    assert "postgres:16-alpine pg_restore --version" in readiness["steps"][0]["run"]
+    assert "for command_name in git ssh ssh-keygen python3; do" in readiness["steps"][0]["run"]
+    assert "docker" not in readiness["steps"][0]["run"]
     deploy = jobs["deploy-and-accept"]
     assert deploy["needs"] == "resilience-runner-readiness"
     assert deploy["environment"] == "production"
@@ -79,7 +79,7 @@ def test_checkout_repair_is_explicit_manual_opt_in_and_uses_protected_transport(
 
 def test_live_workflows_wait_for_exact_sha_required_ci_before_live_execution():
     cases = [
-        (WORKFLOW, "deploy-and-accept", "Validate protected internal production and downstream resilience material"),
+        (WORKFLOW, "deploy-and-accept", "Validate protected internal production transport material"),
         (CLOUD_LIVE_WORKFLOW, "live-provider-reality", "Install exact cloud runtime dependencies"),
         (IDENTITY_LIVE_WORKFLOW, "external-identity-live", "Install live identity dependencies"),
     ]
@@ -138,10 +138,8 @@ def test_live_production_workflow_requires_bounded_authorization_pinned_ssh_ente
         "AEGIS_PRODUCTION_BACKUP_S3_CREDENTIALS_JSON",
         "AEGIS_PRODUCTION_BACKUP_ENCRYPTION_KEY_B64",
     ):
-        assert secret_name in text
-    assert "Protected production chain material is incomplete" in text
-    assert "BACKUP_ENCRYPTION_KEY_B64 must decode to exactly 32 bytes" in text
-    assert "BACKUP_CREDENTIALS_JSON must contain access_key_id and secret_access_key" in text
+        assert secret_name not in text
+    assert "Protected production transport material is incomplete" in text
     assert "AEGIS_PRODUCTION_ALERT_WEBHOOK_URL" not in text
     assert "AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-production/enterprise-ca.pem" in text
     assert "REQUESTS_CA_BUNDLE=/tmp/aegis-production/enterprise-ca.pem" in text

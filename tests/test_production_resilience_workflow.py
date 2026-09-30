@@ -31,22 +31,32 @@ def test_resilience_workflow_is_manual_or_chained_main_only_and_protected():
     assert "runs-on: ubuntu-latest" not in WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_resilience_workflow_pins_remote_backup_versions_and_restores_disposable_db():
+def test_resilience_workflow_keeps_backup_secrets_on_host_and_consumes_restore_proof():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "production_resilience_backup.py" in text
-    assert "--manifest-version-id" in text
-    assert "AEGIS_DR_OBJECT_VERSION_ID" in text
-    assert "verify_postgres_restore.sh" in text
-    assert "postgres:16-alpine" in text
-    assert "resilience-restore-password" in text
-    assert "RESTORE_VERIFICATION=PASS" in text
-    assert "dropdb" not in text
-    assert "PGHOST: 127.0.0.1" in text
-    assert "for command_name in docker git ssh curl; do" in text
-    assert "docker run --rm --pull=missing" in text
-    assert "--network host" in text
-    assert "postgres:16-alpine" in text
-    assert "sh /verify_postgres_restore.sh /recovery/production.dump" in text
+    for forbidden in (
+        "AEGIS_PRODUCTION_BACKUP_S3_ENDPOINT",
+        "AEGIS_PRODUCTION_BACKUP_S3_BUCKET",
+        "AEGIS_PRODUCTION_BACKUP_S3_CREDENTIALS_JSON",
+        "AEGIS_PRODUCTION_BACKUP_ENCRYPTION_KEY_B64",
+        "BACKUP_CREDENTIALS_JSON",
+        "BACKUP_ENCRYPTION_KEY_B64",
+    ):
+        assert forbidden not in text
+    assert "services:\n      postgres:" not in text
+    assert "remote_backup.py restore" not in text
+    assert "--network host" not in text
+    assert "restore_verification" in text
+    assert "AEGIS_DR_SOURCE_SHA256" in text
+    assert "'source_sha256': os.environ['AEGIS_DR_SOURCE_SHA256']" in text
+    assert "postgres_restore_verified" in text
+    assert "isolated-backup-db" in text
+    assert "ephemeral-backup-container-tmpfs" in text
+    assert "postgres_image_id" in text
+    assert "aegisscan.production-host-restore-verification.v1" in text
+    assert "restored-and-verified-on-production-host" in text
+    assert "RESTORE_VERIFICATION=PASS scope=production-host-disposable-postgres" in text
+    assert "for command_name in git ssh ssh-keygen python3; do" in text
 
 
 def test_resilience_workflow_reuses_authenticated_internal_alert_delivery_proof():

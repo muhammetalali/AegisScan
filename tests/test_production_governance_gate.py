@@ -135,11 +135,16 @@ def _resilience(tmp_path: Path) -> Path:
     _write_json(
         root / "remote-restore.json",
         {
-            "status": "restored-locally",
+            "schema": "aegisscan.production-host-restore-verification.v1",
+            "status": "restored-and-verified-on-production-host",
             "backup_id": backup_id,
             "manifest_version_id": manifest_version,
             "object_version_id": object_version,
             "source_sha256": "c" * 64,
+            "postgres_restore_verified": True,
+            "network_scope": "isolated-backup-db",
+            "plaintext_scope": "ephemeral-backup-container-tmpfs",
+            "postgres_image_id": "sha256:" + "a" * 64,
         },
     )
     (root / "postgres-restore.txt").write_text(
@@ -176,6 +181,7 @@ def _resilience(tmp_path: Path) -> Path:
             "backup_id": backup_id,
             "manifest_version_id": manifest_version,
             "object_version_id": object_version,
+            "source_sha256": "c" * 64,
             "sha256": {name: _sha(root / name) for name in evidence},
         },
     )

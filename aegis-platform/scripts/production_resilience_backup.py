@@ -150,12 +150,24 @@ def trigger(
                 payload = candidate
                 break
             continue
+        verification = candidate.get("restore_verification")
         if (
             candidate.get("status") == "success"
             and candidate.get("backup_id")
             and candidate.get("manifest_key")
             and candidate.get("manifest_version_id")
             and candidate.get("object_version_id")
+            and re.fullmatch(r"[0-9a-f]{64}", str(candidate.get("source_sha256", "")))
+            and isinstance(verification, dict)
+            and verification.get("status") == "success"
+            and verification.get("postgres_restore_verified") is True
+            and verification.get("backup_id") == candidate.get("backup_id")
+            and verification.get("manifest_version_id") == candidate.get("manifest_version_id")
+            and verification.get("object_version_id") == candidate.get("object_version_id")
+            and verification.get("source_sha256") == candidate.get("source_sha256")
+            and verification.get("network_scope") == "isolated-backup-db"
+            and verification.get("plaintext_scope") == "ephemeral-backup-container-tmpfs"
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", str(verification.get("postgres_image_id", "")))
         ):
             payload = candidate
             break
