@@ -74,6 +74,8 @@ def test_checkout_repair_is_explicit_manual_opt_in_and_uses_protected_transport(
     assert "repair_args+=(--repair-current-checkout)" in script
     assert '--private-key /tmp/aegis-production/id' in script
     assert '--known-hosts /tmp/aegis-production/known_hosts' in script
+    assert '--output-json /tmp/aegis-production/deploy.json' in script
+    assert 'tee /tmp/aegis-production/deploy.json' not in script
 
 
 
