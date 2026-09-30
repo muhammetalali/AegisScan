@@ -596,6 +596,64 @@ def _backup_before_upgrade(env_file: Path, deployment_env: dict[str, str]) -> di
     }
 
 
+def _validate_nginx_config(env_file: Path, deployment_env: dict[str, str]) -> None:
+    """Test the candidate TLS config without letting Compose mutate the live stack."""
+    rendered = _run(
+        _compose(env_file, "config", "--format", "json"),
+        cwd=PLATFORM_DIR,
+        env=deployment_env,
+        timeout=60,
+    )
+    try:
+        compose_config = json.loads(rendered.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise DeployError("resolved production Compose configuration is not valid JSON") from exc
+
+    services = compose_config.get("services") if isinstance(compose_config, dict) else None
+    nginx = services.get("nginx") if isinstance(services, dict) else None
+    if not isinstance(nginx, dict):
+        raise DeployError("resolved production Compose configuration has no nginx service")
+    image = nginx.get("image")
+    if not isinstance(image, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}", image):
+        raise DeployError("resolved production nginx image is invalid")
+
+    volumes = nginx.get("volumes")
+    if not isinstance(volumes, list):
+        raise DeployError("resolved production nginx mounts are invalid")
+    mounts = {
+        item.get("target"): item
+        for item in volumes
+        if isinstance(item, dict) and isinstance(item.get("target"), str)
+    }
+    required_targets = {
+        "/etc/nginx/nginx.conf": "file",
+        "/etc/nginx/ssl": "directory",
+    }
+    argv = [
+        "docker", "run", "--rm", "--network", "none", "--read-only",
+        "--tmpfs", "/var/log/nginx:rw,noexec,nosuid,nodev,size=4m",
+        "--tmpfs", "/var/cache/nginx:rw,noexec,nosuid,nodev,size=4m",
+        "--tmpfs", "/var/run:rw,noexec,nosuid,nodev,size=4m",
+        "--entrypoint", "nginx",
+    ]
+    for target, expected_kind in required_targets.items():
+        mount = mounts.get(target)
+        if not isinstance(mount, dict) or mount.get("type") != "bind":
+            raise DeployError(f"production nginx is missing its required bind mount: {target}")
+        source = mount.get("source")
+        if not isinstance(source, str) or not Path(source).is_absolute() or any(ch in source for ch in ",\r\n\x00"):
+            raise DeployError(f"production nginx bind mount source is invalid: {target}")
+        source_path = Path(source)
+        if expected_kind == "file" and not source_path.is_file():
+            raise DeployError(f"production nginx config file is unavailable: {target}")
+        if expected_kind == "directory" and not source_path.is_dir():
+            raise DeployError(f"production nginx TLS directory is unavailable: {target}")
+        argv.extend(["--mount", f"type=bind,source={source},target={target},readonly"])
+
+    argv.extend([image, "-t"])
+    _run(argv, cwd=PLATFORM_DIR, env=deployment_env, capture=False, timeout=180)
+
+
 def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, object]:
     _run(
         _compose(env_file, "build", "--pull"),
@@ -605,16 +663,11 @@ def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, ob
         timeout=7200,
     )
     storage = _post_build_storage("application-image-build")
-    # Validate the gateway image and mounted TLS config before replacing services.
-    _run(
-        _compose(env_file, "run", "--rm", "--no-deps", "nginx", "nginx", "-t"),
-        cwd=PLATFORM_DIR,
-        env=deployment_env,
-        capture=False,
-        timeout=180,
-    )
+    # "docker compose run" can reconcile networks and volumes even with
+    # --no-deps. Validate with an isolated one-shot container so a config check
+    # cannot remove/recreate live production networks before rollout.
+    _validate_nginx_config(env_file, deployment_env)
     return storage
-
 
 def _deploy_stack(env_file: Path, deployment_env: dict[str, str]) -> None:
     _run(
