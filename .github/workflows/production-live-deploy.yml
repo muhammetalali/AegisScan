@@ -239,8 +239,9 @@ jobs:
             --known-hosts /tmp/aegis-production/known_hosts \
             --release-sha "$GITHUB_SHA" \
             --origin "$AEGIS_LIVE_ORIGIN" \
-            "${repair_args[@]}" \
-            | tee /tmp/aegis-production/deploy.json
+            --output-json /tmp/aegis-production/deploy.json \
+            "${repair_args[@]}"
+
 
       - name: Prove Alertmanager and committed encrypted remote backup on production host
         id: operational_acceptance
@@ -403,6 +404,12 @@ jobs:
               'e2e-cleanup.log',
               'e2e-scope-cleanup.json',
           ]
+          def load_json(name):
+              try:
+                  return json.loads((root / name).read_text(encoding='utf-8'))
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f'internal go-live evidence is not valid JSON: {name}: {exc}') from exc
+
           digests = {}
           for name in evidence_files:
               path = root / name
@@ -410,12 +417,12 @@ jobs:
                   raise SystemExit(f'missing required internal go-live evidence: {name}')
               digests[name] = hashlib.sha256(path.read_bytes()).hexdigest()
 
-          storage = json.loads((root / 'storage-reclaim.json').read_text(encoding='utf-8'))
+          storage = load_json('storage-reclaim.json')
           if storage.get('schema') != 'aegisscan.production-storage-reclaim.v1' or storage.get('status') != 'success':
               raise SystemExit('production storage reclaim evidence mismatch')
           if storage.get('volume_prune_performed') is not False:
               raise SystemExit('production storage reclaim must never prune volumes')
-          deployment = json.loads((root / 'deploy.json').read_text(encoding='utf-8'))
+          deployment = load_json('deploy.json')
           if deployment.get('schema') != 'aegisscan.remote-production-deploy.v1' or deployment.get('status') != 'success':
               raise SystemExit('remote deployment evidence mismatch')
           if deployment.get('release_sha') != os.environ['AEGIS_RELEASE_SHA']:
@@ -431,7 +438,7 @@ jobs:
           if int(storage.get('after_free_bytes') or 0) < 60 * 1024**3 and storage.get('deferred_to_privileged_deploy') is not True:
               raise SystemExit('runner-side storage below minimum was not explicitly deferred to privileged deploy')
 
-          operational = json.loads((root / 'operational-acceptance.json').read_text(encoding='utf-8'))
+          operational = load_json('operational-acceptance.json')
           if operational.get('schema') != 'aegisscan.remote-production-operational-acceptance.v1' or operational.get('status') != 'success':
               raise SystemExit('remote operational acceptance evidence mismatch')
           if operational.get('release_sha') != os.environ['AEGIS_RELEASE_SHA']:
@@ -446,7 +453,7 @@ jobs:
           if backup.get('status') != 'healthy' or not backup.get('backup_id'):
               raise SystemExit('committed encrypted remote backup evidence is missing')
 
-          acceptance = json.loads((root / 'internal-acceptance.json').read_text(encoding='utf-8'))
+          acceptance = load_json('internal-acceptance.json')
           if acceptance.get('schema') != 'aegisscan.internal-production-acceptance.v1':
               raise SystemExit('internal acceptance schema mismatch')
           if acceptance.get('deployment_mode') != 'internal':

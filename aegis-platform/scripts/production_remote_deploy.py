@@ -230,8 +230,8 @@ def _stream_remote_deploy(
     def pump() -> None:
         nonlocal payload
         for line in process.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
+            sys.stderr.write(line)
+            sys.stderr.flush()
             stripped = line.strip()
             if not stripped:
                 continue
@@ -401,6 +401,20 @@ def deploy(
     }
 
 
+def _write_json_output(path: Path, payload: dict[str, object]) -> None:
+    """Atomically persist the machine-readable result separately from streamed deploy logs."""
+    path = path.expanduser()
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise RemoteDeployError(f"unable to write deployment JSON output {path}: {exc}") from exc
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True)
@@ -416,6 +430,10 @@ def main() -> int:
     parser.add_argument(
         "--repair-current-checkout", action="store_true",
         help="Explicitly restore tracked files to the existing approved HEAD through the installed gate",
+    )
+    parser.add_argument(
+        "--output-json", type=Path,
+        help="Atomically write the final machine-readable result to this path, separate from progress logs",
     )
     args = parser.parse_args()
 
@@ -448,6 +466,17 @@ def main() -> int:
             "error": str(exc),
         }, sort_keys=True), file=sys.stderr)
         return 1
+
+    if args.output_json is not None:
+        try:
+            _write_json_output(args.output_json, result)
+        except RemoteDeployError as exc:
+            print(json.dumps({
+                "schema": "aegisscan.remote-production-deploy.v1",
+                "status": "failed",
+                "error": str(exc),
+            }, sort_keys=True), file=sys.stderr)
+            return 1
 
     print(json.dumps(result, sort_keys=True))
     return 0
