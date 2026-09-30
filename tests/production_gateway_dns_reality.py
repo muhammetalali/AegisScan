@@ -82,6 +82,7 @@ class Proof:
         self.image = image
         self.prefix = "aegis-gateway-reality-" + uuid.uuid4().hex[:12]
         self.network = self.prefix + "-net"
+        self.subnet = f"198.19.{int(self.prefix[-2:], 16)}.0/24"
         self.containers: set[str] = set()
         self.generations = dict.fromkeys(PORTS, 1)
         self.cert = directory / "ssl" / "fullchain.pem"
@@ -219,7 +220,7 @@ class Proof:
         assert int(headers["x-reality-generation"]) == self.generations["fastapi"]
 
     def run(self) -> dict:
-        docker("network", "create", self.network)
+        docker("network", "create", "--subnet", self.subnet, self.network)
         for service in PORTS:
             self.start_backend(service)
 
