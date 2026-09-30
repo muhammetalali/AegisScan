@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -132,11 +133,20 @@ def trigger(
         if not isinstance(candidate, dict) or candidate.get("release_sha") != release_sha:
             continue
         if action == "recover-services":
+            delivery = candidate.get("alert_delivery")
             if (candidate.get("schema") == "aegisscan.production-service-recovery.v1"
                 and candidate.get("status") == "success"
                 and candidate.get("https_acceptance") is True
                 and candidate.get("execution_plane_healthy") is True
-                and candidate.get("restarted_services") == ["fastapi"]):
+                and candidate.get("restarted_services") == ["fastapi"]
+                and isinstance(delivery, dict)
+                and delivery.get("status") == "success"
+                and delivery.get("authenticated") is True
+                and delivery.get("transport") == "https"
+                and delivery.get("receiver") == "internal"
+                and delivery.get("proof_alertname") == "AegisProductionAlertDeliveryAcceptance"
+                and delivery.get("proof_release_sha") == release_sha
+                and re.fullmatch(r"[0-9a-f]{64}", str(delivery.get("audit_payload_sha256", "")))):
                 payload = candidate
                 break
             continue

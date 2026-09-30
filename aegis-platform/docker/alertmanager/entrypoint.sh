@@ -27,6 +27,13 @@ if [ -n "$enterprise_ca" ]; then
   export SSL_CERT_FILE=/tmp/aegis-ca-bundle.pem
 fi
 
+token_file=/run/secrets/alert-receiver-token
+if [ -s "$token_file" ]; then
+  export ALERT_WEBHOOK_AUTH_TOKEN_FILE="$token_file"
+else
+  unset ALERT_WEBHOOK_AUTH_TOKEN_FILE 2>/dev/null || true
+fi
+
 python3 /usr/local/lib/aegis/render_alertmanager_config.py \
   --template /etc/aegis-alertmanager/alertmanager.yml.tpl \
   --output /tmp/alertmanager.yml \

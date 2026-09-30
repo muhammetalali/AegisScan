@@ -43,9 +43,11 @@ def execute(*, action: str, release_sha: str, env_file: Path, origin: str = "") 
         host._run(host._compose(env_file, "restart", "fastapi"), cwd=host.PLATFORM_DIR, env=env, timeout=180)
         host._execution_plane_acceptance(env_file, env)
         host._accept(origin)
+        alert_delivery = host._alert_delivery_acceptance(env_file, env, release_sha)
         payload = {"schema": "aegisscan.production-service-recovery.v1", "status": "success",
                    "release_sha": release_sha, "restarted_services": ["fastapi"],
-                   "https_acceptance": True, "execution_plane_healthy": True}
+                   "https_acceptance": True, "execution_plane_healthy": True,
+                   "alert_delivery": alert_delivery}
     if host._current_sha() != release_sha:
         raise host.DeployError("production release changed during resilience acceptance")
     return payload

@@ -137,12 +137,12 @@ def test_live_production_workflow_requires_bounded_authorization_pinned_ssh_ente
         "AEGIS_PRODUCTION_BACKUP_S3_BUCKET",
         "AEGIS_PRODUCTION_BACKUP_S3_CREDENTIALS_JSON",
         "AEGIS_PRODUCTION_BACKUP_ENCRYPTION_KEY_B64",
-        "AEGIS_PRODUCTION_ALERT_WEBHOOK_URL",
     ):
         assert secret_name in text
     assert "Protected production chain material is incomplete" in text
     assert "BACKUP_ENCRYPTION_KEY_B64 must decode to exactly 32 bytes" in text
     assert "BACKUP_CREDENTIALS_JSON must contain access_key_id and secret_access_key" in text
+    assert "AEGIS_PRODUCTION_ALERT_WEBHOOK_URL" not in text
     assert "AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-production/enterprise-ca.pem" in text
     assert "REQUESTS_CA_BUNDLE=/tmp/aegis-production/enterprise-ca.pem" in text
     assert "SSL_CERT_FILE=/tmp/aegis-production/enterprise-ca.pem" in text

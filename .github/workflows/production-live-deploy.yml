@@ -64,7 +64,6 @@ jobs:
       BACKUP_ADDRESSING_STYLE: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_ADDRESSING_STYLE || 'path' }}
       BACKUP_CREDENTIALS_JSON: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_CREDENTIALS_JSON }}
       BACKUP_ENCRYPTION_KEY_B64: ${{ secrets.AEGIS_PRODUCTION_BACKUP_ENCRYPTION_KEY_B64 }}
-      ALERT_WEBHOOK_URL: ${{ secrets.AEGIS_PRODUCTION_ALERT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -143,8 +142,7 @@ jobs:
             BACKUP_PREFIX \
             BACKUP_ADDRESSING_STYLE \
             BACKUP_CREDENTIALS_JSON \
-            BACKUP_ENCRYPTION_KEY_B64 \
-            ALERT_WEBHOOK_URL; do
+            BACKUP_ENCRYPTION_KEY_B64; do
             value="${!name:-}"
             [ -n "$value" ] || missing+=("$name")
           done
@@ -194,7 +192,6 @@ jobs:
 
           https_url('PROD_ORIGIN', origin_only=True)
           https_url('BACKUP_ENDPOINT')
-          https_url('ALERT_WEBHOOK_URL')
 
           bucket = os.environ['BACKUP_BUCKET'].strip()
           if (

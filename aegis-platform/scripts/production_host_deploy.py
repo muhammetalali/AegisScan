@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -13,6 +14,7 @@ import stat
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -32,6 +34,11 @@ GIB = 1024 ** 3
 PRODUCTION_MINIMUM_FREE_BYTES = 60 * GIB
 PRODUCTION_TARGET_FREE_BYTES = 68 * GIB
 MAX_STORAGE_DIAGNOSTIC_BYTES = 16 * 1024
+INTERNAL_ALERT_PATH = "/_aegis/alerts"
+INTERNAL_ALERT_PORT = 8443
+ALERT_RECEIVER_TOKEN_PATH = Path("/etc/aegisscan/secrets/alert-receiver-token")
+ALERT_RECEIVER_UID = 10003
+ALERT_RECEIVER_GID = 10003
 
 
 class DeployError(RuntimeError):
@@ -289,6 +296,98 @@ def _restore_private_env(path: Path, snapshot: tuple[bytes, int, int]) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def _rewrite_env_values(path: Path, updates: dict[str, str]) -> None:
+    _private_file(path)
+    state = path.stat()
+    pending = dict(updates)
+    lines: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            lines.append(raw)
+            continue
+        candidate = stripped[7:].strip() if stripped.startswith("export ") else stripped
+        name = candidate.split("=", 1)[0].strip()
+        if name in pending:
+            value = pending.pop(name)
+            if any(ch in value for ch in "\r\n\x00"):
+                raise DeployError(f"invalid control character in reconciled environment value: {name}")
+            lines.append(f"{name}={value}")
+        else:
+            lines.append(raw)
+    for name in sorted(pending):
+        value = pending[name]
+        if any(ch in value for ch in "\r\n\x00"):
+            raise DeployError(f"invalid control character in reconciled environment value: {name}")
+        lines.append(f"{name}={value}")
+    temporary = path.with_name(f".{path.name}.reconcile-{os.getpid()}")
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write("\n".join(lines).rstrip("\n") + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+        os.chown(path, state.st_uid, state.st_gid)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _ensure_alert_receiver_token(path: Path | None = None) -> None:
+    path = path or ALERT_RECEIVER_TOKEN_PATH
+    if path.exists():
+        _private_file(path, max_bytes=4096)
+        info = path.stat()
+        token = path.read_bytes().strip()
+        if info.st_uid != ALERT_RECEIVER_UID or info.st_gid != ALERT_RECEIVER_GID:
+            raise DeployError("alert receiver token must be owned by the hardened alert runtime identity")
+        if len(token) < 32 or len(token) > 512 or any(ch in token for ch in b"\r\n\x00"):
+            raise DeployError("alert receiver token has invalid material")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    token = (secrets.token_urlsafe(48) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(token)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(path, 0o600)
+        os.chown(path, ALERT_RECEIVER_UID, ALERT_RECEIVER_GID)
+    except BaseException:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _reconcile_internal_alert_receiver(env_file: Path, origin: str) -> dict[str, str]:
+    env = _load_env_file(env_file)
+    parsed = urlparse(origin)
+    assert parsed.hostname
+    host = parsed.hostname
+    host_for_url = f"[{host}]" if ":" in host else host
+    expected_url = f"https://{host_for_url}:{INTERNAL_ALERT_PORT}{INTERNAL_ALERT_PATH}"
+    configured_token = env.get("AEGIS_ALERT_RECEIVER_TOKEN_FILE", "").strip()
+    if configured_token and Path(configured_token) != ALERT_RECEIVER_TOKEN_PATH:
+        raise DeployError("internal alert receiver token path must use the production-controlled location")
+    _ensure_alert_receiver_token()
+    _rewrite_env_values(
+        env_file,
+        {
+            "AEGIS_PRODUCTION_DOMAIN": parsed.hostname,
+            "ALERT_WEBHOOK_URL": expected_url,
+            "AEGIS_ALERT_RECEIVER_TOKEN_FILE": str(ALERT_RECEIVER_TOKEN_PATH),
+        },
+    )
+    return _load_env_file(env_file)
 
 
 def _execution_profile_environment(environment: dict[str, str]) -> dict[str, str]:
@@ -641,6 +740,137 @@ def _execution_plane_acceptance(
     raise DeployError(f"Recon execution-plane acceptance did not become healthy: {last_error}; {state}")
 
 
+def _alert_receiver_metric(env_file: Path, deployment_env: dict[str, str], name: str) -> float:
+    script = (
+        "import urllib.request; "
+        "text=urllib.request.urlopen('http://127.0.0.1:8080/metrics',timeout=3).read().decode(); "
+        f"key={name!r}; "
+        "values=[line.rsplit(' ',1)[1] for line in text.splitlines() if line.startswith(key+' ')]; "
+        "assert len(values)==1; print(values[0])"
+    )
+    result = _run(
+        _compose(env_file, "exec", "-T", "alert_receiver", "python3", "-c", script),
+        cwd=PLATFORM_DIR,
+        env=deployment_env,
+        timeout=15,
+    )
+    try:
+        return float(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError) as exc:
+        raise DeployError(f"invalid alert receiver metric: {name}") from exc
+
+
+def _alert_receiver_delivery_evidence(
+    env_file: Path,
+    deployment_env: dict[str, str],
+    release_sha: str,
+) -> dict[str, object] | None:
+    script = (
+        "import json; from collections import deque; from pathlib import Path; "
+        "p=Path('/var/lib/aegis-alert-receiver/events.jsonl'); "
+        "lines=deque(p.open(encoding='utf-8'),maxlen=256) if p.is_file() else []; "
+        "items=[]; "
+        "target='AegisProductionAlertDeliveryAcceptance'; "
+        f"release={release_sha!r}; "
+        "[(items.append(x)) for x in (json.loads(line) for line in lines) "
+        "if target in x.get('alertnames',[]) and release in x.get('release_shas',[])]; "
+        "print(json.dumps(items[-1] if items else {},sort_keys=True))"
+    )
+    result = _run(
+        _compose(env_file, "exec", "-T", "alert_receiver", "python3", "-c", script),
+        cwd=PLATFORM_DIR,
+        env=deployment_env,
+        timeout=15,
+    )
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise DeployError("alert receiver returned invalid audit evidence") from exc
+    if not isinstance(payload, dict) or not payload:
+        return None
+    if (
+        "AegisProductionAlertDeliveryAcceptance" not in payload.get("alertnames", [])
+        or release_sha not in payload.get("release_shas", [])
+        or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("payload_sha256", "")))
+    ):
+        raise DeployError("alert receiver returned mismatched delivery audit evidence")
+    return payload
+
+
+def _alert_delivery_acceptance(
+    env_file: Path,
+    deployment_env: dict[str, str],
+    release_sha: str,
+    *,
+    attempts: int = 40,
+) -> dict[str, object]:
+    baseline = _alert_receiver_metric(env_file, deployment_env, "aegis_alert_receiver_events_total")
+    unauthorized_before = _alert_receiver_metric(
+        env_file, deployment_env, "aegis_alert_receiver_unauthorized_total"
+    )
+    rejected_before = _alert_receiver_metric(
+        env_file, deployment_env, "aegis_alert_receiver_rejected_total"
+    )
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    payload = [{
+        "labels": {
+            "alertname": "AegisProductionAlertDeliveryAcceptance",
+            "service": "aegisscan",
+            "severity": "critical",
+            "release_sha": release_sha,
+        },
+        "annotations": {"summary": "AegisScan authenticated internal alert delivery acceptance"},
+        "startsAt": now.isoformat().replace("+00:00", "Z"),
+        "endsAt": (now + timedelta(minutes=10)).isoformat().replace("+00:00", "Z"),
+    }]
+    encoded = json.dumps(payload, separators=(",", ":"))
+    post_script = (
+        "import urllib.request; "
+        f"data={encoded!r}.encode(); "
+        "req=urllib.request.Request('http://127.0.0.1:9093/api/v2/alerts',data=data,headers={'Content-Type':'application/json'}); "
+        "r=urllib.request.urlopen(req,timeout=5); assert r.status==200"
+    )
+    _run(
+        _compose(env_file, "exec", "-T", "alertmanager", "python3", "-c", post_script),
+        cwd=PLATFORM_DIR,
+        env=deployment_env,
+        timeout=15,
+    )
+    last = baseline
+    for _ in range(attempts):
+        time.sleep(2)
+        last = _alert_receiver_metric(env_file, deployment_env, "aegis_alert_receiver_events_total")
+        if last > baseline:
+            evidence = _alert_receiver_delivery_evidence(env_file, deployment_env, release_sha)
+            if evidence is None:
+                continue
+            unauthorized_after = _alert_receiver_metric(
+                env_file, deployment_env, "aegis_alert_receiver_unauthorized_total"
+            )
+            rejected_after = _alert_receiver_metric(
+                env_file, deployment_env, "aegis_alert_receiver_rejected_total"
+            )
+            if unauthorized_after != unauthorized_before or rejected_after != rejected_before:
+                raise DeployError("alert receiver recorded authentication or payload rejection during acceptance")
+            return {
+                "status": "success",
+                "baseline_events": baseline,
+                "current_events": last,
+                "authenticated": True,
+                "transport": "https",
+                "receiver": "internal",
+                "proof_alertname": "AegisProductionAlertDeliveryAcceptance",
+                "proof_release_sha": release_sha,
+                "audit_payload_sha256": evidence["payload_sha256"],
+            }
+    raise DeployError(
+        f"authenticated internal alert delivery did not reach the receiver: baseline={baseline} current={last}"
+    )
+
+
 def _accept(origin: str, attempts: int = 40) -> None:
     command = [
         sys.executable,
@@ -708,15 +938,26 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     origin = _validate_origin(origin)
     _assert_clean_repo()
     _ensure_release(release_sha)
-    env_values = _load_env_file(env_file)
     previous_env_snapshot = _snapshot_private_env(env_file)
-    deployment_env = _execution_profile_environment({**os.environ, **env_values})
     previous_sha = _current_sha()
-    backup = _backup_before_upgrade(env_file, deployment_env)
-    storage_reclaim = _host_storage_reclaim()
+    try:
+        token_preexisted = ALERT_RECEIVER_TOKEN_PATH.exists()
+    except OSError as exc:
+        raise DeployError("cannot inspect production alert receiver token path") from exc
 
     deployment_attempted = False
+    repo_mutation_attempted = False
+    alert_delivery: dict[str, object] = {}
+    backup: dict[str, str | bool] = {}
+    storage_reclaim: dict[str, object] = {}
+    build_storage: dict[str, object] = {}
     try:
+        env_values = _reconcile_internal_alert_receiver(env_file, origin)
+        deployment_env = _execution_profile_environment({**os.environ, **env_values})
+        backup = _backup_before_upgrade(env_file, deployment_env)
+        storage_reclaim = _host_storage_reclaim()
+
+        repo_mutation_attempted = True
         _checkout(release_sha)
         env_values = _prepare_execution_trust(env_file, release_sha)
         deployment_env = _execution_profile_environment({**os.environ, **env_values})
@@ -730,11 +971,13 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         _deploy_stack(env_file, deployment_env)
         _execution_plane_acceptance(env_file, deployment_env)
         _accept(origin)
+        alert_delivery = _alert_delivery_acceptance(env_file, deployment_env, release_sha)
     except BaseException as failure:
-        # The repository was proven clean before this attempt. Any tracked
-        # mutation now belongs to the interrupted/failed deployment and must
-        # not poison the next fail-closed rollout.
-        _restore_tracked_checkout(release_sha)
+        if repo_mutation_attempted:
+            # The repository was proven clean before this attempt. Any tracked
+            # mutation now belongs to the interrupted/failed deployment and must
+            # not poison the next fail-closed rollout.
+            _restore_tracked_checkout(release_sha)
         if deployment_attempted:
             if previous_sha != release_sha:
                 try:
@@ -754,8 +997,19 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
                 _restore_private_env(env_file, previous_env_snapshot)
         else:
             _restore_private_env(env_file, previous_env_snapshot)
-            if previous_sha != release_sha:
+            if repo_mutation_attempted and previous_sha != release_sha:
                 _checkout(previous_sha)
+
+        if not token_preexisted:
+            try:
+                ALERT_RECEIVER_TOKEN_PATH.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_failure:
+                raise DeployError(
+                    f"production deployment failed: {failure}; "
+                    f"alert receiver token cleanup also failed: {cleanup_failure}"
+                ) from failure
         raise
 
     result: dict[str, object] = {
@@ -767,6 +1021,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         "pre_deploy_backup": backup,
         "storage_reclaim": storage_reclaim,
         "application_build_storage": build_storage,
+        "alert_delivery": alert_delivery,
     }
     print(json.dumps(result, sort_keys=True))
     return result

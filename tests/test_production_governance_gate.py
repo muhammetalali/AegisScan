@@ -148,7 +148,12 @@ def _resilience(tmp_path: Path) -> Path:
     )
     _write_json(
         root / "external-alert-delivery.json",
-        {"status": "success", "baseline": 0, "current": 1, "failed": 0},
+        {
+            "status": "success", "baseline": 0, "current": 1, "failed": 0,
+            "authenticated": True, "transport": "https", "receiver": "internal",
+            "proof_alertname": "AegisProductionAlertDeliveryAcceptance",
+            "proof_release_sha": RELEASE, "audit_payload_sha256": "d" * 64,
+        },
     )
     (root / "alertmanager-metrics.txt").write_text(
         'alertmanager_notifications_total{integration="webhook"} 1\n',
@@ -317,7 +322,7 @@ def test_final_governance_rejects_mismatched_workflow_release(tmp_path: Path):
         gate.decide(**inputs)
 
 
-def test_final_governance_rejects_unverified_external_alert(tmp_path: Path):
+def test_final_governance_rejects_unverified_internal_alert(tmp_path: Path):
     inputs = _inputs(tmp_path)
     alert = next(inputs["resilience_root"].rglob("external-alert-delivery.json"))
     _write_json(alert, {"status": "success", "baseline": 0, "current": 0, "failed": 1})
@@ -325,7 +330,21 @@ def test_final_governance_rejects_unverified_external_alert(tmp_path: Path):
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["sha256"]["external-alert-delivery.json"] = _sha(alert)
     _write_json(manifest, payload)
-    with pytest.raises(gate.GovernanceError, match="external alert delivery"):
+    with pytest.raises(gate.GovernanceError, match="internal alert delivery"):
+        gate.decide(**inputs)
+
+
+def test_final_governance_rejects_alert_proof_from_other_release(tmp_path: Path):
+    inputs = _inputs(tmp_path)
+    alert = next(inputs["resilience_root"].rglob("external-alert-delivery.json"))
+    payload = json.loads(alert.read_text(encoding="utf-8"))
+    payload["proof_release_sha"] = "e" * 40
+    _write_json(alert, payload)
+    manifest = next(inputs["resilience_root"].rglob("manifest.json"))
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["sha256"]["external-alert-delivery.json"] = _sha(alert)
+    _write_json(manifest, manifest_payload)
+    with pytest.raises(gate.GovernanceError, match="internal alert delivery"):
         gate.decide(**inputs)
 
 

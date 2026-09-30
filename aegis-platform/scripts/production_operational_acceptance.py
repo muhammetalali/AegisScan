@@ -44,6 +44,7 @@ REQUIRED_RUNNING_SERVICES = {
     "nginx",
     "prometheus",
     "alertmanager",
+    "alert_receiver",
     "backup",
     # Production acceptance must prove the actual scanner execution plane, not
     # only the API/control plane. This also catches a failed provider restart

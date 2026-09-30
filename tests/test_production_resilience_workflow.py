@@ -49,19 +49,21 @@ def test_resilience_workflow_pins_remote_backup_versions_and_restores_disposable
     assert "sh /verify_postgres_restore.sh /recovery/production.dump" in text
 
 
-def test_resilience_workflow_uses_real_alertmanager_external_route():
+def test_resilience_workflow_reuses_authenticated_internal_alert_delivery_proof():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "aegis-alertmanager:resilience" in text
-    assert "ALERT_WEBHOOK_URL" in text
-    assert "AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE" in text
-    assert "AEGIS_ENTERPRISE_CA_BUNDLE=/run/aegis/enterprise-ca.pem" in text
-    assert "/tmp/aegis-resilience/enterprise-ca.pem:/run/aegis/enterprise-ca.pem:ro" in text
-    assert '"$ALERT_WEBHOOK_URL"' in text
-    assert "/tmp/aegis-resilience/enterprise-ca.pem" in text[text.index("Destroy ephemeral production secret material"): ]
-    assert "/api/v2/alerts" in text
-    assert "alertmanager_notifications_total" in text
-    assert "alertmanager_notifications_failed_total" in text
-    assert "https://*)" in text
+    assert "AEGIS_PRODUCTION_ALERT_WEBHOOK_URL" not in text
+    assert "aegis-alertmanager:resilience" not in text
+    assert "Prove authenticated internal alert delivery after recovery" in text
+    assert "payload.get('recovery')" in text
+    assert "remote.get('alert_delivery')" in text
+    assert "delivery.get('authenticated') is not True" in text
+    assert "delivery.get('transport') != 'https'" in text
+    assert "delivery.get('receiver') != 'internal'" in text
+    assert "delivery.get('proof_alertname') != 'AegisProductionAlertDeliveryAcceptance'" in text
+    assert "delivery.get('proof_release_sha') != payload.get('release_sha')" in text
+    assert "audit_payload_sha256" in text
+    assert "external-alert-delivery.json" in text
+    assert "aegis_alert_receiver_events_total" in text
     assert "curl -k" not in text
     assert "curl --insecure" not in text
 

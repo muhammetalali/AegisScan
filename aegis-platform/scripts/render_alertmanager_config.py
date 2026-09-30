@@ -58,7 +58,13 @@ def validate_url(value: str, allow_http: bool = False) -> str:
     return value
 
 
-def render(template: Path, output: Path, webhook_url: str = "", allow_http: bool = False) -> None:
+def render(
+    template: Path,
+    output: Path,
+    webhook_url: str = "",
+    allow_http: bool = False,
+    authorization_credentials_file: str = "",
+) -> None:
     source = template.read_text(encoding="utf-8")
     if source.count(TOKEN) != 1:
         raise ValueError("alertmanager template must contain exactly one webhook config token")
@@ -66,10 +72,23 @@ def render(template: Path, output: Path, webhook_url: str = "", allow_http: bool
     url = webhook_url.strip()
     if url:
         url = validate_url(url, allow_http)
+        credentials_file = authorization_credentials_file.strip()
+        auth = ""
+        if credentials_file:
+            path = Path(credentials_file)
+            if not path.is_absolute() or any(ch in credentials_file for ch in "\r\n\x00"):
+                raise ValueError("ALERT_WEBHOOK_AUTH_TOKEN_FILE must be an absolute safe path")
+            auth = (
+                "\n        http_config:\n"
+                "          authorization:\n"
+                "            type: Bearer\n"
+                f"            credentials_file: {json.dumps(credentials_file)}"
+            )
         webhook_config = (
             "    webhook_configs:\n"
             f"      - url: {json.dumps(url)}\n"
             "        send_resolved: true"
+            + auth
         )
     else:
         webhook_config = (
@@ -95,6 +114,7 @@ def main() -> int:
         args.output,
         os.environ.get("ALERT_WEBHOOK_URL", ""),
         args.allow_http_for_test,
+        os.environ.get("ALERT_WEBHOOK_AUTH_TOKEN_FILE", ""),
     )
     return 0
 

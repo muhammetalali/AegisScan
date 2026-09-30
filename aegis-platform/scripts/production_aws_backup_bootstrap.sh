@@ -31,8 +31,9 @@ case "$AWS_REGION" in
 esac
 
 [ -n "$DOMAIN" ] || fail "AEGIS_PRODUCTION_DOMAIN must not be empty"
-[ -n "$ALERT_WEBHOOK_FILE" ] || fail "AEGIS_ALERT_WEBHOOK_FILE is required"
-[ -f "$ALERT_WEBHOOK_FILE" ] || fail "AEGIS_ALERT_WEBHOOK_FILE does not exist"
+if [ -n "$ALERT_WEBHOOK_FILE" ] && [ ! -f "$ALERT_WEBHOOK_FILE" ]; then
+  fail "AEGIS_ALERT_WEBHOOK_FILE does not exist"
+fi
 
 python3 - "$SECRET_INIT" "$DOMAIN" "$AUTHORIZED_TARGETS" "$ALERT_WEBHOOK_FILE" <<'PY'
 import importlib.util
@@ -48,12 +49,13 @@ spec.loader.exec_module(module)
 
 module._validate_domain(sys.argv[2])
 module._validate_targets([sys.argv[3]])
-raw = module._private_source(Path(sys.argv[4]), max_bytes=8192)
-try:
-    webhook = raw.decode("utf-8").strip()
-except UnicodeDecodeError as exc:
-    raise SystemExit("AEGIS_ALERT_WEBHOOK_FILE must be UTF-8") from exc
-module._validate_https_origin(webhook, "alert webhook")
+if sys.argv[4]:
+    raw = module._private_source(Path(sys.argv[4]), max_bytes=8192)
+    try:
+        webhook = raw.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise SystemExit("AEGIS_ALERT_WEBHOOK_FILE must be UTF-8") from exc
+    module._validate_https_origin(webhook, "alert webhook")
 PY
 
 export AWS_PAGER=""
@@ -94,7 +96,8 @@ cleanup() {
       sudo rm -f \
         /etc/aegisscan/production.env \
         /etc/aegisscan/secrets/s3-credentials.json \
-        /etc/aegisscan/secrets/backup-encryption.key >/dev/null 2>&1 || true
+        /etc/aegisscan/secrets/backup-encryption.key \
+        /etc/aegisscan/secrets/alert-receiver-token >/dev/null 2>&1 || true
     fi
     if [ -n "$NEW_ACCESS_KEY_ID" ]; then
       aws iam delete-access-key --user-name "$IAM_USER" --access-key-id "$NEW_ACCESS_KEY_ID" >/dev/null 2>&1 || true

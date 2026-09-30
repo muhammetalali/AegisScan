@@ -58,7 +58,6 @@ jobs:
       BACKUP_ADDRESSING_STYLE: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_ADDRESSING_STYLE || 'path' }}
       BACKUP_CREDENTIALS_JSON: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_CREDENTIALS_JSON }}
       BACKUP_ENCRYPTION_KEY_B64: ${{ secrets.AEGIS_PRODUCTION_BACKUP_ENCRYPTION_KEY_B64 }}
-      ALERT_WEBHOOK_URL: ${{ secrets.AEGIS_PRODUCTION_ALERT_WEBHOOK_URL }}
 
     steps:
       - uses: actions/checkout@v5
@@ -94,7 +93,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in             PROD_ORIGIN             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             PROD_ENTERPRISE_CA_BUNDLE             BACKUP_ENDPOINT             BACKUP_REGION             BACKUP_BUCKET             BACKUP_PREFIX             BACKUP_ADDRESSING_STYLE             BACKUP_CREDENTIALS_JSON             BACKUP_ENCRYPTION_KEY_B64             ALERT_WEBHOOK_URL; do
+          for name in             PROD_ORIGIN             PROD_SSH_HOST             PROD_SSH_PORT             PROD_SSH_USER             PROD_SSH_PRIVATE_KEY             PROD_SSH_KNOWN_HOSTS             PROD_ENTERPRISE_CA_BUNDLE             BACKUP_ENDPOINT             BACKUP_REGION             BACKUP_BUCKET             BACKUP_PREFIX             BACKUP_ADDRESSING_STYLE             BACKUP_CREDENTIALS_JSON             BACKUP_ENCRYPTION_KEY_B64; do
             value="${!name:-}"
             if [ -z "$value" ]; then
               echo "Required protected production material is missing: $name" >&2
@@ -109,10 +108,6 @@ jobs:
           case "$BACKUP_ENDPOINT" in
             https://*) ;;
             *) echo 'Production backup endpoint must use HTTPS' >&2; exit 1 ;;
-          esac
-          case "$ALERT_WEBHOOK_URL" in
-            https://*) ;;
-            *) echo 'Production alert webhook must use HTTPS' >&2; exit 1 ;;
           esac
 
       - name: Verify provisioned resilience dependencies
@@ -239,107 +234,55 @@ jobs:
             --release-sha "$RELEASE_SHA" --action recover-services --origin "$PROD_ORIGIN" \
             | tee /tmp/aegis-resilience/service-recovery.json
 
-      - name: Build hardened Alertmanager runtime
-        working-directory: aegis-platform
+      - name: Prove authenticated internal alert delivery after recovery
         shell: bash
         run: |
           set -euo pipefail
-          docker build --pull             -f docker/alertmanager/Dockerfile             -t aegis-alertmanager:resilience             .
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-      - name: Deliver synthetic critical alert through Alertmanager to external HTTPS receiver
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true
-          docker run -d             --name aegis-resilience-alertmanager             --read-only             --cap-drop ALL             --security-opt no-new-privileges:true             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16777216,uid=10003,gid=10003,mode=0700             --tmpfs /alertmanager:rw,nosuid,nodev,noexec,size=16777216,uid=10003,gid=10003,mode=0700             -p 127.0.0.1:19093:9093             -e ALERT_WEBHOOK_URL="$ALERT_WEBHOOK_URL"             -e AEGIS_ENTERPRISE_CA_BUNDLE=/run/aegis/enterprise-ca.pem             -v /tmp/aegis-resilience/enterprise-ca.pem:/run/aegis/enterprise-ca.pem:ro             aegis-alertmanager:resilience
-
-          cleanup() { docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
-
-          ready=0
-          for attempt in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:19093/-/ready >/dev/null; then
-              ready=1
-              break
-            fi
-            if [ "$(docker inspect -f '{{.State.Running}}' aegis-resilience-alertmanager 2>/dev/null || true)" != true ]; then
-              docker logs aegis-resilience-alertmanager >&2 || true
-              exit 1
-            fi
-            sleep 1
-          done
-          test "$ready" -eq 1
-
-          baseline="$(curl -fsS http://127.0.0.1:19093/metrics | python -c '
-          import sys
-          total=0.0
-          for line in sys.stdin:
-              if line.startswith("alertmanager_notifications_total") and "webhook" in line:
-                  try: total += float(line.rsplit(" ",1)[1])
-                  except ValueError: pass
-          print(total)
-          ')"
-
-          starts_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          ends_at="$(date -u -d '+10 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-          cat >/tmp/aegis-resilience/alert.json <<EOF
-          [{
-            "labels": {
-              "alertname": "AegisProductionResilienceAcceptance",
-              "service": "aegisscan",
-              "severity": "critical",
-              "release_sha": "$RELEASE_SHA"
-            },
-            "annotations": {
-              "summary": "AegisScan production external alert-route acceptance"
-            },
-            "startsAt": "$starts_at",
-            "endsAt": "$ends_at",
-            "generatorURL": "https://github.com/muhammetalali/AegisScan/actions/runs/$GITHUB_RUN_ID"
-          }]
-          EOF
-
-          curl -fsS             -H 'Content-Type: application/json'             --data-binary @/tmp/aegis-resilience/alert.json             http://127.0.0.1:19093/api/v2/alerts
-
-          delivered=0
-          for attempt in $(seq 1 36); do
-            metrics="$(curl -fsS http://127.0.0.1:19093/metrics)"
-            printf '%s\n' "$metrics" > /tmp/aegis-resilience/alertmanager-metrics.txt
-            current="$(printf '%s\n' "$metrics" | python -c '
-          import sys
-          total=0.0
-          for line in sys.stdin:
-              if line.startswith("alertmanager_notifications_total") and "webhook" in line:
-                  try: total += float(line.rsplit(" ",1)[1])
-                  except ValueError: pass
-          print(total)
-          ')"
-            failed="$(printf '%s\n' "$metrics" | python -c '
-          import sys
-          total=0.0
-          for line in sys.stdin:
-              if line.startswith("alertmanager_notifications_failed_total") and "webhook" in line:
-                  try: total += float(line.rsplit(" ",1)[1])
-                  except ValueError: pass
-          print(total)
-          ')"
-            if python - "$baseline" "$current" "$failed" <<'PY'
-          import sys
-          baseline, current, failed = map(float, sys.argv[1:])
-          raise SystemExit(0 if current > baseline and failed == 0 else 1)
+          lines = [line.strip() for line in Path('/tmp/aegis-resilience/service-recovery.json').read_text().splitlines() if line.strip()]
+          if not lines:
+              raise SystemExit('service recovery returned no JSON')
+          payload = json.loads(lines[-1])
+          if payload.get('status') != 'success':
+              raise SystemExit('service recovery did not succeed')
+          remote = payload.get('recovery')
+          if not isinstance(remote, dict):
+              raise SystemExit('service recovery remote result is missing')
+          delivery = remote.get('alert_delivery')
+          if not isinstance(delivery, dict):
+              raise SystemExit('service recovery did not prove alert delivery')
+          baseline = float(delivery.get('baseline_events', -1))
+          current = float(delivery.get('current_events', -1))
+          if (
+              delivery.get('status') != 'success'
+              or delivery.get('authenticated') is not True
+              or delivery.get('transport') != 'https'
+              or delivery.get('receiver') != 'internal'
+              or delivery.get('proof_alertname') != 'AegisProductionAlertDeliveryAcceptance'
+              or delivery.get('proof_release_sha') != payload.get('release_sha')
+              or len(str(delivery.get('audit_payload_sha256', ''))) != 64
+              or any(ch not in '0123456789abcdef' for ch in str(delivery.get('audit_payload_sha256', '')))
+              or current <= baseline
+          ):
+              raise SystemExit('authenticated internal alert delivery proof is invalid')
+          evidence = {
+              'status':'success', 'baseline':baseline, 'current':current, 'failed':0.0,
+              'authenticated':True, 'transport':'https', 'receiver':'internal',
+              'proof_alertname':delivery['proof_alertname'],
+              'proof_release_sha':delivery['proof_release_sha'],
+              'audit_payload_sha256':delivery['audit_payload_sha256'],
+          }
+          Path('/tmp/aegis-resilience/external-alert-delivery.json').write_text(
+              json.dumps(evidence, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          Path('/tmp/aegis-resilience/alertmanager-metrics.txt').write_text(
+              f'aegis_alert_receiver_events_total {current}\n', encoding='utf-8'
+          )
+          print(json.dumps(evidence, sort_keys=True))
           PY
-            then
-              delivered=1
-              printf '{"status":"success","baseline":%s,"current":%s,"failed":%s}\n'                 "$baseline" "$current" "$failed"                 > /tmp/aegis-resilience/external-alert-delivery.json
-              break
-            fi
-            sleep 5
-          done
-
-          if [ "$delivered" -ne 1 ]; then
-            docker logs aegis-resilience-alertmanager >&2 || true
-            exit 1
-          fi
 
       - name: Build production resilience evidence manifest
         if: success()
@@ -397,7 +340,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for secret in             "$BACKUP_CREDENTIALS_JSON"             "$BACKUP_ENCRYPTION_KEY_B64"             "$PROD_SSH_PRIVATE_KEY"             "$ALERT_WEBHOOK_URL"; do
+          for secret in             "$BACKUP_CREDENTIALS_JSON"             "$BACKUP_ENCRYPTION_KEY_B64"             "$PROD_SSH_PRIVATE_KEY"; do
             if [ -n "$secret" ] && grep -R -F -- "$secret" /tmp/aegis-resilience                 --exclude=id --exclude=known_hosts --exclude=s3.json --exclude=backup.key 2>/dev/null; then
               echo 'protected production material leaked into resilience evidence' >&2
               exit 1
@@ -425,5 +368,4 @@ jobs:
         shell: bash
         run: |
           set +e
-          docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true
           rm -f             /tmp/aegis-resilience/id             /tmp/aegis-resilience/known_hosts             /tmp/aegis-resilience/s3.json             /tmp/aegis-resilience/backup.key             /tmp/aegis-resilience/enterprise-ca.pem

@@ -29,6 +29,10 @@ MIN_CPU_COUNT = 4
 ENTERPRISE_CA_BUNDLE = Path("/etc/aegisscan/enterprise-ca.pem")
 MAX_CA_BUNDLE = 2 * 1024 * 1024
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+INTERNAL_ALERT_PATH = "/_aegis/alerts"
+INTERNAL_ALERT_PORT = 8443
+ALERT_RECEIVER_RUNTIME_UID = 10003
+ALERT_RECEIVER_RUNTIME_GID = 10003
 OPERATIONAL_REQUIRED_ENV = (
     "ALERT_WEBHOOK_URL",
     "AEGIS_BACKUP_S3_ENDPOINT",
@@ -239,12 +243,58 @@ def _https_endpoint(value: str, label: str) -> None:
         raise HostValidationError(f"{label} must be an HTTPS endpoint without credentials or fragment")
 
 
-def _validate_operational_material(env_file: Path) -> dict[str, bool]:
+def _validate_operational_material(env_file: Path) -> dict[str, object]:
     env = _load_env(env_file)
-    missing = [name for name in OPERATIONAL_REQUIRED_ENV if not env.get(name, "").strip()]
+    missing = [
+        name
+        for name in OPERATIONAL_REQUIRED_ENV
+        if name != "ALERT_WEBHOOK_URL" and not env.get(name, "").strip()
+    ]
     if missing:
         raise HostValidationError("missing operational production material: " + ", ".join(missing))
-    _https_endpoint(env["ALERT_WEBHOOK_URL"], "Alertmanager webhook")
+    alert_webhook = env.get("ALERT_WEBHOOK_URL", "").strip()
+    allowed_hosts = [item.strip() for item in env.get("ALLOWED_HOSTS", "").split(",") if item.strip()]
+    production_domain = env.get("AEGIS_PRODUCTION_DOMAIN", "").strip()
+    if not production_domain:
+        if len(allowed_hosts) != 1 or not re.fullmatch(r"[A-Za-z0-9.-]+", allowed_hosts[0]):
+            raise HostValidationError(
+                "production domain is missing and ALLOWED_HOSTS cannot identify one internal receiver domain"
+            )
+        production_domain = allowed_hosts[0]
+    if production_domain not in allowed_hosts:
+        raise HostValidationError("production domain must be present in ALLOWED_HOSTS")
+    alert_mode = "auto-internal"
+    if alert_webhook:
+        _https_endpoint(alert_webhook, "Alertmanager webhook")
+        parsed_alert = urlparse(alert_webhook)
+        try:
+            parsed_alert_port = parsed_alert.port
+        except ValueError as exc:
+            raise HostValidationError("Alertmanager webhook has an invalid port") from exc
+        if (
+            parsed_alert.hostname != production_domain
+            or parsed_alert_port != INTERNAL_ALERT_PORT
+            or parsed_alert.path != INTERNAL_ALERT_PATH
+            or parsed_alert.query
+            or parsed_alert.params
+        ):
+            raise HostValidationError("Alertmanager webhook must use the authenticated internal receiver")
+        token_value = env.get("AEGIS_ALERT_RECEIVER_TOKEN_FILE", "").strip()
+        if not token_value:
+            raise HostValidationError("internal alert receiver token file is missing")
+        token_path = Path(token_value)
+        _private_file(token_path, "alert receiver token", 4096)
+        if (
+            token_path.stat().st_uid != ALERT_RECEIVER_RUNTIME_UID
+            or token_path.stat().st_gid != ALERT_RECEIVER_RUNTIME_GID
+        ):
+            raise HostValidationError(
+                "alert receiver token must be owned by the hardened alert runtime identity"
+            )
+        token = token_path.read_bytes().strip()
+        if len(token) < 32 or len(token) > 512 or any(ch in token for ch in b"\r\n\x00"):
+            raise HostValidationError("alert receiver token has invalid material")
+        alert_mode = "internal-authenticated"
     _https_endpoint(env["AEGIS_BACKUP_S3_ENDPOINT"], "backup endpoint")
     if env.get("AEGIS_ALLOW_HTTP_ALERT_WEBHOOK", "false").strip().lower() in {"1", "true", "yes", "on"}:
         raise HostValidationError("HTTP Alertmanager test override must be disabled in production")
@@ -254,6 +304,7 @@ def _validate_operational_material(env_file: Path) -> dict[str, bool]:
     _private_file(Path(env["AEGIS_BACKUP_ENCRYPTION_KEY_FILE"]), "backup encryption key", 4096)
     return {
         "alert_webhook_https": True,
+        "alert_receiver_mode": alert_mode,
         "backup_endpoint_https": True,
         "backup_credentials_private": True,
         "backup_encryption_key_private": True,

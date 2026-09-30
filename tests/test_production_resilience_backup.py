@@ -148,11 +148,64 @@ def test_recovery_requires_actual_https_and_execution_plane_health(tmp_path, mon
     monkeypatch.setattr(host.host, '_run', lambda argv, **kw: calls.append(argv[-2:]))
     monkeypatch.setattr(host.host, '_execution_plane_acceptance', lambda *a: calls.append('execution'))
     monkeypatch.setattr(host.host, '_accept', lambda *a: calls.append('https'))
+    monkeypatch.setattr(
+        host.host,
+        '_alert_delivery_acceptance',
+        lambda *a: calls.append('alerts') or {
+            'status': 'success', 'authenticated': True, 'transport': 'https', 'receiver': 'internal',
+            'baseline_events': 1.0, 'current_events': 2.0,
+            'proof_alertname': 'AegisProductionAlertDeliveryAcceptance',
+            'proof_release_sha': 'a' * 40, 'audit_payload_sha256': 'f' * 64,
+        },
+    )
     result = host.execute(action='recover-services', release_sha='a' * 40, env_file=tmp_path / 'env', origin='https://security.internal')
-    assert calls == [['restart', 'fastapi'], 'execution', 'https']
+    assert calls == [['restart', 'fastapi'], 'execution', 'https', 'alerts']
     assert result['https_acceptance'] is True
+    assert result['alert_delivery']['authenticated'] is True
     def unhealthy(*args):
         raise host.host.DeployError('unhealthy')
     monkeypatch.setattr(host.host, '_accept', unhealthy)
     with pytest.raises(host.host.DeployError, match='unhealthy'):
         host.execute(action='recover-services', release_sha='a' * 40, env_file=tmp_path / 'env', origin='https://security.internal')
+
+
+def test_trigger_recovery_requires_authenticated_internal_alert_delivery(tmp_path: Path, monkeypatch):
+    key = _private(tmp_path / "id", "private")
+    known = _private(tmp_path / "known_hosts", "security.example.com ssh-ed25519 AAAA\n")
+    monkeypatch.setattr(resilience, "_require_known_host", lambda *args, **kwargs: None)
+    monkeypatch.setattr(resilience, "_resolved_enterprise_addresses", lambda *args: ["10.20.30.40"])
+    release = "b" * 40
+    good = {
+        "schema": "aegisscan.production-service-recovery.v1",
+        "status": "success",
+        "release_sha": release,
+        "restarted_services": ["fastapi"],
+        "https_acceptance": True,
+        "execution_plane_healthy": True,
+        "alert_delivery": {
+            "status": "success",
+            "authenticated": True,
+            "transport": "https",
+            "receiver": "internal",
+            "proof_alertname": "AegisProductionAlertDeliveryAcceptance",
+            "proof_release_sha": release,
+            "audit_payload_sha256": "e" * 64,
+        },
+    }
+    monkeypatch.setattr(resilience.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(good)+"\n"))
+    result = resilience.trigger(
+        host="security.example.com", port=22, user="aegis", private_key=key, known_hosts=known,
+        release_sha=release, repo_path="/opt/aegisscan/AegisScan", env_path="/etc/aegisscan/production.env",
+        timeout_seconds=120, action="recover-services", origin="https://security.example.com",
+    )
+    assert result["recovery"]["alert_delivery"]["authenticated"] is True
+
+    bad = dict(good)
+    bad["alert_delivery"] = {"status": "success", "authenticated": False, "transport": "https", "receiver": "internal"}
+    monkeypatch.setattr(resilience.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(bad)+"\n"))
+    with pytest.raises(resilience.ResilienceError, match="durable versioned backup or recovery success"):
+        resilience.trigger(
+            host="security.example.com", port=22, user="aegis", private_key=key, known_hosts=known,
+            release_sha=release, repo_path="/opt/aegisscan/AegisScan", env_path="/etc/aegisscan/production.env",
+            timeout_seconds=120, action="recover-services", origin="https://security.example.com",
+        )

@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import re
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -281,16 +282,27 @@ def _verify_resilience(root: Path, release_sha: str) -> dict[str, Any]:
 
     alert = _load_json(
         _unique(root, "external-alert-delivery.json", "resilience evidence"),
-        "external alert delivery evidence",
+        "authenticated alert delivery evidence",
     )
     try:
         baseline = float(alert.get("baseline"))
         current = float(alert.get("current"))
         failed = float(alert.get("failed"))
     except (TypeError, ValueError) as exc:
-        raise GovernanceError("external alert delivery counters are invalid") from exc
-    if alert.get("status") != "success" or current <= baseline or failed != 0:
-        raise GovernanceError("external alert delivery did not complete successfully")
+        raise GovernanceError("authenticated alert delivery counters are invalid") from exc
+    audit_sha = str(alert.get("audit_payload_sha256", ""))
+    if (
+        alert.get("status") != "success"
+        or current <= baseline
+        or failed != 0
+        or alert.get("authenticated") is not True
+        or alert.get("transport") != "https"
+        or alert.get("receiver") != "internal"
+        or alert.get("proof_alertname") != "AegisProductionAlertDeliveryAcceptance"
+        or alert.get("proof_release_sha") != release_sha
+        or not re.fullmatch(r"[0-9a-f]{64}", audit_sha)
+    ):
+        raise GovernanceError("authenticated internal alert delivery did not complete successfully")
 
     return {
         "backup_id": manifest["backup_id"],

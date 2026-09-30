@@ -54,7 +54,7 @@ def test_secret_initializer_writes_private_distinct_material(tmp_path: Path):
     result = secret_init.initialize(
         domain="security.example.com",
         authorized_targets=["203.0.113.10", "authorized.example.com"],
-        alert_webhook="https://alerts.example.com/aegis",
+        alert_webhook="https://security.example.com:8443/_aegis/alerts",
         backup_endpoint="https://backups.example.com",
         backup_bucket="aegisscan-production-backups",
         backup_region="eu-central-1",
@@ -68,6 +68,7 @@ def test_secret_initializer_writes_private_distinct_material(tmp_path: Path):
     assert stat.S_IMODE((secrets_dir / "s3-credentials.json").stat().st_mode) == 0o600
     assert stat.S_IMODE((secrets_dir / "backup-encryption.key").stat().st_mode) == 0o600
     assert (secrets_dir / "backup-encryption.key").stat().st_size == 32
+    assert stat.S_IMODE((secrets_dir / "alert-receiver-token").stat().st_mode) == 0o600
 
     values = {}
     for line in output.read_text(encoding="utf-8").splitlines():
@@ -122,7 +123,7 @@ def test_secret_initializer_rejects_non_private_s3_source(tmp_path: Path):
         secret_init.initialize(
             domain="security.example.com",
             authorized_targets=["203.0.113.10"],
-            alert_webhook="https://alerts.example.com/aegis",
+            alert_webhook="https://security.example.com:8443/_aegis/alerts",
             backup_endpoint="https://backups.example.com",
             backup_bucket="aegisscan-production-backups",
             backup_region="eu-central-1",
@@ -136,14 +137,24 @@ def test_secret_initializer_rejects_non_private_s3_source(tmp_path: Path):
 def test_host_reality_operational_material_contract_matches_post_deploy_acceptance():
     assert reality.OPERATIONAL_REQUIRED_ENV == operational_acceptance.OPERATIONAL_REQUIRED_ENV
 
-def test_host_reality_rejects_missing_or_unsafe_operational_material_before_runtime_probes(tmp_path: Path):
+def test_host_reality_rejects_missing_or_unsafe_operational_material_before_runtime_probes(
+    tmp_path: Path, monkeypatch
+):
     credentials = _private_json(tmp_path / "s3.json")
     key = tmp_path / "backup.key"
     key.write_bytes(b"x" * 32)
     key.chmod(0o600)
+    token = tmp_path / "alert-receiver-token"
+    token.write_bytes(b"t" * 64 + b"\n")
+    token.chmod(0o600)
+    monkeypatch.setattr(reality, "ALERT_RECEIVER_RUNTIME_UID", token.stat().st_uid)
+    monkeypatch.setattr(reality, "ALERT_RECEIVER_RUNTIME_GID", token.stat().st_gid)
     env_file = tmp_path / "production.env"
     values = {
-        "ALERT_WEBHOOK_URL": "https://alerts.example.com/aegis",
+        "ALLOWED_HOSTS": "security.example.com",
+        "AEGIS_PRODUCTION_DOMAIN": "security.example.com",
+        "ALERT_WEBHOOK_URL": "https://security.example.com:8443/_aegis/alerts",
+        "AEGIS_ALERT_RECEIVER_TOKEN_FILE": str(token),
         "AEGIS_BACKUP_S3_ENDPOINT": "https://backups.example.com",
         "AEGIS_BACKUP_S3_BUCKET": "aegis-production",
         "AEGIS_BACKUP_S3_CREDENTIALS_FILE": str(credentials),
@@ -159,13 +170,14 @@ def test_host_reality_rejects_missing_or_unsafe_operational_material_before_runt
     write_env()
     evidence = reality._validate_operational_material(env_file)
     assert evidence["alert_webhook_https"] is True
+    assert evidence["alert_receiver_mode"] == "internal-authenticated"
     assert evidence["backup_credentials_private"] is True
 
-    write_env({"ALERT_WEBHOOK_URL": ""})
-    with pytest.raises(reality.HostValidationError, match="ALERT_WEBHOOK_URL"):
+    write_env({"ALERT_WEBHOOK_URL": "https://alerts.example.com/aegis"})
+    with pytest.raises(reality.HostValidationError, match="internal receiver"):
         reality._validate_operational_material(env_file)
 
-    write_env({"ALERT_WEBHOOK_URL": "http://alerts.example.com/aegis"})
+    write_env({"ALERT_WEBHOOK_URL": "http://security.example.com:8443/_aegis/alerts"})
     with pytest.raises(reality.HostValidationError, match="HTTPS"):
         reality._validate_operational_material(env_file)
 
@@ -173,6 +185,29 @@ def test_host_reality_rejects_missing_or_unsafe_operational_material_before_runt
     credentials.chmod(0o640)
     with pytest.raises(reality.HostValidationError, match="0600"):
         reality._validate_operational_material(env_file)
+
+
+def test_host_reality_allows_missing_webhook_only_when_internal_receiver_can_be_auto_provisioned(tmp_path: Path):
+    credentials = _private_json(tmp_path / "s3.json")
+    key = tmp_path / "backup.key"
+    key.write_bytes(b"x" * 32)
+    key.chmod(0o600)
+    env_file = tmp_path / "production.env"
+    env_file.write_text(
+        "\n".join([
+            "ALLOWED_HOSTS=security.example.com",
+            "ALERT_WEBHOOK_URL=",
+            "AEGIS_BACKUP_S3_ENDPOINT=https://backups.example.com",
+            "AEGIS_BACKUP_S3_BUCKET=aegis-production",
+            f"AEGIS_BACKUP_S3_CREDENTIALS_FILE={credentials}",
+            f"AEGIS_BACKUP_ENCRYPTION_KEY_FILE={key}",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    evidence = reality._validate_operational_material(env_file)
+    assert evidence["alert_webhook_https"] is True
+    assert evidence["alert_receiver_mode"] == "auto-internal"
 
 
 def test_enterprise_ca_must_exist_be_bounded_and_parse_as_trust_anchor(tmp_path: Path, monkeypatch):

@@ -26,6 +26,8 @@ FORBIDDEN_SCAN_HOSTS = {"localhost", "metadata.google.internal", "aegis-scan-tar
 HOST_RE = re.compile(r"^[A-Za-z0-9.-]+$")
 BACKUP_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 TRUTHY = {"1", "true", "yes", "on"}
+INTERNAL_ALERT_PATH = "/_aegis/alerts"
+INTERNAL_ALERT_PORT = 8443
 
 HEX64_RE = re.compile(r"^[a-f0-9]{64}$")
 SHA256_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -103,23 +105,54 @@ def _is_unsafe_delivery_host(hostname: str) -> bool:
     return address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast
 
 
-def _check_alert_webhook(value: str, failures: list[str]) -> None:
-    value = value.strip()
+def _check_alert_webhook(environment: dict[str, str], failures: list[str]) -> None:
+    value = environment.get("ALERT_WEBHOOK_URL", "").strip()
     if not value:
-        failures.append("ALERT_WEBHOOK_URL must be configured as an explicit HTTPS destination for production")
+        failures.append("ALERT_WEBHOOK_URL must use the authenticated internal production receiver")
         return
     parsed = urlparse(value)
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        parsed_port = None
+    production_domain = environment.get("AEGIS_PRODUCTION_DOMAIN", "").strip()
+    allowed_hosts = set(_items(environment.get("ALLOWED_HOSTS", "")))
     if (
         parsed.scheme != "https"
         or not parsed.hostname
         or parsed.username
         or parsed.password
         or parsed.fragment
+        or parsed.query
+        or parsed.params
         or _is_unsafe_delivery_host(parsed.hostname or "")
+        or parsed.hostname != production_domain
+        or parsed.hostname not in allowed_hosts
+        or parsed_port != INTERNAL_ALERT_PORT
+        or parsed.path != INTERNAL_ALERT_PATH
     ):
         failures.append(
-            "ALERT_WEBHOOK_URL must be an explicit HTTPS destination without URL credentials, fragment, loopback or link-local host"
+            "ALERT_WEBHOOK_URL must be the authenticated internal HTTPS receiver "
+            f"https://<production-domain>:{INTERNAL_ALERT_PORT}{INTERNAL_ALERT_PATH}"
         )
+        return
+    token_path = environment.get("AEGIS_ALERT_RECEIVER_TOKEN_FILE", "").strip()
+    if not token_path:
+        failures.append("AEGIS_ALERT_RECEIVER_TOKEN_FILE is required for the internal alert receiver")
+        return
+    path = Path(token_path)
+    if not path.is_absolute() or not path.is_file():
+        failures.append("AEGIS_ALERT_RECEIVER_TOKEN_FILE must point to an existing absolute file")
+        return
+    info = path.stat()
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        failures.append("AEGIS_ALERT_RECEIVER_TOKEN_FILE must be mode 0600 or stricter")
+    try:
+        token = path.read_bytes().strip()
+    except OSError:
+        token = b""
+    if len(token) < 32 or len(token) > 512 or any(ch in token for ch in b"\r\n\x00"):
+        failures.append("AEGIS_ALERT_RECEIVER_TOKEN_FILE contains invalid token material")
 
 
 def _truthy(value: str) -> bool:
@@ -365,7 +398,7 @@ def validate(environment: dict[str, str], tls_dir: Path, check_tls: bool = True)
             "AUTHORIZED_SCAN_TARGETS may be empty or contain supplemental explicit targets, "
             "but must exclude wildcard, loopback, link-local and CI targets"
         )
-    _check_alert_webhook(environment.get("ALERT_WEBHOOK_URL", ""), failures)
+    _check_alert_webhook(environment, failures)
     _check_recon_provider_rollout(environment, failures)
     _check_remote_backup(environment, failures)
     if check_tls:
