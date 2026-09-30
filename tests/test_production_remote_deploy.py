@@ -158,7 +158,7 @@ def test_remote_command_is_fail_closed_and_uses_installed_privileged_gate():
         )
 
 
-def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(tmp_path: Path, monkeypatch):
+def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(tmp_path: Path, monkeypatch, capsys):
     key = _private(tmp_path / "id_ed25519", "private")
     known = _private(tmp_path / "known_hosts", "deploy.internal ssh-ed25519 AAAA\n")
     _private_dns(monkeypatch)
@@ -222,6 +222,9 @@ def test_deploy_uses_private_dns_strict_pinned_ssh_and_requires_success_record(t
     assert captured["kwargs"]["stderr"] is remote.subprocess.STDOUT
     assert captured["kwargs"]["text"] is True
     assert captured["timeout"] == 120
+    streamed = capsys.readouterr()
+    assert streamed.out == ""
+    assert "host-check=PASS" in streamed.err
 
     output["text"] = '{"status":"success"}\n'
     with pytest.raises(remote.RemoteDeployError, match="successful production deployment record"):
@@ -362,3 +365,40 @@ def test_failed_checkout_repair_prevents_deployment(tmp_path, monkeypatch):
             repo_path=remote.PRODUCTION_REPO_PATH, env_path=remote.PRODUCTION_ENV_PATH,
             timeout_seconds=120, repair_current_checkout=True,
         )
+
+
+def test_json_output_is_atomically_written_as_machine_readable_payload(tmp_path):
+    output = tmp_path / "nested" / "deploy.json"
+    output.parent.mkdir()
+    output.write_text("incomplete mixed logs", encoding="utf-8")
+    payload = {"schema": "aegisscan.remote-production-deploy.v1", "status": "success"}
+
+    remote._write_json_output(output, payload)
+
+    assert json.loads(output.read_text(encoding="utf-8")) == payload
+    assert list(output.parent.glob(".deploy.json.*.tmp")) == []
+    assert output.stat().st_mode & 0o077 == 0
+
+
+def test_main_writes_clean_deploy_result_when_output_json_is_requested(tmp_path, monkeypatch, capsys):
+    output = tmp_path / "deploy.json"
+    payload = {"schema": "aegisscan.remote-production-deploy.v1", "status": "success"}
+    monkeypatch.setattr(remote, "deploy", lambda **_kwargs: payload)
+    monkeypatch.setattr(remote.sys, "argv", [
+        "production_remote_deploy.py",
+        "--host", "deploy.internal",
+        "--port", "22",
+        "--user", "aegis",
+        "--private-key", str(tmp_path / "id"),
+        "--known-hosts", str(tmp_path / "known_hosts"),
+        "--release-sha", "b" * 40,
+        "--origin", "https://security.internal",
+        "--output-json", str(output),
+    ])
+
+    assert remote.main() == 0
+
+    assert json.loads(output.read_text(encoding="utf-8")) == payload
+    printed = capsys.readouterr()
+    assert json.loads(printed.out) == payload
+    assert printed.err == ""
