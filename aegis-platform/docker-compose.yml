@@ -219,7 +219,8 @@ services:
       django: {condition: service_started}
       fastapi: {condition: service_healthy}
   nginx:
-    image: nginx:alpine
+    # Open-source upstream DNS resolution requires nginx >= 1.27.3.
+    image: nginx:1.30.5-alpine
     container_name: aegis-nginx
     restart: unless-stopped
     ports: ["80:80"]

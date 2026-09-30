@@ -78,7 +78,7 @@ def test_fastapi_upstream_keepalive_is_enabled_in_http_and_tls_gateways() -> Non
     ):
         config = (root / relative).read_text(encoding="utf-8")
         assert "upstream fastapi {" in config
-        assert "server fastapi:8001;" in config
+        assert "server fastapi:8001 resolve;" in config
         assert "keepalive 128;" in config
         assert "proxy_http_version 1.1;" in config
         assert 'proxy_set_header Connection "";' in config
@@ -104,3 +104,13 @@ def test_http_proxy_locations_redeclare_connection_keepalive_header() -> None:
             else:
                 assert 'proxy_set_header Connection "";' in block
 
+
+
+def test_gateway_service_dns_tracks_recreated_containers() -> None:
+    root = Path(__file__).parents[1]
+    for relative in ("aegis-platform/docker/nginx.conf", "aegis-platform/docker/nginx-ssl.conf"):
+        config = (root / relative).read_text(encoding="utf-8")
+        assert "resolver 127.0.0.11 valid=5s ipv6=off;" in config
+        for service, port in (("frontend", 80), ("django", 8000), ("fastapi", 8001)):
+            assert f"zone {service}_peers 64k;" in config
+            assert f"server {service}:{port} resolve;" in config
