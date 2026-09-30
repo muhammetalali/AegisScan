@@ -397,7 +397,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for secret in             "$BACKUP_CREDENTIALS_JSON"             "$BACKUP_ENCRYPTION_KEY_B64"             "$PROD_SSH_PRIVATE_KEY"; do
+          for secret in             "$BACKUP_CREDENTIALS_JSON"             "$BACKUP_ENCRYPTION_KEY_B64"             "$PROD_SSH_PRIVATE_KEY"             "$ALERT_WEBHOOK_URL"; do
             if [ -n "$secret" ] && grep -R -F -- "$secret" /tmp/aegis-resilience                 --exclude=id --exclude=known_hosts --exclude=s3.json --exclude=backup.key 2>/dev/null; then
               echo 'protected production material leaked into resilience evidence' >&2
               exit 1
@@ -426,4 +426,4 @@ jobs:
         run: |
           set +e
           docker rm -f aegis-resilience-alertmanager >/dev/null 2>&1 || true
-          rm -f             /tmp/aegis-resilience/id             /tmp/aegis-resilience/known_hosts             /tmp/aegis-resilience/s3.json             /tmp/aegis-resilience/backup.key
+          rm -f             /tmp/aegis-resilience/id             /tmp/aegis-resilience/known_hosts             /tmp/aegis-resilience/s3.json             /tmp/aegis-resilience/backup.key             /tmp/aegis-resilience/enterprise-ca.pem
