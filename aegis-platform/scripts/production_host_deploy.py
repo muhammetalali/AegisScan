@@ -641,7 +641,7 @@ def _validate_nginx_config(env_file: Path, deployment_env: dict[str, str]) -> No
         if not isinstance(mount, dict) or mount.get("type") != "bind":
             raise DeployError(f"production nginx is missing its required bind mount: {target}")
         source = mount.get("source")
-        if not isinstance(source, str) or not Path(source).is_absolute() or any(ch in source for ch in ",\\r\\n\\x00"):
+        if not isinstance(source, str) or not Path(source).is_absolute() or any(ch in source for ch in ",\r\n\x00"):
             raise DeployError(f"production nginx bind mount source is invalid: {target}")
         source_path = Path(source)
         if expected_kind == "file" and not source_path.is_file():
