@@ -293,6 +293,7 @@ def _restore_private_env(path: Path, snapshot: tuple[bytes, int, int]) -> None:
 
 def _execution_profile_environment(environment: dict[str, str]) -> dict[str, str]:
     resolved = dict(environment)
+    resolved["AEGIS_ENTERPRISE_CA_HOST_BUNDLE"] = "/etc/aegisscan/enterprise-ca.pem"
     mode = resolved.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
     try:
         canary_bps = int(resolved.get("AEGIS_KALI_RECON_CANARY_BPS", "0").strip())

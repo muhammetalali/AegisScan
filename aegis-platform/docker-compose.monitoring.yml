@@ -71,8 +71,10 @@ services:
     environment:
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       AEGIS_ALLOW_HTTP_ALERT_WEBHOOK: ${AEGIS_ALLOW_HTTP_ALERT_WEBHOOK:-false}
+      AEGIS_ENTERPRISE_CA_BUNDLE: /run/aegis/enterprise-ca.pem
     volumes:
       - alertmanager_data:/alertmanager
+      - ${AEGIS_ENTERPRISE_CA_HOST_BUNDLE:-/dev/null}:/run/aegis/enterprise-ca.pem:ro
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]

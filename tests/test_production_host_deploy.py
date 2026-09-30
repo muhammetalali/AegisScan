@@ -348,6 +348,12 @@ def test_schema_blocked_rollback_keeps_new_release_env_bound(tmp_path: Path, mon
 
     assert env_file.read_bytes() == new_env
 
+
+
+def test_execution_profile_environment_pins_enterprise_ca_host_bundle():
+    resolved = deploy._execution_profile_environment({})
+    assert resolved["AEGIS_ENTERPRISE_CA_HOST_BUNDLE"] == "/etc/aegisscan/enterprise-ca.pem"
+
 def test_execution_profile_environment_activates_governed_kali_for_default_and_active_canary():
     base = {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"}
     legacy = deploy._execution_profile_environment(base)

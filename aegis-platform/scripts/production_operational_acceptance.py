@@ -161,6 +161,7 @@ def _compose(env_file: Path, *args: str) -> list[str]:
 def _compose_environment(env: dict[str, str], *, extra_profiles: set[str] | None = None) -> dict[str, str]:
     resolved = dict(os.environ)
     resolved.update(env)
+    resolved["AEGIS_ENTERPRISE_CA_HOST_BUNDLE"] = "/etc/aegisscan/enterprise-ca.pem"
     profiles = {item.strip() for item in resolved.get("COMPOSE_PROFILES", "").split(",") if item.strip()}
     mode = resolved.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
     try:
