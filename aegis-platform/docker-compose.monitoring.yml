@@ -11,8 +11,13 @@ services:
 
   nginx:
     networks:
-      - default
-      - observability
+      default: {}
+      observability: {}
+      alert_delivery:
+        aliases:
+          - ${AEGIS_PRODUCTION_DOMAIN:-aegis-prod.aegis.internal}
+    depends_on:
+      alert_receiver: {condition: service_healthy}
 
   blackbox-exporter:
     image: prom/blackbox-exporter:v0.28.0
@@ -62,6 +67,36 @@ services:
     depends_on:
       redis: {condition: service_healthy}
 
+  alert_receiver:
+    build:
+      context: .
+      dockerfile: docker/alert-receiver/Dockerfile
+    container_name: aegis-alert-receiver
+    restart: unless-stopped
+    user: "10003:10003"
+    environment:
+      AEGIS_ALERT_RECEIVER_TOKEN_FILE: /run/secrets/alert-receiver-token
+      AEGIS_ALERT_RECEIVER_AUDIT_FILE: /var/lib/aegis-alert-receiver/events.jsonl
+      AEGIS_ALERT_RECEIVER_ALLOW_STANDBY: ${AEGIS_ALERT_RECEIVER_ALLOW_STANDBY:-false}
+    volumes:
+      - alert_receiver_data:/var/lib/aegis-alert-receiver
+      - ${AEGIS_ALERT_RECEIVER_TOKEN_FILE:-/dev/null}:/run/secrets/alert-receiver-token:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=10003,gid=10003,mode=0700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.25
+    networks: [alert_delivery]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/ready',timeout=2); assert r.status==200"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+
   alertmanager:
     build:
       context: .
@@ -71,13 +106,18 @@ services:
     environment:
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       AEGIS_ALLOW_HTTP_ALERT_WEBHOOK: ${AEGIS_ALLOW_HTTP_ALERT_WEBHOOK:-false}
+      AEGIS_ENTERPRISE_CA_BUNDLE: /run/aegis/enterprise-ca.pem
     volumes:
       - alertmanager_data:/alertmanager
+      - ${AEGIS_ENTERPRISE_CA_HOST_BUNDLE:-/dev/null}:/run/aegis/enterprise-ca.pem:ro
+      - ${AEGIS_ALERT_RECEIVER_TOKEN_FILE:-/dev/null}:/run/secrets/alert-receiver-token:ro
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     networks: [alert_delivery]
+    depends_on:
+      alert_receiver: {condition: service_healthy}
 
   prometheus:
     image: prom/prometheus:v3.13.3
@@ -110,7 +150,9 @@ networks:
   observability:
     internal: true
   alert_delivery:
+    internal: true
 
 volumes:
   prometheus_data:
   alertmanager_data:
+  alert_receiver_data:

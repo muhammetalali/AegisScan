@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +20,12 @@ TRUST_SPEC = importlib.util.spec_from_file_location("production_execution_trust_
 assert TRUST_SPEC and TRUST_SPEC.loader
 trust = importlib.util.module_from_spec(TRUST_SPEC)
 TRUST_SPEC.loader.exec_module(trust)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_alert_receiver_token_path(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(deploy, "ALERT_RECEIVER_TOKEN_PATH", tmp_path / "alert-receiver-token")
+    monkeypatch.setattr(deploy.os, "chown", lambda *_args: None)
 
 
 def _env_file(tmp_path: Path) -> Path:
@@ -319,6 +326,7 @@ def test_failed_backup_leaves_checkout_and_private_environment_untouched(tmp_pat
     with pytest.raises(deploy.DeployError, match="backup failed"):
         deploy.deploy("b" * 40, env_file, "https://security.internal")
     assert env_file.read_bytes() == original
+    assert not deploy.ALERT_RECEIVER_TOKEN_PATH.exists()
 
 
 def test_schema_blocked_rollback_keeps_new_release_env_bound(tmp_path: Path, monkeypatch):
@@ -347,6 +355,12 @@ def test_schema_blocked_rollback_keeps_new_release_env_bound(tmp_path: Path, mon
         )
 
     assert env_file.read_bytes() == new_env
+
+
+
+def test_execution_profile_environment_pins_enterprise_ca_host_bundle():
+    resolved = deploy._execution_profile_environment({})
+    assert resolved["AEGIS_ENTERPRISE_CA_HOST_BUNDLE"] == "/etc/aegisscan/enterprise-ca.pem"
 
 def test_execution_profile_environment_activates_governed_kali_for_default_and_active_canary():
     base = {"AEGIS_RECON_PROVIDER": "legacy", "AEGIS_KALI_RECON_CANARY_BPS": "0"}
@@ -439,15 +453,80 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     monkeypatch.setattr(deploy, "_deploy_stack", lambda *_args: events.append("deploy"))
     monkeypatch.setattr(deploy, "_execution_plane_acceptance", lambda *_args: events.append("execution"))
     monkeypatch.setattr(deploy, "_accept", lambda *_args: events.append("accept"))
+    monkeypatch.setattr(
+        deploy,
+        "_alert_delivery_acceptance",
+        lambda *_args: events.append("alerts") or {
+            "status": "success",
+            "authenticated": True,
+            "transport": "https",
+            "receiver": "internal",
+            "baseline_events": 1.0,
+            "current_events": 2.0,
+        },
+    )
 
     result = deploy.deploy(release_sha, env_file, "https://security.example.com")
 
     assert result["status"] == "success"
+    assert result["alert_delivery"]["authenticated"] is True
     assert events.index("backup") < events.index("storage")
     assert events.index("storage") < events.index(("checkout", release_sha))
     assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
     assert events.index(("trust", release_sha)) < events.index("preflight")
     assert events.index("preflight") < events.index("build") < events.index("deploy")
+    assert events.index("deploy") < events.index("execution") < events.index("accept") < events.index("alerts")
+
+
+def test_alert_delivery_acceptance_rejects_unrelated_counter_increment(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    counts = iter([1.0, 2.0])
+
+    def metric(_env, _deployment, name):
+        if name == "aegis_alert_receiver_events_total":
+            return next(counts)
+        return 0.0
+
+    monkeypatch.setattr(deploy, "_alert_receiver_metric", metric)
+    monkeypatch.setattr(deploy, "_alert_receiver_delivery_evidence", lambda *_args: None)
+    monkeypatch.setattr(deploy, "_run", lambda *_args, **_kwargs: SimpleNamespace(stdout=""))
+    monkeypatch.setattr(deploy.time, "sleep", lambda _seconds: None)
+    with pytest.raises(deploy.DeployError, match="did not reach the receiver"):
+        deploy._alert_delivery_acceptance(env_file, {}, "a" * 40, attempts=1)
+
+
+def test_alert_delivery_acceptance_binds_success_to_exact_audit_evidence(tmp_path: Path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    event_counts = iter([7.0, 8.0])
+    auth_counts = iter([0.0, 0.0])
+    rejected_counts = iter([0.0, 0.0])
+
+    def metric(_env, _deployment, name):
+        if name == "aegis_alert_receiver_events_total":
+            return next(event_counts)
+        if name == "aegis_alert_receiver_unauthorized_total":
+            return next(auth_counts)
+        if name == "aegis_alert_receiver_rejected_total":
+            return next(rejected_counts)
+        raise AssertionError(name)
+
+    proof_sha = "f" * 64
+    monkeypatch.setattr(deploy, "_alert_receiver_metric", metric)
+    monkeypatch.setattr(
+        deploy,
+        "_alert_receiver_delivery_evidence",
+        lambda *_args: {
+            "alertnames": ["AegisProductionAlertDeliveryAcceptance"],
+            "release_shas": ["b" * 40],
+            "payload_sha256": proof_sha,
+        },
+    )
+    monkeypatch.setattr(deploy, "_run", lambda *_args, **_kwargs: SimpleNamespace(stdout=""))
+    monkeypatch.setattr(deploy.time, "sleep", lambda _seconds: None)
+    result = deploy._alert_delivery_acceptance(env_file, {}, "b" * 40, attempts=1)
+    assert result["audit_payload_sha256"] == proof_sha
+    assert result["proof_release_sha"] == "b" * 40
+    assert result["proof_alertname"] == "AegisProductionAlertDeliveryAcceptance"
 
 
 def test_runtime_trust_bootstrap_contract_is_exercised_by_launch_gate():
@@ -706,6 +785,9 @@ def test_rollback_failure_preserves_original_deployment_cause(tmp_path, monkeypa
     assert "scanner service failed" in str(exc.value)
     assert "rollback capacity failed" in str(exc.value)
     assert exc.value.__cause__ is original_failure
+    # A failed rollback may leave the new stack partially running. Retain the
+    # private token rather than breaking its authenticated receiver mid-failure.
+    assert deploy.ALERT_RECEIVER_TOKEN_PATH.is_file()
 
 
 def test_capacity_loss_after_build_restores_state_before_any_service_change(tmp_path, monkeypatch):
@@ -815,3 +897,48 @@ def test_invalid_gateway_config_stops_build_boundary_before_service_start(tmp_pa
     with pytest.raises(subprocess.CalledProcessError):
         deploy._build_stack(_env_file(tmp_path), {})
     assert not any("up" in argv for argv in calls)
+
+
+def test_reconcile_internal_alert_receiver_bootstraps_private_material(tmp_path: Path, monkeypatch):
+    env_file = tmp_path / "production.env"
+    env_file.write_text(
+        "ALLOWED_HOSTS=security.example.com\nALERT_WEBHOOK_URL=\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    token = tmp_path / "secrets" / "alert-receiver-token"
+    monkeypatch.setattr(deploy, "ALERT_RECEIVER_TOKEN_PATH", token)
+    monkeypatch.setattr(deploy.os, "chown", lambda *_args: None)
+
+    values = deploy._reconcile_internal_alert_receiver(
+        env_file,
+        "https://security.example.com",
+    )
+
+    assert values["AEGIS_PRODUCTION_DOMAIN"] == "security.example.com"
+    assert values["ALERT_WEBHOOK_URL"] == "https://security.example.com:8443/_aegis/alerts"
+    assert values["AEGIS_ALERT_RECEIVER_TOKEN_FILE"] == str(token)
+    assert token.is_file()
+    assert stat.S_IMODE(token.stat().st_mode) == 0o600
+    assert len(token.read_bytes().strip()) >= 32
+
+
+def test_reconcile_internal_alert_receiver_migrates_explicit_external_override(tmp_path: Path, monkeypatch):
+    env_file = tmp_path / "production.env"
+    env_file.write_text(
+        "ALLOWED_HOSTS=security.example.com\nALERT_WEBHOOK_URL=https://alerts.example.com/aegis\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    token = tmp_path / "secrets" / "alert-receiver-token"
+    monkeypatch.setattr(deploy, "ALERT_RECEIVER_TOKEN_PATH", token)
+    monkeypatch.setattr(deploy.os, "chown", lambda *_args: None)
+
+    values = deploy._reconcile_internal_alert_receiver(
+        env_file,
+        "https://security.example.com",
+    )
+
+    assert values["ALERT_WEBHOOK_URL"] == "https://security.example.com:8443/_aegis/alerts"
+    assert values["AEGIS_ALERT_RECEIVER_TOKEN_FILE"] == str(token)
+    assert token.is_file()

@@ -63,7 +63,7 @@ def test_aws_backup_bootstrap_requires_authenticated_aws_and_supports_governed_d
     assert 'DOMAIN="${AEGIS_PRODUCTION_DOMAIN:-aegis-prod.aegis.internal}"' in text
     assert "AEGIS_AUTHORIZED_SCAN_TARGETS is required" not in text
     assert "AEGIS_ALERT_WEBHOOK_FILE is required" not in text
-    assert 'if [ -n "$ALERT_WEBHOOK_FILE" ]' in text
+    assert 'if [ -n "$ALERT_WEBHOOK_FILE" ] && [ ! -f "$ALERT_WEBHOOK_FILE" ]; then' in text
     assert "module._private_source(Path(sys.argv[4]), max_bytes=8192)" in text
     assert "module._validate_https_origin(webhook, \"alert webhook\")" in text
 
@@ -75,5 +75,6 @@ def test_aws_backup_bootstrap_finishes_through_secret_init_and_preflight():
     assert 'secrets_dir=Path("/etc/aegisscan/secrets")' in text
     assert "/etc/aegisscan/secrets/s3-credentials.json" in text
     assert "/etc/aegisscan/secrets/backup-encryption.key" in text
+    assert "/etc/aegisscan/secrets/alert-receiver-token" in text
     assert 'exec python3 "$AEGIS_PREFLIGHT" --skip-tls' in text
     assert '"schema":"aegisscan.production-aws-backup-bootstrap.v1"' in text

@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import re
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -240,7 +241,7 @@ def _verify_resilience(root: Path, release_sha: str) -> dict[str, Any]:
         raise GovernanceError("resilience manifest is not successful")
     if manifest.get("release_sha") != release_sha:
         raise GovernanceError("resilience manifest release SHA mismatch")
-    for key in ("backup_id", "manifest_version_id", "object_version_id"):
+    for key in ("backup_id", "manifest_version_id", "object_version_id", "source_sha256"):
         if not str(manifest.get(key, "")).strip():
             raise GovernanceError(f"resilience manifest is missing {key}")
     _verify_digest_manifest(root, manifest, "resilience manifest")
@@ -258,6 +259,7 @@ def _verify_resilience(root: Path, release_sha: str) -> dict[str, Any]:
         inner.get("backup_id") != manifest["backup_id"]
         or inner.get("manifest_version_id") != manifest["manifest_version_id"]
         or inner.get("object_version_id") != manifest["object_version_id"]
+        or inner.get("source_sha256") != manifest["source_sha256"]
     ):
         raise GovernanceError("resilience backup versions do not match the manifest")
 
@@ -266,12 +268,18 @@ def _verify_resilience(root: Path, release_sha: str) -> dict[str, Any]:
         "remote restore evidence",
     )
     if (
-        restore.get("status") != "restored-locally"
+        restore.get("schema") != "aegisscan.production-host-restore-verification.v1"
+        or restore.get("status") != "restored-and-verified-on-production-host"
+        or restore.get("postgres_restore_verified") is not True
+        or restore.get("network_scope") != "isolated-backup-db"
+        or restore.get("plaintext_scope") != "ephemeral-backup-container-tmpfs"
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(restore.get("postgres_image_id", "")))
         or restore.get("backup_id") != manifest["backup_id"]
         or restore.get("manifest_version_id") != manifest["manifest_version_id"]
         or restore.get("object_version_id") != manifest["object_version_id"]
+        or restore.get("source_sha256") != manifest["source_sha256"]
     ):
-        raise GovernanceError("remote restore evidence does not match the committed backup")
+        raise GovernanceError("production-host restore evidence does not match the committed backup")
 
     restore_text = _unique(root, "postgres-restore.txt", "resilience evidence").read_text(
         encoding="utf-8", errors="replace"
@@ -281,16 +289,27 @@ def _verify_resilience(root: Path, release_sha: str) -> dict[str, Any]:
 
     alert = _load_json(
         _unique(root, "external-alert-delivery.json", "resilience evidence"),
-        "external alert delivery evidence",
+        "authenticated alert delivery evidence",
     )
     try:
         baseline = float(alert.get("baseline"))
         current = float(alert.get("current"))
         failed = float(alert.get("failed"))
     except (TypeError, ValueError) as exc:
-        raise GovernanceError("external alert delivery counters are invalid") from exc
-    if alert.get("status") != "success" or current <= baseline or failed != 0:
-        raise GovernanceError("external alert delivery did not complete successfully")
+        raise GovernanceError("authenticated alert delivery counters are invalid") from exc
+    audit_sha = str(alert.get("audit_payload_sha256", ""))
+    if (
+        alert.get("status") != "success"
+        or current <= baseline
+        or failed != 0
+        or alert.get("authenticated") is not True
+        or alert.get("transport") != "https"
+        or alert.get("receiver") != "internal"
+        or alert.get("proof_alertname") != "AegisProductionAlertDeliveryAcceptance"
+        or alert.get("proof_release_sha") != release_sha
+        or not re.fullmatch(r"[0-9a-f]{64}", audit_sha)
+    ):
+        raise GovernanceError("authenticated internal alert delivery did not complete successfully")
 
     return {
         "backup_id": manifest["backup_id"],

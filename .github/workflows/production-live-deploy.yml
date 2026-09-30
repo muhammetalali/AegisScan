@@ -26,7 +26,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resilience-runner-readiness:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, aegisscan-resilience]
+    timeout-minutes: 10
+    steps:
+      - name: Prove downstream resilience runner runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command_name in git ssh ssh-keygen python3; do
+            command -v "$command_name" >/dev/null
+          done
+          python3 -c 'import ssl; print(ssl.OPENSSL_VERSION)' >/dev/null
+          echo 'AEGISSCAN_RESILIENCE_RUNNER_READINESS=PASS'
+
   deploy-and-accept:
+    needs: resilience-runner-readiness
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, aegisscan-production]
     timeout-minutes: 360
@@ -98,10 +114,11 @@ jobs:
             --timeout-seconds 4500 \
             --poll-seconds 15
 
-      - name: Validate protected internal production material
+      - name: Validate protected internal production transport material
         shell: bash
         run: |
           set -euo pipefail
+          missing=()
           for name in \
             PROD_SSH_HOST \
             PROD_SSH_PORT \
@@ -111,20 +128,48 @@ jobs:
             PROD_ORIGIN \
             PROD_ENTERPRISE_CA_BUNDLE; do
             value="${!name:-}"
-            if [ -z "$value" ]; then
-              echo "Required internal production secret/variable is missing: $name" >&2
-              exit 1
-            fi
+            [ -n "$value" ] || missing+=("$name")
           done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Protected production transport material is incomplete: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
           case "$PROD_SSH_PORT" in
             ''|*[!0-9]*) echo 'PROD_SSH_PORT must be numeric' >&2; exit 1 ;;
           esac
           test "$PROD_SSH_PORT" -ge 1
           test "$PROD_SSH_PORT" -le 65535
-          case "$PROD_ORIGIN" in
-            https://*) ;;
-            *) echo 'PROD_ORIGIN must use HTTPS' >&2; exit 1 ;;
-          esac
+          python - <<'PYVALIDATE'
+          import ipaddress
+          import os
+          from urllib.parse import urlparse
+
+          value = os.environ['PROD_ORIGIN'].strip()
+          parsed = urlparse(value)
+          if (
+              parsed.scheme != 'https'
+              or not parsed.hostname
+              or parsed.username
+              or parsed.password
+              or parsed.fragment
+              or parsed.path not in {'', '/'}
+              or parsed.query
+              or parsed.params
+          ):
+              raise SystemExit('PROD_ORIGIN must be a valid HTTPS origin')
+          host = parsed.hostname.strip().lower().strip('[]')
+          try:
+              address = ipaddress.ip_address(host)
+          except ValueError:
+              address = None
+          if address is not None and (
+              address.is_loopback
+              or address.is_link_local
+              or address.is_unspecified
+              or address.is_multicast
+          ):
+              raise SystemExit('PROD_ORIGIN uses an unsafe endpoint address')
+          PYVALIDATE
           LIVE_ORIGIN="${PROD_ORIGIN%/}"
           test -n "$LIVE_ORIGIN"
           printf 'AEGIS_LIVE_ORIGIN=%s\n' "$LIVE_ORIGIN" >> "$GITHUB_ENV"

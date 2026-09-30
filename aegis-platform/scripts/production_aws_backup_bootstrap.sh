@@ -96,7 +96,8 @@ cleanup() {
       sudo rm -f \
         /etc/aegisscan/production.env \
         /etc/aegisscan/secrets/s3-credentials.json \
-        /etc/aegisscan/secrets/backup-encryption.key >/dev/null 2>&1 || true
+        /etc/aegisscan/secrets/backup-encryption.key \
+        /etc/aegisscan/secrets/alert-receiver-token >/dev/null 2>&1 || true
     fi
     if [ -n "$NEW_ACCESS_KEY_ID" ]; then
       aws iam delete-access-key --user-name "$IAM_USER" --access-key-id "$NEW_ACCESS_KEY_ID" >/dev/null 2>&1 || true

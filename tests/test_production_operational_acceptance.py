@@ -38,6 +38,7 @@ def test_compose_environment_preserves_governed_kali_and_adds_only_requested_pro
         "COMPOSE_PROFILES": "existing-profile",
     }
     resolved = ops._compose_environment(env, extra_profiles={"ci-only"})
+    assert resolved["AEGIS_ENTERPRISE_CA_HOST_BUNDLE"] == "/etc/aegisscan/enterprise-ca.pem"
     assert set(resolved["COMPOSE_PROFILES"].split(",")) == {
         "ci-only",
         "existing-profile",

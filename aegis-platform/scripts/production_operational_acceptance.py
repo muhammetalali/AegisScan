@@ -28,6 +28,14 @@ COMPOSE_FILES = (
     "docker-compose.monitoring.yml",
     "docker-compose.backup.yml",
 )
+OPERATIONAL_REQUIRED_ENV = (
+    "ALERT_WEBHOOK_URL",
+    "AEGIS_BACKUP_S3_ENDPOINT",
+    "AEGIS_BACKUP_S3_BUCKET",
+    "AEGIS_BACKUP_S3_CREDENTIALS_FILE",
+    "AEGIS_BACKUP_ENCRYPTION_KEY_FILE",
+)
+
 REQUIRED_RUNNING_SERVICES = {
     "postgres",
     "redis",
@@ -36,6 +44,7 @@ REQUIRED_RUNNING_SERVICES = {
     "nginx",
     "prometheus",
     "alertmanager",
+    "alert_receiver",
     "backup",
     # Production acceptance must prove the actual scanner execution plane, not
     # only the API/control plane. This also catches a failed provider restart
@@ -129,14 +138,7 @@ def _https_endpoint(value: str, label: str) -> None:
 
 
 def _validate_operational_material(env: dict[str, str]) -> None:
-    required = (
-        "ALERT_WEBHOOK_URL",
-        "AEGIS_BACKUP_S3_ENDPOINT",
-        "AEGIS_BACKUP_S3_BUCKET",
-        "AEGIS_BACKUP_S3_CREDENTIALS_FILE",
-        "AEGIS_BACKUP_ENCRYPTION_KEY_FILE",
-    )
-    missing = [name for name in required if not env.get(name, "").strip()]
+    missing = [name for name in OPERATIONAL_REQUIRED_ENV if not env.get(name, "").strip()]
     if missing:
         raise OperationalAcceptanceError("missing operational production material: " + ", ".join(missing))
     _https_endpoint(env["ALERT_WEBHOOK_URL"], "Alertmanager webhook")
@@ -160,6 +162,7 @@ def _compose(env_file: Path, *args: str) -> list[str]:
 def _compose_environment(env: dict[str, str], *, extra_profiles: set[str] | None = None) -> dict[str, str]:
     resolved = dict(os.environ)
     resolved.update(env)
+    resolved["AEGIS_ENTERPRISE_CA_HOST_BUNDLE"] = "/etc/aegisscan/enterprise-ca.pem"
     profiles = {item.strip() for item in resolved.get("COMPOSE_PROFILES", "").split(",") if item.strip()}
     mode = resolved.get("AEGIS_RECON_PROVIDER", "default-kali").strip().lower()
     try:

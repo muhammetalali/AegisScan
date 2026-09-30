@@ -104,6 +104,20 @@ class Proof:
             "python:3.12-alpine", "python", "-B", "/backend.py",
         )
 
+    def start_stable_alert_receiver(self) -> None:
+        name = self.prefix + "-alert-receiver"
+        self.containers.add(name)
+        docker(
+            "run", "-d", "--name", name, "--network", self.network,
+            "--network-alias", "alert_receiver", "--read-only",
+            "--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE",
+            "--security-opt", "no-new-privileges", "--user", "65534:65534",
+            "-e", "SERVICE=alert_receiver", "-e", "PORT=8080",
+            "-e", "GENERATION=1",
+            "-v", f"{self.directory / 'backend.py'}:/backend.py:ro",
+            "python:3.12-alpine", "python", "-B", "/backend.py",
+        )
+
     def address(self, name: str) -> str:
         return docker(
             "inspect", "--format",
@@ -223,6 +237,7 @@ class Proof:
         docker("network", "create", "--subnet", self.subnet, self.network)
         for service in PORTS:
             self.start_backend(service)
+        self.start_stable_alert_receiver()
 
         tls_config = ROOT / "aegis-platform/docker/nginx-ssl.conf"
         legacy = tls_config.read_text()

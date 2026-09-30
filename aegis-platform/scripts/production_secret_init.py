@@ -19,6 +19,10 @@ DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-
 BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 TRUTHY = {"1", "true", "yes", "on"}
 DEFAULT_PRODUCTION_DOMAIN = "aegis-prod.aegis.internal"
+INTERNAL_ALERT_PATH = "/_aegis/alerts"
+INTERNAL_ALERT_PORT = 8443
+ALERT_RECEIVER_RUNTIME_UID = 10003
+ALERT_RECEIVER_RUNTIME_GID = 10003
 
 
 class SecretInitError(RuntimeError):
@@ -147,9 +151,17 @@ def initialize(
 ) -> dict[str, str]:
     domain = _validate_domain(domain)
     targets = _validate_targets(authorized_targets)
+    expected_alert_webhook = f"https://{domain}:{INTERNAL_ALERT_PORT}{INTERNAL_ALERT_PATH}"
     alert_webhook = alert_webhook.strip()
     if alert_webhook:
         alert_webhook = _validate_https_origin(alert_webhook, "alert webhook")
+        if alert_webhook != expected_alert_webhook:
+            raise SecretInitError(
+                "production alert webhook must use the authenticated internal receiver "
+                f"at {expected_alert_webhook}"
+            )
+    else:
+        alert_webhook = expected_alert_webhook
     backup_endpoint = _validate_https_origin(backup_endpoint, "backup endpoint")
     backup_bucket = _validate_bucket(backup_bucket)
     backup_region = backup_region.strip()
@@ -178,6 +190,17 @@ def initialize(
     encryption_key = secrets_dir / "backup-encryption.key"
     _write_private(target_credentials, credentials, owner=(runtime_uid, runtime_gid))
     _write_private(encryption_key, secrets.token_bytes(32), owner=(runtime_uid, runtime_gid))
+    alert_receiver_token_file = secrets_dir / "alert-receiver-token"
+    alert_owner = (
+        (ALERT_RECEIVER_RUNTIME_UID, ALERT_RECEIVER_RUNTIME_GID)
+        if os.geteuid() == 0
+        else (os.getuid(), os.getgid())
+    )
+    _write_private(
+        alert_receiver_token_file,
+        (secrets.token_urlsafe(48) + "\n").encode("utf-8"),
+        owner=alert_owner,
+    )
 
     django_secret = secrets.token_urlsafe(64)
     jwt_secret = secrets.token_urlsafe(64)
@@ -206,6 +229,7 @@ def initialize(
         "REDIS_URL": "redis://redis:6379/0",
         "CELERY_BROKER_URL": "redis://redis:6379/0",
         "CELERY_RESULT_BACKEND": "redis://redis:6379/1",
+        "AEGIS_PRODUCTION_DOMAIN": domain,
         "ALLOWED_HOSTS": domain,
         "CORS_ALLOWED_ORIGINS": f"https://{domain}",
         "CSRF_TRUSTED_ORIGINS": f"https://{domain}",
@@ -214,6 +238,7 @@ def initialize(
         "AEGIS_SCAN_SCOPE_MODE": "asset-authorization",
         "AUTHORIZED_SCAN_TARGETS": ",".join(targets),
         "ALERT_WEBHOOK_URL": alert_webhook,
+        "AEGIS_ALERT_RECEIVER_TOKEN_FILE": str(alert_receiver_token_file),
         "AEGIS_RECON_PROVIDER": "default-kali",
         "AEGIS_RECON_LEGACY_DISABLED": "true",
         "AEGIS_KALI_RECON_CANARY_BPS": "0",
@@ -266,6 +291,8 @@ def initialize(
         "env_file": str(output_env),
         "s3_credentials_file": str(target_credentials),
         "backup_encryption_key_file": str(encryption_key),
+        "alert_receiver_token_file": str(alert_receiver_token_file),
+        "alert_webhook_url": alert_webhook,
     }
 
 

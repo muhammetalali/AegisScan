@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).parents[1] / "aegis-platform/scripts/render_alertmanager_config.py"
+ROOT = Path(__file__).parents[1]
+SCRIPT = ROOT / "aegis-platform/scripts/render_alertmanager_config.py"
+ENTRYPOINT = ROOT / "aegis-platform/docker/alertmanager/entrypoint.sh"
+MONITORING_COMPOSE = ROOT / "aegis-platform/docker-compose.monitoring.yml"
 SPEC = importlib.util.spec_from_file_location("render_alertmanager_config", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
@@ -84,3 +87,48 @@ def test_renderer_allows_http_only_for_explicit_loopback_tests(tmp_path):
             "http://alerts.example.com/aegis",
             allow_http=True,
         )
+
+
+
+def test_renderer_adds_bearer_credentials_file_for_authenticated_internal_receiver(tmp_path):
+    output = tmp_path / "alertmanager.yml"
+    MODULE.render(
+        _template(tmp_path),
+        output,
+        "https://security.example.com:8443/_aegis/alerts",
+        authorization_credentials_file="/run/secrets/alert-receiver-token",
+    )
+    rendered = output.read_text(encoding="utf-8")
+    assert "http_config:" in rendered
+    assert "authorization:" in rendered
+    assert "type: Bearer" in rendered
+    assert 'credentials_file: "/run/secrets/alert-receiver-token"' in rendered
+
+
+def test_renderer_rejects_relative_authorization_credentials_file(tmp_path):
+    with pytest.raises(ValueError, match="absolute safe path"):
+        MODULE.render(
+            _template(tmp_path),
+            tmp_path / "out",
+            "https://security.example.com:8443/_aegis/alerts",
+            authorization_credentials_file="relative-token",
+        )
+
+def test_alertmanager_entrypoint_combines_public_and_enterprise_ca_trust():
+    entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
+    compose = MONITORING_COMPOSE.read_text(encoding="utf-8")
+    assert 'AEGIS_ENTERPRISE_CA_BUNDLE' in entrypoint
+    assert 'cat /etc/ssl/certs/ca-certificates.crt "$enterprise_ca" > /tmp/aegis-ca-bundle.pem' in entrypoint
+    assert 'export SSL_CERT_FILE=/tmp/aegis-ca-bundle.pem' in entrypoint
+    assert 'AEGIS_ENTERPRISE_CA_BUNDLE: /run/aegis/enterprise-ca.pem' in compose
+    assert '${AEGIS_ENTERPRISE_CA_HOST_BUNDLE:-/dev/null}:/run/aegis/enterprise-ca.pem:ro' in compose
+    assert 'token_file=/run/secrets/alert-receiver-token' in entrypoint
+    assert '${AEGIS_ALERT_RECEIVER_TOKEN_FILE:-/dev/null}:/run/secrets/alert-receiver-token:ro' in compose
+    assert 'alert_receiver:' in compose
+
+
+def test_internal_alert_delivery_network_is_isolated_and_receiver_fails_closed():
+    compose = MONITORING_COMPOSE.read_text(encoding="utf-8")
+    assert "alert_delivery:\n    internal: true" in compose
+    assert 'AEGIS_ALERT_RECEIVER_ALLOW_STANDBY: ${AEGIS_ALERT_RECEIVER_ALLOW_STANDBY:-false}' in compose
+    assert "8443:8443" not in compose

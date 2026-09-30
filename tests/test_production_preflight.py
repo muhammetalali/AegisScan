@@ -24,6 +24,7 @@ def valid_environment(tmp_path: Path) -> dict[str, str]:
         tmp_path / "backup.key",
         b"0123456789abcdef0123456789abcdef",
     )
+    alert_token = _private(tmp_path / "alert-receiver-token", b"t" * 64 + b"\n")
     return {
         "DEBUG": "False",
         "SECRET_KEY": "django-" + "a" * 40,
@@ -36,6 +37,7 @@ def valid_environment(tmp_path: Path) -> dict[str, str]:
         "CELERY_BROKER_URL": "redis://redis:6379/0",
         "CELERY_RESULT_BACKEND": "redis://redis:6379/1",
         "ALLOWED_HOSTS": "security.example.com",
+        "AEGIS_PRODUCTION_DOMAIN": "security.example.com",
         "CORS_ALLOWED_ORIGINS": "https://security.example.com",
         "CSRF_TRUSTED_ORIGINS": "https://security.example.com",
         "AEGIS_SCAN_SCOPE_MODE": "asset-authorization",
@@ -52,7 +54,8 @@ def valid_environment(tmp_path: Path) -> dict[str, str]:
         "AEGIS_KALI_RECON_EXPECTED_TOOL_MANIFEST_DIGEST": "sha256:" + "d" * 64,
         "AEGIS_KALI_RECON_EXPECTED_IMAGE_DIGEST": "sha256:" + "e" * 64,
         "AEGIS_KALI_RECON_EXPECTED_RUNTIME_MANIFEST_DIGEST": "sha256:" + "f" * 64,
-        "ALERT_WEBHOOK_URL": "https://alerts.example.com/aegis",
+        "ALERT_WEBHOOK_URL": "https://security.example.com:8443/_aegis/alerts",
+        "AEGIS_ALERT_RECEIVER_TOKEN_FILE": alert_token,
         "AEGIS_REMOTE_BACKUP_ENABLED": "true",
         "AEGIS_BACKUP_S3_ENDPOINT": "https://backups.example.com",
         "AEGIS_BACKUP_S3_REGION": "us-east-1",
@@ -101,6 +104,47 @@ def test_rejects_webhook_credentials_fragment_and_link_local_destination(tmp_pat
         environment["ALERT_WEBHOOK_URL"] = webhook
         failures = preflight.validate(environment, tmp_path, check_tls=False)
         assert any("ALERT_WEBHOOK_URL" in failure for failure in failures), webhook
+
+
+def test_accepts_authenticated_internal_alert_receiver(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    token = _private(tmp_path / "alert-receiver-token", b"t" * 64 + b"\n")
+    environment.update({
+        "AEGIS_PRODUCTION_DOMAIN": "security.example.com",
+        "ALERT_WEBHOOK_URL": "https://security.example.com:8443/_aegis/alerts",
+        "AEGIS_ALERT_RECEIVER_TOKEN_FILE": token,
+    })
+    assert preflight.validate(environment, tmp_path, check_tls=False) == []
+
+
+def test_rejects_external_or_public_port_alert_receiver(tmp_path: Path):
+    for webhook in (
+        "https://alerts.example.com/aegis",
+        "https://security.example.com/_aegis/alerts",
+        "https://security.example.com:9443/_aegis/alerts",
+    ):
+        environment = valid_environment(tmp_path)
+        environment["ALERT_WEBHOOK_URL"] = webhook
+        failures = preflight.validate(environment, tmp_path, check_tls=False)
+        assert any("authenticated internal HTTPS receiver" in failure for failure in failures), webhook
+
+
+def test_internal_alert_receiver_rejects_missing_or_public_token(tmp_path: Path):
+    environment = valid_environment(tmp_path)
+    environment.update({
+        "AEGIS_PRODUCTION_DOMAIN": "security.example.com",
+        "ALERT_WEBHOOK_URL": "https://security.example.com:8443/_aegis/alerts",
+        "AEGIS_ALERT_RECEIVER_TOKEN_FILE": str(tmp_path / "missing-token"),
+    })
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert any("AEGIS_ALERT_RECEIVER_TOKEN_FILE" in failure for failure in failures)
+
+    token = Path(tmp_path / "alert-receiver-token")
+    token.write_bytes(b"t" * 64)
+    token.chmod(0o644)
+    environment["AEGIS_ALERT_RECEIVER_TOKEN_FILE"] = str(token)
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert any("0600" in failure for failure in failures)
 
 
 def test_rejects_missing_malformed_or_reused_credential_vault_keys(tmp_path: Path):
@@ -235,11 +279,12 @@ def test_default_kali_rejects_missing_retirement_lock(tmp_path: Path):
     assert "AEGIS_RECON_LEGACY_DISABLED must be explicitly true after M6 retirement" in failures
 
 
-def test_asset_authorization_scope_allows_empty_static_targets_and_webhook(tmp_path: Path):
+def test_asset_authorization_scope_rejects_missing_production_alert_webhook(tmp_path: Path):
     environment = valid_environment(tmp_path)
     environment["AUTHORIZED_SCAN_TARGETS"] = ""
     environment["ALERT_WEBHOOK_URL"] = ""
-    assert preflight.validate(environment, tmp_path, check_tls=False) == []
+    failures = preflight.validate(environment, tmp_path, check_tls=False)
+    assert any("ALERT_WEBHOOK_URL" in failure for failure in failures)
 
 
 def test_preflight_rejects_missing_asset_authorization_scope_mode(tmp_path: Path):

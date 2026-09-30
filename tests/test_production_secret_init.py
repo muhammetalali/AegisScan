@@ -7,6 +7,8 @@ import re
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import pytest
+
 
 PATH = Path(__file__).parents[1] / "aegis-platform/scripts/production_secret_init.py"
 SPEC = spec_from_file_location("production_secret_init", PATH)
@@ -39,7 +41,7 @@ def test_secret_init_generates_private_vault_material(tmp_path: Path):
     result = MODULE.initialize(
         domain="security.example.com",
         authorized_targets=["authorized.example.com"],
-        alert_webhook="https://alerts.example.com/aegis",
+        alert_webhook="https://security.example.com:8443/_aegis/alerts",
         backup_endpoint="https://backups.example.com",
         backup_bucket="aegisscan-production-backups",
         backup_region="us-east-1",
@@ -84,6 +86,12 @@ def test_secret_init_generates_private_vault_material(tmp_path: Path):
         assert re.fullmatch(r"[0-9a-f]{64}", values[name])
     assert Path(result["s3_credentials_file"]).is_file()
     assert Path(result["backup_encryption_key_file"]).is_file()
+    token_file = Path(result["alert_receiver_token_file"])
+    assert token_file.is_file()
+    assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+    assert len(token_file.read_bytes().strip()) >= 32
+    assert values["AEGIS_ALERT_RECEIVER_TOKEN_FILE"] == str(token_file)
+    assert values["AEGIS_PRODUCTION_DOMAIN"] == "security.example.com"
 
 def test_secret_init_main_emits_structured_failure(monkeypatch, capsys, tmp_path: Path):
     def fail_initialize(**_kwargs):
@@ -100,7 +108,7 @@ def test_secret_init_main_emits_structured_failure(monkeypatch, capsys, tmp_path
             "--authorized-target",
             "authorized.example.com",
             "--alert-webhook",
-            "https://alerts.example.com/aegis",
+            "https://security.example.com:8443/_aegis/alerts",
             "--backup-endpoint",
             "https://backups.example.com",
             "--backup-bucket",
@@ -119,7 +127,7 @@ def test_secret_init_main_emits_structured_failure(monkeypatch, capsys, tmp_path
     assert '"error": "synthetic-secret-init-failure"' in captured.err
 
 
-def test_secret_init_supports_ddns_default_scope_without_static_targets_or_webhook(tmp_path: Path):
+def test_secret_init_defaults_to_authenticated_internal_alert_receiver(tmp_path: Path):
     source = tmp_path / "s3-source.json"
     source.write_text(
         '{"access_key_id":"proof-access","secret_access_key":"proof-secret"}',
@@ -127,10 +135,8 @@ def test_secret_init_supports_ddns_default_scope_without_static_targets_or_webho
     )
     source.chmod(0o600)
     env_file = tmp_path / "production.env"
-    secrets_dir = tmp_path / "secrets"
-
     result = MODULE.initialize(
-        domain=MODULE.DEFAULT_PRODUCTION_DOMAIN,
+        domain="security.example.com",
         authorized_targets=[],
         alert_webhook="",
         backup_endpoint="https://backups.example.com",
@@ -138,12 +144,27 @@ def test_secret_init_supports_ddns_default_scope_without_static_targets_or_webho
         backup_region="us-east-1",
         s3_credentials_source=source,
         output_env=env_file,
-        secrets_dir=secrets_dir,
+        secrets_dir=tmp_path / "secrets",
     )
-
     values = _parse_env(env_file)
-    assert result["domain"] == "aegis-prod.aegis.internal"
-    assert values["ALLOWED_HOSTS"] == "aegis-prod.aegis.internal"
-    assert values["AEGIS_SCAN_SCOPE_MODE"] == "asset-authorization"
-    assert values["AUTHORIZED_SCAN_TARGETS"] == ""
-    assert values["ALERT_WEBHOOK_URL"] == ""
+    assert result["alert_webhook_url"] == "https://security.example.com:8443/_aegis/alerts"
+    assert values["ALERT_WEBHOOK_URL"] == result["alert_webhook_url"]
+    assert Path(values["AEGIS_ALERT_RECEIVER_TOKEN_FILE"]).is_file()
+
+
+def test_secret_init_rejects_external_primary_alert_webhook(tmp_path: Path):
+    source = tmp_path / "s3-source.json"
+    source.write_text('{"access_key_id":"proof-access","secret_access_key":"proof-secret"}', encoding="utf-8")
+    source.chmod(0o600)
+    with pytest.raises(MODULE.SecretInitError, match="authenticated internal receiver"):
+        MODULE.initialize(
+            domain="security.example.com",
+            authorized_targets=[],
+            alert_webhook="https://alerts.example.com/aegis",
+            backup_endpoint="https://backups.example.com",
+            backup_bucket="aegisscan-production-backups",
+            backup_region="us-east-1",
+            s3_credentials_source=source,
+            output_env=tmp_path / "production.env",
+            secrets_dir=tmp_path / "secrets",
+        )

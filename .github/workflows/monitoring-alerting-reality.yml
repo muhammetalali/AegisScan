@@ -14,10 +14,13 @@ name: Monitoring Alerting Reality
       - 'aegis-platform/docker/nginx.conf'
       - 'aegis-platform/docker/nginx-ssl.conf'
       - 'aegis-platform/docker/alertmanager/**'
+      - 'aegis-platform/docker/alert-receiver/**'
+      - 'aegis-platform/scripts/production_alert_receiver.py'
       - 'aegis-platform/monitoring/**'
       - 'aegis-platform/scripts/render_alertmanager_config.py'
       - 'aegis-platform/scripts/production_preflight.py'
       - 'tests/test_alertmanager_config.py'
+      - 'tests/test_production_alert_receiver.py'
       - 'tests/test_production_preflight.py'
       - 'tests/alert_receiver.py'
   push:
@@ -33,10 +36,13 @@ name: Monitoring Alerting Reality
       - 'aegis-platform/docker/nginx.conf'
       - 'aegis-platform/docker/nginx-ssl.conf'
       - 'aegis-platform/docker/alertmanager/**'
+      - 'aegis-platform/docker/alert-receiver/**'
+      - 'aegis-platform/scripts/production_alert_receiver.py'
       - 'aegis-platform/monitoring/**'
       - 'aegis-platform/scripts/render_alertmanager_config.py'
       - 'aegis-platform/scripts/production_preflight.py'
       - 'tests/test_alertmanager_config.py'
+      - 'tests/test_production_alert_receiver.py'
       - 'tests/test_production_preflight.py'
       - 'tests/alert_receiver.py'
   workflow_dispatch:
@@ -68,8 +74,9 @@ jobs:
       CSRF_TRUSTED_ORIGINS: http://localhost,http://nginx
       AUTH_COOKIE_SECURE: 'False'
       AUTHORIZED_SCAN_TARGETS: 203.0.113.10
-      ALERT_WEBHOOK_URL: http://alert-receiver:8080/aegis
+      ALERT_WEBHOOK_URL: http://alert_receiver:8080/alert
       AEGIS_ALLOW_HTTP_ALERT_WEBHOOK: 'true'
+      AEGIS_ALERT_RECEIVER_TOKEN_FILE: /tmp/aegis-monitoring-alert-token
       PROMETHEUS_RETENTION: 1h
 
     steps:
@@ -82,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install pytest==9.1.1
-          python -m pytest -q tests/test_alertmanager_config.py tests/test_production_preflight.py
+          python -m pytest -q tests/test_alertmanager_config.py tests/test_production_alert_receiver.py tests/test_production_preflight.py
 
       - name: Validate Prometheus rules and configuration with pinned promtool
         run: |
@@ -122,7 +129,8 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config --quiet
-          ALERT_WEBHOOK_URL=https://alerts.example.com/aegis \
+          ALERT_WEBHOOK_URL=https://security.example.com:8443/_aegis/alerts \
+          AEGIS_PRODUCTION_DOMAIN=security.example.com \
           AUTHORIZED_SCAN_TARGETS=203.0.113.10 \
           docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.monitoring.yml config --quiet
 
@@ -133,10 +141,10 @@ jobs:
 
           config = json.loads(Path('/tmp/aegis-monitoring-compose.json').read_text())
           services = config['services']
-          required = {'prometheus', 'alertmanager', 'blackbox-exporter', 'postgres-exporter', 'redis-exporter'}
+          required = {'prometheus', 'alertmanager', 'alert_receiver', 'blackbox-exporter', 'postgres-exporter', 'redis-exporter'}
           assert required <= set(services), set(services)
           assert config['networks']['observability'].get('internal') is True
-          assert config['networks']['alert_delivery'].get('internal') is not True
+          assert config['networks']['alert_delivery'].get('internal') is True
 
           for name in required:
               service = services[name]
@@ -146,6 +154,7 @@ jobs:
               assert 'no-new-privileges:true' in service.get('security_opt', []), (name, service.get('security_opt'))
 
           assert 'observability' not in services['alertmanager']['networks']
+          assert set(services['alert_receiver']['networks']) == {'alert_delivery'}
           assert {'observability', 'alert_delivery'} <= set(services['prometheus']['networks'])
           assert set(services['blackbox-exporter']['networks']) == {'observability'}
           assert set(services['postgres-exporter']['networks']) == {'observability'}
@@ -157,7 +166,7 @@ jobs:
         working-directory: aegis-platform
         run: |
           set -euo pipefail
-          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml build --pull alertmanager
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml build --pull alert_receiver alertmanager
 
       - name: Run real scrape rule and alert-delivery chain
         working-directory: aegis-platform
@@ -166,6 +175,10 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/aegis-alert-evidence
           chmod 0700 /tmp/aegis-alert-evidence
+          sudo rm -f "$AEGIS_ALERT_RECEIVER_TOKEN_FILE"
+          printf '%s\n' 'monitoring-reality-alert-token-0123456789abcdef0123456789abcdef' | sudo tee "$AEGIS_ALERT_RECEIVER_TOKEN_FILE" >/dev/null
+          sudo chown 10003:10003 "$AEGIS_ALERT_RECEIVER_TOKEN_FILE"
+          sudo chmod 0600 "$AEGIS_ALERT_RECEIVER_TOKEN_FILE"
           RECEIVER_UID="$(id -u)"
           RECEIVER_GID="$(id -g)"
           OBS_NET="${COMPOSE_PROJECT_NAME}_observability"
@@ -173,8 +186,9 @@ jobs:
           COMPOSE="docker compose -f docker-compose.yml -f docker-compose.monitoring.yml"
 
           cleanup() {
-            docker rm -f aegis-monitoring-gateway aegis-alert-receiver >/dev/null 2>&1 || true
+            docker rm -f aegis-monitoring-gateway >/dev/null 2>&1 || true
             $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
+            sudo rm -f "$AEGIS_ALERT_RECEIVER_TOKEN_FILE" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
@@ -194,21 +208,12 @@ jobs:
             fi
           done
 
-          $COMPOSE up -d --no-deps alertmanager blackbox-exporter postgres-exporter redis-exporter
-
-          docker run -d --name aegis-alert-receiver \
-            --user "${RECEIVER_UID}:${RECEIVER_GID}" \
-            --network "$DELIVERY_NET" --network-alias alert-receiver \
-            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
-            --tmpfs /tmp \
-            -v "$GITHUB_WORKSPACE/tests/alert_receiver.py:/receiver.py:ro" \
-            -v /tmp/aegis-alert-evidence:/evidence \
-            python:3.12-alpine python /receiver.py
+          $COMPOSE up -d --no-deps alert_receiver alertmanager blackbox-exporter postgres-exporter redis-exporter
 
           receiver_ready=0
           for attempt in $(seq 1 30); do
             if docker run --rm --network "$DELIVERY_NET" python:3.12-alpine \
-              python -c "import urllib.request; r=urllib.request.urlopen('http://alert-receiver:8080/ready', timeout=2); assert r.status == 200" >/dev/null 2>&1; then
+              python -c "import urllib.request; r=urllib.request.urlopen('http://alert_receiver:8080/ready', timeout=2); assert r.status == 200" >/dev/null 2>&1; then
               receiver_ready=1
               break
             fi
@@ -285,7 +290,7 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          names = ['aegis-prometheus', 'aegis-alertmanager', 'aegis-blackbox-exporter', 'aegis-postgres-exporter', 'aegis-redis-exporter']
+          names = ['aegis-prometheus', 'aegis-alertmanager', 'aegis-alert-receiver', 'aegis-blackbox-exporter', 'aegis-postgres-exporter', 'aegis-redis-exporter']
           proof = {}
           for name in names:
               raw = subprocess.check_output(['docker', 'inspect', name], text=True)
@@ -319,9 +324,8 @@ jobs:
               docker logs aegis-alert-receiver >&2 || true
               exit 1
             fi
-            if test -s /tmp/aegis-alert-evidence/alert.json \
-              && grep -q 'AegisGatewayDown' /tmp/aegis-alert-evidence/alert.json \
-              && grep -q '"status":"firing"' /tmp/aegis-alert-evidence/alert.json; then
+            if docker exec aegis-alert-receiver sh -c \
+              "test -s /var/lib/aegis-alert-receiver/events.jsonl && grep -q 'AegisGatewayDown' /var/lib/aegis-alert-receiver/events.jsonl"; then
               delivered=1
               break
             fi
@@ -332,6 +336,13 @@ jobs:
             docker logs aegis-alert-receiver >&2 || true
             exit 1
           fi
+
+          docker cp aegis-alert-receiver:/var/lib/aegis-alert-receiver/events.jsonl /tmp/aegis-alert-evidence/alert-receiver-events.jsonl
+          docker exec aegis-alert-receiver python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/metrics', timeout=3).read().decode())" \
+            > /tmp/aegis-alert-evidence/alert-receiver-metrics.txt
+          grep -q '^aegis_alert_receiver_events_total [1-9]' /tmp/aegis-alert-evidence/alert-receiver-metrics.txt
+          grep -q '^aegis_alert_receiver_unauthorized_total 0$' /tmp/aegis-alert-evidence/alert-receiver-metrics.txt
+          grep -q '^aegis_alert_receiver_rejected_total 0$' /tmp/aegis-alert-evidence/alert-receiver-metrics.txt
 
           query_expect 'probe_success{job="aegis-gateway"}' 0 > /tmp/aegis-alert-evidence/gateway-failed.json
 
@@ -356,14 +367,15 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          lines = [line for line in Path('/tmp/aegis-alert-evidence/alert.json').read_text().splitlines() if line.strip()]
-          payloads = [json.loads(line) for line in lines]
+          lines = [line for line in Path('/tmp/aegis-alert-evidence/alert-receiver-events.jsonl').read_text().splitlines() if line.strip()]
+          events = [json.loads(line) for line in lines]
           assert any(
               item.get('status') == 'firing'
-              and any(alert.get('labels', {}).get('alertname') == 'AegisGatewayDown' for alert in item.get('alerts', []))
-              for item in payloads
-          ), payloads
-          print('monitoring-alert-delivery-e2e-ok')
+              and 'AegisGatewayDown' in item.get('alertnames', [])
+              for item in events
+          ), events
+          assert all('annotations' not in item for item in events), events
+          print('monitoring-authenticated-alert-delivery-e2e-ok')
           PY
 
       - name: Capture diagnostics on failure
@@ -371,8 +383,7 @@ jobs:
         working-directory: aegis-platform
         run: |
           docker compose -f docker-compose.yml -f docker-compose.monitoring.yml ps || true
-          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml logs --no-color prometheus alertmanager blackbox-exporter postgres-exporter redis-exporter || true
-          docker logs aegis-alert-receiver || true
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml logs --no-color prometheus alertmanager alert_receiver blackbox-exporter postgres-exporter redis-exporter || true
 
       - name: Upload alert delivery evidence
         if: always()

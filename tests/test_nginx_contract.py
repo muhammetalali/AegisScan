@@ -114,3 +114,22 @@ def test_gateway_service_dns_tracks_recreated_containers() -> None:
         for service, port in (("frontend", 80), ("django", 8000), ("fastapi", 8001)):
             assert f"zone {service}_peers 64k;" in config
             assert f"server {service}:{port} resolve;" in config
+
+
+def test_tls_gateway_exposes_only_authenticated_internal_alert_ingress():
+    config = (Path(__file__).parents[1] / "aegis-platform/docker/nginx-ssl.conf").read_text(encoding="utf-8")
+    assert "upstream alert_receiver {" in config
+    assert "server alert_receiver:8080 resolve;" in config
+    assert config.count("location = /_aegis/alerts {") == 1
+    servers = _server_blocks(config)
+    internal = next(block for block in servers if "listen 8443 ssl;" in block)
+    public = next(block for block in servers if "listen 443 ssl;" in block)
+    assert "location = /_aegis/alerts {" in internal
+    assert "location = /_aegis/alerts {" not in public
+    block = next(item for item in _location_blocks(internal) if "location = /_aegis/alerts" in item)
+    assert "limit_except POST { deny all; }" in block
+    assert "limit_req zone=aegis_alert_ingress burst=60 nodelay;" in block
+    assert "client_max_body_size 1m;" in block
+    assert "proxy_pass http://alert_receiver/alert;" in block
+    assert "proxy_set_header Authorization $http_authorization;" in block
+    assert "proxy_set_header X-Forwarded-Proto https;" in block

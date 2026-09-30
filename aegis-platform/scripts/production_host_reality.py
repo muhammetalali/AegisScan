@@ -7,11 +7,14 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 PLATFORM_DIR = Path(__file__).resolve().parents[1]
 COMPOSE_FILES = (
@@ -25,6 +28,18 @@ MIN_DISK_BYTES = 60 * 1024**3
 MIN_CPU_COUNT = 4
 ENTERPRISE_CA_BUNDLE = Path("/etc/aegisscan/enterprise-ca.pem")
 MAX_CA_BUNDLE = 2 * 1024 * 1024
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+INTERNAL_ALERT_PATH = "/_aegis/alerts"
+INTERNAL_ALERT_PORT = 8443
+ALERT_RECEIVER_RUNTIME_UID = 10003
+ALERT_RECEIVER_RUNTIME_GID = 10003
+OPERATIONAL_REQUIRED_ENV = (
+    "ALERT_WEBHOOK_URL",
+    "AEGIS_BACKUP_S3_ENDPOINT",
+    "AEGIS_BACKUP_S3_BUCKET",
+    "AEGIS_BACKUP_S3_CREDENTIALS_FILE",
+    "AEGIS_BACKUP_ENCRYPTION_KEY_FILE",
+)
 
 
 class HostValidationError(RuntimeError):
@@ -178,6 +193,124 @@ def _probe_shared_network_namespace() -> None:
         )
 
 
+def _private_file(path: Path, label: str, max_bytes: int = 2 * 1024 * 1024) -> None:
+    if not path.is_file():
+        raise HostValidationError(f"{label} does not exist")
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o077:
+        raise HostValidationError(f"{label} must be mode 0600 or stricter")
+    size = path.stat().st_size
+    if size <= 0 or size > max_bytes:
+        raise HostValidationError(f"{label} has invalid size")
+
+
+def _load_env(path: Path) -> dict[str, str]:
+    _private_file(path, "production environment file")
+    values: dict[str, str] = {}
+    for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            raise HostValidationError(f"invalid production env assignment at line {line_no}")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not ENV_KEY_RE.fullmatch(key):
+            raise HostValidationError(f"invalid production env key at line {line_no}")
+        value = value.strip()
+        if value and value[0] in {"'", '"'}:
+            quote = value[0]
+            if len(value) < 2 or value[-1] != quote:
+                raise HostValidationError(f"unterminated production env value at line {line_no}")
+            value = value[1:-1]
+        if "\x00" in value or "\n" in value or "\r" in value:
+            raise HostValidationError(f"control character in production env at line {line_no}")
+        values[key] = value
+    return values
+
+
+def _https_endpoint(value: str, label: str) -> None:
+    parsed = urlparse(value.strip())
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise HostValidationError(f"{label} must be an HTTPS endpoint without credentials or fragment")
+
+
+def _validate_operational_material(env_file: Path) -> dict[str, object]:
+    env = _load_env(env_file)
+    missing = [
+        name
+        for name in OPERATIONAL_REQUIRED_ENV
+        if name != "ALERT_WEBHOOK_URL" and not env.get(name, "").strip()
+    ]
+    if missing:
+        raise HostValidationError("missing operational production material: " + ", ".join(missing))
+    alert_webhook = env.get("ALERT_WEBHOOK_URL", "").strip()
+    allowed_hosts = [item.strip() for item in env.get("ALLOWED_HOSTS", "").split(",") if item.strip()]
+    production_domain = env.get("AEGIS_PRODUCTION_DOMAIN", "").strip()
+    if not production_domain:
+        if len(allowed_hosts) != 1 or not re.fullmatch(r"[A-Za-z0-9.-]+", allowed_hosts[0]):
+            raise HostValidationError(
+                "production domain is missing and ALLOWED_HOSTS cannot identify one internal receiver domain"
+            )
+        production_domain = allowed_hosts[0]
+    if production_domain not in allowed_hosts:
+        raise HostValidationError("production domain must be present in ALLOWED_HOSTS")
+    alert_mode = "auto-internal"
+    if alert_webhook:
+        _https_endpoint(alert_webhook, "Alertmanager webhook")
+        parsed_alert = urlparse(alert_webhook)
+        try:
+            parsed_alert_port = parsed_alert.port
+        except ValueError as exc:
+            raise HostValidationError("Alertmanager webhook has an invalid port") from exc
+        if (
+            parsed_alert.hostname != production_domain
+            or parsed_alert_port != INTERNAL_ALERT_PORT
+            or parsed_alert.path != INTERNAL_ALERT_PATH
+            or parsed_alert.query
+            or parsed_alert.params
+        ):
+            raise HostValidationError("Alertmanager webhook must use the authenticated internal receiver")
+        token_value = env.get("AEGIS_ALERT_RECEIVER_TOKEN_FILE", "").strip()
+        if not token_value:
+            raise HostValidationError("internal alert receiver token file is missing")
+        token_path = Path(token_value)
+        _private_file(token_path, "alert receiver token", 4096)
+        if (
+            token_path.stat().st_uid != ALERT_RECEIVER_RUNTIME_UID
+            or token_path.stat().st_gid != ALERT_RECEIVER_RUNTIME_GID
+        ):
+            raise HostValidationError(
+                "alert receiver token must be owned by the hardened alert runtime identity"
+            )
+        token = token_path.read_bytes().strip()
+        if len(token) < 32 or len(token) > 512 or any(ch in token for ch in b"\r\n\x00"):
+            raise HostValidationError("alert receiver token has invalid material")
+        alert_mode = "internal-authenticated"
+    _https_endpoint(env["AEGIS_BACKUP_S3_ENDPOINT"], "backup endpoint")
+    if env.get("AEGIS_ALLOW_HTTP_ALERT_WEBHOOK", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        raise HostValidationError("HTTP Alertmanager test override must be disabled in production")
+    if env.get("AEGIS_BACKUP_ALLOW_HTTP_TEST_ONLY", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        raise HostValidationError("HTTP backup test override must be disabled in production")
+    _private_file(Path(env["AEGIS_BACKUP_S3_CREDENTIALS_FILE"]), "backup credentials file", 256 * 1024)
+    _private_file(Path(env["AEGIS_BACKUP_ENCRYPTION_KEY_FILE"]), "backup encryption key", 4096)
+    return {
+        "alert_webhook_https": True,
+        "alert_receiver_mode": alert_mode,
+        "backup_endpoint_https": True,
+        "backup_credentials_private": True,
+        "backup_encryption_key_private": True,
+    }
+
+
 def _validate_compose(env_file: Path) -> None:
     argv = ["docker", "compose", "--env-file", str(env_file)]
     for name in COMPOSE_FILES:
@@ -195,6 +328,7 @@ def validate(env_file: Path, *, defer_disk_capacity: bool = False) -> dict[str, 
         raise HostValidationError("host validation must run as root to prove production capabilities")
     if not env_file.is_file():
         raise HostValidationError(f"production env file not found: {env_file}")
+    operational_material = _validate_operational_material(env_file)
 
     cpu_count = os.cpu_count() or 0
     if cpu_count < MIN_CPU_COUNT:
@@ -243,6 +377,7 @@ def validate(env_file: Path, *, defer_disk_capacity: bool = False) -> dict[str, 
             ),
             "ipv4_forward": True,
         },
+        "operational_material": operational_material,
         "runtime": {
             "versions": versions,
             "docker": docker,
