@@ -28,6 +28,14 @@ COMPOSE_FILES = (
     "docker-compose.monitoring.yml",
     "docker-compose.backup.yml",
 )
+OPERATIONAL_REQUIRED_ENV = (
+    "ALERT_WEBHOOK_URL",
+    "AEGIS_BACKUP_S3_ENDPOINT",
+    "AEGIS_BACKUP_S3_BUCKET",
+    "AEGIS_BACKUP_S3_CREDENTIALS_FILE",
+    "AEGIS_BACKUP_ENCRYPTION_KEY_FILE",
+)
+
 REQUIRED_RUNNING_SERVICES = {
     "postgres",
     "redis",
@@ -129,14 +137,7 @@ def _https_endpoint(value: str, label: str) -> None:
 
 
 def _validate_operational_material(env: dict[str, str]) -> None:
-    required = (
-        "ALERT_WEBHOOK_URL",
-        "AEGIS_BACKUP_S3_ENDPOINT",
-        "AEGIS_BACKUP_S3_BUCKET",
-        "AEGIS_BACKUP_S3_CREDENTIALS_FILE",
-        "AEGIS_BACKUP_ENCRYPTION_KEY_FILE",
-    )
-    missing = [name for name in required if not env.get(name, "").strip()]
+    missing = [name for name in OPERATIONAL_REQUIRED_ENV if not env.get(name, "").strip()]
     if missing:
         raise OperationalAcceptanceError("missing operational production material: " + ", ".join(missing))
     _https_endpoint(env["ALERT_WEBHOOK_URL"], "Alertmanager webhook")

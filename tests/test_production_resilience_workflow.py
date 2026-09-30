@@ -42,6 +42,11 @@ def test_resilience_workflow_pins_remote_backup_versions_and_restores_disposable
     assert "RESTORE_VERIFICATION=PASS" in text
     assert "dropdb" not in text
     assert "PGHOST: 127.0.0.1" in text
+    assert "for command_name in docker git ssh curl; do" in text
+    assert "docker run --rm --pull=missing" in text
+    assert "--network host" in text
+    assert "postgres:16-alpine" in text
+    assert "sh /verify_postgres_restore.sh /recovery/production.dump" in text
 
 
 def test_resilience_workflow_uses_real_alertmanager_external_route():

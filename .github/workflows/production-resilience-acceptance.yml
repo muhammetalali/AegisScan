@@ -118,13 +118,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for command_name in docker git ssh curl psql pg_restore; do
+          for command_name in docker git ssh curl; do
             command -v "$command_name" >/dev/null
           done
           docker info >/dev/null
           python -m pip install 'boto3>=1.35,<2' 'cryptography>=42,<47'
-          psql --version
-          pg_restore --version
+          docker run --rm --pull=missing postgres:16-alpine psql --version
+          docker run --rm --pull=missing postgres:16-alpine pg_restore --version
 
       - name: Materialize ephemeral protected transport material
         shell: bash
@@ -210,7 +210,19 @@ jobs:
           AEGIS_RESTORE_REQUIRED_TABLES: django_migrations,users_user
         run: |
           set -euo pipefail
-          sh aegis-platform/scripts/verify_postgres_restore.sh             /tmp/aegis-resilience/recovery/production.dump             | tee /tmp/aegis-resilience/postgres-restore.txt
+          docker run --rm --pull=missing \
+            --network host \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=67108864 \
+            -e PGHOST -e PGPORT -e PGUSER -e PGPASSWORD \
+            -e AEGIS_RESTORE_REQUIRED_TABLES \
+            -v "$GITHUB_WORKSPACE/aegis-platform/scripts/verify_postgres_restore.sh:/verify_postgres_restore.sh:ro" \
+            -v /tmp/aegis-resilience/recovery:/recovery:ro \
+            postgres:16-alpine \
+            sh /verify_postgres_restore.sh /recovery/production.dump \
+            | tee /tmp/aegis-resilience/postgres-restore.txt
           grep -q 'RESTORE_VERIFICATION=PASS' /tmp/aegis-resilience/postgres-restore.txt
 
       - name: Recover the production API and verify HTTPS and scanner health

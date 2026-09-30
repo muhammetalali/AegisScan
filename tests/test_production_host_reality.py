@@ -26,6 +26,10 @@ secret_init = _load(
     "production_secret_init",
     "aegis-platform/scripts/production_secret_init.py",
 )
+operational_acceptance = _load(
+    "production_operational_acceptance_for_host_contract",
+    "aegis-platform/scripts/production_operational_acceptance.py",
+)
 
 
 def _private_json(path: Path) -> Path:
@@ -128,6 +132,49 @@ def test_secret_initializer_rejects_non_private_s3_source(tmp_path: Path):
         )
 
 
+
+def test_host_reality_operational_material_contract_matches_post_deploy_acceptance():
+    assert reality.OPERATIONAL_REQUIRED_ENV == operational_acceptance.OPERATIONAL_REQUIRED_ENV
+
+def test_host_reality_rejects_missing_or_unsafe_operational_material_before_runtime_probes(tmp_path: Path):
+    credentials = _private_json(tmp_path / "s3.json")
+    key = tmp_path / "backup.key"
+    key.write_bytes(b"x" * 32)
+    key.chmod(0o600)
+    env_file = tmp_path / "production.env"
+    values = {
+        "ALERT_WEBHOOK_URL": "https://alerts.example.com/aegis",
+        "AEGIS_BACKUP_S3_ENDPOINT": "https://backups.example.com",
+        "AEGIS_BACKUP_S3_BUCKET": "aegis-production",
+        "AEGIS_BACKUP_S3_CREDENTIALS_FILE": str(credentials),
+        "AEGIS_BACKUP_ENCRYPTION_KEY_FILE": str(key),
+    }
+
+    def write_env(overrides=None):
+        current = dict(values)
+        current.update(overrides or {})
+        env_file.write_text("\n".join(f"{k}={v}" for k, v in current.items()) + "\n", encoding="utf-8")
+        env_file.chmod(0o600)
+
+    write_env()
+    evidence = reality._validate_operational_material(env_file)
+    assert evidence["alert_webhook_https"] is True
+    assert evidence["backup_credentials_private"] is True
+
+    write_env({"ALERT_WEBHOOK_URL": ""})
+    with pytest.raises(reality.HostValidationError, match="ALERT_WEBHOOK_URL"):
+        reality._validate_operational_material(env_file)
+
+    write_env({"ALERT_WEBHOOK_URL": "http://alerts.example.com/aegis"})
+    with pytest.raises(reality.HostValidationError, match="HTTPS"):
+        reality._validate_operational_material(env_file)
+
+    write_env()
+    credentials.chmod(0o640)
+    with pytest.raises(reality.HostValidationError, match="0600"):
+        reality._validate_operational_material(env_file)
+
+
 def test_enterprise_ca_must_exist_be_bounded_and_parse_as_trust_anchor(tmp_path: Path, monkeypatch):
     missing = tmp_path / "missing.pem"
     with pytest.raises(reality.HostValidationError, match="missing"):
@@ -151,6 +198,7 @@ def test_host_reality_requires_four_vcpu_floor(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(reality.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
     monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT - 1)
+    monkeypatch.setattr(reality, "_validate_operational_material", lambda _: {})
     with pytest.raises(reality.HostValidationError, match="vCPU"):
         reality.validate(env_file)
 
@@ -162,6 +210,7 @@ def test_host_reality_requires_production_resource_floor(tmp_path: Path, monkeyp
     monkeypatch.setattr(reality.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
     monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT)
+    monkeypatch.setattr(reality, "_validate_operational_material", lambda _: {})
     monkeypatch.setattr(reality, "_memory_bytes", lambda: reality.MIN_MEMORY_BYTES - 1)
     with pytest.raises(reality.HostValidationError, match="7 GiB"):
         reality.validate(env_file)
@@ -174,6 +223,7 @@ def test_host_reality_keeps_disk_floor_strict_by_default(tmp_path: Path, monkeyp
     monkeypatch.setattr(reality.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
     monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT)
+    monkeypatch.setattr(reality, "_validate_operational_material", lambda _: {})
     monkeypatch.setattr(reality, "_memory_bytes", lambda: reality.MIN_MEMORY_BYTES + 1)
     monkeypatch.setattr(reality, "_disk_free_bytes", lambda _: reality.MIN_DISK_BYTES - 1)
 
@@ -191,6 +241,16 @@ def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: 
     monkeypatch.setattr(reality.platform, "release", lambda: "6.8.0")
     monkeypatch.setattr(reality.os, "geteuid", lambda: 0)
     monkeypatch.setattr(reality.os, "cpu_count", lambda: reality.MIN_CPU_COUNT)
+    monkeypatch.setattr(
+        reality,
+        "_validate_operational_material",
+        lambda _: {
+            "alert_webhook_https": True,
+            "backup_endpoint_https": True,
+            "backup_credentials_private": True,
+            "backup_encryption_key_private": True,
+        },
+    )
     monkeypatch.setattr(reality, "_memory_bytes", lambda: reality.MIN_MEMORY_BYTES + 1)
     monkeypatch.setattr(reality, "_disk_free_bytes", lambda _: reality.MIN_DISK_BYTES + 1)
     monkeypatch.setattr(reality, "_kernel_ipv4_forward", lambda: True)
@@ -225,6 +285,7 @@ def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: 
     assert result["status"] == "success"
     assert result["deployment_mode"] == "internal"
     assert result["enterprise_ca"]["sha256"] == "a" * 64
+    assert result["operational_material"]["alert_webhook_https"] is True
     assert ("cap", "NET_RAW") in events
     assert ("cap", "NET_ADMIN") in events
     assert ("netns", True) in events

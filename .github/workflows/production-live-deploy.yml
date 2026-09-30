@@ -26,7 +26,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resilience-runner-readiness:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, aegisscan-resilience]
+    timeout-minutes: 10
+    steps:
+      - name: Prove downstream resilience runner runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command_name in docker git ssh curl; do
+            command -v "$command_name" >/dev/null
+          done
+          docker info >/dev/null
+          docker run --rm --pull=missing postgres:16-alpine psql --version
+          docker run --rm --pull=missing postgres:16-alpine pg_restore --version
+          echo 'AEGISSCAN_RESILIENCE_RUNNER_READINESS=PASS'
+
   deploy-and-accept:
+    needs: resilience-runner-readiness
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, aegisscan-production]
     timeout-minutes: 360
@@ -39,6 +57,14 @@ jobs:
       PROD_SSH_KNOWN_HOSTS: ${{ secrets.AEGIS_PRODUCTION_SSH_KNOWN_HOSTS }}
       PROD_ORIGIN: ${{ secrets.AEGIS_PRODUCTION_ORIGIN }}
       PROD_ENTERPRISE_CA_BUNDLE: ${{ secrets.AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE }}
+      BACKUP_ENDPOINT: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_ENDPOINT }}
+      BACKUP_REGION: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_REGION || 'us-east-1' }}
+      BACKUP_BUCKET: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_BUCKET }}
+      BACKUP_PREFIX: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_PREFIX || 'aegisscan/postgres' }}
+      BACKUP_ADDRESSING_STYLE: ${{ vars.AEGIS_PRODUCTION_BACKUP_S3_ADDRESSING_STYLE || 'path' }}
+      BACKUP_CREDENTIALS_JSON: ${{ secrets.AEGIS_PRODUCTION_BACKUP_S3_CREDENTIALS_JSON }}
+      BACKUP_ENCRYPTION_KEY_B64: ${{ secrets.AEGIS_PRODUCTION_BACKUP_ENCRYPTION_KEY_B64 }}
+      ALERT_WEBHOOK_URL: ${{ secrets.AEGIS_PRODUCTION_ALERT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -98,10 +124,11 @@ jobs:
             --timeout-seconds 4500 \
             --poll-seconds 15
 
-      - name: Validate protected internal production material
+      - name: Validate protected internal production and downstream resilience material
         shell: bash
         run: |
           set -euo pipefail
+          missing=()
           for name in \
             PROD_SSH_HOST \
             PROD_SSH_PORT \
@@ -109,22 +136,91 @@ jobs:
             PROD_SSH_PRIVATE_KEY \
             PROD_SSH_KNOWN_HOSTS \
             PROD_ORIGIN \
-            PROD_ENTERPRISE_CA_BUNDLE; do
+            PROD_ENTERPRISE_CA_BUNDLE \
+            BACKUP_ENDPOINT \
+            BACKUP_REGION \
+            BACKUP_BUCKET \
+            BACKUP_PREFIX \
+            BACKUP_ADDRESSING_STYLE \
+            BACKUP_CREDENTIALS_JSON \
+            BACKUP_ENCRYPTION_KEY_B64 \
+            ALERT_WEBHOOK_URL; do
             value="${!name:-}"
-            if [ -z "$value" ]; then
-              echo "Required internal production secret/variable is missing: $name" >&2
-              exit 1
-            fi
+            [ -n "$value" ] || missing+=("$name")
           done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Protected production chain material is incomplete: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
           case "$PROD_SSH_PORT" in
             ''|*[!0-9]*) echo 'PROD_SSH_PORT must be numeric' >&2; exit 1 ;;
           esac
           test "$PROD_SSH_PORT" -ge 1
           test "$PROD_SSH_PORT" -le 65535
-          case "$PROD_ORIGIN" in
-            https://*) ;;
-            *) echo 'PROD_ORIGIN must use HTTPS' >&2; exit 1 ;;
-          esac
+          python - <<'PYVALIDATE'
+          import base64
+          import binascii
+          import ipaddress
+          import json
+          import os
+          import re
+          from urllib.parse import urlparse
+
+          def https_url(name, *, origin_only=False):
+              value = os.environ[name].strip()
+              parsed = urlparse(value)
+              if (
+                  parsed.scheme != 'https'
+                  or not parsed.hostname
+                  or parsed.username
+                  or parsed.password
+                  or parsed.fragment
+                  or (origin_only and (parsed.path not in {'', '/'} or parsed.query or parsed.params))
+              ):
+                  raise SystemExit(f'{name} must be a valid HTTPS endpoint')
+              host = parsed.hostname.strip().lower().strip('[]')
+              try:
+                  address = ipaddress.ip_address(host)
+              except ValueError:
+                  address = None
+              if address is not None and (
+                  address.is_loopback
+                  or address.is_link_local
+                  or address.is_unspecified
+                  or address.is_multicast
+              ):
+                  raise SystemExit(f'{name} uses an unsafe endpoint address')
+              return value
+
+          https_url('PROD_ORIGIN', origin_only=True)
+          https_url('BACKUP_ENDPOINT')
+          https_url('ALERT_WEBHOOK_URL')
+
+          bucket = os.environ['BACKUP_BUCKET'].strip()
+          if (
+              not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', bucket)
+              or '..' in bucket
+              or '.-' in bucket
+              or '-.' in bucket
+          ):
+              raise SystemExit('BACKUP_BUCKET is invalid')
+          if os.environ['BACKUP_ADDRESSING_STYLE'].strip() not in {'auto', 'path', 'virtual'}:
+              raise SystemExit('BACKUP_ADDRESSING_STYLE must be auto, path or virtual')
+
+          try:
+              credentials = json.loads(os.environ['BACKUP_CREDENTIALS_JSON'])
+          except json.JSONDecodeError as exc:
+              raise SystemExit('BACKUP_CREDENTIALS_JSON is not valid JSON') from exc
+          if not isinstance(credentials, dict) or not credentials.get('access_key_id') or not credentials.get('secret_access_key'):
+              raise SystemExit('BACKUP_CREDENTIALS_JSON must contain access_key_id and secret_access_key')
+
+          try:
+              encryption_key = base64.b64decode(os.environ['BACKUP_ENCRYPTION_KEY_B64'], validate=True)
+          except (binascii.Error, ValueError) as exc:
+              raise SystemExit('BACKUP_ENCRYPTION_KEY_B64 is not valid base64') from exc
+          if len(encryption_key) != 32:
+              raise SystemExit('BACKUP_ENCRYPTION_KEY_B64 must decode to exactly 32 bytes')
+          PYVALIDATE
           LIVE_ORIGIN="${PROD_ORIGIN%/}"
           test -n "$LIVE_ORIGIN"
           printf 'AEGIS_LIVE_ORIGIN=%s\n' "$LIVE_ORIGIN" >> "$GITHUB_ENV"

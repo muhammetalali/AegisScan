@@ -45,7 +45,14 @@ def test_live_production_workflow_has_only_manual_or_one_time_main_request_trigg
     assert triggers["push"]["paths"] == [".github/deployment-requests/internal-production.json"]
 
     jobs = data["jobs"]
+    readiness = jobs["resilience-runner-readiness"]
+    assert readiness["runs-on"] == ["self-hosted", "linux", "x64", "aegisscan-resilience"]
+    assert readiness["timeout-minutes"] == 10
+    assert "AEGISSCAN_RESILIENCE_RUNNER_READINESS=PASS" in readiness["steps"][0]["run"]
+    assert "postgres:16-alpine psql --version" in readiness["steps"][0]["run"]
+    assert "postgres:16-alpine pg_restore --version" in readiness["steps"][0]["run"]
     deploy = jobs["deploy-and-accept"]
+    assert deploy["needs"] == "resilience-runner-readiness"
     assert deploy["environment"] == "production"
     assert deploy["if"] == "github.ref == 'refs/heads/main'"
     assert deploy["runs-on"] == ["self-hosted", "linux", "x64", "aegisscan-production"]
@@ -72,7 +79,7 @@ def test_checkout_repair_is_explicit_manual_opt_in_and_uses_protected_transport(
 
 def test_live_workflows_wait_for_exact_sha_required_ci_before_live_execution():
     cases = [
-        (WORKFLOW, "deploy-and-accept", "Validate protected internal production material"),
+        (WORKFLOW, "deploy-and-accept", "Validate protected internal production and downstream resilience material"),
         (CLOUD_LIVE_WORKFLOW, "live-provider-reality", "Install exact cloud runtime dependencies"),
         (IDENTITY_LIVE_WORKFLOW, "external-identity-live", "Install live identity dependencies"),
     ]
@@ -125,6 +132,17 @@ def test_live_production_workflow_requires_bounded_authorization_pinned_ssh_ente
     assert "AEGIS_PRODUCTION_SSH_PRIVATE_KEY" in text
     assert "AEGIS_PRODUCTION_SSH_KNOWN_HOSTS" in text
     assert "AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE" in text
+    for secret_name in (
+        "AEGIS_PRODUCTION_BACKUP_S3_ENDPOINT",
+        "AEGIS_PRODUCTION_BACKUP_S3_BUCKET",
+        "AEGIS_PRODUCTION_BACKUP_S3_CREDENTIALS_JSON",
+        "AEGIS_PRODUCTION_BACKUP_ENCRYPTION_KEY_B64",
+        "AEGIS_PRODUCTION_ALERT_WEBHOOK_URL",
+    ):
+        assert secret_name in text
+    assert "Protected production chain material is incomplete" in text
+    assert "BACKUP_ENCRYPTION_KEY_B64 must decode to exactly 32 bytes" in text
+    assert "BACKUP_CREDENTIALS_JSON must contain access_key_id and secret_access_key" in text
     assert "AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-production/enterprise-ca.pem" in text
     assert "REQUESTS_CA_BUNDLE=/tmp/aegis-production/enterprise-ca.pem" in text
     assert "SSL_CERT_FILE=/tmp/aegis-production/enterprise-ca.pem" in text
