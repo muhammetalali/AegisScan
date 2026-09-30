@@ -160,9 +160,9 @@ jobs:
               assert verification.get(name) == backup.get(name), (name, backup, verification)
 
           legacy_restore_evidence = {
+              **verification,
               'schema': 'aegisscan.production-host-restore-verification.v1',
               'status': 'restored-and-verified-on-production-host',
-              **verification,
           }
           Path('/tmp/aegis-resilience/remote-restore.json').write_text(
               json.dumps(legacy_restore_evidence, sort_keys=True) + '\n', encoding='utf-8'
