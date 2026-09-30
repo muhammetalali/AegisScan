@@ -465,17 +465,23 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
             "current_events": 2.0,
         },
     )
+    monkeypatch.setattr(
+        deploy,
+        "_retire_legacy_alert_delivery_network",
+        lambda: events.append("legacy-network-cleanup") or {"status": "removed", "removed": True},
+    )
 
     result = deploy.deploy(release_sha, env_file, "https://security.example.com")
 
     assert result["status"] == "success"
     assert result["alert_delivery"]["authenticated"] is True
+    assert result["legacy_alert_network_cleanup"]["removed"] is True
     assert events.index("backup") < events.index("storage")
     assert events.index("storage") < events.index(("checkout", release_sha))
     assert events.index(("checkout", release_sha)) < events.index(("trust", release_sha))
     assert events.index(("trust", release_sha)) < events.index("preflight")
     assert events.index("preflight") < events.index("build") < events.index("deploy")
-    assert events.index("deploy") < events.index("execution") < events.index("accept") < events.index("alerts")
+    assert events.index("deploy") < events.index("execution") < events.index("accept") < events.index("alerts") < events.index("legacy-network-cleanup")
 
 
 def test_alert_delivery_acceptance_rejects_unrelated_counter_increment(tmp_path: Path, monkeypatch):
