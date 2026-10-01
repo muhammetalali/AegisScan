@@ -72,8 +72,10 @@ def validate_code_target(target: str) -> str:
     path = Path(value).expanduser().resolve()
     if not path.exists():
         raise ValueError(f'Code scan target does not exist: {path}')
-    if not path.is_dir():
-        raise ValueError('Code scan target must be a directory')
+    if not path.is_dir() and not path.is_file():
+        raise ValueError('Code scan target must be a regular file or directory')
+    if path.is_symlink():
+        raise ValueError('Code scan target must not be a symlink')
     return str(path)
 
 
