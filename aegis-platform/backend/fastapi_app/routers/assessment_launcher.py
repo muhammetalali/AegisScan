@@ -12,6 +12,7 @@ from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from django.db.models import Q
 from django.utils.text import slugify
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -25,6 +26,7 @@ from ..services.asset_authorization_governance import (
     asset_authorization_version,
     govern_asset_authorization,
     initialize_asset_configuration,
+    replace_asset_configuration_preserving_authorization,
 )
 from ..services.authorization_guard import asset_target
 from ..services.capability_planner import plan_capabilities
@@ -193,6 +195,7 @@ def _capability_plan(asset: Asset, depth: Depth) -> dict:
     }
 
 
+@transaction.atomic
 def _prepare_asset(
     *,
     project_id: str,
@@ -213,7 +216,7 @@ def _prepare_asset(
         config = initialize_asset_configuration(configuration)
         asset = Asset.objects.create(
             project=project,
-            owner_id=user_id,
+            owner=project.owner,
             name=display[:200],
             slug=_unique_slug(project, display),
             type=asset_type,
@@ -224,6 +227,14 @@ def _prepare_asset(
             tags=list(dict.fromkeys(['assessment-launcher', *tags])),
         )
         created = True
+    else:
+        refreshed = replace_asset_configuration_preserving_authorization(
+            asset.configuration,
+            configuration,
+        )
+        if refreshed != (asset.configuration or {}):
+            Asset.objects.filter(pk=asset.pk).update(configuration=refreshed)
+            asset.configuration = refreshed
     decision = _ensure_authorization(asset, user_id)
     plan = _capability_plan(asset, depth)
     return {
