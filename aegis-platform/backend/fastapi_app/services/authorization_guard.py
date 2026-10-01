@@ -9,6 +9,7 @@ from django_project.assets.models import Asset, AssetAuthorization
 from django_project.scans.models import Scan
 
 from .scope_authorization import ScopeAuthorizationError, require_authorized_target
+from .dynamic_egress import DynamicEgressError, authorize_dynamic_egress
 
 
 _NETWORK_SCAN_TYPES = {Scan.Type.IP, Scan.Type.URL, Scan.Type.NETWORK}
@@ -59,13 +60,14 @@ def _require_worker_egress(
     approved_target: str = '',
 ) -> tuple[bool, str]:
     try:
-        require_authorized_target(
+        destinations = require_authorized_target(
             target,
             url=url,
             resolve_dns=True,
             approved_target=approved_target or None,
         )
-    except ScopeAuthorizationError as exc:
+        authorize_dynamic_egress(destinations)
+    except (ScopeAuthorizationError, DynamicEgressError) as exc:
         return False, f'Execution blocked: {exc}'
     return True, ''
 
