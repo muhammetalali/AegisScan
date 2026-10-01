@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.release1_version import RELEASE_TAG
+
 from scripts.ci.final_project_hygiene import FinalHygieneError, build_hygiene
 
 SHA = "a" * 40
@@ -86,11 +88,11 @@ def _fixture(tmp_path: Path):
     release = _write(
         tmp_path / "release.json",
         {
-            "tagName": "v1.0.0",
+            "tagName": RELEASE_TAG,
             "targetCommitish": SHA,
             "isDraft": False,
             "isPrerelease": False,
-            "url": "https://github.com/muhammetalali/AegisScan/releases/tag/v1.0.0",
+            "url": f"https://github.com/muhammetalali/AegisScan/releases/tag/{RELEASE_TAG}",
         },
     )
     return repo_root, state, apply_result, post_plan, release

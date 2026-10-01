@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.release1_version import RELEASE_TAG
+
 from scripts.ci.project_completion import ProjectCompletionError, build_completion
 
 SHA = "a" * 40
@@ -39,11 +41,11 @@ def _fixture(tmp_path: Path):
     )
     release = _write(
         tmp_path / "release.json",
-        {"tagName": "v1.0.0", "targetCommitish": SHA, "isDraft": False, "isPrerelease": False},
+        {"tagName": RELEASE_TAG, "targetCommitish": SHA, "isDraft": False, "isPrerelease": False},
     )
     tag = _write(
         tmp_path / "tag.json",
-        {"ref": "refs/tags/v1.0.0", "object": {"type": "commit", "sha": SHA}},
+        {"ref": f"refs/tags/{RELEASE_TAG}", "object": {"type": "commit", "sha": SHA}},
     )
     run = _write(
         tmp_path / "run.json",
@@ -68,7 +70,7 @@ def _fixture(tmp_path: Path):
             "decision": "VERIFIED",
             "repository": REPO,
             "release": 1,
-            "release_tag": "v1.0.0",
+            "release_tag": RELEASE_TAG,
             "release_sha": SHA,
             "main_sha": SHA,
             "open_pr_count": 0,
@@ -140,7 +142,7 @@ def test_project_completion_rejects_verification_run_from_other_sha(tmp_path: Pa
     value = json.loads(run.read_text())
     value["head_sha"] = "f" * 40
     run.write_text(json.dumps(value))
-    with pytest.raises(ProjectCompletionError, match="workflow metadata"):
+    with pytest.raises(ProjectCompletionError, match="head_sha"):
         build_completion(
             release_sha=SHA, repository=REPO, repository_state=state,
             release_metadata=release, release_tag_metadata=tag,
@@ -198,7 +200,7 @@ def test_project_completion_workflow_runs_only_after_verified_fresh_main_and_pub
     assert "fresh-main-final-verification.sha256" in text
     assert "project_completion.py" in text
     assert "AEGISSCAN_PROJECT=COMPLETE" in text
-    assert "gh release upload v1.0.0" in text
+    assert 'gh release upload "$AEGIS_RELEASE_TAG"' in text
     assert "aegisscan-project-completion.json" in text
     assert "partial project-completion asset set; refusing overwrite" in text
     assert "--clobber" not in text

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.release1_version import RELEASE_TAG
+
 from scripts.ci.fresh_main_final_verification import (
     FinalVerificationError,
     _require_companion_sha256,
@@ -82,11 +84,11 @@ def _fixture(tmp_path: Path):
     )
     release = _write(
         tmp_path / "release.json",
-        {"tagName": "v1.0.0", "targetCommitish": SHA, "isDraft": False, "isPrerelease": False},
+        {"tagName": RELEASE_TAG, "targetCommitish": SHA, "isDraft": False, "isPrerelease": False},
     )
     tag = _write(
         tmp_path / "tag.json",
-        {"ref": "refs/tags/v1.0.0", "object": {"type": "commit", "sha": SHA}},
+        {"ref": f"refs/tags/{RELEASE_TAG}", "object": {"type": "commit", "sha": SHA}},
     )
     runs = {
         "required_ci": _run(tmp_path, "required-ci", "Required CI Governance", ".github/workflows/required-ci-governance.yml", "push", 1),

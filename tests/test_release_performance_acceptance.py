@@ -150,3 +150,89 @@ def test_release_acceptance_rejects_cross_sha_performance_evidence(tmp_path: Pat
             output=tmp_path / "acceptance.json",
         )
 
+
+@pytest.mark.parametrize("limit", [0.0, 0.01])
+def test_zero_errors_remain_zero_under_strict_release_policy(tmp_path, limit):
+    capacity, performance = _fixture(tmp_path)
+    data = json.loads(performance.read_text())
+    data["thresholds"]["max_error_rate"] = limit
+    performance.write_text(json.dumps(data))
+    result = build_acceptance(
+        release_sha=SHA, profile="release", capacity_path=capacity,
+        performance_path=performance, output=tmp_path / "acceptance.json",
+    )
+    assert result["performance"]["error_rate"] == 0.0
+    assert result["performance"]["thresholds"]["max_error_rate"] == limit
+
+
+@pytest.mark.parametrize("section,key", [
+    ("summary", "error_rate"), ("thresholds", "max_error_rate"),
+])
+@pytest.mark.parametrize("value", [None, True, False, "0.0", -0.01, 1.01, float("nan"), float("inf")])
+def test_error_rate_requires_an_explicit_finite_fraction(tmp_path, section, key, value):
+    capacity, performance = _fixture(tmp_path)
+    data = json.loads(performance.read_text())
+    data[section][key] = value
+    performance.write_text(json.dumps(data))
+    with pytest.raises(PerformanceAcceptanceError, match="error_rate"):
+        build_acceptance(
+            release_sha=SHA, profile="release", capacity_path=capacity,
+            performance_path=performance, output=tmp_path / "acceptance.json",
+        )
+    assert not (tmp_path / "acceptance.json").exists()
+
+
+@pytest.mark.parametrize("section,key", [
+    ("summary", "error_rate"), ("thresholds", "max_error_rate"),
+])
+def test_missing_error_rate_is_rejected_without_creating_acceptance(tmp_path, section, key):
+    capacity, performance = _fixture(tmp_path)
+    data = json.loads(performance.read_text())
+    del data[section][key]
+    performance.write_text(json.dumps(data))
+    with pytest.raises(PerformanceAcceptanceError, match="error_rate"):
+        build_acceptance(
+            release_sha=SHA, profile="release", capacity_path=capacity,
+            performance_path=performance, output=tmp_path / "acceptance.json",
+        )
+    assert not (tmp_path / "acceptance.json").exists()
+
+
+def test_excessive_nonzero_error_rate_is_rejected(tmp_path):
+    capacity, performance = _fixture(tmp_path)
+    data = json.loads(performance.read_text())
+    data["summary"]["error_rate"] = 0.01001
+    performance.write_text(json.dumps(data))
+    with pytest.raises(PerformanceAcceptanceError, match="error_rate"):
+        build_acceptance(
+            release_sha=SHA, profile="release", capacity_path=capacity,
+            performance_path=performance, output=tmp_path / "acceptance.json",
+        )
+
+
+def test_zero_measured_latency_is_valid_numeric_evidence(tmp_path):
+    capacity, performance = _fixture(tmp_path)
+    data = json.loads(performance.read_text())
+    data["summary"]["worst_stage_p95_ms"] = 0.0
+    performance.write_text(json.dumps(data))
+    result = build_acceptance(
+        release_sha=SHA, profile="release", capacity_path=capacity,
+        performance_path=performance, output=tmp_path / "acceptance.json",
+    )
+    assert result["performance"]["worst_stage_p95_ms"] == 0.0
+
+
+@pytest.mark.parametrize("section,key", [
+    ("summary", "worst_stage_p95_ms"), ("thresholds", "max_p95_ms"),
+])
+@pytest.mark.parametrize("value", [None, True, "0.0", -0.01, float("nan"), float("inf")])
+def test_latency_requires_finite_nonnegative_numeric_evidence(tmp_path, section, key, value):
+    capacity, performance = _fixture(tmp_path)
+    data = json.loads(performance.read_text())
+    data[section][key] = value
+    performance.write_text(json.dumps(data))
+    with pytest.raises(PerformanceAcceptanceError, match="p95"):
+        build_acceptance(
+            release_sha=SHA, profile="release", capacity_path=capacity,
+            performance_path=performance, output=tmp_path / "acceptance.json",
+        )

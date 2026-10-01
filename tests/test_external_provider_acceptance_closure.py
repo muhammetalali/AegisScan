@@ -199,7 +199,7 @@ def test_provider_closure_workflow_requires_published_release_and_exact_artifact
     job = workflow["jobs"]["provider-closure"]
     assert job["if"] == "github.ref == 'refs/heads/main'"
     text = (root / ".github/workflows/external-provider-acceptance-closure.yml").read_text()
-    assert "gh release view v1.0.0" in text
+    assert 'gh release view "$AEGIS_RELEASE_TAG"' in text
     assert 'release[\'targetCommitish\'] == os.environ[\'RELEASE_SHA\']' in text
     assert "cloud-live-provider-proof-$RELEASE_SHA" in text
     assert "external-identity-live-proof-$RELEASE_SHA" in text

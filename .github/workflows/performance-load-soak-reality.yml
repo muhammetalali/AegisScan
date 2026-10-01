@@ -16,6 +16,7 @@ name: Performance Load Soak Reality
       - 'aegis-platform/docker/nginx-ssl.conf'
       - 'tests/test_nginx_contract.py'
       - 'tests/test_performance_release_workflow.py'
+      - 'tests/test_release_performance_acceptance.py'
       - 'aegis-platform/kali/**'
       - '.github/workflows/performance-load-soak-reality.yml'
   push:
@@ -30,6 +31,7 @@ name: Performance Load Soak Reality
       - 'aegis-platform/docker/nginx-ssl.conf'
       - 'tests/test_nginx_contract.py'
       - 'tests/test_performance_release_workflow.py'
+      - 'tests/test_release_performance_acceptance.py'
       - '.github/live-acceptance-requests/performance.json'
       - '.github/workflows/performance-load-soak-reality.yml'
 
@@ -240,7 +242,8 @@ jobs:
           python -m pytest -q \
             aegis-platform/scripts/test_release_capacity_reality.py \
             tests/test_nginx_contract.py \
-            tests/test_performance_release_workflow.py
+            tests/test_performance_release_workflow.py \
+            tests/test_release_performance_acceptance.py
           python -m py_compile aegis-platform/scripts/release_capacity_reality.py aegis-platform/e2e/external_black_box_e2e.py
       - name: Prepare isolated full-stack environment
         working-directory: aegis-platform

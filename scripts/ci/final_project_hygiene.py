@@ -10,6 +10,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.ci.release1_version import RELEASE_TAG
+
 SCHEMA = "aegisscan.final-project-hygiene.v1"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -76,7 +80,7 @@ def build_hygiene(
         raise FinalHygieneError(f"repository state failed checks: {failures}")
 
     if (
-        release.get("tagName") != "v1.0.0"
+        release.get("tagName") != RELEASE_TAG
         or release.get("targetCommitish") != release_sha
         or release.get("isDraft") is not False
         or release.get("isPrerelease") is not False
@@ -150,7 +154,7 @@ def build_hygiene(
         "decision": "CLEAN",
         "repository": repository,
         "release_sha": release_sha,
-        "release_tag": "v1.0.0",
+        "release_tag": RELEASE_TAG,
         "open_pr_count": 0,
         "safe_branch_candidates_before": sorted(map(str, candidates)),
         "safe_branches_deleted": sorted(deleted_names),

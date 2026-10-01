@@ -39,6 +39,10 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Load current Release 1 publication tag
+        shell: bash
+        run: python scripts/ci/release1_version.py >> "$GITHUB_ENV"
+
       - name: Require exact current main and immutable Release 1 tag
         shell: bash
         run: |
@@ -52,10 +56,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
           install -d -m 0700 /tmp/aegis-final/metadata /tmp/aegis-final/evidence artifacts
-          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" \
+          gh release view "$AEGIS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json tagName,targetCommitish,isDraft,isPrerelease,url \
             > /tmp/aegis-final/release.json
-          gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/v1.0.0" \
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/$AEGIS_RELEASE_TAG" \
             > /tmp/aegis-final/release-tag.json
 
       - name: Require zero open pull requests and capture repository state
