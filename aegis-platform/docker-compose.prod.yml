@@ -51,7 +51,7 @@ services:
     environment:
       <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}
-      AEGIS_SCAN_SCOPE_MODE: ${AEGIS_ASSESSMENT_SCOPE_MODE:-single-operator-lab}
+      AEGIS_ASSESSMENT_LAUNCHER_MODE: ${AEGIS_ASSESSMENT_LAUNCHER_MODE:-single-operator-lab}
       AEGIS_SEMGREP_UPLOAD_ROOT: /var/lib/aegis-semgrep/uploads
     depends_on: !override
       django: {condition: service_started}

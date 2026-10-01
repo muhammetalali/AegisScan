@@ -92,18 +92,19 @@ def test_dynamic_egress_only_materializes_non_global_destinations():
 
 
 def test_scope_mode_defaults_to_governed_authorization(monkeypatch):
+    monkeypatch.delenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', raising=False)
     monkeypatch.delenv('AEGIS_SCAN_SCOPE_MODE', raising=False)
     assert launcher._scope_mode() == 'asset-authorization'
 
 
 def test_scope_mode_rejects_unknown_values(monkeypatch):
-    monkeypatch.setenv('AEGIS_SCAN_SCOPE_MODE', 'anything-goes')
-    with pytest.raises(HTTPException, match='AEGIS_SCAN_SCOPE_MODE is invalid'):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'anything-goes')
+    with pytest.raises(HTTPException, match='Assessment Launcher scope mode is invalid'):
         launcher._scope_mode()
 
 
 def test_single_operator_lab_mode_routes_through_governance_service(monkeypatch):
-    monkeypatch.setenv('AEGIS_SCAN_SCOPE_MODE', 'single-operator-lab')
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'single-operator-lab')
     monkeypatch.setattr(launcher, '_current_authorization', lambda _asset: None)
     monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 7)
 
@@ -146,3 +147,9 @@ def test_dynamic_egress_public_target_needs_no_control_root(monkeypatch):
     monkeypatch.delenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', raising=False)
     monkeypatch.setenv('JWT_SECRET_KEY', 'must-not-be-used-for-egress')
     authorize_dynamic_egress(['93.184.216.34'])
+
+
+def test_launcher_mode_overrides_global_governed_scope(monkeypatch):
+    monkeypatch.setenv('AEGIS_SCAN_SCOPE_MODE', 'asset-authorization')
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'single-operator-lab')
+    assert launcher._scope_mode() == 'single-operator-lab'

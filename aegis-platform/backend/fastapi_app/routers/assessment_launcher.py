@@ -149,9 +149,11 @@ def _existing_asset(project: Project, asset_type: str, target: str) -> Asset | N
 
 
 def _scope_mode() -> str:
-    mode = os.getenv('AEGIS_SCAN_SCOPE_MODE', 'asset-authorization').strip().lower()
+    mode = os.getenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', '').strip().lower()
+    if not mode:
+        mode = os.getenv('AEGIS_SCAN_SCOPE_MODE', 'asset-authorization').strip().lower()
     if mode not in {'asset-authorization', 'single-operator-lab'}:
-        raise HTTPException(status_code=500, detail='AEGIS_SCAN_SCOPE_MODE is invalid')
+        raise HTTPException(status_code=500, detail='Assessment Launcher scope mode is invalid')
     return mode
 
 
