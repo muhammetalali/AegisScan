@@ -21,14 +21,17 @@ def _endpoint() -> str:
 
 
 def _non_global_network(value: str) -> str | None:
+    raw = str(value).strip()
     try:
-        network = ipaddress.ip_network(str(value), strict=False)
+        address = ipaddress.ip_address(raw)
     except ValueError:
-        try:
-            address = ipaddress.ip_address(str(value))
-        except ValueError:
-            return None
+        address = None
+    if address is not None:
         return str(address) if not address.is_global else None
+    try:
+        network = ipaddress.ip_network(raw, strict=False)
+    except ValueError:
+        return None
     if network.version == 4:
         if network.network_address.is_global and network.broadcast_address.is_global:
             return None
