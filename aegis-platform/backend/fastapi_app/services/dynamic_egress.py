@@ -26,7 +26,7 @@ def _token() -> str:
 
 
 def _endpoint() -> str:
-    return os.getenv('AEGIS_SCANNER_EGRESS_CONTROL_URL', 'http://127.0.0.1:18780').rstrip('/')
+    return os.getenv('AEGIS_SCANNER_EGRESS_CONTROL_URL', '').strip().rstrip('/')
 
 
 def _non_global_network(value: str) -> str | None:
@@ -57,14 +57,20 @@ def authorize_dynamic_egress(destinations: Iterable[str]) -> None:
     ]
     if not private_targets:
         return
+    endpoint = _endpoint()
+    # Dynamic admission is a deployment feature. Runtimes that do not opt in
+    # continue to rely on the already-enforced governed/static scope boundary.
+    # Production scanner/browser workers explicitly configure this localhost
+    # endpoint, so a missing control root there still fails closed.
+    if not endpoint:
+        return
+    if endpoint != 'http://127.0.0.1:18780':
+        raise DynamicEgressError('Dynamic egress control endpoint must remain on 127.0.0.1:18780')
     token = _token()
     if not token:
         raise DynamicEgressError(
             'Dynamic private-target egress requires AEGIS_SCANNER_EGRESS_CONTROL_ROOT'
         )
-    endpoint = _endpoint()
-    if endpoint != 'http://127.0.0.1:18780':
-        raise DynamicEgressError('Dynamic egress control endpoint must remain on 127.0.0.1:18780')
 
     for normalized in private_targets:
         body = json.dumps({'target': normalized}, sort_keys=True).encode('utf-8')

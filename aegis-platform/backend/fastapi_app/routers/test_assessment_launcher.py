@@ -136,14 +136,22 @@ def test_single_operator_lab_mode_routes_through_governance_service(monkeypatch)
 
 
 
-def test_dynamic_egress_private_target_fails_closed_without_control_root(monkeypatch):
+def test_dynamic_egress_configured_controller_fails_closed_without_control_root(monkeypatch):
+    monkeypatch.setenv('AEGIS_SCANNER_EGRESS_CONTROL_URL', 'http://127.0.0.1:18780')
     monkeypatch.delenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', raising=False)
     monkeypatch.setenv('JWT_SECRET_KEY', 'must-not-be-used-for-egress')
     with pytest.raises(DynamicEgressError, match='AEGIS_SCANNER_EGRESS_CONTROL_ROOT'):
         authorize_dynamic_egress(['192.168.49.10'])
 
 
+def test_dynamic_egress_unconfigured_runtime_uses_existing_scope_boundary(monkeypatch):
+    monkeypatch.delenv('AEGIS_SCANNER_EGRESS_CONTROL_URL', raising=False)
+    monkeypatch.delenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', raising=False)
+    authorize_dynamic_egress(['192.168.49.10'])
+
+
 def test_dynamic_egress_public_target_needs_no_control_root(monkeypatch):
+    monkeypatch.delenv('AEGIS_SCANNER_EGRESS_CONTROL_URL', raising=False)
     monkeypatch.delenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', raising=False)
     monkeypatch.setenv('JWT_SECRET_KEY', 'must-not-be-used-for-egress')
     authorize_dynamic_egress(['93.184.216.34'])
