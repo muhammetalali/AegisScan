@@ -8,11 +8,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from django_project.assets.models import Asset, AssetAuthorization
-from django_project.projects.models import Project
-from django_project.users.models import User
 from fastapi_app.routers import assessment_launcher as launcher
-from fastapi_app.services.asset_authorization_governance import initialize_asset_configuration
 from fastapi_app.services.dynamic_egress import _non_global_network
 from fastapi_app.services.scanner_adapters import validate_code_target
 
@@ -106,36 +102,33 @@ def test_scope_mode_rejects_unknown_values(monkeypatch):
         launcher._scope_mode()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_single_operator_lab_mode_creates_real_authorization_decision(monkeypatch):
+def test_single_operator_lab_mode_routes_through_governance_service(monkeypatch):
     monkeypatch.setenv('AEGIS_SCAN_SCOPE_MODE', 'single-operator-lab')
-    user = User.objects.create_user(
-        email='launcher-lab-owner@example.invalid',
-        password='Strong-Test-Password-123!',
-        first_name='Lab',
-        last_name='Owner',
-    )
-    project = Project.objects.create(
-        name='Launcher Lab Project',
-        slug='launcher-lab-project',
-        owner=user,
-    )
-    asset = Asset.objects.create(
-        project=project,
-        owner=user,
-        name='Lab Host',
-        slug='lab-host',
-        type=Asset.Type.IP_ADDRESS,
-        configuration=initialize_asset_configuration({'ip': '192.168.49.10'}),
-    )
+    monkeypatch.setattr(launcher, '_current_authorization', lambda _asset: None)
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 7)
 
-    result = launcher._ensure_authorization(asset, str(user.id))
+    decision = SimpleNamespace(
+        id='decision-1',
+        authorized=True,
+        target_snapshot='192.168.49.10',
+        actor_id='owner-1',
+    )
+    calls = {}
+
+    def govern(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(decision=decision)
+
+    monkeypatch.setattr(launcher, 'govern_asset_authorization', govern)
+    asset = SimpleNamespace(id='asset-1', project_id='project-1')
+
+    result = launcher._ensure_authorization(asset, 'owner-1')
 
     assert result['state'] == 'authorized'
     assert result['source'] == 'single-operator-lab'
-    decision = result['decision']
-    assert decision is not None
-    assert decision.authorized is True
-    assert decision.target_snapshot == '192.168.49.10'
-    assert str(decision.actor_id) == str(user.id)
-    assert AssetAuthorization.objects.filter(asset=asset, pk=decision.id).exists()
+    assert result['decision'] is decision
+    assert calls['asset_id'] == 'asset-1'
+    assert calls['project_id'] == 'project-1'
+    assert calls['actor_id'] == 'owner-1'
+    assert calls['expected_version'] == 7
+    assert calls['authorized'] is True
