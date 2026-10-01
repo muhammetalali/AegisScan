@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -11,7 +12,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TABLE = 'aegis_egress'
 SET4 = 'dynamic_ipv4'
 SET6 = 'dynamic_ipv6'
-TOKEN = os.getenv('AEGIS_SCANNER_EGRESS_CONTROL_TOKEN', '').strip()
+ROOT = os.getenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', '').strip()
+TOKEN = (
+    hmac.new(
+        ROOT.encode('utf-8'),
+        b'aegisscan-scanner-egress-control-v1',
+        hashlib.sha256,
+    ).hexdigest()
+    if ROOT else ''
+)
 HOST = '127.0.0.1'
 PORT = 18780
 
