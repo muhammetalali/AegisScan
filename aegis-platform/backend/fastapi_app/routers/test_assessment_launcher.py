@@ -8,7 +8,11 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from django_project.assets.models import Asset, AssetAuthorization
+from django_project.projects.models import Project
+from django_project.users.models import User
 from fastapi_app.routers import assessment_launcher as launcher
+from fastapi_app.services.asset_authorization_governance import initialize_asset_configuration
 from fastapi_app.services.dynamic_egress import _non_global_network
 from fastapi_app.services.scanner_adapters import validate_code_target
 
@@ -89,3 +93,49 @@ def test_dynamic_egress_only_materializes_non_global_destinations():
     assert _non_global_network('192.168.49.0/24') == '192.168.49.0/24'
     assert _non_global_network('10.20.30.40') == '10.20.30.40'
     assert _non_global_network('93.184.216.34') is None
+
+
+def test_scope_mode_defaults_to_governed_authorization(monkeypatch):
+    monkeypatch.delenv('AEGIS_SCAN_SCOPE_MODE', raising=False)
+    assert launcher._scope_mode() == 'asset-authorization'
+
+
+def test_scope_mode_rejects_unknown_values(monkeypatch):
+    monkeypatch.setenv('AEGIS_SCAN_SCOPE_MODE', 'anything-goes')
+    with pytest.raises(HTTPException, match='AEGIS_SCAN_SCOPE_MODE is invalid'):
+        launcher._scope_mode()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_single_operator_lab_mode_creates_real_authorization_decision(monkeypatch):
+    monkeypatch.setenv('AEGIS_SCAN_SCOPE_MODE', 'single-operator-lab')
+    user = User.objects.create_user(
+        email='launcher-lab-owner@example.invalid',
+        password='Strong-Test-Password-123!',
+        first_name='Lab',
+        last_name='Owner',
+    )
+    project = Project.objects.create(
+        name='Launcher Lab Project',
+        slug='launcher-lab-project',
+        owner=user,
+    )
+    asset = Asset.objects.create(
+        project=project,
+        owner=user,
+        name='Lab Host',
+        slug='lab-host',
+        type=Asset.Type.IP_ADDRESS,
+        configuration=initialize_asset_configuration({'ip': '192.168.49.10'}),
+    )
+
+    result = launcher._ensure_authorization(asset, str(user.id))
+
+    assert result['state'] == 'authorized'
+    assert result['source'] == 'single-operator-lab'
+    decision = result['decision']
+    assert decision is not None
+    assert decision.authorized is True
+    assert decision.target_snapshot == '192.168.49.10'
+    assert str(decision.actor_id) == str(user.id)
+    assert AssetAuthorization.objects.filter(asset=asset, pk=decision.id).exists()
