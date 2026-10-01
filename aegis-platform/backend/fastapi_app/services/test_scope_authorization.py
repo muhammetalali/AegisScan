@@ -222,6 +222,37 @@ def test_bound_hostname_snapshot_preserves_private_dns_rebinding_guard(monkeypat
         )
 
 
+def test_bound_hostname_snapshot_allows_pinned_private_resolution(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('10.23.45.67')],
+    )
+    assert scope.require_authorized_target(
+        'internal.example',
+        resolve_dns=True,
+        approved_target='internal.example',
+        approved_addresses=('10.23.45.67',),
+    ) == ('10.23.45.67',)
+
+
+def test_bound_hostname_snapshot_rejects_private_resolution_outside_pin(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('10.23.45.68')],
+    )
+    with pytest.raises(scope.ScopeAuthorizationError, match='non-global destination'):
+        scope.require_authorized_target(
+            'internal.example',
+            resolve_dns=True,
+            approved_target='internal.example',
+            approved_addresses=('10.23.45.67',),
+        )
+
+
 def test_bound_hostname_snapshot_allows_public_resolution_without_static_allowlist(monkeypatch):
     monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
     monkeypatch.setattr(
