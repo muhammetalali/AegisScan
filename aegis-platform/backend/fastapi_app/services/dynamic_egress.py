@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -13,7 +15,17 @@ class DynamicEgressError(RuntimeError):
 
 
 def _token() -> str:
-    return os.getenv('AEGIS_SCANNER_EGRESS_CONTROL_TOKEN', '').strip()
+    root = (
+        os.getenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', '').strip()
+        or os.getenv('JWT_SECRET_KEY', '').strip()
+    )
+    if not root:
+        return ''
+    return hmac.new(
+        root.encode('utf-8'),
+        b'aegisscan-scanner-egress-control-v1',
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _endpoint() -> str:
