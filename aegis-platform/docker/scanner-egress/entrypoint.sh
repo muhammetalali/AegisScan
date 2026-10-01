@@ -95,6 +95,15 @@ nft add table netdev "$TABLE"
 nft "add chain netdev $TABLE $CHAIN { type filter hook egress device \"$IFACE\" priority 0; policy accept; }"
 nft "add chain netdev $TABLE $INGRESS_CHAIN { type filter hook ingress device \"$IFACE\" priority 0; policy accept; }"
 
+# Dynamic private targets are admitted only after the application binds an
+# immutable AssetAuthorization decision.  The local control API can add exact
+# IP/CIDR elements to these interval sets; the broad private-range drops below
+# remain authoritative for everything else.
+nft "add set netdev $TABLE dynamic_ipv4 { type ipv4_addr; flags interval; }"
+nft "add set netdev $TABLE dynamic_ipv6 { type ipv6_addr; flags interval; }"
+nft add rule netdev "$TABLE" "$CHAIN" ip daddr @dynamic_ipv4 accept
+nft add rule netdev "$TABLE" "$CHAIN" ip6 daddr @dynamic_ipv6 accept
+
 # Amass v5's collection engine listens on :4000. The legacy scanner worker and
 # governed Kali Recon provider intentionally share this network namespace, so
 # loopback coordination is required. Never expose the transient engine API on
@@ -167,5 +176,12 @@ log "kernel egress policy installed on $IFACE"
 log "control endpoints: $CONTROL_ENDPOINTS"
 log "private scan targets: ${PRIVATE_TARGETS:-<none>}"
 nft list table netdev "$TABLE"
+
+if [ -n "${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-}" ]; then
+  /usr/bin/python3 /usr/local/lib/aegis-egress-control.py &
+  log "dynamic authorization control listening on 127.0.0.1:18780"
+else
+  log "dynamic authorization control disabled: no isolated control root"
+fi
 
 exec tail -f /dev/null

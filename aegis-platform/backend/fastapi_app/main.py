@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from asgiref.sync import sync_to_async
 import asyncio,logging,time
 from datetime import datetime,timezone
-from .routers import scans,vulnerabilities,finding_dispositions,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,plugin_registry,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities,risk_correlation,web_security,wstg,oast,scheduled_scans,work_queue,threat_modeling,validated_attack_chain,business_logic_security,iast,burp_mcp,provider_approval,crypto_assets,crypto_lifecycle,fair_risk,agentic_security,attack_replay
+from .routers import scans,vulnerabilities,finding_dispositions,remediation,reports,assets,evidence,compliance,knowledge,digital_twin,posture,system,dashboard,validations,audit,assurance,assurance_graph,security_decision,decision_actions,governance,policy,enterprise,enterprise_extra,enterprise_gap,plugin_registry,attack_path,compliance_validation,intelligence,validation_contract,investigation,asset_authorization,capabilities,risk_correlation,web_security,wstg,oast,scheduled_scans,work_queue,threat_modeling,validated_attack_chain,business_logic_security,iast,burp_mcp,provider_approval,crypto_assets,crypto_lifecycle,fair_risk,agentic_security,attack_replay,assessment_launcher
 from .services.scan_orchestrator import ScanOrchestrator
 from .services.websocket_manager import WebSocketManager
 from .services.decision_action_orchestration import initialize_action_store
@@ -180,6 +180,7 @@ async def readiness_check():
     }
 app.include_router(scans.router,prefix='/scans',tags=['Scans']); app.include_router(scans.router,prefix='/api/v1/scans',tags=['Scans'])
 app.include_router(capabilities.router,prefix='/api/v1/capabilities',tags=['Security Capabilities'])
+app.include_router(assessment_launcher.router,prefix='/api/v1/assessment-launcher',tags=['Assessment Launcher'])
 app.include_router(vulnerabilities.router,prefix='/vulnerabilities',tags=['Vulnerabilities']); app.include_router(vulnerabilities.router,prefix='/api/v1/vulnerabilities',tags=['Vulnerabilities'])
 app.include_router(finding_dispositions.router,prefix='/vulnerabilities',tags=['Finding Dispositions']); app.include_router(finding_dispositions.router,prefix='/api/v1/vulnerabilities',tags=['Finding Dispositions'])
 app.include_router(remediation.router,tags=['Remediation Workflow']); app.include_router(remediation.router,prefix='/api/v1',tags=['Remediation Workflow'])

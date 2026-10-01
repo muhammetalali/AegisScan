@@ -42,7 +42,8 @@ services:
   fastapi:
     env_file: !reset []
     ports: !reset []
-    volumes: !reset []
+    volumes: !override
+      - semgrep_workspace:/var/lib/aegis-semgrep
     read_only: true
     tmpfs: [/tmp]
     security_opt: [no-new-privileges:true]
@@ -50,6 +51,8 @@ services:
     environment:
       <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}
+      AEGIS_ASSESSMENT_LAUNCHER_MODE: ${AEGIS_ASSESSMENT_LAUNCHER_MODE:-single-operator-lab}
+      AEGIS_SEMGREP_UPLOAD_ROOT: /var/lib/aegis-semgrep/uploads
     depends_on: !override
       django: {condition: service_started}
       redis: {condition: service_healthy}
@@ -59,6 +62,7 @@ services:
       SCANNER_EGRESS_INTERFACE: ${SCANNER_EGRESS_INTERFACE:-eth0}
       SCANNER_CONTROL_ENDPOINTS: ${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}
       SCANNER_EGRESS_PRIVATE_TARGETS: ${SCANNER_EGRESS_PRIVATE_TARGETS:-}
+      AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_KALI_NETWORK_AUTH_TOKEN:-}
     depends_on: !override
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -100,6 +104,8 @@ services:
       <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_KALI_NETWORK_AUTH_TOKEN:-}
+      AEGIS_SCANNER_EGRESS_CONTROL_URL: http://127.0.0.1:18780
       AEGIS_RECON_PROVIDER: ${AEGIS_RECON_PROVIDER:-default-kali}
       AEGIS_RECON_LEGACY_DISABLED: "true"
       AEGIS_KALI_RECON_CANARY_BPS: ${AEGIS_KALI_RECON_CANARY_BPS:-0}
@@ -310,6 +316,8 @@ services:
     environment:
       <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}
+      AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_KALI_NETWORK_AUTH_TOKEN:-}
+      AEGIS_SCANNER_EGRESS_CONTROL_URL: http://127.0.0.1:18780
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
       XDG_CONFIG_HOME: /tmp/.config

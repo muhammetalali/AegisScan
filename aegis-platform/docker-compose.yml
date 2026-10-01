@@ -58,11 +58,13 @@ services:
     container_name: aegis-fastapi
     restart: unless-stopped
     command: uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001 --workers 4 --loop uvloop --http httptools --no-access-log
-    volumes: [./backend:/app]
+    volumes: [./backend:/app, semgrep_workspace:/var/lib/aegis-semgrep]
     ports: ["8001:8001"]
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      AEGIS_ASSESSMENT_LAUNCHER_MODE: ${AEGIS_ASSESSMENT_LAUNCHER_MODE:-single-operator-lab}
+      AEGIS_SEMGREP_UPLOAD_ROOT: /var/lib/aegis-semgrep/uploads
     depends_on:
       django: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -86,6 +88,7 @@ services:
       SCANNER_EGRESS_INTERFACE: ${SCANNER_EGRESS_INTERFACE:-eth0}
       SCANNER_CONTROL_ENDPOINTS: ${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}
       SCANNER_EGRESS_PRIVATE_TARGETS: ${SCANNER_EGRESS_PRIVATE_TARGETS:-aegis-scan-target}
+      AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-aegis-dev-egress-control-root}
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -122,12 +125,14 @@ services:
     network_mode: "service:scanner_egress"
     cap_drop: [ALL]
     cap_add: [NET_RAW, SETUID, SETGID, SETPCAP]
-    volumes: [./backend:/app]
+    volumes: [./backend:/app, semgrep_workspace:/var/lib/aegis-semgrep]
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
       DJANGO_SETTINGS_MODULE: django_project.settings
+      AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-aegis-dev-egress-control-root}
+      AEGIS_SCANNER_EGRESS_CONTROL_URL: http://127.0.0.1:18780
       AEGIS_RECON_PROVIDER: ${AEGIS_RECON_PROVIDER:-legacy}
       AEGIS_KALI_RECON_CANARY_BPS: ${AEGIS_KALI_RECON_CANARY_BPS:-0}
       AEGIS_KALI_RECON_URL: ${AEGIS_KALI_RECON_URL:-http://127.0.0.1:18765}
@@ -191,6 +196,8 @@ services:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
       DJANGO_SETTINGS_MODULE: django_project.settings
       AEGIS_KALI_RECON_AUTH_TOKEN: ""
+      AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-aegis-dev-egress-control-root}
+      AEGIS_SCANNER_EGRESS_CONTROL_URL: http://127.0.0.1:18780
     depends_on:
       scanner_egress: {condition: service_healthy}
       django: {condition: service_healthy}
@@ -235,3 +242,4 @@ volumes:
   redis_data:
   media_data:
   static_data:
+  semgrep_workspace:

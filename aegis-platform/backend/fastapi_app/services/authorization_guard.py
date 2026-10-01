@@ -9,6 +9,7 @@ from django_project.assets.models import Asset, AssetAuthorization
 from django_project.scans.models import Scan
 
 from .scope_authorization import ScopeAuthorizationError, require_authorized_target
+from .dynamic_egress import DynamicEgressError, authorize_dynamic_egress
 
 
 _NETWORK_SCAN_TYPES = {Scan.Type.IP, Scan.Type.URL, Scan.Type.NETWORK}
@@ -57,15 +58,18 @@ def _require_worker_egress(
     *,
     url: bool = False,
     approved_target: str = '',
+    approved_addresses: tuple[str, ...] = (),
 ) -> tuple[bool, str]:
     try:
-        require_authorized_target(
+        destinations = require_authorized_target(
             target,
             url=url,
             resolve_dns=True,
             approved_target=approved_target or None,
+            approved_addresses=approved_addresses,
         )
-    except ScopeAuthorizationError as exc:
+        authorize_dynamic_egress(destinations)
+    except (ScopeAuthorizationError, DynamicEgressError) as exc:
         return False, f'Execution blocked: {exc}'
     return True, ''
 
@@ -103,12 +107,15 @@ def require_bound_scan_authorization(scan_id: str) -> tuple[Scan | None, str, As
             return None, 'Execution blocked: scan target no longer matches the bound authorization decision.', None
         needs_egress_check = scan.scan_type in _NETWORK_SCAN_TYPES
         is_url_scan = scan.scan_type == Scan.Type.URL
+        resolved = (asset.configuration or {}).get('resolved_ips') or []
+        approved_addresses = tuple(str(item) for item in resolved if isinstance(item, str))
 
     if needs_egress_check:
         ok, reason = _require_worker_egress(
             authorized_target,
             url=is_url_scan,
             approved_target=authorized_target,
+            approved_addresses=approved_addresses,
         )
         if not ok:
             return None, reason, None
@@ -156,10 +163,12 @@ def require_bound_validation_authorization(validation) -> tuple[Asset | None, st
         return None, reason, None
     if decision.id != validation.authorization_decision_id:
         return None, 'Execution blocked: bound authorization decision is no longer the latest asset decision.', None
+    resolved = (asset.configuration or {}).get('resolved_ips') or []
     ok, reason = _require_worker_egress(
         decision.target_snapshot,
         url=(validation.target_type or '').strip().lower() == 'url',
         approved_target=decision.target_snapshot,
+        approved_addresses=tuple(str(item) for item in resolved if isinstance(item, str)),
     )
     if not ok:
         return None, reason, None
@@ -180,12 +189,15 @@ def revalidate_bound_authorization(scan: Scan, decision: AssetAuthorization) -> 
         needs_egress_check = scan.scan_type in _NETWORK_SCAN_TYPES
         is_url_scan = scan.scan_type == Scan.Type.URL
         target = decision.target_snapshot
+        resolved = (asset.configuration or {}).get('resolved_ips') or []
+        approved_addresses = tuple(str(item) for item in resolved if isinstance(item, str))
 
     if needs_egress_check:
         ok, reason = _require_worker_egress(
             target,
             url=is_url_scan,
             approved_target=decision.target_snapshot,
+            approved_addresses=approved_addresses,
         )
         if not ok:
             return False, reason.replace('Execution blocked: ', 'Execution blocked before evidence persistence: ', 1)

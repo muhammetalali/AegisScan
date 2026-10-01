@@ -85,7 +85,7 @@ CAPABILITIES: dict[str, Capability] = {
     'code.semgrep': Capability(
         id='code.semgrep', tool='semgrep', category='source-code-analysis',
         description='Authorized static source-code analysis using the native Semgrep adapter.',
-        scan_type='code', asset_types=('source_code', 'repository'), risk='passive',
+        scan_type='code', asset_types=('source_code', 'repository', 'file'), risk='passive',
         runner_profile=resolve_kali_profile('code.semgrep'),
     ),
 }
