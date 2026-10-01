@@ -37,7 +37,7 @@ def test_publication_consumers_load_same_immutable_patch_tag(workflow, tmp_path)
     )
     assert result.returncode == 0, result.stderr
     assert env_file.read_text() == f"AEGIS_RELEASE_TAG={RELEASE_TAG}\n"
-    assert RELEASE_TAG == "v1.0.1"
+    assert RELEASE_TAG == "v1.0.2"
     for step in steps[index + 1:]:
         script = step.get("run", "")
         if "gh release " in script:
