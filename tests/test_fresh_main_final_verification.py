@@ -8,7 +8,7 @@ import pytest
 
 from scripts.ci.release1_version import RELEASE_TAG
 from scripts.ci.project_completion import build_completion
-from release1_evidence_fixture import _build as build_release1_fixture
+from tests.release1_evidence_fixture import _build as build_release1_fixture
 
 from scripts.ci.fresh_main_final_verification import (
     FinalVerificationError,

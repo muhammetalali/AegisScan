@@ -11,7 +11,7 @@ from scripts.ci.release1_closure import (
     build_manifest,
 )
 
-from release1_evidence_fixture import REPO, SHA, _build, _fixture, _write
+from tests.release1_evidence_fixture import REPO, SHA, _build, _fixture, _write
 
 
 def test_release1_closure_requires_complete_exact_sha_evidence(tmp_path: Path):
