@@ -33,6 +33,14 @@ def _run_nft(statement: str) -> None:
 def _normalize_target(value: object) -> tuple[str, str]:
     raw = str(value or '').strip()
     try:
+        address = ipaddress.ip_address(raw)
+    except ValueError:
+        address = None
+    if address is not None:
+        if address.is_multicast or address.is_unspecified:
+            raise ValueError('multicast and unspecified targets are not supported')
+        return str(address), SET4 if address.version == 4 else SET6
+    try:
         network = ipaddress.ip_network(raw, strict=False)
     except ValueError as exc:
         raise ValueError('target must be an IP address or CIDR') from exc
