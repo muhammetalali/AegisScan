@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from scripts.ci.release1_version import RELEASE_TAG
+from scripts.ci.project_completion import build_completion
+from release1_evidence_fixture import _build as build_release1_fixture
 
 from scripts.ci.fresh_main_final_verification import (
     FinalVerificationError,
@@ -77,6 +79,12 @@ def _decision(
     return _write(tmp_path / name, payload)
 
 
+def _release_fixture_root(tmp_path: Path) -> Path:
+    root = tmp_path / "release-producer"
+    root.mkdir()
+    return root
+
+
 def _fixture(tmp_path: Path):
     state = _write(
         tmp_path / "state.json",
@@ -98,10 +106,9 @@ def _fixture(tmp_path: Path):
         "hygiene": _run(tmp_path, "hygiene-run", "Final Project Hygiene", ".github/workflows/final-project-hygiene.yml", "workflow_dispatch", 5),
     }
     decisions = {
-        "release_closure": _decision(
-            tmp_path, "release1-closure.json", "aegisscan.release1-closure.v1", "RELEASED",
-            digest_field="release_closure_sha256",
-            extra={"release": 1},
+        "release_closure": _write(
+            tmp_path / "release1-closure.json",
+            build_release1_fixture(_release_fixture_root(tmp_path)),
         ),
         "provider_closure": _decision(
             tmp_path, "external-provider-acceptance-closure.json",
@@ -297,3 +304,47 @@ def test_fresh_main_workflow_downloads_all_final_decision_artifacts():
     assert "/tmp/aegis-final/canonical/performance/release-performance-acceptance.sha256" in text
     assert "fresh_main_final_verification.py" in text
     assert "AEGISSCAN_FRESH_MAIN_FINAL=VERIFIED" in text
+
+def test_real_release_producer_verifier_and_completion_contract(tmp_path: Path):
+    verification = _build(tmp_path)
+    assert json.loads((tmp_path / "release1-closure.json").read_text())["release"] == "1"
+    assert verification["release"] == 1
+    run = _run(
+        tmp_path, "fresh-run", "Fresh Main Final Verification",
+        ".github/workflows/fresh-main-final-verification.yml", "workflow_dispatch", 6,
+    )
+    report = tmp_path / "verification.json"
+    completion = build_completion(
+        release_sha=SHA, repository=REPO,
+        repository_state=tmp_path / "state.json",
+        release_metadata=tmp_path / "release.json",
+        release_tag_metadata=tmp_path / "tag.json",
+        verification_run_metadata=run,
+        fresh_verification=report,
+        fresh_verification_sha256=_companion(report),
+        output=tmp_path / "completion.json",
+    )
+    assert completion["decision"] == "PROJECT_COMPLETE"
+    assert completion["release_sha"] == SHA
+    assert all(completion["controls"].values())
+
+
+@pytest.mark.parametrize("release_number", [1, True, 1.0, None, "2", "01"])
+def test_final_verification_rejects_noncanonical_release_number(tmp_path, monkeypatch, release_number):
+    original = _fixture
+
+    def invalid_fixture(path):
+        state, release, tag, runs, decisions, checksums = original(path)
+        report = decisions["release_closure"]
+        value = json.loads(report.read_text())
+        value["release"] = release_number
+        value.pop("release_closure_sha256")
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        value["release_closure_sha256"] = hashlib.sha256(raw).hexdigest()
+        _write(report, value)
+        checksums["release_closure"] = _companion(report)
+        return state, release, tag, runs, decisions, checksums
+
+    monkeypatch.setitem(globals(), "_fixture", invalid_fixture)
+    with pytest.raises(FinalVerificationError, match="release number mismatch"):
+        _build(tmp_path)

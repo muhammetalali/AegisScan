@@ -238,7 +238,8 @@ def build_verification(
         release_sha=release_sha,
         label="Release 1 closure",
     )
-    if release_value.get("release") != 1:
+    # The release1-closure.v1 producer publishes the canonical string "1".
+    if release_value.get("release") != "1":
         raise FinalVerificationError("Release 1 closure release number mismatch")
 
     _require_embedded_digest(
