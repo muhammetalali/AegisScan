@@ -102,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     if not TOKEN:
-        raise SystemExit('AEGIS_SCANNER_EGRESS_CONTROL_TOKEN is required')
+        raise SystemExit('AEGIS_SCANNER_EGRESS_CONTROL_ROOT is required')
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.serve_forever()
 

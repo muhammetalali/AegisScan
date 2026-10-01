@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from fastapi_app.routers import assessment_launcher as launcher
-from fastapi_app.services.dynamic_egress import _non_global_network
+from fastapi_app.services.dynamic_egress import DynamicEgressError, _non_global_network, authorize_dynamic_egress
 from fastapi_app.services.scanner_adapters import validate_code_target
 
 
@@ -132,3 +132,17 @@ def test_single_operator_lab_mode_routes_through_governance_service(monkeypatch)
     assert calls['actor_id'] == 'owner-1'
     assert calls['expected_version'] == 7
     assert calls['authorized'] is True
+
+
+
+def test_dynamic_egress_private_target_fails_closed_without_control_root(monkeypatch):
+    monkeypatch.delenv(AEGIS_SCANNER_EGRESS_CONTROL_ROOT, raising=False)
+    monkeypatch.setenv(JWT_SECRET_KEY, must-not-be-used-for-egress)
+    with pytest.raises(DynamicEgressError, match=AEGIS_SCANNER_EGRESS_CONTROL_ROOT):
+        authorize_dynamic_egress([192.168.49.10])
+
+
+def test_dynamic_egress_public_target_needs_no_control_root(monkeypatch):
+    monkeypatch.delenv(AEGIS_SCANNER_EGRESS_CONTROL_ROOT, raising=False)
+    monkeypatch.setenv(JWT_SECRET_KEY, must-not-be-used-for-egress)
+    authorize_dynamic_egress([93.184.216.34])

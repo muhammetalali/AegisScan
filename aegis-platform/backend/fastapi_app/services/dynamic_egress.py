@@ -15,10 +15,7 @@ class DynamicEgressError(RuntimeError):
 
 
 def _token() -> str:
-    root = (
-        os.getenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', '').strip()
-        or os.getenv('JWT_SECRET_KEY', '').strip()
-    )
+    root = os.getenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', '').strip()
     if not root:
         return ''
     return hmac.new(
@@ -53,17 +50,23 @@ def _non_global_network(value: str) -> str | None:
 
 
 def authorize_dynamic_egress(destinations: Iterable[str]) -> None:
+    private_targets = [
+        normalized
+        for destination in destinations
+        if (normalized := _non_global_network(str(destination))) is not None
+    ]
+    if not private_targets:
+        return
     token = _token()
     if not token:
-        return
+        raise DynamicEgressError(
+            'Dynamic private-target egress requires AEGIS_SCANNER_EGRESS_CONTROL_ROOT'
+        )
     endpoint = _endpoint()
     if endpoint != 'http://127.0.0.1:18780':
         raise DynamicEgressError('Dynamic egress control endpoint must remain on 127.0.0.1:18780')
 
-    for destination in destinations:
-        normalized = _non_global_network(str(destination))
-        if normalized is None:
-            continue
+    for normalized in private_targets:
         body = json.dumps({'target': normalized}, sort_keys=True).encode('utf-8')
         request = urllib.request.Request(
             endpoint + '/v1/allow',
