@@ -21,15 +21,26 @@ LABEL org.opencontainers.image.revision=${BUILD_COMMIT} \
 RUN test -n "$BUILD_COMMIT" && test "$BUILD_COMMIT" != "unknown" \
     && test "$SOURCE_DATE_EPOCH" -gt 0
 
+# Seed public TLS roots from a digest-pinned official Python image because the
+# minimal Kali base does not yet contain ca-certificates. The pinned Kali
+# ca-certificates package replaces this bootstrap bundle during installation.
+COPY --from=python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
 # Foundation packages are pinned at the direct dependency boundary. Before
 # reading metadata, APT is switched fail-closed from the moving kali-rolling
 # suite to Kali's official point-release kali-last-snapshot suite.
 RUN set -eux; \
+    test -s /etc/ssl/certs/ca-certificates.crt; \
+    printf '%s\n' 'APT::Update::Error-Mode "any";' 'Acquire::Retries "3";' 'Acquire::http::Timeout "60";' 'Acquire::https::Timeout "60";' > /etc/apt/apt.conf.d/80aegis-network; \
     if [ -f /etc/apt/sources.list.d/kali.sources ]; then \
+        sed -i -E 's|^URIs:[[:space:]]+http://http\.kali\.org/kali/?[[:space:]]*$|URIs: https://kali.download/kali/|' /etc/apt/sources.list.d/kali.sources; \
+        grep -Eq '^URIs: https://kali\.download/kali/[[:space:]]*$' /etc/apt/sources.list.d/kali.sources; \
         sed -i -E 's/^Suites:[[:space:]]+kali-rolling[[:space:]]*$/Suites: kali-last-snapshot/' /etc/apt/sources.list.d/kali.sources; \
         grep -Eq '^Suites:[[:space:]]+kali-last-snapshot[[:space:]]*$' /etc/apt/sources.list.d/kali.sources; \
         ! grep -Eq '^Suites:[[:space:]]+kali-rolling([[:space:]]|$)' /etc/apt/sources.list.d/kali.sources; \
     elif [ -f /etc/apt/sources.list ]; then \
+        sed -i -E 's|(^deb[[:space:]]+)http://http\.kali\.org/kali/?([[:space:]])|\1https://kali.download/kali/\2|' /etc/apt/sources.list; \
+        grep -Eq '^deb[[:space:]]+https://kali\.download/kali/[[:space:]]' /etc/apt/sources.list; \
         sed -i -E 's/(^deb[[:space:]]+[^[:space:]]+[[:space:]]+)kali-rolling([[:space:]])/\1kali-last-snapshot\2/' /etc/apt/sources.list; \
         grep -Eq '^deb[[:space:]]+[^[:space:]]+[[:space:]]+kali-last-snapshot[[:space:]]' /etc/apt/sources.list; \
         ! grep -Eq '^[[:space:]]*deb[[:space:]]+[^[:space:]]+[[:space:]]+kali-rolling([[:space:]]|$)' /etc/apt/sources.list; \
