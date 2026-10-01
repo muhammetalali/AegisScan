@@ -13,7 +13,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
-from django.db.models import Q
 from django.utils.text import slugify
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -31,6 +30,12 @@ from ..services.asset_authorization_governance import (
 from ..services.authorization_guard import asset_target
 from ..services.capability_planner import plan_capabilities
 from ..services.capability_registry import get_capability
+from ..services.governed_action_requests import (
+    GovernedActionRequestConflict,
+    GovernedActionRequestError,
+    create_governed_action_request,
+    governed_action_request_view,
+)
 
 router = APIRouter()
 
@@ -143,7 +148,14 @@ def _existing_asset(project: Project, asset_type: str, target: str) -> Asset | N
     return None
 
 
-def _ensure_authorization(asset: Asset, actor_id: str) -> AssetAuthorization:
+def _scope_mode() -> str:
+    mode = os.getenv('AEGIS_SCAN_SCOPE_MODE', 'asset-authorization').strip().lower()
+    if mode not in {'asset-authorization', 'single-operator-lab'}:
+        raise HTTPException(status_code=500, detail='AEGIS_SCAN_SCOPE_MODE is invalid')
+    return mode
+
+
+def _current_authorization(asset: Asset) -> AssetAuthorization | None:
     latest = AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id').first()
     target = asset_target(asset)
     if (
@@ -153,22 +165,69 @@ def _ensure_authorization(asset: Asset, actor_id: str) -> AssetAuthorization:
         and latest.target_snapshot == target
     ):
         return latest
+    return None
+
+
+def _ensure_authorization(asset: Asset, actor_id: str) -> dict:
+    latest = _current_authorization(asset)
+    if latest is not None:
+        return {
+            'state': 'authorized',
+            'source': 'existing-governed-decision',
+            'decision': latest,
+            'request': None,
+        }
+
     request_id = uuid.uuid4()
     correlation_id = uuid.uuid4()
+    mode = _scope_mode()
+
+    if mode == 'single-operator-lab':
+        try:
+            result = govern_asset_authorization(
+                asset_id=str(asset.id),
+                project_id=str(asset.project_id),
+                actor_id=str(actor_id),
+                expected_version=asset_authorization_version(asset),
+                authorized=True,
+                reason='Single-operator lab mode: Assessment Launcher target activation',
+                governed_request_id=str(request_id),
+                correlation_id=str(correlation_id),
+            )
+        except AssetAuthorizationGovernanceError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            'state': 'authorized',
+            'source': 'single-operator-lab',
+            'decision': result.decision,
+            'request': None,
+        }
+
     try:
-        result = govern_asset_authorization(
-            asset_id=str(asset.id),
+        submitted = create_governed_action_request(
             project_id=str(asset.project_id),
-            actor_id=str(actor_id),
+            requested_by_id=str(actor_id),
+            action_id='asset.authorization.approve',
+            entity_type='asset',
+            entity_id=str(asset.id),
             expected_version=asset_authorization_version(asset),
-            authorized=True,
-            reason='Assessment Launcher project-owner target activation',
-            governed_request_id=str(request_id),
-            correlation_id=str(correlation_id),
+            idempotency_key=f'assessment-launcher-authorization:{request_id}',
+            parameters={'reason': 'Assessment Launcher target activation request'},
+            correlation_id=correlation_id,
         )
-    except AssetAuthorizationGovernanceError as exc:
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except GovernedActionRequestConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return result.decision
+    except GovernedActionRequestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        'state': 'pending',
+        'source': 'governed-action-request',
+        'decision': None,
+        'request': governed_action_request_view(submitted),
+    }
 
 
 def _capability_plan(asset: Asset, depth: Depth) -> dict:
@@ -228,17 +287,25 @@ def _prepare_asset(
         )
         created = True
     else:
-        refreshed = replace_asset_configuration_preserving_authorization(
-            asset.configuration,
-            configuration,
-        )
-        if refreshed != (asset.configuration or {}):
-            Asset.objects.filter(pk=asset.pk).update(configuration=refreshed)
-            asset.configuration = refreshed
-    decision = _ensure_authorization(asset, user_id)
+        current = _current_authorization(asset)
+        if _scope_mode() == 'single-operator-lab' or current is None:
+            refreshed = replace_asset_configuration_preserving_authorization(
+                asset.configuration,
+                configuration,
+            )
+            if refreshed != (asset.configuration or {}):
+                Asset.objects.filter(pk=asset.pk).update(configuration=refreshed)
+                asset.configuration = refreshed
+
+    authorization = _ensure_authorization(asset, user_id)
     plan = _capability_plan(asset, depth)
+    decision = authorization['decision']
+    if authorization['state'] != 'authorized':
+        plan['recommended_capabilities'] = []
+
     return {
         'project_id': str(project.id),
+        'scope_mode': _scope_mode(),
         'asset': {
             'id': str(asset.id),
             'name': asset.name,
@@ -247,9 +314,12 @@ def _prepare_asset(
             'created': created,
         },
         'authorization': {
-            'id': str(decision.id),
-            'target': decision.target_snapshot,
-            'authorized': decision.authorized,
+            'state': authorization['state'],
+            'source': authorization['source'],
+            'id': str(decision.id) if decision is not None else None,
+            'target': decision.target_snapshot if decision is not None else asset_target(asset),
+            'authorized': bool(decision and decision.authorized),
+            'request': authorization['request'],
         },
         **plan,
     }
@@ -299,6 +369,8 @@ async def assessment_context(project_id: str, user=Depends(get_current_user)):
         'suggested_networks': list(dict.fromkeys(suggestions)),
         'modes': ['network', 'ip', 'url', 'file'],
         'default_depth': 'standard',
+        'scope_mode': _scope_mode(),
+        'automatic_scope_activation': _scope_mode() == 'single-operator-lab',
     }
 
 
