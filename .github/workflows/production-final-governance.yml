@@ -170,22 +170,22 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          install -d -m 0700 /tmp/aegis-governance
-          printf '%s\n' "$PROD_ENTERPRISE_CA_BUNDLE" > /tmp/aegis-governance/enterprise-ca.pem
-          chmod 0600 /tmp/aegis-governance/enterprise-ca.pem
-          test -s /tmp/aegis-governance/enterprise-ca.pem
+          install -d -m 0700 ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}
+          printf '%s\n' "$PROD_ENTERPRISE_CA_BUNDLE" > ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem
+          chmod 0600 ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem
+          test -s ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem
           python - <<'PY'
           import ssl
           from pathlib import Path
-          path = Path('/tmp/aegis-governance/enterprise-ca.pem')
+          path = Path('${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem')
           if path.stat().st_size > 2 * 1024 * 1024:
               raise SystemExit('enterprise CA bundle exceeds 2 MiB')
           ssl.create_default_context(cafile=str(path))
           PY
           {
-            echo 'AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-governance/enterprise-ca.pem'
-            echo 'REQUESTS_CA_BUNDLE=/tmp/aegis-governance/enterprise-ca.pem'
-            echo 'SSL_CERT_FILE=/tmp/aegis-governance/enterprise-ca.pem'
+            echo 'AEGIS_ENTERPRISE_CA_BUNDLE=${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem'
+            echo 'REQUESTS_CA_BUNDLE=${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem'
+            echo 'SSL_CERT_FILE=${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem'
           } >> "$GITHUB_ENV"
 
       - name: Download independently captured workflow metadata and evidence
@@ -193,32 +193,32 @@ jobs:
         run: |
           set -euo pipefail
           install -d -m 0700 \
-            /tmp/aegis-governance/live \
-            /tmp/aegis-governance/resilience \
-            /tmp/aegis-governance/supply-chain \
-            /tmp/aegis-governance/metadata
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/live \
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/resilience \
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/supply-chain \
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata
 
           gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$LIVE_DEPLOY_RUN_ID" \
-            > /tmp/aegis-governance/metadata/live-run.json
+            > ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/live-run.json
           gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RESILIENCE_RUN_ID" \
-            > /tmp/aegis-governance/metadata/resilience-run.json
+            > ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/resilience-run.json
           gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SUPPLY_CHAIN_RUN_ID" \
-            > /tmp/aegis-governance/metadata/supply-chain-run.json
+            > ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/supply-chain-run.json
 
           gh run download "$LIVE_DEPLOY_RUN_ID" \
             --repo "$GITHUB_REPOSITORY" \
-            --dir /tmp/aegis-governance/live
+            --dir ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/live
           gh run download "$RESILIENCE_RUN_ID" \
             --repo "$GITHUB_REPOSITORY" \
-            --dir /tmp/aegis-governance/resilience
+            --dir ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/resilience
           # Require each evidence ZIP separately; Docker build records are not ZIP evidence.
           for component in django fastapi frontend; do
             artifact_name="supply-chain-$component-$RELEASE_SHA"
-            install -d -m 0700 "/tmp/aegis-governance/supply-chain/$artifact_name"
+            install -d -m 0700 "${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/supply-chain/$artifact_name"
             gh run download "$SUPPLY_CHAIN_RUN_ID" \
               --repo "$GITHUB_REPOSITORY" \
               --name "$artifact_name" \
-              --dir "/tmp/aegis-governance/supply-chain/$artifact_name"
+              --dir "${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/supply-chain/$artifact_name"
           done
 
       - name: Resolve approved internal production origin from immutable go-live evidence
@@ -231,7 +231,7 @@ jobs:
           from pathlib import Path
 
           candidates = []
-          for path in Path('/tmp/aegis-governance/live').rglob('manifest.json'):
+          for path in Path('${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/live').rglob('manifest.json'):
               try:
                   payload = json.loads(path.read_text(encoding='utf-8'))
               except Exception:
@@ -257,7 +257,7 @@ jobs:
           set -euo pipefail
           python aegis-platform/scripts/public_acceptance.py \
             --origin "$AEGIS_APPROVED_INTERNAL_ORIGIN" \
-            | tee /tmp/aegis-governance/current-internal-acceptance.json
+            | tee ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/current-internal-acceptance.json
 
       - name: Evaluate evidence-driven internal production governance decision
         shell: bash
@@ -265,20 +265,20 @@ jobs:
           set -euo pipefail
           python aegis-platform/scripts/production_governance_gate.py \
             --release-sha "$RELEASE_SHA" \
-            --go-live-root /tmp/aegis-governance/live \
-            --resilience-root /tmp/aegis-governance/resilience \
-            --supply-chain-root /tmp/aegis-governance/supply-chain \
-            --live-run-metadata /tmp/aegis-governance/metadata/live-run.json \
-            --resilience-run-metadata /tmp/aegis-governance/metadata/resilience-run.json \
-            --supply-chain-run-metadata /tmp/aegis-governance/metadata/supply-chain-run.json \
-            --current-internal-acceptance /tmp/aegis-governance/current-internal-acceptance.json \
-            --output /tmp/aegis-governance/decision.json \
-            | tee /tmp/aegis-governance/decision-output.json
+            --go-live-root ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/live \
+            --resilience-root ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/resilience \
+            --supply-chain-root ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/supply-chain \
+            --live-run-metadata ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/live-run.json \
+            --resilience-run-metadata ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/resilience-run.json \
+            --supply-chain-run-metadata ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/supply-chain-run.json \
+            --current-internal-acceptance ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/current-internal-acceptance.json \
+            --output ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/decision.json \
+            | tee ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/decision-output.json
 
           python - <<'PY'
           import json
           from pathlib import Path
-          decision = json.loads(Path('/tmp/aegis-governance/decision.json').read_text())
+          decision = json.loads(Path('${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/decision.json').read_text())
           assert decision['schema'] == 'aegisscan.production-governance-decision.v2'
           assert decision['status'] == 'success'
           assert decision['decision'] == 'APPROVED'
@@ -290,13 +290,13 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum \
-            /tmp/aegis-governance/decision.json \
-            /tmp/aegis-governance/current-internal-acceptance.json \
-            /tmp/aegis-governance/metadata/live-run.json \
-            /tmp/aegis-governance/metadata/resilience-run.json \
-            /tmp/aegis-governance/metadata/supply-chain-run.json \
-            | tee /tmp/aegis-governance/final-evidence.sha256
-          sha256sum -c /tmp/aegis-governance/final-evidence.sha256
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/decision.json \
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/current-internal-acceptance.json \
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/live-run.json \
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/resilience-run.json \
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/supply-chain-run.json \
+            | tee ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/final-evidence.sha256
+          sha256sum -c ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/final-evidence.sha256
 
       - name: Publish governance decision summary
         if: success()
@@ -306,7 +306,7 @@ jobs:
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           from pathlib import Path
-          d = json.loads(Path('/tmp/aegis-governance/decision.json').read_text())
+          d = json.loads(Path('${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/decision.json').read_text())
           print('# AegisScan Final Internal Production Governance')
           print()
           print(f"**Decision:** {d['decision']}")
@@ -323,13 +323,13 @@ jobs:
         with:
           name: aegisscan-final-internal-governance-${{ env.RELEASE_SHA }}-${{ github.run_id }}
           path: |
-            /tmp/aegis-governance/decision.json
-            /tmp/aegis-governance/decision-output.json
-            /tmp/aegis-governance/current-internal-acceptance.json
-            /tmp/aegis-governance/final-evidence.sha256
-            /tmp/aegis-governance/metadata/live-run.json
-            /tmp/aegis-governance/metadata/resilience-run.json
-            /tmp/aegis-governance/metadata/supply-chain-run.json
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/decision.json
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/decision-output.json
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/current-internal-acceptance.json
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/final-evidence.sha256
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/live-run.json
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/resilience-run.json
+            ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/supply-chain-run.json
           if-no-files-found: error
           retention-days: 90
 
@@ -338,4 +338,4 @@ jobs:
         shell: bash
         run: |
           set +e
-          rm -f /tmp/aegis-governance/enterprise-ca.pem
+          rm -f ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem

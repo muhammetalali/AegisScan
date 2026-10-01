@@ -89,8 +89,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/release1/metadata /tmp/release1/evidence artifacts
-          gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$AEGIS_RELEASE_SHA&per_page=100"             > /tmp/release1/all-runs.json
+          mkdir -p ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/metadata ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence artifacts
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$AEGIS_RELEASE_SHA&per_page=100"             > ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/all-runs.json
 
           python - <<'PY'
           import json
@@ -101,7 +101,7 @@ jobs:
           sha = os.environ['AEGIS_RELEASE_SHA']
           repository = os.environ['GITHUB_REPOSITORY']
           trigger_id = os.environ.get('TRIGGER_FINAL_GOV_RUN_ID', '').strip()
-          payload = json.loads(Path('/tmp/release1/all-runs.json').read_text(encoding='utf-8'))
+          payload = json.loads(Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/all-runs.json').read_text(encoding='utf-8'))
           runs = payload.get('workflow_runs') or []
 
           required = {
@@ -167,7 +167,7 @@ jobs:
               'Production Resilience Acceptance': 'RESILIENCE_RUN_ID',
               'Final Internal Production Governance': 'FINAL_PRODUCTION_GOVERNANCE_RUN_ID',
           }
-          metadata_root = Path('/tmp/release1/metadata')
+          metadata_root = Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/metadata')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
               for index, (name, run) in enumerate(sorted(selected.items()), start=1):
                   slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
@@ -190,7 +190,7 @@ jobs:
           import os
           import subprocess
           from pathlib import Path
-          for path in Path('/tmp/release1/metadata').glob('*.json'):
+          for path in Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/metadata').glob('*.json'):
               run = json.loads(path.read_text())
               endpoint = f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100"
               pages = json.loads(subprocess.check_output(['gh', 'api', '--paginate', '--slurp', endpoint], text=True))
@@ -208,21 +208,21 @@ jobs:
           for pair in             "final-acceptance:$FINAL_ACCEPTANCE_RUN_ID"             "final-governance:$FINAL_GOVERNANCE_RUN_ID"             "supply-chain:$SUPPLY_CHAIN_RUN_ID"             "live-deploy:$LIVE_DEPLOY_RUN_ID"             "resilience:$RESILIENCE_RUN_ID"             "final-production-governance:$FINAL_PRODUCTION_GOVERNANCE_RUN_ID"; do
             name="${pair%%:*}"
             run_id="${pair#*:}"
-            mkdir -p "/tmp/release1/evidence/$name"
+            mkdir -p "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name"
             if [ "$name" = supply-chain ]; then
               # One exact artifact per command makes a missing component fail immediately.
               for component in django fastapi frontend; do
                 artifact_name="supply-chain-$component-$AEGIS_RELEASE_SHA"
-                mkdir -p "/tmp/release1/evidence/$name/$artifact_name"
+                mkdir -p "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name/$artifact_name"
                 gh run download "$run_id" \
                   --repo "$GITHUB_REPOSITORY" \
                   --name "$artifact_name" \
-                  --dir "/tmp/release1/evidence/$name/$artifact_name"
+                  --dir "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name/$artifact_name"
               done
             else
               gh run download "$run_id" \
                 --repo "$GITHUB_REPOSITORY" \
-                --dir "/tmp/release1/evidence/$name"
+                --dir "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name"
             fi
           done
 
@@ -230,22 +230,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "/repos/$GITHUB_REPOSITORY" > /tmp/release1/repository.json
-          gh api "/repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" > /tmp/release1/open-prs.json
+          gh api "/repos/$GITHUB_REPOSITORY" > ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/repository.json
+          gh api "/repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" > ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/open-prs.json
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          repo = json.loads(Path('/tmp/release1/repository.json').read_text(encoding='utf-8'))
-          pulls = json.loads(Path('/tmp/release1/open-prs.json').read_text(encoding='utf-8'))
+          repo = json.loads(Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/repository.json').read_text(encoding='utf-8'))
+          pulls = json.loads(Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/open-prs.json').read_text(encoding='utf-8'))
           payload = {
               'repository': os.environ['GITHUB_REPOSITORY'],
               'default_branch': repo.get('default_branch'),
               'main_sha': os.environ['AEGIS_RELEASE_SHA'],
               'open_pr_count': len(pulls),
           }
-          Path('/tmp/release1/repository-state.json').write_text(
+          Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/repository-state.json').write_text(
               json.dumps(payload, sort_keys=True, indent=2) + '\n',
               encoding='utf-8',
           )
@@ -257,13 +257,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/admin/branch_hygiene_admin.py             --repo "$GITHUB_REPOSITORY"             --mode apply             --min-age-hours 24             --output /tmp/release1/branch-hygiene.json
+          python scripts/admin/branch_hygiene_admin.py             --repo "$GITHUB_REPOSITORY"             --mode apply             --min-age-hours 24             --output ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/branch-hygiene.json
 
       - name: Build Release 1 closure manifest
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/ci/release1_closure.py             --release-sha "$AEGIS_RELEASE_SHA"             --repository "$GITHUB_REPOSITORY"             --metadata-root /tmp/release1/metadata             --evidence-root /tmp/release1/evidence             --repository-state /tmp/release1/repository-state.json             --branch-hygiene /tmp/release1/branch-hygiene.json             --output artifacts/release1-closure.json
+          python scripts/ci/release1_closure.py             --release-sha "$AEGIS_RELEASE_SHA"             --repository "$GITHUB_REPOSITORY"             --metadata-root ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/metadata             --evidence-root ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence             --repository-state ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/repository-state.json             --branch-hygiene ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/branch-hygiene.json             --output artifacts/release1-closure.json
           sha256sum artifacts/release1-closure.json > artifacts/release1-closure.sha256
           sha256sum -c artifacts/release1-closure.sha256
 
@@ -291,8 +291,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release_json=/tmp/release1/github-release.json
-          tag_ref=/tmp/release1/github-release-tag.json
+          release_json=${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/github-release.json
+          tag_ref=${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/github-release-tag.json
           existing=false
 
           if gh release view "$AEGIS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
@@ -317,8 +317,8 @@ jobs:
           import os
           from pathlib import Path
 
-          release = json.loads(Path('/tmp/release1/github-release.json').read_text(encoding='utf-8'))
-          tag = json.loads(Path('/tmp/release1/github-release-tag.json').read_text(encoding='utf-8'))
+          release = json.loads(Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/github-release.json').read_text(encoding='utf-8'))
+          tag = json.loads(Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/github-release-tag.json').read_text(encoding='utf-8'))
           expected_sha = os.environ['AEGIS_RELEASE_SHA']
           expected_tag = os.environ['AEGIS_RELEASE_TAG']
 
@@ -335,20 +335,20 @@ jobs:
               raise SystemExit('GitHub Release URL is missing')
           PY
 
-          rm -rf /tmp/release1/published-assets
-          mkdir -p /tmp/release1/published-assets
+          rm -rf ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/published-assets
+          mkdir -p ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/published-assets
           gh release download "$AEGIS_RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --pattern release1-closure.json \
             --pattern release1-closure.sha256 \
-            --dir /tmp/release1/published-assets
-          cmp artifacts/release1-closure.json /tmp/release1/published-assets/release1-closure.json
-          cmp artifacts/release1-closure.sha256 /tmp/release1/published-assets/release1-closure.sha256
+            --dir ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/published-assets
+          cmp artifacts/release1-closure.json ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/published-assets/release1-closure.json
+          cmp artifacts/release1-closure.sha256 ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/published-assets/release1-closure.sha256
 
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           from pathlib import Path
-          release = json.loads(Path('/tmp/release1/github-release.json').read_text(encoding='utf-8'))
+          release = json.loads(Path('${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/github-release.json').read_text(encoding='utf-8'))
           print(f"**GitHub Release:** {release['url']}")
           PY
 
@@ -359,11 +359,11 @@ jobs:
           path: |
             artifacts/release1-closure.json
             artifacts/release1-closure.sha256
-            /tmp/release1/metadata/
-            /tmp/release1/repository-state.json
-            /tmp/release1/branch-hygiene.json
-            /tmp/release1/github-release.json
-            /tmp/release1/github-release-tag.json
+            ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/metadata/
+            ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/repository-state.json
+            ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/branch-hygiene.json
+            ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/github-release.json
+            ${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/github-release-tag.json
           if-no-files-found: error
           retention-days: 180
 
