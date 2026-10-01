@@ -69,13 +69,14 @@ def validate_code_target(target: str) -> str:
     value = target.strip()
     if not value or '\x00' in value:
         raise ValueError('Invalid code scan target')
-    path = Path(value).expanduser().resolve()
+    candidate = Path(value).expanduser()
+    if candidate.is_symlink():
+        raise ValueError('Code scan target must not be a symlink')
+    path = candidate.resolve()
     if not path.exists():
         raise ValueError(f'Code scan target does not exist: {path}')
     if not path.is_dir() and not path.is_file():
         raise ValueError('Code scan target must be a regular file or directory')
-    if path.is_symlink():
-        raise ValueError('Code scan target must not be a symlink')
     return str(path)
 
 
