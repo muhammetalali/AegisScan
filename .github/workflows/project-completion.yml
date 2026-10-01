@@ -52,6 +52,10 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Load current Release 1 publication tag
+        shell: bash
+        run: python scripts/ci/release1_version.py >> "$GITHUB_ENV"
+
       - name: Require exact current main and final Release 1 object
         shell: bash
         run: |
@@ -64,10 +68,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
           install -d -m 0700 /tmp/aegis-completion/verification artifacts
-          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" \
+          gh release view "$AEGIS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json tagName,targetCommitish,isDraft,isPrerelease,url \
             > /tmp/aegis-completion/release.json
-          gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/v1.0.0" \
+          gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/$AEGIS_RELEASE_TAG" \
             > /tmp/aegis-completion/release-tag.json
 
       - name: Recheck zero open PRs at terminal decision time
@@ -207,7 +211,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" --json assets \
+          gh release view "$AEGIS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
             > /tmp/aegis-completion/release-assets.json
           asset_state="$(python - <<'PY'
           import json
@@ -221,7 +225,7 @@ jobs:
           )"
           case "$asset_state" in
             none)
-              gh release upload v1.0.0 \
+              gh release upload "$AEGIS_RELEASE_TAG" \
                 artifacts/aegisscan-project-completion.json \
                 artifacts/aegisscan-project-completion.sha256 \
                 --repo "$GITHUB_REPOSITORY"
@@ -240,7 +244,7 @@ jobs:
 
           rm -rf /tmp/aegis-completion/published
           mkdir -p /tmp/aegis-completion/published
-          gh release download v1.0.0 \
+          gh release download "$AEGIS_RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --pattern aegisscan-project-completion.json \
             --pattern aegisscan-project-completion.sha256 \

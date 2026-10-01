@@ -10,6 +10,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.ci.release1_version import RELEASE_TAG
+
 SCHEMA = "aegisscan.project-completion.v1"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -102,7 +106,7 @@ def build_completion(
     release = _load(release_metadata, "GitHub Release metadata")
     tag = _load(release_tag_metadata, "GitHub Release tag metadata")
     if (
-        release.get("tagName") != "v1.0.0"
+        release.get("tagName") != RELEASE_TAG
         or release.get("targetCommitish") != release_sha
         or release.get("isDraft") is not False
         or release.get("isPrerelease") is not False
@@ -110,7 +114,7 @@ def build_completion(
         raise ProjectCompletionError("GitHub Release 1 does not match the exact completion SHA")
     tag_object = tag.get("object") or {}
     if tag_object.get("type") != "commit" or tag_object.get("sha") != release_sha:
-        raise ProjectCompletionError("v1.0.0 tag does not point directly to the completion SHA")
+        raise ProjectCompletionError(f"{RELEASE_TAG} tag does not point directly to the completion SHA")
 
     run = _load(verification_run_metadata, "fresh-main verification workflow metadata")
     repo = run.get("repository") or {}
@@ -138,7 +142,7 @@ def build_completion(
         or verification.get("status") != "success"
         or verification.get("decision") != "VERIFIED"
         or verification.get("release") != 1
-        or verification.get("release_tag") != "v1.0.0"
+        or verification.get("release_tag") != RELEASE_TAG
         or verification.get("release_sha") != release_sha
         or verification.get("main_sha") != release_sha
         or verification.get("open_pr_count") != 0
@@ -179,7 +183,7 @@ def build_completion(
         "canonical_application": "aegis-platform/",
         "canonical_branch": "main",
         "release": 1,
-        "release_tag": "v1.0.0",
+        "release_tag": RELEASE_TAG,
         "release_sha": release_sha,
         "main_sha": release_sha,
         "open_pr_count": 0,

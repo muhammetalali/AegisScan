@@ -11,6 +11,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.ci.release1_version import RELEASE_TAG
+
 SCHEMA = "aegisscan.release1-closure.v1"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -294,6 +298,7 @@ def build_manifest(
         "status": "success",
         "decision": "RELEASED",
         "release": "1",
+        "release_tag": RELEASE_TAG,
         "release_sha": release_sha,
         "repository": repository,
         "controls": {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -36,6 +37,20 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _finite_nonnegative(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
+        and (not isinstance(value, float) or math.isfinite(value))
+    )
+
+
+def _ratio(value: Any) -> bool:
+    """Require an explicit finite fraction; zero is valid evidence."""
+    return _finite_nonnegative(value) and value <= 1.0
 
 
 def build_acceptance(
@@ -92,11 +107,11 @@ def build_acceptance(
         "passed": performance.get("passed") is True,
         "min_requests": int(thresholds.get("min_requests") or 0) >= 5000,
         "min_rps": float(thresholds.get("min_rps") or 0) >= 10.0,
-        "max_p95": float(thresholds.get("max_p95_ms") or 999999) <= 750.0,
-        "max_error_rate": float(thresholds.get("max_error_rate") or 1.0) <= 0.01,
+        "max_p95": _finite_nonnegative(thresholds.get("max_p95_ms")) and 0 < thresholds["max_p95_ms"] <= 750.0,
+        "max_error_rate": _ratio(thresholds.get("max_error_rate")) and thresholds["max_error_rate"] <= 0.01,
         "requests": int(summary.get("requests") or 0) >= int(thresholds.get("min_requests") or 0),
-        "p95": float(summary.get("worst_stage_p95_ms") or 999999) <= float(thresholds.get("max_p95_ms") or 0),
-        "error_rate": float(summary.get("error_rate") or 1.0) <= float(thresholds.get("max_error_rate") or 0),
+        "p95": _finite_nonnegative(summary.get("worst_stage_p95_ms")) and _finite_nonnegative(thresholds.get("max_p95_ms")) and summary["worst_stage_p95_ms"] <= thresholds["max_p95_ms"],
+        "error_rate": _ratio(summary.get("error_rate")) and _ratio(thresholds.get("max_error_rate")) and summary["error_rate"] <= thresholds["max_error_rate"],
         "rps": float(summary.get("minimum_stage_rps") or 0) >= float(thresholds.get("min_rps") or 0),
         "release_concurrency_shape": stage_concurrency == [30, 75, 125, 50],
         "extended_soak": final_stage_duration >= 850.0,

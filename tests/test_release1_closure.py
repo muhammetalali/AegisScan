@@ -274,7 +274,7 @@ def test_release_workflow_publishes_exact_sha_immutable_github_release_only_afte
     import yaml
     root = Path(__file__).parents[1]
     workflow = yaml.safe_load((root / '.github/workflows/release1-closure.yml').read_text(encoding='utf-8'))
-    assert workflow['env']['AEGIS_RELEASE_TAG'] == 'v1.0.0'
+    assert any('python scripts/ci/release1_version.py >> "$GITHUB_ENV"' in step.get('run', '') for step in workflow['jobs']['release1-closure']['steps'])
     steps = workflow['jobs']['release1-closure']['steps']
     names = [step.get('name') for step in steps]
     prove = names.index('Prove Release 1 decision')

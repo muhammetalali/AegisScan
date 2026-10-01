@@ -38,6 +38,10 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Load current Release 1 publication tag
+        shell: bash
+        run: python scripts/ci/release1_version.py >> "$GITHUB_ENV"
+
       - name: Require explicit exact released main
         shell: bash
         run: |
@@ -51,14 +55,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
 
-          gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" \
+          gh release view "$AEGIS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json tagName,targetCommitish,isDraft,isPrerelease > /tmp/aegis-provider-release.json
           python - <<'PY'
           import json
           import os
           from pathlib import Path
           release = json.loads(Path('/tmp/aegis-provider-release.json').read_text(encoding='utf-8'))
-          assert release['tagName'] == 'v1.0.0'
+          assert release['tagName'] == os.environ['AEGIS_RELEASE_TAG']
           assert release['targetCommitish'] == os.environ['RELEASE_SHA']
           assert release['isDraft'] is False
           assert release['isPrerelease'] is False
