@@ -105,7 +105,22 @@ def _normalize_target(mode: TargetMode, value: str) -> tuple[str, str, dict]:
         target = str(address)
         return 'ip_address', target, {'ip': target}
     target = _normalize_web_target(candidate)
-    return 'website', target, {'url': target}
+    host = urlsplit(target).hostname or ''
+    try:
+        direct = ipaddress.ip_address(host)
+        resolved_ips = [str(direct)]
+    except ValueError:
+        try:
+            answers = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            raise HTTPException(status_code=422, detail='Target DNS resolution failed') from exc
+        resolved_ips = sorted({
+            str(ipaddress.ip_address(str(answer[4][0]).split('%', 1)[0]))
+            for answer in answers if answer[4]
+        })
+        if not resolved_ips:
+            raise HTTPException(status_code=422, detail='Target DNS resolution returned no addresses')
+    return 'website', target, {'url': target, 'resolved_ips': resolved_ips}
 
 
 def _unique_slug(project: Project, name: str) -> str:
