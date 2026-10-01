@@ -9,8 +9,8 @@ import { cn } from '@/utils/cn'
 type Mode='network'|'ip'|'url'|'file'
 type Depth='quick'|'standard'|'deep'|'comprehensive'
 type Project={id:string;name:string;environment?:string}
-type LauncherContext={project_id:string;suggested_networks:string[];modes:Mode[];default_depth:Depth}
-type Prepared={project_id:string;asset:{id:string;name:string;type:string;target:string;created:boolean};depth:Depth;recommended_capabilities:string[]}
+type LauncherContext={project_id:string;suggested_networks:string[];modes:Mode[];default_depth:Depth;scope_mode:string;automatic_scope_activation:boolean}
+type Prepared={project_id:string;asset:{id:string;name:string;type:string;target:string;created:boolean};authorization:{state:'authorized'|'pending';source:string;id:string|null;target:string;authorized:boolean;request?:any};depth:Depth;recommended_capabilities:string[]}
 
 const modes=[
   {id:'network' as Mode,label:'Internal network',desc:'Discover hosts and exposed services across a CIDR range.',icon:Network,placeholder:'192.168.49.0/24'},
@@ -58,6 +58,11 @@ export const AssessmentLauncher=()=>{
       let prepared:Prepared
       if(mode==='file'){const form=new FormData();form.append('project_id',id);form.append('depth',depth);form.append('file',file as File);prepared=(await api.post<Prepared>('/assessment-launcher/file',form,{timeout:120000})).data}
       else prepared=await apiHelpers.post<Prepared>('/assessment-launcher/prepare',{project_id:id,mode,target:target.trim(),depth})
+      if(prepared.authorization?.state!=='authorized'){
+        toast.info('Target prepared. Authorization request is ready for governed approval.')
+        navigate('/assurance/governance')
+        return
+      }
       await execute(prepared)
     }catch(error:any){const detail=error?.response?.data?.detail;toast.error(typeof detail==='string'?detail:(error?.message||'Unable to start assessment.'));setStatus('')}finally{setBusy(false)}
   }
@@ -66,7 +71,7 @@ export const AssessmentLauncher=()=>{
   if(!project)return <div className="enterprise-card rounded-3xl p-10 text-center">Project could not be loaded.</div>
   const active=modes.find(item=>item.id===mode)||modes[0]
   return <div className="mx-auto w-full max-w-6xl space-y-6 pb-12">
-    <section className="enterprise-card rounded-[2rem] p-6 md:p-8"><div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-primary"><Radar className="h-3.5 w-3.5"/>Assessment Launcher</div><h1 className="mt-4 text-3xl font-semibold md:text-4xl">What do you want to assess?</h1><p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">{project.name} · choose a target and depth. AegisScan creates the inventory record, binds the project scope, selects eligible scanners and preserves evidence automatically.</p></section>
+    <section className="enterprise-card rounded-[2rem] p-6 md:p-8"><div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-primary"><Radar className="h-3.5 w-3.5"/>Assessment Launcher</div><h1 className="mt-4 text-3xl font-semibold md:text-4xl">What do you want to assess?</h1><p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">{project.name} · choose a target and depth. AegisScan creates the inventory record, binds the project scope, selects eligible scanners and preserves evidence automatically.</p><div className="mt-4 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold text-muted-foreground"><ShieldCheck className="h-3.5 w-3.5 text-primary"/>{contextQuery.data?.automatic_scope_activation?'Single-operator lab · scope activates automatically':'Governed authorization · approval is preserved internally'}</div></section>
     <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{modes.map(item=>{const Icon=item.icon;const selected=mode===item.id;return <button key={item.id} onClick={()=>choose(item.id)} className={cn('enterprise-card rounded-2xl border p-5 text-start transition-all',selected?'border-primary bg-primary/5 shadow-lg':'hover:-translate-y-0.5 hover:border-primary/30')}><Icon className={cn('h-5 w-5',selected?'text-primary':'text-muted-foreground')}/><div className="mt-4 font-semibold">{item.label}</div><p className="mt-1 text-xs leading-5 text-muted-foreground">{item.desc}</p></button>})}</section>
     <section className="enterprise-card rounded-3xl p-6 md:p-8"><div className="grid gap-7 lg:grid-cols-[1.2fr_.8fr]"><div><div className="flex items-center gap-2 text-sm font-semibold">{mode==='file'?<UploadCloud className="h-4 w-4 text-primary"/>:<Activity className="h-4 w-4 text-primary"/>}{active.label}</div>
       {mode==='file'?<label className="mt-4 grid min-h-44 cursor-pointer place-items-center rounded-2xl border border-dashed bg-muted/10 p-6 text-center hover:bg-muted/20"><input type="file" className="hidden" onChange={e=>setFile(e.target.files?.[0]||null)}/><div><UploadCloud className="mx-auto h-8 w-8 text-primary"/><div className="mt-3 font-semibold">{file?file.name:'Choose file or ZIP source bundle'}</div><div className="mt-1 text-xs text-muted-foreground">{file?Math.ceil(file.size/1024)+' KB':'Stored in the bounded code-analysis workspace automatically.'}</div></div></label>:<label className="mt-4 block"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Target</span><input autoFocus value={target} onChange={e=>setTarget(e.target.value)} placeholder={active.placeholder} dir="ltr" className="mt-2 h-14 w-full rounded-2xl border bg-background px-4 font-mono text-sm outline-none focus:ring-2 focus:ring-primary/20"/>{mode==='network'&&contextQuery.data?.suggested_networks?.length?<div className="mt-2 flex flex-wrap gap-2">{contextQuery.data.suggested_networks.map(item=><button key={item} type="button" onClick={()=>setTarget(item)} className="rounded-full border px-3 py-1 text-[11px] hover:bg-muted">Use {item}</button>)}</div>:null}</label>}
