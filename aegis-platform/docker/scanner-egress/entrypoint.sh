@@ -177,11 +177,11 @@ log "control endpoints: $CONTROL_ENDPOINTS"
 log "private scan targets: ${PRIVATE_TARGETS:-<none>}"
 nft list table netdev "$TABLE"
 
-if [ -n "${AEGIS_SCANNER_EGRESS_CONTROL_TOKEN:-}" ]; then
+if [ -n "${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-}" ]; then
   /usr/bin/python3 /usr/local/lib/aegis-egress-control.py &
   log "dynamic authorization control listening on 127.0.0.1:18780"
 else
-  log "dynamic authorization control disabled: no control token"
+  log "dynamic authorization control disabled: no isolated control root"
 fi
 
 exec tail -f /dev/null
