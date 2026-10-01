@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, ArrowUpRight, FolderKanban, Plus, Search, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { cn } from '@/utils/cn'
@@ -39,6 +39,7 @@ const scoreClass = (score?: number | null) => score == null ? 'text-muted-foregr
 
 export const Projects = () => {
   const t = useLanguageStore(s => s.t)
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [q, setQ] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
@@ -60,7 +61,7 @@ export const Projects = () => {
     try {
       const created = await apiHelpers.post<ProjectCreateResponse>('/projects/', { name: trimmed, description: description.trim(), environment, status: 'active', tags: [], settings: {}, default_scan_config: {} })
       if (!created?.id) throw new Error(t('Project service did not return a project id'))
-      await queryClient.invalidateQueries({ queryKey: ['projects'] }); setCreateOpen(false); setName(''); setDescription(''); setEnvironment('development'); toast.success(t('Project created successfully'))
+      await queryClient.invalidateQueries({ queryKey: ['projects'] }); setCreateOpen(false); setName(''); setDescription(''); setEnvironment('development'); toast.success(t('Project created successfully')); navigate('/projects/'+created.id+'/assess')
     } catch (error:any) {
       const detail=error?.response?.data?.detail; const message=Array.isArray(detail)?detail.join(', '):typeof detail==='string'?detail:error?.response?.data?.name?.[0]||error?.message; toast.error(message||t('Unable to create project'))
     } finally { setCreating(false) }
