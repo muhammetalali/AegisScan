@@ -144,7 +144,7 @@ def _resolve_host_addresses(host: str) -> tuple[ipaddress.IPv4Address | ipaddres
     return tuple(sorted(addresses, key=lambda item: (item.version, int(item))))
 
 
-def _enforce_resolved_egress(host: str, *, snapshot_authorized: bool = False) -> tuple[str, ...]:
+def _enforce_resolved_egress(host: str, *, approved_addresses: tuple[str, ...] = ()) -> tuple[str, ...]:
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
@@ -167,7 +167,7 @@ def _enforce_resolved_egress(host: str, *, snapshot_authorized: bool = False) ->
     for destination in resolved:
         if destination.is_global:
             continue
-        if snapshot_authorized:
+        if str(destination) in approved_addresses:
             continue
         if _ip_explicitly_authorized(destination):
             continue
@@ -274,6 +274,7 @@ def require_authorized_target(
     url: bool = False,
     resolve_dns: bool = False,
     approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Require target to be covered by static scope or an exact bound snapshot."""
     snapshot_authorized = _approved_snapshot_matches(target, approved_target)
@@ -296,4 +297,4 @@ def require_authorized_target(
         )
     if not resolve_dns:
         return ()
-    return _enforce_resolved_egress(host, snapshot_authorized=snapshot_authorized)
+    return _enforce_resolved_egress(host, approved_addresses=tuple(approved_addresses))
