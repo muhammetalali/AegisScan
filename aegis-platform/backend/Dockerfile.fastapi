@@ -35,7 +35,9 @@ COPY . .
 
 RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
-    && chown -R aegis:aegis /app
+    && mkdir -p /var/lib/aegis-semgrep/uploads \
+    && chown -R aegis:aegis /app /var/lib/aegis-semgrep \
+    && chmod 0700 /var/lib/aegis-semgrep
 
 EXPOSE 8001
 
