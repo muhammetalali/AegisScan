@@ -51,8 +51,8 @@ def test_final_governance_requires_exact_main_same_sha_run_ids_and_enterprise_ca
     assert "RESILIENCE_RUN_ID" in text
     assert "SUPPLY_CHAIN_RUN_ID" in text
     assert "AEGIS_PRODUCTION_ENTERPRISE_CA_BUNDLE" in text
-    assert "AEGIS_ENTERPRISE_CA_BUNDLE=/tmp/aegis-governance/enterprise-ca.pem" in text
-    assert "REQUESTS_CA_BUNDLE=/tmp/aegis-governance/enterprise-ca.pem" in text
+    assert "AEGIS_ENTERPRISE_CA_BUNDLE=${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem" in text
+    assert "REQUESTS_CA_BUNDLE=${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem" in text
     assert "gh api" in text
     assert "gh run download" in text
 
@@ -162,12 +162,12 @@ for name in selected:
     if workflow == "governance":
         steps = _workflow()["jobs"]["final-governance"]["steps"]
         title = "Download independently captured workflow metadata and evidence"
-        prefix = "/tmp/aegis-governance"
+        prefix = "${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}"
     else:
         data = yaml.safe_load((ROOT / ".github/workflows/release1-closure.yml").read_text())
         steps = data["jobs"]["release1-closure"]["steps"]
         title = "Download immutable release evidence"
-        prefix = "/tmp/release1"
+        prefix = "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}"
     root = tmp_path / "output"
     script = next(step["run"] for step in steps if step.get("name") == title).replace(prefix, str(root))
     env = {
@@ -192,3 +192,92 @@ for name in selected:
         for component in ("django", "fastapi", "frontend"):
             assert len(list(root.rglob(f"{component}.cdx.json"))) == 1
             assert len(list(root.rglob(f"{component}.provenance.json"))) == 1
+
+
+@pytest.mark.parametrize("workflow", ["governance", "closure"])
+def test_evidence_download_isolates_previous_release_and_same_run_retry(tmp_path, workflow):
+    """An old manifest must not contaminate either a new run or its retry."""
+    if workflow == "governance":
+        job = _workflow()["jobs"]["final-governance"]
+        title = "Download independently captured workflow metadata and evidence"
+        old_prefix, directory, live_suffix = "/tmp/aegis-governance", "aegis-governance", "live"
+    else:
+        data = yaml.safe_load((ROOT / ".github/workflows/release1-closure.yml").read_text())
+        job = data["jobs"]["release1-closure"]
+        title = "Download immutable release evidence"
+        old_prefix, directory, live_suffix = "/tmp/release1", "release1", "evidence/live-deploy"
+    download = next(step["run"] for step in job["steps"] if step.get("name") == title)
+    legacy = tmp_path / "shared-old-workspace"
+    stale = legacy / live_suffix / "old-artifact" / "manifest.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(json.dumps({"release_sha": "0" * 40}))
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    cli = binary / "gh"
+    cli.write_text('''#!/usr/bin/env python3
+import json, os, sys, zipfile
+from pathlib import Path
+args = sys.argv[1:]
+if args[0] == 'api':
+    print('{}')
+    sys.exit(0)
+available = json.loads(Path(os.environ['GH_FIXTURE']).read_text())[args[2]]
+names = [args[i+1] for i, arg in enumerate(args) if arg == '--name'] or list(available)
+root = Path(args[args.index('--dir') + 1])
+for name in names:
+    with zipfile.ZipFile(available[name]) as archive:
+        archive.extractall(root / name)
+''')
+    cli.chmod(0o755)
+    fixture = tmp_path / "inventory.json"
+    roots = []
+    for index, (run_id, attempt, release) in enumerate(
+        [("100", "1", "a" * 40), ("100", "2", "a" * 40), ("101", "1", "b" * 40)]
+    ):
+        inventory = {}
+        for role in ("live", "resilience", "acceptance", "governance", "production"):
+            archive = tmp_path / f"{role}-{index}.zip"
+            with zipfile.ZipFile(archive, "w") as stream:
+                stream.writestr("manifest.json", json.dumps({
+                    "schema": "aegisscan.go-live-evidence.v3", "deployment_mode": "internal",
+                    "release_sha": release, "internal_origin": "https://aegis.internal",
+                }))
+            inventory[role] = {f"{role}-artifact-{index}": str(archive)}
+        inventory["supply"] = {}
+        for component in ("django", "fastapi", "frontend"):
+            archive = tmp_path / f"{component}-{index}.zip"
+            with zipfile.ZipFile(archive, "w") as stream:
+                stream.writestr(f"{component}.cdx.json", "{}")
+            inventory["supply"][f"supply-chain-{component}-{release}"] = str(archive)
+        fixture.write_text(json.dumps(inventory))
+        script = download.replace("${{ runner.temp }}", str(tmp_path / "runner-temp"))
+        script = script.replace("${{ github.run_id }}", run_id).replace("${{ github.run_attempt }}", attempt)
+        script = script.replace(old_prefix, str(legacy))
+        env = {
+            **os.environ, "PATH": f"{binary}:{os.environ['PATH']}", "GH_FIXTURE": str(fixture),
+            "GITHUB_REPOSITORY": "owner/repo", "RELEASE_SHA": release, "AEGIS_RELEASE_SHA": release,
+            "LIVE_DEPLOY_RUN_ID": "live", "RESILIENCE_RUN_ID": "resilience",
+            "SUPPLY_CHAIN_RUN_ID": "supply", "FINAL_ACCEPTANCE_RUN_ID": "acceptance",
+            "FINAL_GOVERNANCE_RUN_ID": "governance", "FINAL_PRODUCTION_GOVERNANCE_RUN_ID": "production",
+        }
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        root = tmp_path / "runner-temp" / f"{directory}-{run_id}-{attempt}" if "${{ runner.temp }}" in download else legacy
+        roots.append(root)
+        manifests = list((root / live_suffix).rglob("manifest.json"))
+        assert len(manifests) == 1, "stale evidence contaminated the current run"
+        assert json.loads(manifests[0].read_text())["release_sha"] == release
+        if workflow == "governance":
+            resolve = next(step["run"] for step in job["steps"] if step.get("name") ==
+                           "Resolve approved internal production origin from immutable go-live evidence")
+            resolve = resolve.replace("${{ runner.temp }}", str(tmp_path / "runner-temp"))
+            resolve = resolve.replace("${{ github.run_id }}", run_id).replace("${{ github.run_attempt }}", attempt)
+            resolve = resolve.replace(old_prefix, str(legacy))
+            env_file = tmp_path / f"github-env-{index}"
+            env_file.write_text("")
+            result = subprocess.run(["bash", "-c", resolve], env={**env, "GITHUB_ENV": str(env_file)},
+                                    capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+            assert "AEGIS_APPROVED_INTERNAL_ORIGIN=https://aegis.internal" in env_file.read_text()
+    assert len(set(roots)) == 3
+    assert stale.is_file(), "isolation must preserve evidence from other runs"

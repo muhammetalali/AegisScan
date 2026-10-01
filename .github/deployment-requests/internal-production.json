@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "resilience-evidence-approved-20260930T224819231Z",
+  "request_id": "isolated-evidence-approved-20261001T003408Z",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "2bfc042c256e863f87f1e2a96d03e885c9c71e7d",
-  "requested_at": "2026-09-30T22:48:19Z",
-  "expires_at": "2026-10-01T22:48:19Z"
+  "requested_base_sha": "da9ae4d8b9599b48df0d23ca65011ef109d15f41",
+  "requested_at": "2026-10-01T00:34:08Z",
+  "expires_at": "2026-10-02T00:34:08Z"
 }
