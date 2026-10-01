@@ -133,3 +133,13 @@ def test_tls_gateway_exposes_only_authenticated_internal_alert_ingress():
     assert "proxy_pass http://alert_receiver/alert;" in block
     assert "proxy_set_header Authorization $http_authorization;" in block
     assert "proxy_set_header X-Forwarded-Proto https;" in block
+
+
+def test_nginx_does_not_expose_version_tokens() -> None:
+    root = Path(__file__).parents[1]
+    for relative in (
+        "aegis-platform/docker/nginx.conf",
+        "aegis-platform/docker/nginx-ssl.conf",
+    ):
+        config = (root / relative).read_text(encoding="utf-8")
+        assert re.search(r"(?m)^\s*server_tokens\s+off\s*;", config)
