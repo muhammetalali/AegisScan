@@ -20,6 +20,14 @@ trap cleanup EXIT
 mkdir -p "$ARTIFACTS"
 chmod 0777 "$ARTIFACTS"
 
+container_logs_contain() {
+  local container="$1"
+  local needle="$2"
+  local logs
+  logs="$(docker logs "$container" 2>&1)" || return 1
+  grep -Fq -- "$needle" <<<"$logs"
+}
+
 docker build --no-cache --target legacy-parity-reference   -t aegis-masscan-m5:legacy   -f aegis-platform/backend/Dockerfile.django   aegis-platform/backend
 
 docker build --no-cache   -t aegis-scanner-egress:masscan-m5   -f aegis-platform/docker/scanner-egress/Dockerfile   aegis-platform/docker/scanner-egress
@@ -71,13 +79,13 @@ docker run -d --name aegis-masscan-m5-egress   --network "$NETWORK" --ip "$EGRES
 for _ in $(seq 1 30); do
   fixture_ready=false
   egress_ready=false
-  docker logs aegis-masscan-m5-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY && fixture_ready=true || true
-  docker logs aegis-masscan-m5-egress 2>&1 | grep -Fq 'kernel egress policy installed' && egress_ready=true || true
+  container_logs_contain aegis-masscan-m5-fixture AEGIS_NMAP_PARITY_FIXTURE_READY && fixture_ready=true || true
+  container_logs_contain aegis-masscan-m5-egress 'kernel egress policy installed' && egress_ready=true || true
   if "$fixture_ready" && "$egress_ready"; then break; fi
   sleep 1
 done
-docker logs aegis-masscan-m5-fixture 2>&1 | grep -Fq AEGIS_NMAP_PARITY_FIXTURE_READY
-docker logs aegis-masscan-m5-egress 2>&1 | grep -Fq 'kernel egress policy installed'
+container_logs_contain aegis-masscan-m5-fixture AEGIS_NMAP_PARITY_FIXTURE_READY
+container_logs_contain aegis-masscan-m5-egress 'kernel egress policy installed'
 
 INTERFACE=eth0
 ADAPTER_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' aegis-masscan-m5-egress)"
