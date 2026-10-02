@@ -56,7 +56,7 @@ export const AssessmentLauncher=()=>{
     setBusy(true);setStatus('Preparing target, scope and execution plan…')
     try{
       let prepared:Prepared
-      if(mode==='file'){const form=new FormData();form.append('project_id',id);form.append('depth',depth);form.append('file',file as File);prepared=(await api.post<Prepared>('/assessment-launcher/file',form,{timeout:120000})).data}
+      if(mode==='file'){const form=new FormData();form.append('project_id',id);form.append('depth',depth);form.append('file',file as File);prepared=(await api.post<Prepared>('/assessment-launcher/file',form,{timeout:120000,headers:{'Content-Type':'multipart/form-data'}})).data}
       else prepared=await apiHelpers.post<Prepared>('/assessment-launcher/prepare',{project_id:id,mode,target:target.trim(),depth})
       if(prepared.authorization?.state!=='authorized'){
         toast.info('Target prepared. Authorization request is ready for governed approval.')
