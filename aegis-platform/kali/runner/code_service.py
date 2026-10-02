@@ -145,7 +145,7 @@ def _runtime_contract() -> dict[str, Any]:
 
 
 def _semgrep_config() -> str:
-    config = os.environ.get('AEGIS_CODE_SEMGREP_CONFIG', 'auto').strip()
+    config = os.environ.get('AEGIS_CODE_SEMGREP_CONFIG', 'p/default').strip()
     if not config or any(ch in config for ch in '\r\n\x00'):
         raise RuntimeError('AEGIS_CODE_SEMGREP_CONFIG is missing or invalid')
     if config.startswith('/'):
