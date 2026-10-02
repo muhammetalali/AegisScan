@@ -76,7 +76,7 @@ services:
     environment:
       <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}
-      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-p/default}
     depends_on: !override
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
@@ -103,7 +103,7 @@ services:
     environment:
       <<: *backend-production-environment
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}
-      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-p/default}
       AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_KALI_NETWORK_AUTH_TOKEN:-}
       AEGIS_SCANNER_EGRESS_CONTROL_URL: http://127.0.0.1:18780
       AEGIS_RECON_PROVIDER: ${AEGIS_RECON_PROVIDER:-default-kali}
@@ -294,7 +294,7 @@ services:
       AEGIS_CODE_LISTEN_PORT: "18771"
       AEGIS_KALI_CODE_AUTH_TOKEN: ${AEGIS_KALI_CODE_AUTH_TOKEN:-}
       AEGIS_CODE_WORKSPACE_ROOT: /var/lib/aegis-semgrep
-      AEGIS_CODE_SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      AEGIS_CODE_SEMGREP_CONFIG: ${SEMGREP_CONFIG:-p/default}
       HOME: /tmp/aegis-home
       TMPDIR: /tmp
       XDG_CACHE_HOME: /tmp/aegis-home/.cache
