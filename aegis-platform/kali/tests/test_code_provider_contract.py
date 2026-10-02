@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "runner" / "code_service.py"
 SPEC = importlib.util.spec_from_file_location("code_service", MODULE_PATH)
@@ -44,6 +46,15 @@ class GovernedCodeProviderContractTests(unittest.TestCase):
             (root / "linked.py").symlink_to(target)
             with self.assertRaisesRegex(MODULE.ProtocolError, "symlink"):
                 MODULE._tree_sha256(root)
+
+    def test_default_semgrep_config_is_explicit_and_metrics_stay_off(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AEGIS_CODE_SEMGREP_CONFIG", None)
+            self.assertEqual(MODULE._semgrep_config(), "p/default")
+        with tempfile.TemporaryDirectory() as holder:
+            env = MODULE._sanitized_env(holder)
+        self.assertEqual(env["SEMGREP_SEND_METRICS"], "off")
+        self.assertEqual(env["SEMGREP_ENABLE_VERSION_CHECK"], "0")
 
     def test_request_cannot_choose_binary_config_or_raw_path(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
