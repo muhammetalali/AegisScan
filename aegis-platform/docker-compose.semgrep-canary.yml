@@ -38,7 +38,7 @@ services:
       AEGIS_CODE_LISTEN_PORT: "18771"
       AEGIS_KALI_CODE_AUTH_TOKEN: ${AEGIS_KALI_CODE_AUTH_TOKEN:-}
       AEGIS_CODE_WORKSPACE_ROOT: /var/lib/aegis-semgrep
-      AEGIS_CODE_SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      AEGIS_CODE_SEMGREP_CONFIG: ${SEMGREP_CONFIG:-p/default}
       HOME: /tmp/aegis-home
       TMPDIR: /tmp
       XDG_CACHE_HOME: /tmp/aegis-home/.cache
