@@ -246,7 +246,7 @@ def run_semgrep(target: str, timeout: int = 600, state_getter: Callable[[], str]
     executable = shutil.which('semgrep')
     if not executable:
         raise RuntimeError('Semgrep is not installed on the worker')
-    argv = [executable, '--config', os.getenv('SEMGREP_CONFIG', 'auto'), '--json', '--error', '--no-git-ignore', path]
+    argv = [executable, '--config', os.getenv('SEMGREP_CONFIG', 'p/default'), '--json', '--error', '--no-git-ignore', path]
     if state_getter is not None:
         return _run_controlled(argv, tool='semgrep', target=path, timeout=timeout, state_getter=state_getter)
     completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
