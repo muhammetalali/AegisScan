@@ -20,6 +20,7 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/e2e/fixtures/bac-target/**'
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
       - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
+      - 'aegis-platform/e2e/test_web_lab_host_lifecycle_guard.py'
       - 'docs/web-labs-p5-contract.md'
       - 'docs/web-labs-p6-contract.md'
       - 'docs/web-labs/p6-measurement-plan-v1.json'
@@ -87,6 +88,7 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/e2e/fixtures/bac-target/**'
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
       - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
+      - 'aegis-platform/e2e/test_web_lab_host_lifecycle_guard.py'
       - 'docs/web-labs-p5-contract.md'
       - 'docs/web-labs-p6-contract.md'
       - 'docs/web-labs/p6-measurement-plan-v1.json'
@@ -239,6 +241,7 @@ jobs:
             aegis-platform/backend/scripts/burp_mcp_sse_probe.py \
             aegis-platform/scripts/inspect_web_lab_runtime.py \
             aegis-platform/scripts/web_lab_host_lifecycle.py \
+            aegis-platform/e2e/test_web_lab_host_lifecycle_guard.py \
             aegis-platform/backend/fastapi_app/main.py
 
       - name: PostgreSQL schema migration and evidence immutability reality
@@ -319,6 +322,7 @@ jobs:
             ../e2e/test_live_burp_lab_verification_guard.py \
             ../e2e/test_live_web_lab_measurement_guard.py \
             ../e2e/test_run_web_lab_p6_acceptance_guard.py \
+            ../e2e/test_web_lab_host_lifecycle_guard.py \
             fastapi_app/services/test_finding_confirmation.py \
             fastapi_app/services/test_credential_execution_contract.py \
             fastapi_app/tasks/test_celery_reliability_contract.py \

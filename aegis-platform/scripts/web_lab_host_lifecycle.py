@@ -18,7 +18,7 @@ from pathlib import Path
 
 CONTAINER_RE = re.compile(r'^aegis-web-lab-[0-9a-f]{12}$')
 IMAGE_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
-CONTROL_RE = re.compile(r'^(?:aegis-django|aegis-burp-p5-control)$')
+CONTROL_RE = re.compile(r'^(?:aegis-django|aegis-burp-p5-control|aegis-burp-p6-control)$')
 NETWORK_RE = re.compile(r'^(?:aegis-burp-p2-egress|aegis-web-lab-egress-[0-9a-f]{12})$')
 IDEM_RE = re.compile(r'^[A-Za-z0-9._:-]{1,96}$')
 
