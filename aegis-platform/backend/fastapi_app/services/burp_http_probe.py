@@ -35,9 +35,23 @@ def summarize_health_result(payload: dict) -> dict:
     raw = content[0]['text']
     if len(raw.encode()) > 1_048_576:
         raise ValueError('Burp HTTP response exceeds the bounded probe limit')
-    head, sep, body = raw.partition('\r\n\r\n')
+    response_text = raw
+    response_format = 'http-response'
+    prefix = 'HttpRequestResponse{httpRequest='
+    delimiter = ', httpResponse='
+    suffix = ", messageAnnotations=Annotations{comment='', highlightColor=NONE}}"
+    if raw.startswith(prefix):
+        if not raw.endswith(suffix) or raw.count(delimiter) != 1:
+            raise ValueError('Burp returned an ambiguous request-response wrapper')
+        request_text, _, response_text = raw[len(prefix):-len(suffix)].partition(delimiter)
+        if (not request_text.startswith('GET /health HTTP/1.1\r\n')
+                or request_text.count('\r\n\r\n') != 1
+                or not request_text.endswith('\r\n\r\n')):
+            raise ValueError('Burp returned a mismatched health request wrapper')
+        response_format = 'montoya-request-response'
+    head, sep, body = response_text.partition('\r\n\r\n')
     if not sep:
-        head, sep, body = raw.partition('\n\n')
+        head, sep, body = response_text.partition('\n\n')
     first = head.splitlines()[0] if head else ''
     parts = first.split(' ', 2)
     if not sep or len(parts) < 2 or parts[0] not in {'HTTP/1.0', 'HTTP/1.1', 'HTTP/2'} or not parts[1].isdigit():
@@ -53,6 +67,7 @@ def summarize_health_result(payload: dict) -> dict:
     return {
         'transport_metadata': payload['transport_metadata'], 'status_code': status,
         'response_sha256': hashlib.sha256(raw.encode()).hexdigest(),
+        'response_format': response_format,
         'fixture_health_marker_matches': marker, 'transport_probe_passed': status == 200 and marker,
         'live_fixture_revision_verified': False, 'lab_solved': False,
         'raw_request_response_persisted': False,

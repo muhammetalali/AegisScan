@@ -210,3 +210,53 @@ def test_sse_event_size_limit_is_enforced():
         server.events.put(b'event: message\ndata: ' + b'x' * 1_048_577 + b'\n\n')
         with pytest.raises(MCPTransportError, match='event_size_limit'):
             call(server)
+
+
+@pytest.mark.parametrize('base,advertised', [
+    ('http://127.0.0.1:9876', '?sessionId=abc'),
+    ('http://127.0.0.1:9876/', '?sessionId=abc'),
+    ('http://127.0.0.1:9876/', 'http://127.0.0.1:9876?sessionId=abc'),
+])
+def test_official_root_message_endpoint_is_normalized(base, advertised):
+    assert message_endpoint(base, advertised) == 'http://127.0.0.1:9876/?sessionId=abc'
+
+
+def montoya_health_wrapper(response):
+    request = health_request_arguments('http://127.0.0.1:18081')['content']
+    return ('HttpRequestResponse{httpRequest=' + request + ', httpResponse=' + response
+            + ", messageAnnotations=Annotations{comment='', highlightColor=NONE}}")
+
+
+def test_official_montoya_health_wrapper_is_parsed_and_redacted():
+    raw = montoya_health_wrapper('HTTP/1.1 200 OK\r\nSet-Cookie: synthetic-private\r\n\r\n'
+                                '{"status":"ok","fixture":"bac-target"}')
+    summary = summarize_health_result({'mcp_result': {'content': [{'type': 'text', 'text': raw}]},
+                                       'transport_metadata': {}})
+    assert summary['transport_probe_passed'] is True
+    assert summary['response_format'] == 'montoya-request-response'
+    assert summary['lab_solved'] is False
+    assert 'synthetic-private' not in json.dumps(summary)
+    assert 'httpRequest' not in json.dumps(summary)
+
+
+@pytest.mark.parametrize('mutation', ['truncated', 'duplicate', 'wrong_request', 'body_in_request'])
+def test_ambiguous_montoya_wrappers_are_rejected(mutation):
+    raw = montoya_health_wrapper('HTTP/1.1 200 OK\r\n\r\n{"status":"ok","fixture":"bac-target"}')
+    if mutation == 'truncated':
+        raw = raw[:-1]
+    elif mutation == 'duplicate':
+        raw = raw.replace('Host:', ', httpResponse=Host:')
+    elif mutation == 'wrong_request':
+        raw = raw.replace('GET /health', 'GET /other')
+    else:
+        raw = raw.replace('\r\n\r\n, httpResponse=', '\r\n\r\nbody, httpResponse=')
+    with pytest.raises(ValueError):
+        summarize_health_result({'mcp_result': {'content': [{'type': 'text', 'text': raw}]},
+                                 'transport_metadata': {}})
+
+
+def test_montoya_wrapper_cannot_promote_unrelated_fixture_to_success():
+    raw = montoya_health_wrapper('HTTP/1.1 200 OK\r\n\r\n{"status":"ok","fixture":"other"}')
+    summary = summarize_health_result({'mcp_result': {'content': [{'type': 'text', 'text': raw}]},
+                                       'transport_metadata': {}})
+    assert summary['transport_probe_passed'] is False

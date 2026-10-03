@@ -47,6 +47,9 @@ def message_endpoint(base: str, advertised: str) -> str:
     if _origin(value) != _origin(base):
         raise MCPTransportError('endpoint_origin_mismatch')
     parsed = urlsplit(value)
+    if not parsed.path:
+        parsed = parsed._replace(path='/')
+        value = parsed.geturl()
     query = parse_qs(parsed.query, keep_blank_values=True)
     if (not parsed.path.startswith('/') or len(value) > 2048 or '\\' in value
             or set(query) - {'sessionId'} or any(len(v) != 1 or not v[0] for v in query.values())):

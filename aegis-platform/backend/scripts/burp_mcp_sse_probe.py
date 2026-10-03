@@ -21,7 +21,7 @@ def loopback_origin(value: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--endpoint', default='http://127.0.0.1:9876/sse')
+    parser.add_argument('--endpoint', default='http://127.0.0.1:9876/')
     parser.add_argument('--target', default='http://127.0.0.1:18081')
     parser.add_argument('--schema-sha256', default='')
     args = parser.parse_args()
