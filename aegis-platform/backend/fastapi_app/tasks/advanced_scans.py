@@ -282,6 +282,7 @@ def run_semgrep_scan(self,scan_id:str)->dict[str,Any]:
             execution.completed_at=now
             execution.findings_found=len(findings)
             execution.evidences_collected=1
+            execution.error_message=result.stderr if result.exit_code!=0 else ''
             execution.result_data={
                 'tool':'semgrep',
                 'source':source,
@@ -293,7 +294,7 @@ def run_semgrep_scan(self,scan_id:str)->dict[str,Any]:
             }
             execution.save(update_fields=[
                 'status','progress','completed_at','findings_found',
-                'evidences_collected','result_data','updated_at',
+                'evidences_collected','error_message','result_data','updated_at',
             ])
             scan.status=Scan.Status.COMPLETED if result.exit_code==0 else Scan.Status.PARTIAL
             scan.progress=100

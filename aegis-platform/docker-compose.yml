@@ -110,7 +110,7 @@ services:
     cap_drop: [ALL]
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
-      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-p/default}
       DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
       django: {condition: service_healthy}
@@ -129,7 +129,7 @@ services:
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
-      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-auto}
+      SEMGREP_CONFIG: ${SEMGREP_CONFIG:-p/default}
       DJANGO_SETTINGS_MODULE: django_project.settings
       AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-aegis-dev-egress-control-root}
       AEGIS_SCANNER_EGRESS_CONTROL_URL: http://127.0.0.1:18780
