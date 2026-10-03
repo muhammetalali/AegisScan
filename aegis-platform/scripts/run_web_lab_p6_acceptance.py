@@ -593,6 +593,28 @@ def lifecycle_target_names() -> list[str]:
     ]
 
 
+def validate_burp_profile(profile: Path) -> str:
+    config = profile / "data" / "UserConfig.json"
+    if not profile.is_dir() or not config.is_file():
+        raise AcceptanceError("Burp profile is missing data/UserConfig.json")
+    try:
+        payload = json.loads(config.read_text())
+        extensions = payload["user_options"]["extender"]["extensions"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AcceptanceError("Burp profile has malformed extension configuration") from exc
+    if not isinstance(extensions, list) or not any(
+        isinstance(item, dict)
+        and item.get("loaded") is True
+        and item.get("extension_type") == "java"
+        and item.get("extension_file") == "/opt/burp/burp-mcp-all.jar"
+        for item in extensions
+    ):
+        raise AcceptanceError(
+            "Burp profile must load the packaged MCP extension from /opt/burp/burp-mcp-all.jar"
+        )
+    return sha256_file(config)
+
+
 def cleanup_p6_runtime() -> None:
     names = output(
         [
@@ -648,8 +670,9 @@ def main() -> int:
     if image_inspect(FIXTURE_IMAGE_ID)["Id"] != FIXTURE_IMAGE_ID:
         raise AcceptanceError("fixture image identity changed")
     burp_id = image_inspect(args.burp_image)["Id"]
-    if not args.env_template.is_file() or not args.profile.is_dir() or not args.xauthority.is_file():
-        raise AcceptanceError("required host-only env/profile/Xauthority input is unavailable")
+    if not args.env_template.is_file() or not args.xauthority.is_file():
+        raise AcceptanceError("required host-only env/Xauthority input is unavailable")
+    profile_config_sha256 = validate_burp_profile(args.profile.resolve())
 
     env = load_env(args.env_template, args.source_commit)
     backend_root = source_root / "aegis-platform/backend"
@@ -866,6 +889,7 @@ def main() -> int:
             "fixture_image_id": FIXTURE_IMAGE_ID,
             "fixture_revision": FIXTURE_REVISION,
             "burp_runtime_image_id": burp_id,
+            "burp_profile_config_sha256": profile_config_sha256,
             "measurement_sha256": report["measurement_sha256"],
             "case_count": report["case_count"],
             "mismatches": report["outcomes"]["mismatches"],

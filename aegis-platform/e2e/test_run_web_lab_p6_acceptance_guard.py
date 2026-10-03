@@ -48,6 +48,32 @@ class P6AcceptanceGuardTests(unittest.TestCase):
             finally:
                 first.close()
 
+    def test_burp_profile_requires_packaged_mcp_extension(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp)
+            data = profile / "data"
+            data.mkdir()
+            config = data / "UserConfig.json"
+            config.write_text(json.dumps({
+                "user_options": {"extender": {"extensions": [{
+                    "loaded": True,
+                    "extension_type": "java",
+                    "extension_file": "/opt/burp/burp-mcp-all.jar",
+                }]}}
+            }))
+            digest = MODULE.validate_burp_profile(profile)
+            self.assertEqual(len(digest), 64)
+
+            config.write_text(json.dumps({
+                "user_options": {"extender": {"extensions": [{
+                    "loaded": True,
+                    "extension_type": "java",
+                    "extension_file": "/home/user/burp-mcp-all.jar",
+                }]}}
+            }))
+            with self.assertRaisesRegex(MODULE.AcceptanceError, "packaged MCP extension"):
+                MODULE.validate_burp_profile(profile)
+
     def test_secure_base_is_fail_closed(self):
         args = MODULE.secure_base(
             {"AEGIS_ISOLATED_WEB_LAB_MEASUREMENT_PROOF": "1"},
