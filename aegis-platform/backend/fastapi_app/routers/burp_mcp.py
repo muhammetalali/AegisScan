@@ -31,7 +31,7 @@ class BurpMCPSessionIn(BaseModel):
     authorization_id: UUID
     provider_name: str = Field(min_length=1, max_length=180)
     provider_version: str = Field(min_length=1, max_length=120)
-    requested_operations: list[str] = Field(min_length=1, max_length=4)
+    requested_operations: list[str] = Field(min_length=1, max_length=5)
     idempotency_key: str = Field(min_length=1, max_length=128)
     credential_ref: UUID | None = None
     max_invocations: int = Field(default=20, ge=1, le=100)

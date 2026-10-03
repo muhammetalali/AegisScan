@@ -1,0 +1,210 @@
+{
+  "schema_version": "aegis.web-labs-preparation.v1",
+  "repository": "muhammetalali/AegisScan",
+  "base_sha": "f863787569a7fcea85f5318f559bdb2890084299",
+  "branch": "codex/web-labs-preparation-20261003",
+  "preparation_status": "PREPARATION_COMPLETE",
+  "implementation_status": "P1_implemented_and_tested",
+  "user_checkpoint_policy": "report_each_completed_phase_then_wait_for_user_continue",
+  "execution_authority": "POST /api/v1/capabilities/{capability_id}/execute",
+  "provider_operations": "existing /api/v1/burp-mcp gateway",
+  "reuse_paths": [
+    "aegis-platform/backend/fastapi_app/routers/capabilities.py",
+    "aegis-platform/backend/fastapi_app/routers/assessment_launcher.py",
+    "aegis-platform/backend/fastapi_app/services/governed_execution_contract.py",
+    "aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py",
+    "aegis-platform/backend/enterprise/burp_mcp_models.py",
+    "aegis-platform/backend/fastapi_app/services/capability_registry.py",
+    "aegis-platform/backend/fastapi_app/services/kali_profile_policy.py",
+    "aegis-platform/backend/fastapi_app/services/wstg_catalog.py",
+    "aegis-platform/backend/fastapi_app/services/credential_execution.py",
+    "aegis-platform/backend/fastapi_app/services/web_security_foundation.py",
+    "aegis-platform/backend/django_project/evidence/models.py",
+    "aegis-platform/backend/fastapi_app/services/finding_confirmation.py",
+    "aegis-platform/backend/fastapi_app/services/governed_oast.py",
+    "aegis-platform/backend/fastapi_app/services/attack_replay_sandbox.py",
+    "aegis-platform/frontend/src/pages/assessments/AssessmentLauncher.tsx",
+    "aegis-platform/frontend/src/pages/enterprise/EnterpriseSecurityPlanesPage.tsx",
+    "aegis-platform/frontend/src/pages/assurance/WSTGCoveragePage.tsx",
+    "aegis-platform/e2e/fixtures/bac-target/app.py",
+    "aegis-platform/e2e/fixtures/multi-tenant-target/app.py"
+  ],
+  "proposed_paths": [
+    "aegis-platform/backend/fastapi_app/services/web_labs_preparation.py",
+    "aegis-platform/backend/fastapi_app/routers/web_labs.py",
+    "aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py",
+    "aegis-platform/backend/fastapi_app/services/lab_verification.py",
+    "aegis-platform/frontend/src/pages/labs/WebLabsPage.tsx"
+  ],
+  "pilot": {
+    "fixture_path": "aegis-platform/e2e/fixtures/bac-target/app.py",
+    "fixture_revision_sha256": "4213a578e2751c6cbe22cc3d1166b2bfed2e89860f33b63b90b14f470800fef0",
+    "methodology_id": "WSTG-v42-ATHZ-04",
+    "transport": "HTTP GET only for first pilot",
+    "cases": [
+      {
+        "id": "owner_baseline",
+        "route": "/vulnerable/orders/51",
+        "identity_ref": "alice",
+        "expected": "owner resource"
+      },
+      {
+        "id": "cross_owner_positive",
+        "route": "/vulnerable/orders/74",
+        "identity_ref": "alice",
+        "expected": "foreign resource in vulnerable fixture"
+      },
+      {
+        "id": "patched_negative",
+        "route": "/fixed/orders/74",
+        "identity_ref": "alice",
+        "expected": "404 and no foreign resource"
+      },
+      {
+        "id": "patched_owner_baseline",
+        "route": "/fixed/orders/74",
+        "identity_ref": "bob",
+        "expected": "owner resource"
+      },
+      {
+        "id": "anonymous_negative",
+        "route": "/vulnerable/orders/74",
+        "identity_ref": "anonymous",
+        "expected": "401"
+      }
+    ],
+    "executed": false,
+    "solved": false,
+    "proof_requirement": "resource id plus owner and tenant plus matched negative control; status code alone insufficient"
+  },
+  "scope_constraints": {
+    "production_changed": false,
+    "application_changed": true,
+    "new_scheduler": false,
+    "new_permission_system": false,
+    "raw_credentials_in_plan": false
+  },
+  "phases": [
+    {
+      "id": "P1",
+      "title_ar": "عقد جاهزية المختبر",
+      "status": "implemented_and_tested",
+      "depends_on": [
+        "P0"
+      ],
+      "output": "preview_no_write_no_dispatch",
+      "acceptance_checks": [
+        "tenant_asset_isolation",
+        "expired_authorization",
+        "missing_provider",
+        "no_mutation_or_dispatch"
+      ],
+      "contract": "aegis.web-labs-readiness.v1",
+      "endpoint": "POST /api/v1/web-labs/prepare"
+    },
+    {
+      "id": "P2",
+      "title_ar": "اتصال Burp الحقيقي",
+      "status": "planned",
+      "depends_on": [
+        "P1"
+      ],
+      "output": "real_provider_conformance",
+      "acceptance_checks": [
+        "transport_tool_schema",
+        "provider_error_handling",
+        "runtime_packaging",
+        "canonical_dispatch"
+      ]
+    },
+    {
+      "id": "P3",
+      "title_ar": "الجلسات والطلبات",
+      "status": "planned",
+      "depends_on": [
+        "P2"
+      ],
+      "output": "bound_multistep_evidence",
+      "acceptance_checks": [
+        "identity_isolation",
+        "cancellation",
+        "lost_response_reconciliation",
+        "budgets"
+      ]
+    },
+    {
+      "id": "P4",
+      "title_ar": "التحقق والشرح العربي",
+      "status": "planned",
+      "depends_on": [
+        "P3"
+      ],
+      "output": "positive_negative_verified_verdict",
+      "acceptance_checks": [
+        "vulnerable_fixed_pair",
+        "evidence_lineage",
+        "fresh_revision",
+        "arabic_explanation"
+      ]
+    },
+    {
+      "id": "P5",
+      "title_ar": "الأهداف والواجهة",
+      "status": "planned",
+      "depends_on": [
+        "P4"
+      ],
+      "output": "guided_resettable_workflow",
+      "acceptance_checks": [
+        "reset_expiry",
+        "rtl_ltr",
+        "no_stale_solved",
+        "local_remote_source"
+      ]
+    },
+    {
+      "id": "P6",
+      "title_ar": "القياس والإصدار",
+      "status": "planned",
+      "depends_on": [
+        "P5"
+      ],
+      "output": "measured_capability_release",
+      "acceptance_checks": [
+        "held_out_separation",
+        "resource_baseline",
+        "required_ci",
+        "post_merge_sha"
+      ]
+    }
+  ],
+  "next_phase": "P2",
+  "validation": {
+    "status": "passed",
+    "verified_at_utc": "2026-10-03T00:35:38.063060+00:00",
+    "checks": [
+      "exact_base_branch",
+      "existing_reuse_paths",
+      "proposed_paths_distinguished",
+      "phase_dependencies",
+      "canonical_execution_authority",
+      "fixture_route_source_validation",
+      "canonical_wstg_mapping",
+      "arabic_step_fields",
+      "docs_only_change_scope",
+      "no_live_test_claims"
+    ],
+    "application_tests_run": true,
+    "live_burp_test_run": false,
+    "ci_claim": "PR checks pending; not a main release",
+    "application_test_count": 63,
+    "application_test_suites": {
+      "test_web_labs_preparation": 32,
+      "test_burp_mcp_gateway": 10,
+      "test_provider_approval": 6,
+      "test_assessment_launcher": 15
+    },
+    "isolated_test_network": "aegis-web-labs-p1-20261003",
+    "test_junit_sha256": "429a7f87b8c81b61a0ceec18ca9209c075057ef4895ab4b93079c60efce7bcbc"
+  }
+}

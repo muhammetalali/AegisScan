@@ -1,0 +1,237 @@
+{
+  "schema": "aegis.burp-preparation-provenance.v1",
+  "recorded_at": "2026-10-03T02:03:15.832998+00:00",
+  "source_review": {
+    "repository": "PortSwigger/mcp-server",
+    "commit": "642e6fa31c63db3886a353fcd7ed62037e0ceed5",
+    "server_info_in_source": "burp-suite/1.1.2"
+  },
+  "artifacts": [
+    {
+      "name": "burpsuite-desktop-2026.9.jar",
+      "source_url": "https://portswigger.net/burp/releases/startdownload?product=desktop&version=2026.9&type=Jar",
+      "sha256": "d6c80be60575b59a3097e939b1cf4acf2efd104c0f6ed05166753180365fc7fc",
+      "size": 730366049,
+      "vendor_checksum_verified": true,
+      "rechecked_at_live_probe": true
+    },
+    {
+      "name": "mcp-server-1.3.0.bapp",
+      "source_url": "https://portswigger.net/bappstore/bapps/download/9952290f04ed4f628e624d0aa9dccebc/10",
+      "sha256": "4d675b10796ff51d440c5a40f3855a3d38a1666a91a0b28fb8853a26abd5b2c5",
+      "size": 28190991,
+      "vendor_checksum_verified": false
+    },
+    {
+      "java_image_id": "sha256:cff19e6215689161eb6162c11b86b0c60ddf802164f2eaf48d570f8fb79a36c5",
+      "java_source_image": "eclipse-temurin:21-jre"
+    },
+    {
+      "name": "burp-mcp-all.jar",
+      "extracted_from": "mcp-server-1.3.0.bapp",
+      "sha256": "f93e434a9154fbb03bc9b20e46555fc901be57a80ec63d607d9cde192d27691c",
+      "size": 29992269,
+      "jar_manifest_version": "1.3.0",
+      "vendor_checksum_verified": false,
+      "rechecked_at_live_probe": true
+    }
+  ],
+  "observed_burp_cli_version": "2026.9-53998 Burp Suite",
+  "edition": "Community",
+  "live_mcp_conformance": "verified_local",
+  "live_probe_at_preparation": {
+    "schema": "aegis.burp-live-probe.v1",
+    "transport_probe_passed": false,
+    "lab_solved": false,
+    "live_fixture_revision_verified": false,
+    "error_code": "transport_failed",
+    "message_ar": "لم يثبت اتصال Burp الحي. تحقّق من تشغيل الإضافة والسماح للهدف المحلي المحدد."
+  },
+  "fixture": {
+    "path": "aegis-platform/e2e/fixtures/bac-target/app.py",
+    "source_sha256": "4213a578e2751c6cbe22cc3d1166b2bfed2e89860f33b63b90b14f470800fef0",
+    "direct_health_marker_matches": true,
+    "live_fixture_revision_verified": false
+  },
+  "production_provider_registered": false,
+  "scanner_runtime_packaging_verified": false,
+  "test_image_id": "sha256:9eeddfea38a87e3a87917955b12b3d9b677a73416977e7b9ff7c9aea6564ca9f",
+  "updated_at": "2026-10-03T03:50:16.267390+00:00",
+  "edition_evidence": "Burp Suite Community Edition v2026.9-53998 window title and use_community_edition=true in isolated profile",
+  "live_probe_verified": {
+    "schema": "aegis.burp-live-probe.v1",
+    "source": "configured-local-endpoint",
+    "claim_requires_official_runtime_provenance": true,
+    "transport_metadata": {
+      "transport": "sse",
+      "protocol_version": "2024-11-05",
+      "server_info_sha256": "d716892618612f3618641e1ed75690193095d00595ac0d8fec2d647fbf7c6d8f",
+      "server_name": "burp-suite",
+      "server_reported_version": "1.1.2",
+      "tools_sha256": "40ad6b93717e8d5251d533f58f70f3662ce1dbed100c236fa279814ba7395712",
+      "tool_schema_sha256": "337bfce281301e755dfd4422c79c32c18e672e5b9c492b7974b47777791434e9",
+      "edition": "not_reported",
+      "retry_count": 0
+    },
+    "status_code": 200,
+    "response_sha256": "697cda9c43b5268c3020abaab673147a7df7354b0eb6afdd2d568a9a7670e01a",
+    "response_format": "montoya-request-response",
+    "fixture_health_marker_matches": true,
+    "transport_probe_passed": true,
+    "live_fixture_revision_verified": false,
+    "lab_solved": false,
+    "raw_request_response_persisted": false,
+    "recorded_exit_code": 0
+  },
+  "isolated_scanner_image_probe": {
+    "schema": "aegis.burp-live-probe.v1",
+    "source": "configured-local-endpoint",
+    "claim_requires_official_runtime_provenance": true,
+    "transport_metadata": {
+      "transport": "sse",
+      "protocol_version": "2024-11-05",
+      "server_info_sha256": "d716892618612f3618641e1ed75690193095d00595ac0d8fec2d647fbf7c6d8f",
+      "server_name": "burp-suite",
+      "server_reported_version": "1.1.2",
+      "tools_sha256": "40ad6b93717e8d5251d533f58f70f3662ce1dbed100c236fa279814ba7395712",
+      "tool_schema_sha256": "337bfce281301e755dfd4422c79c32c18e672e5b9c492b7974b47777791434e9",
+      "edition": "not_reported",
+      "retry_count": 0
+    },
+    "status_code": 200,
+    "response_sha256": "1a48fbca8f217c0c9d04e896ac977744bc4c86f8e32957d8f8b30126cc8782c3",
+    "response_format": "montoya-request-response",
+    "fixture_health_marker_matches": true,
+    "transport_probe_passed": true,
+    "live_fixture_revision_verified": false,
+    "lab_solved": false,
+    "raw_request_response_persisted": false,
+    "image_id": "sha256:2a743d87edae714d9c39460018809a407e86f2077cca965752be49e4222fa744",
+    "network": "host",
+    "source_mount": "development_checkout_read_only",
+    "production_topology_proven": false
+  },
+  "live_runtime_controls": {
+    "mcp_bind": "127.0.0.1:9876",
+    "auto_approved_http_targets": [
+      "127.0.0.1:18081"
+    ],
+    "require_http_request_approval": true,
+    "require_project_data_access_approval": true,
+    "config_editing_tooling": false
+  },
+  "conformance_source_hashes": {
+    "aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py": "5818473443185c82cb015bfc8de540579f3a86ba8f7e487488a7f80a2bc7331f",
+    "aegis-platform/backend/fastapi_app/services/burp_http_probe.py": "cd45b5e4f562a9064f36aecdb237581477119d7f6b8d2fe6e64a5529e106ca9a",
+    "aegis-platform/backend/scripts/burp_mcp_sse_probe.py": "8299897a6ff9c4de6ebd3183dcd4c35f3272e461fdcfffdd612a578ed8aaafa2"
+  },
+  "local_validation": {
+    "tests": 174,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "duration_seconds": 280.3,
+    "junit_sha256": "70a4fe050f506bd7ba2be189891092ef0744e04eb28566c801f20dd5183880be",
+    "isolated_network": true,
+    "source_read_only": true,
+    "temporary_extra_test_dependency": "networkx==3.6.1",
+    "extra_dependency_sha256": "d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762"
+  },
+  "ci_after_fix": "pending_new_commit",
+  "production_checkout_rechecked": "fc715f5849dcd5e7d206540955991e0d6d10ff00",
+  "production_tree_clean": true,
+  "packaged_shared_namespace_p2": {
+    "at": "2026-10-03T08:41:09.577165+00:00",
+    "production_topology_model": "network_mode: service:scanner_egress",
+    "scope": "isolated clone of production namespace pattern; no production deployment or provider registration",
+    "images": {
+      "aegis-burp-p2:2026.9": {
+        "image_id": "sha256:044c95df91b56db81d0d019e661f54c74c1ff5e507522009cae4aec472d133b8",
+        "created": "2026-10-03T08:32:57.423404818Z"
+      },
+      "aegis-burp-p2-scanner:candidate": {
+        "image_id": "sha256:457acf6dd213e98155f052fb2a86f3cdae258bdb584c714808deffc6c2eaf4c0",
+        "created": "2026-10-03T08:32:43.605858489Z"
+      },
+      "aegis-platform-scanner_egress:latest": {
+        "image_id": "sha256:0298a0c972e1934da62432a4b9873e14f6a11f11d5ecf2f1dc2e3a28992d1efa",
+        "created": "2026-10-02T20:40:09.941281755Z"
+      }
+    },
+    "probe": {
+      "schema": "aegis.burp-live-probe.v1",
+      "source": "configured-local-endpoint",
+      "claim_requires_official_runtime_provenance": true,
+      "transport_metadata": {
+        "transport": "sse",
+        "protocol_version": "2024-11-05",
+        "server_info_sha256": "d716892618612f3618641e1ed75690193095d00595ac0d8fec2d647fbf7c6d8f",
+        "server_name": "burp-suite",
+        "server_reported_version": "1.1.2",
+        "tools_sha256": "40ad6b93717e8d5251d533f58f70f3662ce1dbed100c236fa279814ba7395712",
+        "tool_schema_sha256": "337bfce281301e755dfd4422c79c32c18e672e5b9c492b7974b47777791434e9",
+        "edition": "not_reported",
+        "retry_count": 0
+      },
+      "status_code": 200,
+      "response_sha256": "68af6fe0855817a6d872a511774f438e48014cb7bfe5c07e907a4dc0116c866b",
+      "response_format": "montoya-request-response",
+      "fixture_health_marker_matches": true,
+      "transport_probe_passed": true,
+      "live_fixture_revision_verified": false,
+      "lab_solved": false,
+      "raw_request_response_persisted": false
+    },
+    "packaged_source": {
+      "matches": true,
+      "modules": {
+        "fastapi_app/services/burp_mcp_transport.py": "5818473443185c82cb015bfc8de540579f3a86ba8f7e487488a7f80a2bc7331f",
+        "fastapi_app/services/burp_http_probe.py": "cd45b5e4f562a9064f36aecdb237581477119d7f6b8d2fe6e64a5529e106ca9a",
+        "fastapi_app/tasks/burp_mcp.py": "4fdc4d21209ae58b5d7a80998a88e048e11b9180144ece50aa20b34b5efbdcc3",
+        "fastapi_app/celery_app.py": "c3b6ed47648c050a24c2fa6be9efd3792268b133ab85d4dfd10f3dfc36d725fb",
+        "scripts/burp_mcp_sse_probe.py": "8299897a6ff9c4de6ebd3183dcd4c35f3272e461fdcfffdd612a578ed8aaafa2"
+      }
+    },
+    "isolation": {
+      "external": {
+        "private_peer": {
+          "status": 200
+        },
+        "external_mcp": {
+          "error_type": "ConnectTimeout"
+        }
+      },
+      "worker": {
+        "private_peer": {
+          "error_type": "ConnectTimeout"
+        },
+        "external_mcp": {
+          "error_type": "ConnectError"
+        }
+      }
+    },
+    "runtime_mode": "supervised Community temporary-project GUI",
+    "restart_approval_observation": "exact host:port approval required again after restart; only 127.0.0.1:18081 approved",
+    "runtime_capabilities": [],
+    "production_provider_registered": false,
+    "full_release_image_rebuilt": false,
+    "scanner_candidate_base": "sha256:2a743d87edae714d9c39460018809a407e86f2077cca965752be49e4222fa744",
+    "reliability_regression": {
+      "tests": 14,
+      "passed": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 49.27,
+      "junit_sha256": "9dca8e6799c0dce8c44102157a091f9e26b34541a2ed46c80452510048176b00"
+    },
+    "prior_ci_head": "b8df2f9f89ea0ded5b26d3d9879ce831e4a7fb01",
+    "prior_ci_first_page": {
+      "retrieved": 61,
+      "success": 59,
+      "failure": 2
+    },
+    "prior_ci_failure": "stale strict expected SCANNER_TASK_ROUTES omitted new Burp task; Domain Contract failed and required governance followed",
+    "ci_after_fix": "pending new commit"
+  }
+}

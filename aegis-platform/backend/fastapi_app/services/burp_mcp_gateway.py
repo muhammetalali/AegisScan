@@ -10,6 +10,8 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+from .burp_mcp_transport import call_burp_sse, MCPTransportError
+from .burp_http_probe import health_request_arguments, summarize_health_result
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -44,6 +46,7 @@ _OPERATION_ARGUMENTS: dict[str, set[str]] = {
     'burp.passive_scan': {'url'},
     'burp.active_scan': {'url', 'profile'},
     'burp.issue_details': {'issue_id'},
+    'burp.http_request': {'path'},
 }
 _ACTIVE_SCAN_PROFILES = {'default', 'audit', 'crawl'}
 _PROVIDER_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,179}$')
@@ -307,7 +310,21 @@ def _current_provider_approval(
             raise BurpMCPProviderError('Approved Burp MCP provider manifest contains an unsupported tool mapping.')
         normalized[op] = tool
 
+    validate_transport_manifest(manifest, normalized)
     return record, governance, normalized, _endpoint(manifest)
+
+def validate_transport_manifest(manifest: dict, mapping: dict) -> None:
+    transport = manifest.get('mcp_transport', 'legacy-jsonrpc-http')
+    if not isinstance(transport, str) or transport not in {'legacy-jsonrpc-http', 'sse'}:
+        raise BurpMCPProviderError('Unsupported Burp MCP transport.')
+    if transport == 'sse' and mapping != {'burp.http_request': 'send_http1_request'}:
+        raise BurpMCPProviderError('SSE currently admits only the pinned HTTP/1 fixture probe tool.')
+    if 'burp.http_request' in mapping and transport != 'sse':
+        raise BurpMCPProviderError('The HTTP fixture probe requires MCP SSE lifecycle.')
+    pin = manifest.get('mcp_tool_schema_sha256', '')
+    if not isinstance(pin, str) or (pin and not re.fullmatch(r'[0-9a-f]{64}', pin)):
+        raise BurpMCPProviderError('Invalid approved tool schema fingerprint.')
+
 
 def _credential(
     *,
@@ -434,6 +451,14 @@ def _safe_arguments(operation: str, arguments: dict[str, Any] | None, target: st
             if profile not in _ACTIVE_SCAN_PROFILES:
                 raise BurpMCPError('active scan profile is not allowlisted.')
             result['profile'] = profile
+    elif operation == 'burp.http_request':
+        if arguments.get('path', '/health') != '/health':
+            raise BurpMCPAuthorizationError('P2 admits only the server-built anonymous GET /health probe.')
+        try:
+            health_request_arguments(target)
+        except ValueError as exc:
+            raise BurpMCPAuthorizationError('HTTP probe requires an authorized web origin.') from exc
+        result['path'] = '/health'
     elif operation == 'burp.issue_details':
         issue_id = str(arguments.get('issue_id') or '').strip()
         if not _ISSUE_RE.fullmatch(issue_id):
@@ -472,7 +497,22 @@ def _perform_mcp_call(
     arguments: dict[str, Any],
     request_id: str,
     bearer_token: str = '',
+    transport: str = 'legacy-jsonrpc-http',
+    expected_schema_sha256: str = '',
 ) -> tuple[Any, str]:
+    if transport == 'sse':
+        try:
+            call = call_burp_sse(endpoint=endpoint, provider_tool_name=provider_tool_name,
+                                 arguments=health_request_arguments(arguments['target']),
+                                 request_id=request_id, bearer_token=bearer_token,
+                                 expected_schema_sha256=expected_schema_sha256)
+            return {'mcp_result': call.result, 'transport_metadata': call.metadata}, call.request_id
+        except MCPTransportError as exc:
+            failure = BurpMCPProviderError(str(exc))
+            failure.code = exc.code
+            raise failure from exc
+    if transport != 'legacy-jsonrpc-http':
+        raise BurpMCPProviderError('Unsupported Burp MCP transport.')
     payload = {
         'jsonrpc': '2.0',
         'id': request_id,
@@ -501,6 +541,8 @@ def _perform_mcp_call(
         raise BurpMCPProviderError('Burp MCP provider returned a JSON-RPC error.')
     if 'result' not in body:
         raise BurpMCPProviderError('Burp MCP provider response has no result.')
+    if isinstance(body['result'], dict) and body['result'].get('isError') is True:
+        raise BurpMCPProviderError('Burp MCP tool returned an execution error.')
     return body['result'], str(body.get('id') or '')[:128]
 
 
@@ -533,6 +575,7 @@ def _session_contract(
             'capability_manifest_sha256': governance.capability_manifest_sha256,
             'supply_chain_sha256': governance.supply_chain_sha256,
             'endpoint_sha256': hashlib.sha256(endpoint.encode('utf-8')).hexdigest(),
+            'transport': governance.manifest.get('mcp_transport', 'legacy-jsonrpc-http'),
         },
         'target': target,
         'allowed_tools': dict(sorted(allowed_tools.items())),
@@ -847,9 +890,17 @@ def invoke_burp_mcp(
                 arguments=safe_arguments,
                 request_id=provider_request_id,
                 bearer_token=bearer,
+                transport=governance.manifest.get('mcp_transport', 'legacy-jsonrpc-http'),
+                expected_schema_sha256=governance.manifest.get('mcp_tool_schema_sha256', ''),
             )
             provider_result_sha256 = _sha(raw_result)
-            result_summary = _redact_result(raw_result)
+            if op == 'burp.http_request':
+                try:
+                    result_summary = summarize_health_result(raw_result)
+                except (ValueError, TypeError, KeyError) as exc:
+                    raise BurpMCPProviderError('Burp returned no valid bounded HTTP probe result.') from exc
+            else:
+                result_summary = _redact_result(raw_result)
             assert_no_credential_material_leaked(materials, result_summary)
 
             evidence_payload = {

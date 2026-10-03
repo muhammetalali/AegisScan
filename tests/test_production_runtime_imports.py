@@ -192,7 +192,14 @@ def test_capability_planner_exposes_zero_native_packaging_gaps() -> None:
     ):
         plan = planning_summary(asset_type, depth)
         assert plan["pending_packaging"] == 0, plan
-        assert all(item["execution_ready"] for item in plan["plan"]), plan
+        pending = [item for item in plan["plan"] if not item["execution_ready"]]
+        expected_pending = 1 if asset_type == "website" else 0
+        assert len(pending) == expected_pending, plan
+        assert plan["pending_provider_runtime"] == expected_pending, plan
+        assert plan["ready"] + expected_pending == plan["total"], plan
+        if pending:
+            assert pending[0]["capability_id"] == "burp.mcp.gateway", plan
+            assert "مزود Burp" in pending[0]["reason"], plan
 
     web = planning_summary("website", "standard")
     assert web["ready"] >= 8

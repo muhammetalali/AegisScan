@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 from .capability_registry import Capability, list_capabilities
+from .burp_mcp_capability import CAPABILITY_ID as BURP_GATEWAY_ID
 from .native_packaging import PACKAGED_NATIVE_CAPABILITIES
 from .native_tool_runtime import NATIVE_TOOL_SPECS
 
@@ -38,6 +39,8 @@ class PlannedCapability:
 
 
 def _execution_ready(capability: Capability) -> bool:
+    if capability.id == BURP_GATEWAY_ID:
+        return False  # Asset-type planning has no project provider/runtime proof.
     if capability.id not in NATIVE_TOOL_SPECS:
         return True
     return capability.id in PACKAGED_NATIVE_CAPABILITIES
@@ -72,7 +75,9 @@ def plan_capabilities(asset_type: str, depth: Depth = 'standard') -> list[Planne
                 reason=(
                     'packaged and eligible for governed execution'
                     if ready
-                    else 'adapter registered; scanner image packaging proof pending'
+                    else ('يتطلب اختيار مزود Burp معتمدًا وإثبات تشغيله؛ التسجيل وحده لا يثبت الجاهزية.'
+                          if capability.id == BURP_GATEWAY_ID
+                          else 'adapter registered; scanner image packaging proof pending')
                 ),
                 order=len(plan) + 1,
             )
@@ -89,6 +94,7 @@ def planning_summary(asset_type: str, depth: Depth = 'standard') -> dict:
         'depth': depth,
         'total': len(plan),
         'ready': len(ready),
-        'pending_packaging': len(pending),
+        'pending_packaging': sum(item.capability_id != BURP_GATEWAY_ID for item in pending),
+        'pending_provider_runtime': sum(item.capability_id == BURP_GATEWAY_ID for item in pending),
         'plan': [item.public_dict() for item in plan],
     }

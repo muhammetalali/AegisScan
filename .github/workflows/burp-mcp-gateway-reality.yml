@@ -13,7 +13,30 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/routers/web_labs.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_labs_preparation.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_labs_preparation.py'
+      - 'aegis-platform/backend/resources/web-labs/**'
       - 'aegis-platform/backend/fastapi_app/main.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_http_probe.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/kali_profile_policy.py'
+      - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py'
+      - 'aegis-platform/docker/burp-runtime/**'
+      - 'aegis-platform/docker-compose.burp.yml'
+      - 'aegis-platform/backend/scripts/burp_mcp_sse_probe.py'
+      - 'aegis-platform/scripts/verify_burp_scanner_release.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/requirements.txt'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   push:
     branches: [main, chatgpt-a/burp-mcp-gateway-20260922]
@@ -24,7 +47,30 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/routers/web_labs.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_labs_preparation.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_labs_preparation.py'
+      - 'aegis-platform/backend/resources/web-labs/**'
       - 'aegis-platform/backend/fastapi_app/main.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_http_probe.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/kali_profile_policy.py'
+      - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py'
+      - 'aegis-platform/docker/burp-runtime/**'
+      - 'aegis-platform/docker-compose.burp.yml'
+      - 'aegis-platform/backend/scripts/burp_mcp_sse_probe.py'
+      - 'aegis-platform/scripts/verify_burp_scanner_release.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/requirements.txt'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   workflow_dispatch:
 
@@ -96,6 +142,19 @@ jobs:
             aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py \
             aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py \
             aegis-platform/backend/fastapi_app/routers/burp_mcp.py \
+            aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py \
+            aegis-platform/backend/fastapi_app/services/burp_http_probe.py \
+            aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py \
+            aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py \
+            aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py \
+            aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py \
+            aegis-platform/backend/fastapi_app/services/capability_registry.py \
+            aegis-platform/backend/fastapi_app/services/capability_planner.py \
+            aegis-platform/backend/fastapi_app/services/kali_profile_policy.py \
+            aegis-platform/backend/fastapi_app/routers/capabilities.py \
+            aegis-platform/backend/fastapi_app/tasks/burp_mcp.py \
+            aegis-platform/backend/fastapi_app/celery_app.py \
+            aegis-platform/backend/scripts/burp_mcp_sse_probe.py \
             aegis-platform/backend/fastapi_app/main.py
 
       - name: PostgreSQL schema migration and evidence immutability reality
@@ -140,7 +199,7 @@ jobs:
           print('BURP_MCP_EVIDENCE_IMMUTABILITY=POSTGRESQL_TRIGGER')
           PY
 
-      - name: Governed Burp MCP JSON-RPC provider and security reality
+      - name: MCP SSE contract double and gateway security regressions (not live Burp)
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
@@ -148,6 +207,13 @@ jobs:
         run: |
           pytest -q \
             fastapi_app/services/test_burp_mcp_gateway.py \
+            fastapi_app/services/test_web_labs_preparation.py \
+            fastapi_app/services/test_burp_mcp_transport.py \
+            fastapi_app/services/test_burp_mcp_execution.py \
+            fastapi_app/tasks/test_celery_reliability_contract.py \
+            fastapi_app/services/test_kali_profile_policy.py \
+            fastapi_app/routers/test_governed_execution_contract.py \
+            fastapi_app/routers/test_assessment_launcher.py \
             --junitxml=/tmp/burp-mcp-gateway-junit.xml
 
       - name: Provider approval gate regression
@@ -208,6 +274,34 @@ jobs:
           print('BURP_MCP_EVIDENCE_QUALIFICATION=WIRED')
           PY
 
+      - name: Optional Burp runtime Compose and shell contract
+        working-directory: aegis-platform
+        env:
+          POSTGRES_PASSWORD: ci-compose-only
+          AEGIS_BURP_RUNTIME_IMAGE: aegis-burp:ci-config-only
+          AEGIS_BURP_PROFILE_PATH: /tmp/ci-burp-profile
+          AEGIS_BURP_XAUTHORITY_PATH: /tmp/ci-burp-xauthority
+          AEGIS_BURP_ALLOW_LOOPBACK_HTTP: 'true'
+        run: |
+          sh -n docker/burp-runtime/entrypoint.sh docker/burp-runtime/prepare-build-context.sh
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.burp.yml --profile burp-runtime config --no-env-resolution --format json > /tmp/burp-compose-contract.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          services = json.loads(Path('/tmp/burp-compose-contract.json').read_text())['services']
+          runtime = services['burp_runtime']
+          assert runtime['network_mode'] == services['scanner_worker']['network_mode'] == 'service:scanner_egress'
+          assert not runtime.get('ports')
+          assert runtime['cap_drop'] == ['ALL'] and not runtime.get('cap_add')
+          assert runtime['read_only'] is True
+          assert runtime['restart'] == 'no'
+          assert runtime['profiles'] == ['burp-runtime']
+          assert runtime['security_opt'] == ['no-new-privileges:true']
+          for name in ['scanner_worker', 'fastapi']:
+              assert services[name]['environment']['BURP_MCP_ALLOW_INSECURE_LOCAL'] == 'true'
+          print('BURP_OPTIONAL_SHARED_NAMESPACE_CONTRACT=PASS')
+          PY
+
       - name: Retain Burp MCP Reality evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -216,3 +310,50 @@ jobs:
           path: /tmp/burp-mcp-gateway-junit.xml
           retention-days: 30
           if-no-files-found: warn
+
+  burp-scanner-release:
+    needs: burp-mcp-gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout and clean build context
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AEGIS_EXACT_HEAD"
+          test ! -e aegis-platform/backend/.env
+          python -m py_compile aegis-platform/scripts/verify_burp_scanner_release.py
+      - name: Build the fully retired scanner release from scratch
+        run: |
+          set -euo pipefail
+          docker build --no-cache --target production-no-legacy-recon \
+            --build-arg AEGIS_RETIRE_NMAP=1 \
+            --build-arg AEGIS_RETIRE_NUCLEI=1 \
+            --build-arg AEGIS_RETIRE_SEMGREP=1 \
+            --build-arg AEGIS_RETIRE_MASSCAN=1 \
+            --label "org.opencontainers.image.revision=$AEGIS_EXACT_HEAD" \
+            -t "aegis-burp-release:$AEGIS_EXACT_HEAD" \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+      - name: Verify embedded source, retirement and the actual Burp producer offline
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/verify_burp_scanner_release.py \
+            --image "aegis-burp-release:$AEGIS_EXACT_HEAD" \
+            --expected-head "$AEGIS_EXACT_HEAD" \
+            --source-root aegis-platform/backend \
+            --output /tmp/burp-scanner-release-proof.json
+      - name: Retain offline scanner image proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: burp-scanner-release-${{ env.AEGIS_EXACT_HEAD }}
+          path: /tmp/burp-scanner-release-proof.json
+          if-no-files-found: error
+          retention-days: 30
