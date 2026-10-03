@@ -34,6 +34,7 @@ class BurpMCPSessionIn(BaseModel):
     requested_operations: list[str] = Field(min_length=1, max_length=5)
     idempotency_key: str = Field(min_length=1, max_length=128)
     credential_ref: UUID | None = None
+    lab_credential_refs: list[UUID] | None = Field(default=None, min_length=2, max_length=2)
     max_invocations: int = Field(default=20, ge=1, le=100)
     rate_limit_per_minute: int = Field(default=10, ge=1, le=60)
     ttl_seconds: int = Field(default=1800, ge=60, le=3600)
@@ -117,6 +118,7 @@ async def create_burp_mcp_session(payload: BurpMCPSessionIn, user=Depends(get_cu
             requested_operations=payload.requested_operations,
             idempotency_key=payload.idempotency_key,
             credential_ref=str(payload.credential_ref) if payload.credential_ref else None,
+            lab_credential_refs=[str(ref) for ref in payload.lab_credential_refs] if payload.lab_credential_refs is not None else None,
             max_invocations=payload.max_invocations,
             rate_limit_per_minute=payload.rate_limit_per_minute,
             ttl_seconds=payload.ttl_seconds,

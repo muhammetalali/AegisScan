@@ -198,7 +198,7 @@ def test_worker_rechecks_contract_and_current_scope_before_provider_call(client,
     assert BurpMCPInvocation.objects.count() == 0
 
 
-def test_preview_exposes_probe_only_blocker_and_keeps_solver_unready(context):
+def test_preview_exposes_recipe_metadata_and_keeps_solver_unready(context):
     approve(context, 'http://127.0.0.1:9876/sse')
     user, project, asset, _authorization, _membership, credentials = context
     result = prepare_web_lab(actor_id=str(user.id), project_id=str(project.id), asset_id=str(asset.id),
@@ -206,8 +206,9 @@ def test_preview_exposes_probe_only_blocker_and_keeps_solver_unready(context):
                              depth='standard')
     assert result['metadata_ready'] is True
     assert result['execution_ready'] is False
-    assert 'request_operation.anonymous_probe_only' in {b['code'] for b in result['blockers']}
-    assert 'canonical_capability.not_registered' in {b['code'] for b in result['blockers']}
+    assert next(r for r in result['requirements'] if r['id'] == 'request_operation')['state'] == 'ready'
+    assert result['capabilities'][0]['registered'] is True
+    assert {'fixture_binding.not_verified', 'runtime.not_checked'} <= {b['code'] for b in result['blockers']}
 
 
 def test_asset_type_planner_cannot_claim_provider_runtime_readiness():

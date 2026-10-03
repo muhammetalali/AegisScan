@@ -7,6 +7,7 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/enterprise/apps.py'
       - 'aegis-platform/backend/enterprise/burp_mcp_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
+      - 'aegis-platform/backend/enterprise/migrations/0049_burp_invocation_claims.py'
       - 'aegis-platform/backend/enterprise/provider_approval_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0042_provider_approval_plane.py'
       - 'aegis-platform/backend/fastapi_app/services/provider_approval.py'
@@ -22,6 +23,10 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/burp_http_probe.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_lab_requests.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_lab_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_credential_execution_contract.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
@@ -44,6 +49,7 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/enterprise/apps.py'
       - 'aegis-platform/backend/enterprise/burp_mcp_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
+      - 'aegis-platform/backend/enterprise/migrations/0049_burp_invocation_claims.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
@@ -56,6 +62,10 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/burp_http_probe.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_lab_requests.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_lab_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/credential_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_credential_execution_contract.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py'
       - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
@@ -136,6 +146,7 @@ jobs:
           python -m py_compile \
             aegis-platform/backend/enterprise/burp_mcp_models.py \
             aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py \
+            aegis-platform/backend/enterprise/migrations/0049_burp_invocation_claims.py \
             aegis-platform/backend/enterprise/provider_approval_models.py \
             aegis-platform/backend/enterprise/migrations/0042_provider_approval_plane.py \
             aegis-platform/backend/fastapi_app/services/provider_approval.py \
@@ -146,6 +157,9 @@ jobs:
             aegis-platform/backend/fastapi_app/services/burp_http_probe.py \
             aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py \
             aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py \
+            aegis-platform/backend/fastapi_app/services/burp_lab_requests.py \
+            aegis-platform/backend/fastapi_app/services/test_burp_lab_execution.py \
+            aegis-platform/backend/fastapi_app/services/credential_execution.py \
             aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py \
             aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py \
             aegis-platform/backend/fastapi_app/services/capability_registry.py \
@@ -171,9 +185,11 @@ jobs:
           django.setup()
 
           from django.db import connection
-          from enterprise.burp_mcp_models import BurpMCPInvocation, BurpMCPSession
+          from enterprise.burp_mcp_models import BurpMCPInvocation, BurpMCPSession, BurpMCPInvocationClaim
 
           assert connection.vendor == 'postgresql', connection.vendor
+          assert {c.name for c in BurpMCPInvocationClaim._meta.constraints} == {
+              'uniq_burp_claim_idem', 'uniq_burp_claim_seq', 'burp_claim_known_state', 'burp_claim_commit_binding'}
           session_fields = {field.name for field in BurpMCPSession._meta.fields}
           invocation_fields = {field.name for field in BurpMCPInvocation._meta.fields}
           assert {
@@ -210,6 +226,8 @@ jobs:
             fastapi_app/services/test_web_labs_preparation.py \
             fastapi_app/services/test_burp_mcp_transport.py \
             fastapi_app/services/test_burp_mcp_execution.py \
+            fastapi_app/services/test_burp_lab_execution.py \
+            fastapi_app/services/test_credential_execution_contract.py \
             fastapi_app/tasks/test_celery_reliability_contract.py \
             fastapi_app/services/test_kali_profile_policy.py \
             fastapi_app/routers/test_governed_execution_contract.py \

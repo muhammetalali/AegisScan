@@ -129,7 +129,7 @@ def _http1_schema(tool: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-async def _call(*, endpoint: str, provider_tool_name: str, arguments: dict[str, Any],
+async def _call_unwatched(*, endpoint: str, provider_tool_name: str, arguments: dict[str, Any],
                 request_id: str, bearer_token: str, deadline_seconds: float,
                 expected_schema_sha256: str = '') -> MCPCallResult:
     _origin(endpoint)
@@ -250,9 +250,30 @@ async def _call(*, endpoint: str, provider_tool_name: str, arguments: dict[str, 
                     await asyncio.gather(reader, return_exceptions=True)
 
 
+async def _call(*, cancel_check=None, **kwargs):
+    if cancel_check is None:
+        return await _call_unwatched(**kwargs)
+    async def watch():
+        while True:
+            if await asyncio.to_thread(cancel_check):
+                raise MCPTransportError('execution_cancelled')
+            await asyncio.sleep(0.1)
+    call = asyncio.create_task(_call_unwatched(**kwargs))
+    monitor = asyncio.create_task(watch())
+    try:
+        done, _ = await asyncio.wait({call, monitor}, return_when=asyncio.FIRST_COMPLETED)
+        if monitor in done:
+            await monitor
+        return await call
+    finally:
+        call.cancel()
+        monitor.cancel()
+        await asyncio.gather(call, monitor, return_exceptions=True)
+
+
 def call_burp_sse(*, endpoint: str, provider_tool_name: str, arguments: dict[str, Any],
                   request_id: str, bearer_token: str = '', deadline_seconds: float = 15.0,
-                  expected_schema_sha256: str = '') -> MCPCallResult:
+                  expected_schema_sha256: str = '', cancel_check=None) -> MCPCallResult:
     if provider_tool_name != 'send_http1_request':
         raise MCPTransportError('unsupported_tool_binding')
     if (not isinstance(request_id, str) or not request_id or len(request_id) > 128
@@ -261,7 +282,8 @@ def call_burp_sse(*, endpoint: str, provider_tool_name: str, arguments: dict[str
     try:
         return asyncio.run(_call(endpoint=endpoint, provider_tool_name=provider_tool_name,
                                  arguments=arguments, request_id=request_id, bearer_token=bearer_token,
-                                 deadline_seconds=deadline_seconds, expected_schema_sha256=expected_schema_sha256))
+                                 deadline_seconds=deadline_seconds, expected_schema_sha256=expected_schema_sha256,
+                                 cancel_check=cancel_check))
     except MCPTransportError:
         raise
     except (httpx.HTTPError, TimeoutError, ValueError, TypeError) as exc:

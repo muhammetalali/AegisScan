@@ -315,7 +315,11 @@ def _validate_scope(
     capability_id: str,
     identity_ref: str = '',
 ) -> None:
-    if capability_id == 'browser.spa-discovery':
+    if capability_id == 'burp.mcp.gateway' and identity_ref:
+        _validate_browser_scope(credential=credential, actor=actor, purpose=purpose, target=target)
+        if _browser_identity_binding(credential) != identity_ref:
+            raise CredentialVaultDenied('Burp target credential identity does not match this recipe step.')
+    elif capability_id == 'browser.spa-discovery':
         _validate_browser_scope(
             credential=credential,
             actor=actor,

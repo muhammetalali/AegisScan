@@ -219,16 +219,18 @@ def prepare_web_lab(*, actor_id: str, project_id: str, asset_id: str,
           'يلزم مرجعان مختلفان لهويتي alice وbob، من المشروع نفسه وبنطاق browser_origin مطابق.',
           'اربط مرجعي TOKEN أو GENERIC في الخزنة الحالية؛ هذا الفحص لا يفك السر ولا يثبت صلاحية الجلسة.')
     required_operation = definition['required_operation']
-    check('request_operation', False,
-          'anonymous_probe_only' if required_operation in operations else 'unsupported',
-          'اختبار ملكية الطلب يحتاج إرسال HTTP مربوطًا بهويتين؛ فحص الاتصال الحالي يرسل GET /health مجهول الهوية فقط.',
-          'أكمل موصل الطلبات واختبار توافقه في P2 قبل تشغيل اللاب.')
+    request_ready = (required_operation in operations
+                     and provider['state'] == 'metadata_ready')
+    check('request_operation', request_ready,
+          'pinned_recipe_available' if request_ready else 'unsupported',
+          'وصفة GET محدودة تربط هويتي Alice وBob عبر بوابة Burp الحالية؛ توفرها لا يثبت نتيجة اللاب.',
+          'اختر مزود SSE المقبول ومرجعي الهوية الحاليين عند تنفيذ وصفة P3.')
     capability_id = definition['required_capability_id']
     capability = CAPABILITIES.get(capability_id)
     check('canonical_capability', capability is not None,
           'registered' if capability else 'not_registered',
           'فحص تسجيل قدرة المختبر ضمن سجل القدرات الحالي؛ التسجيل وحده لا يثبت التشغيل.',
-          'أكمل التسجيل وسياسة runner والتوزيع عبر مسار capability execute في P2.')
+          'استخدم مسار capability execute الحالي بوضع lab_sequence مع إعادة فحص التفويض.')
     check('fixture_binding', False, 'not_verified',
           'بصمة تعريف الهدف مثبتة، لكن نسخة الهدف الحية وربطها بالأصل لم يُتحققا.',
           'تحقق من النسخة والبصمة والضبط الإيجابي والسلبي عند توصيل الهدف.', unverified=True)

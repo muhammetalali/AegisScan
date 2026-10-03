@@ -17,7 +17,7 @@ from ..core.dependencies import get_current_user
 from ..celery_app import BROWSER_QUEUE, SCANNER_QUEUE
 from ..services.authorization_guard import asset_target
 from ..services.burp_mcp_capability import CAPABILITY_ID as BURP_GATEWAY_ID
-from ..services.burp_mcp_execution import resolve_probe_provider
+from ..services.burp_mcp_execution import resolve_probe_provider, authorize_burp_execution
 from ..services.burp_mcp_gateway import BurpMCPError
 from ..tasks.burp_mcp import run_burp_mcp_probe
 from ..services.governed_execution_contract import GovernedExecutionDraft, finalize_governed_execution_contract, prepare_governed_execution_draft
@@ -256,6 +256,10 @@ async def execute_capability(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if (capability.id == BURP_GATEWAY_ID and options.get('mode') != 'lab_sequence'
+            and len(credential_refs) > 1):
+        raise HTTPException(status_code=409, detail='Burp transport probe accepts at most one provider credential reference')
+
     if capability.credential_required and len(credential_refs) != 1:
         raise HTTPException(
             status_code=409,
@@ -305,7 +309,9 @@ async def execute_capability(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     try:
-        credential_context = (
+        credential_context = await sync_to_async(authorize_burp_execution, thread_sensitive=True)(
+            project_id=request.project_id, actor_id=user_id, target=target, refs=credential_refs, options=options,
+        ) if capability.id == BURP_GATEWAY_ID else (
             await _authorize_credential_bindings(
                 project_id=request.project_id,
                 user_id=user_id,
