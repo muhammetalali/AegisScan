@@ -4,7 +4,7 @@
   "base_sha": "f863787569a7fcea85f5318f559bdb2890084299",
   "branch": "codex/web-labs-preparation-20261003",
   "preparation_status": "PREPARATION_COMPLETE",
-  "implementation_status": "not_started",
+  "implementation_status": "P1_implemented_and_tested",
   "user_checkpoint_policy": "report_each_completed_phase_then_wait_for_user_continue",
   "execution_authority": "POST /api/v1/capabilities/{capability_id}/execute",
   "provider_operations": "existing /api/v1/burp-mcp gateway",
@@ -79,7 +79,7 @@
   },
   "scope_constraints": {
     "production_changed": false,
-    "application_changed": false,
+    "application_changed": true,
     "new_scheduler": false,
     "new_permission_system": false,
     "raw_credentials_in_plan": false
@@ -88,7 +88,7 @@
     {
       "id": "P1",
       "title_ar": "عقد جاهزية المختبر",
-      "status": "planned",
+      "status": "implemented_and_tested",
       "depends_on": [
         "P0"
       ],
@@ -98,7 +98,9 @@
         "expired_authorization",
         "missing_provider",
         "no_mutation_or_dispatch"
-      ]
+      ],
+      "contract": "aegis.web-labs-readiness.v1",
+      "endpoint": "POST /api/v1/web-labs/prepare"
     },
     {
       "id": "P2",
@@ -176,7 +178,7 @@
       ]
     }
   ],
-  "next_phase": "P1",
+  "next_phase": "P2",
   "validation": {
     "status": "passed",
     "verified_at_utc": "2026-10-03T00:35:38.063060+00:00",
@@ -192,8 +194,17 @@
       "docs_only_change_scope",
       "no_live_test_claims"
     ],
-    "application_tests_run": false,
+    "application_tests_run": true,
     "live_burp_test_run": false,
-    "ci_claim": "not_run_for_preparation_commit"
+    "ci_claim": "PR checks pending; not a main release",
+    "application_test_count": 63,
+    "application_test_suites": {
+      "test_web_labs_preparation": 32,
+      "test_burp_mcp_gateway": 10,
+      "test_provider_approval": 6,
+      "test_assessment_launcher": 15
+    },
+    "isolated_test_network": "aegis-web-labs-p1-20261003",
+    "test_junit_sha256": "429a7f87b8c81b61a0ceec18ca9209c075057ef4895ab4b93079c60efce7bcbc"
   }
 }

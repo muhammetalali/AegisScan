@@ -13,6 +13,10 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/routers/web_labs.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_labs_preparation.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_labs_preparation.py'
+      - 'aegis-platform/backend/resources/web-labs/**'
       - 'aegis-platform/backend/fastapi_app/main.py'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   push:
@@ -24,6 +28,10 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/routers/web_labs.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_labs_preparation.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_labs_preparation.py'
+      - 'aegis-platform/backend/resources/web-labs/**'
       - 'aegis-platform/backend/fastapi_app/main.py'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   workflow_dispatch:
@@ -148,6 +156,7 @@ jobs:
         run: |
           pytest -q \
             fastapi_app/services/test_burp_mcp_gateway.py \
+            fastapi_app/services/test_web_labs_preparation.py \
             --junitxml=/tmp/burp-mcp-gateway-junit.xml
 
       - name: Provider approval gate regression
