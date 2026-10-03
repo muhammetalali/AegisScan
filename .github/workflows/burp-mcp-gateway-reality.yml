@@ -8,6 +8,12 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/enterprise/burp_mcp_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
       - 'aegis-platform/backend/enterprise/migrations/0049_burp_invocation_claims.py'
+      - 'aegis-platform/backend/enterprise/migrations/0050_web_lab_evidence_immutability.py'
+      - 'aegis-platform/backend/django_project/evidence/models.py'
+      - 'aegis-platform/backend/fastapi_app/services/lab_verification.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_lab_verification.py'
+      - 'aegis-platform/e2e/fixtures/bac-target/**'
+      - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
       - 'aegis-platform/backend/enterprise/provider_approval_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0042_provider_approval_plane.py'
       - 'aegis-platform/backend/fastapi_app/services/provider_approval.py'
@@ -50,6 +56,12 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/enterprise/burp_mcp_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
       - 'aegis-platform/backend/enterprise/migrations/0049_burp_invocation_claims.py'
+      - 'aegis-platform/backend/enterprise/migrations/0050_web_lab_evidence_immutability.py'
+      - 'aegis-platform/backend/django_project/evidence/models.py'
+      - 'aegis-platform/backend/fastapi_app/services/lab_verification.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_lab_verification.py'
+      - 'aegis-platform/e2e/fixtures/bac-target/**'
+      - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
@@ -158,6 +170,9 @@ jobs:
             aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py \
             aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py \
             aegis-platform/backend/fastapi_app/services/burp_lab_requests.py \
+            aegis-platform/backend/fastapi_app/services/lab_verification.py \
+            aegis-platform/backend/fastapi_app/services/test_lab_verification.py \
+            aegis-platform/backend/enterprise/migrations/0050_web_lab_evidence_immutability.py \
             aegis-platform/backend/fastapi_app/services/test_burp_lab_execution.py \
             aegis-platform/backend/fastapi_app/services/credential_execution.py \
             aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py \
@@ -209,7 +224,7 @@ jobs:
                     AND NOT tgisinternal
               """)
               triggers = {row[0] for row in cursor.fetchall()}
-          assert 'trg_burp_mcp_evidence_immutable' in triggers, triggers
+          assert {'trg_burp_mcp_evidence_immutable', 'trg_web_lab_evidence_immutable'} <= triggers, triggers
           print('BURP_MCP_DATABASE=POSTGRESQL')
           print('BURP_MCP_SCHEMA=WIRED')
           print('BURP_MCP_EVIDENCE_IMMUTABILITY=POSTGRESQL_TRIGGER')
@@ -227,6 +242,8 @@ jobs:
             fastapi_app/services/test_burp_mcp_transport.py \
             fastapi_app/services/test_burp_mcp_execution.py \
             fastapi_app/services/test_burp_lab_execution.py \
+            fastapi_app/services/test_lab_verification.py \
+            fastapi_app/services/test_finding_confirmation.py \
             fastapi_app/services/test_credential_execution_contract.py \
             fastapi_app/tasks/test_celery_reliability_contract.py \
             fastapi_app/services/test_kali_profile_policy.py \

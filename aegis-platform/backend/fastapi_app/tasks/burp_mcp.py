@@ -9,7 +9,8 @@ from fastapi_app.celery_app import SCANNER_QUEUE
 from fastapi_app.services.authorization_guard import require_bound_scan_authorization
 from fastapi_app.services.burp_mcp_capability import CAPABILITY_ID, validate_burp_probe_options
 from fastapi_app.services.burp_mcp_execution import resolve_probe_provider, authorize_burp_execution
-from fastapi_app.services.burp_lab_requests import STEPS
+from fastapi_app.services.burp_lab_requests import STEPS, VERIFIED_STEPS
+from fastapi_app.services.lab_verification import verify_lab_attempt
 from fastapi_app.services.burp_mcp_gateway import start_burp_mcp_session, invoke_burp_mcp
 from fastapi_app.services.scanner_delivery import terminal_scan_delivery
 from fastapi_app.services.governed_execution_contract import _fingerprint
@@ -55,8 +56,10 @@ def run_burp_mcp_probe(self, scan_id: str) -> dict:
         if scan is None or authorization is None:
             return _fail(persisted, execution, 'توقّف فحص Burp: التفويض المرتبط أو نطاق الهدف غير صالح.')
         authorize_burp_execution(project_id=str(scan.project_id), actor_id=str(scan.initiated_by_id),
-                                 target=target, refs=refs, options=options)
-        lab_mode = options.get('mode') == 'lab_sequence'
+                                 target=target, refs=refs, options=options, asset_id=str(scan.asset_id))
+        lab_mode = options.get('mode') in {'lab_sequence', 'verified_lab_sequence'}
+        verified_mode = options.get('mode') == 'verified_lab_sequence'
+        steps = VERIFIED_STEPS if verified_mode else STEPS
         provider_ref = options.get('provider_credential_ref') if lab_mode else (refs[0] if refs else None)
         target_refs = [ref for ref in refs if ref != provider_ref] if lab_mode else None
         provider = resolve_probe_provider(project_id=str(scan.project_id),
@@ -81,11 +84,12 @@ def run_burp_mcp_probe(self, scan_id: str) -> dict:
             authorization_id=str(authorization.id), actor_id=str(scan.initiated_by_id),
             provider_name=provider.provider_name, provider_version=provider.provider_version,
             requested_operations=['burp.http_request'], idempotency_key=f'probe-session:{scan.id}',
-            credential_ref=provider_ref, lab_credential_refs=target_refs, max_invocations=len(STEPS) if lab_mode else 1,
+            credential_ref=provider_ref, lab_credential_refs=target_refs, max_invocations=len(steps) if lab_mode else 1,
             rate_limit_per_minute=60 if lab_mode else 1, ttl_seconds=300 if lab_mode else 120,
+            runtime_evidence_ref=options.get('runtime_evidence_ref') if verified_mode else None,
         ).session
         invocations = []
-        for step in STEPS if lab_mode else ['health']:
+        for step in steps if lab_mode else ['health']:
             invocation = invoke_burp_mcp(session_id=str(session.id), actor_id=str(scan.initiated_by_id),
                 operation='burp.http_request', arguments={'lab_step': step} if lab_mode else {'path': '/health'},
                 idempotency_key=f'lab-step:{scan.id}:{step}' if lab_mode else f'probe-health:{scan.id}').invocation
@@ -100,6 +104,13 @@ def run_burp_mcp_probe(self, scan_id: str) -> dict:
                     'lab_solved': False, 'live_fixture_revision_verified': False}
                    if lab_mode else invocation.result_summary)
         with transaction.atomic():
+            # The verifier uses the gateway's same authorization/tenant lock
+            # order. Its commit and scan completion share one short transaction.
+            # No network request occurs here, and cancellation is revalidated.
+            if verified_mode:
+                verdict = verify_lab_attempt(session_id=str(session.id), actor_id=str(scan.initiated_by_id))
+                summary.update(lab_verification=verdict, lab_solved=verdict['lab_solved'],
+                    live_fixture_revision_verified=verdict['live_fixture_revision_verified'])
             current = Scan.objects.select_for_update().get(pk=scan_id)
             if current.status == Scan.Status.CANCELLED:
                 return _cancelled(current, execution)
@@ -113,8 +124,11 @@ def run_burp_mcp_probe(self, scan_id: str) -> dict:
             execution.progress, execution.completed_at, execution.evidences_collected = 100, now, len(invocations)
             execution.result_data = {**summary, 'target': target, 'capability_id': CAPABILITY_ID,
                                      'session_ref': str(session.id), 'invocation_ref': str(invocation.id),
-                                     'evidence_ref': str(invocation.evidence_id), 'finding_ids': [],
-                                     'message_ar': 'نفذت خطوات المختبر وسجلت ملاحظاتها؛ حكم الحل والتحقق من النسخة الحية لم ينفذا بعد.' if lab_mode else 'نجح اتصال HTTP عبر Burp إلى علامة صحة الهدف؛ لم يتحقق حل اللاب أو بصمة النسخة الحية.'
+                                     'evidence_ref': str(invocation.evidence_id),
+                                     'finding_ids': [verdict['finding_id']] if verified_mode and verdict['finding_id'] else [],
+                                     'message_ar': ('ثبت وصول Alice إلى مورد Bob بعد نجاح الضوابط والتحقق من النسخة؛ سجلت ثغرة للمراجعة المستقلة.' if verdict['lab_solved']
+                                         else 'انتهى تحقق المختبر؛ راجع الحكم وأسباب عدم الحسم أو رفض الوصول.') if verified_mode
+                                         else 'نفذت خطوات المختبر وسجلت ملاحظاتها؛ حكم الحل والتحقق من النسخة الحية لم ينفذا بعد.' if lab_mode else 'نجح اتصال HTTP عبر Burp إلى علامة صحة الهدف؛ لم يتحقق حل اللاب أو بصمة النسخة الحية.'
                                      if success else 'تم الاستدعاء لكن علامة صحة الهدف أو حالته لا تطابق التعريف؛ لم ينجح فحص الاتصال.'}
             execution.error_message = '' if success else execution.result_data['message_ar']
             execution.save(update_fields=['status', 'progress', 'completed_at', 'evidences_collected',
@@ -127,7 +141,8 @@ def run_burp_mcp_probe(self, scan_id: str) -> dict:
             current.save(update_fields=['status', 'progress', 'completed_at', 'current_phase',
                                         'engine_results', 'error_message', 'updated_at'])
         return {'status': current.status, 'scan_id': scan_id, 'evidence_ref': str(invocation.evidence_id),
-                'transport_probe_passed': success if not lab_mode else False, 'recipe_executed': success if lab_mode else False, 'lab_solved': False}
+                'transport_probe_passed': success if not lab_mode else False, 'recipe_executed': success if lab_mode else False,
+                'lab_solved': summary.get('lab_solved', False)}
     except Exception as exc:
         persisted.refresh_from_db(fields=['status'])
         if persisted.status == Scan.Status.CANCELLED:

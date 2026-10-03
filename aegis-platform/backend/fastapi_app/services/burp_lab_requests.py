@@ -23,6 +23,12 @@ STEPS = {
     'anonymous_negative': ('anonymous', '/vulnerable/orders/74'),
     'owner_recheck': ('alice', '/vulnerable/orders/51'),
 }
+VERIFIED_STEPS = {'instance_before': ('anonymous', '/__lab__/identity'), **STEPS,
+                  'instance_after': ('anonymous', '/__lab__/identity')}
+
+
+def session_steps(session):
+    return VERIFIED_STEPS if session.contract_snapshot.get('lab', {}).get('runtime_binding') else STEPS
 
 
 def lab_bindings(*, project_id, actor_id, target, refs):
@@ -49,7 +55,9 @@ def validate_lab_bindings(session, actor_id):
     contract = session.contract_snapshot.get('lab')
     if not isinstance(contract, dict):
         raise CredentialVaultDenied('No BAC identity contract is bound to this session.')
-    if (contract.get('definition_id') != LAB_ID or contract.get('fixture_revision') != FIXTURE_SHA256
+    from .lab_verification import FIXTURE_REVISION, validate_runtime_evidence
+    revision = FIXTURE_REVISION if contract.get('runtime_binding') else FIXTURE_SHA256
+    if (contract.get('definition_id') != LAB_ID or contract.get('fixture_revision') != revision
             or contract.get('attempt_ref') != str(session.scan_id)):
         raise CredentialVaultDenied('The BAC attempt or fixture definition binding changed.')
     identities = contract.get('identities')
@@ -59,14 +67,21 @@ def validate_lab_bindings(session, actor_id):
     if lab_bindings(project_id=str(session.project_id), actor_id=actor_id,
                     target=session.target_snapshot, refs=refs) != identities:
         raise CredentialVaultDenied('BAC identity versions or scope changed; start a new governed attempt.')
+    if contract.get('runtime_binding'):
+        runtime = validate_runtime_evidence(evidence_ref=contract['runtime_binding']['evidence_ref'],
+            project_id=str(session.project_id), asset_id=str(session.asset_id), target=session.target_snapshot)
+        if runtime != contract['runtime_binding']:
+            raise CredentialVaultDenied('The pinned runtime inspection changed.')
     return contract
 
 
 def lab_request(*, session, actor_id, step):
-    if step not in STEPS:
+    if step not in session_steps(session):
         raise ValueError('Unknown BAC recipe step.')
     contract = validate_lab_bindings(session, actor_id)
-    identity, path = STEPS[step]
+    identity, path = session_steps(session)[step]
+    if step in {'instance_before', 'instance_after'}:
+        path += '?nonce=' + str(session.id) + '-' + step
     arguments = health_request_arguments(session.target_snapshot)
     content = arguments['content'].replace('GET /health HTTP/1.1', f'GET {path} HTTP/1.1', 1)
     materials = ()
@@ -110,7 +125,8 @@ def summarize_lab_result(payload, *, request_arguments, session, step):
             or not first[1].isdigit() or not 100 <= int(first[1]) <= 599):
         raise ValueError('Malformed HTTP response.')
     try:
-        data = json.loads(body)
+        from .lab_verification import strict_json
+        data = strict_json(body)
     except ValueError:
         data = None
     resource = None
@@ -118,12 +134,12 @@ def summarize_lab_result(payload, *, request_arguments, session, step):
             and data.get('id') in {'51', '74'}
             and data.get('owner_id') in {'alice', 'bob'} and data.get('tenant_id') in {'tenant-a', 'tenant-b'}):
         resource = {key: data[key] for key in ['id', 'owner_id', 'tenant_id']}
-    identity, path = STEPS[step]
-    return {
+    identity, path = session_steps(session)[step]
+    summary = {
         'schema': 'aegis.burp-lab-observation.v1', 'attempt_ref': str(session.scan_id),
         'step_ref': step, 'action_ref': 'GET:' + path, 'identity_ref': identity,
         'target_ref': str(session.asset_id), 'definition_id': LAB_ID,
-        'fixture_revision': FIXTURE_SHA256, 'live_fixture_revision_verified': False,
+        'fixture_revision': session.contract_snapshot['lab']['fixture_revision'], 'live_fixture_revision_verified': False,
         'status_code': int(first[1]), 'resource': resource,
         'response_sha256': hashlib.sha256(response.encode()).hexdigest(),
         'wire_request_sha256': hashlib.sha256(request_arguments['content'].encode()).hexdigest(),
@@ -131,3 +147,17 @@ def summarize_lab_result(payload, *, request_arguments, session, step):
         'raw_request_response_persisted': False, 'lab_solved': False,
         'verdict': 'observation_only',
     }
+    if step in {'instance_before', 'instance_after'}:
+        instance = None
+        if isinstance(data, dict) and set(data) == {'instance_ref', 'process_ref', 'fixture_revision', 'variant', 'nonce'}:
+            from uuid import UUID
+            try:
+                if (all(str(UUID(data[k])) == data[k] for k in ('instance_ref', 'process_ref'))
+                        and isinstance(data['fixture_revision'], str) and re.fullmatch('[0-9a-f]{64}', data['fixture_revision'])
+                        and data['variant'] in {'vulnerable', 'patched'}
+                        and data['nonce'] == str(session.id) + '-' + step):
+                    instance = data
+            except (ValueError, TypeError, AttributeError):
+                pass
+        summary['instance_identity'] = instance
+    return summary

@@ -6,15 +6,22 @@ from django.core.exceptions import ValidationError
 
 
 class EvidenceQuerySet(models.QuerySet):
+    def _contains_web_lab(self):
+        return self.filter(source__in=['lab_runtime_inspector', 'lab_verification']).exists()
+
     def _contains_oast(self) -> bool:
         return self.filter(source='oast').exists()
 
     def update(self, **kwargs):
+        if self._contains_web_lab() or kwargs.get('source') in {'lab_runtime_inspector', 'lab_verification'}:
+            raise ValidationError('Web Labs evidence is immutable.')
         if self._contains_oast() or str(kwargs.get('source') or '').lower() == 'oast':
             raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
         return super().update(**kwargs)
 
     def delete(self):
+        if self._contains_web_lab():
+            raise ValidationError('Web Labs evidence is immutable.')
         if self._contains_oast():
             raise ValidationError('Governed OAST evidence is immutable and cannot be deleted.')
         return super().delete()
@@ -22,6 +29,9 @@ class EvidenceQuerySet(models.QuerySet):
     def bulk_update(self, objs, fields, **kwargs):
         objs = tuple(objs)
         ids = [obj.pk for obj in objs if getattr(obj, 'pk', None)]
+        if (any(getattr(obj, 'source', '') in {'lab_runtime_inspector', 'lab_verification'} for obj in objs)
+                or self.model.objects.filter(pk__in=ids, source__in=['lab_runtime_inspector', 'lab_verification']).exists()):
+            raise ValidationError('Web Labs evidence is immutable.')
         if any(str(getattr(obj, 'source', '')).lower() == 'oast' for obj in objs):
             raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
         if ids and self.model.objects.filter(pk__in=ids, source='oast').exists():
@@ -51,12 +61,16 @@ class Evidence(models.Model):
     def save(self, *args, **kwargs):
         if not self._state.adding:
             existing_source = type(self).objects.filter(pk=self.pk).values_list('source', flat=True).first()
+            if existing_source in {'lab_runtime_inspector', 'lab_verification'} or self.source in {'lab_runtime_inspector', 'lab_verification'}:
+                raise ValidationError('Web Labs evidence is immutable.')
             if str(existing_source or '').lower() == 'oast' or str(self.source or '').lower() == 'oast':
                 raise ValidationError('Governed OAST evidence is immutable and cannot be updated.')
         self.sha256 = hashlib.sha256(self.raw_output.encode('utf-8', errors='replace')).hexdigest()
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
+        if self.source in {'lab_runtime_inspector', 'lab_verification'}:
+            raise ValidationError('Web Labs evidence is immutable.')
         if str(self.source or '').lower() == 'oast':
             raise ValidationError('Governed OAST evidence is immutable and cannot be deleted.')
         return super().delete(*args, **kwargs)

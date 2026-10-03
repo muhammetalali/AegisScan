@@ -131,9 +131,9 @@ for _id, _spec in WSTG_INTERNAL_SPECS.items():
 
 CAPABILITIES[BURP_GATEWAY_ID] = Capability(
     id=BURP_GATEWAY_ID, tool='burp-mcp', category='web-provider-conformance',
-    description='Bounded anonymous health probe or pinned two-identity BAC GET recipe through approved Burp MCP; observations only, no lab verdict.',
+    description='Bounded anonymous health probe or pinned two-identity BAC GET recipe through approved Burp MCP; observation mode or independent BAC verdict with a trusted sealed-runtime inspection.',
     scan_type='url', asset_types=('website', 'api_endpoint'), risk='active-low',
-    allowed_options=('provider_decision_ref', 'lab_definition_id', 'mode', 'provider_credential_ref'), adapter='burp-mcp',
+    allowed_options=('provider_decision_ref', 'lab_definition_id', 'mode', 'provider_credential_ref', 'runtime_evidence_ref'), adapter='burp-mcp',
     credential_mode='burp-bound-identities', credential_kinds=('api_key', 'token', 'generic'),
     runner_profile=resolve_kali_profile(BURP_GATEWAY_ID),
 )
