@@ -132,6 +132,8 @@ jobs:
           allowed = oast_owned | scheduled_successor
           shared_triggers = {
               '.github/workflows/governed-oast-runtime-reality.yml',
+              # Evidence is shared by Burp, BAC and OAST; retain the OAST runtime gates below.
+              'aegis-platform/backend/django_project/evidence/models.py',
               'aegis-platform/backend/fastapi_app/main.py',
           }
           base = os.environ.get('BASE_SHA', '').strip()

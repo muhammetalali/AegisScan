@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import re
+from pathlib import Path
+from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Response
@@ -16,6 +20,25 @@ ORDERS = {
     '51': {'id': '51', 'owner_id': 'alice', 'tenant_id': 'tenant-a', 'amount': 125},
     '74': {'id': '74', 'owner_id': 'bob', 'tenant_id': 'tenant-b', 'amount': 900},
 }
+
+# Only the trusted lab provisioner selects these values. A process restart gets
+# a new process_ref, even when the container and its instance label are reused.
+INSTANCE_REF = os.getenv('AEGIS_LAB_INSTANCE_REF', str(uuid4()))
+PROCESS_REF = str(uuid4())
+VARIANT = os.getenv('AEGIS_LAB_VARIANT', 'vulnerable')
+if VARIANT not in {'vulnerable', 'patched'}:
+    raise RuntimeError('Unsupported fixture variant')
+REVISION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+@app.get('/__lab__/identity')
+def lab_identity(response: Response, nonce: str):
+    if not re.fullmatch(r'[a-zA-Z0-9_-]{1,96}', nonce):
+        raise HTTPException(status_code=400, detail='Invalid challenge')
+    _secure_headers(response)
+    response.headers['Cache-Control'] = 'no-store'
+    return {'instance_ref': INSTANCE_REF, 'process_ref': PROCESS_REF,
+            'fixture_revision': REVISION, 'variant': VARIANT, 'nonce': nonce}
 
 
 def _identity(authorization: str | None) -> dict:
@@ -54,9 +77,11 @@ def fixed_order(order_id: str, response: Response, authorization: str | None = H
 
 @app.get('/vulnerable/orders/{order_id}')
 def vulnerable_order(order_id: str, response: Response, authorization: str | None = Header(default=None)):
-    _identity(authorization)
+    identity = _identity(authorization)
     order = ORDERS.get(order_id)
     if order is None:
+        raise HTTPException(status_code=404, detail='Not found')
+    if VARIANT == 'patched' and (order['tenant_id'] != identity['tenant'] or order['owner_id'] != identity['ref']):
         raise HTTPException(status_code=404, detail='Not found')
     _secure_headers(response)
     return order

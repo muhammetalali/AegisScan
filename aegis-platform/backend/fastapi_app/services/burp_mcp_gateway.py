@@ -25,7 +25,7 @@ from enterprise.models import Organization, OrganizationMembership, TenantProjec
 from enterprise.provider_approval_models import ProviderApprovalDecision
 from enterprise.web_security_models import ProviderApprovalRecord
 
-from .burp_lab_requests import STEPS, LAB_ID, FIXTURE_SHA256, lab_bindings, validate_lab_bindings, lab_request, summarize_lab_result
+from .burp_lab_requests import STEPS, VERIFIED_STEPS, session_steps, LAB_ID, FIXTURE_SHA256, lab_bindings, validate_lab_bindings, lab_request, summarize_lab_result
 from .audit_writer import add_audit_entry
 from .authorization_guard import asset_target
 from .credential_execution import (
@@ -456,7 +456,7 @@ def _safe_arguments(operation: str, arguments: dict[str, Any] | None, target: st
     elif operation == 'burp.http_request':
         if 'lab_step' in arguments:
             if (set(arguments) != {'lab_step'} or not isinstance(arguments['lab_step'], str)
-                    or arguments['lab_step'] not in STEPS):
+                    or arguments['lab_step'] not in VERIFIED_STEPS):
                 raise BurpMCPAuthorizationError('Only a pinned BAC recipe step is accepted.')
             health_request_arguments(target)
             return {'target': target, 'lab_step': arguments['lab_step']}
@@ -618,6 +618,7 @@ def start_burp_mcp_session(
     max_invocations: int = 20,
     rate_limit_per_minute: int = 10,
     ttl_seconds: int = 1800,
+    runtime_evidence_ref: str | None = None,
 ) -> BurpMCPSessionResult:
     name = _provider_name(provider_name, 'provider_name')
     version = _provider_name(provider_version, 'provider_version')
@@ -682,6 +683,15 @@ def start_burp_mcp_session(
                                     target=decision.target_snapshot, refs=lab_credential_refs)
             contract['lab'] = {'definition_id': LAB_ID, 'fixture_revision': FIXTURE_SHA256,
                                'attempt_ref': str(scan.id), 'identities': bindings}
+            if runtime_evidence_ref:
+                from .lab_verification import FIXTURE_REVISION, validate_runtime_evidence
+                runtime = validate_runtime_evidence(evidence_ref=runtime_evidence_ref,
+                    project_id=str(project.id), asset_id=str(asset.id), target=decision.target_snapshot)
+                if maximum != len(VERIFIED_STEPS):
+                    raise BurpMCPAuthorizationError('Verified BAC execution requires its exact eight-step budget.')
+                contract['lab'].update(fixture_revision=FIXTURE_REVISION, runtime_binding=runtime)
+        elif runtime_evidence_ref:
+            raise BurpMCPAuthorizationError('Runtime evidence requires bound BAC identities.')
         contract_fingerprint = _sha(contract)
         request = {
             'organization_id': str(organization.id),
@@ -863,6 +873,8 @@ def _invocation_context(session_id, actor_id, op, arguments, idem):
     safe_arguments = _safe_arguments(op, arguments, session.target_snapshot)
     if 'lab_step' in safe_arguments:
         validate_lab_bindings(session, actor_id)
+        if safe_arguments['lab_step'] not in session_steps(session):
+            raise BurpMCPAuthorizationError('This step is not part of the pinned session recipe.')
         if governance.manifest.get('mcp_transport') != 'sse':
             raise BurpMCPAuthorizationError('BAC recipe cannot fall back to a legacy provider.')
     arguments_sha256 = _sha(safe_arguments)

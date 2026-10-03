@@ -1,9 +1,9 @@
 {
   "id": "bac-orders-v1",
-  "definition_version": "1.0",
+  "definition_version": "1.1",
   "title_ar": "اختبار ملكية الطلبات بين هويتين",
   "fixture_path": "aegis-platform/e2e/fixtures/bac-target/app.py",
-  "fixture_revision_sha256": "4213a578e2751c6cbe22cc3d1166b2bfed2e89860f33b63b90b14f470800fef0",
+  "fixture_revision_sha256": "b051e47ecb3b77c97a2b89b12cc7d98c0557ce9b330f63d301c2d70a81f21bc9",
   "methodology_id": "WSTG-v42-ATHZ-04",
   "identity_refs": [
     "alice",
@@ -12,5 +12,7 @@
   "required_operation": "burp.http_request",
   "required_capability_id": "burp.mcp.gateway",
   "live_binding_verified": false,
-  "execution_mode": "lab_sequence"
+  "execution_mode": "lab_sequence",
+  "verification_mode": "verified_lab_sequence",
+  "runtime_inspection_required": true
 }

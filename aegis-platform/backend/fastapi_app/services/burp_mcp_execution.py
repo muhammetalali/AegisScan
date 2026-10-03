@@ -34,8 +34,8 @@ def resolve_probe_provider(*, project_id: str, decision_ref: str, target: str):
         return current
 
 
-def authorize_burp_execution(*, project_id, actor_id, target, refs, options):
-    if options.get('mode') != 'lab_sequence':
+def authorize_burp_execution(*, project_id, actor_id, target, refs, options, asset_id=None):
+    if options.get('mode') not in {'lab_sequence', 'verified_lab_sequence'}:
         if len(refs) > 1:
             raise CredentialVaultDenied('The transport probe accepts at most one provider credential.')
         return authorize_credential_refs_for_execution(
@@ -48,6 +48,12 @@ def authorize_burp_execution(*, project_id, actor_id, target, refs, options):
         raise CredentialVaultDenied('The provider credential must be bound to this execution.')
     target_refs = [ref for ref in refs if ref != provider]
     bindings = lab_bindings(project_id=project_id, actor_id=actor_id, target=target, refs=target_refs)
+    if options.get('mode') == 'verified_lab_sequence':
+        from .lab_verification import validate_runtime_evidence
+        if not asset_id:
+            raise CredentialVaultDenied('Verified BAC scheduling requires the selected asset binding.')
+        validate_runtime_evidence(evidence_ref=options['runtime_evidence_ref'],
+            project_id=project_id, asset_id=asset_id, target=target)
     metadata = [{'credential_ref': b['credential_ref'], 'version': b['version'], 'identity_ref': identity,
                  'role': 'target-identity'} for identity, b in sorted(bindings.items())]
     if provider:

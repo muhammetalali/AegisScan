@@ -256,7 +256,7 @@ async def execute_capability(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if (capability.id == BURP_GATEWAY_ID and options.get('mode') != 'lab_sequence'
+    if (capability.id == BURP_GATEWAY_ID and options.get('mode') not in {'lab_sequence', 'verified_lab_sequence'}
             and len(credential_refs) > 1):
         raise HTTPException(status_code=409, detail='Burp transport probe accepts at most one provider credential reference')
 
@@ -310,7 +310,7 @@ async def execute_capability(
 
     try:
         credential_context = await sync_to_async(authorize_burp_execution, thread_sensitive=True)(
-            project_id=request.project_id, actor_id=user_id, target=target, refs=credential_refs, options=options,
+            project_id=request.project_id, actor_id=user_id, target=target, refs=credential_refs, options=options, asset_id=request.asset_id,
         ) if capability.id == BURP_GATEWAY_ID else (
             await _authorize_credential_bindings(
                 project_id=request.project_id,

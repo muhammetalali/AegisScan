@@ -1,4 +1,4 @@
-# P3 candidate only: preserve the exact running retired-tools scanner base.
+# Lab candidate only: preserve the exact running retired-tools scanner base.
 # Full release rebuild remains the existing Dockerfile.django production target.
 ARG SCANNER_BASE=aegis-platform-scanner_worker:latest@sha256:2a743d87edae714d9c39460018809a407e86f2077cca965752be49e4222fa744
 FROM ${SCANNER_BASE}
@@ -8,4 +8,5 @@ COPY --chown=10001:10001 fastapi_app /app/fastapi_app
 COPY --chown=10001:10001 scripts /app/scripts
 COPY --chown=10001:10001 enterprise /app/enterprise
 COPY --chown=10001:10001 resources /app/resources
+COPY --chown=10001:10001 django_project /app/django_project
 USER 10001:10001

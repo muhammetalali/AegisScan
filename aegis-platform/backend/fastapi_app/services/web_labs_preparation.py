@@ -224,7 +224,7 @@ def prepare_web_lab(*, actor_id: str, project_id: str, asset_id: str,
     check('request_operation', request_ready,
           'pinned_recipe_available' if request_ready else 'unsupported',
           'وصفة GET محدودة تربط هويتي Alice وBob عبر بوابة Burp الحالية؛ توفرها لا يثبت نتيجة اللاب.',
-          'اختر مزود SSE المقبول ومرجعي الهوية الحاليين عند تنفيذ وصفة P3.')
+          'اختر مزود SSE المقبول ومرجعي الهوية؛ الحكم المستقل يتطلب سجل فحص موثوق للنسخة الحية.')
     capability_id = definition['required_capability_id']
     capability = CAPABILITIES.get(capability_id)
     check('canonical_capability', capability is not None,
@@ -233,7 +233,7 @@ def prepare_web_lab(*, actor_id: str, project_id: str, asset_id: str,
           'استخدم مسار capability execute الحالي بوضع lab_sequence مع إعادة فحص التفويض.')
     check('fixture_binding', False, 'not_verified',
           'بصمة تعريف الهدف مثبتة، لكن نسخة الهدف الحية وربطها بالأصل لم يُتحققا.',
-          'تحقق من النسخة والبصمة والضبط الإيجابي والسلبي عند توصيل الهدف.', unverified=True)
+          'اربط سجل فحص الحاوية الموقّع عند تنفيذ verified_lab_sequence؛ المعاينة لا تفك المفتاح ولا تتحقق من الهدف.', unverified=True)
     check('runtime', False, 'not_checked',
           'لم نفحص اتصال Burp أو العامل أو صلاحية الجلسات؛ لا توجد نتيجة تشغيل في هذه المعاينة.',
           'نفذ اختبارات التوافق والتحقق في المراحل اللاحقة؛ أعد فحص التفويض عند التنفيذ.', unverified=True)
