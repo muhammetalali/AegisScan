@@ -26,10 +26,11 @@ def docker(args):
 
 
 def inspect_runtime(container, expected_image, expected_revision):
-    if (not re.fullmatch(r'aegis-burp-p4-target-[a-z0-9-]{1,40}', container)
+    if (not (re.fullmatch(r'aegis-burp-p4-target-[a-z0-9-]{1,40}', container)
+             or re.fullmatch(r'aegis-web-lab-[0-9a-f]{12}', container))
             or not re.fullmatch(r'sha256:[0-9a-f]{64}', expected_image)
             or not re.fullmatch(r'[0-9a-f]{64}', expected_revision)):
-        raise ValueError('Use a dedicated P4 target and immutable image/source IDs')
+        raise ValueError('Use a dedicated Web Lab target and immutable image/source IDs')
     record = json.loads(docker(['inspect', container]))[0]
     config, host = record['Config'], record['HostConfig']
     if (not record['State']['Running'] or record['Image'] != expected_image

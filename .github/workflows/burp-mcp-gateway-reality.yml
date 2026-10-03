@@ -9,11 +9,18 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
       - 'aegis-platform/backend/enterprise/migrations/0049_burp_invocation_claims.py'
       - 'aegis-platform/backend/enterprise/migrations/0050_web_lab_evidence_immutability.py'
+      - 'aegis-platform/backend/enterprise/migrations/0051_web_lab_lifecycle.py'
+      - 'aegis-platform/backend/enterprise/web_lab_models.py'
+      - 'aegis-platform/backend/enterprise/management/commands/web_lab_lifecycle.py'
       - 'aegis-platform/backend/django_project/evidence/models.py'
       - 'aegis-platform/backend/fastapi_app/services/lab_verification.py'
       - 'aegis-platform/backend/fastapi_app/services/test_lab_verification.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_lab_lifecycle.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_lab_lifecycle.py'
       - 'aegis-platform/e2e/fixtures/bac-target/**'
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
+      - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
+      - 'docs/web-labs-p5-contract.md'
       - 'aegis-platform/backend/enterprise/provider_approval_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0042_provider_approval_plane.py'
       - 'aegis-platform/backend/fastapi_app/services/provider_approval.py'
@@ -57,11 +64,18 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/enterprise/migrations/0041_burp_mcp_gateway.py'
       - 'aegis-platform/backend/enterprise/migrations/0049_burp_invocation_claims.py'
       - 'aegis-platform/backend/enterprise/migrations/0050_web_lab_evidence_immutability.py'
+      - 'aegis-platform/backend/enterprise/migrations/0051_web_lab_lifecycle.py'
+      - 'aegis-platform/backend/enterprise/web_lab_models.py'
+      - 'aegis-platform/backend/enterprise/management/commands/web_lab_lifecycle.py'
       - 'aegis-platform/backend/django_project/evidence/models.py'
       - 'aegis-platform/backend/fastapi_app/services/lab_verification.py'
       - 'aegis-platform/backend/fastapi_app/services/test_lab_verification.py'
+      - 'aegis-platform/backend/fastapi_app/services/web_lab_lifecycle.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_lab_lifecycle.py'
       - 'aegis-platform/e2e/fixtures/bac-target/**'
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
+      - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
+      - 'docs/web-labs-p5-contract.md'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
@@ -173,6 +187,11 @@ jobs:
             aegis-platform/backend/fastapi_app/services/lab_verification.py \
             aegis-platform/backend/fastapi_app/services/test_lab_verification.py \
             aegis-platform/backend/enterprise/migrations/0050_web_lab_evidence_immutability.py \
+            aegis-platform/backend/enterprise/migrations/0051_web_lab_lifecycle.py \
+            aegis-platform/backend/enterprise/web_lab_models.py \
+            aegis-platform/backend/enterprise/management/commands/web_lab_lifecycle.py \
+            aegis-platform/backend/fastapi_app/services/web_lab_lifecycle.py \
+            aegis-platform/backend/fastapi_app/services/test_web_lab_lifecycle.py \
             aegis-platform/backend/fastapi_app/services/test_burp_lab_execution.py \
             aegis-platform/backend/fastapi_app/services/credential_execution.py \
             aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py \
@@ -184,6 +203,8 @@ jobs:
             aegis-platform/backend/fastapi_app/tasks/burp_mcp.py \
             aegis-platform/backend/fastapi_app/celery_app.py \
             aegis-platform/backend/scripts/burp_mcp_sse_probe.py \
+            aegis-platform/scripts/inspect_web_lab_runtime.py \
+            aegis-platform/scripts/web_lab_host_lifecycle.py \
             aegis-platform/backend/fastapi_app/main.py
 
       - name: PostgreSQL schema migration and evidence immutability reality
@@ -201,10 +222,17 @@ jobs:
 
           from django.db import connection
           from enterprise.burp_mcp_models import BurpMCPInvocation, BurpMCPSession, BurpMCPInvocationClaim
+          from enterprise.web_lab_models import WebLabInstance, WebLabLifecycleEvent
 
           assert connection.vendor == 'postgresql', connection.vendor
           assert {c.name for c in BurpMCPInvocationClaim._meta.constraints} == {
               'uniq_burp_claim_idem', 'uniq_burp_claim_seq', 'burp_claim_known_state', 'burp_claim_commit_binding'}
+          assert {c.name for c in WebLabInstance._meta.constraints} == {
+              'uniq_weblab_generation', 'weblab_generation_gte_1',
+              'weblab_version_gte_1', 'weblab_cleaned_shape'}
+          assert {c.name for c in WebLabLifecycleEvent._meta.constraints} == {
+              'uniq_weblab_event_sequence', 'uniq_weblab_org_idem',
+              'weblab_event_sequence_gte_1', 'weblab_event_generation_gte_1'}
           session_fields = {field.name for field in BurpMCPSession._meta.fields}
           invocation_fields = {field.name for field in BurpMCPInvocation._meta.fields}
           assert {
@@ -223,14 +251,23 @@ jobs:
                   WHERE tgrelid = 'evidence_evidence'::regclass
                     AND NOT tgisinternal
               """)
-              triggers = {row[0] for row in cursor.fetchall()}
-          assert {'trg_burp_mcp_evidence_immutable', 'trg_web_lab_evidence_immutable'} <= triggers, triggers
+              evidence_triggers = {row[0] for row in cursor.fetchall()}
+              cursor.execute("""
+                  SELECT tgname
+                  FROM pg_trigger
+                  WHERE tgrelid = 'enterprise_weblablifecycleevent'::regclass
+                    AND NOT tgisinternal
+              """)
+              lifecycle_triggers = {row[0] for row in cursor.fetchall()}
+          assert {'trg_burp_mcp_evidence_immutable', 'trg_web_lab_evidence_immutable'} <= evidence_triggers, evidence_triggers
+          assert 'trg_web_lab_lifecycle_event_immutable' in lifecycle_triggers, lifecycle_triggers
           print('BURP_MCP_DATABASE=POSTGRESQL')
           print('BURP_MCP_SCHEMA=WIRED')
           print('BURP_MCP_EVIDENCE_IMMUTABILITY=POSTGRESQL_TRIGGER')
+          print('WEB_LAB_LIFECYCLE_IMMUTABILITY=POSTGRESQL_TRIGGER')
           PY
 
-      - name: MCP SSE contract double and gateway security regressions (not live Burp)
+      - name: MCP SSE, Web Lab lifecycle and gateway security regressions (not live Burp)
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
@@ -243,6 +280,7 @@ jobs:
             fastapi_app/services/test_burp_mcp_execution.py \
             fastapi_app/services/test_burp_lab_execution.py \
             fastapi_app/services/test_lab_verification.py \
+            fastapi_app/services/test_web_lab_lifecycle.py \
             fastapi_app/services/test_finding_confirmation.py \
             fastapi_app/services/test_credential_execution_contract.py \
             fastapi_app/tasks/test_celery_reliability_contract.py \
@@ -307,6 +345,43 @@ jobs:
           print('BURP_MCP_PROVIDER_APPROVAL=ENTERPRISE_PINNED')
           print('BURP_MCP_AUTHORIZATION=REVALIDATED')
           print('BURP_MCP_EVIDENCE_QUALIFICATION=WIRED')
+          PY
+
+      - name: Web Lab host lifecycle authority boundary
+        run: |
+          python aegis-platform/scripts/web_lab_host_lifecycle.py --help >/dev/null
+          python - <<'PY'
+          from pathlib import Path
+
+          service = Path('aegis-platform/backend/fastapi_app/services/web_lab_lifecycle.py').read_text()
+          host = Path('aegis-platform/scripts/web_lab_host_lifecycle.py').read_text()
+          inspector = Path('aegis-platform/scripts/inspect_web_lab_runtime.py').read_text()
+
+          assert 'subprocess' not in service
+          assert 'docker' not in service.lower()
+          assert '/var/run/docker.sock' not in host
+          assert 'docker.sock' not in host
+          assert 'shell=True' not in host
+          assert 'os.system' not in host
+          assert 'subprocess.run(' in host
+          assert "CONTAINER_RE = re.compile(r'^aegis-web-lab-" in host
+          assert "CONTROL_RE = re.compile(" in host
+          assert "NETWORK_RE = re.compile(" in host
+          for token in [
+              "'--read-only'", "'--cap-drop'", "'ALL'",
+              "'--security-opt'", "'no-new-privileges:true'",
+              "'--user', '10001:10001'", "'--restart', 'no'",
+              "'--memory', '256m'", "'--cpus', '1'", "'--pids-limit', '128'",
+          ]:
+              assert token in host, token
+          assert "'verify-chain'" in host
+          assert 'verify_lifecycle_chain' in service
+          assert 'current_asset_authorization' in service
+          assert 'inspect_web_lab_runtime.py' in host
+          assert 'host[\'NetworkMode\'].startswith(\'container:\')' in inspector or "host['NetworkMode'].startswith('container:')" in inspector
+          print('WEB_LAB_DOCKER_AUTHORITY=HOST_ONLY')
+          print('WEB_LAB_LIFECYCLE_CHAIN=REVALIDATED')
+          print('WEB_LAB_RUNTIME_BOUNDARY=SEALED')
           PY
 
       - name: Optional Burp runtime Compose and shell contract

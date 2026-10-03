@@ -24,6 +24,7 @@ class EnterpriseConfig(AppConfig):
         from . import agentic_security_models  # noqa: F401
         from . import attack_replay_models  # noqa: F401
         from . import work_queue_models  # noqa: F401
+        from . import web_lab_models  # noqa: F401
 
     def ready(self):
         from . import signals  # noqa: F401
