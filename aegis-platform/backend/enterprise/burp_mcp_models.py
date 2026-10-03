@@ -177,3 +177,28 @@ class BurpMCPInvocation(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError('Burp MCP invocations are immutable and cannot be deleted.')
+
+
+class BurpMCPInvocationClaim(models.Model):
+    """Durable reservation: an uncertain external call is never re-sent implicitly."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(BurpMCPSession, on_delete=models.PROTECT, related_name='invocation_claims')
+    idempotency_key = models.CharField(max_length=128)
+    request_fingerprint = models.CharField(max_length=64)
+    invocation_sequence = models.PositiveIntegerField()
+    state = models.CharField(max_length=20, default='in_flight', choices=[
+        ('in_flight', 'In flight'), ('committed', 'Committed'), ('indeterminate', 'Indeterminate'),
+    ])
+    failure_code = models.CharField(max_length=80, blank=True)
+    invocation = models.OneToOneField(BurpMCPInvocation, on_delete=models.PROTECT, null=True, blank=True, related_name='claim')
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['session', 'idempotency_key'], name='uniq_burp_claim_idem'),
+            models.UniqueConstraint(fields=['session', 'invocation_sequence'], name='uniq_burp_claim_seq'),
+            models.CheckConstraint(condition=models.Q(state__in=['in_flight', 'committed', 'indeterminate']), name='burp_claim_known_state'),
+            models.CheckConstraint(condition=(models.Q(state='committed', invocation__isnull=False, completed_at__isnull=False) | models.Q(state__in=['in_flight', 'indeterminate'], invocation__isnull=True)), name='burp_claim_commit_binding'),
+        ]

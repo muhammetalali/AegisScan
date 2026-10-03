@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from .burp_mcp_transport import call_burp_sse, MCPTransportError
 from .burp_http_probe import health_request_arguments, summarize_health_result
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, transaction, connection, connections
 from django.utils import timezone
 
 from django_project.assets.models import Asset, AssetAuthorization
@@ -20,11 +20,12 @@ from django_project.evidence.models import Evidence
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.system.credential_models import CredentialSecret
-from enterprise.burp_mcp_models import BurpMCPInvocation, BurpMCPSession
+from enterprise.burp_mcp_models import BurpMCPInvocation, BurpMCPSession, BurpMCPInvocationClaim
 from enterprise.models import Organization, OrganizationMembership, TenantProject
 from enterprise.provider_approval_models import ProviderApprovalDecision
 from enterprise.web_security_models import ProviderApprovalRecord
 
+from .burp_lab_requests import STEPS, LAB_ID, FIXTURE_SHA256, lab_bindings, validate_lab_bindings, lab_request, summarize_lab_result
 from .audit_writer import add_audit_entry
 from .authorization_guard import asset_target
 from .credential_execution import (
@@ -46,7 +47,7 @@ _OPERATION_ARGUMENTS: dict[str, set[str]] = {
     'burp.passive_scan': {'url'},
     'burp.active_scan': {'url', 'profile'},
     'burp.issue_details': {'issue_id'},
-    'burp.http_request': {'path'},
+    'burp.http_request': {'path', 'lab_step'},
 }
 _ACTIVE_SCAN_PROFILES = {'default', 'audit', 'crawl'}
 _PROVIDER_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,179}$')
@@ -168,6 +169,7 @@ def _lock_context(
     if not OrganizationMembership.objects.filter(
         organization=organization,
         user_id=actor_id,
+        user__is_active=True,
         is_active=True,
     ).exists():
         raise BurpMCPAuthorizationError('Actor has no active enterprise tenant membership.')
@@ -452,8 +454,14 @@ def _safe_arguments(operation: str, arguments: dict[str, Any] | None, target: st
                 raise BurpMCPError('active scan profile is not allowlisted.')
             result['profile'] = profile
     elif operation == 'burp.http_request':
+        if 'lab_step' in arguments:
+            if (set(arguments) != {'lab_step'} or not isinstance(arguments['lab_step'], str)
+                    or arguments['lab_step'] not in STEPS):
+                raise BurpMCPAuthorizationError('Only a pinned BAC recipe step is accepted.')
+            health_request_arguments(target)
+            return {'target': target, 'lab_step': arguments['lab_step']}
         if arguments.get('path', '/health') != '/health':
-            raise BurpMCPAuthorizationError('P2 admits only the server-built anonymous GET /health probe.')
+            raise BurpMCPAuthorizationError('Only the server-built health probe or a bound BAC step is accepted.')
         try:
             health_request_arguments(target)
         except ValueError as exc:
@@ -499,13 +507,15 @@ def _perform_mcp_call(
     bearer_token: str = '',
     transport: str = 'legacy-jsonrpc-http',
     expected_schema_sha256: str = '',
+    request_arguments: dict | None = None,
+    cancel_check=None,
 ) -> tuple[Any, str]:
     if transport == 'sse':
         try:
             call = call_burp_sse(endpoint=endpoint, provider_tool_name=provider_tool_name,
-                                 arguments=health_request_arguments(arguments['target']),
+                                 arguments=request_arguments or health_request_arguments(arguments['target']),
                                  request_id=request_id, bearer_token=bearer_token,
-                                 expected_schema_sha256=expected_schema_sha256)
+                                 expected_schema_sha256=expected_schema_sha256, cancel_check=cancel_check)
             return {'mcp_result': call.result, 'transport_metadata': call.metadata}, call.request_id
         except MCPTransportError as exc:
             failure = BurpMCPProviderError(str(exc))
@@ -604,6 +614,7 @@ def start_burp_mcp_session(
     requested_operations: list[str] | tuple[str, ...],
     idempotency_key: str,
     credential_ref: str | None = None,
+    lab_credential_refs: list[str] | None = None,
     max_invocations: int = 20,
     rate_limit_per_minute: int = 10,
     ttl_seconds: int = 1800,
@@ -660,6 +671,17 @@ def start_burp_mcp_session(
             rate_limit_per_minute=per_minute,
             ttl_seconds=ttl,
         )
+        if credential is not None:
+            contract['credential_version'] = int(credential.version)
+        if lab_credential_refs is not None:
+            if requested != ['burp.http_request'] or governance.manifest.get('mcp_transport') != 'sse':
+                raise BurpMCPAuthorizationError('The BAC recipe requires the pinned SSE HTTP-only session.')
+            if credential_id and credential_id in lab_credential_refs:
+                raise BurpMCPAuthorizationError('Provider authentication cannot be a target identity credential.')
+            bindings = lab_bindings(project_id=str(project.id), actor_id=str(actor_id),
+                                    target=decision.target_snapshot, refs=lab_credential_refs)
+            contract['lab'] = {'definition_id': LAB_ID, 'fixture_revision': FIXTURE_SHA256,
+                               'attempt_ref': str(scan.id), 'identities': bindings}
         contract_fingerprint = _sha(contract)
         request = {
             'organization_id': str(organization.id),
@@ -777,132 +799,172 @@ def _audit_failure(session_id: str, actor_id: str, message: str) -> None:
         return
 
 
+def _invocation_context(session_id, actor_id, op, arguments, idem):
+    session = (
+        BurpMCPSession.objects.select_for_update(of=('self',))
+        .select_related(
+            'organization', 'project', 'asset', 'scan', 'authorization_decision',
+            'provider_approval', 'provider_governance_decision', 'credential_ref',
+        )
+        .filter(pk=session_id)
+        .first()
+    )
+    if session is None:
+        raise BurpMCPAuthorizationError('Burp MCP session was not found.')
+
+    organization, project, asset, scan, decision = _lock_context(
+        project_id=str(session.project_id),
+        asset_id=str(session.asset_id),
+        scan_id=str(session.scan_id),
+        authorization_id=str(session.authorization_decision_id),
+        actor_id=str(actor_id),
+    )
+    if organization.id != session.organization_id:
+        raise BurpMCPAuthorizationError('Burp MCP tenant lineage changed before invocation.')
+    if decision.target_snapshot != session.target_snapshot:
+        raise BurpMCPAuthorizationError('Burp MCP target lineage changed before invocation.')
+    if session.policy_version != BURP_MCP_POLICY_VERSION:
+        raise BurpMCPAuthorizationError('Burp MCP session policy version is no longer accepted.')
+    if session.expires_at <= timezone.now():
+        raise BurpMCPAuthorizationError('Burp MCP session has expired.')
+
+    if _sha(session.contract_snapshot) != session.contract_fingerprint:
+        raise BurpMCPAuthorizationError('Burp session contract fingerprint changed.')
+    if scan.status in {Scan.Status.CANCELLED, Scan.Status.PAUSED}:
+        raise BurpMCPAuthorizationError('Burp execution is cancelled or paused.')
+    approval, governance, mapping, endpoint = _current_provider_approval(
+        project_id=str(project.id),
+        provider_name=session.provider_name,
+        provider_version=session.provider_version,
+    )
+    if approval.id != session.provider_approval_id or approval.manifest_sha256 != session.provider_approval.manifest_sha256:
+        raise BurpMCPProviderError('Pinned Burp MCP provider approval is no longer current.')
+    if (
+        session.provider_governance_decision_id is None
+        or governance.id != session.provider_governance_decision_id
+        or governance.provider_identity_sha256 != session.provider_identity_sha256
+    ):
+        raise BurpMCPProviderError('Pinned enterprise provider decision is no longer current.')
+    if endpoint != session.endpoint_origin:
+        raise BurpMCPProviderError('Approved Burp MCP endpoint changed after session creation.')
+
+    if session.credential_ref_id:
+        credential = _credential(project_id=str(project.id), actor_id=str(actor_id),
+                                 credential_ref=str(session.credential_ref_id),
+                                 provider_name=session.provider_name, provider_version=session.provider_version)
+        pinned_version = session.contract_snapshot.get('credential_version')
+        if pinned_version is not None and int(credential.version) != pinned_version:
+            raise BurpMCPAuthorizationError('Pinned provider credential version changed.')
+
+    allowed = session.allowed_tools if isinstance(session.allowed_tools, dict) else {}
+    if op not in allowed or mapping.get(op) != allowed.get(op):
+        raise BurpMCPAuthorizationError('Burp MCP operation is not admitted by the pinned session contract.')
+    provider_tool_name = str(allowed[op])
+    safe_arguments = _safe_arguments(op, arguments, session.target_snapshot)
+    if 'lab_step' in safe_arguments:
+        validate_lab_bindings(session, actor_id)
+        if governance.manifest.get('mcp_transport') != 'sse':
+            raise BurpMCPAuthorizationError('BAC recipe cannot fall back to a legacy provider.')
+    arguments_sha256 = _sha(safe_arguments)
+    request_fingerprint = _sha({
+        'session_id': str(session.id),
+        'actor_id': str(actor_id),
+        'operation': op,
+        'provider_tool_name': provider_tool_name,
+        'idempotency_key': idem,
+        'arguments_sha256': arguments_sha256,
+    })
+
+    return session, organization, project, asset, scan, decision, approval, governance, provider_tool_name, safe_arguments, arguments_sha256, request_fingerprint
+
+
+def _scan_stopped(scan_id):
+    # Called in a separate asyncio worker thread, with its own short-lived DB connection.
+    try:
+        state = Scan.objects.filter(pk=scan_id).values_list('status', flat=True).first()
+        return state is None or state in {Scan.Status.CANCELLED, Scan.Status.PAUSED, Scan.Status.COMPLETED, Scan.Status.FAILED}
+    finally:
+        connections.close_all()
+
+
 def invoke_burp_mcp(
-    *,
-    session_id: str,
-    actor_id: str,
-    operation: str,
-    arguments: dict[str, Any] | None,
-    idempotency_key: str,
+    *, session_id: str, actor_id: str, operation: str,
+    arguments: dict[str, Any] | None, idempotency_key: str,
 ) -> BurpMCPInvocationResult:
+    if connection.in_atomic_block:
+        raise BurpMCPConflict('Gateway network calls must run outside a caller transaction.')
     op = _text(operation, field='operation', maximum=80)
     if op not in _OPERATION_ARGUMENTS:
         raise BurpMCPAuthorizationError('Burp MCP operation is not allowlisted.')
     idem = _idempotency(idempotency_key)
-
+    claim = None
     try:
         with transaction.atomic():
-            session = (
-                BurpMCPSession.objects.select_for_update(of=('self',))
-                .select_related(
-                    'organization', 'project', 'asset', 'scan', 'authorization_decision',
-                    'provider_approval', 'provider_governance_decision', 'credential_ref',
-                )
-                .filter(pk=session_id)
-                .first()
-            )
-            if session is None:
-                raise BurpMCPAuthorizationError('Burp MCP session was not found.')
-
-            organization, project, asset, scan, decision = _lock_context(
-                project_id=str(session.project_id),
-                asset_id=str(session.asset_id),
-                scan_id=str(session.scan_id),
-                authorization_id=str(session.authorization_decision_id),
-                actor_id=str(actor_id),
-            )
-            if organization.id != session.organization_id:
-                raise BurpMCPAuthorizationError('Burp MCP tenant lineage changed before invocation.')
-            if decision.target_snapshot != session.target_snapshot:
-                raise BurpMCPAuthorizationError('Burp MCP target lineage changed before invocation.')
-            if session.policy_version != BURP_MCP_POLICY_VERSION:
-                raise BurpMCPAuthorizationError('Burp MCP session policy version is no longer accepted.')
-            if session.expires_at <= timezone.now():
-                raise BurpMCPAuthorizationError('Burp MCP session has expired.')
-
-            approval, governance, mapping, endpoint = _current_provider_approval(
-                project_id=str(project.id),
-                provider_name=session.provider_name,
-                provider_version=session.provider_version,
-            )
-            if approval.id != session.provider_approval_id or approval.manifest_sha256 != session.provider_approval.manifest_sha256:
-                raise BurpMCPProviderError('Pinned Burp MCP provider approval is no longer current.')
-            if (
-                session.provider_governance_decision_id is None
-                or governance.id != session.provider_governance_decision_id
-                or governance.provider_identity_sha256 != session.provider_identity_sha256
-            ):
-                raise BurpMCPProviderError('Pinned enterprise provider decision is no longer current.')
-            if endpoint != session.endpoint_origin:
-                raise BurpMCPProviderError('Approved Burp MCP endpoint changed after session creation.')
-
-            allowed = session.allowed_tools if isinstance(session.allowed_tools, dict) else {}
-            if op not in allowed or mapping.get(op) != allowed.get(op):
-                raise BurpMCPAuthorizationError('Burp MCP operation is not admitted by the pinned session contract.')
-            provider_tool_name = str(allowed[op])
-            safe_arguments = _safe_arguments(op, arguments, session.target_snapshot)
-            arguments_sha256 = _sha(safe_arguments)
-            request_fingerprint = _sha({
-                'session_id': str(session.id),
-                'actor_id': str(actor_id),
-                'operation': op,
-                'provider_tool_name': provider_tool_name,
-                'idempotency_key': idem,
-                'arguments_sha256': arguments_sha256,
-            })
-
-            replay = _replay(
-                session=session,
-                idempotency_key=idem,
-                request_fingerprint=request_fingerprint,
-            )
+            (session, organization, project, asset, scan, decision, approval, governance,
+             provider_tool_name, safe_arguments, arguments_sha256, request_fingerprint) = _invocation_context(
+                session_id, actor_id, op, arguments, idem)
+            replay = _replay(session=session, idempotency_key=idem, request_fingerprint=request_fingerprint)
             if replay is not None:
                 return replay
-
-            total = session.invocations.count()
+            if scan.status in {Scan.Status.COMPLETED, Scan.Status.FAILED}:
+                raise BurpMCPAuthorizationError('Completed or failed execution cannot send another request.')
+            existing = BurpMCPInvocationClaim.objects.filter(session=session, idempotency_key=idem).first()
+            if existing is not None:
+                raise BurpMCPConflict('External invocation is already claimed or indeterminate; do not re-send it.')
+            if session.invocation_claims.filter(state__in=['in_flight', 'indeterminate']).exists():
+                raise BurpMCPConflict('An unresolved invocation blocks further requests for this Burp session.')
+            legacy = session.invocations.filter(claim__isnull=True)
+            total = session.invocation_claims.count() + legacy.count()
             if total >= int(session.max_invocations):
                 raise BurpMCPRateLimit('Burp MCP session invocation budget is exhausted.')
-            recent = session.invocations.filter(created_at__gte=timezone.now() - timedelta(minutes=1)).count()
+            cutoff = timezone.now() - timedelta(minutes=1)
+            recent = session.invocation_claims.filter(created_at__gte=cutoff).count() + legacy.filter(created_at__gte=cutoff).count()
             if recent >= int(session.rate_limit_per_minute):
                 raise BurpMCPRateLimit('Burp MCP per-minute invocation rate limit is exhausted.')
             sequence = total + 1
-
-            materials: tuple[dict[str, Any], ...] = ()
+            claim = BurpMCPInvocationClaim.objects.create(session=session, idempotency_key=idem,
+                request_fingerprint=request_fingerprint, invocation_sequence=sequence)
+            materials = ()
             if session.credential_ref_id:
-                materials, _credential_context = resolve_credential_refs_for_worker(
-                    project_id=str(project.id),
-                    actor_id=str(actor_id),
-                    refs=[str(session.credential_ref_id)],
+                materials, _ = resolve_credential_refs_for_worker(
+                    project_id=str(project.id), actor_id=str(actor_id), refs=[str(session.credential_ref_id)],
                     capability_id=BURP_MCP_CAPABILITY_ID,
                     allowed_kinds=(CredentialSecret.Kind.API_KEY, CredentialSecret.Kind.TOKEN),
-                    purpose='burp-mcp:provider-call',
-                )
+                    purpose='burp-mcp:provider-call')
             bearer = str(materials[0]['secret']) if materials else ''
-
-            provider_request_id = _sha({
-                'session_id': str(session.id),
-                'sequence': sequence,
-                'request_fingerprint': request_fingerprint,
-            })[:32]
-            raw_result, response_request_id = _perform_mcp_call(
-                endpoint=session.endpoint_origin,
-                provider_tool_name=provider_tool_name,
-                arguments=safe_arguments,
-                request_id=provider_request_id,
-                bearer_token=bearer,
-                transport=governance.manifest.get('mcp_transport', 'legacy-jsonrpc-http'),
-                expected_schema_sha256=governance.manifest.get('mcp_tool_schema_sha256', ''),
-            )
-            provider_result_sha256 = _sha(raw_result)
-            if op == 'burp.http_request':
-                try:
-                    result_summary = summarize_health_result(raw_result)
-                except (ValueError, TypeError, KeyError) as exc:
-                    raise BurpMCPProviderError('Burp returned no valid bounded HTTP probe result.') from exc
+            request_arguments = None
+            if 'lab_step' in safe_arguments:
+                request_arguments, target_materials = lab_request(session=session, actor_id=actor_id,
+                                                                 step=safe_arguments['lab_step'])
+                materials = (*materials, *target_materials)
+            provider_request_id = _sha({'claim': str(claim.id), 'request_fingerprint': request_fingerprint})[:32]
+        # Reservation is committed. No tenant/project/asset/scan/session row lock spans the network.
+        raw_result, response_request_id = _perform_mcp_call(
+            endpoint=session.endpoint_origin, provider_tool_name=provider_tool_name,
+            arguments=safe_arguments, request_id=provider_request_id, bearer_token=bearer,
+            transport=governance.manifest.get('mcp_transport', 'legacy-jsonrpc-http'),
+            expected_schema_sha256=governance.manifest.get('mcp_tool_schema_sha256', ''),
+            request_arguments=request_arguments, cancel_check=lambda: _scan_stopped(str(scan.id)))
+        provider_result_sha256 = _sha(raw_result)
+        try:
+            if 'lab_step' in safe_arguments:
+                result_summary = summarize_lab_result(raw_result, request_arguments=request_arguments,
+                                                      session=session, step=safe_arguments['lab_step'])
+            elif op == 'burp.http_request':
+                result_summary = summarize_health_result(raw_result)
             else:
                 result_summary = _redact_result(raw_result)
-            assert_no_credential_material_leaked(materials, result_summary)
-
+        except (ValueError, TypeError, KeyError) as exc:
+            raise BurpMCPProviderError('Burp returned no valid bounded HTTP result.') from exc
+        assert_no_credential_material_leaked(materials, result_summary)
+        with transaction.atomic():
+            (session, organization, project, asset, scan, decision, approval, governance,
+             _tool, _args, _args_sha, current_fingerprint) = _invocation_context(session_id, actor_id, op, arguments, idem)
+            if scan.status in {Scan.Status.COMPLETED, Scan.Status.FAILED}:
+                raise BurpMCPAuthorizationError('Execution became terminal before evidence commit.')
+            claim = BurpMCPInvocationClaim.objects.select_for_update().get(pk=claim.id)
+            if claim.state != 'in_flight' or current_fingerprint != claim.request_fingerprint:
+                raise BurpMCPConflict('Invocation claim changed before evidence commit.')
             evidence_payload = {
                 'schema': 'aegis.burp-mcp-evidence.v1',
                 'policy_version': BURP_MCP_EVIDENCE_POLICY_VERSION,
@@ -1028,7 +1090,13 @@ def invoke_burp_mcp(
                     'policy_version': BURP_MCP_POLICY_VERSION,
                 },
             )
+            claim.state, claim.invocation, claim.completed_at = 'committed', invocation, timezone.now()
+            claim.save(update_fields=['state', 'invocation', 'completed_at'])
             return BurpMCPInvocationResult(invocation=invocation, replayed=False)
     except Exception as exc:
-        _audit_failure(str(session_id), str(actor_id), str(exc))
+        if claim is not None:
+            # A crash or lost response can leave in_flight indefinitely: neither state permits re-send.
+            BurpMCPInvocationClaim.objects.filter(pk=claim.id, state='in_flight').update(
+                state='indeterminate', failure_code=type(exc).__name__[:80], completed_at=timezone.now())
+        _audit_failure(str(session_id), str(actor_id), 'Invocation rejected: ' + type(exc).__name__)
         raise
