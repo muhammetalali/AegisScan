@@ -30,6 +30,9 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
       - 'aegis-platform/backend/fastapi_app/tasks/burp_mcp.py'
       - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py'
+      - 'aegis-platform/docker/burp-runtime/**'
+      - 'aegis-platform/docker-compose.burp.yml'
       - 'aegis-platform/backend/scripts/burp_mcp_sse_probe.py'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   push:
@@ -58,6 +61,9 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
       - 'aegis-platform/backend/fastapi_app/tasks/burp_mcp.py'
       - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/test_celery_reliability_contract.py'
+      - 'aegis-platform/docker/burp-runtime/**'
+      - 'aegis-platform/docker-compose.burp.yml'
       - 'aegis-platform/backend/scripts/burp_mcp_sse_probe.py'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   workflow_dispatch:
@@ -198,6 +204,7 @@ jobs:
             fastapi_app/services/test_web_labs_preparation.py \
             fastapi_app/services/test_burp_mcp_transport.py \
             fastapi_app/services/test_burp_mcp_execution.py \
+            fastapi_app/tasks/test_celery_reliability_contract.py \
             fastapi_app/services/test_kali_profile_policy.py \
             fastapi_app/routers/test_governed_execution_contract.py \
             fastapi_app/routers/test_assessment_launcher.py \
@@ -259,6 +266,34 @@ jobs:
           print('BURP_MCP_PROVIDER_APPROVAL=ENTERPRISE_PINNED')
           print('BURP_MCP_AUTHORIZATION=REVALIDATED')
           print('BURP_MCP_EVIDENCE_QUALIFICATION=WIRED')
+          PY
+
+      - name: Optional Burp runtime Compose and shell contract
+        working-directory: aegis-platform
+        env:
+          POSTGRES_PASSWORD: ci-compose-only
+          AEGIS_BURP_RUNTIME_IMAGE: aegis-burp:ci-config-only
+          AEGIS_BURP_PROFILE_PATH: /tmp/ci-burp-profile
+          AEGIS_BURP_XAUTHORITY_PATH: /tmp/ci-burp-xauthority
+          AEGIS_BURP_ALLOW_LOOPBACK_HTTP: 'true'
+        run: |
+          sh -n docker/burp-runtime/entrypoint.sh docker/burp-runtime/prepare-build-context.sh
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.burp.yml --profile burp-runtime config --no-env-resolution --format json > /tmp/burp-compose-contract.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          services = json.loads(Path('/tmp/burp-compose-contract.json').read_text())['services']
+          runtime = services['burp_runtime']
+          assert runtime['network_mode'] == services['scanner_worker']['network_mode'] == 'service:scanner_egress'
+          assert not runtime.get('ports')
+          assert runtime['cap_drop'] == ['ALL'] and not runtime.get('cap_add')
+          assert runtime['read_only'] is True
+          assert runtime['restart'] == 'no'
+          assert runtime['profiles'] == ['burp-runtime']
+          assert runtime['security_opt'] == ['no-new-privileges:true']
+          for name in ['scanner_worker', 'fastapi']:
+              assert services[name]['environment']['BURP_MCP_ALLOW_INSECURE_LOCAL'] == 'true'
+          print('BURP_OPTIONAL_SHARED_NAMESPACE_CONTRACT=PASS')
           PY
 
       - name: Retain Burp MCP Reality evidence

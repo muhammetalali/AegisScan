@@ -108,3 +108,13 @@ P3 يوسع الطلبات إلى baseline وهويتين، ويعالج claim/c
 نجح فحص محلي بمخطط أداة مثبت ببصمة SHA256، ونجح من حاوية مستقلة تستخدم image ID عامل scanner الموجود، مع مصدر التطوير read-only وnetwork host وread-only root وcap-drop ALL. هذا إثبات لمسار مختبري على المضيف نفسه؛ لم نغير شبكة عامل الإنتاج أو نغلف الكود في صورته أو نسجل قبول مزود إنتاجي.
 
 تصحيح CI: ملف tool-manifest.json يجب أن يطابق سياسة profile web التي تشمل burp.mcp.gateway. اختبار الإنتاج يتحقق من صفر فجوات التغليف الأصلي، ومن وجود Burp وحده كمتطلب مزود غير جاهز؛ يرفض أي قدرة أخرى غير جاهزة. التسجيل لا يثبت runtime.
+
+## التغليف المرشح داخل نمط الإنتاج
+
+المسار المثبت الجديد هو Burp runtime colocated في namespace scanner_egress، بالـoverlay الاختياري docker-compose.burp.yml. العامل يصل إلى MCP على loopback الجذر نفسه؛ لا proxy أو رخصة أمنية لقبول HTTP بعيد. صورة Burp تحتوي JAR المورد وJAR الإضافة، والملف الشخصي ومفتاح شاشة X11 يركبان منفصلين. راجع docker/burp-runtime/README.md لإعداد context والبصمات والـprofile والتشغيل.
+
+نجح طلب حي من صورة scanner مرشحة تتضمن كود P2 بلا تركيب source وبلا network host. طبقة candidate تحافظ على صورة scanner الموجودة وانسحاب الأدوات القديمة؛ ليست build release كاملًا. namespace الاختبار مستقل عن الإنتاج لكنه يستخدم صورة egress وسياسة private drops نفسها مع control endpoints فارغة. أثبت الفحص الخارجي أن MCP غير متاح، وأن peer خاص قابل للوصول خارج namespace ومحظور من العامل.
+
+احتاج طلب HTTP موافقة جديدة في GUI بعد restart، ثم وافقنا على host:port المحلي المحدد فقط. Community يبقى supervised temporary-project runtime؛ لا ندعي headless أو استمرار موافقات الهدف تلقائيًا. يلزم عند التفعيل قرار ProviderApprovalDecision حقيقي حسب الضوابط الموجودة. ملفات Compose لا تنشئ هذا القرار، ونجاح health لا يتحول إلى جاهزية solver.
+
+كشف CI قائمة مهام قديمة في test_celery_reliability_contract؛ أضيفت مهمة Burp للقائمة المتوقعة، وبقيت مطابقة الطابور كاملة. نجحت مجموعة scanner failure/retry/redelivery/reliability ذات14 اختبارًا محليًا. CI الجديد يؤخذ من commit التصحيح وحده.

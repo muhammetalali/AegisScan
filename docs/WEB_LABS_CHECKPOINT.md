@@ -1,13 +1,13 @@
 # Web Labs — نقطة استئناف
 
-- المرحلة الحالية: P2؛ الاتصال الحي المحلي مثبت، وتصحيحات توافق المزود والـCI اجتازت 174 اختبارًا محليًا. CI الجديد سيؤخذ من أحدث رأس PR #315. بوابة النشر الإنتاجي لم تغلق.
+- المرحلة الحالية: P2؛ التغليف المرشح والمسار الحي داخل namespace معزول مطابق لنمط scanner_egress مثبتان. 174 اختبارًا سابقًا و14 اختبار موثوقية إضافيًا ناجحة؛ CI على الرأس المصحح قيد التحقق. لا نشر أو قبول مزود إنتاجي.
 - P1: commit `88d421529ebf5690a3a4203bf0ade8cc7b54c567`، PR #314؛ آخر قراءة 51 SUCCESS و1 SKIPPED، وبوابة الحوكمة المطلوبة SUCCESS.
 - فرع P2: `codex/burp-mcp-transport-20261003`، مبني على P1 دون تعديل فرع P1.
 - working copy: `/home/aegisadmin/aegis-burp-transport-development` على aegis-prod.
 - main وقت إعادة الفحص: `f863787569a7fcea85f5318f559bdb2890084299`.
 - checkout الإنتاج: `fc715f5849dcd5e7d206540955991e0d6d10ff00`، نظيف؛ لا نشر أو تعديل DB الإنتاج.
 - التفاصيل: [عقد النقل والتكامل العربي](WEB_LABS_BURP_TRANSPORT_AR.md)، [مصادر التشغيل وبصماته](WEB_LABS_BURP_PROVENANCE.json).
-- التالي عند «تابع»: إغلاق CI على أحدث commit وتحديد تغليف/مسار المزود داخل topology النشر؛ ثم تقرير وتوقف قبل P3.
+- التالي: إغلاق CI على أحدث commit ثم تقرير P2 وتوقف قبل P3. تفعيل المزود/النشر يحتاج بوابة التشغيل الحالية، ولا يستنتج من الدليل المختبري.
 
 ## ما نعيد استخدامه
 
@@ -70,3 +70,14 @@ Burp gateway وProviderApprovalDecision وAssetAuthorization وcanonical capabil
 - التشغيل السابق: 161 PASS و4 FAIL من غياب networkx في صورة الاختبار. جهزت networkx==3.6.1 مؤقتًا داخل حاوية الاختبار؛ لم أثبته في الإنتاج. تم تجاوز مهلة تنزيل ومشكلة ملكية مجلد wheel باستخدام UID المضيف، والسجلات السابقة محفوظة.
 - نسخة الإنتاج أعيد فحصها: fc715f58، working tree نظيف. لم نسجل مزودًا في DB الإنتاج أو ندمج أو ننشر.
 - التالي: نتائج CI على أحدث رأس PR #315، ثم إغلاق مسار endpoint المحكوم والتغليف الإنتاجي قبل ادعاء جاهزية العامل الحالي. P3/P4 لم يبدآ.
+
+## التغليف والمسار المحكوم — استئناف P2
+
+- CI على b8df2f9f: 61 مسارًا مسترجعًا، 59 SUCCESS و2 FAILURE. Domain Contract كشف أن قائمة مهام طابور scanner في الاختبار لم تتضمن مهمة Burp؛ الحوكمة المطلوبة تبعت هذا الفشل. صححت القائمة الصارمة دون حذف التحقق؛ مجموعة الموثوقية كاملة 14 PASS في 49.27 ثانية.
+- العامل الإنتاجي الحالي يشارك namespace مع scanner_egress. أضفت overlay اختياريًا burp-runtime بنفس النمط، بلا host networking أو منافذ منشورة، non-root وread-only وcap-drop ALL وno-new-privileges، وحدود موارد. الصورة تغلف JAR المورد والإضافة ذات البصمة المسجلة؛ profile وXauthority خارج الصورة.
+- بُنيت صورة عامل مرشحة على image ID العامل الإنتاجي المنزوع الأدوات القديمة، مع تضمين fastapi_app/scripts. تطابقت بصمات خمس وحدات حرجة داخل الصورة مع الفرع؛ لا source mount في الفحص. هذا ليس rebuild كامل لصورة release.
+- من الصورة المرشحة داخل namespace معزول بنمط الإنتاج: initialize/discovery ومخطط مثبت وGET /health نجحت، HTTP200 وعلامة bac-target، exit0، retry0. فشل أول طلب بسبب موافقة Burp الجديدة بعد إعادة التشغيل؛ سُمح للعنوان:المنفذ المحدد فقط ثم نجحت جلسة جديدة. لا ادعاء أن الموافقة تستمر عبر restart.
+- fixture خاص منفصل يعيد200 للحاوية الخارجية، لكنه timeout من namespace العامل تحت سياسة egress؛ MCP غير متاح للحاوية الخارجية، ومستمعه loopback فقط. بقيت قواعد private-range drop دون توسعة.
+- docker compose config للbase+production+overlay نجح، وأضيف تحقق دائم للعقد إلى workflow Burp الحالي مع اختبار موثوقية الطابور.
+- Community مشروع مؤقت عبر GUI، restart=no، والتشغيل تحت إشراف. الملف README يشرح إعداد profile/الإضافة/الموافقة دون xhost+، وoverride loopback HTTP اختياري وفقط scanner/API؛ لا queue أو auth أو vault جديد.
+- source metadata ونتائج الاختبار والعزل وصور candidate في WEB_LABS_BURP_PROVENANCE.json. lab_solved=false وlive_fixture_revision_verified=false؛ لا Findings أو provider approval في DB الإنتاج.

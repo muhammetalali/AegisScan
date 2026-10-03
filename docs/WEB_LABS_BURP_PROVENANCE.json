@@ -139,5 +139,99 @@
   },
   "ci_after_fix": "pending_new_commit",
   "production_checkout_rechecked": "fc715f5849dcd5e7d206540955991e0d6d10ff00",
-  "production_tree_clean": true
+  "production_tree_clean": true,
+  "packaged_shared_namespace_p2": {
+    "at": "2026-10-03T08:41:09.577165+00:00",
+    "production_topology_model": "network_mode: service:scanner_egress",
+    "scope": "isolated clone of production namespace pattern; no production deployment or provider registration",
+    "images": {
+      "aegis-burp-p2:2026.9": {
+        "image_id": "sha256:044c95df91b56db81d0d019e661f54c74c1ff5e507522009cae4aec472d133b8",
+        "created": "2026-10-03T08:32:57.423404818Z"
+      },
+      "aegis-burp-p2-scanner:candidate": {
+        "image_id": "sha256:457acf6dd213e98155f052fb2a86f3cdae258bdb584c714808deffc6c2eaf4c0",
+        "created": "2026-10-03T08:32:43.605858489Z"
+      },
+      "aegis-platform-scanner_egress:latest": {
+        "image_id": "sha256:0298a0c972e1934da62432a4b9873e14f6a11f11d5ecf2f1dc2e3a28992d1efa",
+        "created": "2026-10-02T20:40:09.941281755Z"
+      }
+    },
+    "probe": {
+      "schema": "aegis.burp-live-probe.v1",
+      "source": "configured-local-endpoint",
+      "claim_requires_official_runtime_provenance": true,
+      "transport_metadata": {
+        "transport": "sse",
+        "protocol_version": "2024-11-05",
+        "server_info_sha256": "d716892618612f3618641e1ed75690193095d00595ac0d8fec2d647fbf7c6d8f",
+        "server_name": "burp-suite",
+        "server_reported_version": "1.1.2",
+        "tools_sha256": "40ad6b93717e8d5251d533f58f70f3662ce1dbed100c236fa279814ba7395712",
+        "tool_schema_sha256": "337bfce281301e755dfd4422c79c32c18e672e5b9c492b7974b47777791434e9",
+        "edition": "not_reported",
+        "retry_count": 0
+      },
+      "status_code": 200,
+      "response_sha256": "68af6fe0855817a6d872a511774f438e48014cb7bfe5c07e907a4dc0116c866b",
+      "response_format": "montoya-request-response",
+      "fixture_health_marker_matches": true,
+      "transport_probe_passed": true,
+      "live_fixture_revision_verified": false,
+      "lab_solved": false,
+      "raw_request_response_persisted": false
+    },
+    "packaged_source": {
+      "matches": true,
+      "modules": {
+        "fastapi_app/services/burp_mcp_transport.py": "5818473443185c82cb015bfc8de540579f3a86ba8f7e487488a7f80a2bc7331f",
+        "fastapi_app/services/burp_http_probe.py": "cd45b5e4f562a9064f36aecdb237581477119d7f6b8d2fe6e64a5529e106ca9a",
+        "fastapi_app/tasks/burp_mcp.py": "4fdc4d21209ae58b5d7a80998a88e048e11b9180144ece50aa20b34b5efbdcc3",
+        "fastapi_app/celery_app.py": "c3b6ed47648c050a24c2fa6be9efd3792268b133ab85d4dfd10f3dfc36d725fb",
+        "scripts/burp_mcp_sse_probe.py": "8299897a6ff9c4de6ebd3183dcd4c35f3272e461fdcfffdd612a578ed8aaafa2"
+      }
+    },
+    "isolation": {
+      "external": {
+        "private_peer": {
+          "status": 200
+        },
+        "external_mcp": {
+          "error_type": "ConnectTimeout"
+        }
+      },
+      "worker": {
+        "private_peer": {
+          "error_type": "ConnectTimeout"
+        },
+        "external_mcp": {
+          "error_type": "ConnectError"
+        }
+      }
+    },
+    "runtime_mode": "supervised Community temporary-project GUI",
+    "restart_approval_observation": "exact host:port approval required again after restart; only 127.0.0.1:18081 approved",
+    "runtime_capabilities": [],
+    "production_provider_registered": false,
+    "full_release_image_rebuilt": false,
+    "scanner_candidate_base": "sha256:2a743d87edae714d9c39460018809a407e86f2077cca965752be49e4222fa744",
+    "reliability_regression": {
+      "tests": 14,
+      "passed": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 49.27,
+      "junit_sha256": "9dca8e6799c0dce8c44102157a091f9e26b34541a2ed46c80452510048176b00"
+    },
+    "prior_ci_head": "b8df2f9f89ea0ded5b26d3d9879ce831e4a7fb01",
+    "prior_ci_first_page": {
+      "retrieved": 61,
+      "success": 59,
+      "failure": 2
+    },
+    "prior_ci_failure": "stale strict expected SCANNER_TASK_ROUTES omitted new Burp task; Domain Contract failed and required governance followed",
+    "ci_after_fix": "pending new commit"
+  }
 }

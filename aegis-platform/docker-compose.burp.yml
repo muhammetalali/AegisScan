@@ -1,0 +1,31 @@
+# Optional supervised GUI runtime; merge with the existing base + production files.
+# Explicitly prepared private profile and Xauthority are required. No public ports.
+services:
+  scanner_worker:
+    environment:
+      BURP_MCP_ALLOW_INSECURE_LOCAL: ${AEGIS_BURP_ALLOW_LOOPBACK_HTTP:-false}
+  fastapi:
+    environment:
+      BURP_MCP_ALLOW_INSECURE_LOCAL: ${AEGIS_BURP_ALLOW_LOOPBACK_HTTP:-false}
+  burp_runtime:
+    image: ${AEGIS_BURP_RUNTIME_IMAGE:?Set a verified Burp runtime image digest}
+    profiles: [burp-runtime]
+    restart: "no"
+    user: "${AEGIS_BURP_UID:-1000}:${AEGIS_BURP_GID:-1000}"
+    network_mode: "service:scanner_egress"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    pids_limit: 256
+    mem_limit: 1536m
+    cpus: 1.0
+    tmpfs: [/tmp:rw,nosuid,nodev,size=256m,mode=1777]
+    environment:
+      DISPLAY: ${AEGIS_BURP_DISPLAY:-:0}
+      XAUTHORITY: /run/burp-xauthority
+    volumes:
+      - ${AEGIS_BURP_PROFILE_PATH:?Prepare an isolated private profile}:/var/lib/aegis-burp/profile
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - ${AEGIS_BURP_XAUTHORITY_PATH:?Prepare a private Xauthority file}:/run/burp-xauthority:ro
+    depends_on:
+      scanner_egress: {condition: service_healthy}
