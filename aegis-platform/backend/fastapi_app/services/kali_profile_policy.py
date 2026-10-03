@@ -39,6 +39,7 @@ CAPABILITY_PROFILE_MAP: dict[str, str] = {
     'recon.dnsenum': 'recon',
     'recon.fierce': 'recon',
     'web.nuclei': 'web',
+    'burp.mcp.gateway': 'web',
     'web.httpx': 'web',
     'web.katana': 'web',
     'web.security-headers': 'web',

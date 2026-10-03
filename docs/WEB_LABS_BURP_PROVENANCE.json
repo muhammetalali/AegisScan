@@ -1,0 +1,57 @@
+{
+  "schema": "aegis.burp-preparation-provenance.v1",
+  "recorded_at": "2026-10-03T02:03:15.832998+00:00",
+  "source_review": {
+    "repository": "PortSwigger/mcp-server",
+    "commit": "642e6fa31c63db3886a353fcd7ed62037e0ceed5",
+    "server_info_in_source": "burp-suite/1.1.2"
+  },
+  "artifacts": [
+    {
+      "name": "burpsuite-desktop-2026.9.jar",
+      "source_url": "https://portswigger.net/burp/releases/startdownload?product=desktop&version=2026.9&type=Jar",
+      "sha256": "d6c80be60575b59a3097e939b1cf4acf2efd104c0f6ed05166753180365fc7fc",
+      "size": 730366049,
+      "vendor_checksum_verified": true
+    },
+    {
+      "name": "mcp-server-1.3.0.bapp",
+      "source_url": "https://portswigger.net/bappstore/bapps/download/9952290f04ed4f628e624d0aa9dccebc/10",
+      "sha256": "4d675b10796ff51d440c5a40f3855a3d38a1666a91a0b28fb8853a26abd5b2c5",
+      "size": 28190991,
+      "vendor_checksum_verified": false
+    },
+    {
+      "java_image_id": "sha256:cff19e6215689161eb6162c11b86b0c60ddf802164f2eaf48d570f8fb79a36c5",
+      "java_source_image": "eclipse-temurin:21-jre"
+    },
+    {
+      "name": "burp-mcp-all.jar",
+      "extracted_from": "mcp-server-1.3.0.bapp",
+      "sha256": "f93e434a9154fbb03bc9b20e46555fc901be57a80ec63d607d9cde192d27691c",
+      "size": 29992269,
+      "jar_manifest_version": "1.3.0",
+      "vendor_checksum_verified": false
+    }
+  ],
+  "observed_burp_cli_version": "2026.9-53998 Burp Suite",
+  "edition": "unselected_or_unverified",
+  "live_mcp_conformance": "not_verified",
+  "live_probe_at_preparation": {
+    "schema": "aegis.burp-live-probe.v1",
+    "transport_probe_passed": false,
+    "lab_solved": false,
+    "live_fixture_revision_verified": false,
+    "error_code": "transport_failed",
+    "message_ar": "\u0644\u0645 \u064a\u062b\u0628\u062a \u0627\u062a\u0635\u0627\u0644 Burp \u0627\u0644\u062d\u064a. \u062a\u062d\u0642\u0651\u0642 \u0645\u0646 \u062a\u0634\u063a\u064a\u0644 \u0627\u0644\u0625\u0636\u0627\u0641\u0629 \u0648\u0627\u0644\u0633\u0645\u0627\u062d \u0644\u0644\u0647\u062f\u0641 \u0627\u0644\u0645\u062d\u0644\u064a \u0627\u0644\u0645\u062d\u062f\u062f."
+  },
+  "fixture": {
+    "path": "aegis-platform/e2e/fixtures/bac-target/app.py",
+    "source_sha256": "4213a578e2751c6cbe22cc3d1166b2bfed2e89860f33b63b90b14f470800fef0",
+    "direct_health_marker_matches": true,
+    "live_fixture_revision_verified": false
+  },
+  "production_provider_registered": false,
+  "scanner_runtime_packaging_verified": false,
+  "test_image_id": "sha256:9eeddfea38a87e3a87917955b12b3d9b677a73416977e7b9ff7c9aea6564ca9f"
+}

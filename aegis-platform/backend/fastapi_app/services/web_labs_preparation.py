@@ -16,7 +16,7 @@ from enterprise.provider_approval_models import ProviderApprovalDecision
 from enterprise.web_security_models import ProviderApprovalRecord
 
 from .authorization_guard import asset_target, current_asset_authorization
-from .burp_mcp_gateway import BURP_MCP_CAPABILITY_ID, _OPERATION_ARGUMENTS, _TOOL_RE, _endpoint, BurpMCPProviderError
+from .burp_mcp_gateway import BURP_MCP_CAPABILITY_ID, _OPERATION_ARGUMENTS, _TOOL_RE, _endpoint, BurpMCPProviderError, validate_transport_manifest
 from .capability_registry import CAPABILITIES
 from .credential_execution import _canonical_web_origin, normalize_credential_refs
 from .provider_approval import evaluate_provider_admissibility
@@ -82,8 +82,14 @@ def _provider_metadata(project_id: str) -> tuple[dict[str, Any], list[str]]:
     mapping = manifest.get('mcp_tools')
     if (not isinstance(mapping, dict) or not mapping
             or any(op not in _OPERATION_ARGUMENTS or not isinstance(tool, str)
-                   or not _TOOL_RE.fullmatch(tool) for op, tool in mapping.items())):
+                   or not _TOOL_RE.fullmatch(tool)
+                   or (op == 'burp.http_request' and tool != 'send_http1_request') for op, tool in mapping.items())):
         metadata['state'] = 'invalid_tool_mapping'
+        return metadata, []
+    try:
+        validate_transport_manifest(manifest, mapping)
+    except (BurpMCPProviderError, ValueError):
+        metadata['state'] = 'invalid_transport'
         return metadata, []
     try:
         _endpoint(manifest)  # Syntax/policy only; no request or DNS lookup.
@@ -203,6 +209,7 @@ def prepare_web_lab(*, actor_id: str, project_id: str, asset_id: str,
           'invalid_tool_mapping': 'بيان أدوات المزود يحتوي ربطًا لا تقبله بوابة Burp الحالية.',
           'invalid_endpoint': 'عنوان اتصال المزود لا يطابق صيغة أو سياسة بوابة Burp الحالية.',
           'metadata_ready': 'قرار المزود وبيانه مقبولان؛ الاتصال والأدوات الحية لم يُفحصا.',
+          'invalid_transport': 'تعريف النقل أو بصمة مخطط الأداة غير متوافقين مع عقد Burp المعتمد.',
           }[provider['state']],
           'راجع قبول مزود Burp وإصداره وبيانه في شاشة المزودين الحالية؛ تعدد المزودين يحتاج اختيارًا صريحًا.')
     credentials, credentials_ready = _credential_metadata(
@@ -212,9 +219,9 @@ def prepare_web_lab(*, actor_id: str, project_id: str, asset_id: str,
           'يلزم مرجعان مختلفان لهويتي alice وbob، من المشروع نفسه وبنطاق browser_origin مطابق.',
           'اربط مرجعي TOKEN أو GENERIC في الخزنة الحالية؛ هذا الفحص لا يفك السر ولا يثبت صلاحية الجلسة.')
     required_operation = definition['required_operation']
-    check('request_operation', required_operation in operations,
-          'supported' if required_operation in operations else 'unsupported',
-          'اختبار ملكية الطلب يحتاج إرسال HTTP مضبوطًا بهوية؛ عمليات البوابة الحالية لا تحقق هذا الشرط.',
+    check('request_operation', False,
+          'anonymous_probe_only' if required_operation in operations else 'unsupported',
+          'اختبار ملكية الطلب يحتاج إرسال HTTP مربوطًا بهويتين؛ فحص الاتصال الحالي يرسل GET /health مجهول الهوية فقط.',
           'أكمل موصل الطلبات واختبار توافقه في P2 قبل تشغيل اللاب.')
     capability_id = definition['required_capability_id']
     capability = CAPABILITIES.get(capability_id)

@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from .burp_mcp_capability import CAPABILITY_ID as BURP_GATEWAY_ID, validate_burp_probe_options
 from .api_runtime_capability import CAPABILITY_ID as API_RUNTIME_CAPABILITY_ID, register_api_runtime_capability
 from .api_schema_capability import CAPABILITY_ID as API_SCHEMA_CAPABILITY_ID, register_api_schema_capability
 from .cloud_capability import register_cloud_capability
@@ -128,6 +129,15 @@ for _id, _spec in WSTG_INTERNAL_SPECS.items():
         runner_profile=resolve_kali_profile(_id),
     )
 
+CAPABILITIES[BURP_GATEWAY_ID] = Capability(
+    id=BURP_GATEWAY_ID, tool='burp-mcp', category='web-provider-conformance',
+    description='Bounded anonymous BAC fixture HTTP transport probe through an approved Burp MCP SSE provider; not a lab solver.',
+    scan_type='url', asset_types=('website', 'api_endpoint'), risk='active-low',
+    allowed_options=('provider_decision_ref', 'lab_definition_id'), adapter='burp-mcp',
+    credential_mode='burp-provider-token', credential_kinds=('api_key', 'token'),
+    runner_profile=resolve_kali_profile(BURP_GATEWAY_ID),
+)
+
 validate_profile_policy(set(CAPABILITIES))
 
 
@@ -158,6 +168,9 @@ def validate_capability_options(capability: Capability, options: dict[str, Any])
     unknown = sorted(set(options) - set(capability.allowed_options))
     if unknown:
         raise ValueError(f'Unsupported options for {capability.id}: {unknown}')
+
+    if capability.id == BURP_GATEWAY_ID:
+        return validate_burp_probe_options(options)
 
     if capability.id in WSTG_INTERNAL_SPECS:
         return validate_wstg_internal_options(capability.id, options)

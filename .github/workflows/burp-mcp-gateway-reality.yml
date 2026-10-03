@@ -18,6 +18,19 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/test_web_labs_preparation.py'
       - 'aegis-platform/backend/resources/web-labs/**'
       - 'aegis-platform/backend/fastapi_app/main.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_http_probe.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/kali_profile_policy.py'
+      - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/scripts/burp_mcp_sse_probe.py'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   push:
     branches: [main, chatgpt-a/burp-mcp-gateway-20260922]
@@ -33,6 +46,19 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/backend/fastapi_app/services/test_web_labs_preparation.py'
       - 'aegis-platform/backend/resources/web-labs/**'
       - 'aegis-platform/backend/fastapi_app/main.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_http_probe.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py'
+      - 'aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_registry.py'
+      - 'aegis-platform/backend/fastapi_app/services/capability_planner.py'
+      - 'aegis-platform/backend/fastapi_app/services/kali_profile_policy.py'
+      - 'aegis-platform/backend/fastapi_app/routers/capabilities.py'
+      - 'aegis-platform/backend/fastapi_app/tasks/burp_mcp.py'
+      - 'aegis-platform/backend/fastapi_app/celery_app.py'
+      - 'aegis-platform/backend/scripts/burp_mcp_sse_probe.py'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   workflow_dispatch:
 
@@ -104,6 +130,19 @@ jobs:
             aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py \
             aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py \
             aegis-platform/backend/fastapi_app/routers/burp_mcp.py \
+            aegis-platform/backend/fastapi_app/services/burp_mcp_transport.py \
+            aegis-platform/backend/fastapi_app/services/burp_http_probe.py \
+            aegis-platform/backend/fastapi_app/services/burp_mcp_capability.py \
+            aegis-platform/backend/fastapi_app/services/burp_mcp_execution.py \
+            aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py \
+            aegis-platform/backend/fastapi_app/services/test_burp_mcp_execution.py \
+            aegis-platform/backend/fastapi_app/services/capability_registry.py \
+            aegis-platform/backend/fastapi_app/services/capability_planner.py \
+            aegis-platform/backend/fastapi_app/services/kali_profile_policy.py \
+            aegis-platform/backend/fastapi_app/routers/capabilities.py \
+            aegis-platform/backend/fastapi_app/tasks/burp_mcp.py \
+            aegis-platform/backend/fastapi_app/celery_app.py \
+            aegis-platform/backend/scripts/burp_mcp_sse_probe.py \
             aegis-platform/backend/fastapi_app/main.py
 
       - name: PostgreSQL schema migration and evidence immutability reality
@@ -148,7 +187,7 @@ jobs:
           print('BURP_MCP_EVIDENCE_IMMUTABILITY=POSTGRESQL_TRIGGER')
           PY
 
-      - name: Governed Burp MCP JSON-RPC provider and security reality
+      - name: MCP SSE contract double and gateway security regressions (not live Burp)
         working-directory: aegis-platform/backend
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
@@ -157,6 +196,11 @@ jobs:
           pytest -q \
             fastapi_app/services/test_burp_mcp_gateway.py \
             fastapi_app/services/test_web_labs_preparation.py \
+            fastapi_app/services/test_burp_mcp_transport.py \
+            fastapi_app/services/test_burp_mcp_execution.py \
+            fastapi_app/services/test_kali_profile_policy.py \
+            fastapi_app/routers/test_governed_execution_contract.py \
+            fastapi_app/routers/test_assessment_launcher.py \
             --junitxml=/tmp/burp-mcp-gateway-junit.xml
 
       - name: Provider approval gate regression

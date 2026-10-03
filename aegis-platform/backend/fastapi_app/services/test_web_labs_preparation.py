@@ -99,7 +99,7 @@ def test_approved_provider_is_metadata_only_not_runtime_readiness(context):
     result = preview(context)
     assert result['metadata_ready'] is True
     assert result['execution_ready'] is False
-    assert set(result['supported_operations']) == set(burp_mcp_gateway._OPERATION_ARGUMENTS)
+    assert set(result['supported_operations']) == set(_manifest('https://unused.invalid')['mcp_tools'])
     assert {'request_operation.unsupported', 'canonical_capability.not_registered',
             'fixture_binding.not_verified', 'runtime.not_checked'} <= codes(result)
     assert result['capabilities'][0]['runtime_verified'] is False

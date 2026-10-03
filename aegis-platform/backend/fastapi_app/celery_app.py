@@ -20,6 +20,7 @@ celery_app = Celery(
 SCANNER_QUEUE = "scanners"
 BROWSER_QUEUE = "browser"
 SCANNER_TASK_ROUTES = {
+    'fastapi_app.tasks.burp_mcp.run_burp_mcp_probe': {'queue': SCANNER_QUEUE},
     "fastapi_app.tasks.security_scan.run_nmap_scan": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.security_scan.run_nuclei_scan": {"queue": SCANNER_QUEUE},
     "fastapi_app.tasks.security_scan.validate_finding_task": {"queue": SCANNER_QUEUE},
@@ -48,6 +49,7 @@ celery_app.conf.update(
     result_backend_transport_options={"visibility_timeout": settings.CELERY_VISIBILITY_TIMEOUT_SECONDS},
     visibility_timeout=settings.CELERY_VISIBILITY_TIMEOUT_SECONDS,
     imports=(
+        "fastapi_app.tasks.burp_mcp",
         "fastapi_app.tasks.advanced_scans",
         "fastapi_app.tasks.native_capabilities",
         "fastapi_app.tasks.finding_validation",

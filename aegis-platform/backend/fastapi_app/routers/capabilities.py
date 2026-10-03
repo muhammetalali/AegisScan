@@ -14,8 +14,12 @@ from django_project.scans.models import Scan
 from django_project.system.credential_vault import CredentialVaultDenied
 
 from ..core.dependencies import get_current_user
-from ..celery_app import BROWSER_QUEUE
+from ..celery_app import BROWSER_QUEUE, SCANNER_QUEUE
 from ..services.authorization_guard import asset_target
+from ..services.burp_mcp_capability import CAPABILITY_ID as BURP_GATEWAY_ID
+from ..services.burp_mcp_execution import resolve_probe_provider
+from ..services.burp_mcp_gateway import BurpMCPError
+from ..tasks.burp_mcp import run_burp_mcp_probe
 from ..services.governed_execution_contract import GovernedExecutionDraft, finalize_governed_execution_contract, prepare_governed_execution_draft
 from ..services.capability_planner import planning_summary
 from ..services.capability_registry import RETIRED_CAPABILITIES, RetiredCapabilityError, get_capability, list_capabilities, validate_capability_options
@@ -201,6 +205,7 @@ async def capability_packaging(user=Depends(get_current_user)):
         'native_packaged': sorted(PACKAGED_NATIVE_CAPABILITIES),
         'native_registered': sorted(NATIVE_TOOL_SPECS),
         'internal_registered': sorted(WSTG_INTERNAL_SPECS),
+        'provider_adapters': [BURP_GATEWAY_ID],
         'plugin_delegated': plugin_items,
         'retired': RETIRED_CAPABILITIES,
     }
@@ -262,6 +267,7 @@ async def execute_capability(
         'cloud-credentials-file',
         'browser-session-file',
     }
+    single_ref_modes.add('burp-provider-token')
     if credential_refs and capability.credential_mode in single_ref_modes and len(credential_refs) != 1:
         raise HTTPException(
             status_code=409,
@@ -289,6 +295,14 @@ async def execute_capability(
     target = asset_target(asset)
     if not target:
         raise HTTPException(status_code=409, detail='Asset has no executable target')
+
+    if capability.id == BURP_GATEWAY_ID:
+        try:
+            await sync_to_async(resolve_probe_provider, thread_sensitive=True)(
+                project_id=request.project_id, decision_ref=options['provider_decision_ref'], target=target,
+            )
+        except (BurpMCPError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     try:
         credential_context = (
@@ -370,7 +384,7 @@ async def execute_capability(
         'credential_required': capability.credential_required,
     }
 
-    if capability.id in NATIVE_TOOL_SPECS or is_wstg_internal_capability(capability.id):
+    if capability.id == BURP_GATEWAY_ID or capability.id in NATIVE_TOOL_SPECS or is_wstg_internal_capability(capability.id):
         created, created_new = await _create_native_scan(
             capability.id,
             request.project_id,
@@ -381,7 +395,9 @@ async def execute_capability(
             execution_draft,
         )
         if created_new:
-            if capability.id == 'browser.spa-discovery':
+            if capability.id == BURP_GATEWAY_ID:
+                task = run_burp_mcp_probe.apply_async(args=[str(created.id)], queue=SCANNER_QUEUE, routing_key=SCANNER_QUEUE)
+            elif capability.id == 'browser.spa-discovery':
                 task = run_native_capability_scan.apply_async(
                     args=[str(created.id)],
                     queue=BROWSER_QUEUE,
