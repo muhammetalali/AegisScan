@@ -69,7 +69,7 @@ def main():
             target_snapshot='http://127.0.0.1:18081')
         org = Organization.objects.create(name='Isolated P4 tenant', slug='p4-' + marker, owner=user)
         OrganizationMembership.objects.create(organization=org, user=user, is_active=True,
-            role=OrganizationMembership.Role.MANAGER)
+            role=OrganizationMembership.Role.OWNER)
         TenantProject.objects.create(organization=org, project=project)
         refs = []
         for identity in ('alice', 'bob'):
