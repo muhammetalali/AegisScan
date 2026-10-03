@@ -39,6 +39,15 @@ class P6AcceptanceGuardTests(unittest.TestCase):
         self.assertEqual(env["AEGIS_PROOF_SOURCE_COMMIT"], "a" * 40)
         self.assertEqual(env["UNRELATED"], "kept")
 
+    def test_acceptance_lock_rejects_parallel_runner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = MODULE.acquire_acceptance_lock(Path(tmp))
+            try:
+                with self.assertRaisesRegex(MODULE.AcceptanceError, "already running"):
+                    MODULE.acquire_acceptance_lock(Path(tmp))
+            finally:
+                first.close()
+
     def test_secure_base_is_fail_closed(self):
         args = MODULE.secure_base(
             {"AEGIS_ISOLATED_WEB_LAB_MEASUREMENT_PROOF": "1"},

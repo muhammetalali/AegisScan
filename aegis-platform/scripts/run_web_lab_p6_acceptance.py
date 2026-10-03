@@ -7,6 +7,7 @@ unsealed/dirty source checkout, mutable scanner image revision, or non-P6 DB.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -33,6 +34,21 @@ SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
 class AcceptanceError(RuntimeError):
     pass
+
+
+def acquire_acceptance_lock(root: Path):
+    root.mkdir(parents=True, exist_ok=True)
+    handle = (root / ".p6-acceptance.lock").open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise AcceptanceError("another P6 live acceptance is already running") from exc
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"pid={os.getpid()}\n")
+    handle.flush()
+    return handle
 
 
 def run(args, *, check=True, input_text=None, stdout=None, stderr=None, timeout=180):
@@ -618,6 +634,7 @@ def main() -> int:
     allowed_root = Path("/home/aegisadmin/aegis-web-labs-checkpoints").resolve()
     if checkpoint.parent != allowed_root:
         raise AcceptanceError("P6 checkpoint must be a direct child of the checkpoint root")
+    acceptance_lock = acquire_acceptance_lock(allowed_root)
     if checkpoint.exists():
         raise AcceptanceError("P6 checkpoint already exists; never overwrite evidence")
     checkpoint.mkdir(mode=0o700)
