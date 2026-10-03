@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -10,6 +11,65 @@ SPEC = importlib.util.spec_from_file_location("aegis_required_ci_governance", MO
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+
+
+class _Response:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.payload
+
+
+class ApiRetryTests(unittest.TestCase):
+    def test_timeout_is_retried_then_recovers(self) -> None:
+        responses = [TimeoutError("read timed out"), _Response(b'{"ok": true}')]
+        sleeps: list[float] = []
+        with (
+            mock.patch.object(MODULE.urllib.request, "urlopen", side_effect=responses),
+            mock.patch.object(MODULE.time, "sleep", side_effect=sleeps.append),
+        ):
+            result = MODULE._api_json("/repos/acme/aegis/actions/runs", "token")
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(sleeps, [1.0])
+
+    def test_timeout_exhaustion_fails_closed_after_bounded_retries(self) -> None:
+        sleeps: list[float] = []
+        with (
+            mock.patch.object(MODULE.urllib.request, "urlopen", side_effect=TimeoutError("read timed out")),
+            mock.patch.object(MODULE.time, "sleep", side_effect=sleeps.append),
+        ):
+            with self.assertRaisesRegex(MODULE.GovernanceError, "after 4 transient attempts"):
+                MODULE._api_json("/repos/acme/aegis/actions/runs", "token")
+        self.assertEqual(sleeps, [1.0, 2.0, 4.0])
+
+    def test_nontransient_http_error_is_not_retried(self) -> None:
+        error = MODULE.urllib.error.HTTPError(
+            "https://api.github.com/test",
+            403,
+            "forbidden",
+            {},
+            io.BytesIO(b'{"message":"forbidden"}'),
+        )
+        calls = {"count": 0}
+
+        def fail(*_args, **_kwargs):
+            calls["count"] += 1
+            raise error
+
+        with (
+            mock.patch.object(MODULE.urllib.request, "urlopen", side_effect=fail),
+            mock.patch.object(MODULE.time, "sleep", side_effect=AssertionError("must not retry 403")),
+        ):
+            with self.assertRaisesRegex(MODULE.GovernanceError, "403"):
+                MODULE._api_json("/repos/acme/aegis/actions/runs", "token")
+        self.assertEqual(calls["count"], 1)
 
 
 class WorkflowObservationTests(unittest.TestCase):
