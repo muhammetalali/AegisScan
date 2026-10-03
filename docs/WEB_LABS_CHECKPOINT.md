@@ -81,3 +81,13 @@ Burp gateway وProviderApprovalDecision وAssetAuthorization وcanonical capabil
 - docker compose config للbase+production+overlay نجح، وأضيف تحقق دائم للعقد إلى workflow Burp الحالي مع اختبار موثوقية الطابور.
 - Community مشروع مؤقت عبر GUI، restart=no، والتشغيل تحت إشراف. الملف README يشرح إعداد profile/الإضافة/الموافقة دون xhost+، وoverride loopback HTTP اختياري وفقط scanner/API؛ لا queue أو auth أو vault جديد.
 - source metadata ونتائج الاختبار والعزل وصور candidate في WEB_LABS_BURP_PROVENANCE.json. lab_solved=false وlive_fixture_revision_verified=false؛ لا Findings أو provider approval في DB الإنتاج.
+
+
+## بوابة صورة release الكاملة — استئناف 2026-10-03
+
+- على الرأس 80b29e5361af: جميع مسارات CI الـ61 المسترجعة ناجحة. الفحوص السابقة 174 PASS و14 PASS موثوقية، دون إعادة احتساب المجموعة الفرعية.
+- أُعيد تشغيل Burp في namespace العامل؛ جلسة جديدة بموافقة محددة للعنوان:المنفذ أعادت HTTP200 وعلامة bac-target من صورة candidate دون source mount.
+- فحص candidate مستقل offline أكد هوية تطبيق Celery الحقيقي، ارتباط المهمة به، والطابور المحلول scanners وmax_retries=0 وUID10001؛ الأدوات القديمة وحزمة semgrep والقوالب و/app/.env غائبة.
+- محاولتا rebuild محلي كامل لصورة production-no-legacy-recon مع تقاعد الأدوات الأربعة فشلتا. الأولى DNS لمورد Docker، والثانية connection reset في تنزيل الطبقات واعتماديات Go. لم تتكون صورة release ولم ينفذ فاحصها؛ لا نحول دليل candidate إلى نجاح rebuild كامل.
+- أُضيفت بوابة CI مستقلة إلى Burp MCP Gateway Reality: checkout للرأس المحدد، build بلا cache بالأعلام الأربعة، ثم فحص صورة offline بلا network أو source mounts مع تطابق بصمات الوحدات الخمس وrequirements.txt، وهوية منتج Burp والطابور الفعلي. تحفظ JSON proof مستقلًا. نتيجة هذا التشغيل لم تثبت بعد عند كتابة هذا القسم.
+- لا يزال lab_solved=false وlive_fixture_revision_verified=false. لم ينفذ P3/P4 ولم يسجل مزود في الإنتاج أو يدمج أو ينشر هذا الفرع.

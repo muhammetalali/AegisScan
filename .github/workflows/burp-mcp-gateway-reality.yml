@@ -34,6 +34,9 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/docker/burp-runtime/**'
       - 'aegis-platform/docker-compose.burp.yml'
       - 'aegis-platform/backend/scripts/burp_mcp_sse_probe.py'
+      - 'aegis-platform/scripts/verify_burp_scanner_release.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/requirements.txt'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   push:
     branches: [main, chatgpt-a/burp-mcp-gateway-20260922]
@@ -65,6 +68,9 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/docker/burp-runtime/**'
       - 'aegis-platform/docker-compose.burp.yml'
       - 'aegis-platform/backend/scripts/burp_mcp_sse_probe.py'
+      - 'aegis-platform/scripts/verify_burp_scanner_release.py'
+      - 'aegis-platform/backend/Dockerfile.django'
+      - 'aegis-platform/backend/requirements.txt'
       - '.github/workflows/burp-mcp-gateway-reality.yml'
   workflow_dispatch:
 
@@ -304,3 +310,50 @@ jobs:
           path: /tmp/burp-mcp-gateway-junit.xml
           retention-days: 30
           if-no-files-found: warn
+
+  burp-scanner-release:
+    needs: burp-mcp-gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      AEGIS_EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_EXACT_HEAD }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prove exact checkout and clean build context
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AEGIS_EXACT_HEAD"
+          test ! -e aegis-platform/backend/.env
+          python -m py_compile aegis-platform/scripts/verify_burp_scanner_release.py
+      - name: Build the fully retired scanner release from scratch
+        run: |
+          set -euo pipefail
+          docker build --no-cache --target production-no-legacy-recon \
+            --build-arg AEGIS_RETIRE_NMAP=1 \
+            --build-arg AEGIS_RETIRE_NUCLEI=1 \
+            --build-arg AEGIS_RETIRE_SEMGREP=1 \
+            --build-arg AEGIS_RETIRE_MASSCAN=1 \
+            --label "org.opencontainers.image.revision=$AEGIS_EXACT_HEAD" \
+            -t "aegis-burp-release:$AEGIS_EXACT_HEAD" \
+            -f aegis-platform/backend/Dockerfile.django \
+            aegis-platform/backend
+      - name: Verify embedded source, retirement and the actual Burp producer offline
+        run: |
+          set -euo pipefail
+          python aegis-platform/scripts/verify_burp_scanner_release.py \
+            --image "aegis-burp-release:$AEGIS_EXACT_HEAD" \
+            --expected-head "$AEGIS_EXACT_HEAD" \
+            --source-root aegis-platform/backend \
+            --output /tmp/burp-scanner-release-proof.json
+      - name: Retain offline scanner image proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: burp-scanner-release-${{ env.AEGIS_EXACT_HEAD }}
+          path: /tmp/burp-scanner-release-proof.json
+          if-no-files-found: error
+          retention-days: 30
