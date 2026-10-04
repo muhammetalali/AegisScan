@@ -118,6 +118,41 @@ class P6AcceptanceGuardTests(unittest.TestCase):
         self.assertNotIn("/sse", command[endpoint_index])
         self.assertEqual(command[target_index], "http://127.0.0.1:18081")
 
+    def test_x11_expected_windows_ignores_hidden_transient_matches(self):
+        hidden = {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 1,
+            "state": "IsUnMapped",
+        }
+        visible = {
+            "x": 233,
+            "y": 156,
+            "width": 814,
+            "height": 521,
+            "state": "IsViewable",
+        }
+        with (
+            mock.patch.object(MODULE, "x11_window_ids", return_value={0x10, 0x20}),
+            mock.patch.object(
+                MODULE,
+                "x11_window_geometry",
+                side_effect=lambda window_id, _xauthority: (
+                    hidden if window_id == 0x10 else visible
+                ),
+            ),
+        ):
+            matches = MODULE.x11_expected_windows(
+                MODULE.BURP_STARTUP_TITLE,
+                set(),
+                Path("/tmp/xauth"),
+                MODULE.BURP_STARTUP_SIZE,
+            )
+
+        self.assertEqual(set(matches), {0x20})
+        self.assertEqual(matches[0x20], visible)
+
     def test_community_bootstrap_is_exact_window_and_two_bounded_clicks(self):
         geometry = {
             "x": 10,

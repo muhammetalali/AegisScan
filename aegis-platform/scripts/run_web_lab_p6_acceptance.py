@@ -430,22 +430,45 @@ def require_x11_geometry(
     return geometry
 
 
+def x11_expected_windows(
+    title: str,
+    before: set[int],
+    xauthority: Path,
+    expected: tuple[int, int],
+) -> dict[int, dict[str, int | str]]:
+    matches: dict[int, dict[str, int | str]] = {}
+    for window_id in x11_window_ids(title, xauthority) - before:
+        try:
+            geometry = x11_window_geometry(window_id, xauthority)
+        except AcceptanceError:
+            continue
+        actual = (int(geometry["width"]), int(geometry["height"]))
+        if geometry["state"] == "IsViewable" and actual == expected:
+            matches[window_id] = geometry
+    return matches
+
+
 def wait_new_x11_window(
     title: str,
     before: set[int],
     xauthority: Path,
     *,
+    expected: tuple[int, int],
     timeout: float,
 ) -> int:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        current = x11_window_ids(title, xauthority) - before
+        current = x11_expected_windows(title, before, xauthority, expected)
         if len(current) == 1:
             return next(iter(current))
         if len(current) > 1:
-            raise AcceptanceError(f"multiple new X11 windows matched {title!r}")
+            raise AcceptanceError(
+                f"multiple new viewable X11 windows matched {title!r} at {expected}"
+            )
         time.sleep(0.1)
-    raise AcceptanceError(f"timed out waiting for X11 window {title!r}")
+    raise AcceptanceError(
+        f"timed out waiting for viewable X11 window {title!r} at {expected}"
+    )
 
 
 def x11_click_relative(
@@ -526,7 +549,11 @@ def automate_burp_community_startup(
     main_before: set[int],
 ) -> dict[str, object]:
     startup_window = wait_new_x11_window(
-        BURP_STARTUP_TITLE, startup_before, xauthority, timeout=30
+        BURP_STARTUP_TITLE,
+        startup_before,
+        xauthority,
+        expected=BURP_STARTUP_SIZE,
+        timeout=30,
     )
     startup_geometry = require_x11_geometry(
         startup_window, xauthority, BURP_STARTUP_SIZE, "Burp startup"
@@ -546,7 +573,11 @@ def automate_burp_community_startup(
         startup_window, xauthority, second_geometry, BURP_WIZARD_BUTTON
     )
     main_window = wait_new_x11_window(
-        BURP_MAIN_TITLE, main_before, xauthority, timeout=45
+        BURP_MAIN_TITLE,
+        main_before,
+        xauthority,
+        expected=BURP_MAIN_SIZE,
+        timeout=45,
     )
     require_x11_geometry(main_window, xauthority, BURP_MAIN_SIZE, "Burp main")
     return {
@@ -612,8 +643,11 @@ def prime_burp_http_target(
     try:
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline and process.poll() is None:
-            new_modals = (
-                x11_window_ids(BURP_APPROVAL_MODAL_TITLE, xauthority) - modal_before
+            new_modals = x11_expected_windows(
+                BURP_APPROVAL_MODAL_TITLE,
+                modal_before,
+                xauthority,
+                BURP_APPROVAL_MODAL_SIZE,
             )
             if len(new_modals) > 1:
                 raise AcceptanceError(
