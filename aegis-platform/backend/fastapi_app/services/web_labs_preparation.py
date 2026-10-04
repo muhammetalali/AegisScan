@@ -35,6 +35,22 @@ class UnknownLabDefinition(ValueError):
     pass
 
 
+def _accessible_scope(*, actor_id: str, project_id: str, asset_id: str):
+    actor = get_user_model().objects.filter(pk=actor_id, is_active=True).first()
+    project = Project.objects.filter(pk=project_id, status=Project.Status.ACTIVE).first()
+    if (not actor or not project or not (
+        str(project.owner_id) == actor_id
+        or project.members.filter(pk=actor_id).exists()
+    )):
+        raise WebLabsAccessError('المشروع أو الأصل غير متاح ضمن وصولك الحالي.')
+    asset = Asset.objects.filter(
+        pk=asset_id, project_id=project_id, is_active=True
+    ).first()
+    if not asset:
+        raise WebLabsAccessError('المشروع أو الأصل غير متاح ضمن وصولك الحالي.')
+    return actor, project, asset
+
+
 def lab_definition(identifier: str) -> dict[str, Any]:
     definition = json.loads(DEFINITION_PATH.read_text(encoding='utf-8'))
     if identifier != definition['id']:
@@ -142,6 +158,69 @@ def _credential_metadata(project_id: str, refs: list[str], target: str,
     ready = (sorted(bound) == sorted(identities)
              and all(item['state'] == 'metadata_ready' for item in result))
     return result, ready
+
+
+def list_web_lab_credential_options(*, actor_id: str, project_id: str, asset_id: str,
+                                    lab_definition_id: str) -> dict[str, Any]:
+    """Return only safe project-scoped metadata for credentials usable by this lab."""
+    _actor, _project, asset = _accessible_scope(
+        actor_id=actor_id, project_id=project_id, asset_id=asset_id
+    )
+    tenant = TenantProject.objects.filter(
+        project_id=project_id, organization__is_active=True
+    ).first()
+    tenant_ready = bool(
+        tenant
+        and OrganizationMembership.objects.filter(
+            organization_id=tenant.organization_id,
+            user_id=actor_id,
+            is_active=True,
+        ).exists()
+    )
+    if not tenant_ready:
+        raise WebLabsAccessError('المشروع أو الأصل غير متاح ضمن وصولك الحالي.')
+    definition = lab_definition(lab_definition_id)
+    target = _web_target(asset)
+    identities = set(definition['identity_refs'])
+    options: list[dict[str, Any]] = []
+    rows = CredentialSecret.objects.filter(
+        project_id=project_id,
+        status=CredentialSecret.Status.ACTIVE,
+        kind__in=[CredentialSecret.Kind.TOKEN, CredentialSecret.Kind.GENERIC],
+    ).values('id', 'name', 'kind', 'scope', 'version')
+    for row in rows:
+        scope = row['scope'] if isinstance(row['scope'], dict) else {}
+        identity = scope.get('browser_identity_ref')
+        if identity not in identities:
+            continue
+        try:
+            same_origin = bool(target) and _canonical_web_origin(
+                scope.get('browser_origin', '')
+            ) == _canonical_web_origin(target)
+        except (ValueError, TypeError):
+            same_origin = False
+        if not same_origin:
+            continue
+        options.append({
+            'credential_ref': str(row['id']),
+            'name': row['name'],
+            'kind': row['kind'],
+            'identity_ref': identity,
+            'version': row['version'],
+        })
+    options.sort(key=lambda item: (
+        definition['identity_refs'].index(item['identity_ref']),
+        item['name'].lower(),
+        item['credential_ref'],
+    ))
+    return {
+        'contract_version': 'aegis.web-labs-credential-options.v1',
+        'project_ref': project_id,
+        'asset_ref': asset_id,
+        'lab_ref': definition['id'],
+        'identity_refs': definition['identity_refs'],
+        'options': options,
+    }
 
 
 def prepare_web_lab(*, actor_id: str, project_id: str, asset_id: str,

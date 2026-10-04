@@ -103,3 +103,26 @@
 ## تحديث التنفيذ — P1
 
 نفذ عقد المعاينة وخدمته واختباراته وربطه بالتطبيق وCI الحالي. التفاصيل وشرح كل فحص موجودة في [عقد جاهزية المختبر بالعربية](WEB_LABS_READINESS_CONTRACT_AR.md). نجح 63 اختبارًا في بيئة PostgreSQL/Redis منفصلة؛ لا هدف حي أو نشر أو حل لاب ضمن P1. المراحل P2–P6 ما زالت لاحقة، وتتوقف المتابعة حتى يرسل المستخدم «تابع».
+
+## تحديث الإغلاق — 4 أكتوبر 2026
+
+أغلقت P2–P6 فعليًا بعد الخطة الأصلية أعلاه. دمجت P6 عبر PR #319 في main عند
+`a3ebfc58bab98cdef2947c20b17d0501e3869c90`، وكان رأس القياس الحي
+`21b9612ecbcf11cdcd8efd0c4bff649f27a5868a`.
+
+نجحت الحالات الخمس المختومة بلا تدخل بشري: الضعيفة baseline/held-out أعطت
+`vulnerable + finding + solved`، والمصححة أعطت
+`not_vulnerable + no finding + unsolved`، وحالة قطع النقل أعطت
+`indeterminate + no finding + unsolved`. بصمة تقرير القياس:
+`0b5e47e3eb4d7008e3dd5b06f690f8332169c34cac77b88ba4bb49515c38f2ec`،
+وبصمة closeout:
+`8cc0bc2062c45acfdc6dd3197dde05506570c0ef616245fcb36801da7629073b`.
+
+الفجوة المتبقية من P5 هي تجربة الواجهة المخصصة فقط؛ lifecycle authority نفسها
+تبقى host-only كما يفرض العقد. مرحلة الإغلاق الحالية تضيف اختيارًا آمنًا للهوية
+من metadata المشروع، readiness preview، وتشغيل ملاحظات BAC عبر مسار
+`capabilities/{id}/execute` القائم فقط. لا تضيف Docker API، ولا تمنح المتصفح
+سلطة provision/reset/cleanup، ولا تعتبر observation run حكمًا متحققًا للنسخة الحية.
+
+بعد نجاح fresh-main وCI لهذه الواجهة، تكون الخطوة التالية exact-SHA production
+promotion/release، وليس فتح P7/P8/P9 مصطنعة.

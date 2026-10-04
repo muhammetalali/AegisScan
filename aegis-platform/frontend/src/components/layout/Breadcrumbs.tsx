@@ -7,6 +7,7 @@ const LABELS: Record<string, string> = {
   projects: 'Projects',
   assets: 'Assets',
   validations: 'Validations',
+  'web-labs': 'Web Labs',
   new: 'New Validation',
   progress: 'Live Progress',
   results: 'Results',

@@ -91,3 +91,34 @@ Burp gateway وProviderApprovalDecision وAssetAuthorization وcanonical capabil
 - محاولتا rebuild محلي كامل لصورة production-no-legacy-recon مع تقاعد الأدوات الأربعة فشلتا. الأولى DNS لمورد Docker، والثانية connection reset في تنزيل الطبقات واعتماديات Go. لم تتكون صورة release ولم ينفذ فاحصها؛ لا نحول دليل candidate إلى نجاح rebuild كامل.
 - أُضيفت بوابة CI مستقلة إلى Burp MCP Gateway Reality: checkout للرأس المحدد، build بلا cache بالأعلام الأربعة، ثم فحص صورة offline بلا network أو source mounts مع تطابق بصمات الوحدات الخمس وrequirements.txt، وهوية منتج Burp والطابور الفعلي. تحفظ JSON proof مستقلًا. نتيجة هذا التشغيل لم تثبت بعد عند كتابة هذا القسم.
 - لا يزال lab_solved=false وlive_fixture_revision_verified=false. لم ينفذ P3/P4 ولم يسجل مزود في الإنتاج أو يدمج أو ينشر هذا الفرع.
+
+---
+
+## Current superseding checkpoint — 2026-10-04
+
+The historical checkpoint above is retained as execution lineage. It is superseded by the verified state below.
+
+- Canonical release branch: `main`.
+- P6 PR #319 merged as `a3ebfc58bab98cdef2947c20b17d0501e3869c90`.
+- Exact P6 source SHA: `21b9612ecbcf11cdcd8efd0c4bff649f27a5868a`.
+- Live P6 acceptance: `PASS`.
+- Measurement SHA-256: `0b5e47e3eb4d7008e3dd5b06f690f8332169c34cac77b88ba4bb49515c38f2ec`.
+- Closeout SHA-256: `8cc0bc2062c45acfdc6dd3197dde05506570c0ef616245fcb36801da7629073b`.
+- Five sealed P6 cases passed with zero human interventions:
+  - vulnerable baseline/held-out → vulnerable + finding + solved;
+  - patched baseline/held-out → not vulnerable + no finding + unsolved;
+  - disconnect held-out → indeterminate + no finding + unsolved.
+- No P6 target/runtime/control container remained after closeout.
+- Fresh-main on the P6 merge SHA completed 28/28 required workflows successfully.
+- Current independent branch: `codex/web-labs-ux-closeout-20261004`.
+- This candidate closes the missing P5 guided UX and stale P0–P6 documentation.
+- Browser code receives no Docker/lifecycle authority. It uses a read-only, tenant-scoped credential metadata projection, readiness preview, and the existing governed capability execution path.
+- Frontend production build: PASS.
+- Frontend ESLint with zero warnings: PASS.
+- UI contract audit: PASS.
+- i18n audit: REVIEW only for pre-existing pages; the new Web Labs page is not listed as an untranslated surface.
+- Backend PostgreSQL isolated regression: 87 passed.
+- Post-hardening credential tenant-isolation regression: 36 passed.
+- Credential option projection exposes only UUID/name/kind/identity/version for active, same-origin, project-scoped credentials and requires active tenant membership.
+- No production runtime or production database was changed during candidate validation.
+- Next gate: exact-head PR CI for the UX closeout. After merge, verify new main and then perform exact-SHA production promotion/release.

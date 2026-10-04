@@ -1,10 +1,10 @@
 {
   "schema_version": "aegis.web-labs-preparation.v1",
   "repository": "muhammetalali/AegisScan",
-  "base_sha": "f863787569a7fcea85f5318f559bdb2890084299",
-  "branch": "codex/web-labs-preparation-20261003",
-  "preparation_status": "PREPARATION_COMPLETE",
-  "implementation_status": "P1_implemented_and_tested",
+  "base_sha": "a3ebfc58bab98cdef2947c20b17d0501e3869c90",
+  "branch": "codex/web-labs-ux-closeout-20261004",
+  "preparation_status": "POST_P6_UX_CLOSEOUT",
+  "implementation_status": "P1_P6_merged_P5_ui_closeout_candidate_verified",
   "user_checkpoint_policy": "report_each_completed_phase_then_wait_for_user_continue",
   "execution_authority": "POST /api/v1/capabilities/{capability_id}/execute",
   "provider_operations": "existing /api/v1/burp-mcp gateway",
@@ -38,7 +38,7 @@
   ],
   "pilot": {
     "fixture_path": "aegis-platform/e2e/fixtures/bac-target/app.py",
-    "fixture_revision_sha256": "4213a578e2751c6cbe22cc3d1166b2bfed2e89860f33b63b90b14f470800fef0",
+    "fixture_revision_sha256": "b051e47ecb3b77c97a2b89b12cc7d98c0557ce9b330f63d301c2d70a81f21bc9",
     "methodology_id": "WSTG-v42-ATHZ-04",
     "transport": "HTTP GET only for first pilot",
     "cases": [
@@ -73,9 +73,10 @@
         "expected": "401"
       }
     ],
-    "executed": false,
-    "solved": false,
-    "proof_requirement": "resource id plus owner and tenant plus matched negative control; status code alone insufficient"
+    "executed": true,
+    "solved": true,
+    "proof_requirement": "resource id plus owner and tenant plus matched negative control; status code alone insufficient",
+    "execution_evidence_scope": "isolated_live_P6_acceptance"
   },
   "scope_constraints": {
     "production_changed": false,
@@ -88,7 +89,7 @@
     {
       "id": "P1",
       "title_ar": "عقد جاهزية المختبر",
-      "status": "implemented_and_tested",
+      "status": "completed_merged",
       "depends_on": [
         "P0"
       ],
@@ -105,7 +106,7 @@
     {
       "id": "P2",
       "title_ar": "اتصال Burp الحقيقي",
-      "status": "planned",
+      "status": "completed_merged",
       "depends_on": [
         "P1"
       ],
@@ -120,7 +121,7 @@
     {
       "id": "P3",
       "title_ar": "الجلسات والطلبات",
-      "status": "planned",
+      "status": "completed_merged",
       "depends_on": [
         "P2"
       ],
@@ -135,7 +136,7 @@
     {
       "id": "P4",
       "title_ar": "التحقق والشرح العربي",
-      "status": "planned",
+      "status": "completed_merged",
       "depends_on": [
         "P3"
       ],
@@ -150,7 +151,7 @@
     {
       "id": "P5",
       "title_ar": "الأهداف والواجهة",
-      "status": "planned",
+      "status": "backend_completed_merged_ui_candidate_verified",
       "depends_on": [
         "P4"
       ],
@@ -165,7 +166,7 @@
     {
       "id": "P6",
       "title_ar": "القياس والإصدار",
-      "status": "planned",
+      "status": "completed_merged",
       "depends_on": [
         "P5"
       ],
@@ -178,33 +179,32 @@
       ]
     }
   ],
-  "next_phase": "P2",
+  "next_phase": "POST_P6_FRESH_MAIN_UX_RELEASE_CLOSEOUT",
   "validation": {
-    "status": "passed",
-    "verified_at_utc": "2026-10-03T00:35:38.063060+00:00",
-    "checks": [
-      "exact_base_branch",
-      "existing_reuse_paths",
-      "proposed_paths_distinguished",
-      "phase_dependencies",
-      "canonical_execution_authority",
-      "fixture_route_source_validation",
-      "canonical_wstg_mapping",
-      "arabic_step_fields",
-      "docs_only_change_scope",
-      "no_live_test_claims"
-    ],
-    "application_tests_run": true,
-    "live_burp_test_run": false,
-    "ci_claim": "PR checks pending; not a main release",
-    "application_test_count": 63,
-    "application_test_suites": {
-      "test_web_labs_preparation": 32,
-      "test_burp_mcp_gateway": 10,
-      "test_provider_approval": 6,
-      "test_assessment_launcher": 15
+    "status": "p6_live_pass_main_green_ux_candidate_local_pass",
+    "verified_at_utc": "2026-10-04T00:54:00Z",
+    "p6_source_commit": "21b9612ecbcf11cdcd8efd0c4bff649f27a5868a",
+    "p6_merge_commit": "a3ebfc58bab98cdef2947c20b17d0501e3869c90",
+    "p6_measurement_sha256": "0b5e47e3eb4d7008e3dd5b06f690f8332169c34cac77b88ba4bb49515c38f2ec",
+    "p6_closeout_sha256": "8cc0bc2062c45acfdc6dd3197dde05506570c0ef616245fcb36801da7629073b",
+    "live_case_semantics": {
+      "baseline-vulnerable": "vulnerable_finding_solved",
+      "baseline-patched": "not_vulnerable_no_finding_unsolved",
+      "heldout-vulnerable": "vulnerable_finding_solved",
+      "heldout-patched": "not_vulnerable_no_finding_unsolved",
+      "heldout-disconnect": "indeterminate_no_finding_unsolved"
     },
-    "isolated_test_network": "aegis-web-labs-p1-20261003",
-    "test_junit_sha256": "429a7f87b8c81b61a0ceec18ca9209c075057ef4895ab4b93079c60efce7bcbc"
+    "human_interventions_per_case": 0,
+    "main_required_ci": "28_of_28_success",
+    "ux_candidate": {
+      "frontend_build": "pass",
+      "frontend_lint": "pass",
+      "frontend_ui_contract_audit": "pass",
+      "frontend_i18n_audit": "review_existing_debt_no_new_WebLabsPage_violation",
+      "backend_burp_regression": "87_passed_2_dependency_deprecation_warnings",
+      "backend_tenant_guard_regression": "36_passed_2_dependency_deprecation_warnings",
+      "git_diff_check": "pass",
+      "production_changed": false
+    }
   }
 }
