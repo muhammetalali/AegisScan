@@ -14,6 +14,16 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 
+def isolated_environment_allowed(database, broker, env) -> bool:
+    if database.hostname != 'aegis-burp-p3-postgres' or broker.hostname != 'aegis-burp-p3-redis':
+        return False
+    p4 = (database.path == '/burp_p4' and broker.path == '/1'
+          and env.get('AEGIS_ISOLATED_BURP_LAB_VERIFICATION_PROOF') == '1')
+    p6 = (database.path == '/burp_p6' and broker.path == '/2'
+          and env.get('AEGIS_ISOLATED_WEB_LAB_MEASUREMENT_PROOF') == '1')
+    return p4 or p6
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['schedule', 'collect'])
@@ -23,11 +33,8 @@ def main():
     args = parser.parse_args()
     database = urlsplit(os.environ.get('DATABASE_URL', ''))
     broker = urlsplit(os.environ.get('CELERY_BROKER_URL', ''))
-    if (database.hostname != 'aegis-burp-p3-postgres' or database.path != '/burp_p4'
-            or broker.hostname != 'aegis-burp-p3-redis'
-            or broker.path != '/1'
-            or os.environ.get('AEGIS_ISOLATED_BURP_LAB_VERIFICATION_PROOF') != '1'):
-        raise SystemExit('This harness requires the dedicated isolated P4 database and broker.')
+    if not isolated_environment_allowed(database, broker, os.environ):
+        raise SystemExit('This harness requires the dedicated isolated P4/P6 database and broker.')
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
     import django
     django.setup()

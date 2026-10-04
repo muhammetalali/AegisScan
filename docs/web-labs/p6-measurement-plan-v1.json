@@ -1,0 +1,57 @@
+{
+  "schema": "aegis.web-labs-p6-plan.v1",
+  "recipe_revision": "aegis.web-labs-p6-recipes.v1",
+  "definition_id": "bac-orders-v1",
+  "scope": "fresh sealed instances of the proven BAC fixture only",
+  "held_out_policy": "held-out cases are created only after the measurement code and plan are sealed; they use fresh instance/process/evidence identities and are never tuning inputs",
+  "resource_metrics": [
+    "duration_ms",
+    "cpu_seconds",
+    "peak_memory_bytes",
+    "external_requests",
+    "human_interventions"
+  ],
+  "cases": [
+    {
+      "case_ref": "baseline-vulnerable",
+      "split": "baseline",
+      "scenario": "nominal",
+      "variant": "vulnerable",
+      "expected_verdict": "vulnerable"
+    },
+    {
+      "case_ref": "baseline-patched",
+      "split": "baseline",
+      "scenario": "nominal",
+      "variant": "patched",
+      "expected_verdict": "not_vulnerable"
+    },
+    {
+      "case_ref": "heldout-vulnerable",
+      "split": "held_out",
+      "scenario": "nominal",
+      "variant": "vulnerable",
+      "expected_verdict": "vulnerable"
+    },
+    {
+      "case_ref": "heldout-patched",
+      "split": "held_out",
+      "scenario": "nominal",
+      "variant": "patched",
+      "expected_verdict": "not_vulnerable"
+    },
+    {
+      "case_ref": "heldout-disconnect",
+      "split": "held_out",
+      "scenario": "disconnect",
+      "variant": "vulnerable",
+      "expected_verdict": "indeterminate"
+    }
+  ],
+  "release_claim_limits": {
+    "production_deployment": false,
+    "provider_production_approval": false,
+    "arbitrary_academy_solver": false,
+    "additional_vulnerability_families": false
+  }
+}

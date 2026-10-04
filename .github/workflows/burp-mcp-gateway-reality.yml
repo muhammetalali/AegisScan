@@ -20,7 +20,20 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/e2e/fixtures/bac-target/**'
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
       - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
+      - 'aegis-platform/e2e/test_web_lab_host_lifecycle_guard.py'
       - 'docs/web-labs-p5-contract.md'
+      - 'docs/web-labs-p6-contract.md'
+      - 'docs/web-labs/p6-measurement-plan-v1.json'
+      - 'aegis-platform/backend/fastapi_app/services/web_lab_measurement.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_lab_measurement.py'
+      - 'aegis-platform/scripts/web_lab_measurement_report.py'
+      - 'aegis-platform/scripts/web_lab_measurement_case.py'
+      - 'aegis-platform/scripts/run_web_lab_p6_acceptance.py'
+      - 'aegis-platform/e2e/live_burp_lab_verification.py'
+      - 'aegis-platform/e2e/test_live_burp_lab_verification_guard.py'
+      - 'aegis-platform/e2e/live_web_lab_measurement.py'
+      - 'aegis-platform/e2e/test_live_web_lab_measurement_guard.py'
+      - 'aegis-platform/e2e/test_run_web_lab_p6_acceptance_guard.py'
       - 'aegis-platform/backend/enterprise/provider_approval_models.py'
       - 'aegis-platform/backend/enterprise/migrations/0042_provider_approval_plane.py'
       - 'aegis-platform/backend/fastapi_app/services/provider_approval.py'
@@ -75,7 +88,20 @@ name: Burp MCP Gateway Reality
       - 'aegis-platform/e2e/fixtures/bac-target/**'
       - 'aegis-platform/scripts/inspect_web_lab_runtime.py'
       - 'aegis-platform/scripts/web_lab_host_lifecycle.py'
+      - 'aegis-platform/e2e/test_web_lab_host_lifecycle_guard.py'
       - 'docs/web-labs-p5-contract.md'
+      - 'docs/web-labs-p6-contract.md'
+      - 'docs/web-labs/p6-measurement-plan-v1.json'
+      - 'aegis-platform/backend/fastapi_app/services/web_lab_measurement.py'
+      - 'aegis-platform/backend/fastapi_app/services/test_web_lab_measurement.py'
+      - 'aegis-platform/scripts/web_lab_measurement_report.py'
+      - 'aegis-platform/scripts/web_lab_measurement_case.py'
+      - 'aegis-platform/scripts/run_web_lab_p6_acceptance.py'
+      - 'aegis-platform/e2e/live_burp_lab_verification.py'
+      - 'aegis-platform/e2e/test_live_burp_lab_verification_guard.py'
+      - 'aegis-platform/e2e/live_web_lab_measurement.py'
+      - 'aegis-platform/e2e/test_live_web_lab_measurement_guard.py'
+      - 'aegis-platform/e2e/test_run_web_lab_p6_acceptance_guard.py'
       - 'aegis-platform/backend/fastapi_app/services/burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/services/test_burp_mcp_gateway.py'
       - 'aegis-platform/backend/fastapi_app/routers/burp_mcp.py'
@@ -192,6 +218,16 @@ jobs:
             aegis-platform/backend/enterprise/management/commands/web_lab_lifecycle.py \
             aegis-platform/backend/fastapi_app/services/web_lab_lifecycle.py \
             aegis-platform/backend/fastapi_app/services/test_web_lab_lifecycle.py \
+            aegis-platform/backend/fastapi_app/services/web_lab_measurement.py \
+            aegis-platform/backend/fastapi_app/services/test_web_lab_measurement.py \
+            aegis-platform/scripts/web_lab_measurement_report.py \
+            aegis-platform/scripts/web_lab_measurement_case.py \
+            aegis-platform/scripts/run_web_lab_p6_acceptance.py \
+            aegis-platform/e2e/live_burp_lab_verification.py \
+            aegis-platform/e2e/test_live_burp_lab_verification_guard.py \
+            aegis-platform/e2e/live_web_lab_measurement.py \
+            aegis-platform/e2e/test_live_web_lab_measurement_guard.py \
+            aegis-platform/e2e/test_run_web_lab_p6_acceptance_guard.py \
             aegis-platform/backend/fastapi_app/services/test_burp_lab_execution.py \
             aegis-platform/backend/fastapi_app/services/credential_execution.py \
             aegis-platform/backend/fastapi_app/services/test_burp_mcp_transport.py \
@@ -205,6 +241,7 @@ jobs:
             aegis-platform/backend/scripts/burp_mcp_sse_probe.py \
             aegis-platform/scripts/inspect_web_lab_runtime.py \
             aegis-platform/scripts/web_lab_host_lifecycle.py \
+            aegis-platform/e2e/test_web_lab_host_lifecycle_guard.py \
             aegis-platform/backend/fastapi_app/main.py
 
       - name: PostgreSQL schema migration and evidence immutability reality
@@ -281,6 +318,11 @@ jobs:
             fastapi_app/services/test_burp_lab_execution.py \
             fastapi_app/services/test_lab_verification.py \
             fastapi_app/services/test_web_lab_lifecycle.py \
+            fastapi_app/services/test_web_lab_measurement.py \
+            ../e2e/test_live_burp_lab_verification_guard.py \
+            ../e2e/test_live_web_lab_measurement_guard.py \
+            ../e2e/test_run_web_lab_p6_acceptance_guard.py \
+            ../e2e/test_web_lab_host_lifecycle_guard.py \
             fastapi_app/services/test_finding_confirmation.py \
             fastapi_app/services/test_credential_execution_contract.py \
             fastapi_app/tasks/test_celery_reliability_contract.py \
@@ -288,6 +330,22 @@ jobs:
             fastapi_app/routers/test_governed_execution_contract.py \
             fastapi_app/routers/test_assessment_launcher.py \
             --junitxml=/tmp/burp-mcp-gateway-junit.xml
+
+      - name: Web Lab P6 sealed measurement contract
+        working-directory: aegis-platform/backend
+        env:
+          PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from fastapi_app.services.web_lab_measurement import validate_plan
+          plan = json.loads(Path('../../docs/web-labs/p6-measurement-plan-v1.json').read_text())
+          validated = validate_plan(plan)
+          assert len(validated['cases']) == 5
+          assert sum(x['split'] == 'held_out' for x in validated['cases']) == 3
+          print('WEB_LABS_P6_MEASUREMENT_PLAN=SEALED')
+          PY
 
       - name: Provider approval gate regression
         working-directory: aegis-platform/backend
