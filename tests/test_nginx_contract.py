@@ -143,3 +143,17 @@ def test_nginx_does_not_expose_version_tokens() -> None:
     ):
         config = (root / relative).read_text(encoding="utf-8")
         assert re.search(r"(?m)^\s*server_tokens\s+off\s*;", config)
+
+
+def test_frontend_assets_spa_route_does_not_collide_with_vite_assets_directory() -> None:
+    config = (
+        Path(__file__).parents[1] / "aegis-platform/frontend/nginx.conf"
+    ).read_text(encoding="utf-8")
+
+    blocks = _location_blocks(config)
+    exact_assets = next(block for block in blocks if re.search(r"location\s+=\s+/assets\s*\{", block))
+    generic = next(block for block in blocks if re.search(r"location\s+/\s*\{", block))
+
+    assert "try_files /index.html =404;" in exact_assets
+    assert "try_files $uri $uri/ /index.html;" in generic
+    assert config.index("location = /assets {") < config.index("location / {")
