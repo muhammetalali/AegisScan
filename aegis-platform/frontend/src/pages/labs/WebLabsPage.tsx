@@ -73,8 +73,12 @@ const ReadinessSchema = z.object({
 }).strict()
 
 type Project = { id: string; name: string }
+type ProjectsResponse = Project[] | { items?: Project[]; results?: Project[] }
 type Asset = { id: string; project_id: string; name: string; type: string; is_active: boolean }
 type Depth = 'quick' | 'standard' | 'deep' | 'comprehensive'
+
+export const unwrapWebLabProjects = (data: ProjectsResponse | undefined): Project[] =>
+  Array.isArray(data) ? data : data?.items ?? data?.results ?? []
 
 export const WebLabsPage = () => {
   const t = useLanguageStore((s) => s.t)
@@ -85,10 +89,11 @@ export const WebLabsPage = () => {
   const [depth, setDepth] = useState<Depth>('standard')
   const [selected, setSelected] = useState<Record<string, string>>({})
 
-  const projects = useQuery<Project[]>({
+  const projects = useQuery<ProjectsResponse>({
     queryKey: ['web-labs-projects'],
-    queryFn: () => apiHelpers.get<Project[]>('/projects/'),
+    queryFn: () => apiHelpers.get<ProjectsResponse>('/projects/'),
   })
+  const projectItems = useMemo(() => unwrapWebLabProjects(projects.data), [projects.data])
   const assets = useQuery<Asset[]>({
     queryKey: ['web-labs-assets', projectId],
     queryFn: () => apiHelpers.get<Asset[]>('/assets/', { params: { project_id: projectId } }),
@@ -203,7 +208,7 @@ export const WebLabsPage = () => {
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Project')}</span>
             <select value={projectId} onChange={(e) => resetScope(e.target.value)} className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm">
               <option value="">{t('Select project')}</option>
-              {(projects.data || []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              {projectItems.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
             </select>
           </label>
           <label>
