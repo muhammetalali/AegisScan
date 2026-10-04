@@ -24,7 +24,65 @@ env:
   AEGIS_RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.event_name == 'workflow_dispatch' && inputs.release_sha || github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  release1-applicability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      state: ${{ steps.gate.outputs.state }}
+      should_close: ${{ steps.gate.outputs.should_close }}
+      published_sha: ${{ steps.gate.outputs.published_sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.AEGIS_RELEASE_SHA }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Load current Release 1 publication tag
+        shell: bash
+        run: python scripts/ci/release1_version.py >> "$GITHUB_ENV"
+
+      - name: Decide whether Release 1 closure applies to this SHA
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          optional_api_value() {
+            local endpoint="$1"
+            local jq_filter="$2"
+            local error_file
+            error_file="$(mktemp)"
+            local value
+            if value="$(gh api "$endpoint" --jq "$jq_filter" 2>"$error_file")"; then
+              rm -f "$error_file"
+              printf '%s' "$value"
+              return 0
+            fi
+            if grep -q 'HTTP 404' "$error_file"; then
+              rm -f "$error_file"
+              return 0
+            fi
+            cat "$error_file" >&2
+            rm -f "$error_file"
+            return 1
+          }
+          published_release_sha="$(optional_api_value "/repos/$GITHUB_REPOSITORY/releases/tags/$AEGIS_RELEASE_TAG" .target_commitish)"
+          published_tag_sha="$(optional_api_value "/repos/$GITHUB_REPOSITORY/git/ref/tags/$AEGIS_RELEASE_TAG" .object.sha)"
+          python scripts/ci/release1_applicability.py \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --candidate-sha "$AEGIS_RELEASE_SHA" \
+            --published-release-sha "$published_release_sha" \
+            --published-tag-sha "$published_tag_sha" >> "$GITHUB_OUTPUT"
+
   release-contract:
+    needs: release1-applicability
+    if: needs.release1-applicability.outputs.should_close == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -38,18 +96,19 @@ jobs:
 
       - name: Prove Release 1 closure contract
         run: |
-          python -m py_compile scripts/ci/release1_closure.py tests/test_release1_closure.py
+          python -m py_compile scripts/ci/release1_closure.py scripts/ci/release1_applicability.py tests/test_release1_closure.py tests/test_release1_applicability.py
           python -m pip install pytest==9.1.1 pyyaml==6.0.2
-          pytest -q tests/test_release1_closure.py tests/test_release1_publication_tag.py tests/test_release_performance_acceptance.py tests/test_external_provider_acceptance_closure.py tests/test_final_project_hygiene.py tests/test_fresh_main_final_verification.py tests/test_project_completion.py
+          pytest -q tests/test_release1_closure.py tests/test_release1_applicability.py tests/test_release1_publication_tag.py tests/test_release_performance_acceptance.py tests/test_external_provider_acceptance_closure.py tests/test_final_project_hygiene.py tests/test_fresh_main_final_verification.py tests/test_project_completion.py
 
   release1-closure:
-    needs: release-contract
+    needs: [release1-applicability, release-contract]
     if: >-
-      (github.event_name == 'workflow_run' &&
+      needs.release1-applicability.outputs.should_close == 'true' &&
+      ((github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository) ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -373,17 +432,36 @@ jobs:
   release-result:
     name: Release 1 actual closure result
     if: always()
-    needs: [release-contract, release1-closure]
+    needs: [release1-applicability, release-contract, release1-closure]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Reject skipped or failed release closure
+      - name: Report immutable Release 1 closure state
         env:
+          APPLICABILITY_RESULT: ${{ needs.release1-applicability.result }}
+          RELEASE1_STATE: ${{ needs.release1-applicability.outputs.state }}
+          PUBLISHED_SHA: ${{ needs.release1-applicability.outputs.published_sha }}
           CONTRACT_RESULT: ${{ needs.release-contract.result }}
           CLOSURE_RESULT: ${{ needs.release1-closure.result }}
         run: |
           set -euo pipefail
+          if [ "$APPLICABILITY_RESULT" != success ]; then
+            echo "AEGISSCAN_RELEASE_1=NOT_CLOSED (applicability=$APPLICABILITY_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [ "$RELEASE1_STATE" = already_closed ]; then
+            if [ "$CONTRACT_RESULT" != skipped ] || [ "$CLOSURE_RESULT" != skipped ]; then
+              echo "AEGISSCAN_RELEASE_1=INVALID_POST_RELEASE_STATE (contract=$CONTRACT_RESULT, closure=$CLOSURE_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            echo "AEGISSCAN_RELEASE_1=ALREADY_CLOSED (published_sha=$PUBLISHED_SHA)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$RELEASE1_STATE" != close ]; then
+            echo "AEGISSCAN_RELEASE_1=INVALID_APPLICABILITY_STATE ($RELEASE1_STATE)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           if [ "$CONTRACT_RESULT" != success ] || [ "$CLOSURE_RESULT" != success ]; then
             echo "AEGISSCAN_RELEASE_1=NOT_CLOSED (contract=$CONTRACT_RESULT, closure=$CLOSURE_RESULT)" >> "$GITHUB_STEP_SUMMARY"
             exit 1
