@@ -26,6 +26,11 @@ TRUST_SPEC.loader.exec_module(trust)
 def _isolate_alert_receiver_token_path(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(deploy, "ALERT_RECEIVER_TOKEN_PATH", tmp_path / "alert-receiver-token")
     monkeypatch.setattr(deploy.os, "chown", lambda *_args: None)
+    monkeypatch.setattr(
+        deploy.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(deploy.socket.AF_INET, deploy.socket.SOCK_STREAM, 6, "", ("203.0.113.10", 443))],
+    )
 
 
 def _env_file(tmp_path: Path) -> Path:
@@ -685,6 +690,120 @@ def test_storage_floor_fails_before_service_mutation(monkeypatch):
 def test_storage_floor_accepts_exact_minimum(monkeypatch):
     monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 60 * deploy.GIB)
     assert deploy._assert_storage_floor("application-image-build") == 60 * deploy.GIB
+
+
+def test_registry_dns_readiness_retries_until_all_names_resolve(monkeypatch):
+    calls = {"count": 0}
+    sleeps = []
+
+    def resolve(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise deploy.socket.gaierror(-3, "temporary failure")
+        return [(deploy.socket.AF_INET, deploy.socket.SOCK_STREAM, 6, "", ("203.0.113.10", 443))]
+
+    monkeypatch.setattr(deploy.socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
+
+    result = deploy._wait_for_registry_dns(
+        names=("registry.example",),
+        attempts=3,
+        backoff_seconds=2,
+    )
+
+    assert result == {"status": "ready", "attempt": 3, "names": ["registry.example"]}
+    assert sleeps == [2, 4]
+
+
+def test_registry_dns_readiness_fails_closed_before_build(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(
+        deploy.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(deploy.socket.gaierror(-3, "server misbehaving")),
+    )
+    monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
+
+    with pytest.raises(deploy.DeployError, match="registry DNS readiness failed after 2 attempts"):
+        deploy._wait_for_registry_dns(
+            names=("registry-1.docker.io",),
+            attempts=2,
+            backoff_seconds=1,
+        )
+
+    assert sleeps == [1]
+
+
+def test_build_stack_retries_transient_build_failure_after_dns_readiness(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    calls = []
+    sleeps = []
+    readiness_calls = []
+
+    monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
+    monkeypatch.setattr(
+        deploy,
+        "_wait_for_registry_dns",
+        lambda: readiness_calls.append(True) or {"status": "ready", "attempt": 1, "names": ["registry-1.docker.io"]},
+    )
+    monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
+    monkeypatch.setattr(deploy, "_post_build_storage", lambda _stage: {"status": "success"})
+    monkeypatch.setattr(deploy, "_validate_nginx_config", lambda *_args: None)
+
+    def run(argv, **_kwargs):
+        calls.append(list(argv))
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, argv)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+
+    result = deploy._build_stack(env_file, {})
+
+    assert calls == [
+        ["docker", "compose", "build", "--pull"],
+        ["docker", "compose", "build", "--pull"],
+    ]
+    assert len(readiness_calls) == 2
+    assert sleeps == [deploy.PRODUCTION_BUILD_BACKOFF_SECONDS]
+    assert result["build_attempts"] == 2
+    assert result["registry_dns_readiness"]["status"] == "ready"
+
+
+def test_build_stack_stops_after_bounded_failed_attempts(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    calls = []
+    sleeps = []
+
+    monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
+    monkeypatch.setattr(
+        deploy,
+        "_wait_for_registry_dns",
+        lambda: {"status": "ready", "attempt": 1, "names": ["registry-1.docker.io"]},
+    )
+    monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        deploy,
+        "_post_build_storage",
+        lambda _stage: pytest.fail("storage checkpoint must not run after a failed build"),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_validate_nginx_config",
+        lambda *_args: pytest.fail("nginx validation must not run after a failed build"),
+    )
+
+    def run(argv, **_kwargs):
+        calls.append(list(argv))
+        raise subprocess.CalledProcessError(1, argv)
+
+    monkeypatch.setattr(deploy, "_run", run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        deploy._build_stack(env_file, {})
+
+    assert len(calls) == deploy.PRODUCTION_BUILD_ATTEMPTS
+    assert sleeps == [deploy.PRODUCTION_BUILD_BACKOFF_SECONDS]
 
 
 def test_production_28_capacity_recovers_before_start_without_pruning_images_or_volumes(tmp_path, monkeypatch):
