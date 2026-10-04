@@ -27,7 +27,7 @@ from enterprise.models import Organization, OrganizationMembership, TenantProjec
 from enterprise.provider_approval_models import ProviderApprovalDecision
 from enterprise.web_security_models import ProviderApprovalRecord
 from fastapi_app.core.dependencies import get_current_user
-from fastapi_app.routers.web_labs import router, PrepareWebLabOut
+from fastapi_app.routers.web_labs import CredentialOptionsOut, router, PrepareWebLabOut
 from fastapi_app.services import burp_mcp_gateway, web_labs_preparation as preparation
 from fastapi_app.services.provider_approval import record_provider_decision
 from fastapi_app.services.test_burp_mcp_gateway import _manifest
@@ -219,6 +219,57 @@ def test_preview_issues_no_writes_secret_resolution_target_network_or_dispatch(c
     assert CredentialAccess.objects.count() == before
 
 
+def test_credential_options_expose_only_safe_bound_metadata(context):
+    user, project, asset, _auth, _membership, credentials = context
+    payload = preparation.list_web_lab_credential_options(
+        actor_id=str(user.id),
+        project_id=str(project.id),
+        asset_id=str(asset.id),
+        lab_definition_id='bac-orders-v1',
+    )
+    parsed = CredentialOptionsOut.model_validate(payload).model_dump()
+    assert parsed['identity_refs'] == ['alice', 'bob']
+    assert [item['identity_ref'] for item in parsed['options']] == ['alice', 'bob']
+    assert [item['credential_ref'] for item in parsed['options']] == [str(c.id) for c in credentials]
+    serialized = json.dumps(parsed)
+    assert 'ciphertext-must-not-be-read' not in serialized
+    assert 'secret_fingerprint' not in serialized
+    assert 'arbitrary_private_metadata' not in serialized
+    assert 'browser_origin' not in serialized
+
+
+def test_credential_options_require_active_tenant_membership(context):
+    user, project, asset, _auth, membership, _credentials = context
+    membership.is_active = False
+    membership.save(update_fields=['is_active'])
+    with pytest.raises(preparation.WebLabsAccessError, match='غير متاح'):
+        preparation.list_web_lab_credential_options(
+            actor_id=str(user.id),
+            project_id=str(project.id),
+            asset_id=str(asset.id),
+            lab_definition_id='bac-orders-v1',
+        )
+
+
+def test_credential_options_exclude_wrong_origin_and_foreign_scope(context):
+    user, project, asset, _auth, _membership, credentials = context
+    credentials[0].scope['browser_origin'] = 'https://wrong.invalid'
+    credentials[0].save(update_fields=['scope'])
+    foreign = Project.objects.create(name='Foreign options', slug='foreign-options', owner=user)
+    CredentialSecret.objects.create(
+        project=foreign, created_by=user, name='foreign-alice', kind=CredentialSecret.Kind.TOKEN,
+        encrypted_secret='foreign-ciphertext', secret_fingerprint='e' * 64,
+        scope={'browser_origin': 'http://bac-target:18081', 'browser_identity_ref': 'alice'},
+    )
+    payload = preparation.list_web_lab_credential_options(
+        actor_id=str(user.id),
+        project_id=str(project.id),
+        asset_id=str(asset.id),
+        lab_definition_id='bac-orders-v1',
+    )
+    assert [item['identity_ref'] for item in payload['options']] == ['bob']
+
+
 @pytest.fixture
 def client(context):
     app = FastAPI()
@@ -232,6 +283,27 @@ def client(context):
 def payload(context):
     return dict(project_id=str(context[1].id), asset_id=str(context[2].id),
                 lab_definition_id='bac-orders-v1', credential_refs=[str(c.id) for c in context[-1]])
+
+
+def test_api_credential_options_are_project_scoped(client, context):
+    response = client.get('/api/v1/web-labs/credential-options', params={
+        'project_id': str(context[1].id),
+        'asset_id': str(context[2].id),
+        'lab_definition_id': 'bac-orders-v1',
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body['identity_refs'] == ['alice', 'bob']
+    assert [row['identity_ref'] for row in body['options']] == ['alice', 'bob']
+    assert 'encrypted_secret' not in response.text
+    assert 'secret_fingerprint' not in response.text
+
+    response = client.get('/api/v1/web-labs/credential-options', params={
+        'project_id': str(context[1].id),
+        'asset_id': str(uuid4()),
+        'lab_definition_id': 'bac-orders-v1',
+    })
+    assert response.status_code == 404
 
 
 def test_api_contract_unknown_lab_and_inaccessible_asset(client, context):
@@ -288,6 +360,7 @@ def test_api_preview_does_not_mutate_in_its_database_thread(client, context, mon
 def test_main_registration_and_fixture_revision_are_real_source_metadata():
     from fastapi_app.main import app
     assert '/api/v1/web-labs/prepare' in app.openapi()['paths']
+    assert '/api/v1/web-labs/credential-options' in app.openapi()['paths']
     definition = preparation.lab_definition('bac-orders-v1')
     repository = Path(__file__).resolve().parents[4]
     fixture = repository / definition['fixture_path']

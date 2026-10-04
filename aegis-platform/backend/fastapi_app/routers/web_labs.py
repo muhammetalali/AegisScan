@@ -4,14 +4,16 @@ from typing import Literal
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..core.dependencies import get_current_user
-from ..services.web_labs_preparation import UnknownLabDefinition, WebLabsAccessError, prepare_web_lab
+from ..services.web_labs_preparation import (
+    UnknownLabDefinition, WebLabsAccessError, list_web_lab_credential_options, prepare_web_lab,
+)
 
 
 class ArabicValidationRoute(APIRoute):
@@ -90,6 +92,23 @@ class CapabilityMetadata(ContractModel):
     runtime_verified: Literal[False]
 
 
+class CredentialOption(ContractModel):
+    credential_ref: str
+    name: str
+    kind: str
+    identity_ref: str
+    version: int
+
+
+class CredentialOptionsOut(ContractModel):
+    contract_version: Literal['aegis.web-labs-credential-options.v1']
+    project_ref: str
+    asset_ref: str
+    lab_ref: str
+    identity_refs: list[str]
+    options: list[CredentialOption]
+
+
 class PrepareWebLabOut(ContractModel):
     contract_version: Literal['aegis.web-labs-readiness.v1']
     project_ref: str
@@ -109,6 +128,34 @@ class PrepareWebLabOut(ContractModel):
     requirements: list[Requirement]
     blockers: list[Blocker]
     explanation_ar: str
+
+
+@router.get('/credential-options', response_model=CredentialOptionsOut)
+async def credential_options(
+    project_id: UUID,
+    asset_id: UUID,
+    lab_definition_id: str = Query(
+        default='bac-orders-v1',
+        min_length=1,
+        max_length=80,
+        pattern=r'^[a-z0-9][a-z0-9-]*$',
+    ),
+    user=Depends(get_current_user),
+):
+    actor_id = user.get('user_id') or user.get('id')
+    if not actor_id:
+        raise HTTPException(401, detail={'code': 'invalid_actor', 'message_ar': 'هوية المستخدم غير متاحة.'})
+    try:
+        return await sync_to_async(list_web_lab_credential_options, thread_sensitive=True)(
+            actor_id=str(actor_id),
+            project_id=str(project_id),
+            asset_id=str(asset_id),
+            lab_definition_id=lab_definition_id,
+        )
+    except WebLabsAccessError as exc:
+        raise HTTPException(404, detail={'code': 'unavailable_scope', 'message_ar': str(exc)}) from exc
+    except UnknownLabDefinition as exc:
+        raise HTTPException(422, detail={'code': 'unknown_lab_definition', 'message_ar': str(exc)}) from exc
 
 
 @router.post('/prepare', response_model=PrepareWebLabOut)
