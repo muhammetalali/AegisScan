@@ -8,6 +8,7 @@ name: Release 1 Contract Reality
       - '.github/workflows/release1-contract-reality.yml'
       - '.github/deployment-requests/internal-production.json'
       - 'scripts/ci/release1_closure.py'
+      - 'scripts/ci/release1_applicability.py'
       - 'scripts/ci/release_performance_acceptance.py'
       - 'scripts/ci/external_provider_acceptance_closure.py'
       - 'scripts/ci/final_project_hygiene.py'
@@ -21,6 +22,7 @@ name: Release 1 Contract Reality
       - 'scripts/ci/release1_version.py'
       - 'tests/test_release1_publication_tag.py'
       - 'tests/test_release1_closure.py'
+      - 'tests/test_release1_applicability.py'
   push:
     branches: [main]
     paths:
@@ -28,6 +30,7 @@ name: Release 1 Contract Reality
       - '.github/workflows/release1-contract-reality.yml'
       - '.github/deployment-requests/internal-production.json'
       - 'scripts/ci/release1_closure.py'
+      - 'scripts/ci/release1_applicability.py'
       - 'scripts/ci/release_performance_acceptance.py'
       - 'scripts/ci/external_provider_acceptance_closure.py'
       - 'scripts/ci/final_project_hygiene.py'
@@ -41,6 +44,7 @@ name: Release 1 Contract Reality
       - 'scripts/ci/release1_version.py'
       - 'tests/test_release1_publication_tag.py'
       - 'tests/test_release1_closure.py'
+      - 'tests/test_release1_applicability.py'
 
 permissions:
   contents: read
@@ -63,7 +67,7 @@ jobs:
 
       - name: Prove Release 1 closure contract
         run: |
-          python -m py_compile scripts/ci/release1_closure.py tests/test_release1_closure.py
+          python -m py_compile scripts/ci/release1_closure.py scripts/ci/release1_applicability.py tests/test_release1_closure.py tests/test_release1_applicability.py
           python -m pip install pytest==9.1.1 pyyaml==6.0.2
-          pytest -q tests/test_release1_closure.py tests/test_release1_publication_tag.py tests/test_release_performance_acceptance.py tests/test_external_provider_acceptance_closure.py tests/test_final_project_hygiene.py tests/test_fresh_main_final_verification.py tests/test_project_completion.py
+          pytest -q tests/test_release1_closure.py tests/test_release1_applicability.py tests/test_release1_publication_tag.py tests/test_release_performance_acceptance.py tests/test_external_provider_acceptance_closure.py tests/test_final_project_hygiene.py tests/test_fresh_main_final_verification.py tests/test_project_completion.py
 

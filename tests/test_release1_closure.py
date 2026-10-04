@@ -175,14 +175,46 @@ def test_contract_success_cannot_be_reported_as_actual_release_closure(tmp_path)
     contract = yaml.safe_load((root / '.github/workflows/release1-contract-reality.yml').read_text())
     assert set(live['on']) == {'workflow_run', 'workflow_dispatch'}
     assert set(contract['on']) == {'pull_request', 'push'}
+
+    applicability = live['jobs']['release1-applicability']
+    assert applicability['outputs']['state'] == '${{ steps.gate.outputs.state }}'
+    assert applicability['outputs']['should_close'] == '${{ steps.gate.outputs.should_close }}'
+    gate = next(step for step in applicability['steps'] if step.get('id') == 'gate')
+    assert 'release1_applicability.py' in gate['run']
+    assert 'releases/tags/$AEGIS_RELEASE_TAG' in gate['run']
+    assert 'git/ref/tags/$AEGIS_RELEASE_TAG' in gate['run']
+    assert "grep -q 'HTTP 404'" in gate['run']
+
+    release_job = live['jobs']['release1-closure']
+    assert set(release_job['needs']) == {'release1-applicability', 'release-contract'}
+    assert "needs.release1-applicability.outputs.should_close == 'true'" in release_job['if']
+
     result = live['jobs']['release-result']
     assert result['if'] == 'always()'
-    assert set(result['needs']) == {'release-contract', 'release1-closure'}
+    assert set(result['needs']) == {'release1-applicability', 'release-contract', 'release1-closure'}
     script = result['steps'][0]['run']
+
     for outcome in ['skipped', 'failure', 'cancelled', 'success']:
-        summary = tmp_path / f'{outcome}.txt'
+        summary = tmp_path / f'close-{outcome}.txt'
         proc = subprocess.run(['bash', '-c', script], env={**os.environ,
+            'APPLICABILITY_RESULT': 'success', 'RELEASE1_STATE': 'close', 'PUBLISHED_SHA': '',
             'CONTRACT_RESULT': 'success', 'CLOSURE_RESULT': outcome,
             'GITHUB_STEP_SUMMARY': str(summary)}, capture_output=True, text=True)
         assert (proc.returncode == 0) is (outcome == 'success')
         assert ('AEGISSCAN_RELEASE_1=CLOSED' in summary.read_text()) is (outcome == 'success')
+
+    summary = tmp_path / 'already-closed.txt'
+    proc = subprocess.run(['bash', '-c', script], env={**os.environ,
+        'APPLICABILITY_RESULT': 'success', 'RELEASE1_STATE': 'already_closed', 'PUBLISHED_SHA': '1' * 40,
+        'CONTRACT_RESULT': 'skipped', 'CLOSURE_RESULT': 'skipped',
+        'GITHUB_STEP_SUMMARY': str(summary)}, capture_output=True, text=True)
+    assert proc.returncode == 0
+    assert 'AEGISSCAN_RELEASE_1=ALREADY_CLOSED' in summary.read_text()
+
+    summary = tmp_path / 'invalid-noop.txt'
+    proc = subprocess.run(['bash', '-c', script], env={**os.environ,
+        'APPLICABILITY_RESULT': 'success', 'RELEASE1_STATE': 'already_closed', 'PUBLISHED_SHA': '1' * 40,
+        'CONTRACT_RESULT': 'success', 'CLOSURE_RESULT': 'skipped',
+        'GITHUB_STEP_SUMMARY': str(summary)}, capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert 'INVALID_POST_RELEASE_STATE' in summary.read_text()
