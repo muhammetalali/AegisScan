@@ -6,6 +6,7 @@ const LABELS: Record<string, string> = {
   dashboard: 'Dashboard',
   projects: 'Projects',
   assets: 'Assets',
+  assess: 'New Assessment',
   validations: 'Validations',
   'web-labs': 'Web Labs',
   new: 'New Validation',
