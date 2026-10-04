@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "run_web_lab_p6_acceptance.py"
@@ -73,6 +74,109 @@ class P6AcceptanceGuardTests(unittest.TestCase):
             }))
             with self.assertRaisesRegex(MODULE.AcceptanceError, "packaged MCP extension"):
                 MODULE.validate_burp_profile(profile)
+
+    def test_runtime_profile_is_cloned_without_reusing_session_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = root / "seed"
+            data = seed / "data"
+            sessions = data / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions / "stale.run").write_text("must-not-be-reused")
+            (seed / "prefs").mkdir()
+            config = data / "UserConfig.json"
+            config.write_text(json.dumps({
+                "user_options": {"extender": {"extensions": [{
+                    "loaded": True,
+                    "extension_type": "java",
+                    "extension_file": "/opt/burp/burp-mcp-all.jar",
+                }]}}
+            }))
+            destination = root / "runtime"
+
+            result = MODULE.clone_burp_runtime_profile(seed, destination)
+
+            self.assertEqual(result, destination)
+            self.assertTrue((seed / "data/sessions/stale.run").is_file())
+            self.assertEqual(list((destination / "data/sessions").iterdir()), [])
+            self.assertEqual(
+                MODULE.validate_burp_profile(destination),
+                MODULE.validate_burp_profile(seed),
+            )
+
+    def test_prime_command_pins_root_sse_and_exact_fixture_target(self):
+        command = MODULE.burp_prime_command("sha256:" + "a" * 64, "p6-prime")
+        joined = " ".join(command)
+        self.assertIn("--read-only", command)
+        self.assertIn("--cap-drop ALL", joined)
+        self.assertIn("no-new-privileges:true", command)
+        self.assertIn("container:aegis-burp-p2-egress", command)
+        self.assertIn("/app/scripts/burp_mcp_sse_probe.py", command)
+        endpoint_index = command.index("--endpoint") + 1
+        target_index = command.index("--target") + 1
+        self.assertEqual(command[endpoint_index], "http://127.0.0.1:9876/")
+        self.assertNotIn("/sse", command[endpoint_index])
+        self.assertEqual(command[target_index], "http://127.0.0.1:18081")
+
+    def test_community_bootstrap_is_exact_window_and_two_bounded_clicks(self):
+        geometry = {
+            "x": 10,
+            "y": 20,
+            "width": 814,
+            "height": 521,
+            "state": "IsViewable",
+        }
+        with (
+            mock.patch.object(
+                MODULE,
+                "wait_new_x11_window",
+                side_effect=[0x100, 0x200],
+            ),
+            mock.patch.object(
+                MODULE,
+                "require_x11_geometry",
+                side_effect=[geometry, geometry, {
+                    "x": 0,
+                    "y": 33,
+                    "width": 1280,
+                    "height": 767,
+                    "state": "IsViewable",
+                }],
+            ),
+            mock.patch.object(
+                MODULE,
+                "x11_window_ids",
+                return_value={0x100},
+            ),
+            mock.patch.object(MODULE, "x11_click_relative") as click,
+            mock.patch.object(MODULE.time, "sleep"),
+        ):
+            evidence = MODULE.automate_burp_community_startup(
+                xauthority=Path("/tmp/xauth"),
+                startup_before=set(),
+                main_before=set(),
+            )
+
+        self.assertEqual(click.call_count, 2)
+        self.assertEqual(
+            [call.args[3] for call in click.call_args_list],
+            [MODULE.BURP_WIZARD_BUTTON, MODULE.BURP_WIZARD_BUTTON],
+        )
+        self.assertEqual(evidence["human_interventions"], 0)
+        self.assertEqual(
+            evidence["wizard_steps"],
+            ["temporary_project_in_memory", "use_burp_defaults"],
+        )
+
+    def test_approval_is_host_port_scoped_and_ui_contract_is_pinned(self):
+        self.assertEqual(MODULE.BURP_APPROVAL_TARGET, "http://127.0.0.1:18081")
+        self.assertEqual(MODULE.BURP_APPROVAL_MODAL_TITLE, " ")
+        self.assertEqual(MODULE.BURP_APPROVAL_MODAL_SIZE, (860, 400))
+        self.assertEqual(MODULE.BURP_APPROVAL_HOST_PORT_BUTTON, (565, 354))
+        self.assertNotEqual(
+            MODULE.BURP_APPROVAL_HOST_PORT_BUTTON,
+            MODULE.BURP_WIZARD_BUTTON,
+        )
 
     def test_secure_base_is_fail_closed(self):
         args = MODULE.secure_base(

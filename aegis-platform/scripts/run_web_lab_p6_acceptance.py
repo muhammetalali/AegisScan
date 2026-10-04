@@ -7,6 +7,7 @@ unsealed/dirty source checkout, mutable scanner image revision, or non-P6 DB.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -30,6 +31,16 @@ CONTROL = "aegis-burp-p6-control"
 P6_DB = "burp_p6"
 P6_REDIS_DB = "2"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+BURP_STARTUP_TITLE = "Burp Suite Community Edition v2026.9"
+BURP_MAIN_TITLE = "Burp Suite Community Edition v2026.9 - Temporary Project"
+BURP_MCP_ENDPOINT = "http://127.0.0.1:9876/"
+BURP_APPROVAL_TARGET = "http://127.0.0.1:18081"
+BURP_STARTUP_SIZE = (814, 521)
+BURP_MAIN_SIZE = (1280, 767)
+BURP_APPROVAL_MODAL_TITLE = " "
+BURP_APPROVAL_MODAL_SIZE = (860, 400)
+BURP_WIZARD_BUTTON = (753, 494)
+BURP_APPROVAL_HOST_PORT_BUTTON = (565, 354)
 
 
 class AcceptanceError(RuntimeError):
@@ -366,14 +377,349 @@ def start_worker(env: dict[str, str], image: str, name: str) -> None:
         raise AcceptanceError(f"P6 worker did not remain running: {name}")
 
 
+def _x11_env(xauthority: Path) -> list[str]:
+    return ["env", "DISPLAY=:0", f"XAUTHORITY={xauthority}"]
+
+
+def x11_window_ids(title: str, xauthority: Path) -> set[int]:
+    tree = output(_x11_env(xauthority) + ["xwininfo", "-root", "-tree"], timeout=30)
+    result: set[int] = set()
+    pattern = re.compile(r'^\s*(0x[0-9a-fA-F]+)\s+"(.*?)":')
+    for line in tree.splitlines():
+        match = pattern.match(line)
+        if match and match.group(2) == title:
+            result.add(int(match.group(1), 16))
+    return result
+
+
+def x11_window_geometry(window_id: int, xauthority: Path) -> dict[str, int | str]:
+    info = output(
+        _x11_env(xauthority) + ["xwininfo", "-id", f"0x{window_id:x}"], timeout=30
+    )
+
+    def number(label: str) -> int:
+        match = re.search(rf"{re.escape(label)}:\s+(-?\d+)", info)
+        if not match:
+            raise AcceptanceError(f"X11 window 0x{window_id:x} is missing {label}")
+        return int(match.group(1))
+
+    state_match = re.search(r"Map State:\s+(\S+)", info)
+    if not state_match:
+        raise AcceptanceError(f"X11 window 0x{window_id:x} is missing Map State")
+    return {
+        "x": number("Absolute upper-left X"),
+        "y": number("Absolute upper-left Y"),
+        "width": number("Width"),
+        "height": number("Height"),
+        "state": state_match.group(1),
+    }
+
+
+def require_x11_geometry(
+    window_id: int,
+    xauthority: Path,
+    expected: tuple[int, int],
+    purpose: str,
+) -> dict[str, int | str]:
+    geometry = x11_window_geometry(window_id, xauthority)
+    actual = (int(geometry["width"]), int(geometry["height"]))
+    if geometry["state"] != "IsViewable" or actual != expected:
+        raise AcceptanceError(
+            f"unexpected {purpose} X11 window geometry/state: {actual} {geometry['state']}"
+        )
+    return geometry
+
+
+def wait_new_x11_window(
+    title: str,
+    before: set[int],
+    xauthority: Path,
+    *,
+    timeout: float,
+) -> int:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = x11_window_ids(title, xauthority) - before
+        if len(current) == 1:
+            return next(iter(current))
+        if len(current) > 1:
+            raise AcceptanceError(f"multiple new X11 windows matched {title!r}")
+        time.sleep(0.1)
+    raise AcceptanceError(f"timed out waiting for X11 window {title!r}")
+
+
+def x11_click_relative(
+    window_id: int,
+    xauthority: Path,
+    geometry: dict[str, int | str],
+    point: tuple[int, int],
+) -> None:
+    width = int(geometry["width"])
+    height = int(geometry["height"])
+    if not (0 <= point[0] < width and 0 <= point[1] < height):
+        raise AcceptanceError("X11 click target is outside the verified window")
+    old_display = os.environ.get("DISPLAY")
+    old_xauthority = os.environ.get("XAUTHORITY")
+    os.environ["DISPLAY"] = ":0"
+    os.environ["XAUTHORITY"] = str(xauthority)
+    display = None
+    x11 = None
+    try:
+        x11 = ctypes.CDLL("libX11.so.6")
+        xtst = ctypes.CDLL("libXtst.so.6")
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x11.XSetInputFocus.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_int,
+            ctypes.c_ulong,
+        ]
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        xtst.XTestFakeMotionEvent.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_ulong,
+        ]
+        xtst.XTestFakeButtonEvent.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint,
+            ctypes.c_int,
+            ctypes.c_ulong,
+        ]
+        display = x11.XOpenDisplay(b":0")
+        if not display:
+            raise AcceptanceError("cannot open authorized X11 display for Burp bootstrap")
+        x11.XRaiseWindow(display, window_id)
+        x11.XSetInputFocus(display, window_id, 2, 0)
+        x11.XFlush(display)
+        time.sleep(0.1)
+        global_x = int(geometry["x"]) + point[0]
+        global_y = int(geometry["y"]) + point[1]
+        xtst.XTestFakeMotionEvent(display, -1, global_x, global_y, 0)
+        xtst.XTestFakeButtonEvent(display, 1, 1, 0)
+        xtst.XTestFakeButtonEvent(display, 1, 0, 0)
+        x11.XFlush(display)
+    except OSError as exc:
+        raise AcceptanceError(f"required X11/XTest runtime is unavailable: {exc}") from exc
+    finally:
+        if display and x11 is not None:
+            x11.XCloseDisplay(display)
+        if old_display is None:
+            os.environ.pop("DISPLAY", None)
+        else:
+            os.environ["DISPLAY"] = old_display
+        if old_xauthority is None:
+            os.environ.pop("XAUTHORITY", None)
+        else:
+            os.environ["XAUTHORITY"] = old_xauthority
+
+
+def automate_burp_community_startup(
+    *,
+    xauthority: Path,
+    startup_before: set[int],
+    main_before: set[int],
+) -> dict[str, object]:
+    startup_window = wait_new_x11_window(
+        BURP_STARTUP_TITLE, startup_before, xauthority, timeout=30
+    )
+    startup_geometry = require_x11_geometry(
+        startup_window, xauthority, BURP_STARTUP_SIZE, "Burp startup"
+    )
+    x11_click_relative(
+        startup_window, xauthority, startup_geometry, BURP_WIZARD_BUTTON
+    )
+    time.sleep(1.0)
+    if startup_window not in x11_window_ids(BURP_STARTUP_TITLE, xauthority):
+        raise AcceptanceError(
+            "Burp startup wizard disappeared before configuration selection"
+        )
+    second_geometry = require_x11_geometry(
+        startup_window, xauthority, BURP_STARTUP_SIZE, "Burp configuration"
+    )
+    x11_click_relative(
+        startup_window, xauthority, second_geometry, BURP_WIZARD_BUTTON
+    )
+    main_window = wait_new_x11_window(
+        BURP_MAIN_TITLE, main_before, xauthority, timeout=45
+    )
+    require_x11_geometry(main_window, xauthority, BURP_MAIN_SIZE, "Burp main")
+    return {
+        "startup_window_id": f"0x{startup_window:x}",
+        "main_window_id": f"0x{main_window:x}",
+        "wizard_steps": ["temporary_project_in_memory", "use_burp_defaults"],
+        "human_interventions": 0,
+    }
+
+
+def burp_prime_command(scanner_image: str, name: str) -> list[str]:
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        name,
+        "--label",
+        "aegis.phase=web-labs-p6",
+        "--network",
+        f"container:{EGRESS}",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--memory",
+        "256m",
+        "--cpus",
+        "0.5",
+        "--pids-limit",
+        "64",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev,size=64m,mode=1777",
+        "--user",
+        "10001:10001",
+        "-w",
+        "/app",
+        "--entrypoint",
+        "python",
+        scanner_image,
+        "/app/scripts/burp_mcp_sse_probe.py",
+        "--endpoint",
+        BURP_MCP_ENDPOINT,
+        "--target",
+        BURP_APPROVAL_TARGET,
+    ]
+
+
+def prime_burp_http_target(
+    *, scanner_image: str, xauthority: Path
+) -> dict[str, object]:
+    modal_before = x11_window_ids(BURP_APPROVAL_MODAL_TITLE, xauthority)
+    name = "aegis-burp-p6-prime-" + uuid.uuid4().hex[:8]
+    process = subprocess.Popen(
+        burp_prime_command(scanner_image, name),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    approval_mode = "preapproved"
+    modal_window: int | None = None
+    try:
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline and process.poll() is None:
+            new_modals = (
+                x11_window_ids(BURP_APPROVAL_MODAL_TITLE, xauthority) - modal_before
+            )
+            if len(new_modals) > 1:
+                raise AcceptanceError(
+                    "multiple Burp approval dialogs appeared during P6 priming"
+                )
+            if len(new_modals) == 1:
+                modal_window = next(iter(new_modals))
+                geometry = require_x11_geometry(
+                    modal_window,
+                    xauthority,
+                    BURP_APPROVAL_MODAL_SIZE,
+                    "Burp HTTP approval",
+                )
+                x11_click_relative(
+                    modal_window,
+                    xauthority,
+                    geometry,
+                    BURP_APPROVAL_HOST_PORT_BUTTON,
+                )
+                approval_mode = "always_allow_host_port"
+                break
+            time.sleep(0.1)
+        try:
+            stdout, _ = process.communicate(timeout=25)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            stdout, _ = process.communicate()
+            raise AcceptanceError("Burp MCP target priming timed out") from exc
+        lines = [line.strip() for line in (stdout or "").splitlines() if line.strip()]
+        payload = None
+        for line in reversed(lines):
+            try:
+                candidate = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        if process.returncode != 0 or not payload:
+            raise AcceptanceError(
+                "Burp MCP target priming failed: " + (stdout or "")[-1600:]
+            )
+        if (
+            payload.get("transport_probe_passed") is not True
+            or payload.get("status_code") != 200
+            or payload.get("fixture_health_marker_matches") is not True
+            or payload.get("lab_solved") is not False
+        ):
+            raise AcceptanceError("Burp MCP target priming returned non-conforming proof")
+        return {
+            "approval_mode": approval_mode,
+            "approval_target": BURP_APPROVAL_TARGET,
+            "approval_modal_window_id": (
+                f"0x{modal_window:x}" if modal_window is not None else None
+            ),
+            "probe": payload,
+            "human_interventions": 0,
+        }
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        remove_container(name)
+
+
+def reset_burp_runtime_profile(profile: Path) -> None:
+    sessions = profile / "data" / "sessions"
+    shutil.rmtree(sessions, ignore_errors=True)
+    sessions.mkdir(parents=True, mode=0o700, exist_ok=True)
+    prefs_root = profile / "prefs"
+    if prefs_root.exists():
+        for pattern in (".user.lock.*", ".userRootModFile.*"):
+            for path in prefs_root.rglob(pattern):
+                path.unlink(missing_ok=True)
+
+
+def clone_burp_runtime_profile(seed: Path, destination: Path) -> Path:
+    if destination.exists():
+        raise AcceptanceError(f"Burp runtime profile already exists: {destination}")
+    shutil.copytree(seed, destination)
+    reset_burp_runtime_profile(destination)
+    if validate_burp_profile(destination) != validate_burp_profile(seed):
+        shutil.rmtree(destination, ignore_errors=True)
+        raise AcceptanceError("Burp runtime profile configuration differs from sealed seed")
+    return destination
+
+
 def start_burp(
     *,
     name: str,
     image: str,
+    scanner_image: str,
     profile: Path,
     xauthority: Path,
+    evidence_path: Path,
 ) -> str:
     remove_container(name)
+    closed_probe = run(
+        ["docker", "exec", EGRESS, "nc", "-z", "-w", "1", "127.0.0.1", "9876"],
+        check=False,
+    )
+    if closed_probe.returncode == 0:
+        raise AcceptanceError("Burp MCP port 9876 was already open before P6 runtime start")
+    reset_burp_runtime_profile(profile)
+    startup_before = x11_window_ids(BURP_STARTUP_TITLE, xauthority)
+    main_before = x11_window_ids(BURP_MAIN_TITLE, xauthority)
     image_record = image_inspect(image)
     args = [
         "docker",
@@ -412,7 +758,13 @@ def start_burp(
         f"{xauthority}:/run/burp-xauthority:ro",
         image,
     ]
+    started = time.monotonic()
     run(args)
+    startup = automate_burp_community_startup(
+        xauthority=xauthority,
+        startup_before=startup_before,
+        main_before=main_before,
+    )
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         probe = run(
@@ -420,12 +772,35 @@ def start_burp(
             check=False,
         )
         if probe.returncode == 0:
+            prime = prime_burp_http_target(
+                scanner_image=scanner_image,
+                xauthority=xauthority,
+            )
+            evidence_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "aegis.web-labs-p6-burp-startup.v1",
+                        "status": "pass",
+                        "image_id": image_record["Id"],
+                        "endpoint": BURP_MCP_ENDPOINT,
+                        "startup_elapsed_seconds": round(time.monotonic() - started, 3),
+                        "startup": startup,
+                        "target_priming": prime,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
             return image_record["Id"]
         if not docker_inspect(name)["State"]["Running"]:
             logs = output(["docker", "logs", name], timeout=30)
-            raise AcceptanceError(f"Burp runtime exited before MCP readiness: {logs[-1600:]}")
+            raise AcceptanceError(
+                f"Burp runtime exited before MCP readiness: {logs[-1600:]}"
+            )
         time.sleep(1)
-    raise AcceptanceError("Burp MCP SSE port 9876 did not become ready")
+    raise AcceptanceError(
+        "Burp MCP root SSE did not become ready after Community bootstrap"
+    )
 
 
 def harness(
@@ -672,8 +1047,8 @@ def main() -> int:
     burp_id = image_inspect(args.burp_image)["Id"]
     if not args.env_template.is_file() or not args.xauthority.is_file():
         raise AcceptanceError("required host-only env/Xauthority input is unavailable")
-    profile_config_sha256 = validate_burp_profile(args.profile.resolve())
-
+    sealed_profile = args.profile.resolve()
+    profile_config_sha256 = validate_burp_profile(sealed_profile)
     env = load_env(args.env_template, args.source_commit)
     backend_root = source_root / "aegis-platform/backend"
     sys.path.insert(0, str(backend_root))
@@ -693,6 +1068,26 @@ def main() -> int:
             + ",".join(preexisting_labs)
         )
     cleanup_p6_runtime()
+    runtime_profiles_root = (
+        allowed_root / f".p6-runtime-{args.source_commit[:12]}-{os.getpid()}"
+    )
+    if runtime_profiles_root.exists():
+        raise AcceptanceError("P6 transient Burp profile root already exists")
+    runtime_profiles_root.mkdir(mode=0o700)
+    (checkpoint / "burp-profile-source.json").write_text(
+        json.dumps(
+            {
+                "schema": "aegis.web-labs-p6-burp-profile-source.v1",
+                "status": "pass",
+                "seed_profile_config_sha256": profile_config_sha256,
+                "source_profile_mounted": False,
+                "runtime_profile_transient": True,
+                "runtime_profiles_per_case": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     case_outputs: list[Path] = []
     lifecycle_instances: dict[str, tuple[str, str]] = {}
     try:
@@ -750,6 +1145,7 @@ def main() -> int:
             runtime_name = "aegis-burp-p6-runtime-" + str(index)
             worker_name = "aegis-burp-p6-worker-" + str(index)
             is_disconnect = spec["scenario"] == "disconnect"
+            runtime_profile: Path | None = None
             if is_disconnect:
                 probe = run(
                     ["docker", "exec", EGRESS, "nc", "-z", "-w", "1", "127.0.0.1", "9876"],
@@ -758,11 +1154,17 @@ def main() -> int:
                 if probe.returncode == 0:
                     raise AcceptanceError("disconnect case began with MCP port unexpectedly open")
             else:
+                runtime_profile = clone_burp_runtime_profile(
+                    sealed_profile,
+                    runtime_profiles_root / case_ref,
+                )
                 observed_burp_id = start_burp(
                     name=runtime_name,
                     image=burp_id,
-                    profile=args.profile.resolve(),
+                    scanner_image=scanner_id,
+                    profile=runtime_profile,
                     xauthority=args.xauthority.resolve(),
+                    evidence_path=case_dir / "burp-startup.json",
                 )
                 if observed_burp_id != burp_id:
                     raise AcceptanceError("Burp runtime image identity changed")
@@ -837,6 +1239,8 @@ def main() -> int:
 
             remove_container(worker_name)
             remove_container(runtime_name)
+            if runtime_profile is not None:
+                shutil.rmtree(runtime_profile, ignore_errors=True)
             cleanup_result = lifecycle(
                 source_root,
                 state["actor_ref"],
@@ -935,6 +1339,7 @@ def main() -> int:
                     handle.write(f"{instance_id} {container_name}: {exc}\n")
                 remove_container(container_name)
         cleanup_p6_runtime()
+        shutil.rmtree(runtime_profiles_root, ignore_errors=True)
 
 
 if __name__ == "__main__":
