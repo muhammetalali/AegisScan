@@ -9,6 +9,7 @@ import re
 import secrets
 import shlex
 import shutil
+import socket
 import signal
 import stat
 import subprocess
@@ -39,6 +40,15 @@ INTERNAL_ALERT_PORT = 8443
 ALERT_RECEIVER_TOKEN_PATH = Path("/etc/aegisscan/secrets/alert-receiver-token")
 ALERT_RECEIVER_UID = 10003
 ALERT_RECEIVER_GID = 10003
+PRODUCTION_REGISTRY_DNS_NAMES = (
+    "registry-1.docker.io",
+    "auth.docker.io",
+    "ghcr.io",
+)
+PRODUCTION_DNS_ATTEMPTS = 6
+PRODUCTION_DNS_BACKOFF_SECONDS = 3
+PRODUCTION_BUILD_ATTEMPTS = 2
+PRODUCTION_BUILD_BACKOFF_SECONDS = 10
 
 
 class DeployError(RuntimeError):
@@ -654,15 +664,77 @@ def _validate_nginx_config(env_file: Path, deployment_env: dict[str, str]) -> No
     _run(argv, cwd=PLATFORM_DIR, env=deployment_env, capture=False, timeout=180)
 
 
-def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, object]:
-    _run(
-        _compose(env_file, "build", "--pull"),
-        cwd=PLATFORM_DIR,
-        env=deployment_env,
-        capture=False,
-        timeout=7200,
+def _wait_for_registry_dns(
+    *,
+    names: tuple[str, ...] = PRODUCTION_REGISTRY_DNS_NAMES,
+    attempts: int = PRODUCTION_DNS_ATTEMPTS,
+    backoff_seconds: int = PRODUCTION_DNS_BACKOFF_SECONDS,
+) -> dict[str, object]:
+    if attempts < 1:
+        raise DeployError("production registry DNS attempts must be positive")
+    last_errors: dict[str, str] = {}
+    for attempt in range(1, attempts + 1):
+        errors: dict[str, str] = {}
+        for name in names:
+            try:
+                answers = socket.getaddrinfo(name, 443, type=socket.SOCK_STREAM)
+            except OSError as exc:
+                errors[name] = str(exc)
+                continue
+            if not answers:
+                errors[name] = "resolver returned no addresses"
+        if not errors:
+            return {
+                "status": "ready",
+                "attempt": attempt,
+                "names": list(names),
+            }
+        last_errors = errors
+        if attempt < attempts:
+            time.sleep(backoff_seconds * attempt)
+    raise DeployError(
+        "production registry DNS readiness failed after "
+        f"{attempts} attempts: {json.dumps(last_errors, sort_keys=True)}"
     )
+
+
+def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, object]:
+    build_argv = _compose(env_file, "build", "--pull")
+    dns_readiness: dict[str, object] = {}
+    build_attempt = 0
+    for build_attempt in range(1, PRODUCTION_BUILD_ATTEMPTS + 1):
+        dns_readiness = _wait_for_registry_dns()
+        try:
+            _run(
+                build_argv,
+                cwd=PLATFORM_DIR,
+                env=deployment_env,
+                capture=False,
+                timeout=7200,
+            )
+            break
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            if build_attempt >= PRODUCTION_BUILD_ATTEMPTS:
+                raise
+            print(
+                json.dumps(
+                    {
+                        "event": "production-build-retry",
+                        "schema": "aegisscan.production-build-retry.v1",
+                        "status": "retrying",
+                        "attempt": build_attempt,
+                        "max_attempts": PRODUCTION_BUILD_ATTEMPTS,
+                        "returncode": getattr(exc, "returncode", None),
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(PRODUCTION_BUILD_BACKOFF_SECONDS * build_attempt)
     storage = _post_build_storage("application-image-build")
+    storage["registry_dns_readiness"] = dns_readiness
+    storage["build_attempts"] = build_attempt
     # "docker compose run" can reconcile networks and volumes even with
     # --no-deps. Validate with an isolated one-shot container so a config check
     # cannot remove/recreate live production networks before rollout.
