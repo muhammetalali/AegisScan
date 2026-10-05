@@ -12,6 +12,8 @@ class ToolRequest:
     target: str
     authorized: bool
     options: dict[str, Any] = field(default_factory=dict)
+    approved_target: str | None = None
+    approved_addresses: tuple[str, ...] = ()
 
 
 class SecurityTool(ABC):
@@ -41,7 +43,13 @@ class ExploitationFramework(SecurityTool):
 class NmapNetworkScanner(NetworkScanner):
     name = 'nmap'
     def run(self, request: ToolRequest, timeout: int = 300, state_getter: Callable[[], str] | None = None) -> ScanResult:
-        return run_nmap(self.validate(request), timeout=timeout, state_getter=state_getter)
+        return run_nmap(
+            self.validate(request),
+            timeout=timeout,
+            state_getter=state_getter,
+            approved_target=request.approved_target,
+            approved_addresses=request.approved_addresses,
+        )
 
 
 class MasscanNetworkScanner(NetworkScanner):

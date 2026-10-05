@@ -45,6 +45,33 @@ def test_rustscan_ports_accept_only_explicit_tcp_port_lists():
             validate_native_options(spec, {'ports': invalid})
 
 
+def test_exact_bound_private_ip_snapshot_authorizes_native_target(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(
+        'fastapi_app.services.native_tool_runtime.shutil.which',
+        lambda binary: '/usr/local/bin/nbtscan',
+    )
+    spec = get_native_tool_spec('network.nbtscan-host')
+
+    argv, target = build_native_argv(
+        spec,
+        '10.10.20.30',
+        {},
+        approved_target='10.10.20.30',
+    )
+
+    assert target == '10.10.20.30'
+    assert argv == ['/usr/local/bin/nbtscan', '10.10.20.30']
+
+    with pytest.raises(ValueError, match='outside the server-side authorized scan scope'):
+        build_native_argv(
+            spec,
+            '10.10.20.30',
+            {},
+            approved_target='10.10.20.31',
+        )
+
+
 def test_subfinder_runtime_is_pinned_and_disables_update_checks(monkeypatch):
     monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'example.invalid')
     monkeypatch.setattr(

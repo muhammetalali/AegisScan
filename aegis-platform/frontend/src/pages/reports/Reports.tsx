@@ -12,7 +12,7 @@ const unwrapProjects=(data:ProjectsResponse|undefined):Project[]=>Array.isArray(
 
 export const Reports=()=>{
  const t=useLanguageStore(s=>s.t); const qc=useQueryClient(); const [open,setOpen]=useState(false); const [projectId,setProjectId]=useState(''); const [scanId,setScanId]=useState(''); const [title,setTitle]=useState(''); const [type,setType]=useState('full'); const [format,setFormat]=useState('pdf'); const [creating,setCreating]=useState(false)
- const reports=useQuery<Report[]>({queryKey:['reports-center'],queryFn:()=>apiHelpers.get<Report[]>('/reports?limit=100')})
+ const reports=useQuery<Report[]>({queryKey:['reports-center'],queryFn:()=>apiHelpers.get<Report[]>('/reports/?limit=100')})
  const summary=useQuery<any>({queryKey:['reports-summary'],queryFn:()=>apiHelpers.get<any>('/dashboard/summary')})
  const risk=useQuery<any>({queryKey:['reports-risk'],queryFn:()=>apiHelpers.get<any>('/dashboard/risk-distribution')})
  const projects=useQuery<ProjectsResponse>({queryKey:['reports-projects'],queryFn:()=>apiHelpers.get<ProjectsResponse>('/projects/')}); const projectItems=unwrapProjects(projects.data)

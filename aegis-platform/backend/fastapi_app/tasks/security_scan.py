@@ -176,6 +176,8 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
     try:
         started=scan.started_at
         timeout=120 if scan.depth==Scan.Depth.QUICK else 300
+        resolved=(scan.asset.configuration or {}).get('resolved_ips') or []
+        approved_addresses=tuple(str(item) for item in resolved if isinstance(item,str))
         result=run_nmap_with_provider(
             target=target,
             timeout_seconds=timeout,
@@ -184,6 +186,8 @@ def run_nmap_scan(self,scan_id:str)->dict[str,Any]:
             authorization_ref=str(authorization.id),
             scope_ref=f'project:{scan.project_id}:asset:{scan.asset_id}',
             state_getter=lambda:runtime_state(scan_id),
+            approved_target=str(authorization.target_snapshot),
+            approved_addresses=approved_addresses,
         )
         parsed=parse_nmap_xml(result.stdout) if result.stdout.strip() else {'hosts':[],'host_count':0,'open_ports':0}
         ok,reason=revalidate_bound_authorization(scan,authorization)

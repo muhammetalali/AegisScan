@@ -63,11 +63,21 @@ def test_nginx_location_directives_are_unique_per_server() -> None:
         assert duplicates == []
 
 
-def test_legacy_vulnerability_route_cannot_fall_through_to_spa() -> None:
-    config = (Path(__file__).parents[1] / "aegis-platform/docker/nginx.conf").read_text()
+def test_vulnerability_spa_and_legacy_api_are_disambiguated() -> None:
+    root = Path(__file__).parents[1]
+    for relative in (
+        "aegis-platform/docker/nginx.conf",
+        "aegis-platform/docker/nginx-ssl.conf",
+    ):
+        config = (root / relative).read_text(encoding="utf-8")
 
-    assert "location /vulnerabilities/" in config
-    assert "proxy_pass http://fastapi/api/v1/vulnerabilities/;" in config
+        assert "location = /vulnerabilities {" in config
+        assert "proxy_pass http://frontend;" in config
+        assert "location /vulnerabilities/ {" in config
+        assert 'if ($http_accept ~* "text/html") { return 418; }' in config
+        assert "error_page 418 = @vulnerabilities_spa;" in config
+        assert "location @vulnerabilities_spa {" in config
+        assert "proxy_pass http://fastapi/api/v1/vulnerabilities/;" in config
 
 
 def test_fastapi_upstream_keepalive_is_enabled_in_http_and_tls_gateways() -> None:
@@ -114,6 +124,14 @@ def test_gateway_service_dns_tracks_recreated_containers() -> None:
         for service, port in (("frontend", 80), ("django", 8000), ("fastapi", 8001)):
             assert f"zone {service}_peers 64k;" in config
             assert f"server {service}:{port} resolve;" in config
+
+
+def test_tls_gateway_rewrites_same_host_upstream_redirects_to_https() -> None:
+    config = (Path(__file__).parents[1] / "aegis-platform/docker/nginx-ssl.conf").read_text(encoding="utf-8")
+    servers = _server_blocks(config)
+    public = next(block for block in servers if "listen 443 ssl;" in block)
+
+    assert "proxy_redirect http://$host/ https://$host/;" in public
 
 
 def test_tls_gateway_exposes_only_authenticated_internal_alert_ingress():
