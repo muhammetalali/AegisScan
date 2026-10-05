@@ -18,11 +18,16 @@ def _key_for(selected_provider: str) -> str:
 
 
 def _scan(scan_id: str):
-    return SimpleNamespace(id=scan_id, project_id='project-m4', asset_id='asset-m4')
+    return SimpleNamespace(
+        id=scan_id,
+        project_id='project-m4',
+        asset_id='asset-m4',
+        asset=SimpleNamespace(configuration={}),
+    )
 
 
 def _authorization():
-    return SimpleNamespace(id='authorization-m4')
+    return SimpleNamespace(id='authorization-m4', target_snapshot='parity.test')
 
 
 def test_native_execution_uses_legacy_for_canary_holdback_and_persists_decision(monkeypatch):
@@ -53,6 +58,9 @@ def test_native_execution_uses_legacy_for_canary_holdback_and_persists_decision(
 
     assert result.stdout == 'legacy'
     assert len(calls) == 1
+    _, _, legacy_kwargs = calls[0]
+    assert legacy_kwargs['approved_target'] == 'parity.test'
+    assert legacy_kwargs['approved_addresses'] == ()
     decision = provenance['routing_decision']
     assert provenance['provider'] == 'legacy-native-worker'
     assert decision['selected_provider'] == 'legacy'
