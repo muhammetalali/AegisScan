@@ -118,6 +118,24 @@ def _project_access(project_id: str, user_id: str):
 def _report_queryset(user_id: str):
     return DataExport.objects.filter(resource_type='project_report', user_id=user_id).order_by('-created_at')
 
+@sync_to_async
+def _list_reports(
+    user_id: str,
+    project_id: Optional[str],
+    report_type: Optional[str],
+    status: Optional[str],
+    limit: int,
+    offset: int,
+) -> list[DataExport]:
+    qs = _report_queryset(user_id)
+    if project_id:
+        qs = qs.filter(filters__project_id=project_id)
+    if report_type:
+        qs = qs.filter(filters__report_type=report_type)
+    if status:
+        qs = qs.filter(status=status)
+    return list(qs[offset:offset + limit])
+
 def _serialize_schedule(schedule: ReportSchedule) -> ReportScheduleResponse:
     return ReportScheduleResponse(
         id=str(schedule.id), project_id=str(schedule.project_id),
@@ -378,11 +396,15 @@ def _get_report(report_id: str, user_id: str):
 
 @router.get('/', response_model=List[ReportResponse])
 async def list_reports(project_id: Optional[str] = None, report_type: Optional[str] = None, status: Optional[str] = None, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), current_user=Depends(require_permission(Permission.REPORT_READ))):
-    qs = _report_queryset(str(current_user.get('user_id')))
-    if project_id: qs = qs.filter(filters__project_id=project_id)
-    if report_type: qs = qs.filter(filters__report_type=report_type)
-    if status: qs = qs.filter(status=status)
-    return [await _serialize(item) for item in list(qs[offset:offset + limit])]
+    rows = await _list_reports(
+        str(current_user.get('user_id')),
+        project_id,
+        report_type,
+        status,
+        limit,
+        offset,
+    )
+    return [await _serialize(item) for item in rows]
 
 @router.post('/', response_model=ReportResponse, status_code=201)
 async def create_report(report: ReportCreate, current_user=Depends(require_permission(Permission.REPORT_CREATE))):
