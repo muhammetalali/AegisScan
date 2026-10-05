@@ -111,7 +111,11 @@ def _bind_persisted_authorization(
         raise HTTPException(status_code=409, detail='The authorized asset target no longer matches the authoritative authorization snapshot')
     if scan.scan_type in NETWORK_SCAN_TYPES:
         try:
-            require_authorized_target(current_target, url=scan.scan_type == Scan.Type.URL)
+            require_authorized_target(
+                current_target,
+                url=scan.scan_type == Scan.Type.URL,
+                approved_target=latest.target_snapshot,
+            )
         except ScopeAuthorizationError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
     return asset, current_target, latest

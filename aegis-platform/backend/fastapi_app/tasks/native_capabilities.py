@@ -156,12 +156,18 @@ def _execute_runtime(
     routing_decision = recon_provider_decision(capability_id, routing_key=str(scan.id))
     routing_evidence = routing_decision.as_dict()
     if routing_decision.selected_provider != 'kali':
+        resolved = (scan.asset.configuration or {}).get('resolved_ips') or []
+        approved_addresses = tuple(
+            str(item) for item in resolved if isinstance(item, str)
+        )
         result = run_native_tool(
             capability_id,
             target,
             options,
             state_getter=state_getter,
             credential_materials=credential_materials,
+            approved_target=str(authorization.target_snapshot),
+            approved_addresses=approved_addresses,
         )
         return result, {
             'provider': 'legacy-native-worker',

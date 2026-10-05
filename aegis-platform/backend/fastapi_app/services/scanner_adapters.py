@@ -172,9 +172,24 @@ def _run_controlled(
         raise
 
 
-def run_nmap(target: str, timeout: int = 300, state_getter: Callable[[], str] | None = None) -> ScanResult:
+def run_nmap(
+    target: str,
+    timeout: int = 300,
+    state_getter: Callable[[], str] | None = None,
+    *,
+    approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
+) -> ScanResult:
     host = validate_authorized_target(target)
-    require_authorized_target(host, resolve_dns=True)
+    if approved_target is None and not approved_addresses:
+        require_authorized_target(host, resolve_dns=True)
+    else:
+        require_authorized_target(
+            host,
+            resolve_dns=True,
+            approved_target=approved_target,
+            approved_addresses=approved_addresses,
+        )
     executable = shutil.which('nmap')
     if not executable:
         raise RuntimeError('Nmap is not installed on the worker')

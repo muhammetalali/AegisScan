@@ -190,14 +190,31 @@ def validate_native_options(spec: NativeToolSpec, options: dict[str, Any]) -> di
     return normalized
 
 
-def _validated_target(spec: NativeToolSpec, target: str) -> str:
+def _validated_target(
+    spec: NativeToolSpec,
+    target: str,
+    *,
+    approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
+) -> str:
     if spec.target_kind == 'url':
         value = validate_authorized_web_target(target)
-        require_authorized_target(value, url=True, resolve_dns=True)
+        require_authorized_target(
+            value,
+            url=True,
+            resolve_dns=True,
+            approved_target=approved_target,
+            approved_addresses=approved_addresses,
+        )
         return value
     if spec.target_kind in {'host', 'network'}:
         value = validate_authorized_target(target)
-        require_authorized_target(value, resolve_dns=True)
+        require_authorized_target(
+            value,
+            resolve_dns=True,
+            approved_target=approved_target,
+            approved_addresses=approved_addresses,
+        )
         return value
     if spec.target_kind == 'path':
         path = Path(target).expanduser().resolve()
@@ -212,11 +229,23 @@ def _validated_target(spec: NativeToolSpec, target: str) -> str:
     return value
 
 
-def build_native_argv(spec: NativeToolSpec, target: str, options: dict[str, Any]) -> tuple[list[str], str]:
+def build_native_argv(
+    spec: NativeToolSpec,
+    target: str,
+    options: dict[str, Any],
+    *,
+    approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
+) -> tuple[list[str], str]:
     executable = shutil.which(spec.binary)
     if not executable:
         raise RuntimeError(f'{spec.binary} is not installed on the scanner worker')
-    target = _validated_target(spec, target)
+    target = _validated_target(
+        spec,
+        target,
+        approved_target=approved_target,
+        approved_addresses=approved_addresses,
+    )
     normalized = validate_native_options(spec, options)
     if 'wordlist' in normalized and not Path(str(normalized['wordlist'])).is_file():
         raise ValueError('wordlist does not exist on the scanner worker')
@@ -425,10 +454,19 @@ def run_native_tool(
     state_getter: Callable[[], str] | None = None,
     poll_interval: float = 0.5,
     credential_materials: tuple[Mapping[str, Any], ...] | None = None,
+    *,
+    approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
 ) -> ScanResult:
     spec = get_native_tool_spec(capability_id)
     execution_timeout = effective_native_timeout(spec, options)
-    argv, canonical_target = build_native_argv(spec, target, options)
+    argv, canonical_target = build_native_argv(
+        spec,
+        target,
+        options,
+        approved_target=approved_target,
+        approved_addresses=approved_addresses,
+    )
     cleanup_paths: list[str] = []
     cleanup_dirs: list[str] = []
     captured_report_path: str | None = None

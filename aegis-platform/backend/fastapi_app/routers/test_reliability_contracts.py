@@ -6,7 +6,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.db import close_old_connections
 
-from django_project.assets.models import Asset, AssetRelationship
+from django_project.assets.models import Asset, AssetAuthorization, AssetRelationship
 from django_project.projects.models import Project
 from django_project.users.models import User
 from fastapi_app.core.dependencies import get_current_user as core_get_current_user
@@ -72,7 +72,7 @@ def test_scan_target_is_bound_to_authorized_asset_identity(monkeypatch):
     assert not project.scans.exists()
 
 
-def test_server_scope_is_required_even_for_authorized_asset(monkeypatch):
+def test_configuration_authorized_flag_does_not_replace_authoritative_decision(monkeypatch):
     from fastapi import HTTPException
     from fastapi_app.routers.scans import _create_scan, ScanCreate
 
@@ -102,6 +102,44 @@ def test_server_scope_is_required_even_for_authorized_asset(monkeypatch):
 
     assert exc.value.status_code == 403
     assert not project.scans.exists()
+
+
+def test_exact_bound_private_ip_authorization_allows_scan_without_static_allowlist(monkeypatch):
+    from fastapi_app.routers.scans import _create_scan, ScanCreate
+
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    user = User.objects.create_user(email='dynamic-private-scan@example.invalid', password='Strong-Test-Password-123!')
+    project = Project.objects.create(name='Dynamic Private Scan', slug='dynamic-private-scan', owner=user)
+    asset = Asset.objects.create(
+        project=project,
+        owner=user,
+        name='Exact private target',
+        slug='exact-private-target',
+        type=Asset.Type.IP_ADDRESS,
+        configuration={'ip': '10.40.0.10', 'authorized': True},
+    )
+    decision = AssetAuthorization.objects.create(
+        asset=asset,
+        actor=user,
+        authorized=True,
+        target_snapshot='10.40.0.10',
+        reason='exact governed private target',
+    )
+
+    scan, engines = async_to_sync(_create_scan)(
+        ScanCreate(
+            project_id=str(project.id),
+            name='exact private nmap',
+            scan_type='ip',
+            asset_id=str(asset.id),
+            engines=['nmap'],
+        ),
+        str(user.id),
+    )
+
+    assert engines == ['nmap']
+    assert scan.asset_id == asset.id
+    assert scan.authorization_decision_id == decision.id
 
 
 def test_attack_path_persistence_is_idempotent():

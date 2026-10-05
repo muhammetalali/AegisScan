@@ -58,6 +58,8 @@ def run_nmap_with_provider(
     authorization_ref: str,
     scope_ref: str,
     state_getter: Callable[[], str] | None,
+    approved_target: str | None = None,
+    approved_addresses: tuple[str, ...] = (),
 ) -> NmapExecutionResult:
     """Execute Nmap through the authoritative governed provider decision.
 
@@ -78,7 +80,12 @@ def run_nmap_with_provider(
 
     if decision.selected_provider == 'legacy':
         result = get_tool('nmap').run(
-            ToolRequest(target=target, authorized=True),
+            ToolRequest(
+                target=target,
+                authorized=True,
+                approved_target=approved_target,
+                approved_addresses=approved_addresses,
+            ),
             timeout=timeout_seconds,
             state_getter=state_getter,
         )

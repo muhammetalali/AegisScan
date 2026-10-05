@@ -37,3 +37,10 @@ def test_global_navigation_uses_assessment_entry_while_finding_validation_remain
     assert "/validations/new?finding_id=" in findings
     assert "/projects/${encodeURIComponent(selected.project_id)}/assess" in assets
     assert "/validations/new?asset_id=" not in assets
+
+
+def test_reports_use_canonical_collection_path_without_insecure_redirect() -> None:
+    reports = read("pages/reports/Reports.tsx")
+
+    assert "apiHelpers.get<Report[]>('/reports/?limit=100')" in reports
+    assert "apiHelpers.get<Report[]>('/reports?limit=100')" not in reports

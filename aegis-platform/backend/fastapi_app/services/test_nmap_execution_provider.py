@@ -16,6 +16,8 @@ class _LegacyTool:
         self.calls += 1
         assert request.target == '192.0.2.10'
         assert request.authorized is True
+        assert request.approved_target == '192.0.2.10'
+        assert request.approved_addresses == ('192.0.2.10',)
         assert timeout == 120
         assert state_getter() == 'running'
         return SimpleNamespace(
@@ -33,6 +35,8 @@ def _kwargs(routing_key: str = 'scan-1') -> dict:
         'authorization_ref': 'authorization-1',
         'scope_ref': 'project:p1:asset:a1',
         'state_getter': lambda: 'running',
+        'approved_target': '192.0.2.10',
+        'approved_addresses': ('192.0.2.10',),
     }
 
 
