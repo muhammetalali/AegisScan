@@ -345,3 +345,21 @@ def test_django_healthcheck_uses_configured_allowed_host_instead_of_localhost():
     assert "headers={'Host':h}" in script
     assert "127.0.0.1" in script
     assert "localhost:8000" not in script
+
+def test_file_acceptance_is_explicit_one_release_opt_in_with_production_finding_proof():
+    data = _workflow()
+    file_input = data["on"]["workflow_dispatch"]["inputs"]["file_acceptance"]
+    assert file_input["type"] == "boolean"
+    assert file_input["default"] is False
+
+    steps = data["jobs"]["deploy-and-accept"]["steps"]
+    e2e = next(
+        step for step in steps
+        if step.get("name") == "Run real internal-network black-box production E2E"
+    )
+    assert e2e["env"]["AEGIS_E2E_FILE_ACCEPTANCE"] == "${{ inputs.file_acceptance || false }}"
+    assert e2e["env"]["AEGIS_E2E_FILE_REQUIRE_FINDING"] == "${{ inputs.file_acceptance || false }}"
+
+    ci = (ROOT / ".github/workflows/external-black-box-e2e.yml").read_text(encoding="utf-8")
+    assert "AEGIS_E2E_FILE_ACCEPTANCE: 'true'" in ci
+    assert "AEGIS_E2E_FILE_REQUIRE_FINDING: 'false'" in ci

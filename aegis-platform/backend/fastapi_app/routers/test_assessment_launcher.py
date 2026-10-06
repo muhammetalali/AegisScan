@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from django_project.assets import signals as asset_signals
 from fastapi_app.routers import assessment_launcher as launcher
 from fastapi_app.services.dynamic_egress import DynamicEgressError, _non_global_network, authorize_dynamic_egress
 from fastapi_app.services.scanner_adapters import validate_code_target
@@ -161,3 +162,46 @@ def test_launcher_mode_overrides_global_governed_scope(monkeypatch):
     monkeypatch.setenv('AEGIS_SCAN_SCOPE_MODE', 'asset-authorization')
     monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'single-operator-lab')
     assert launcher._scope_mode() == 'single-operator-lab'
+
+def test_deleted_file_asset_cleanup_removes_only_managed_upload_bucket(tmp_path, monkeypatch):
+    root = tmp_path / "uploads"
+    bucket = root / ("a" * 32)
+    content = bucket / "content"
+    content.mkdir(parents=True)
+    source = content / "safe.py"
+    source.write_text("print('ok')\n", encoding="utf-8")
+    monkeypatch.setenv("AEGIS_SEMGREP_UPLOAD_ROOT", str(root))
+    instance = SimpleNamespace(type="file", configuration={"path": str(source)})
+
+    asset_signals.cleanup_managed_file_upload(sender=None, instance=instance)
+
+    assert not bucket.exists()
+    assert root.exists()
+
+
+def test_deleted_file_asset_cleanup_rejects_path_outside_managed_root(tmp_path, monkeypatch):
+    root = tmp_path / "uploads"
+    root.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("print('keep')\n", encoding="utf-8")
+    monkeypatch.setenv("AEGIS_SEMGREP_UPLOAD_ROOT", str(root))
+    instance = SimpleNamespace(type="file", configuration={"path": str(outside)})
+
+    asset_signals.cleanup_managed_file_upload(sender=None, instance=instance)
+
+    assert outside.exists()
+
+
+def test_deleted_file_asset_cleanup_rejects_unmanaged_bucket_name(tmp_path, monkeypatch):
+    root = tmp_path / "uploads"
+    bucket = root / "not-a-managed-upload"
+    content = bucket / "content"
+    content.mkdir(parents=True)
+    source = content / "safe.py"
+    source.write_text("print('keep')\n", encoding="utf-8")
+    monkeypatch.setenv("AEGIS_SEMGREP_UPLOAD_ROOT", str(root))
+    instance = SimpleNamespace(type="file", configuration={"path": str(source)})
+
+    asset_signals.cleanup_managed_file_upload(sender=None, instance=instance)
+
+    assert bucket.exists()

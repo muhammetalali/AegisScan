@@ -43,6 +43,8 @@ jobs:
       AEGIS_API_URL: http://nginx/api/v1
       AEGIS_E2E_TARGET: aegis-scan-target
       AEGIS_E2E_TIMEOUT: '600'
+      AEGIS_E2E_FILE_ACCEPTANCE: 'true'
+      AEGIS_E2E_FILE_REQUIRE_FINDING: 'false'
       AEGIS_E2E_EMAIL: e2e-operator@aegisscan.local
     steps:
       - uses: actions/checkout@v4

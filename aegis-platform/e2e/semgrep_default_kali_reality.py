@@ -17,7 +17,10 @@ from fastapi_app.services.kali_semgrep_provider import (
     semgrep_provider_decision,
 )
 from fastapi_app.services.semgrep_execution_provider import run_semgrep_with_provider
-from fastapi_app.services.semgrep_semantic_parity import compare_semgrep_semantics
+from fastapi_app.services.semgrep_semantic_parity import (
+    compare_semgrep_semantics,
+    normalize_semgrep_check_id,
+)
 from fastapi_app.tasks.advanced_scans import _semgrep_findings
 
 SOURCE = "/workspace/source"
@@ -89,10 +92,11 @@ def compare() -> None:
     lf = _semgrep_findings(legacy)
     cf = _semgrep_findings(candidate)
     assert len(lf) == len(cf) == 1, (lf, cf)
-    for field in ("check_id", "message", "severity", "path", "line"):
+    for field in ("message", "severity", "path", "line"):
         assert lf[0][field] == cf[0][field], (field, lf, cf)
+    assert normalize_semgrep_check_id(lf[0]["check_id"]) == normalize_semgrep_check_id(cf[0]["check_id"]), (lf, cf)
     assert lf[0]["path"] == cf[0]["path"] == "/workspace/source/app.py", (lf, cf)
-    assert lf[0]["check_id"].endswith("aegis.semgrep.parity.eval"), (lf, cf)
+    assert normalize_semgrep_check_id(lf[0]["check_id"]) == "aegis.semgrep.parity.eval", (lf, cf)
 
     (ARTIFACTS / "default-kali-semantic-parity.json").write_text(
         json.dumps(comparison, sort_keys=True, indent=2), encoding="utf-8"

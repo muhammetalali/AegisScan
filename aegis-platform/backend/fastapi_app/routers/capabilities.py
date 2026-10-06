@@ -73,7 +73,7 @@ class CapabilityExecutionRequest(BaseModel):
 def _asset_for_execution(asset_id: str, project_id: str, user_id: str):
     return (
         Asset.objects.select_related('project')
-        .filter(pk=asset_id, project_id=project_id)
+        .filter(pk=asset_id, project_id=project_id, is_active=True)
         .filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
         .distinct()
         .first()
@@ -137,7 +137,11 @@ def _create_native_scan(
                     )
                 return existing, False
 
-        asset = Asset.objects.select_for_update().filter(pk=asset_id, project=project).first()
+        asset = Asset.objects.select_for_update().filter(
+            pk=asset_id,
+            project=project,
+            is_active=True,
+        ).first()
         if asset is None:
             raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
         target = asset_target(asset)

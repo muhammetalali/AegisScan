@@ -404,7 +404,7 @@ def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]
             '--config',
             _semgrep_config(),
             '--json',
-            '--error',
+            '--no-rewrite-rule-ids',
             '--no-git-ignore',
             str(request['target']),
         ]

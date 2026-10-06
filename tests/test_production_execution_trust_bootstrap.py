@@ -125,6 +125,7 @@ def test_bootstrap_derives_all_active_provider_trust_before_env_commit(tmp_path:
     assert committed["AEGIS_MASSCAN_PROVIDER"] == "default-kali"
     assert committed["AEGIS_NUCLEI_PROVIDER"] == "default-kali"
     assert committed["AEGIS_SEMGREP_PROVIDER"] == "default-kali"
+    assert committed["AEGIS_CODE_SEMGREP_CONFIG"] == "/opt/aegis-semgrep-rules/aegis-production-baseline-v1.yml"
     assert committed["AEGIS_KALI_RECON_EXPECTED_BUILD_COMMIT"] == release_sha
     assert committed["AEGIS_KALI_NETWORK_EXPECTED_BUILD_COMMIT"] == release_sha
     assert committed["AEGIS_KALI_MASSCAN_EXPECTED_BUILD_COMMIT"] == release_sha

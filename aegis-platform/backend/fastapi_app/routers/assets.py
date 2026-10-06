@@ -151,6 +151,7 @@ async def delete_asset(asset_id: str,user=Depends(get_current_user)):
 async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='standard', user=Depends(get_current_user)):
     asset=await _get_asset(asset_id,str(user.get('user_id')))
     if not asset: raise HTTPException(status_code=404,detail='Asset not found')
+    if not asset.is_active: raise HTTPException(status_code=409,detail='Asset is inactive and cannot be scanned')
     config=asset.configuration or {}
     from .scans import ScanCreate,_create_scan,_attach_celery_task,run_masscan_scan,run_nmap_scan,run_nuclei_scan,run_semgrep_scan
     type_to_scan={'website':('url','nuclei'),'ip_address':('ip','nmap'),'domain':('ip','nmap'),'network_range':('network','masscan'),'source_code':('code','semgrep'),'repository':('code','semgrep'),'api_endpoint':('url','nuclei')}

@@ -16,7 +16,10 @@ from fastapi_app.services.kali_semgrep_provider import (
     semgrep_provider_decision,
 )
 from fastapi_app.services.semgrep_execution_provider import run_semgrep_with_provider
-from fastapi_app.services.semgrep_semantic_parity import compare_semgrep_semantics
+from fastapi_app.services.semgrep_semantic_parity import (
+    compare_semgrep_semantics,
+    normalize_semgrep_check_id,
+)
 from fastapi_app.tasks.advanced_scans import _semgrep_findings
 
 SOURCE = "/workspace/source"
@@ -57,7 +60,11 @@ def cohorts() -> None:
     assert candidate.routing["selected_provider"] == "kali", candidate.routing
     assert candidate.runtime["provider"] == "aegis-kali-code", candidate.runtime
     assert candidate.runtime["linux_privilege"]["allowed_capabilities"] == [], candidate.runtime
-    assert legacy.exit_code == candidate.exit_code, (legacy.exit_code, candidate.exit_code)
+    # Legacy Semgrep may return 1 for a successful scan that found issues because
+    # the retired path uses --error. The governed code provider intentionally
+    # treats findings as data, not execution failure, and therefore must return 0.
+    assert legacy.exit_code in {0, 1}, legacy.exit_code
+    assert candidate.exit_code == 0, candidate.exit_code
 
     comparison = compare_semgrep_semantics(legacy.stdout, candidate.stdout)
     assert comparison["equivalent"] is True, comparison
@@ -68,9 +75,9 @@ def cohorts() -> None:
     cf = _semgrep_findings(candidate.stdout)
     assert len(lf) == len(cf) == 1, (lf, cf)
     assert lf[0]["path"] == cf[0]["path"] == "/workspace/source/app.py", (lf, cf)
-    check_id = lf[0]["check_id"]
-    assert check_id == cf[0]["check_id"], (lf, cf)
-    assert check_id.endswith("aegis.semgrep.parity.eval"), (lf, cf)
+    check_id = normalize_semgrep_check_id(lf[0]["check_id"])
+    assert check_id == normalize_semgrep_check_id(cf[0]["check_id"]), (lf, cf)
+    assert check_id == "aegis.semgrep.parity.eval", (lf, cf)
 
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     (ARTIFACTS / "holdback.json").write_text(legacy.stdout, encoding="utf-8")
@@ -86,6 +93,12 @@ def cohorts() -> None:
                 "selected_routing": candidate.routing,
                 "holdback_routing": legacy.routing,
                 "selected_runtime": candidate.runtime,
+                "selected_exit_code": candidate.exit_code,
+                "holdback_exit_code": legacy.exit_code,
+                "finding_exit_contract": {
+                    "candidate_success": 0,
+                    "legacy_accepted": [0, 1],
+                },
             },
             sort_keys=True,
             indent=2,

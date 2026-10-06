@@ -86,6 +86,7 @@ POLICY_DEFAULTS = {
     "AEGIS_KALI_NUCLEI_CANARY_BPS": "0",
     "AEGIS_KALI_WEB_URL": "http://127.0.0.1:18770",
     "SEMGREP_CONFIG": "p/default",
+    "AEGIS_CODE_SEMGREP_CONFIG": "/opt/aegis-semgrep-rules/aegis-production-baseline-v1.yml",
     "AEGIS_SEMGREP_PROVIDER": "default-kali",
     "AEGIS_SEMGREP_LEGACY_DISABLED": "true",
     "AEGIS_KALI_SEMGREP_CANARY_BPS": "0",

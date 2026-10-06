@@ -1,10 +1,19 @@
 ARG AEGIS_CODE_BASE_IMAGE=aegis-kali:code
 FROM ${AEGIS_CODE_BASE_IMAGE}
+ENV AEGIS_CODE_SEMGREP_CONFIG=/opt/aegis-semgrep-rules/aegis-production-baseline-v1.yml
 USER root
 COPY runner/code_service.py /opt/aegis-runner/code_service.py
-RUN mkdir -p /var/lib/aegis-semgrep \
+COPY semgrep-rules/aegis-production-baseline-v1.yml /opt/aegis-semgrep-rules/aegis-production-baseline-v1.yml
+RUN mkdir -p /var/lib/aegis-semgrep /opt/aegis-semgrep-rules \
     && chown 10001:10001 /var/lib/aegis-semgrep \
-    && chmod 0700 /var/lib/aegis-semgrep
+    && chmod 0700 /var/lib/aegis-semgrep \
+    && chmod 0444 /opt/aegis-semgrep-rules/aegis-production-baseline-v1.yml \
+    && SEMGREP_SEND_METRICS=off SEMGREP_ENABLE_VERSION_CHECK=0 \
+       /opt/aegis-code-tools/bin/semgrep --json --no-rewrite-rule-ids --no-git-ignore \
+       --config /opt/aegis-semgrep-rules/aegis-production-baseline-v1.yml \
+       /opt/aegis-runner/code_service.py >/tmp/aegis-semgrep-baseline-build-proof.json \
+    && test -s /tmp/aegis-semgrep-baseline-build-proof.json \
+    && rm -f /tmp/aegis-semgrep-baseline-build-proof.json
 RUN chmod 0755 /opt/aegis-runner/code_service.py \
     && python3 -m py_compile /opt/aegis-runner/code_service.py \
     && python3 - <<'PY'

@@ -74,6 +74,8 @@ jobs:
               'deterministic_assignment':True,
               'zero_bps_rollback':'legacy',
               'selected_failure_fallback':False,
+              'candidate_finding_exit_code':0,
+              'legacy_finding_exit_codes':[0,1],
               'source_snapshot_max_files':20000,
               'source_snapshot_max_bytes':268435456,
               'source_symlinks_allowed':False,

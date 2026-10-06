@@ -12,6 +12,11 @@ name: Internal Production Deploy and Acceptance
         required: false
         type: boolean
         default: false
+      file_acceptance:
+        description: 'Run the one-release governed file upload and Semgrep production acceptance'
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -307,6 +312,8 @@ jobs:
         env:
           AEGIS_E2E_TIMEOUT: '900'
           AEGIS_VERIFY_TLS: 'true'
+          AEGIS_E2E_FILE_ACCEPTANCE: ${{ inputs.file_acceptance || false }}
+          AEGIS_E2E_FILE_REQUIRE_FINDING: ${{ inputs.file_acceptance || false }}
         run: |
           set -euo pipefail
           export AEGIS_BASE_URL="$AEGIS_LIVE_ORIGIN"
