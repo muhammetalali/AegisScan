@@ -703,7 +703,30 @@ def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, ob
     dns_readiness: dict[str, object] = {}
     build_attempt = 0
     for build_attempt in range(1, PRODUCTION_BUILD_ATTEMPTS + 1):
-        dns_readiness = _wait_for_registry_dns()
+        try:
+            dns_readiness = _wait_for_registry_dns()
+        except DeployError as exc:
+            if build_attempt >= PRODUCTION_BUILD_ATTEMPTS:
+                raise
+            print(
+                json.dumps(
+                    {
+                        "event": "production-build-retry",
+                        "schema": "aegisscan.production-build-retry.v1",
+                        "status": "retrying",
+                        "attempt": build_attempt,
+                        "max_attempts": PRODUCTION_BUILD_ATTEMPTS,
+                        "failure_stage": "registry-dns-readiness",
+                        "error": str(exc),
+                        "returncode": None,
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(PRODUCTION_BUILD_BACKOFF_SECONDS * build_attempt)
+            continue
         try:
             _run(
                 build_argv,
@@ -724,6 +747,7 @@ def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, ob
                         "status": "retrying",
                         "attempt": build_attempt,
                         "max_attempts": PRODUCTION_BUILD_ATTEMPTS,
+                        "failure_stage": "compose-build",
                         "returncode": getattr(exc, "returncode", None),
                     },
                     sort_keys=True,
