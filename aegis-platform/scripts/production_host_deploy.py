@@ -45,8 +45,9 @@ PRODUCTION_REGISTRY_DNS_NAMES = (
     "auth.docker.io",
     "ghcr.io",
 )
-PRODUCTION_DNS_ATTEMPTS = 6
+PRODUCTION_DNS_ATTEMPTS = 60
 PRODUCTION_DNS_BACKOFF_SECONDS = 3
+PRODUCTION_DNS_STABLE_SAMPLES = 5
 PRODUCTION_BUILD_ATTEMPTS = 2
 PRODUCTION_BUILD_BACKOFF_SECONDS = 10
 
@@ -664,37 +665,114 @@ def _validate_nginx_config(env_file: Path, deployment_env: dict[str, str]) -> No
     _run(argv, cwd=PLATFORM_DIR, env=deployment_env, capture=False, timeout=180)
 
 
+def _uplink_readiness(
+    *,
+    route_path: Path = Path("/proc/net/route"),
+    carrier_root: Path = Path("/sys/class/net"),
+) -> dict[str, object]:
+    try:
+        lines = route_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return {"status": "not-ready", "error": f"default route table unavailable: {exc}"}
+
+    candidates: list[tuple[int, str]] = []
+    for raw in lines[1:]:
+        fields = raw.split()
+        if len(fields) < 8 or fields[1] != "00000000" or fields[7] != "00000000":
+            continue
+        try:
+            flags = int(fields[3], 16)
+            metric = int(fields[6], 10)
+        except ValueError:
+            continue
+        interface = fields[0]
+        if not (flags & 0x1) or not re.fullmatch(r"[A-Za-z0-9_.:-]+", interface):
+            continue
+        candidates.append((metric, interface))
+
+    if not candidates:
+        return {"status": "not-ready", "error": "default route unavailable"}
+
+    metric, interface = min(candidates)
+    carrier_path = carrier_root / interface / "carrier"
+    try:
+        carrier = carrier_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return {
+            "status": "not-ready",
+            "interface": interface,
+            "error": f"carrier state unavailable: {exc}",
+        }
+    if carrier != "1":
+        return {
+            "status": "not-ready",
+            "interface": interface,
+            "metric": metric,
+            "carrier": carrier,
+            "error": "default-route carrier is down",
+        }
+    return {
+        "status": "ready",
+        "interface": interface,
+        "metric": metric,
+        "carrier": carrier,
+    }
+
+
 def _wait_for_registry_dns(
     *,
     names: tuple[str, ...] = PRODUCTION_REGISTRY_DNS_NAMES,
     attempts: int = PRODUCTION_DNS_ATTEMPTS,
     backoff_seconds: int = PRODUCTION_DNS_BACKOFF_SECONDS,
+    stable_samples: int = PRODUCTION_DNS_STABLE_SAMPLES,
 ) -> dict[str, object]:
     if attempts < 1:
         raise DeployError("production registry DNS attempts must be positive")
+    if stable_samples < 1 or stable_samples > attempts:
+        raise DeployError("production registry DNS stable samples must be between 1 and attempts")
+    if backoff_seconds < 0:
+        raise DeployError("production registry DNS backoff must be non-negative")
+
     last_errors: dict[str, str] = {}
+    consecutive_ready = 0
+    last_uplink: dict[str, object] = {}
     for attempt in range(1, attempts + 1):
         errors: dict[str, str] = {}
-        for name in names:
-            try:
-                answers = socket.getaddrinfo(name, 443, type=socket.SOCK_STREAM)
-            except OSError as exc:
-                errors[name] = str(exc)
-                continue
-            if not answers:
-                errors[name] = "resolver returned no addresses"
+        uplink = _uplink_readiness()
+        last_uplink = uplink
+        if uplink.get("status") != "ready":
+            errors["uplink"] = str(uplink.get("error") or "uplink is not ready")
+        else:
+            for name in names:
+                try:
+                    answers = socket.getaddrinfo(name, 443, type=socket.SOCK_STREAM)
+                except OSError as exc:
+                    errors[name] = str(exc)
+                    continue
+                if not answers:
+                    errors[name] = "resolver returned no addresses"
+
         if not errors:
-            return {
-                "status": "ready",
-                "attempt": attempt,
-                "names": list(names),
-            }
-        last_errors = errors
+            consecutive_ready += 1
+            if consecutive_ready >= stable_samples:
+                return {
+                    "status": "ready",
+                    "attempt": attempt,
+                    "names": list(names),
+                    "stable_samples": consecutive_ready,
+                    "uplink_interface": last_uplink.get("interface"),
+                }
+        else:
+            consecutive_ready = 0
+            last_errors = errors
+
         if attempt < attempts:
-            time.sleep(backoff_seconds * attempt)
+            time.sleep(backoff_seconds)
+
     raise DeployError(
-        "production registry DNS readiness failed after "
-        f"{attempts} attempts: {json.dumps(last_errors, sort_keys=True)}"
+        "production registry/uplink readiness failed after "
+        f"{attempts} attempts with {consecutive_ready}/{stable_samples} stable samples: "
+        f"{json.dumps(last_errors, sort_keys=True)}"
     )
 
 
