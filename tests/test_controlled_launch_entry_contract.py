@@ -62,3 +62,20 @@ def test_production_black_box_proves_governed_url_assessment_launcher() -> None:
     assert "f'{API_V1}/capabilities/web.httpx/execute'" in e2e
     assert "'Assessment Launcher URL web.httpx execution',{202}" in e2e
     assert "CONTROLLED_LAUNCH_URL_EXECUTION=PASS" in e2e
+
+def test_black_box_proves_governed_file_assessment_and_deactivation_guard() -> None:
+    e2e = (ROOT / "aegis-platform" / "e2e" / "external_black_box_e2e.py").read_text(encoding="utf-8")
+
+    assert "AEGIS_E2E_FILE_ACCEPTANCE" in e2e
+    assert "AEGIS_E2E_FILE_REQUIRE_FINDING" in e2e
+    assert "'Assessment Launcher file prepare',{201}" in e2e
+    assert "'code.semgrep'" in e2e
+    assert "CONTROLLED_LAUNCH_FILE_AUTH=AUTOMATIC" in e2e
+    assert "CONTROLLED_LAUNCH_FILE_AUTH=PENDING" in e2e
+    assert "CONTROLLED_LAUNCH_FILE_PREPARE=PASS" in e2e
+    assert "'Assessment Launcher file Semgrep execution',{202}" in e2e
+    assert "CONTROLLED_LAUNCH_FILE_EXECUTION=PASS" in e2e
+    assert "CONTROLLED_LAUNCH_FILE_FINDING=PASS" in e2e
+    assert "'Deactivate file assessment asset',{200}" in e2e
+    assert "'Reject inactive file assessment execution',{404}" in e2e
+    assert "CONTROLLED_LAUNCH_FILE_DEACTIVATION_GUARD=PASS" in e2e
