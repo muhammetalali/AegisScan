@@ -313,6 +313,18 @@ def test_external_black_box_proves_final_scanner_runtime_capabilities():
     assert 'expected 10001' in workflow
 
 
+def test_external_black_box_proves_authenticated_report_listing():
+    script = (
+        Path(__file__).parents[1] / 'aegis-platform/e2e/external_black_box_e2e.py'
+    ).read_text(encoding='utf-8')
+    assert "f'{API_V1}/reports/'" in script
+    assert "'Authenticated report listing',{200}" in script
+    assert "params={'project_id':project_id,'limit':100}" in script
+    assert "collection(reports_data,'Authenticated report listing')" in script
+    assert "REPORT_LISTING=PASS" in script
+    assert script.index("'Project creation',{201}") < script.index("'Authenticated report listing',{200}")
+
+
 def test_external_black_box_proves_shared_runtime_network_namespace():
     workflow = (
         Path(__file__).parents[1] / '.github/workflows/external-black-box-e2e.yml'
