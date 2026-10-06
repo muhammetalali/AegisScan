@@ -74,6 +74,7 @@ def main()->int:
  if CAPACITY_MODE: print('CAPACITY_ACTOR_AUTH=PREPROVISIONED_JWT')
  else: http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)
  project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20); project_id=project['id']
+ reports_data=http(session,'GET',f'{API_V1}/reports/','Authenticated report listing',{200},params={'project_id':project_id,'limit':100},timeout=20); collection(reports_data,'Authenticated report listing'); print('REPORT_LISTING=PASS')
  created_organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
  if not isinstance(created_organization,dict) or not created_organization.get('id'):raise RuntimeError(f'Tenant creation did not return id: {created_organization!r}')
  organization_id=E2E_GOV_ORG_ID or str(created_organization['id'])
