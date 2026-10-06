@@ -308,7 +308,7 @@ jobs:
 
       - name: Upload production resilience evidence
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/resilient-evidence-upload
         with:
           name: aegisscan-production-resilience-${{ env.RELEASE_SHA }}-${{ github.run_id }}
           path: |
@@ -319,7 +319,6 @@ jobs:
             /tmp/aegis-resilience/external-alert-delivery.json
             /tmp/aegis-resilience/alertmanager-metrics.txt
             /tmp/aegis-resilience/manifest.json
-          if-no-files-found: error
           retention-days: 90
 
       - name: Destroy ephemeral production secret material

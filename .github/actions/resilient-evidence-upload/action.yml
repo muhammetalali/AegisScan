@@ -1,0 +1,148 @@
+name: Resilient Evidence Upload
+description: Retry immutable evidence uploads across transient GitHub Actions transport resets.
+
+inputs:
+  name:
+    description: Artifact name.
+    required: true
+  path:
+    description: Newline-delimited file or directory paths to upload.
+    required: true
+  retention-days:
+    description: Artifact retention in days.
+    required: false
+    default: '90'
+  compression-level:
+    description: Zlib compression level from 0 through 9.
+    required: false
+    default: '6'
+
+outputs:
+  artifact-id:
+    description: GitHub artifact ID from the successful upload attempt.
+    value: ${{ steps.verify.outputs.artifact-id }}
+  artifact-url:
+    description: GitHub artifact URL from the successful upload attempt.
+    value: ${{ steps.verify.outputs.artifact-url }}
+  artifact-digest:
+    description: SHA-256 digest reported by upload-artifact.
+    value: ${{ steps.verify.outputs.artifact-digest }}
+  upload-attempt:
+    description: Successful bounded upload attempt number.
+    value: ${{ steps.verify.outputs.upload-attempt }}
+
+runs:
+  using: composite
+  steps:
+    - name: Upload evidence artifact (attempt 1)
+      id: upload_1
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        overwrite: true
+
+    - name: Back off after first artifact transport failure
+      if: steps.upload_1.outcome == 'failure'
+      shell: bash
+      run: sleep 10
+
+    - name: Upload evidence artifact (attempt 2)
+      id: upload_2
+      if: steps.upload_1.outcome == 'failure'
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        overwrite: true
+
+    - name: Back off after second artifact transport failure
+      if: steps.upload_1.outcome == 'failure' && steps.upload_2.outcome == 'failure'
+      shell: bash
+      run: sleep 30
+
+    - name: Upload evidence artifact (attempt 3)
+      id: upload_3
+      if: steps.upload_1.outcome == 'failure' && steps.upload_2.outcome == 'failure'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        overwrite: true
+
+    - name: Verify immutable evidence artifact upload
+      id: verify
+      shell: bash
+      env:
+        UPLOAD_1_OUTCOME: ${{ steps.upload_1.outcome }}
+        UPLOAD_1_ID: ${{ steps.upload_1.outputs.artifact-id }}
+        UPLOAD_1_URL: ${{ steps.upload_1.outputs.artifact-url }}
+        UPLOAD_1_DIGEST: ${{ steps.upload_1.outputs.artifact-digest }}
+        UPLOAD_2_OUTCOME: ${{ steps.upload_2.outcome }}
+        UPLOAD_2_ID: ${{ steps.upload_2.outputs.artifact-id }}
+        UPLOAD_2_URL: ${{ steps.upload_2.outputs.artifact-url }}
+        UPLOAD_2_DIGEST: ${{ steps.upload_2.outputs.artifact-digest }}
+        UPLOAD_3_OUTCOME: ${{ steps.upload_3.outcome }}
+        UPLOAD_3_ID: ${{ steps.upload_3.outputs.artifact-id }}
+        UPLOAD_3_URL: ${{ steps.upload_3.outputs.artifact-url }}
+        UPLOAD_3_DIGEST: ${{ steps.upload_3.outputs.artifact-digest }}
+      run: |
+        set -euo pipefail
+
+        attempt=''
+        artifact_id=''
+        artifact_url=''
+        artifact_digest=''
+
+        if [ "$UPLOAD_1_OUTCOME" = 'success' ]; then
+          attempt='1'
+          artifact_id="$UPLOAD_1_ID"
+          artifact_url="$UPLOAD_1_URL"
+          artifact_digest="$UPLOAD_1_DIGEST"
+        elif [ "$UPLOAD_2_OUTCOME" = 'success' ]; then
+          attempt='2'
+          artifact_id="$UPLOAD_2_ID"
+          artifact_url="$UPLOAD_2_URL"
+          artifact_digest="$UPLOAD_2_DIGEST"
+        elif [ "$UPLOAD_3_OUTCOME" = 'success' ]; then
+          attempt='3'
+          artifact_id="$UPLOAD_3_ID"
+          artifact_url="$UPLOAD_3_URL"
+          artifact_digest="$UPLOAD_3_DIGEST"
+        else
+          echo 'all bounded artifact upload attempts failed' >&2
+          exit 1
+        fi
+
+        case "$artifact_id" in
+          ''|*[!0-9]*) echo 'artifact upload returned an invalid artifact id' >&2; exit 1 ;;
+        esac
+        case "$artifact_digest" in
+          ''|*[!0-9a-f]*) echo 'artifact upload returned an invalid artifact digest' >&2; exit 1 ;;
+        esac
+        test "${#artifact_digest}" -eq 64
+        case "$artifact_url" in
+          https://github.com/*) ;;
+          *) echo 'artifact upload returned an invalid artifact URL' >&2; exit 1 ;;
+        esac
+
+        {
+          printf 'artifact-id=%s\n' "$artifact_id"
+          printf 'artifact-url=%s\n' "$artifact_url"
+          printf 'artifact-digest=%s\n' "$artifact_digest"
+          printf 'upload-attempt=%s\n' "$attempt"
+        } >> "$GITHUB_OUTPUT"
+
+        printf 'AEGISSCAN_EVIDENCE_UPLOAD=PASS attempt=%s artifact_id=%s digest=%s\n' \
+          "$attempt" "$artifact_id" "$artifact_digest"

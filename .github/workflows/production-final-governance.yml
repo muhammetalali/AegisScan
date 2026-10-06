@@ -319,7 +319,7 @@ jobs:
 
       - name: Upload final governance decision evidence
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/resilient-evidence-upload
         with:
           name: aegisscan-final-internal-governance-${{ env.RELEASE_SHA }}-${{ github.run_id }}
           path: |
@@ -330,7 +330,6 @@ jobs:
             ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/live-run.json
             ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/resilience-run.json
             ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/supply-chain-run.json
-          if-no-files-found: error
           retention-days: 90
 
       - name: Destroy local enterprise trust material
