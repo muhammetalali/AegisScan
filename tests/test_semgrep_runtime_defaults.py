@@ -10,6 +10,8 @@ DEFAULT_KALI_COMPOSE = Path("aegis-platform/docker-compose.semgrep-default-kali.
 TRUST_BOOTSTRAP = Path("aegis-platform/scripts/production_execution_trust_bootstrap.py")
 CODE_PROVIDER_DOCKERFILE = Path("aegis-platform/kali/Dockerfile.code-provider")
 PRODUCTION_BASELINE = Path("aegis-platform/kali/semgrep-rules/aegis-production-baseline-v1.yml")
+CANARY_REALITY = Path("aegis-platform/e2e/semgrep_canary_reality.py")
+CANARY_WORKFLOW = Path(".github/workflows/code-semgrep-canary-reality.yml")
 ADVANCED_SCANS = Path("aegis-platform/backend/fastapi_app/tasks/advanced_scans.py")
 
 
@@ -48,3 +50,16 @@ def test_semgrep_partial_execution_persists_stderr():
     )[1]
     assert "execution.error_message=result.stderr if result.exit_code!=0 else ''" in semgrep
     assert "'evidences_collected','error_message','result_data','updated_at'" in semgrep
+
+
+def test_semgrep_canary_normalizes_successful_finding_exit_codes():
+    reality = CANARY_REALITY.read_text(encoding="utf-8")
+    workflow = CANARY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "assert legacy.exit_code in {0, 1}" in reality
+    assert "assert candidate.exit_code == 0" in reality
+    assert "legacy.exit_code == candidate.exit_code" not in reality
+    assert '"candidate_success": 0' in reality
+    assert '"legacy_accepted": [0, 1]' in reality
+    assert "'candidate_finding_exit_code':0" in workflow
+    assert "'legacy_finding_exit_codes':[0,1]" in workflow

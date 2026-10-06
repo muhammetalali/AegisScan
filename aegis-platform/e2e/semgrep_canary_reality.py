@@ -57,7 +57,11 @@ def cohorts() -> None:
     assert candidate.routing["selected_provider"] == "kali", candidate.routing
     assert candidate.runtime["provider"] == "aegis-kali-code", candidate.runtime
     assert candidate.runtime["linux_privilege"]["allowed_capabilities"] == [], candidate.runtime
-    assert legacy.exit_code == candidate.exit_code, (legacy.exit_code, candidate.exit_code)
+    # Legacy Semgrep may return 1 for a successful scan that found issues because
+    # the retired path uses --error. The governed code provider intentionally
+    # treats findings as data, not execution failure, and therefore must return 0.
+    assert legacy.exit_code in {0, 1}, legacy.exit_code
+    assert candidate.exit_code == 0, candidate.exit_code
 
     comparison = compare_semgrep_semantics(legacy.stdout, candidate.stdout)
     assert comparison["equivalent"] is True, comparison
@@ -86,6 +90,12 @@ def cohorts() -> None:
                 "selected_routing": candidate.routing,
                 "holdback_routing": legacy.routing,
                 "selected_runtime": candidate.runtime,
+                "selected_exit_code": candidate.exit_code,
+                "holdback_exit_code": legacy.exit_code,
+                "finding_exit_contract": {
+                    "candidate_success": 0,
+                    "legacy_accepted": [0, 1],
+                },
             },
             sort_keys=True,
             indent=2,
