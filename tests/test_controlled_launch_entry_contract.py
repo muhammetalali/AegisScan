@@ -44,3 +44,16 @@ def test_reports_use_canonical_collection_path_without_insecure_redirect() -> No
 
     assert "apiHelpers.get<Report[]>('/reports/?limit=100')" in reports
     assert "apiHelpers.get<Report[]>('/reports?limit=100')" not in reports
+
+def test_production_black_box_proves_governed_url_assessment_launcher() -> None:
+    e2e = (ROOT / "aegis-platform" / "e2e" / "external_black_box_e2e.py").read_text(encoding="utf-8")
+
+    assert "'Assessment Launcher URL prepare',{201}" in e2e
+    assert "'mode':'url'" in e2e
+    assert "CONTROLLED_LAUNCH_URL_PREPARE=PASS" in e2e
+    assert "'Execute governed Assessment Launcher URL authorization',{200}" in e2e
+    assert "'Assessment Launcher URL authorized re-prepare',{201}" in e2e
+    assert "'web.httpx' not in launcher_caps" in e2e
+    assert "f'{API_V1}/capabilities/web.httpx/execute'" in e2e
+    assert "'Assessment Launcher URL web.httpx execution',{202}" in e2e
+    assert "CONTROLLED_LAUNCH_URL_EXECUTION=PASS" in e2e

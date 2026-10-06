@@ -87,6 +87,12 @@ def main()->int:
  if binding.get('organization_id')!=organization_id:raise RuntimeError(f'Project tenant binding did not persist: {binding!r}')
  grant=http(session,'POST',f'{API_V1}/assurance/governance/responsibilities/grants','Governed authorization responsibility grant',{200},json={'organization_id':organization_id,'membership_id':approver_membership_id,'responsibility':'authorization_approver','scope_kind':'project','project_id':project_id,'reason':'Independent CI asset authorization approval duty.','idempotency_key':f'e2e-authorization-responsibility-{unique}'},timeout=20)
  if grant.get('membership_id')!=approver_membership_id or grant.get('responsibility')!='authorization_approver':raise RuntimeError(f'Authorization responsibility grant did not persist: {grant!r}')
+ launcher_target=f'http://{TARGET}'
+ launcher_prepared=http(session,'POST',f'{API_V1}/assessment-launcher/prepare','Assessment Launcher URL prepare',{201},json={'project_id':project_id,'mode':'url','target':launcher_target,'depth':'quick'},timeout=20)
+ launcher_asset=launcher_prepared.get('asset') if isinstance(launcher_prepared,dict) else None; launcher_authorization=launcher_prepared.get('authorization') if isinstance(launcher_prepared,dict) else None; launcher_asset_id=launcher_asset.get('id') if isinstance(launcher_asset,dict) else None; launcher_request=launcher_authorization.get('request') if isinstance(launcher_authorization,dict) else None
+ if not launcher_asset_id or launcher_asset.get('type')!='website' or launcher_asset.get('target')!=launcher_target:raise RuntimeError(f'Assessment Launcher URL asset contract invalid: {launcher_prepared!r}')
+ if not isinstance(launcher_request,dict) or launcher_authorization.get('state')!='pending' or launcher_request.get('action_id')!='asset.authorization.approve':raise RuntimeError(f'Assessment Launcher URL authorization request invalid: {launcher_prepared!r}')
+ print('CONTROLLED_LAUNCH_URL_PREPARE=PASS')
  asset=http(session,'POST',f'{API_V1}/assets/','Nmap asset creation',{201},json={'project_id':project_id,'name':f'External Nmap target {unique}','type':'ip_address','description':'Real E2E target','environment':'development','criticality':'medium','configuration':{'host':TARGET},'tags':['e2e','nmap']},timeout=20); asset_id=asset.get('id') if isinstance(asset,dict) else None
  if not asset_id:raise RuntimeError(f'Asset creation did not return id: {asset!r}')
  proposal=http(session,'POST',f'{API_V1}/assets/{asset_id}/authorization','Submit governed Nmap authorization',{202},json={'authorized':True,'reason':'CI controlled real scanner target'},timeout=20)
@@ -97,6 +103,25 @@ def main()->int:
  approver_token=csrf(approver); approver_headers={'X-CSRFToken':approver_token,'Referer':f'{BASE_URL}/'}
  if CAPACITY_MODE: print('CAPACITY_APPROVER_AUTH=PREPROVISIONED_JWT')
  else: http(approver,'POST',f'{DJANGO_URL}/auth/login/','Governance approver login',{200},json={'email':approver_email,'password':approver_password},headers=approver_headers,timeout=20)
+ launcher_authorization_execution=http(approver,'POST',f'{API_V1}/assurance/governance/actions/execute','Execute governed Assessment Launcher URL authorization',{200},json={'action_id':'asset.authorization.approve','project_id':project_id,'entity_type':'asset','entity_id':launcher_asset_id,'expected_version':launcher_request['expected_version'],'idempotency_key':f'e2e-launcher-url-authorization-{unique}','request_id':launcher_request['request_id'],'parameters':launcher_request['parameters']},timeout=20)
+ launcher_authorization_result=launcher_authorization_execution.get('result') if isinstance(launcher_authorization_execution,dict) else None; launcher_authorization_decision_id=launcher_authorization_result.get('authorization_decision_id') if isinstance(launcher_authorization_result,dict) else None
+ if not launcher_authorization_decision_id or launcher_authorization_execution.get('request_id')!=launcher_request['request_id']:raise RuntimeError(f'Assessment Launcher URL authorization did not preserve governed lineage: {launcher_authorization_execution!r}')
+ launcher_ready=http(session,'POST',f'{API_V1}/assessment-launcher/prepare','Assessment Launcher URL authorized re-prepare',{201},json={'project_id':project_id,'mode':'url','target':launcher_target,'depth':'quick'},timeout=20)
+ launcher_ready_asset=launcher_ready.get('asset') if isinstance(launcher_ready,dict) else None; launcher_ready_authorization=launcher_ready.get('authorization') if isinstance(launcher_ready,dict) else None; launcher_caps=launcher_ready.get('recommended_capabilities') if isinstance(launcher_ready,dict) else None
+ if not isinstance(launcher_ready_asset,dict) or launcher_ready_asset.get('id')!=launcher_asset_id or launcher_ready_asset.get('created') is not False:raise RuntimeError(f'Assessment Launcher did not reuse the governed URL asset: {launcher_ready!r}')
+ if not isinstance(launcher_ready_authorization,dict) or launcher_ready_authorization.get('state')!='authorized' or str(launcher_ready_authorization.get('id'))!=str(launcher_authorization_decision_id):raise RuntimeError(f'Assessment Launcher URL authorization was not durable: {launcher_ready!r}')
+ if not isinstance(launcher_caps,list) or 'web.httpx' not in launcher_caps:raise RuntimeError(f'Assessment Launcher URL plan omitted web.httpx: {launcher_ready!r}')
+ launcher_execution=http(session,'POST',f'{API_V1}/capabilities/web.httpx/execute','Assessment Launcher URL web.httpx execution',{202},json={'project_id':project_id,'asset_id':launcher_asset_id,'depth':'quick','options':{},'credential_refs':[],'idempotency_key':f'e2e-launcher-url-{unique}','correlation_id':f'e2e-launcher-url-corr-{unique}'},timeout=20)
+ launcher_scan=launcher_execution.get('scan') if isinstance(launcher_execution,dict) and isinstance(launcher_execution.get('scan'),dict) else {}; launcher_scan_id=launcher_scan.get('id')
+ if not launcher_scan_id:raise RuntimeError(f'Assessment Launcher URL execution returned no Scan id: {launcher_execution!r}')
+ launcher_deadline=time.monotonic()+TIMEOUT; launcher_last={}
+ while time.monotonic()<launcher_deadline:
+  launcher_last=http(session,'GET',f'{API_V1}/scans/{launcher_scan_id}','Assessment Launcher URL scan polling',{200},timeout=20)
+  if isinstance(launcher_last,dict) and launcher_last.get('status') in {'completed','failed','cancelled','partial'}:break
+  time.sleep(2)
+ else:raise RuntimeError(f'Assessment Launcher URL scan timed out after {TIMEOUT}s; last state={launcher_last}')
+ if not isinstance(launcher_last,dict) or launcher_last.get('status')!='completed':raise RuntimeError(f'Assessment Launcher URL web.httpx scan did not complete successfully: {launcher_last!r}')
+ print('CONTROLLED_LAUNCH_URL_EXECUTION=PASS'); print(f'controlled_launch_url_scan_id={launcher_scan_id}'); print(f'controlled_launch_url_authorization_decision_id={launcher_authorization_decision_id}')
  authorization_execution=http(approver,'POST',f'{API_V1}/assurance/governance/actions/execute','Execute governed Nmap authorization',{200},json={'action_id':'asset.authorization.approve','project_id':project_id,'entity_type':'asset','entity_id':asset_id,'expected_version':governed_request['expected_version'],'idempotency_key':f'e2e-authorization-execute-{unique}','request_id':governed_request['request_id'],'parameters':governed_request['parameters']},timeout=20)
  authorization_result=authorization_execution.get('result') if isinstance(authorization_execution,dict) else None
  authorization_decision_id=authorization_result.get('authorization_decision_id') if isinstance(authorization_result,dict) else None
