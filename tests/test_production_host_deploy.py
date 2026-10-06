@@ -1210,3 +1210,72 @@ def test_legacy_alert_delivery_network_with_live_endpoints_is_preserved(monkeypa
         deploy._retire_legacy_alert_delivery_network()
 
     assert not any(argv[1:3] == ["network", "rm"] for argv in calls)
+
+
+def test_build_stack_retries_registry_dns_readiness_before_build(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    readiness_calls = []
+    build_calls = []
+    sleeps = []
+
+    monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
+    monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
+    monkeypatch.setattr(deploy, "_post_build_storage", lambda _stage: {"status": "success"})
+    monkeypatch.setattr(deploy, "_validate_nginx_config", lambda *_args: None)
+
+    def readiness():
+        readiness_calls.append(True)
+        if len(readiness_calls) == 1:
+            raise deploy.DeployError("production registry DNS readiness failed after 6 attempts")
+        return {"status": "ready", "attempt": 1, "names": ["registry-1.docker.io"]}
+
+    monkeypatch.setattr(deploy, "_wait_for_registry_dns", readiness)
+    monkeypatch.setattr(
+        deploy,
+        "_run",
+        lambda argv, **_kwargs: build_calls.append(list(argv)) or SimpleNamespace(stdout=""),
+    )
+
+    result = deploy._build_stack(env_file, {})
+
+    assert len(readiness_calls) == 2
+    assert build_calls == [["docker", "compose", "build", "--pull"]]
+    assert sleeps == [deploy.PRODUCTION_BUILD_BACKOFF_SECONDS]
+    assert result["build_attempts"] == 2
+    assert result["registry_dns_readiness"]["status"] == "ready"
+
+
+def test_build_stack_fails_closed_after_bounded_registry_dns_failures(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    readiness_calls = []
+    sleeps = []
+
+    monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
+    monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        deploy,
+        "_post_build_storage",
+        lambda _stage: pytest.fail("storage checkpoint must not run after DNS failure"),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_validate_nginx_config",
+        lambda *_args: pytest.fail("nginx validation must not run after DNS failure"),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_run",
+        lambda *_args, **_kwargs: pytest.fail("compose build must not start without registry DNS"),
+    )
+
+    def readiness():
+        readiness_calls.append(True)
+        raise deploy.DeployError("production registry DNS readiness failed after 6 attempts")
+
+    monkeypatch.setattr(deploy, "_wait_for_registry_dns", readiness)
+
+    with pytest.raises(deploy.DeployError, match="registry DNS readiness failed"):
+        deploy._build_stack(env_file, {})
+
+    assert len(readiness_calls) == deploy.PRODUCTION_BUILD_ATTEMPTS
+    assert sleeps == [deploy.PRODUCTION_BUILD_BACKOFF_SECONDS]
