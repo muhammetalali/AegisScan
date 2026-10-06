@@ -306,8 +306,10 @@ jobs:
             fi
           done
 
-      - name: Upload production resilience evidence
+      - name: Upload production resilience evidence (attempt 1)
+        id: resilience_upload_1
         if: success()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: aegisscan-production-resilience-${{ env.RELEASE_SHA }}-${{ github.run_id }}
@@ -321,6 +323,54 @@ jobs:
             /tmp/aegis-resilience/manifest.json
           if-no-files-found: error
           retention-days: 90
+          overwrite: true
+
+      - name: Back off before resilience evidence upload retry 2
+        if: steps.resilience_upload_1.outcome == 'failure'
+        shell: bash
+        run: sleep 10
+
+      - name: Upload production resilience evidence (attempt 2)
+        id: resilience_upload_2
+        if: steps.resilience_upload_1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-production-resilience-${{ env.RELEASE_SHA }}-${{ github.run_id }}
+          path: |
+            /tmp/aegis-resilience/remote-backup.json
+            /tmp/aegis-resilience/remote-restore.json
+            /tmp/aegis-resilience/service-recovery.json
+            /tmp/aegis-resilience/postgres-restore.txt
+            /tmp/aegis-resilience/external-alert-delivery.json
+            /tmp/aegis-resilience/alertmanager-metrics.txt
+            /tmp/aegis-resilience/manifest.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+      - name: Back off before resilience evidence upload retry 3
+        if: steps.resilience_upload_2.outcome == 'failure'
+        shell: bash
+        run: sleep 30
+
+      - name: Upload production resilience evidence (attempt 3)
+        id: resilience_upload_3
+        if: steps.resilience_upload_2.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisscan-production-resilience-${{ env.RELEASE_SHA }}-${{ github.run_id }}
+          path: |
+            /tmp/aegis-resilience/remote-backup.json
+            /tmp/aegis-resilience/remote-restore.json
+            /tmp/aegis-resilience/service-recovery.json
+            /tmp/aegis-resilience/postgres-restore.txt
+            /tmp/aegis-resilience/external-alert-delivery.json
+            /tmp/aegis-resilience/alertmanager-metrics.txt
+            /tmp/aegis-resilience/manifest.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
 
       - name: Destroy ephemeral production secret material
         if: always()

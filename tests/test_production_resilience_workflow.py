@@ -139,3 +139,43 @@ def test_restore_evidence_preserves_its_declared_schema_and_status(tmp_path, mon
     assert record['status'] == 'restored-and-verified-on-production-host'
     assert record['source_sha256'] == verification['source_sha256']
     assert record['postgres_restore_verified'] is True
+
+def test_resilience_evidence_upload_retries_transient_artifact_service_failures_fail_closed():
+    steps = _workflow()['jobs']['resilience-acceptance']['steps']
+    names = [step.get('name') for step in steps]
+    attempt_names = [
+        'Upload production resilience evidence (attempt 1)',
+        'Upload production resilience evidence (attempt 2)',
+        'Upload production resilience evidence (attempt 3)',
+    ]
+    attempts = [next(step for step in steps if step.get('name') == name) for name in attempt_names]
+    first, second, third = attempts
+
+    assert names.index(attempt_names[0]) < names.index(attempt_names[1]) < names.index(attempt_names[2])
+    assert all(step['uses'] == 'actions/upload-artifact@v4' for step in attempts)
+    assert first['id'] == 'resilience_upload_1'
+    assert second['id'] == 'resilience_upload_2'
+    assert third['id'] == 'resilience_upload_3'
+    assert first['continue-on-error'] is True
+    assert second['continue-on-error'] is True
+    assert 'continue-on-error' not in third
+
+    expected_name = 'aegisscan-production-resilience-${{ env.RELEASE_SHA }}-${{ github.run_id }}'
+    assert all(step['with']['name'] == expected_name for step in attempts)
+    assert all(step['with']['overwrite'] is True for step in attempts)
+    assert all(step['with']['if-no-files-found'] == 'error' for step in attempts)
+    assert all(step['with']['retention-days'] == 90 for step in attempts)
+
+    assert first['if'] == 'success()'
+    assert second['if'] == "steps.resilience_upload_1.outcome == 'failure'"
+    assert third['if'] == "steps.resilience_upload_2.outcome == 'failure'"
+
+    retry2 = next(step for step in steps if step.get('name') == 'Back off before resilience evidence upload retry 2')
+    retry3 = next(step for step in steps if step.get('name') == 'Back off before resilience evidence upload retry 3')
+    assert retry2['if'] == "steps.resilience_upload_1.outcome == 'failure'"
+    assert retry3['if'] == "steps.resilience_upload_2.outcome == 'failure'"
+    assert retry2['run'] == 'sleep 10'
+    assert retry3['run'] == 'sleep 30'
+
+    cleanup = names.index('Destroy ephemeral production secret material')
+    assert names.index(attempt_names[2]) < cleanup
