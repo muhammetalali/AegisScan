@@ -25,6 +25,8 @@ class GovernedCodeProviderContractTests(unittest.TestCase):
         self.assertIn("semantic-code-provider", source)
         self.assertIn("shell=False", source)
         self.assertNotIn("shell=True", source)
+        self.assertIn("'--no-rewrite-rule-ids'", source)
+        self.assertNotIn("'--error'", source)
 
     def test_source_entry_rejects_escape_and_absolute_paths(self) -> None:
         for value in ("../outside", "/etc/passwd", "a/../../b"):
