@@ -33,6 +33,7 @@ from fastapi_app.routers.reports import (
     _list_report_schedule_executions,
     _list_report_recipient_deliveries,
     _update_report_schedule,
+    list_reports,
     download_report,
     download_shared_report,
     router,
@@ -107,6 +108,35 @@ def test_report_schedule_listing_is_user_and_project_scoped(report_projects):
     assert len(rows) == 1
     assert rows[0].project_id == project.id
     assert rows[0].created_by_id == owner.id
+
+
+@pytest.mark.django_db
+def test_report_listing_evaluates_queryset_outside_async_context(report_projects):
+    owner, _, project, _ = report_projects
+    report = DataExport.objects.create(
+        user=owner,
+        name="Async-safe report listing",
+        format="json",
+        status=DataExport.Status.COMPLETED,
+        resource_type="project_report",
+        filters={"project_id": str(project.id), "report_type": "full"},
+        fields=[],
+        expires_at=django_timezone.now() + timedelta(days=1),
+        completed_at=django_timezone.now(),
+    )
+
+    rows = async_to_sync(list_reports)(
+        project_id=str(project.id),
+        report_type="full",
+        status=DataExport.Status.COMPLETED,
+        limit=100,
+        offset=0,
+        current_user={"user_id": str(owner.id)},
+    )
+
+    assert [row.id for row in rows] == [str(report.id)]
+    assert rows[0].project_id == str(project.id)
+    assert rows[0].status == DataExport.Status.COMPLETED
 
 
 @pytest.mark.parametrize("path", ["/schedules", "/templates"])
