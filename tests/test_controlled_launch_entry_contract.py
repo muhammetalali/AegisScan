@@ -48,8 +48,13 @@ def test_reports_use_canonical_collection_path_without_insecure_redirect() -> No
 def test_production_black_box_proves_governed_url_assessment_launcher() -> None:
     e2e = (ROOT / "aegis-platform" / "e2e" / "external_black_box_e2e.py").read_text(encoding="utf-8")
 
+    assert "if not CAPACITY_MODE:" in e2e
     assert "'Assessment Launcher URL prepare',{201}" in e2e
     assert "'mode':'url'" in e2e
+    assert "launcher_scope_mode=='single-operator-lab'" in e2e
+    assert "CONTROLLED_LAUNCH_URL_AUTH=AUTOMATIC" in e2e
+    assert "launcher_scope_mode=='asset-authorization'" in e2e
+    assert "CONTROLLED_LAUNCH_URL_AUTH=PENDING" in e2e
     assert "CONTROLLED_LAUNCH_URL_PREPARE=PASS" in e2e
     assert "'Execute governed Assessment Launcher URL authorization',{200}" in e2e
     assert "'Assessment Launcher URL authorized re-prepare',{201}" in e2e
