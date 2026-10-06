@@ -177,3 +177,18 @@ def test_client_cannot_supply_authorization_or_methodology_authority(governed_ex
     assert response.status_code == 422
     assert dispatches == []
     assert Scan.objects.filter(project=project).count() == 0
+
+def test_inactive_asset_cannot_execute_governed_capability(governed_execution_fixture):
+    client, _user, project, asset, _authorization, dispatches = governed_execution_fixture
+    asset.is_active = False
+    asset.save(update_fields=['is_active', 'updated_at'])
+
+    response = client.post(
+        '/api/v1/capabilities/web.http-method-policy/execute',
+        json=_payload(project, asset),
+    )
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Asset not found or inaccessible'
+    assert dispatches == []
+    assert Scan.objects.filter(project=project).count() == 0

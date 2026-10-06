@@ -8,7 +8,7 @@ import pytest
 from django.db import connections
 from fastapi.testclient import TestClient
 
-from django_project.assets.models import Asset
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import User
@@ -42,8 +42,15 @@ def api_fixture(transactional_db, monkeypatch):
         name="aegis-scan-target",
         slug="aegis-scan-target",
         type=Asset.Type.IP_ADDRESS,
-        configuration={"host": "aegis-scan-target", "authorized": True},
+        configuration={"host": "aegis-scan-target"},
         owner=user,
+    )
+    AssetAuthorization.objects.create(
+        asset=asset,
+        actor=user,
+        authorized=True,
+        target_snapshot="aegis-scan-target",
+        reason="scan route contract fixture",
     )
 
     app.dependency_overrides[core_dependencies.get_current_user] = lambda: {
@@ -55,6 +62,7 @@ def api_fixture(transactional_db, monkeypatch):
         return SimpleNamespace(id=f"test-task-{scan_id}")
 
     monkeypatch.setattr(scans_router.run_nmap_scan, "delay", fake_delay)
+    monkeypatch.setattr(scans_router, "require_authorized_target", lambda target, **_kwargs: target)
 
     client = TestClient(app)
     with client:
@@ -66,9 +74,10 @@ def api_fixture(transactional_db, monkeypatch):
             app.dependency_overrides.clear()
 
 
-def _body(project_id: str) -> dict:
+def _body(project_id: str, asset_id: str) -> dict:
     return {
         "project_id": str(project_id),
+        "asset_id": str(asset_id),
         "name": "Repeat Target Scan",
         "scan_type": "network",
         "engines": ["nmap"],
@@ -81,7 +90,7 @@ def _body(project_id: str) -> dict:
 def test_create_scan_reuses_existing_authorized_asset(api_fixture):
     client, _, project, asset = api_fixture
 
-    response = client.post("/scans/", json=_body(project.id))
+    response = client.post("/scans/", json=_body(project.id, asset.id))
 
     assert response.status_code == 201
     payload = response.json()
@@ -91,14 +100,25 @@ def test_create_scan_reuses_existing_authorized_asset(api_fixture):
     assert Asset.objects.filter(project=project, slug="aegis-scan-target").count() == 1
 
 
-def test_create_scan_rejects_slug_collision_with_different_identity(api_fixture):
-    client, _, project, _ = api_fixture
-    conflicting = Asset.objects.get(project=project, slug="aegis-scan-target")
-    conflicting.configuration = {"host": "different-target", "authorized": True}
-    conflicting.save(update_fields=["configuration"])
+def test_create_scan_rejects_authorized_target_drift(api_fixture):
+    client, _, project, asset = api_fixture
+    asset.configuration = {"host": "different-target"}
+    asset.save(update_fields=["configuration"])
 
-    response = client.post("/scans/", json=_body(project.id))
+    response = client.post("/scans/", json=_body(project.id, asset.id))
 
     assert response.status_code == 409
-    assert "different identity" in response.json()["detail"]
+    assert "exactly match the authorized asset target" in response.json()["detail"]
+    assert Scan.objects.filter(project=project).count() == 0
+
+
+def test_inactive_asset_legacy_scan_route_rejects_before_dispatch(api_fixture):
+    client, _, project, asset = api_fixture
+    asset.is_active = False
+    asset.save(update_fields=["is_active", "updated_at"])
+
+    response = client.post(f"/api/v1/assets/{asset.id}/scan")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Asset is inactive and cannot be scanned"
     assert Scan.objects.filter(project=project).count() == 0
