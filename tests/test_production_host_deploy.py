@@ -692,9 +692,52 @@ def test_storage_floor_accepts_exact_minimum(monkeypatch):
     assert deploy._assert_storage_floor("application-image-build") == 60 * deploy.GIB
 
 
+def test_uplink_readiness_uses_lowest_metric_live_default_route(tmp_path):
+    route = tmp_path / "route"
+    route.write_text(
+        "Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\n"
+        "ens34 00000000 0201A8C0 0003 0 0 200 00000000 0 0 0\n"
+        "ens33 00000000 0201A8C0 0003 0 0 100 00000000 0 0 0\n",
+        encoding="utf-8",
+    )
+    carrier_root = tmp_path / "net"
+    for interface in ("ens33", "ens34"):
+        path = carrier_root / interface
+        path.mkdir(parents=True)
+        (path / "carrier").write_text("1\n", encoding="utf-8")
+
+    result = deploy._uplink_readiness(route_path=route, carrier_root=carrier_root)
+
+    assert result == {"status": "ready", "interface": "ens33", "metric": 100, "carrier": "1"}
+
+
+def test_uplink_readiness_rejects_down_default_route_carrier(tmp_path):
+    route = tmp_path / "route"
+    route.write_text(
+        "Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\n"
+        "ens33 00000000 0201A8C0 0003 0 0 100 00000000 0 0 0\n",
+        encoding="utf-8",
+    )
+    carrier = tmp_path / "net" / "ens33"
+    carrier.mkdir(parents=True)
+    (carrier / "carrier").write_text("0\n", encoding="utf-8")
+
+    result = deploy._uplink_readiness(route_path=route, carrier_root=tmp_path / "net")
+
+    assert result["status"] == "not-ready"
+    assert result["interface"] == "ens33"
+    assert result["carrier"] == "0"
+    assert result["error"] == "default-route carrier is down"
+
+
 def test_registry_dns_readiness_retries_until_all_names_resolve(monkeypatch):
     calls = {"count": 0}
     sleeps = []
+    monkeypatch.setattr(
+        deploy,
+        "_uplink_readiness",
+        lambda: {"status": "ready", "interface": "ens33", "metric": 100, "carrier": "1"},
+    )
 
     def resolve(*_args, **_kwargs):
         calls["count"] += 1
@@ -709,14 +752,63 @@ def test_registry_dns_readiness_retries_until_all_names_resolve(monkeypatch):
         names=("registry.example",),
         attempts=3,
         backoff_seconds=2,
+        stable_samples=1,
     )
 
-    assert result == {"status": "ready", "attempt": 3, "names": ["registry.example"]}
-    assert sleeps == [2, 4]
+    assert result == {
+        "status": "ready",
+        "attempt": 3,
+        "names": ["registry.example"],
+        "stable_samples": 1,
+        "uplink_interface": "ens33",
+    }
+    assert sleeps == [2, 2]
+
+
+def test_registry_dns_readiness_requires_consecutive_uplink_stability(monkeypatch):
+    sleeps = []
+    states = iter(
+        [
+            {"status": "not-ready", "interface": "ens33", "error": "default-route carrier is down"},
+            {"status": "ready", "interface": "ens33", "metric": 100, "carrier": "1"},
+            {"status": "ready", "interface": "ens33", "metric": 100, "carrier": "1"},
+            {"status": "not-ready", "interface": "ens33", "error": "default-route carrier is down"},
+            {"status": "ready", "interface": "ens33", "metric": 100, "carrier": "1"},
+            {"status": "ready", "interface": "ens33", "metric": 100, "carrier": "1"},
+            {"status": "ready", "interface": "ens33", "metric": 100, "carrier": "1"},
+        ]
+    )
+    monkeypatch.setattr(deploy, "_uplink_readiness", lambda: next(states))
+    monkeypatch.setattr(
+        deploy.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (deploy.socket.AF_INET, deploy.socket.SOCK_STREAM, 6, "", ("203.0.113.10", 443))
+        ],
+    )
+    monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
+
+    result = deploy._wait_for_registry_dns(
+        names=("registry.example",),
+        attempts=7,
+        backoff_seconds=1,
+        stable_samples=3,
+    )
+
+    assert result["status"] == "ready"
+    assert result["attempt"] == 7
+    assert result["stable_samples"] == 3
+    assert result["uplink_interface"] == "ens33"
+    assert sleeps == [1, 1, 1, 1, 1, 1]
 
 
 def test_registry_dns_readiness_fails_closed_before_build(monkeypatch):
     sleeps = []
+    monkeypatch.setattr(
+        deploy,
+        "_uplink_readiness",
+        lambda: {"status": "ready", "interface": "ens33", "metric": 100, "carrier": "1"},
+    )
     monkeypatch.setattr(
         deploy.socket,
         "getaddrinfo",
@@ -724,11 +816,12 @@ def test_registry_dns_readiness_fails_closed_before_build(monkeypatch):
     )
     monkeypatch.setattr(deploy.time, "sleep", sleeps.append)
 
-    with pytest.raises(deploy.DeployError, match="registry DNS readiness failed after 2 attempts"):
+    with pytest.raises(deploy.DeployError, match="registry/uplink readiness failed after 2 attempts"):
         deploy._wait_for_registry_dns(
             names=("registry-1.docker.io",),
             attempts=2,
             backoff_seconds=1,
+            stable_samples=1,
         )
 
     assert sleeps == [1]
@@ -807,6 +900,11 @@ def test_build_stack_stops_after_bounded_failed_attempts(tmp_path, monkeypatch):
 
 
 def test_production_28_capacity_recovers_before_start_without_pruning_images_or_volumes(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        deploy,
+        "_wait_for_registry_dns",
+        lambda: {"status": "ready", "attempt": 1, "names": ["registry-1.docker.io"]},
+    )
     free = {"value": 87996936192}
     calls = []
     monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: free["value"])
@@ -909,6 +1007,11 @@ def test_validate_nginx_config_uses_isolated_docker_run(tmp_path: Path, monkeypa
 
 
 def test_unrecoverable_build_capacity_does_not_start_services(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        deploy,
+        "_wait_for_registry_dns",
+        lambda: {"status": "ready", "attempt": 1, "names": ["registry-1.docker.io"]},
+    )
     monkeypatch.setattr(deploy, "_free_bytes", lambda path=deploy.PLATFORM_DIR: 63833497600)
     monkeypatch.setattr(deploy, "_docker_df", lambda: "storage-summary")
     calls = []
@@ -1069,6 +1172,11 @@ def test_post_build_storage_reclaim_remains_fail_closed_when_cache_is_insufficie
 
 
 def test_deploy_stack_recovers_post_build_floor_before_service_mutation(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        deploy,
+        "_wait_for_registry_dns",
+        lambda: {"status": "ready", "attempt": 1, "names": ["registry-1.docker.io"]},
+    )
     env_file = _env_file(tmp_path)
     events = []
 
@@ -1103,6 +1211,11 @@ def test_deploy_stack_recovers_post_build_floor_before_service_mutation(tmp_path
 
 
 def test_invalid_gateway_config_stops_build_boundary_before_service_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        deploy,
+        "_wait_for_registry_dns",
+        lambda: {"status": "ready", "attempt": 1, "names": ["registry-1.docker.io"]},
+    )
     calls = []
     monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
     monkeypatch.setattr(deploy, "_post_build_storage", lambda _stage: {"status": "success"})
