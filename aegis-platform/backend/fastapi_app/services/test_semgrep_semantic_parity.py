@@ -59,5 +59,33 @@ class SemgrepSemanticParityTests(unittest.TestCase):
         self.assertEqual(normalized["observations"], [])
 
 
+    def test_known_legacy_rule_path_prefix_is_normalized(self) -> None:
+        legacy_payload = json.loads(_payload())
+        legacy_payload["results"][0]["check_id"] = (
+            "opt.aegis-semgrep-rules.aegis.semgrep.parity.eval"
+        )
+        comparison = compare_semgrep_semantics(
+            json.dumps(legacy_payload),
+            _payload(),
+        )
+        self.assertTrue(comparison["equivalent"], comparison)
+        self.assertEqual(
+            comparison["legacy"]["observations"][0]["check_id"],
+            "aegis.semgrep.parity.eval",
+        )
+
+    def test_unrelated_rule_prefix_is_not_normalized(self) -> None:
+        legacy_payload = json.loads(_payload())
+        legacy_payload["results"][0]["check_id"] = (
+            "vendor.rules.aegis.semgrep.parity.eval"
+        )
+        comparison = compare_semgrep_semantics(
+            json.dumps(legacy_payload),
+            _payload(),
+        )
+        self.assertFalse(comparison["equivalent"])
+        self.assertIn("finding_semantics", comparison["mismatches"])
+
+
 if __name__ == "__main__":
     unittest.main()

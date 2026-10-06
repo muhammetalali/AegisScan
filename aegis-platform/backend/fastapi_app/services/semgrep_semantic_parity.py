@@ -9,6 +9,17 @@ _SEVERITY_MAP = {
     "warning": "medium",
     "info": "info",
 }
+_LEGACY_RULE_ID_PREFIXES = (
+    "opt.aegis-semgrep-rules.",
+)
+
+
+def normalize_semgrep_check_id(value: object) -> str:
+    check_id = str(value or "")
+    for prefix in _LEGACY_RULE_ID_PREFIXES:
+        if check_id.startswith(prefix):
+            return check_id[len(prefix):]
+    return check_id
 
 
 def _observation(item: dict[str, Any]) -> dict[str, Any]:
@@ -17,7 +28,7 @@ def _observation(item: dict[str, Any]) -> dict[str, Any]:
     message = str(extra.get("message") or item.get("check_id") or "Semgrep finding")
     raw_severity = str(extra.get("severity") or "WARNING").lower()
     return {
-        "check_id": str(item.get("check_id") or ""),
+        "check_id": normalize_semgrep_check_id(item.get("check_id")),
         "message": message,
         "severity": _SEVERITY_MAP.get(raw_severity, "medium"),
         "path": str(item.get("path") or ""),
