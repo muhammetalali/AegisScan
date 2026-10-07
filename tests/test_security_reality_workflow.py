@@ -14,6 +14,7 @@ def test_backend_and_nmap_install_are_bounded():
     install = next(step for step in backend["steps"] if step.get("name") == "Install Nmap")
     assert 1 <= install["timeout-minutes"] <= 10
     script = install["run"]
-    assert "timeout --foreground 180s apt-get" in script
+    assert script.count("timeout --foreground 180s apt-get") == 1
+    assert "timeout --foreground 420s apt-get" in script
     assert "Acquire::http::Timeout=20" in script
     assert "Acquire::https::Timeout=20" in script
