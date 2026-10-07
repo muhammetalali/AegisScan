@@ -18,6 +18,7 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       DEBUG: 'True'
       SECRET_KEY: ci-only-django-secret-key-0123456789abcdef0123456789abcdef
@@ -67,6 +68,7 @@ jobs:
             aegis-platform/backend/requirements.txt
 
       - name: Install Nmap
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
@@ -79,8 +81,10 @@ jobs:
           done
           sudo rm -rf /var/lib/apt/lists/*
           for attempt in 1 2 3; do
-            if sudo apt-get \
-              -o Acquire::Retries=3 \
+            if sudo timeout --foreground 180s apt-get \
+              -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=20 \
+              -o Acquire::https::Timeout=20 \
               -o Acquire::http::No-Cache=True \
               -o Acquire::https::No-Cache=True \
               update; then
@@ -92,7 +96,11 @@ jobs:
             sudo rm -rf /var/lib/apt/lists/*
             sleep $((attempt * 5))
           done
-          sudo apt-get install -y --no-install-recommends nmap
+          sudo timeout --foreground 180s apt-get \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 \
+            install -y --no-install-recommends nmap
           nmap --version
 
       - name: Install root Aegis package
