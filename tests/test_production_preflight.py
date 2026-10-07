@@ -41,6 +41,7 @@ def valid_environment(tmp_path: Path) -> dict[str, str]:
         "CORS_ALLOWED_ORIGINS": "https://security.example.com",
         "CSRF_TRUSTED_ORIGINS": "https://security.example.com",
         "AEGIS_SCAN_SCOPE_MODE": "asset-authorization",
+        "AEGIS_LAB_NETWORK_CIDRS": "192.168.49.0/24,100.116.78.94/32",
         "AUTHORIZED_SCAN_TARGETS": "authorized.example.com,203.0.113.10",
         "AEGIS_RECON_PROVIDER": "default-kali",
         "AEGIS_RECON_LEGACY_DISABLED": "true",
@@ -92,6 +93,14 @@ def test_rejects_default_secrets_insecure_origins_dangerous_targets_and_alert_ro
     assert any("distinct" in failure for failure in failures)
     assert any("AUTHORIZED_SCAN_TARGETS" in failure for failure in failures)
     assert any("ALERT_WEBHOOK_URL" in failure for failure in failures)
+
+
+def test_rejects_invalid_or_unbounded_lab_networks(tmp_path: Path):
+    for value in ("0.0.0.0/0", "8.8.8.0/24", "not-a-cidr"):
+        environment = valid_environment(tmp_path)
+        environment["AEGIS_LAB_NETWORK_CIDRS"] = value
+        failures = preflight.validate(environment, tmp_path, check_tls=False)
+        assert any("AEGIS_LAB_NETWORK_CIDRS" in failure for failure in failures), value
 
 
 def test_rejects_webhook_credentials_fragment_and_link_local_destination(tmp_path: Path):

@@ -279,10 +279,9 @@ def _activate_e2e_scope(
     )
     target_ip = _validation_target_ip()
     runtime_env = dict(profile_env)
-    runtime_env["AUTHORIZED_SCAN_TARGETS"] = _append_csv(env.get("AUTHORIZED_SCAN_TARGETS", ""), target_ip)
-    runtime_env["SCANNER_EGRESS_PRIVATE_TARGETS"] = _append_csv(
-        env.get("SCANNER_EGRESS_PRIVATE_TARGETS", ""),
-        target_ip,
+    runtime_env["AEGIS_LAB_NETWORK_CIDRS"] = _append_csv(
+        env.get("AEGIS_LAB_NETWORK_CIDRS", ""),
+        f"{target_ip}/32",
     )
     _run(
         _compose(env_file, "--profile", "ci-only", "up", "-d"),
@@ -298,18 +297,19 @@ def _activate_e2e_scope(
     )
     fastapi_env = _container_environment("aegis-fastapi")
     egress_env = _container_environment("aegis-scanner-egress")
-    if target_ip not in {
+    target_cidr = f"{target_ip}/32"
+    if target_cidr not in {
         item.strip()
-        for item in fastapi_env.get("AUTHORIZED_SCAN_TARGETS", "").split(",")
+        for item in fastapi_env.get("AEGIS_LAB_NETWORK_CIDRS", "").split(",")
         if item.strip()
     }:
-        raise OperationalAcceptanceError("production E2E target was not bound to the API authorization scope")
-    if target_ip not in {
+        raise OperationalAcceptanceError("production E2E target was not bound to the canonical lab scope")
+    if target_cidr not in {
         item.strip()
-        for item in egress_env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").split(",")
+        for item in egress_env.get("AEGIS_LAB_NETWORK_CIDRS", "").split(",")
         if item.strip()
     }:
-        raise OperationalAcceptanceError("production E2E target was not bound to the scanner egress scope")
+        raise OperationalAcceptanceError("production E2E target was not bound to the canonical scanner lab scope")
     return target_ip, runtime_env, services
 
 
@@ -573,10 +573,10 @@ def cleanup_e2e_scope(
 
     fastapi_env = _container_environment("aegis-fastapi")
     egress_env = _container_environment("aegis-scanner-egress")
-    if fastapi_env.get("AUTHORIZED_SCAN_TARGETS", "").strip() != env.get("AUTHORIZED_SCAN_TARGETS", "").strip():
-        raise OperationalAcceptanceError("API authorization scope was not restored after production E2E")
-    if egress_env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").strip() != env.get("SCANNER_EGRESS_PRIVATE_TARGETS", "").strip():
-        raise OperationalAcceptanceError("scanner egress scope was not restored after production E2E")
+    if fastapi_env.get("AEGIS_LAB_NETWORK_CIDRS", "").strip() != env.get("AEGIS_LAB_NETWORK_CIDRS", "").strip():
+        raise OperationalAcceptanceError("canonical lab scope was not restored after production E2E")
+    if egress_env.get("AEGIS_LAB_NETWORK_CIDRS", "").strip() != env.get("AEGIS_LAB_NETWORK_CIDRS", "").strip():
+        raise OperationalAcceptanceError("canonical scanner lab scope was not restored after production E2E")
 
     return {
         "schema": "aegisscan.production-e2e-scope-cleanup.v1",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -40,6 +41,13 @@ INTERNAL_ALERT_PORT = 8443
 ALERT_RECEIVER_TOKEN_PATH = Path("/etc/aegisscan/secrets/alert-receiver-token")
 ALERT_RECEIVER_UID = 10003
 ALERT_RECEIVER_GID = 10003
+LAB_NETWORK_BOUNDARIES = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fc00::/7"),
+)
 PRODUCTION_REGISTRY_DNS_NAMES = (
     "registry-1.docker.io",
     "auth.docker.io",
@@ -348,6 +356,44 @@ def _rewrite_env_values(path: Path, updates: dict[str, str]) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def _migrate_lab_scope_env(path: Path) -> dict[str, str]:
+    values = _load_env_file(path)
+    lab_networks: set[str] = set()
+    supplemental_targets: list[str] = []
+
+    for raw in (
+        values.get("AEGIS_LAB_NETWORK_CIDRS", "")
+        + ","
+        + values.get("AUTHORIZED_SCAN_TARGETS", "")
+    ).split(","):
+        target = raw.strip()
+        if not target:
+            continue
+        try:
+            network = ipaddress.ip_network(target, strict=False)
+        except ValueError:
+            if target not in supplemental_targets:
+                supplemental_targets.append(target)
+            continue
+        if not any(
+            network.version == boundary.version and network.subnet_of(boundary)
+            for boundary in LAB_NETWORK_BOUNDARIES
+        ):
+            if target not in supplemental_targets:
+                supplemental_targets.append(target)
+            continue
+        lab_networks.add(str(network))
+
+    updates = {
+        "AEGIS_LAB_NETWORK_CIDRS": ",".join(sorted(lab_networks)),
+        "AUTHORIZED_SCAN_TARGETS": ",".join(supplemental_targets),
+    }
+    if any(values.get(name, "").strip() != value for name, value in updates.items()):
+        _rewrite_env_values(path, updates)
+        values = _load_env_file(path)
+    return values
 
 
 def _ensure_alert_receiver_token(path: Path | None = None) -> None:
@@ -1235,6 +1281,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
     build_storage: dict[str, object] = {}
     try:
         env_values = _reconcile_internal_alert_receiver(env_file, origin)
+        env_values = _migrate_lab_scope_env(env_file)
         deployment_env = _execution_profile_environment({**os.environ, **env_values})
         backup = _backup_before_upgrade(env_file, deployment_env)
         storage_reclaim = _host_storage_reclaim()

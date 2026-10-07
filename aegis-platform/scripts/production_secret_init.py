@@ -23,6 +23,20 @@ INTERNAL_ALERT_PATH = "/_aegis/alerts"
 INTERNAL_ALERT_PORT = 8443
 ALERT_RECEIVER_RUNTIME_UID = 10003
 ALERT_RECEIVER_RUNTIME_GID = 10003
+LAB_NETWORK_BOUNDARIES = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def _is_company_lab_network(network) -> bool:
+    return any(
+        network.version == boundary.version and network.subnet_of(boundary)
+        for boundary in LAB_NETWORK_BOUNDARIES
+    )
 
 
 class SecretInitError(RuntimeError):
@@ -151,6 +165,18 @@ def initialize(
 ) -> dict[str, str]:
     domain = _validate_domain(domain)
     targets = _validate_targets(authorized_targets)
+    lab_networks: list[str] = []
+    supplemental_targets: list[str] = []
+    for target in targets:
+        try:
+            network = ipaddress.ip_network(target, strict=False)
+        except ValueError:
+            supplemental_targets.append(target)
+            continue
+        if not _is_company_lab_network(network):
+            supplemental_targets.append(target)
+            continue
+        lab_networks.append(str(network))
     expected_alert_webhook = f"https://{domain}:{INTERNAL_ALERT_PORT}{INTERNAL_ALERT_PATH}"
     alert_webhook = alert_webhook.strip()
     if alert_webhook:
@@ -236,7 +262,8 @@ def initialize(
         "FRONTEND_URL": f"https://{domain}",
         "AUTH_COOKIE_SECURE": "True",
         "AEGIS_SCAN_SCOPE_MODE": "asset-authorization",
-        "AUTHORIZED_SCAN_TARGETS": ",".join(targets),
+        "AEGIS_LAB_NETWORK_CIDRS": ",".join(sorted(set(lab_networks))),
+        "AUTHORIZED_SCAN_TARGETS": ",".join(sorted(set(supplemental_targets))),
         "ALERT_WEBHOOK_URL": alert_webhook,
         "AEGIS_ALERT_RECEIVER_TOKEN_FILE": str(alert_receiver_token_file),
         "AEGIS_RECON_PROVIDER": "default-kali",

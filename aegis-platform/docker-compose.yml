@@ -63,6 +63,7 @@ services:
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
       AEGIS_ASSESSMENT_LAUNCHER_MODE: ${AEGIS_ASSESSMENT_LAUNCHER_MODE:-single-operator-lab}
       AEGIS_SEMGREP_UPLOAD_ROOT: /var/lib/aegis-semgrep/uploads
     depends_on:
@@ -88,6 +89,7 @@ services:
       SCANNER_EGRESS_INTERFACE: ${SCANNER_EGRESS_INTERFACE:-eth0}
       SCANNER_CONTROL_ENDPOINTS: ${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}
       SCANNER_EGRESS_PRIVATE_TARGETS: ${SCANNER_EGRESS_PRIVATE_TARGETS:-aegis-scan-target}
+      AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
       AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-aegis-dev-egress-control-root}
     depends_on:
       postgres: {condition: service_healthy}
@@ -110,6 +112,7 @@ services:
     cap_drop: [ALL]
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-p/default}
       DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
@@ -129,6 +132,7 @@ services:
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
       SEMGREP_CONFIG: ${SEMGREP_CONFIG:-p/default}
       DJANGO_SETTINGS_MODULE: django_project.settings
       AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-aegis-dev-egress-control-root}
@@ -194,6 +198,7 @@ services:
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
       DJANGO_SETTINGS_MODULE: django_project.settings
       AEGIS_KALI_RECON_AUTH_TOKEN: ""
       AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-aegis-dev-egress-control-root}
@@ -212,6 +217,7 @@ services:
     env_file: ./backend/.env
     environment:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-aegis-scan-target}
+      AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
       DJANGO_SETTINGS_MODULE: django_project.settings
     depends_on:
       django: {condition: service_healthy}

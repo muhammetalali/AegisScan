@@ -15,8 +15,17 @@ _CONTROL_RE = re.compile(r'[\x00-\x1f\x7f\s]')
 
 
 def _configured_targets() -> list[str]:
-    raw = os.getenv('AUTHORIZED_SCAN_TARGETS', '')
-    return [item.strip() for item in raw.split(',') if item.strip()]
+    """Return the unified execution scope.
+
+    AEGIS_LAB_NETWORK_CIDRS is the canonical low-friction boundary for owned
+    lab/company networks. AUTHORIZED_SCAN_TARGETS remains a legacy/supplemental
+    compatibility input for exact hosts that are not represented by a lab CIDR.
+    """
+    values: list[str] = []
+    for name in ('AEGIS_LAB_NETWORK_CIDRS', 'AUTHORIZED_SCAN_TARGETS'):
+        raw = os.getenv(name, '')
+        values.extend(item.strip() for item in raw.split(',') if item.strip())
+    return list(dict.fromkeys(values))
 
 
 def _allow_single_label_targets() -> bool:
@@ -246,9 +255,9 @@ def _approved_snapshot_matches(target: str, approved_target: str | None) -> bool
     """Return whether an immutable bound authorization snapshot exactly covers target.
 
     This is intentionally exact-scope only. Wildcards are never inferred from a
-    database decision, and private DNS destinations still require an explicit
-    IP/CIDR entry in AUTHORIZED_SCAN_TARGETS so DNS rebinding cannot expand the
-    approved egress boundary.
+    database decision. Private DNS destinations may resolve inside the canonical
+    AEGIS_LAB_NETWORK_CIDRS boundary (or a legacy supplemental IP/CIDR entry)
+    without requiring a second per-target allow-list.
     """
     if not approved_target:
         return False
@@ -285,7 +294,7 @@ def require_authorized_target(
         if not snapshot_authorized and not is_target_authorized(target):
             raise ScopeAuthorizationError(
                 'Target is outside the server-side authorized scan scope. '
-                'Bind a current AssetAuthorization decision or configure AUTHORIZED_SCAN_TARGETS.'
+                'Bind a current AssetAuthorization decision or configure AEGIS_LAB_NETWORK_CIDRS.'
             )
         return (str(network_target),) if resolve_dns else ()
 
@@ -293,7 +302,7 @@ def require_authorized_target(
     if not snapshot_authorized and not is_target_authorized(target):
         raise ScopeAuthorizationError(
             'Target is outside the server-side authorized scan scope. '
-            'Bind a current AssetAuthorization decision or configure AUTHORIZED_SCAN_TARGETS.'
+            'Bind a current AssetAuthorization decision or configure AEGIS_LAB_NETWORK_CIDRS.'
         )
     if not resolve_dns:
         return ()

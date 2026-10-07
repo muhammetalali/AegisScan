@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from fastapi_app.services import dynamic_egress
 from fastapi_app.services import scanner_adapters
 from fastapi_app.services import scope_authorization as scope
 
@@ -265,3 +266,58 @@ def test_bound_hostname_snapshot_allows_public_resolution_without_static_allowli
         resolve_dns=True,
         approved_target='approved.example',
     ) == ('93.184.216.34',)
+
+
+def test_lab_cidr_is_first_class_scope_without_legacy_allowlist(monkeypatch):
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', '192.168.49.0/24,100.116.78.94/32')
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+
+    assert scope.is_target_authorized('192.168.49.132') is True
+    assert scope.is_target_authorized('192.168.49.0/24') is True
+    assert scope.is_target_authorized('100.116.78.94') is True
+    assert scope.is_target_authorized('192.168.50.1') is False
+
+
+def test_lab_private_dns_resolution_needs_no_second_allowlist(monkeypatch):
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', '192.168.49.0/24')
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('192.168.49.133')],
+    )
+
+    assert scope.require_authorized_target(
+        'lab-target.internal',
+        resolve_dns=True,
+        approved_target='lab-target.internal',
+    ) == ('192.168.49.133',)
+
+
+def test_lab_private_dns_resolution_stays_inside_company_boundary(monkeypatch):
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', '192.168.49.0/24')
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(
+        scope.socket,
+        'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns_answer('192.168.50.10')],
+    )
+
+    with pytest.raises(scope.ScopeAuthorizationError, match='non-global destination'):
+        scope.require_authorized_target(
+            'lab-target.internal',
+            resolve_dns=True,
+            approved_target='lab-target.internal',
+        )
+
+
+def test_dynamic_egress_skips_targets_already_inside_lab_boundary(monkeypatch):
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', '192.168.49.0/24')
+    monkeypatch.setenv('AEGIS_SCANNER_EGRESS_CONTROL_URL', 'http://127.0.0.1:18780')
+    monkeypatch.setenv('AEGIS_SCANNER_EGRESS_CONTROL_ROOT', 'test-control-root')
+
+    def unexpected_controller_call(*_args, **_kwargs):
+        raise AssertionError('lab target should not require per-target egress admission')
+
+    monkeypatch.setattr(dynamic_egress.urllib.request, 'urlopen', unexpected_controller_call)
+    dynamic_egress.authorize_dynamic_egress(('192.168.49.132', '192.168.49.133'))

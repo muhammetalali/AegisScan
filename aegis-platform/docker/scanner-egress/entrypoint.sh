@@ -10,6 +10,7 @@ IFACE="${SCANNER_EGRESS_INTERFACE:-eth0}"
 # production defaults.  Use the default only when the variable is absent.
 CONTROL_ENDPOINTS="${SCANNER_CONTROL_ENDPOINTS-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}"
 PRIVATE_TARGETS="${SCANNER_EGRESS_PRIVATE_TARGETS:-}"
+LAB_NETWORKS="${AEGIS_LAB_NETWORK_CIDRS:-}"
 
 log() {
   printf '[scanner-egress] %s\n' "$*"
@@ -140,6 +141,16 @@ for target in $PRIVATE_TARGETS; do
 done
 IFS="$old_ifs"
 
+# The canonical lab/company boundary is admitted once at the kernel edge.
+# Targets inside these CIDRs no longer need a second per-target egress allow-list.
+old_ifs="$IFS"
+IFS=','
+for target in $LAB_NETWORKS; do
+  [ -n "$target" ] || continue
+  add_allow_target "$target"
+done
+IFS="$old_ifs"
+
 # Block non-global and special IPv4 ranges at the network-device egress hook.
 # This hook sees traffic emitted through raw/packet sockets as well as normal
 # TCP/UDP sockets, so scanner binaries cannot bypass it by changing socket type.
@@ -175,6 +186,7 @@ done
 log "kernel egress policy installed on $IFACE"
 log "control endpoints: $CONTROL_ENDPOINTS"
 log "private scan targets: ${PRIVATE_TARGETS:-<none>}"
+log "lab networks: ${LAB_NETWORKS:-<none>}"
 nft list table netdev "$TABLE"
 
 if [ -n "${AEGIS_SCANNER_EGRESS_CONTROL_ROOT:-}" ]; then

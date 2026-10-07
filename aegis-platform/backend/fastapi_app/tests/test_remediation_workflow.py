@@ -70,7 +70,7 @@ def test_remediation_state_uses_persisted_state_when_present():
     assert get_state(validation) == RemediationState.VERIFIED
 
 
-def test_remediation_request_requires_explicit_authorization():
+def test_remediation_request_authorized_flag_is_compatibility_only():
     request = RemediationValidationRequest()
     assert request.authorized is False
     assert RemediationValidationRequest(authorized=True).authorized is True

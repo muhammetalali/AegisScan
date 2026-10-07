@@ -36,6 +36,7 @@ class ValidationCreate(BaseModel):
     profile: str = 'full'
     engines: List[str] = Field(default_factory=lambda: ['nmap'])
     scope: Optional[str] = None
+    # Compatibility-only input. Persisted AssetAuthorization is authoritative.
     authorized: bool = False
     include_subdomains: bool = False
     duration_minutes: int = 60
@@ -47,6 +48,7 @@ class ValidationCreate(BaseModel):
 class OffensiveValidationCreate(BaseModel):
     finding_id: UUID
     profile: str = 'standard'
+    # Compatibility-only input. Persisted AssetAuthorization is authoritative.
     authorized: bool = True
 
 
@@ -181,8 +183,6 @@ async def create_validation(body: ValidationCreate, user=Depends(get_current_use
         raise HTTPException(status_code=400, detail=f'target_type must be one of {sorted(ALLOWED_TYPES)}')
     if body.profile not in ALLOWED_PROFILES:
         raise HTTPException(status_code=400, detail=f'profile must be one of {sorted(ALLOWED_PROFILES)}')
-    if not body.authorized:
-        raise HTTPException(status_code=400, detail='authorized must be true for real security execution')
     target = (body.scope or body.target_value).strip()
     if not target:
         raise HTTPException(status_code=400, detail='target_value is required')
@@ -228,8 +228,6 @@ async def create_validation(body: ValidationCreate, user=Depends(get_current_use
 async def create_offensive_validation(body: OffensiveValidationCreate, user=Depends(get_current_user)):
     if body.profile not in OFFENSIVE_PROFILES:
         raise HTTPException(status_code=400, detail=f'profile must be one of {sorted(OFFENSIVE_PROFILES)}')
-    if not body.authorized:
-        raise HTTPException(status_code=400, detail='authorized must be true for offensive validation execution')
     user_id = str(user.get('user_id'))
     finding = await _get_finding(body.finding_id, user_id)
     if not finding:
