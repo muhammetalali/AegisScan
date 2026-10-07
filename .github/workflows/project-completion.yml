@@ -143,10 +143,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh run download "$VERIFICATION_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "aegisscan-fresh-main-final-$RELEASE_SHA" \
-            --dir /tmp/aegis-completion/verification
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$VERIFICATION_RUN_ID" \
+            --repository "$GITHUB_REPOSITORY" \
+            --artifact-name "aegisscan-fresh-main-final-$RELEASE_SHA" \
+            --destination /tmp/aegis-completion/verification
 
       - name: Normalize downloaded fresh-main evidence fail closed
         shell: bash

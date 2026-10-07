@@ -143,18 +143,22 @@ jobs:
             /tmp/aegis-final/evidence/performance \
             /tmp/aegis-final/evidence/hygiene
 
-          gh run download "$RELEASE_CLOSURE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "aegisscan-release1-closure-$RELEASE_SHA" \
-            --dir /tmp/aegis-final/evidence/release
-          gh run download "$PROVIDER_CLOSURE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "aegisscan-external-provider-closure-$RELEASE_SHA" \
-            --dir /tmp/aegis-final/evidence/providers
-          gh run download "$PERFORMANCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "release-performance-acceptance-$RELEASE_SHA" \
-            --dir /tmp/aegis-final/evidence/performance
-          gh run download "$HYGIENE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "aegisscan-final-project-hygiene-$RELEASE_SHA" \
-            --dir /tmp/aegis-final/evidence/hygiene
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$RELEASE_CLOSURE_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+            --artifact-name "aegisscan-release1-closure-$RELEASE_SHA" \
+            --destination /tmp/aegis-final/evidence/release
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$PROVIDER_CLOSURE_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+            --artifact-name "aegisscan-external-provider-closure-$RELEASE_SHA" \
+            --destination /tmp/aegis-final/evidence/providers
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$PERFORMANCE_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+            --artifact-name "release-performance-acceptance-$RELEASE_SHA" \
+            --destination /tmp/aegis-final/evidence/performance
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$HYGIENE_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+            --artifact-name "aegisscan-final-project-hygiene-$RELEASE_SHA" \
+            --destination /tmp/aegis-final/evidence/hygiene
 
       - name: Normalize downloaded final evidence paths fail closed
         shell: bash

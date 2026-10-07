@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Current Release 1 publication tag; published tags remain immutable."""
-RELEASE_TAG = "v1.0.7"
+RELEASE_TAG = "v1.0.8"
 
 
 def main() -> None:
