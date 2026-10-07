@@ -21,6 +21,10 @@ for (const required of ['/dashboard','/scan','/validations/new','/vulnerabilitie
 if (!routePaths.includes('/')) failures.push('Protected workspace has no canonical root redirect')
 function walk(dir) { for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { if (['node_modules','dist','.git'].includes(entry.name)) continue; const full=path.join(dir,entry.name); if(entry.isDirectory()) walk(full); else if(/\.(ts|tsx)$/.test(entry.name)) scannedSourceFiles.push(full) } }
 walk(path.join(root,'src'))
+const assetsPage=fs.readFileSync(path.join(root,'src','pages','assets','Assets.tsx'),'utf8')
+if(/apiHelpers\.post(?:<[^>]+>)?\(\s*['"]\/scans\//.test(assetsPage))failures.push('Asset scan action must not bypass governed capability execution')
+if(!assetsPage.includes('/scan?project_id='))failures.push('Asset scan action must open the canonical governed scan picker')
+if(!assetsPage.includes('window.confirm(t(\'Delete this asset?\'))'))failures.push('Asset delete action must require confirmation')
 const scanPagePath=path.join(root,'src','pages','scans','ScanPage.tsx')
 const scanPage=fs.readFileSync(scanPagePath,'utf8')
 if(!scanPage.includes('apiContractPaths.capabilityPlan'))failures.push('ScanPage must use the server-side governed capability planner')
