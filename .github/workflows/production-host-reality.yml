@@ -139,6 +139,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # This is an isolated GitHub-hosted test runner, not the offline
+          # production readiness gate. Stage the capability test fixture.
+          for attempt in 1 2 3; do
+            if docker pull --quiet alpine:3.20; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Unable to stage hosted-CI capability test image" >&2
+              exit 1
+            fi
+            sleep 5
+          done
           sudo python - <<'PY'
           import importlib.util
           from pathlib import Path
@@ -149,15 +161,20 @@ jobs:
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
 
+          # Hosted CI explicitly provisions its test fixture. Production
+          # readiness itself stays offline-only and never pulls images.
+          image = module._local_probe_image()
           module._probe_capability(
               "NET_RAW",
               "ping -c 1 -W 1 127.0.0.1 >/dev/null",
+              image=image,
           )
           module._probe_capability(
               "NET_ADMIN",
               "ip link set lo up && ip link show lo >/dev/null",
+              image=image,
           )
-          module._probe_shared_network_namespace()
+          module._probe_shared_network_namespace(image=image)
           print("aegisscan-host-capabilities-real=PASS")
           PY
 
