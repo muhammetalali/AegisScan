@@ -312,8 +312,9 @@ def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: 
             "architecture": "x86_64",
         },
     )
-    monkeypatch.setattr(reality, "_probe_capability", lambda cap, command: events.append(("cap", cap)))
-    monkeypatch.setattr(reality, "_probe_shared_network_namespace", lambda: events.append(("netns", True)))
+    monkeypatch.setattr(reality, "_local_probe_image", lambda: "postgres:16-alpine")
+    monkeypatch.setattr(reality, "_probe_capability", lambda cap, command, *, image: events.append(("cap", cap, image)))
+    monkeypatch.setattr(reality, "_probe_shared_network_namespace", lambda *, image: events.append(("netns", image)))
     monkeypatch.setattr(reality, "_validate_compose", lambda env: events.append(("compose", env)))
 
     result = reality.validate(env_file)
@@ -321,9 +322,11 @@ def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: 
     assert result["deployment_mode"] == "internal"
     assert result["enterprise_ca"]["sha256"] == "a" * 64
     assert result["operational_material"]["alert_webhook_https"] is True
-    assert ("cap", "NET_RAW") in events
-    assert ("cap", "NET_ADMIN") in events
-    assert ("netns", True) in events
+    assert result["runtime"]["capability_probe_image"] == "postgres:16-alpine"
+    assert result["runtime"]["capability_probe_image_source"] == "local-cache"
+    assert ("cap", "NET_RAW", "postgres:16-alpine") in events
+    assert ("cap", "NET_ADMIN", "postgres:16-alpine") in events
+    assert ("netns", "postgres:16-alpine") in events
     assert ("compose", env_file) in events
 
     monkeypatch.setattr(reality, "_disk_free_bytes", lambda _: reality.MIN_DISK_BYTES - 1)
@@ -332,3 +335,48 @@ def test_host_reality_runs_ca_capability_namespace_and_compose_probes(tmp_path: 
     assert deferred["host"]["minimum_free_disk_bytes"] == reality.MIN_DISK_BYTES
     assert deferred["host"]["disk_capacity_satisfied"] is False
     assert deferred["host"]["disk_capacity_deferred_to_privileged_reclaim"] is True
+
+
+def test_offline_probe_falls_back_to_cached_image(monkeypatch):
+    commands = []
+
+    def fake_run(argv, *, timeout=120):
+        commands.append(argv)
+        if argv[-1] == "alpine:3.20":
+            raise reality.HostValidationError("not cached")
+        return None
+
+    monkeypatch.setattr(reality, "_run", fake_run)
+    assert reality._local_probe_image() == "postgres:16-alpine"
+    assert [argv[-1] for argv in commands] == ["alpine:3.20", "postgres:16-alpine"]
+    assert all(argv[:3] == ["docker", "image", "inspect"] for argv in commands)
+
+
+def test_offline_probe_fails_closed_when_no_local_images(monkeypatch):
+    def missing(argv, *, timeout=120):
+        raise reality.HostValidationError("not cached")
+
+    monkeypatch.setattr(reality, "_run", missing)
+    with pytest.raises(reality.HostValidationError, match="no local image"):
+        reality._local_probe_image()
+
+
+def test_docker_capability_probe_never_downloads_images(monkeypatch):
+    calls = []
+    monkeypatch.setattr(reality, "_run", lambda argv, **kwargs: calls.append(argv))
+    reality._probe_capability("NET_RAW", "ping -c 1 127.0.0.1", image="postgres:16-alpine")
+    assert len(calls) == 1
+    assert "--pull=never" in calls[0]
+    assert "postgres:16-alpine" in calls[0]
+    assert "--cap-drop=ALL" in calls[0]
+    assert "--cap-add=NET_RAW" in calls[0]
+
+
+def test_shared_namespace_probe_never_downloads_images(monkeypatch):
+    commands = []
+    monkeypatch.setattr(reality, "_run", lambda argv, **kwargs: commands.append(argv))
+    monkeypatch.setattr(reality.subprocess, "run", lambda argv, **kwargs: None)
+    reality._probe_shared_network_namespace(image="postgres:16-alpine")
+    assert len(commands) == 2
+    assert all("--pull=never" in argv for argv in commands)
+    assert all("postgres:16-alpine" in argv for argv in commands)
