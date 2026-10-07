@@ -96,7 +96,7 @@ jobs:
             sudo rm -rf /var/lib/apt/lists/*
             sleep $((attempt * 5))
           done
-          sudo timeout --foreground 180s apt-get \
+          sudo timeout --foreground 420s apt-get \
             -o Acquire::Retries=2 \
             -o Acquire::http::Timeout=20 \
             -o Acquire::https::Timeout=20 \
