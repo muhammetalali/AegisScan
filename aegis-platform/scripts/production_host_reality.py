@@ -135,17 +135,37 @@ def _docker_info() -> dict[str, object]:
     }
 
 
-def _probe_capability(capability: str, command: str) -> None:
+# Reuse an installed, trusted Alpine-based image. Host readiness must not
+# depend on a transient registry/CDN download before production deployment.
+LOCAL_PROBE_IMAGES = ("alpine:3.20", "postgres:16-alpine", "redis:7-alpine")
+
+
+def _local_probe_image() -> str:
+    for image in LOCAL_PROBE_IMAGES:
+        try:
+            _run(["docker", "image", "inspect", "--format", "{{.Id}}", image], timeout=30)
+        except HostValidationError:
+            continue
+        return image
+    raise HostValidationError(
+        "no local image available for offline Docker capability probes "
+        "(alpine:3.20, postgres:16-alpine, redis:7-alpine); "
+        "provision a trusted image before running the production readiness gate"
+    )
+
+
+def _probe_capability(capability: str, command: str, *, image: str) -> None:
     _run(
         [
             "docker",
             "run",
             "--rm",
-            "--pull=missing",
+            "--pull=never",
             "--cap-drop=ALL",
             f"--cap-add={capability}",
-            "alpine:3.20",
+            "--entrypoint",
             "sh",
+            image,
             "-ec",
             command,
         ],
@@ -153,7 +173,7 @@ def _probe_capability(capability: str, command: str) -> None:
     )
 
 
-def _probe_shared_network_namespace() -> None:
+def _probe_shared_network_namespace(*, image: str) -> None:
     name = f"aegis-netns-probe-{os.getpid()}"
     try:
         _run(
@@ -161,11 +181,13 @@ def _probe_shared_network_namespace() -> None:
                 "docker",
                 "run",
                 "-d",
+                "--pull=never",
                 "--name",
                 name,
                 "--cap-drop=ALL",
-                "alpine:3.20",
+                "--entrypoint",
                 "sh",
+                image,
                 "-c",
                 "sleep 60",
             ],
@@ -176,9 +198,11 @@ def _probe_shared_network_namespace() -> None:
                 "docker",
                 "run",
                 "--rm",
+                "--pull=never",
                 f"--network=container:{name}",
-                "alpine:3.20",
+                "--entrypoint",
                 "sh",
+                image,
                 "-ec",
                 "test -d /sys/class/net/lo && ip addr show lo >/dev/null",
             ],
@@ -354,9 +378,10 @@ def validate(env_file: Path, *, defer_disk_capacity: bool = False) -> dict[str, 
     if docker["architecture"] not in {"x86_64", "amd64"}:
         raise HostValidationError("Docker daemon architecture must be amd64")
 
-    _probe_capability("NET_RAW", "ping -c 1 -W 1 127.0.0.1 >/dev/null")
-    _probe_capability("NET_ADMIN", "ip link set lo up && ip link show lo >/dev/null")
-    _probe_shared_network_namespace()
+    probe_image = _local_probe_image()
+    _probe_capability("NET_RAW", "ping -c 1 -W 1 127.0.0.1 >/dev/null", image=probe_image)
+    _probe_capability("NET_ADMIN", "ip link set lo up && ip link show lo >/dev/null", image=probe_image)
+    _probe_shared_network_namespace(image=probe_image)
     _validate_compose(env_file)
 
     return {
@@ -381,6 +406,8 @@ def validate(env_file: Path, *, defer_disk_capacity: bool = False) -> dict[str, 
         "runtime": {
             "versions": versions,
             "docker": docker,
+            "capability_probe_image": probe_image,
+            "capability_probe_image_source": "local-cache",
             "net_raw": True,
             "net_admin": True,
             "shared_network_namespace": True,
