@@ -36,8 +36,6 @@ class ValidationCreate(BaseModel):
     profile: str = 'full'
     engines: List[str] = Field(default_factory=lambda: ['nmap'])
     scope: Optional[str] = None
-    # Compatibility-only input. Persisted AssetAuthorization is authoritative.
-    authorized: bool = False
     include_subdomains: bool = False
     duration_minutes: int = 60
     rate_limit: int = 5
@@ -48,8 +46,6 @@ class ValidationCreate(BaseModel):
 class OffensiveValidationCreate(BaseModel):
     finding_id: UUID
     profile: str = 'standard'
-    # Compatibility-only input. Persisted AssetAuthorization is authoritative.
-    authorized: bool = True
 
 
 class ValidationOut(BaseModel):

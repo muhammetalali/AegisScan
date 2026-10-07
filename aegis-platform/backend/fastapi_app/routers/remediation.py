@@ -36,8 +36,6 @@ router = APIRouter()
 
 
 class RemediationValidationRequest(BaseModel):
-    # Compatibility-only input. Persisted AssetAuthorization is authoritative.
-    authorized: bool = False
     profile: str = 'quick'
     duration_minutes: int = Field(default=5, ge=1, le=60)
     rate_limit: int = Field(default=5, ge=1, le=100)

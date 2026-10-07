@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from django_project.assets.models import Asset, AssetAuthorization
-from django_project.projects.models import Project
+from django_project.projects.models import Project, ProjectMembership
 from ..core.dependencies import get_current_user
 from ..services.asset_authorization_governance import (
     AssetAuthorizationGovernanceError,
@@ -58,11 +58,10 @@ def _project_for_launcher(project_id: str, user_id: str, is_staff: bool) -> Proj
     project = Project.objects.filter(pk=project_id, status=Project.Status.ACTIVE).first()
     if project is None:
         raise HTTPException(status_code=404, detail='Project not found')
-    if not is_staff and str(project.owner_id) != str(user_id):
-        raise HTTPException(
-            status_code=403,
-            detail='Assessment Launcher is available to the project owner or staff.',
-        )
+    if is_staff or str(project.owner_id) == str(user_id):
+        return project
+    if not ProjectMembership.objects.filter(project=project, user_id=user_id).exists():
+        raise HTTPException(status_code=403, detail='Project membership is required.')
     return project
 
 

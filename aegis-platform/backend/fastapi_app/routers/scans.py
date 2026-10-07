@@ -35,8 +35,6 @@ class ScanCreate(BaseModel):
     engines: List[str] = Field(default_factory=lambda: ['nmap'])
     depth: str = 'standard'
     config: dict = Field(default_factory=dict)
-    # Compatibility-only input. It is deliberately ignored for authority.
-    authorized: bool = False
 
 
 class ScanResponse(BaseModel):
