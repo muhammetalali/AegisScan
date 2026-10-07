@@ -19,6 +19,7 @@ from django_project.evidence.models import ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
 from ..core.dependencies import get_current_user
 from ..services.audit_writer import add_audit_entry
+from ..services.authorization_guard import current_asset_authorization
 from ..services.finding_closure import FindingClosureError, StaleFindingClosureVersion
 from ..services.governed_action_executor import (
     GovernedActionBlocked,
@@ -35,6 +36,7 @@ router = APIRouter()
 
 
 class RemediationValidationRequest(BaseModel):
+    # Compatibility-only input. Persisted AssetAuthorization is authoritative.
     authorized: bool = False
     profile: str = 'quick'
     duration_minutes: int = Field(default=5, ge=1, le=60)
@@ -110,9 +112,14 @@ def _create_run(
         }
         if reason:
             workflow_result['reason'] = reason
+        decision, authorization_reason = current_asset_authorization(locked_finding.asset, target_value)
+        if decision is None:
+            raise PermissionError(authorization_reason)
+
         validation = ValidationRun.objects.create(
             user_id=user_id,
             finding=locked_finding,
+            authorization_decision=decision,
             target_type=target_type,
             target_value=target_value,
             scope=scope,
@@ -145,9 +152,6 @@ async def request_remediation_validation(
     request: Request,
     user=Depends(get_current_user),
 ):
-    if not body.authorized:
-        raise HTTPException(status_code=400, detail='authorized must be true for real remediation validation')
-
     user_id = str(user.get('user_id'))
     finding = await _get_finding(vuln_id, user_id)
     if not finding:
@@ -167,11 +171,20 @@ async def request_remediation_validation(
 
     if not target:
         raise HTTPException(status_code=400, detail='Finding asset does not contain the target required by its validation engine')
-    if asset_config.get('authorized') is not True:
-        raise HTTPException(status_code=403, detail='Execution blocked: finding asset is not explicitly marked authorized.')
 
+    decision, authorization_reason = await sync_to_async(current_asset_authorization)(finding.asset, target)
+    if decision is None:
+        raise HTTPException(status_code=403, detail=authorization_reason)
+    resolved = asset_config.get('resolved_ips') or []
+    approved_addresses = tuple(str(item) for item in resolved if isinstance(item, str))
     try:
-        require_authorized_target(target)
+        require_authorized_target(
+            target,
+            url=target_type == 'url',
+            resolve_dns=True,
+            approved_target=decision.target_snapshot,
+            approved_addresses=approved_addresses,
+        )
     except ScopeAuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -188,6 +201,8 @@ async def request_remediation_validation(
             duration_minutes=body.duration_minutes,
             rate_limit=body.rate_limit,
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except RemediationValidationConflict as exc:
         raise HTTPException(
             status_code=409,

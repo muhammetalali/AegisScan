@@ -156,6 +156,9 @@ def validate(model: dict) -> list[str]:
     if not password or password == 'change-me':
         failures.append('Production PostgreSQL password is missing or uses the development default')
 
+    canonical_lab_scope = str(
+        (services.get('fastapi', {}).get('environment') or {}).get('AEGIS_LAB_NETWORK_CIDRS', '')
+    ).strip()
     for name in ('fastapi', 'celery_worker', 'scanner_worker', 'browser_worker', 'celery_beat'):
         environment = services.get(name, {}).get('environment') or {}
         scope_mode = str(environment.get('AEGIS_SCAN_SCOPE_MODE', '')).strip()
@@ -163,6 +166,10 @@ def validate(model: dict) -> list[str]:
             failures.append(
                 f'{name} must derive executable scope from current immutable AssetAuthorization decisions'
             )
+
+        lab_scope = str(environment.get('AEGIS_LAB_NETWORK_CIDRS', '')).strip()
+        if lab_scope != canonical_lab_scope:
+            failures.append(f'{name} does not use the canonical AEGIS_LAB_NETWORK_CIDRS boundary')
 
         allowed = str(environment.get('AUTHORIZED_SCAN_TARGETS', '')).strip()
         supplemental = [item.strip() for item in allowed.split(',') if item.strip()]
@@ -242,6 +249,9 @@ def validate(model: dict) -> list[str]:
     if 'NET_RAW' in egress_caps:
         failures.append('scanner_egress should not receive NET_RAW')
     egress_env = egress.get('environment') or {}
+    egress_lab_scope = str(egress_env.get('AEGIS_LAB_NETWORK_CIDRS', '')).strip()
+    if egress_lab_scope != canonical_lab_scope:
+        failures.append('scanner_egress does not use the canonical AEGIS_LAB_NETWORK_CIDRS boundary')
     private_targets = str(egress_env.get('SCANNER_EGRESS_PRIVATE_TARGETS', '')).strip()
     if 'aegis-scan-target' in {item.strip() for item in private_targets.split(',') if item.strip()}:
         failures.append('scanner_egress enables the CI scan target in production')

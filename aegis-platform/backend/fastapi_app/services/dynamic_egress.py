@@ -49,11 +49,36 @@ def _non_global_network(value: str) -> str | None:
     return str(network)
 
 
+def _lab_networks() -> tuple[ipaddress._BaseNetwork, ...]:
+    networks = []
+    for raw in os.getenv('AEGIS_LAB_NETWORK_CIDRS', '').split(','):
+        value = raw.strip()
+        if not value:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
+def _covered_by_lab_boundary(value: str) -> bool:
+    try:
+        candidate = ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return False
+    return any(
+        candidate.version == boundary.version and candidate.subnet_of(boundary)
+        for boundary in _lab_networks()
+    )
+
+
 def authorize_dynamic_egress(destinations: Iterable[str]) -> None:
     private_targets = [
         normalized
         for destination in destinations
         if (normalized := _non_global_network(str(destination))) is not None
+        and not _covered_by_lab_boundary(normalized)
     ]
     if not private_targets:
         return

@@ -28,6 +28,13 @@ BACKUP_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 TRUTHY = {"1", "true", "yes", "on"}
 INTERNAL_ALERT_PATH = "/_aegis/alerts"
 INTERNAL_ALERT_PORT = 8443
+LAB_NETWORK_BOUNDARIES = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fc00::/7"),
+)
 
 HEX64_RE = re.compile(r"^[a-f0-9]{64}$")
 SHA256_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -92,6 +99,22 @@ def _is_forbidden_scan_target(value: str) -> bool:
     except ValueError:
         return False
     return address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast
+
+
+def _check_lab_networks(environment: dict[str, str], failures: list[str]) -> None:
+    for raw in _items(environment.get('AEGIS_LAB_NETWORK_CIDRS', '')):
+        try:
+            network = ipaddress.ip_network(raw, strict=False)
+        except ValueError:
+            failures.append(f'AEGIS_LAB_NETWORK_CIDRS contains invalid CIDR: {raw}')
+            continue
+        if not any(
+            network.version == boundary.version and network.subnet_of(boundary)
+            for boundary in LAB_NETWORK_BOUNDARIES
+        ):
+            failures.append(
+                f'AEGIS_LAB_NETWORK_CIDRS must contain only RFC1918, CGNAT/Tailscale, or IPv6 ULA company/lab networks: {raw}'
+            )
 
 
 def _is_unsafe_delivery_host(hostname: str) -> bool:
@@ -392,6 +415,7 @@ def validate(environment: dict[str, str], tls_dir: Path, check_tls: bool = True)
             "AEGIS_SCAN_SCOPE_MODE must be asset-authorization so executable scope "
             "comes from current immutable AssetAuthorization decisions"
         )
+    _check_lab_networks(environment, failures)
     targets = _items(environment.get("AUTHORIZED_SCAN_TARGETS", ""))
     if any(_is_forbidden_scan_target(target) for target in targets):
         failures.append(

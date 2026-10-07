@@ -68,6 +68,7 @@ def test_secret_init_generates_private_vault_material(tmp_path: Path):
 
     assert values["DATABASE_URL"].startswith("postgresql://aegis:")
     assert values["AEGIS_SCAN_SCOPE_MODE"] == "asset-authorization"
+    assert values["AEGIS_LAB_NETWORK_CIDRS"] == ""
     assert values["AUTHORIZED_SCAN_TARGETS"] == "authorized.example.com"
     assert values["AEGIS_RECON_PROVIDER"] == "default-kali"
     assert values["AEGIS_RECON_LEGACY_DISABLED"] == "true"
@@ -92,6 +93,36 @@ def test_secret_init_generates_private_vault_material(tmp_path: Path):
     assert len(token_file.read_bytes().strip()) >= 32
     assert values["AEGIS_ALERT_RECEIVER_TOKEN_FILE"] == str(token_file)
     assert values["AEGIS_PRODUCTION_DOMAIN"] == "security.example.com"
+
+def test_secret_init_projects_owned_networks_into_canonical_lab_scope(tmp_path: Path):
+    source = tmp_path / "s3-source.json"
+    source.write_text(
+        '{"access_key_id":"proof-access","secret_access_key":"proof-secret"}',
+        encoding="utf-8",
+    )
+    source.chmod(0o600)
+    env_file = tmp_path / "production.env"
+
+    MODULE.initialize(
+        domain="security.example.com",
+        authorized_targets=[
+            "192.168.49.0/24",
+            "100.116.78.94",
+            "authorized.example.com",
+        ],
+        alert_webhook="https://security.example.com:8443/_aegis/alerts",
+        backup_endpoint="https://backups.example.com",
+        backup_bucket="aegisscan-production-backups",
+        backup_region="us-east-1",
+        s3_credentials_source=source,
+        output_env=env_file,
+        secrets_dir=tmp_path / "secrets",
+    )
+
+    values = _parse_env(env_file)
+    assert values["AEGIS_LAB_NETWORK_CIDRS"] == "100.116.78.94/32,192.168.49.0/24"
+    assert values["AUTHORIZED_SCAN_TARGETS"] == "authorized.example.com"
+
 
 def test_secret_init_main_emits_structured_failure(monkeypatch, capsys, tmp_path: Path):
     def fail_initialize(**_kwargs):

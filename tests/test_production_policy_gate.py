@@ -182,6 +182,15 @@ def test_rejects_internal_ports_bind_mounts_fixture_scope_and_ci_target():
     assert not any('scan_target is active' in item for item in MODULE.validate(model))
 
 
+def test_rejects_lab_scope_drift_between_runtime_layers():
+    model = valid_model()
+    for name in ('fastapi', 'celery_worker', 'scanner_worker', 'browser_worker', 'celery_beat'):
+        model['services'][name]['environment']['AEGIS_LAB_NETWORK_CIDRS'] = '192.168.49.0/24'
+    model['services']['scanner_egress']['environment']['AEGIS_LAB_NETWORK_CIDRS'] = '192.168.50.0/24'
+    failures = MODULE.validate(model)
+    assert any('scanner_egress does not use the canonical AEGIS_LAB_NETWORK_CIDRS boundary' in item for item in failures)
+
+
 def test_semgrep_workspace_requires_bounded_chown_bootstrap_capability():
     model = valid_model()
     model['services']['scanner_worker']['cap_add'].remove('CHOWN')

@@ -1280,6 +1280,24 @@ def test_reconcile_internal_alert_receiver_migrates_explicit_external_override(t
     assert token.is_file()
 
 
+def test_migrate_lab_scope_moves_internal_networks_out_of_legacy_allowlist(tmp_path: Path):
+    env_file = tmp_path / "production.env"
+    env_file.write_text(
+        "AUTHORIZED_SCAN_TARGETS=192.168.49.0/24,100.116.78.94,authorized.example.com\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+    values = deploy._migrate_lab_scope_env(env_file)
+
+    assert values["AEGIS_LAB_NETWORK_CIDRS"] == "100.116.78.94/32,192.168.49.0/24"
+    assert values["AUTHORIZED_SCAN_TARGETS"] == "authorized.example.com"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+    again = deploy._migrate_lab_scope_env(env_file)
+    assert again == values
+
+
 def test_private_alert_delivery_network_uses_versioned_name():
     compose = (ROOT / "aegis-platform/docker-compose.monitoring.yml").read_text(encoding="utf-8")
     assert "alert_delivery_v2" in compose

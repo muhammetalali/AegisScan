@@ -12,6 +12,7 @@ x-backend-production-environment: &backend-production-environment
   CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
   CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
   AEGIS_SCAN_SCOPE_MODE: ${AEGIS_SCAN_SCOPE_MODE:-asset-authorization}
+  AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
   DJANGO_SETTINGS_MODULE: django_project.settings
 
 services:
@@ -62,6 +63,7 @@ services:
       SCANNER_EGRESS_INTERFACE: ${SCANNER_EGRESS_INTERFACE:-eth0}
       SCANNER_CONTROL_ENDPOINTS: ${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}
       SCANNER_EGRESS_PRIVATE_TARGETS: ${SCANNER_EGRESS_PRIVATE_TARGETS:-}
+      AEGIS_LAB_NETWORK_CIDRS: ${AEGIS_LAB_NETWORK_CIDRS:-}
       AEGIS_SCANNER_EGRESS_CONTROL_ROOT: ${AEGIS_KALI_NETWORK_AUTH_TOKEN:-}
     depends_on: !override
       postgres: {condition: service_healthy}

@@ -65,7 +65,7 @@ def test_operational_material_requires_https_and_private_backup_secrets(tmp_path
 
 def test_cleanup_is_repeatable_and_preserves_production_scope(monkeypatch, tmp_path):
     release = "a" * 40
-    env = {"AUTHORIZED_SCAN_TARGETS": "security.internal", "SCANNER_EGRESS_PRIVATE_TARGETS": "10.20.30.40"}
+    env = {"AEGIS_LAB_NETWORK_CIDRS": "192.168.49.0/24"}
     monkeypatch.setattr(ops, "_load_env", lambda _: dict(env))
     monkeypatch.setattr(ops, "_current_sha", lambda: release)
     commands = []
@@ -79,7 +79,7 @@ def test_cleanup_is_repeatable_and_preserves_production_scope(monkeypatch, tmp_p
         assert result["authorization_scope_restored"] is True
     restores = [(argv, kw) for argv, kw in commands if "--remove-orphans" in argv]
     assert len(restores) == 2
-    assert all(kw["env"]["AUTHORIZED_SCAN_TARGETS"] == env["AUTHORIZED_SCAN_TARGETS"] for _, kw in restores)
+    assert all(kw["env"]["AEGIS_LAB_NETWORK_CIDRS"] == env["AEGIS_LAB_NETWORK_CIDRS"] for _, kw in restores)
     assert all("ci-only" not in kw["env"].get("COMPOSE_PROFILES", "") for _, kw in restores)
 
     commands.clear()
@@ -87,6 +87,33 @@ def test_cleanup_is_repeatable_and_preserves_production_scope(monkeypatch, tmp_p
     with pytest.raises(ops.OperationalAcceptanceError, match="cleanup release SHA"):
         ops.cleanup_e2e_scope(env_file=tmp_path / "production.env", release_sha=release)
     assert not commands
+
+
+def test_e2e_scope_uses_only_canonical_lab_boundary(monkeypatch, tmp_path: Path):
+    env = {"AEGIS_LAB_NETWORK_CIDRS": "192.168.49.0/24"}
+    monkeypatch.setattr(ops.os, "environ", {})
+    monkeypatch.setattr(ops, "_run", lambda *args, **kwargs: SimpleNamespace(stdout=""))
+    monkeypatch.setattr(ops, "_validation_target_ip", lambda: "172.31.0.9")
+    monkeypatch.setattr(
+        ops,
+        "_wait_required_services",
+        lambda *args, **kwargs: sorted(ops.REQUIRED_RUNNING_SERVICES | {"scan_target"}),
+    )
+    container_env = {"AEGIS_LAB_NETWORK_CIDRS": "192.168.49.0/24,172.31.0.9/32"}
+    monkeypatch.setattr(ops, "_container_environment", lambda _: dict(container_env))
+
+    target, runtime_env, services = ops._activate_e2e_scope(
+        tmp_path / "production.env",
+        env,
+        timeout_seconds=30,
+        poll_seconds=1,
+    )
+
+    assert target == "172.31.0.9"
+    assert runtime_env["AEGIS_LAB_NETWORK_CIDRS"] == "192.168.49.0/24,172.31.0.9/32"
+    assert "AUTHORIZED_SCAN_TARGETS" not in runtime_env
+    assert "SCANNER_EGRESS_PRIVATE_TARGETS" not in runtime_env
+    assert "scan_target" in services
 
 
 def test_alertmanager_and_backup_probes_require_real_success(monkeypatch, tmp_path: Path):
@@ -138,7 +165,7 @@ def test_accept_binds_release_and_emits_sanitized_operational_evidence(monkeypat
     monkeypatch.setattr(
         ops,
         "_activate_e2e_scope",
-        lambda *args, **kwargs: ("172.31.0.9", {"AUTHORIZED_SCAN_TARGETS": "security.example,172.31.0.9"}, sorted(ops.REQUIRED_RUNNING_SERVICES | {"scan_target"})),
+        lambda *args, **kwargs: ("172.31.0.9", {"AEGIS_LAB_NETWORK_CIDRS": "172.31.0.9/32"}, sorted(ops.REQUIRED_RUNNING_SERVICES | {"scan_target"})),
     )
     monkeypatch.setattr(ops, "_provision_e2e_fixture", lambda *args, **kwargs: fixture)
     monkeypatch.setattr(
