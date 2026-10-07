@@ -31,7 +31,7 @@ def test_publication_consumers_load_same_immutable_patch_tag(workflow, tmp_path)
     else:
         assert len(jobs) == 1
 
-    assert RELEASE_TAG == "v1.0.8"
+    assert RELEASE_TAG == "v1.0.9"
     for job_index, job in enumerate(jobs):
         steps = job["steps"]
         index = next(i for i, s in enumerate(steps) if s.get("name") == "Load current Release 1 publication tag")
