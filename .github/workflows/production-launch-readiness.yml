@@ -55,7 +55,7 @@ permissions: {contents: read}
 jobs:
   production-launch-readiness:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -72,6 +72,7 @@ jobs:
       - uses: actions/setup-python@v6
         with: {python-version: '3.12'}
       - name: Install launch-gate dependencies
+        timeout-minutes: 15
         shell: bash
         run: |
           set -euo pipefail
@@ -84,8 +85,10 @@ jobs:
           done
           sudo rm -rf /var/lib/apt/lists/*
           for attempt in 1 2 3; do
-            if sudo apt-get \
-              -o Acquire::Retries=3 \
+            if sudo timeout --foreground 180s apt-get \
+              -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=20 \
+              -o Acquire::https::Timeout=20 \
               -o Acquire::http::No-Cache=True \
               -o Acquire::https::No-Cache=True \
               update; then
@@ -97,7 +100,11 @@ jobs:
             sudo rm -rf /var/lib/apt/lists/*
             sleep $((attempt * 5))
           done
-          sudo apt-get install -y --no-install-recommends postgresql-client openssl
+          sudo timeout --foreground 420s apt-get \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=20 \
+            -o Acquire::https::Timeout=20 \
+            install -y --no-install-recommends postgresql-client openssl
           psql --version
           openssl version
           python -m pip install pytest==9.1.1 pyyaml==6.0.2
