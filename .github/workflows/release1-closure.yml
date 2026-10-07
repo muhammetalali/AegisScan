@@ -276,15 +276,15 @@ jobs:
               for component in django fastapi frontend; do
                 artifact_name="supply-chain-$component-$AEGIS_RELEASE_SHA"
                 mkdir -p "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name/$artifact_name"
-                gh run download "$run_id" \
-                  --repo "$GITHUB_REPOSITORY" \
-                  --name "$artifact_name" \
-                  --dir "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name/$artifact_name"
+                python scripts/ci/resilient_artifact_download.py \
+                  --run-id "$run_id" --repository "$GITHUB_REPOSITORY" \
+                  --artifact-name "$artifact_name" \
+                  --destination "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name/$artifact_name"
               done
             else
-              gh run download "$run_id" \
-                --repo "$GITHUB_REPOSITORY" \
-                --dir "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name"
+              python scripts/ci/resilient_artifact_download.py \
+                --run-id "$run_id" --repository "$GITHUB_REPOSITORY" \
+                --destination "${{ runner.temp }}/release1-${{ github.run_id }}-${{ github.run_attempt }}/evidence/$name"
             fi
           done
 

@@ -205,20 +205,20 @@ jobs:
           gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SUPPLY_CHAIN_RUN_ID" \
             > ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/metadata/supply-chain-run.json
 
-          gh run download "$LIVE_DEPLOY_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/live
-          gh run download "$RESILIENCE_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/resilience
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$LIVE_DEPLOY_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+            --destination ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/live
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$RESILIENCE_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+            --destination ${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/resilience
           # Require each evidence ZIP separately; Docker build records are not ZIP evidence.
           for component in django fastapi frontend; do
             artifact_name="supply-chain-$component-$RELEASE_SHA"
             install -d -m 0700 "${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/supply-chain/$artifact_name"
-            gh run download "$SUPPLY_CHAIN_RUN_ID" \
-              --repo "$GITHUB_REPOSITORY" \
-              --name "$artifact_name" \
-              --dir "${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/supply-chain/$artifact_name"
+            python scripts/ci/resilient_artifact_download.py \
+              --run-id "$SUPPLY_CHAIN_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+              --artifact-name "$artifact_name" \
+              --destination "${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/supply-chain/$artifact_name"
           done
 
       - name: Resolve approved internal production origin from immutable go-live evidence

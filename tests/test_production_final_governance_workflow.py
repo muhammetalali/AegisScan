@@ -54,7 +54,8 @@ def test_final_governance_requires_exact_main_same_sha_run_ids_and_enterprise_ca
     assert "AEGIS_ENTERPRISE_CA_BUNDLE=${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem" in text
     assert "REQUESTS_CA_BUNDLE=${{ runner.temp }}/aegis-governance-${{ github.run_id }}-${{ github.run_attempt }}/enterprise-ca.pem" in text
     assert "gh api" in text
-    assert "gh run download" in text
+    assert "python scripts/ci/resilient_artifact_download.py" in text
+    assert "gh run download" not in text
 
 
 def test_final_governance_revalidates_internal_surface_and_evidence_gate():
@@ -235,20 +236,27 @@ for name in names:
         [("100", "1", "a" * 40), ("100", "2", "a" * 40), ("101", "1", "b" * 40)]
     ):
         inventory = {}
-        for role in ("live", "resilience", "acceptance", "governance", "production"):
+        role_run_ids = {
+            "live": "1",
+            "resilience": "2",
+            "acceptance": "11",
+            "governance": "12",
+            "production": "13",
+        }
+        for role, role_run_id in role_run_ids.items():
             archive = tmp_path / f"{role}-{index}.zip"
             with zipfile.ZipFile(archive, "w") as stream:
                 stream.writestr("manifest.json", json.dumps({
                     "schema": "aegisscan.go-live-evidence.v3", "deployment_mode": "internal",
                     "release_sha": release, "internal_origin": "https://aegis.internal",
                 }))
-            inventory[role] = {f"{role}-artifact-{index}": str(archive)}
-        inventory["supply"] = {}
+            inventory[role_run_id] = {f"{role}-artifact-{index}": str(archive)}
+        inventory["3"] = {}
         for component in ("django", "fastapi", "frontend"):
             archive = tmp_path / f"{component}-{index}.zip"
             with zipfile.ZipFile(archive, "w") as stream:
                 stream.writestr(f"{component}.cdx.json", "{}")
-            inventory["supply"][f"supply-chain-{component}-{release}"] = str(archive)
+            inventory["3"][f"supply-chain-{component}-{release}"] = str(archive)
         fixture.write_text(json.dumps(inventory))
         script = download.replace("${{ runner.temp }}", str(tmp_path / "runner-temp"))
         script = script.replace("${{ github.run_id }}", run_id).replace("${{ github.run_attempt }}", attempt)
@@ -256,9 +264,9 @@ for name in names:
         env = {
             **os.environ, "PATH": f"{binary}:{os.environ['PATH']}", "GH_FIXTURE": str(fixture),
             "GITHUB_REPOSITORY": "owner/repo", "RELEASE_SHA": release, "AEGIS_RELEASE_SHA": release,
-            "LIVE_DEPLOY_RUN_ID": "live", "RESILIENCE_RUN_ID": "resilience",
-            "SUPPLY_CHAIN_RUN_ID": "supply", "FINAL_ACCEPTANCE_RUN_ID": "acceptance",
-            "FINAL_GOVERNANCE_RUN_ID": "governance", "FINAL_PRODUCTION_GOVERNANCE_RUN_ID": "production",
+            "LIVE_DEPLOY_RUN_ID": "1", "RESILIENCE_RUN_ID": "2",
+            "SUPPLY_CHAIN_RUN_ID": "3", "FINAL_ACCEPTANCE_RUN_ID": "11",
+            "FINAL_GOVERNANCE_RUN_ID": "12", "FINAL_PRODUCTION_GOVERNANCE_RUN_ID": "13",
         }
         result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr

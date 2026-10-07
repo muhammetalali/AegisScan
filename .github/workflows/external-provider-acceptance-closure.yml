@@ -122,14 +122,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh run download "$CLOUD_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "cloud-live-provider-proof-$RELEASE_SHA" \
-            --dir /tmp/aegis-provider/cloud
-          gh run download "$IDENTITY_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "external-identity-live-proof-$RELEASE_SHA" \
-            --dir /tmp/aegis-provider/identity
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$CLOUD_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+            --artifact-name "cloud-live-provider-proof-$RELEASE_SHA" \
+            --destination /tmp/aegis-provider/cloud
+          python scripts/ci/resilient_artifact_download.py \
+            --run-id "$IDENTITY_RUN_ID" --repository "$GITHUB_REPOSITORY" \
+            --artifact-name "external-identity-live-proof-$RELEASE_SHA" \
+            --destination /tmp/aegis-provider/identity
 
       - name: Build exact-SHA external provider acceptance closure
         shell: bash
