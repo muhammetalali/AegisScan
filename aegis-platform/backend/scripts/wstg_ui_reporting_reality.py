@@ -55,6 +55,7 @@ def verify() -> dict:
 
     app_source = (FRONTEND / 'src' / 'App.tsx').read_text(encoding='utf-8')
     layout_source = (FRONTEND / 'src' / 'components' / 'layout' / 'Layout.tsx').read_text(encoding='utf-8')
+    navigation_source = (FRONTEND / 'src' / 'components' / 'layout' / 'navigation.ts').read_text(encoding='utf-8')
     page_source = (FRONTEND / 'src' / 'pages' / 'assurance' / 'WSTGCoveragePage.tsx').read_text(encoding='utf-8')
     reports_source = (FRONTEND / 'src' / 'pages' / 'reports' / 'Reports.tsx').read_text(encoding='utf-8')
     evidence_source = (FRONTEND / 'src' / 'pages' / 'evidence' / 'Evidence.tsx').read_text(encoding='utf-8')
@@ -62,7 +63,7 @@ def verify() -> dict:
 
     checks = {
         'protected_route': 'path="/wstg"' in app_source,
-        'navigation': "href: '/wstg'" in layout_source,
+        'navigation': "from './navigation'" in layout_source and "href: '/wstg'" in navigation_source,
         'central_transport': "apiHelpers.get<unknown>(`/wstg/projects/${projectId}/coverage`)" in page_source,
         'strict_contract': (
             'WSTGProjectCoverageSchema' in contracts_source

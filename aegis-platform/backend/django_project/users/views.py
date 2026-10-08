@@ -7,6 +7,11 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.db.models import Q
 import logging
+import hashlib
+import secrets
+from django.db import transaction
+from django_project.audit.models import AuditLog
+from django_project.audit.services import append_audit, client_ip_from_request
 
 from .models import User, Team, TeamMembership, APIKey, UserSession, LoginAttempt
 from .serializers import (
@@ -217,6 +222,7 @@ class APIKeyViewSet(viewsets.ModelViewSet):
         'retrieve': 'api_key.manage',
         'create': 'api_key.manage',
         'destroy': 'api_key.manage',
+        'rotate': 'api_key.manage',
     }
 
     def get_serializer_class(self):
@@ -227,9 +233,48 @@ class APIKeyViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return APIKey.objects.filter(user=self.request.user)
 
+    def _audit_key(self, key, action: str, *, metadata=None):
+        append_audit(
+            user=self.request.user, action=action, result=AuditLog.Result.SUCCESS,
+            resource_type='APIKey', resource_id=str(key.pk), resource_repr=key.name,
+            ip_address=client_ip_from_request(self.request),
+            user_agent=str(self.request.META.get('HTTP_USER_AGENT', ''))[:2000],
+            metadata=metadata or {},
+        )
+
+    def perform_create(self, serializer):
+        key = serializer.save()
+        self._audit_key(key, AuditLog.Action.API_KEY_CREATE)
+
+    @transaction.atomic
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save()
+        if instance.is_active:
+            instance.is_active = False
+            instance.save(update_fields=['is_active'])
+            self._audit_key(instance, AuditLog.Action.API_KEY_REVOKE)
+
+    @action(detail=True, methods=['post'])
+    @transaction.atomic
+    def rotate(self, request, pk=None):
+        old = self.get_object()
+        old = APIKey.objects.select_for_update().get(pk=old.pk)
+        if not old.is_active:
+            return Response({'detail': 'Revoked API keys cannot be rotated.'}, status=status.HTTP_409_CONFLICT)
+        material = f"aegis_{secrets.token_urlsafe(32)}"
+        replacement = APIKey.objects.create(
+            user=request.user, name=old.name, permissions=old.permissions,
+            expires_at=old.expires_at, team=old.team,
+            key_hash=hashlib.sha256(material.encode()).hexdigest(),
+            key_prefix=material[:12],
+        )
+        old.is_active = False
+        old.save(update_fields=['is_active'])
+        self._audit_key(old, AuditLog.Action.API_KEY_REVOKE, metadata={'replaced_by': str(replacement.id)})
+        self._audit_key(replacement, AuditLog.Action.API_KEY_CREATE, metadata={'rotated_from': str(old.id)})
+        # Secret returned once, never included in logs, audit or subsequent list responses.
+        response = APIKeySerializer(replacement, context={'request': request}).data
+        response['key'] = material
+        return Response(response, status=status.HTTP_201_CREATED)
 
 
 class UserSessionViewSet(viewsets.ReadOnlyModelViewSet):
