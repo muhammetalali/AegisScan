@@ -25,3 +25,5 @@ def test_register_no_longer_links_to_nonexistent_legal_routes():
     assert 'to="/terms"' not in register
     assert 'to="/privacy"' not in register
     assert "اطلب معلومات شروط الاستخدام والخصوصية" in register
+    assert "2FA متاح" not in register
+    assert "جلسة محمية" in register
