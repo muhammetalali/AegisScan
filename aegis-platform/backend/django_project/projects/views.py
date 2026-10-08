@@ -1,6 +1,8 @@
 from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework import permissions, status, viewsets
+from rest_framework.authentication import SessionAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.response import Response
 
 from django_project.assets.models import Asset
@@ -9,9 +11,13 @@ from django_project.vulnerabilities.models import Vulnerability
 from .models import Project
 from .serializers import ProjectSerializer, ProjectCreateUpdateSerializer
 from django_project.users.permissions import HasPermission
+from django_project.users.authentication import ScopedAPIKeyAuthentication, CookieJWTAuthentication
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
+    # Opt-in only: key-auth is not globally safe on endpoints without
+    # action-specific RBAC permission declarations.
+    authentication_classes = [ScopedAPIKeyAuthentication, CookieJWTAuthentication, JWTAuthentication, SessionAuthentication]
     queryset = Project.objects.all()
     permission_classes = [permissions.IsAuthenticated, HasPermission]
     required_permissions = {

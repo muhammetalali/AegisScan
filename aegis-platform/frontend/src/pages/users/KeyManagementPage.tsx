@@ -68,6 +68,7 @@ export const KeyManagementPage = () => {
     {mode==='api'&&<>
       <form className="rounded-xl border bg-card p-5 space-y-3" onSubmit={event=>{event.preventDefault();if(!name.trim())return;void transact(()=>apiHelpers.post('/auth/api-keys/',{name:name.trim(),permissions:[permission]}),'Access key created')}}>
         <h2 className="font-semibold">Create access key</h2>
+        <p className="text-xs text-muted-foreground">Verified X-API-Key consumer: read-only GET /api/v1/projects/ using project.read, limited by your project membership. Other scopes are reserved for separately reviewed API consumers; they do not currently enable access to scan or report APIs.</p>
         <label className="block text-sm">Key name<input aria-label="New key name" className={fields} maxLength={100} required value={name} onChange={e=>setName(e.target.value)}/></label>
         <label className="block text-sm">Permission<select aria-label="New key permission" className={fields} value={permission} onChange={e=>setPermission(e.target.value)}>
           {['project.read','scan.read','report.read','asset.read','scan.create'].map(v=><option key={v} value={v}>{v}</option>)}

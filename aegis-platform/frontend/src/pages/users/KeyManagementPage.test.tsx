@@ -29,6 +29,11 @@ beforeEach(()=>{
 afterEach(()=>{cleanup();vi.restoreAllMocks();vi.clearAllMocks()})
 
 describe('live key-management control contracts',()=>{
+  it('identifies the only verified API-key consumer without claiming scanner access',()=>{
+    renderPage()
+    expect(screen.getByText(/Verified X-API-Key consumer/).textContent).toContain('GET /api/v1/projects/')
+    expect(screen.getByText(/Verified X-API-Key consumer/).textContent).toContain('do not currently enable access')
+  })
   it('rejects viewing key-management controls for Viewer',()=>{
     useAuthStore.setState({user:{role:'viewer'} as never})
     renderPage()
