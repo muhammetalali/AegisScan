@@ -93,6 +93,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             pyproject.toml
+            requirements.txt
             aegis-platform/backend/requirements.txt
       - name: Install real platform dependencies
         run: |
