@@ -382,13 +382,19 @@ def test_production_zip_acceptance_is_opt_in_and_requires_semgrep_findings():
 def test_zip_acceptance_fixture_contains_only_nested_static_code():
     import importlib.util
     import io
+    import sys
+    import types
     import zipfile
+    from unittest.mock import patch
 
     harness = ROOT / "aegis-platform/e2e/external_black_box_e2e.py"
     spec = importlib.util.spec_from_file_location("isolated_external_black_box_harness", harness)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Contract-only CI runners install pytest/YAML, not HTTP client packages.
+    # Stub transport imports; no network call is made by this pure fixture test.
+    with patch.dict(sys.modules, {'requests': types.ModuleType('requests')}):
+        spec.loader.exec_module(module)
 
     standalone_name, plain, standalone_mime = module.file_acceptance_fixture()
     zip_name, archive_bytes, zip_mime = module.file_acceptance_fixture(archive=True)
