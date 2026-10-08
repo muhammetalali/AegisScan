@@ -206,3 +206,56 @@ def test_self_deactivation_rejects_wrong_password():
     assert response.status_code == 400
     user.refresh_from_db()
     assert user.is_active is True
+
+
+@pytest.mark.django_db
+def test_mfa_flag_never_issues_password_only_jwt_when_challenge_unavailable():
+    """A pre-existing MFA flag cannot be bypassed by knowing only the password."""
+    from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+
+    account = User.objects.create_user(
+        email='mfa-fail-closed@example.invalid',
+        password='Strong-Test-Password-123!',
+        first_name='MFA',
+        last_name='Enforced',
+        two_factor_enabled=True,
+        two_factor_secret='JBSWY3DPEHPK3PXP',
+    )
+    client = Client(enforce_csrf_checks=True)
+    csrf = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+
+    response = client.post(
+        '/api/v1/auth/login/',
+        {'email': account.email, 'password': 'Strong-Test-Password-123!'},
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+
+    assert response.status_code == 403
+    assert 'Second-factor verification is required' in response.json()['detail']
+    assert 'aegis_access' not in response.cookies
+    assert 'aegis_refresh' not in response.cookies
+    assert not OutstandingToken.objects.filter(user=account).exists()
+    assert LoginAttempt.objects.get(email=account.email).success is False
+
+
+@pytest.mark.django_db
+def test_mfa_flag_wrong_password_does_not_disclose_enrollment():
+    account = User.objects.create_user(
+        email='mfa-wrong-password@example.invalid',
+        password='Strong-Test-Password-123!',
+        two_factor_enabled=True,
+        two_factor_secret='JBSWY3DPEHPK3PXP',
+    )
+    client = Client(enforce_csrf_checks=True)
+    csrf = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+
+    response = client.post(
+        '/api/v1/auth/login/',
+        {'email': account.email, 'password': 'Wrong-Password-123!'},
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+
+    assert response.status_code == 401
+    assert 'Second-factor verification' not in str(response.content)
+    assert 'aegis_access' not in response.cookies
+    assert 'aegis_refresh' not in response.cookies

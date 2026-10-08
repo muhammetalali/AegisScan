@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.auth import authenticate
 from django.middleware.csrf import get_token
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
@@ -18,6 +19,7 @@ from django_project.audit.models import AuditLog
 from django_project.audit.services import append_audit, client_ip_from_request
 from .auth_audit import record_login_event
 from .serializers import UserSerializer, UserCreateSerializer
+from .models import User
 
 
 def _set_auth_cookies(response, access: str, refresh: str | None = None) -> None:
@@ -52,6 +54,27 @@ class LoginView(APIView):
         if getattr(request, 'limited', False):
             record_login_event(request, email=email, success=False, failure_reason='rate_limited')
             raise Throttled(detail='Too many login attempts.')
+        # A password alone MUST NOT issue JWTs when the persistent MFA flag is
+        # enabled. Enrollment/challenge verification is not implemented yet:
+        # fail closed before TokenObtainPairSerializer mints an outstanding token.
+        if (
+            email
+            and User.objects.filter(email__iexact=email, is_active=True, two_factor_enabled=True).exists()
+        ):
+            candidate = authenticate(
+                request=request,
+                email=email,
+                password=str(request.data.get('password') or ''),
+            )
+            if candidate is not None and candidate.two_factor_enabled:
+                record_login_event(
+                    request, email=email, success=False,
+                    failure_reason='second_factor_unavailable',
+                )
+                return Response(
+                    {'detail': 'Second-factor verification is required but is not configured. Contact an administrator.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         serializer = TokenObtainPairSerializer(data=request.data)
         try:
             serializer.is_valid(raise_exception=True)
