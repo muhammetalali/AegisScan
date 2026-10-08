@@ -263,11 +263,16 @@ def test_scope_cleanup_runs_only_after_operational_acceptance_started(tmp_path, 
     executable.write_text('#!/bin/sh\nprintf "cleanup-called\\n"\n', encoding="utf-8")
     executable.chmod(0o700)
     script = cleanup["run"].replace("/tmp/aegis-production", str(tmp_path))
+    invocation = "python aegis-platform/scripts/production_remote_operational_acceptance.py"
+    assert script.count(invocation) == 1, "cleanup must still use the canonical remote acceptance runner"
+    # Interpret the fake script explicitly: isolated Docker /tmp may be noexec.
+    script = script.replace(invocation, "sh " + str(executable), 1)
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env={
         **os.environ, "PATH": str(tmp_path) + ":" + os.environ["PATH"],
         "AEGIS_OPERATIONAL_OUTCOME": outcome, "AEGIS_PROD_TRANSPORT_READY": "true",
         "PROD_SSH_HOST": "unused", "PROD_SSH_PORT": "22", "PROD_SSH_USER": "unused",
         "GITHUB_SHA": "a" * 40,
+        "AEGIS_LIVE_ORIGIN": "https://aegis-prod.aegis.internal",
     })
     assert result.returncode == 0, result.stderr
     assert ("cleanup-called" in result.stdout) is expected
