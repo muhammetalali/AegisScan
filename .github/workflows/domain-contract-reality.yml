@@ -162,7 +162,7 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_bulk_import_atomicity.py fastapi_app/routers/test_asset_list_resource_efficiency.py enterprise/test_intelligence_lineage.py enterprise/test_risk_correlation.py
+        run: python -m pytest -q fastapi_app/routers/test_bulk_import_atomicity.py fastapi_app/routers/test_asset_list_resource_efficiency.py fastapi_app/routers/test_scans.py enterprise/test_intelligence_lineage.py enterprise/test_risk_correlation.py
       - name: System telemetry and unsupported operations reality
         working-directory: aegis-platform/backend
         env:
