@@ -203,7 +203,7 @@ async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='s
     if not asset: raise HTTPException(status_code=404,detail='Asset not found')
     if not asset.is_active: raise HTTPException(status_code=409,detail='Asset is inactive and cannot be scanned')
     config=asset.configuration or {}
-    from .scans import ScanCreate,_create_scan,_attach_celery_task,run_masscan_scan,run_nmap_scan,run_nuclei_scan,run_semgrep_scan
+    from .scans import ScanCreate, _create_scan, _attach_celery_task, _dispatch_primary_scan
     type_to_scan={'website':('url','nuclei'),'ip_address':('ip','nmap'),'domain':('ip','nmap'),'network_range':('network','masscan'),'source_code':('code','semgrep'),'repository':('code','semgrep'),'api_endpoint':('url','nuclei')}
     inferred=type_to_scan.get(asset.type)
     if not inferred: raise HTTPException(status_code=400,detail=f'No scanner mapping exists for asset type: {asset.type}')
@@ -227,8 +227,7 @@ async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='s
     created = response[0]
     created_new = response[2] if len(response) == 3 else True
     if created_new:
-        task_map = {'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}
-        task = task_map[engine].delay(str(created.id))
+        task = _dispatch_primary_scan(str(created.id), engine)
         created = await _attach_celery_task(str(created.id), task.id)
     return {
         'scan_id': str(created.id), 'task_id': created.celery_task_id,

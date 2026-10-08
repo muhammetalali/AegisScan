@@ -205,3 +205,33 @@ def test_deleted_file_asset_cleanup_rejects_unmanaged_bucket_name(tmp_path, monk
     asset_signals.cleanup_managed_file_upload(sender=None, instance=instance)
 
     assert bucket.exists()
+
+def test_safe_zip_extract_rejects_untrusted_symlink(tmp_path):
+    stream = io.BytesIO()
+    info = zipfile.ZipInfo('src/link.py')
+    info.create_system = 3
+    info.external_attr = (0o120777 << 16)
+    with zipfile.ZipFile(stream, 'w') as archive:
+        archive.writestr(info, 'outside-file')
+    with pytest.raises(HTTPException, match='symlinks are not supported') as exc:
+        launcher._safe_extract_zip(stream.getvalue(), tmp_path)
+    assert exc.value.status_code == 422
+
+
+def test_safe_zip_extract_caps_declared_uncompressed_size(tmp_path, monkeypatch):
+    monkeypatch.setattr(launcher, '_MAX_ZIP_BYTES', 16)
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('src/fixture.py', b'x' * 17)
+    with pytest.raises(HTTPException, match='expands beyond') as exc:
+        launcher._safe_extract_zip(stream.getvalue(), tmp_path)
+    assert exc.value.status_code == 413
+
+
+def test_safe_zip_extract_rejects_empty_directory_only_archive(tmp_path):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, 'w') as archive:
+        archive.writestr('folder/', b'')
+    with pytest.raises(HTTPException, match='no regular files') as exc:
+        launcher._safe_extract_zip(stream.getvalue(), tmp_path)
+    assert exc.value.status_code == 422

@@ -26,6 +26,24 @@ from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 
 router = APIRouter()
 SUPPORTED_ENGINES = {'nmap', 'nuclei', 'masscan', 'semgrep'}
+# One existing-task registry shared by both the manual and asset entrypoints.
+# Queue choice and worker behavior are unchanged; governed capability/Beat
+# dispatchers retain their deliberately separate contracts.
+_PRIMARY_SCAN_TASKS = {
+    'nmap': run_nmap_scan,
+    'nuclei': run_nuclei_scan,
+    'masscan': run_masscan_scan,
+    'semgrep': run_semgrep_scan,
+}
+
+
+def _dispatch_primary_scan(scan_id: str, engine: str):
+    task = _PRIMARY_SCAN_TASKS.get(engine)
+    if task is None:
+        raise HTTPException(status_code=400, detail='Unsupported scan engine')
+    return task.delay(scan_id)
+
+
 NETWORK_SCAN_TYPES = {Scan.Type.IP, Scan.Type.URL, Scan.Type.NETWORK}
 PERSISTED_AUTH_SCAN_TYPES = NETWORK_SCAN_TYPES | {Scan.Type.CODE}
 
@@ -263,8 +281,7 @@ async def create_scan(scan: ScanCreate, user=Depends(get_current_user)):
     created, engines = response[:2]
     created_new = response[2] if len(response) == 3 else True
     if created_new:
-        task_map = {'nmap': run_nmap_scan, 'nuclei': run_nuclei_scan, 'masscan': run_masscan_scan, 'semgrep': run_semgrep_scan}
-        result = task_map[engines[0]].delay(str(created.id))
+        result = _dispatch_primary_scan(str(created.id), engines[0])
         created = await _attach_celery_task(str(created.id), result.id)
     return await _serialize_scan(created)
 
