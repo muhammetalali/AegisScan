@@ -180,3 +180,36 @@ def test_retained_revoked_records_are_bounded(monkeypatch):
         control._create_lease({
             "target": "172.21.0.9", "ttl_seconds": 45,
         })
+
+
+def test_kernel_timeout_race_requires_existing_lease_set(monkeypatch):
+    """Do not mistake an absent firewall table for a harmless expired element."""
+    nft_calls = []
+    def nft(command, **_kwargs):
+        nft_calls.append(command)
+        if command.startswith("delete element"):
+            raise RuntimeError("No such file or directory")
+        if command.startswith("list set"):
+            raise RuntimeError("No such file or directory")
+    monkeypatch.setattr(control, "_run_nft", nft)
+    lease_id = control._create_lease({
+        "target": "172.21.0.8", "ttl_seconds": 80,
+    })["lease_id"]
+    with pytest.raises(RuntimeError, match="No such file"):
+        control._revoke_lease({"lease_id": lease_id})
+    assert control._LEASES[lease_id]["active"] is True
+    assert len(nft_calls) == 3
+
+
+def test_kernel_timeout_race_allows_already_expired_element_only_when_set_exists(monkeypatch):
+    nft_calls = []
+    def nft(command, **_kwargs):
+        nft_calls.append(command)
+        if command.startswith("delete element"):
+            raise RuntimeError("No such file or directory")
+    monkeypatch.setattr(control, "_run_nft", nft)
+    lease_id = control._create_lease({
+        "target": "172.21.0.8", "ttl_seconds": 80,
+    })["lease_id"]
+    assert control._revoke_lease({"lease_id": lease_id})["status"] == "revoked"
+    assert any(cmd.startswith("list set") for cmd in nft_calls)

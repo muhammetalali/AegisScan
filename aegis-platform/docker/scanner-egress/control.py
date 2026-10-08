@@ -154,7 +154,13 @@ def _revoke_lease(payload: dict) -> dict:
         except RuntimeError as exc:
             if 'No such file or directory' not in str(exc):
                 raise
-            # The kernel may have expired the nft element first.
+            # An expired element is safe, but a missing nft table/set is NOT.
+            # Require the fail-closed kernel policy and isolated lease set to
+            # still exist before treating the expired element as revoked.
+            _run_nft(
+                f"list set netdev {TABLE} {lease['set_name']}\n",
+                ignore_exists=False,
+            )
         lease['active'] = False
         _LEASE_TARGETS.pop(target, None)
     return {'status': 'revoked', 'target': target}
