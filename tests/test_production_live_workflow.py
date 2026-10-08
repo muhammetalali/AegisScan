@@ -410,3 +410,64 @@ def test_zip_acceptance_fixture_contains_only_nested_static_code():
     assert "if ZIP_ACCEPTANCE and not FILE_ACCEPTANCE:raise RuntimeError" in source
     assert "if ZIP_ACCEPTANCE:prove_file_assessment(session,approver,project_id,unique,archive=True)" in source
     assert "'CONTROLLED_LAUNCH_ZIP' if archive else 'CONTROLLED_LAUNCH_FILE'" in source
+
+def test_api_key_acceptance_is_opt_in_and_uses_existing_one_run_e2e():
+    workflow = _workflow()
+    flag = workflow["on"]["workflow_dispatch"]["inputs"]["api_key_acceptance"]
+    assert flag["type"] == "boolean"
+    assert flag["default"] is False
+    e2e = next(
+        step for step in workflow["jobs"]["deploy-and-accept"]["steps"]
+        if step.get("name") == "Run real internal-network black-box production E2E"
+    )
+    assert e2e["env"]["AEGIS_E2E_API_KEY_ACCEPTANCE"] == "${{ inputs.api_key_acceptance || false }}"
+    source = (ROOT / "aegis-platform/e2e/external_black_box_e2e.py").read_text(encoding="utf-8")
+    assert "if API_KEY_ACCEPTANCE:prove_api_key_consumer(session,str(project_id),unique)" in source
+    assert "API_KEY_LIVE_ACCEPTANCE=PASS" in source
+    assert "API key fixture cleanup" in source
+    assert "API key acceptance requires the regular one-run identity fixture" in source
+
+def test_live_api_key_acceptance_revokes_fixtures_on_success_and_error(monkeypatch):
+    import importlib.util
+    import sys
+    import types
+    from unittest.mock import patch
+
+    harness = ROOT / "aegis-platform/e2e/external_black_box_e2e.py"
+    for fail_read in (False, True):
+        fake_requests = types.ModuleType("requests")
+        fake_requests.Session = lambda: types.SimpleNamespace(verify=True, headers={})
+        spec = importlib.util.spec_from_file_location("isolated_api_key_acceptance", harness)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"requests": fake_requests}):
+            spec.loader.exec_module(module)
+        monkeypatch.setattr(module, "API_KEY_ACCEPTANCE", True)
+        monkeypatch.setattr(module, "csrf", lambda _session: "fixture-csrf")
+        calls = []
+
+        def fake_http(_session, method, _url, label, expected, **kwargs):
+            calls.append((method, label, expected))
+            if label == "One-run API key creation":
+                return {"id": "first", "key": "aegis_issued-in-test-only"}
+            if label == "API-key-only project read":
+                if fail_read:
+                    raise RuntimeError("simulated access denied")
+                return [{"id": "own-project"}]
+            if label == "Metadata-only key inventory":
+                return [{"id": "first", "key_prefix": "aegis_issued"}]
+            if label == "One-run API key rotation":
+                return {"id": "second", "key": "aegis_rotated-in-test-only"}
+            return {}
+
+        monkeypatch.setattr(module, "http", fake_http)
+        if fail_read:
+            with pytest.raises(RuntimeError, match="simulated access denied"):
+                module.prove_api_key_consumer(object(), "own-project", "fixture")
+        else:
+            module.prove_api_key_consumer(object(), "own-project", "fixture")
+            assert ("POST", "API-key mutation denied", {403}) in calls
+            assert ("GET", "Old key rejected after rotation", {401}) in calls
+            assert ("GET", "Revoked key rejected", {401}) in calls
+        expected_count = 1 if fail_read else 2
+        assert sum(label == "API key fixture cleanup" for _, label, _ in calls) == expected_count

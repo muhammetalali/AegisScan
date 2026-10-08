@@ -7,6 +7,7 @@ from typing import Any
 import requests
 BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_ACCESS_TOKEN=os.getenv('AEGIS_E2E_ACCESS_TOKEN'); E2E_APPROVER_ACCESS_TOKEN=os.getenv('AEGIS_E2E_APPROVER_ACCESS_TOKEN'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}; CAPACITY_MODE=os.getenv('AEGIS_E2E_CAPACITY_MODE','').lower() in {'1','true','yes','on'}; FILE_ACCEPTANCE=os.getenv('AEGIS_E2E_FILE_ACCEPTANCE','').lower() in {'1','true','yes','on'}; FILE_REQUIRE_FINDING=os.getenv('AEGIS_E2E_FILE_REQUIRE_FINDING','').lower() in {'1','true','yes','on'}
 ZIP_ACCEPTANCE=os.getenv('AEGIS_E2E_ZIP_ACCEPTANCE','').lower() in {'1','true','yes','on'}
+API_KEY_ACCEPTANCE=os.getenv('AEGIS_E2E_API_KEY_ACCEPTANCE','').lower() in {'1','true','yes','on'}
 
 def file_acceptance_fixture(*, archive:bool=False)->tuple[str,bytes,str]:
  source=(b"def controlled_file_acceptance_marker(user_input):\n"
@@ -117,6 +118,48 @@ def prove_file_assessment(session:requests.Session,approver:requests.Session,pro
  print(f'{marker}_DEACTIVATION_GUARD=PASS')
  print(f'{marker.lower()}_scan_id={scan_id}'); print(f'{marker.lower()}_asset_id={asset_id}'); print(f'{marker.lower()}_authorization_decision_id={decision_id}')
 
+def prove_api_key_consumer(actor:requests.Session,project_id:str,unique:str)->None:
+ """Check issued bearer-only keys against real project HTTP APIs, then revoke fixtures."""
+ if not API_KEY_ACCEPTANCE:return
+ token=csrf(actor); headers={'X-CSRFToken':token,'Referer':f'{BASE_URL}/'}
+ created=http(actor,'POST',f'{DJANGO_URL}/auth/api-keys/','One-run API key creation',{201},
+  json={'name':f'E2E project reader {unique}','permissions':['project.read']},headers=headers,timeout=20)
+ old_id=created.get('id') if isinstance(created,dict) else None
+ old_material=created.get('key') if isinstance(created,dict) else None
+ if not old_id or not isinstance(old_material,str) or not old_material.startswith('aegis_'):
+  raise RuntimeError('One-run API key creation did not return an ID and one-time bearer')
+ ids=[str(old_id)]
+ try:
+  isolated=requests.Session(); isolated.verify=VERIFY_TLS
+  isolated.headers['X-API-Key']=old_material
+  data=http(isolated,'GET',f'{DJANGO_URL}/projects/','API-key-only project read',{200},timeout=20)
+  if project_id not in {str(p.get('id')) for p in collection(data,'API key projects')}:
+   raise RuntimeError('API key could not access its own project')
+  inventory=http(actor,'GET',f'{DJANGO_URL}/auth/api-keys/','Metadata-only key inventory',{200},timeout=20)
+  if any('key' in p for p in collection(inventory,'API key inventory')):
+   raise RuntimeError('API key inventory unexpectedly exposed secret material')
+  http(isolated,'POST',f'{DJANGO_URL}/projects/','API-key mutation denied',{403},
+   json={'name':f'DENIED E2E {unique}'},timeout=20)
+  rotated=http(actor,'POST',f'{DJANGO_URL}/auth/api-keys/{old_id}/rotate/',
+   'One-run API key rotation',{201},json={},headers=headers,timeout=20)
+  new_id=rotated.get('id') if isinstance(rotated,dict) else None
+  new_material=rotated.get('key') if isinstance(rotated,dict) else None
+  if not new_id or not isinstance(new_material,str) or new_material==old_material:
+   raise RuntimeError('API key rotation lacked a distinct replacement')
+  ids.append(str(new_id))
+  http(isolated,'GET',f'{DJANGO_URL}/projects/','Old key rejected after rotation',{401},timeout=20)
+  isolated.headers['X-API-Key']=new_material
+  http(isolated,'GET',f'{DJANGO_URL}/projects/','Rotated key accepted',{200},timeout=20)
+  http(actor,'DELETE',f'{DJANGO_URL}/auth/api-keys/{new_id}/','Revoke rotated key',{204},
+   headers=headers,timeout=20)
+  http(isolated,'GET',f'{DJANGO_URL}/projects/','Revoked key rejected',{401},timeout=20)
+  print('API_KEY_LIVE_ACCEPTANCE=PASS',flush=True)
+ finally:
+  # Soft-revoke every transient key. The release fixture user is deactivated separately.
+  for key_id in ids:
+   http(actor,'DELETE',f'{DJANGO_URL}/auth/api-keys/{key_id}/',
+    'API key fixture cleanup',{204},headers=headers,timeout=20)
+
 def main()->int:
  if CLEANUP_ONLY:
   if not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):
@@ -128,6 +171,7 @@ def main()->int:
   raise RuntimeError('Capacity mode requires pre-provisioned actor/approver credentials and access tokens')
  if FILE_REQUIRE_FINDING and not FILE_ACCEPTANCE:raise RuntimeError('AEGIS_E2E_FILE_REQUIRE_FINDING requires AEGIS_E2E_FILE_ACCEPTANCE')
  if ZIP_ACCEPTANCE and not FILE_ACCEPTANCE:raise RuntimeError('AEGIS_E2E_ZIP_ACCEPTANCE requires AEGIS_E2E_FILE_ACCEPTANCE')
+ if API_KEY_ACCEPTANCE and CAPACITY_MODE:raise RuntimeError('API key acceptance requires the regular one-run identity fixture')
  session=requests.Session(); session.verify=VERIFY_TLS
  if CAPACITY_MODE: session.headers['Authorization']=f'Bearer {E2E_ACCESS_TOKEN}'
  http(session,'GET',f'{API_URL}/ready','FastAPI readiness',{200},timeout=15); http(session,'GET',f'{API_URL}/health','FastAPI health',{200},timeout=15)
@@ -139,6 +183,7 @@ def main()->int:
  if CAPACITY_MODE: print('CAPACITY_ACTOR_AUTH=PREPROVISIONED_JWT')
  else: http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)
  project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20); project_id=project['id']
+ if API_KEY_ACCEPTANCE:prove_api_key_consumer(session,str(project_id),unique)
  reports_data=http(session,'GET',f'{API_V1}/reports/','Authenticated report listing',{200},params={'project_id':project_id,'limit':100},timeout=20); collection(reports_data,'Authenticated report listing'); print('REPORT_LISTING=PASS')
  created_organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
  if not isinstance(created_organization,dict) or not created_organization.get('id'):raise RuntimeError(f'Tenant creation did not return id: {created_organization!r}')
