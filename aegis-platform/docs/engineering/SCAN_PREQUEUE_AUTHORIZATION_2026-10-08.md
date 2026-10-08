@@ -17,3 +17,7 @@ Five focused tests, all passed: missing bound decision, newer revocation, asset 
 - This does not itself make Celery publish atomic with PostgreSQL state. Broker outage or missing publish acknowledgement remains a scanner-outbox recovery task and must be tested before claiming exactly-once delivery.
 - Worker checks still independently enforce authorization and dynamic egress when execution starts.
 - The branch is not production until required PR checks, protected merge, exact-main CI and governed deployment have passed.
+
+## Bounded manual/asset dispatch consolidation
+
+The manual `POST /scans/` and asset `POST /api/v1/assets/{id}/scan` launchers previously maintained duplicate local engine-to-Celery task dictionaries. They now share the existing scan router's `_dispatch_primary_scan` registry, preserving the same engine-task mapping and existing Celery routing. Existing tests for idempotent replay, target authorization, explicit rescans and old Semgrep path must pass unchanged. Native capability, scheduled execution, and enterprise entrypoints are deliberately excluded pending a separately governed broker-outbox/uncertain-ack design.
