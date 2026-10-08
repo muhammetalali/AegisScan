@@ -285,14 +285,7 @@ export const Register = () => {
             </p>
 
             <div className="mt-6 text-center text-xs text-muted-foreground">
-              بالضغط على "إنشاء الحساب"، أنت توافق على
-              <Link to="/terms" className="text-primary hover:underline ml-1">
-                شروط الخدمة
-              </Link>
-              و
-              <Link to="/privacy" className="text-primary hover:underline ml-1">
-                سياسة الخصوصية
-              </Link>
+              اطلب معلومات شروط الاستخدام والخصوصية من مسؤول النظام قبل إنشاء الحساب.
             </div>
           </motion.div>
 
