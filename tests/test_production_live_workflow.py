@@ -363,3 +363,50 @@ def test_file_acceptance_is_explicit_one_release_opt_in_with_production_finding_
     ci = (ROOT / ".github/workflows/external-black-box-e2e.yml").read_text(encoding="utf-8")
     assert "AEGIS_E2E_FILE_ACCEPTANCE: 'true'" in ci
     assert "AEGIS_E2E_FILE_REQUIRE_FINDING: 'false'" in ci
+
+
+def test_production_zip_acceptance_is_opt_in_and_requires_semgrep_findings():
+    workflow = _workflow()
+    dispatch_input = workflow["on"]["workflow_dispatch"]["inputs"]["file_acceptance"]
+    assert dispatch_input["type"] == "boolean"
+    assert dispatch_input["default"] is False
+
+    step = next(
+        s for s in workflow["jobs"]["deploy-and-accept"]["steps"]
+        if s.get("name") == "Run real internal-network black-box production E2E"
+    )
+    assert step["env"]["AEGIS_E2E_ZIP_ACCEPTANCE"] == "${{ inputs.file_acceptance || false }}"
+    assert step["env"]["AEGIS_E2E_FILE_REQUIRE_FINDING"] == "${{ inputs.file_acceptance || false }}"
+
+
+def test_zip_acceptance_fixture_contains_only_nested_static_code():
+    import importlib.util
+    import io
+    import sys
+    import types
+    import zipfile
+    from unittest.mock import patch
+
+    harness = ROOT / "aegis-platform/e2e/external_black_box_e2e.py"
+    spec = importlib.util.spec_from_file_location("isolated_external_black_box_harness", harness)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Contract-only CI runners install pytest/YAML, not HTTP client packages.
+    # Stub transport imports; no network call is made by this pure fixture test.
+    with patch.dict(sys.modules, {'requests': types.ModuleType('requests')}):
+        spec.loader.exec_module(module)
+
+    standalone_name, plain, standalone_mime = module.file_acceptance_fixture()
+    zip_name, archive_bytes, zip_mime = module.file_acceptance_fixture(archive=True)
+    assert standalone_name.endswith(".py") and standalone_mime == "text/x-python"
+    assert zip_name.endswith(".zip") and zip_mime == "application/zip"
+    assert b"eval(user_input)" in plain
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+        assert archive.namelist() == ["src/aegis-file-acceptance.py"]
+        assert archive.read("src/aegis-file-acceptance.py") == plain
+
+    source = harness.read_text(encoding="utf-8")
+    assert "if ZIP_ACCEPTANCE and not FILE_ACCEPTANCE:raise RuntimeError" in source
+    assert "if ZIP_ACCEPTANCE:prove_file_assessment(session,approver,project_id,unique,archive=True)" in source
+    assert "'CONTROLLED_LAUNCH_ZIP' if archive else 'CONTROLLED_LAUNCH_FILE'" in source
