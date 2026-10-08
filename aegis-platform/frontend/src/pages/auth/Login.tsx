@@ -1,5 +1,5 @@
 import React, { FormEvent, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Languages } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/authStore'
@@ -81,6 +81,11 @@ export const Login = () => {
 
             <button type="submit" className="login-submit" disabled={busy}>{busy ? t('Signing in…') : t('Sign in')}</button>
           </form>
+          <p className="mt-4 text-center text-xs text-muted-foreground">
+            <Link to="/forgot-password" className="text-primary hover:underline">
+              {language === 'ar' ? 'هل تحتاج مساعدة للوصول إلى حسابك؟' : 'Need help accessing your account?'}
+            </Link>
+          </p>
         </div>
 
         <div className="login-footer"><span>{t('Protected session')}</span><span aria-hidden="true">•</span><span>RBAC</span><span aria-hidden="true">•</span><span>{t('Evidence')}</span></div>
