@@ -34,14 +34,14 @@ RUN set -eux; \
     test -s /etc/ssl/certs/ca-certificates.crt; \
     printf '%s\n' 'APT::Update::Error-Mode "any";' 'Acquire::Retries "3";' 'Acquire::http::Timeout "60";' 'Acquire::https::Timeout "60";' 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/80aegis-network; \
     if [ -f /etc/apt/sources.list.d/kali.sources ]; then \
-        sed -i -E 's|^URIs:[[:space:]]+http://http\.kali\.org/kali/?[[:space:]]*$|URIs: https://kali.download/kali/|' /etc/apt/sources.list.d/kali.sources; \
-        grep -Eq '^URIs: https://kali\.download/kali/[[:space:]]*$' /etc/apt/sources.list.d/kali.sources; \
+        sed -i -E 's|^URIs:[[:space:]]+http://http\.kali\.org/kali/?[[:space:]]*$|URIs: https://archive.kali.org/kali/|' /etc/apt/sources.list.d/kali.sources; \
+        grep -Eq '^URIs: https://archive\.kali\.org/kali/[[:space:]]*$' /etc/apt/sources.list.d/kali.sources; \
         sed -i -E 's/^Suites:[[:space:]]+kali-rolling[[:space:]]*$/Suites: kali-last-snapshot/' /etc/apt/sources.list.d/kali.sources; \
         grep -Eq '^Suites:[[:space:]]+kali-last-snapshot[[:space:]]*$' /etc/apt/sources.list.d/kali.sources; \
         ! grep -Eq '^Suites:[[:space:]]+kali-rolling([[:space:]]|$)' /etc/apt/sources.list.d/kali.sources; \
     elif [ -f /etc/apt/sources.list ]; then \
-        sed -i -E 's|(^deb[[:space:]]+)http://http\.kali\.org/kali/?([[:space:]])|\1https://kali.download/kali/\2|' /etc/apt/sources.list; \
-        grep -Eq '^deb[[:space:]]+https://kali\.download/kali/[[:space:]]' /etc/apt/sources.list; \
+        sed -i -E 's|(^deb[[:space:]]+)http://http\.kali\.org/kali/?([[:space:]])|\1https://archive.kali.org/kali/\2|' /etc/apt/sources.list; \
+        grep -Eq '^deb[[:space:]]+https://archive\.kali\.org/kali/[[:space:]]' /etc/apt/sources.list; \
         sed -i -E 's/(^deb[[:space:]]+[^[:space:]]+[[:space:]]+)kali-rolling([[:space:]])/\1kali-last-snapshot\2/' /etc/apt/sources.list; \
         grep -Eq '^deb[[:space:]]+[^[:space:]]+[[:space:]]+kali-last-snapshot[[:space:]]' /etc/apt/sources.list; \
         ! grep -Eq '^[[:space:]]*deb[[:space:]]+[^[:space:]]+[[:space:]]+kali-rolling([[:space:]]|$)' /etc/apt/sources.list; \
