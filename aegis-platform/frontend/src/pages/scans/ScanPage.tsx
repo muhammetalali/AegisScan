@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, AlertCircle, ArrowUpRight, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { apiHelpers } from '@/services/api'
@@ -35,9 +35,12 @@ type Asset = {
 export const ScanPage = () => {
   const t = useLanguageStore((s) => s.t)
   const qc = useQueryClient()
-  const [open, setOpen] = useState(false)
-  const [projectId, setProjectId] = useState('')
-  const [assetId, setAssetId] = useState('')
+  const [searchParams] = useSearchParams()
+  const requestedProjectId = searchParams.get('project_id') || ''
+  const requestedAssetId = searchParams.get('asset_id') || ''
+  const [open, setOpen] = useState(Boolean(requestedProjectId && requestedAssetId))
+  const [projectId, setProjectId] = useState(requestedProjectId)
+  const [assetId, setAssetId] = useState(requestedAssetId)
   const [capabilityId, setCapabilityId] = useState('')
   const [depth, setDepth] = useState<'quick' | 'standard' | 'deep' | 'comprehensive'>('standard')
   const [busy, setBusy] = useState(false)
