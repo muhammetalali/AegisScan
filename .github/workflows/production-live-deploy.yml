@@ -265,6 +265,8 @@ jobs:
             --private-key /tmp/aegis-production/id \
             --known-hosts /tmp/aegis-production/known_hosts \
             --release-sha "$GITHUB_SHA" \
+            --probe-origin "$AEGIS_LIVE_ORIGIN" \
+            --probe-ca-bundle /tmp/aegis-production/enterprise-ca.pem \
             --e2e-fixture-output /tmp/aegis-production/e2e-fixture.json \
             | tee /tmp/aegis-production/operational-acceptance.json
 
@@ -387,6 +389,8 @@ jobs:
             --private-key /tmp/aegis-production/id \
             --known-hosts /tmp/aegis-production/known_hosts \
             --release-sha "$GITHUB_SHA" \
+            --probe-origin "$AEGIS_LIVE_ORIGIN" \
+            --probe-ca-bundle /tmp/aegis-production/enterprise-ca.pem \
             --cleanup-e2e-scope \
             | tee /tmp/aegis-production/e2e-scope-cleanup.json
 
