@@ -29,6 +29,9 @@ owned/member projects, independent of key permissions.
 - No API-key authentication on unrelated DRF endpoints or FastAPI.
 - Last-used timestamp and IP are updated; raw key is never logged or
   returned by the listing API.
+- Existing SHA-256 digest lookup gets a PostgreSQL B-tree index through the
+  existing users app migration sequence; do not brute-force scan the API-key
+  table per incoming request.
 - Frontend clearly states the supported consumer. Existing key issuance UI
   remains intact; other key scopes are **not yet enabled for API access**.
 
