@@ -102,8 +102,14 @@ nft "add chain netdev $TABLE $INGRESS_CHAIN { type filter hook ingress device \"
 # remain authoritative for everything else.
 nft "add set netdev $TABLE dynamic_ipv4 { type ipv4_addr; flags interval; }"
 nft "add set netdev $TABLE dynamic_ipv6 { type ipv6_addr; flags interval; }"
+# Ephemeral exact-IP admissions are separate from the durable, governed dynamic
+# sets. nftables expires these elements in-kernel even if the control process dies.
+nft "add set netdev $TABLE leased_ipv4 { type ipv4_addr; flags timeout; }"
+nft "add set netdev $TABLE leased_ipv6 { type ipv6_addr; flags timeout; }"
 nft add rule netdev "$TABLE" "$CHAIN" ip daddr @dynamic_ipv4 accept
 nft add rule netdev "$TABLE" "$CHAIN" ip6 daddr @dynamic_ipv6 accept
+nft add rule netdev "$TABLE" "$CHAIN" ip daddr @leased_ipv4 accept
+nft add rule netdev "$TABLE" "$CHAIN" ip6 daddr @leased_ipv6 accept
 
 # Amass v5's collection engine listens on :4000. The legacy scanner worker and
 # governed Kali Recon provider intentionally share this network namespace, so
