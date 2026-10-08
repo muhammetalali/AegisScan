@@ -10,7 +10,14 @@ import re
 import shlex
 import subprocess
 import sys
+import ssl
+import threading
+import time
+from collections import Counter
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REMOTE_DEPLOY_PATH = SCRIPT_DIR / "production_remote_deploy.py"
@@ -394,6 +401,94 @@ def cleanup_remote(
     }
 
 
+def _observe_ingress_during(operation, *, origin: str | None, ca_bundle: Path | None):
+    """Measure real HTTPS ingress while the privileged E2E scope changes.
+
+    Evidence only: success of the operation does not prove uninterrupted traffic.
+    The probe has no cookies, keys, or auth headers. TLS verification is mandatory.
+    """
+    if origin is None and ca_bundle is None:
+        return operation()
+    if not origin or ca_bundle is None:
+        raise RemoteOperationalAcceptanceError("availability observation needs both an HTTPS origin and enterprise CA")
+    parsed = urlsplit(origin)
+    try:
+        safe_origin = (
+            parsed.scheme == "https" and bool(parsed.hostname)
+            and not parsed.username and not parsed.password
+            and parsed.path in {"", "/"} and not parsed.query and not parsed.fragment
+            and parsed.port in {None, 443}
+        )
+    except ValueError:
+        safe_origin = False
+    if not safe_origin:
+        raise RemoteOperationalAcceptanceError("availability probe origin must be an HTTPS origin")
+    try:
+        if ca_bundle.is_symlink():
+            raise RemoteOperationalAcceptanceError("enterprise CA bundle must not be a symlink")
+        ca_bundle = ca_bundle.resolve(strict=True)
+        remote._private_file(ca_bundle, "enterprise CA bundle", 2 * 1024 * 1024)
+        context = ssl.create_default_context(cafile=str(ca_bundle))
+    except (OSError, ssl.SSLError, remote.RemoteDeployError) as exc:
+        raise RemoteOperationalAcceptanceError("private enterprise CA could not be validated") from exc
+    stop = threading.Event()
+    sample_ready = threading.Event()
+    counts = {"health": Counter(), "ready": Counter()}
+    degraded = []
+    first_sample = time.monotonic()
+    sample_count = 0
+
+    def monitor():
+        nonlocal sample_count
+        while not stop.is_set():
+            statuses = {}
+            for route in ("health", "ready"):
+                url = f"{origin.rstrip('/')}/{route}"
+                try:
+                    with urlopen(url, timeout=2, context=context) as response:
+                        # HTTP redirects must not silently convert a failed health probe into 200.
+                        status = int(response.status) if getattr(response, "geturl", lambda: url)() == url else 0
+                except HTTPError as exc:
+                    status = int(exc.code)
+                except (OSError, URLError, TimeoutError, ValueError):
+                    status = 0
+                statuses[route] = status
+                counts[route][str(status)] += 1
+            sample_count += 1
+            sample_ready.set()
+            if any(status != 200 for status in statuses.values()) and len(degraded) < 12:
+                degraded.append({"offset_ms": round((time.monotonic() - first_sample) * 1000), **statuses})
+            stop.wait(0.35)
+
+    worker = threading.Thread(target=monitor, name="aegis-ingress-observer", daemon=True)
+    worker.start()
+    # Observe ingress once before touching the E2E scope, so a short restart
+    # cannot complete before the sampler is scheduled.
+    sample_ready.wait(timeout=5)
+    try:
+        result = operation()
+    finally:
+        stop.set()
+        worker.join(timeout=6)
+        evidence = {
+            "schema": "aegisscan.production-ingress-availability-observation.v1",
+            "samples": sample_count,
+            "health_status_counts": dict(counts["health"]),
+            "ready_status_counts": dict(counts["ready"]),
+            "degraded_sample_examples": degraded,
+            "observed_degradation": bool(
+                any(code != "200" for code in counts[route]) for route in ("health", "ready")
+            ),
+            "tls_verified": True,
+            "sampling_interval_seconds": 0.35,
+            "continuous_availability_proven": False,
+        }
+        print("PRODUCTION_INGRESS_AVAILABILITY=" + json.dumps(evidence, sort_keys=True), file=sys.stderr, flush=True)
+    if not isinstance(result, dict):
+        raise RemoteOperationalAcceptanceError("availability-wrapped operation did not return a result")
+    return {**result, "ingress_availability_observation": evidence}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True)
@@ -407,6 +502,8 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=int, default=2400)
     parser.add_argument("--e2e-fixture-output", type=Path)
     parser.add_argument("--cleanup-e2e-scope", action="store_true")
+    parser.add_argument("--probe-origin", help="Approved internal HTTPS origin to monitor during scope changes")
+    parser.add_argument("--probe-ca-bundle", type=Path, help="Pinned private enterprise CA for ingress monitoring")
     args = parser.parse_args()
     if args.timeout_seconds < 60 or args.timeout_seconds > 7200:
         print("timeout-seconds must be between 60 and 7200", file=sys.stderr)
@@ -416,7 +513,7 @@ def main() -> int:
         return 2
     try:
         if args.cleanup_e2e_scope:
-            result = cleanup_remote(
+            result = _observe_ingress_during(lambda: cleanup_remote(
                 host=args.host,
                 port=args.port,
                 user=args.user,
@@ -426,10 +523,10 @@ def main() -> int:
                 repo_path=args.repo_path,
                 env_path=args.env_path,
                 timeout_seconds=args.timeout_seconds,
-            )
+            ), origin=args.probe_origin, ca_bundle=args.probe_ca_bundle)
         else:
             assert args.e2e_fixture_output is not None
-            result = accept_remote(
+            result = _observe_ingress_during(lambda: accept_remote(
                 host=args.host,
                 port=args.port,
                 user=args.user,
@@ -440,7 +537,7 @@ def main() -> int:
                 env_path=args.env_path,
                 timeout_seconds=args.timeout_seconds,
                 e2e_fixture_output=args.e2e_fixture_output,
-            )
+            ), origin=args.probe_origin, ca_bundle=args.probe_ca_bundle)
     except RemoteOperationalAcceptanceError as exc:
         print(json.dumps({
             "schema": (

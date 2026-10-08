@@ -197,3 +197,87 @@ def test_private_fixture_transfer_rejects_untrusted_remote_path(tmp_path: Path):
             remote_path="/tmp/attacker-controlled.json",
             local_path=tmp_path / "fixture.json",
         )
+
+
+def test_ingress_availability_evidence_captures_real_http_failure_without_hiding_success(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    """Never equate a successful SSH acceptance with zero observed ingress failures."""
+    import threading
+    from contextlib import nullcontext
+    from urllib.error import HTTPError
+
+    enterprise_ca = _private(tmp_path / "enterprise-ca.pem", "test-only-ca")
+    monkeypatch.setattr(remote_ops.remote, "_private_file", lambda *_args, **_kw: None)
+    monkeypatch.setattr(remote_ops.ssl, "create_default_context", lambda cafile: object())
+    ready_sampled = threading.Event()
+
+    def fake_urlopen(url, *, timeout, context):
+        assert timeout == 2
+        assert context is not None
+        if url.endswith("/ready"):
+            ready_sampled.set()
+            raise HTTPError(url, 502, "temporary upstream unavailable", None, None)
+        return nullcontext(SimpleNamespace(status=200))
+
+    monkeypatch.setattr(remote_ops, "urlopen", fake_urlopen)
+
+    def operation():
+        assert ready_sampled.wait(timeout=2)
+        return {"status": "success", "release_sha": "a" * 40}
+
+    result = remote_ops._observe_ingress_during(
+        operation, origin="https://aegis-prod.aegis.internal", ca_bundle=enterprise_ca,
+    )
+    observation = result["ingress_availability_observation"]
+    assert result["status"] == "success"
+    assert observation["samples"] >= 1
+    assert observation["health_status_counts"].get("200", 0) >= 1
+    assert observation["ready_status_counts"]["502"] >= 1
+    assert observation["observed_degradation"] is True
+    assert observation["continuous_availability_proven"] is False
+    assert observation["tls_verified"] is True
+    printed = capsys.readouterr().err
+    assert "PRODUCTION_INGRESS_AVAILABILITY=" in printed
+    assert "aegis-prod.aegis.internal" not in printed
+    assert "test-only-ca" not in printed
+
+
+def test_ingress_availability_monitor_keeps_cleanup_exception_fail_closed(
+    tmp_path: Path, monkeypatch, capsys,
+):
+    from contextlib import nullcontext
+    enterprise_ca = _private(tmp_path / "enterprise-ca.pem", "test-only-ca")
+    monkeypatch.setattr(remote_ops.remote, "_private_file", lambda *_args, **_kw: None)
+    monkeypatch.setattr(remote_ops.ssl, "create_default_context", lambda cafile: object())
+    monkeypatch.setattr(
+        remote_ops, "urlopen",
+        lambda *_args, **_kw: nullcontext(SimpleNamespace(status=200)),
+    )
+    with pytest.raises(RuntimeError, match="simulated privileged cleanup failure"):
+        remote_ops._observe_ingress_during(
+            lambda: (_ for _ in ()).throw(RuntimeError("simulated privileged cleanup failure")),
+            origin="https://aegis-prod.aegis.internal", ca_bundle=enterprise_ca,
+        )
+    assert "PRODUCTION_INGRESS_AVAILABILITY=" in capsys.readouterr().err
+
+
+def test_ingress_observation_rejects_missing_ca_and_non_https_origin(tmp_path: Path):
+    with pytest.raises(remote_ops.RemoteOperationalAcceptanceError, match="both"):
+        remote_ops._observe_ingress_during(
+            lambda: {"status": "success"},
+            origin="https://aegis-prod.aegis.internal", ca_bundle=None,
+        )
+    with pytest.raises(remote_ops.RemoteOperationalAcceptanceError, match="HTTPS"):
+        remote_ops._observe_ingress_during(
+            lambda: {"status": "success"},
+            origin="http://localhost", ca_bundle=tmp_path / "ca.pem",
+        )
+
+
+def test_production_workflow_pins_enterprise_tls_monitor_around_both_scope_changes():
+    workflow = (ROOT / ".github/workflows/production-live-deploy.yml").read_text(encoding="utf-8")
+    assert workflow.count("--probe-origin \"$AEGIS_LIVE_ORIGIN\"") == 2
+    assert workflow.count(
+        "--probe-ca-bundle /tmp/aegis-production/enterprise-ca.pem"
+    ) == 2
