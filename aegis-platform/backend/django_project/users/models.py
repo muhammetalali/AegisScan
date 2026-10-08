@@ -239,7 +239,7 @@ class TeamMembership(models.Model):
 class APIKey(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(_('name'), max_length=100)
-    key_hash = models.CharField(_('key hash'), max_length=255)
+    key_hash = models.CharField(_('key hash'), max_length=255, db_index=True)
     key_prefix = models.CharField(_('key prefix'), max_length=20)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='api_keys')
     team = models.ForeignKey(Team, on_delete=models.SET_NULL, null=True, blank=True, related_name='api_keys')

@@ -37,6 +37,22 @@ class HasPermission(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
+        # A scoped API key is never a substitute for the user's RBAC grants,
+        # including when its owner is a superuser. Only view-level declared
+        # permissions can authorize a key request.
+        from .models import APIKey
+        if isinstance(request.auth, APIKey):
+            # First opted-in consumer is intentionally read-only. Do not
+            # authorize mutations using scopes without a reviewed API contract.
+            if request.method not in permissions.SAFE_METHODS:
+                return False
+            action = getattr(view, 'action', None) or request.method.lower()
+            required = self._required_permissions(view, action)
+            return bool(required) and any(
+                scope in request.auth.permissions and request.user.has_permission(scope)
+                for scope in required
+            )
+
         if request.user.is_superuser:
             return True
 
