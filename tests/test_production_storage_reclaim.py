@@ -139,8 +139,8 @@ def test_reclaim_uses_only_non_volume_docker_prunes(monkeypatch, tmp_path):
             ["docker", "container", "prune", "--force", "--filter", "until=24h"],
         ),
         (
-            "aged-unused-images",
-            ["docker", "image", "prune", "--all", "--force", "--filter", "until=24h"],
+            "aged-dangling-images",
+            ["docker", "image", "prune", "--force", "--filter", "until=24h"],
         ),
     ]
     assert all("volume" not in token for _, argv in commands for token in argv)
@@ -177,12 +177,14 @@ def test_reclaim_escalates_to_all_non_durable_cache_before_failing(monkeypatch, 
     assert [name for name, _ in commands] == [
         "aged-build-cache",
         "aged-stopped-containers",
-        "aged-unused-images",
+        "aged-dangling-images",
         "all-build-cache",
         "all-stopped-containers",
-        "all-unused-images",
+        "all-dangling-images",
     ]
     assert all("volume" not in token for _, argv in commands for token in argv)
+    # Tagged images may be the only verified rollback release even if unused.
+    assert all("--all" not in argv for _, argv in commands if argv[:3] == ["docker", "image", "prune"])
 
 
 def test_docker_command_failures_are_fail_closed(monkeypatch):

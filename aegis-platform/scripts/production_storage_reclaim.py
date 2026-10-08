@@ -137,8 +137,8 @@ def reclaim(
             ["docker", "container", "prune", "--force", "--filter", "until=24h"],
         ),
         (
-            "aged-unused-images",
-            ["docker", "image", "prune", "--all", "--force", "--filter", "until=24h"],
+            "aged-dangling-images",
+            ["docker", "image", "prune", "--force", "--filter", "until=24h"],
         ),
     ]
 
@@ -160,8 +160,8 @@ def reclaim(
                 ["docker", "container", "prune", "--force"],
             ),
             (
-                "all-unused-images",
-                ["docker", "image", "prune", "--all", "--force"],
+                "all-dangling-images",
+                ["docker", "image", "prune", "--force"],
             ),
         ]
         for name, argv in aggressive_stages:
