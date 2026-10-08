@@ -135,6 +135,20 @@ class APIKeyCreateSerializer(serializers.ModelSerializer):
         model = APIKey
         fields = ['id', 'name', 'key', 'permissions', 'expires_at', 'team']
 
+    def validate_permissions(self, value):
+        # A scoped API key cannot exceed the authenticating operator's RBAC grants.
+        user = self.context['request'].user
+        if not isinstance(value, list) or not value or not all(
+            isinstance(permission, str) and user.has_permission(permission) for permission in value
+        ):
+            raise serializers.ValidationError('Key permissions must be a nonempty subset of your own grants.')
+        return sorted(set(value))
+
+    def validate_team(self, value):
+        if value and not TeamMembership.objects.filter(team=value, user=self.context['request'].user).exists():
+            raise serializers.ValidationError('You are not a member of this team.')
+        return value
+
     def create(self, validated_data):
         import secrets
         import hashlib
