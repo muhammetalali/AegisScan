@@ -16,7 +16,10 @@ from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from ..core.dependencies import get_current_user
 from ..services.authorization_guard import asset_target
-from ..services.governed_execution_contract import GovernedExecutionDraft, finalize_governed_execution_contract
+from ..services.governed_execution_contract import (
+    GovernedExecutionDraft, _fingerprint, _normalized_optional_ref,
+    finalize_governed_execution_contract,
+)
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
@@ -35,6 +38,7 @@ class ScanCreate(BaseModel):
     engines: List[str] = Field(default_factory=lambda: ['nmap'])
     depth: str = 'standard'
     config: dict = Field(default_factory=dict)
+    idempotency_key: Optional[str] = None
 
 
 class ScanResponse(BaseModel):
@@ -128,6 +132,13 @@ async def list_scans(project_id: Optional[str] = None, status: Optional[str] = N
 
 @sync_to_async
 def _create_scan(scan: ScanCreate, user_id: str, execution_draft: GovernedExecutionDraft | None = None):
+    try:
+        request_key = (
+            _normalized_optional_ref('idempotency_key', scan.idempotency_key)
+            if execution_draft is None else ''
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     with transaction.atomic():
         project = (Project.objects.select_for_update().filter(id=scan.project_id, owner_id=user_id).first()
                    or Project.objects.select_for_update().filter(id=scan.project_id, members=user_id).first())
@@ -181,6 +192,34 @@ def _create_scan(scan: ScanCreate, user_id: str, execution_draft: GovernedExecut
             raise HTTPException(status_code=400, detail='Semgrep scans require asset configuration.repo_url or configuration.path')
 
         execution_fields = {}
+        if request_key:
+            request_fingerprint = _fingerprint({
+                'version': 'scan-request-v1',
+                'actor_id': user_id,
+                'project_id': str(project.id),
+                'asset_id': str(asset.id) if asset else None,
+                'authorization_id': str(authorization.id) if authorization else None,
+                'name': scan.name,
+                'scan_type': scan.scan_type,
+                'engines': engines,
+                'depth': scan.depth,
+                'config': scan.config,
+            })
+            existing = Scan.objects.select_for_update().filter(
+                project=project, initiated_by_id=user_id,
+                execution_idempotency_key=request_key,
+            ).first()
+            if existing is not None:
+                if existing.execution_idempotency_fingerprint != request_fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail='Execution idempotency key is already bound to a different scan request',
+                    )
+                return existing, list(existing.engines or []), False
+            execution_fields = {
+                'execution_idempotency_key': request_key,
+                'execution_idempotency_fingerprint': request_fingerprint,
+            }
         if execution_draft is not None:
             if authorization is None:
                 raise HTTPException(
@@ -205,7 +244,7 @@ def _create_scan(scan: ScanCreate, user_id: str, execution_draft: GovernedExecut
             config=scan.config, initiated_by_id=user_id, status=Scan.Status.QUEUED,
             **execution_fields,
         )
-        if execution_draft is not None:
+        if execution_draft is not None or request_key:
             return obj, engines, True
         return obj, engines
 
@@ -220,10 +259,13 @@ def _attach_celery_task(scan_id: str, task_id: str):
 
 @router.post('/', response_model=ScanResponse, status_code=201)
 async def create_scan(scan: ScanCreate, user=Depends(get_current_user)):
-    created, engines = await _create_scan(scan, str(user.get('user_id')))
-    task_map = {'nmap': run_nmap_scan, 'nuclei': run_nuclei_scan, 'masscan': run_masscan_scan, 'semgrep': run_semgrep_scan}
-    result = task_map[engines[0]].delay(str(created.id))
-    created = await _attach_celery_task(str(created.id), result.id)
+    response = await _create_scan(scan, str(user.get('user_id')))
+    created, engines = response[:2]
+    created_new = response[2] if len(response) == 3 else True
+    if created_new:
+        task_map = {'nmap': run_nmap_scan, 'nuclei': run_nuclei_scan, 'masscan': run_masscan_scan, 'semgrep': run_semgrep_scan}
+        result = task_map[engines[0]].delay(str(created.id))
+        created = await _attach_celery_task(str(created.id), result.id)
     return await _serialize_scan(created)
 
 
