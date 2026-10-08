@@ -47,11 +47,63 @@ def _asset_response(asset) -> AssetResponse:
 
 
 @sync_to_async
-def _accessible_assets(user_id: str, project_id: Optional[str] = None):
+def _accessible_assets(
+    user_id: str,
+    project_id: Optional[str] = None,
+    *,
+    asset_type: Optional[str] = None,
+    environment: Optional[str] = None,
+    criticality: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    search: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+):
+    """Filter before fetching assets; preserve casefolded tag-search semantics.
+
+    Most UI requests are unsearched and can be paginated by PostgreSQL rather
+    than loading every asset into application memory.
+    """
     from django_project.assets.models import Asset
-    owner_qs=Asset.objects.select_related('project','owner').filter(project__owner_id=user_id); member_qs=Asset.objects.select_related('project','owner').filter(project__members__id=user_id); qs=(owner_qs|member_qs).distinct()
-    if project_id: qs=qs.filter(project_id=project_id)
-    return list(qs.order_by('-created_at'))
+
+    qs = Asset.objects.filter(
+        Q(project__owner_id=user_id) | Q(project__members__id=user_id)
+    ).distinct()
+    if project_id:
+        qs = qs.filter(project_id=project_id)
+    if asset_type:
+        qs = qs.filter(type=asset_type)
+    if environment:
+        qs = qs.filter(environment=environment)
+    if criticality:
+        qs = qs.filter(criticality=criticality)
+    if is_active is not None:
+        qs = qs.filter(is_active=is_active)
+
+    ordered = qs.order_by('-created_at')
+    if not search:
+        page = ordered[offset:offset + limit] if limit is not None else ordered[offset:]
+        return list(page)
+
+    # JSON tags can contain non-string values, and the existing API uses
+    # Python casefold() on each value. Stream matching rows to preserve that
+    # contract without materializing an unbounded queryset.
+    needle = search.casefold()
+    matched = 0
+    page = []
+    for asset in ordered.iterator(chunk_size=256):
+        if not (
+            needle in asset.name.casefold()
+            or needle in asset.description.casefold()
+            or any(needle in str(tag).casefold() for tag in (asset.tags or []))
+        ):
+            continue
+        if matched >= offset:
+            page.append(asset)
+            if limit is not None and len(page) >= limit:
+                break
+        matched += 1
+    return page
 
 
 @sync_to_async
@@ -68,14 +120,12 @@ def _get_asset(asset_id: str, user_id: str):
 
 @router.get('/', response_model=List[AssetResponse])
 async def list_assets(project_id: Optional[str]=None, asset_type: Optional[str]=None, environment: Optional[str]=None, criticality: Optional[str]=None, is_active: Optional[bool]=None, search: Optional[str]=None, limit: int=Query(50,ge=1,le=200), offset: int=Query(0,ge=0), user=Depends(get_current_user)):
-    assets=await _accessible_assets(str(user.get('user_id')),project_id)
-    if asset_type: assets=[a for a in assets if a.type==asset_type]
-    if environment: assets=[a for a in assets if a.environment==environment]
-    if criticality: assets=[a for a in assets if a.criticality==criticality]
-    if is_active is not None: assets=[a for a in assets if a.is_active==is_active]
-    if search:
-        needle=search.casefold(); assets=[a for a in assets if needle in a.name.casefold() or needle in a.description.casefold() or any(needle in str(t).casefold() for t in (a.tags or []))]
-    return [_asset_response(a) for a in assets[offset:offset+limit]]
+    assets = await _accessible_assets(
+        str(user.get('user_id')), project_id,
+        asset_type=asset_type, environment=environment, criticality=criticality,
+        is_active=is_active, search=search, limit=limit, offset=offset,
+    )
+    return [_asset_response(a) for a in assets]
 
 
 @sync_to_async
