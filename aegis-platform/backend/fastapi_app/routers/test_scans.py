@@ -205,3 +205,44 @@ def test_rejects_invalid_scan_idempotency_key(api_fixture):
     response = client.post("/scans/", json=payload)
     assert response.status_code == 400
     assert Scan.objects.filter(project=project).count() == 0
+
+
+def test_concurrent_same_key_claims_one_scan_atomically(api_fixture):
+    """PostgreSQL row locks serialize two real concurrent requests."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from django.db import connections
+
+    _, user, project, asset = api_fixture
+    barrier = Barrier(2)
+    payload = scans_router.ScanCreate(
+        **{
+            **_body(project.id, asset.id),
+            'idempotency_key': 'concurrent.manual.claim-20261008',
+        },
+    )
+
+    def submit():
+        barrier.wait(timeout=10)
+        try:
+            # Invoke sync ORM implementation in genuinely independent DB threads.
+            return scans_router._create_scan.__wrapped__(payload, str(user.id))
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(submit) for _ in range(2)]
+        results = [future.result(timeout=20) for future in futures]
+
+    assert results[0][0].id == results[1][0].id
+    assert sorted(r[2] for r in results) == [False, True]
+    assert Scan.objects.filter(project=project).count() == 1
+
+
+def test_intentional_rescans_without_key_remain_distinct(api_fixture):
+    client, _, project, asset = api_fixture
+    first = client.post('/scans/', json=_body(project.id, asset.id))
+    second = client.post('/scans/', json=_body(project.id, asset.id))
+    assert first.status_code == second.status_code == 201
+    assert first.json()['id'] != second.json()['id']
+    assert Scan.objects.filter(project=project).count() == 2

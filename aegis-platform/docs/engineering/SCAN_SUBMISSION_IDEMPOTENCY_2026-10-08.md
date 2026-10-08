@@ -17,7 +17,7 @@ Baseline: `main@a0a883bbf44c8d2b83d509e343307bca9262a08b`.
 ## Evidence
 
 Run focused `fastapi_app/routers/test_scans.py` using PostgreSQL isolated from production:
-8/8 tests passed (3 baseline, 5 new: replay, changed payload, revoked authority, asset route, invalid key).
+10/10 tests passed (3 baseline, 7 new: replay, changed payload, revoked authority, asset route, invalid key, concurrent claims, explicit rescans). The concurrency test used two threads with independent Django/PostgreSQL connections against the same project lock and confirmed one persisted Scan.
 Wire the same module into the existing `Domain Contract Reality` workflow; full exact-SHA CI and production acceptance remain mandatory.
 
 ## Outstanding reliability work (explicit limitations)
