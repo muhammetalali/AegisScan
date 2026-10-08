@@ -17,6 +17,11 @@ name: Internal Production Deploy and Acceptance
         required: false
         type: boolean
         default: false
+      api_key_acceptance:
+        description: 'Run bounded live API key creation, read-only use, rotation and revocation acceptance'
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -315,6 +320,7 @@ jobs:
           AEGIS_E2E_FILE_ACCEPTANCE: ${{ inputs.file_acceptance || false }}
           AEGIS_E2E_FILE_REQUIRE_FINDING: ${{ inputs.file_acceptance || false }}
           AEGIS_E2E_ZIP_ACCEPTANCE: ${{ inputs.file_acceptance || false }}
+          AEGIS_E2E_API_KEY_ACCEPTANCE: ${{ inputs.api_key_acceptance || false }}
         run: |
           set -euo pipefail
           export AEGIS_BASE_URL="$AEGIS_LIVE_ORIGIN"
