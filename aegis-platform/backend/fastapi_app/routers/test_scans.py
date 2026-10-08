@@ -122,3 +122,86 @@ def test_inactive_asset_legacy_scan_route_rejects_before_dispatch(api_fixture):
     assert response.status_code == 409
     assert response.json()["detail"] == "Asset is inactive and cannot be scanned"
     assert Scan.objects.filter(project=project).count() == 0
+
+
+def test_manual_idempotency_key_reuses_existing_scan_without_second_dispatch(api_fixture, monkeypatch):
+    client, _, project, asset = api_fixture
+    calls = []
+
+    def counted_delay(scan_id):
+        calls.append(scan_id)
+        return SimpleNamespace(id=f"test-task-{scan_id}")
+
+    monkeypatch.setattr(scans_router.run_nmap_scan, "delay", counted_delay)
+    payload = {**_body(project.id, asset.id), "idempotency_key": "repeat.manual.scan-20261008"}
+
+    first = client.post("/scans/", json=payload)
+    repeated = client.post("/scans/", json=payload)
+
+    assert first.status_code == 201
+    assert repeated.status_code == 201
+    assert first.json()["id"] == repeated.json()["id"]
+    assert len(calls) == 1
+    assert Scan.objects.filter(project=project).count() == 1
+
+
+def test_manual_idempotency_key_conflict_rejects_changed_options(api_fixture):
+    client, _, project, asset = api_fixture
+    payload = {**_body(project.id, asset.id), "idempotency_key": "repeat.manual.conflict-20261008"}
+
+    first = client.post("/scans/", json=payload)
+    changed = client.post("/scans/", json={**payload, "depth": "deep"})
+
+    assert first.status_code == 201
+    assert changed.status_code == 409
+    assert "different scan request" in changed.json()["detail"]
+    assert Scan.objects.filter(project=project).count() == 1
+
+
+def test_manual_idempotency_replay_revalidates_authorization(api_fixture):
+    client, user, project, asset = api_fixture
+    payload = {**_body(project.id, asset.id), "idempotency_key": "repeat.manual.revoked-20261008"}
+    assert client.post("/scans/", json=payload).status_code == 201
+
+    AssetAuthorization.objects.create(
+        asset=asset, actor=user, authorized=False,
+        target_snapshot="aegis-scan-target", reason="revoke test scope",
+    )
+    replay = client.post("/scans/", json=payload)
+
+    assert replay.status_code == 403
+    assert Scan.objects.filter(project=project).count() == 1
+
+
+def test_asset_scan_idempotency_key_reuses_existing_scan(api_fixture, monkeypatch):
+    from fastapi_app.routers import assets as assets_router
+
+    client, _, project, asset = api_fixture
+    calls = []
+
+    def counted_delay(scan_id):
+        calls.append(scan_id)
+        return SimpleNamespace(id=f"test-task-{scan_id}")
+
+    monkeypatch.setattr(scans_router.run_nmap_scan, "delay", counted_delay)
+    monkeypatch.setattr(assets_router, "require_authorized_target", lambda target: target)
+    url = f"/api/v1/assets/{asset.id}/scan?idempotency_key=repeat.asset.scan-20261008"
+
+    first = client.post(url)
+    repeated = client.post(url)
+
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert first.json()["scan_id"] == repeated.json()["scan_id"]
+    assert first.json()["idempotency_reused"] is False
+    assert repeated.json()["idempotency_reused"] is True
+    assert len(calls) == 1
+    assert Scan.objects.filter(project=project).count() == 1
+
+
+def test_rejects_invalid_scan_idempotency_key(api_fixture):
+    client, _, project, asset = api_fixture
+    payload = {**_body(project.id, asset.id), "idempotency_key": "!bad"}
+    response = client.post("/scans/", json=payload)
+    assert response.status_code == 400
+    assert Scan.objects.filter(project=project).count() == 0

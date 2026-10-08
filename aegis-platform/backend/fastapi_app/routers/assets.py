@@ -148,7 +148,7 @@ async def delete_asset(asset_id: str,user=Depends(get_current_user)):
 
 
 @router.post('/{asset_id}/scan')
-async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='standard', user=Depends(get_current_user)):
+async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='standard', idempotency_key: Optional[str]=None, user=Depends(get_current_user)):
     asset=await _get_asset(asset_id,str(user.get('user_id')))
     if not asset: raise HTTPException(status_code=404,detail='Asset not found')
     if not asset.is_active: raise HTTPException(status_code=409,detail='Asset is inactive and cannot be scanned')
@@ -169,9 +169,24 @@ async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='s
             raise HTTPException(status_code=403,detail=str(exc)) from exc
     scan_config={key:value for key,value in config.items() if key!='authorized'}
     scan_config['target']=config_target
-    created,engines=await _create_scan(ScanCreate(project_id=str(asset.project_id),name=f'Asset scan: {asset.name}',scan_type=final_scan_type,asset_id=str(asset.id),engines=[engine],depth=depth,config=scan_config),str(user.get('user_id')))
-    task_map={'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}; result=task_map[engine].delay(str(created.id)); created=await _attach_celery_task(str(created.id),result.id)
-    return {'scan_id':str(created.id),'task_id':result.id,'engine':engine,'status':created.status,'asset_id':str(created.asset_id) if created.asset_id else None,'authorization_decision_id':str(created.authorization_decision_id) if created.authorization_decision_id else None,'source':'postgresql'}
+    response = await _create_scan(ScanCreate(
+        project_id=str(asset.project_id), name=f'Asset scan: {asset.name}',
+        scan_type=final_scan_type, asset_id=str(asset.id), engines=[engine],
+        depth=depth, config=scan_config, idempotency_key=idempotency_key,
+    ), str(user.get('user_id')))
+    created = response[0]
+    created_new = response[2] if len(response) == 3 else True
+    if created_new:
+        task_map = {'nmap':run_nmap_scan,'nuclei':run_nuclei_scan,'masscan':run_masscan_scan,'semgrep':run_semgrep_scan}
+        task = task_map[engine].delay(str(created.id))
+        created = await _attach_celery_task(str(created.id), task.id)
+    return {
+        'scan_id': str(created.id), 'task_id': created.celery_task_id,
+        'engine': engine, 'status': created.status,
+        'asset_id': str(created.asset_id) if created.asset_id else None,
+        'authorization_decision_id': str(created.authorization_decision_id) if created.authorization_decision_id else None,
+        'idempotency_reused': not created_new, 'source': 'postgresql',
+    }
 
 
 @sync_to_async
