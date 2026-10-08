@@ -59,10 +59,11 @@ jobs:
 
           const app = fs.readFileSync('src/App.tsx', 'utf8')
           const layout = fs.readFileSync('src/components/layout/Layout.tsx', 'utf8')
+          const navigation = fs.readFileSync('src/components/layout/navigation.ts', 'utf8')
           const page = fs.readFileSync('src/pages/enterprise/EnterpriseSecurityPlanesPage.tsx', 'utf8')
 
           if (!app.includes('path="/enterprise-security"')) throw new Error('enterprise security route is missing')
-          if (!layout.includes("href: '/enterprise-security'")) throw new Error('enterprise security navigation is missing')
+          if (!layout.includes("from './navigation'") || !navigation.includes("href: '/enterprise-security'")) throw new Error('enterprise security navigation is missing or disconnected')
 
           const endpoints = [
             '/iast/sessions',
