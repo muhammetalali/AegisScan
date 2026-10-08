@@ -306,7 +306,7 @@ export const Register = () => {
             </div>
             <div className="flex flex-col items-center gap-1">
               <Lock className="h-5 w-5 mx-auto" />
-              <span>2FA متاح</span>
+              <span>جلسة محمية</span>
             </div>
           </motion.div>
         </motion.div>
