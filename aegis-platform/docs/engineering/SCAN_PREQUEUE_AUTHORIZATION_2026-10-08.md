@@ -21,3 +21,7 @@ Five focused tests, all passed: missing bound decision, newer revocation, asset 
 ## Bounded manual/asset dispatch consolidation
 
 The manual `POST /scans/` and asset `POST /api/v1/assets/{id}/scan` launchers previously maintained duplicate local engine-to-Celery task dictionaries. They now share the existing scan router's `_dispatch_primary_scan` registry, preserving the same engine-task mapping and existing Celery routing. Existing tests for idempotent replay, target authorization, explicit rescans and old Semgrep path must pass unchanged. Native capability, scheduled execution, and enterprise entrypoints are deliberately excluded pending a separately governed broker-outbox/uncertain-ack design.
+
+## ZIP safety regressions (not production ZIP end-to-end proof)
+
+Extended the existing Assessment Launcher ZIP unit-contract suite with symlink rejection, declared expanded-size limit and empty-directory archive rejection. The existing 21/21 `test_assessment_launcher.py` tests passed against isolated PostgreSQL. The existing Burp MCP reality workflow already executes this test module, so no redundant CI workflow was created. A real production upload -> authorization -> Semgrep scan -> finding/evidence flow for an actual ZIP archive remains an acceptance obligation; `file_acceptance=true` currently tests a standalone Python file rather than ZIP.
