@@ -56,3 +56,12 @@ The GitHub `Performance Load Soak Reality` artifacts for **pre-merge** `a0a883bb
 ## Controlled isolated asset-list A/B (same Ubuntu, same PostgreSQL)
 
 On 2026-10-08 a one-process comparison used 1,500 synthetic assets owned by a single project, 20 requested result rows, 5 warm-up iterations then 45 measured iterations of each implementation. The **pre-#351** implementation loaded all 1,500 authorized objects with joined project/owner data before Python pagination; the **post-#351** implementation materialized 20 ORM objects with SQL limit/offset. The measured **median** was 109.655 ms before vs 10.693 ms after; **p95** 213.967 vs 17.980 ms, respectively. Result parity was checked by exact Asset IDs. This validates the specific ORM read-path under the isolated synthetic workload, **not full production p95, CI health/ready endpoints, frontend render latency, scanner throughput, or savings attributable to all refactors**. The temporary test database and benchmark script were removed after recording this evidence.
+
+
+## Real ZIP end-to-end acceptance — prepared after PR #354
+
+The existing production E2E only uploaded a standalone Python file. The next isolated acceptance change reuses `prove_file_assessment` with an optional ZIP fixture containing `src/aegis-file-acceptance.py`, the same source bearing the static Semgrep eval marker. The existing governed authorization, execution, persisted scan, finding and deactivation-guard steps run once for the file and once for ZIP under unique idempotency/correlation keys.
+
+The production workflow enables `AEGIS_E2E_ZIP_ACCEPTANCE` **only** when the already-existing explicit `file_acceptance` dispatch boolean is true. Default deploy leaves both disabled. ZIP acceptance is incompatible with capacity mode, and requires the existing file/positive-finding guard; no broad target or archive injection is introduced.
+
+Static off-network validation: `tests/test_production_live_workflow.py` **21/21 passed**, including ZIP-only nested-file integrity and opt-in workflow assertions. **Production ZIP execution is not proven until a future approved exact-SHA deployment with the flag enabled and archived evidence.** The current approved release's file acceptance proof is for standalone .py only.

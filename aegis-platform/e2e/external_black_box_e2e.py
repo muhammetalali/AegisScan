@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
 """Real HTTP-only AegisScan E2E harness."""
 from __future__ import annotations
-import hashlib,json,os,sys,time,uuid
+import hashlib,io,json,os,sys,time,uuid,zipfile
 from pathlib import Path
 from typing import Any
 import requests
 BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_ACCESS_TOKEN=os.getenv('AEGIS_E2E_ACCESS_TOKEN'); E2E_APPROVER_ACCESS_TOKEN=os.getenv('AEGIS_E2E_APPROVER_ACCESS_TOKEN'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}; CAPACITY_MODE=os.getenv('AEGIS_E2E_CAPACITY_MODE','').lower() in {'1','true','yes','on'}; FILE_ACCEPTANCE=os.getenv('AEGIS_E2E_FILE_ACCEPTANCE','').lower() in {'1','true','yes','on'}; FILE_REQUIRE_FINDING=os.getenv('AEGIS_E2E_FILE_REQUIRE_FINDING','').lower() in {'1','true','yes','on'}
+ZIP_ACCEPTANCE=os.getenv('AEGIS_E2E_ZIP_ACCEPTANCE','').lower() in {'1','true','yes','on'}
+
+def file_acceptance_fixture(*, archive:bool=False)->tuple[str,bytes,str]:
+ source=(b"def controlled_file_acceptance_marker(user_input):\n"
+         b"    return eval(user_input)\n")
+ if not archive:return 'aegis-file-acceptance.py',source,'text/x-python'
+ # Generate a bounded self-contained ZIP that exercises the actual managed
+ # extraction + nested source traversal used by production Semgrep.
+ buffer=io.BytesIO()
+ with zipfile.ZipFile(buffer,'w',compression=zipfile.ZIP_DEFLATED) as bundle:
+  bundle.writestr('src/aegis-file-acceptance.py',source)
+ return 'aegis-file-acceptance.zip',buffer.getvalue(),'application/zip'
+
 def require(response:requests.Response,expected:set[int],label:str)->dict[str,Any]|list[Any]:
  if response.status_code not in expected: raise RuntimeError(f'{label} failed: HTTP {response.status_code}: {response.text[:1000]}')
  if not response.text:return {}
@@ -54,13 +67,14 @@ def _deactivate_ephemeral_account(email:str,password:str,label:str)->None:
  token=csrf(session); headers['X-CSRFToken']=token
  http(session,'POST',f'{DJANGO_URL}/auth/deactivate-self/',f'{label} self-deactivation',{200},json={'password':password},headers=headers,timeout=20)
 
-def prove_file_assessment(session:requests.Session,approver:requests.Session,project_id:str,unique:str)->None:
+def prove_file_assessment(session:requests.Session,approver:requests.Session,project_id:str,unique:str,*,archive:bool=False)->None:
  if not FILE_ACCEPTANCE:return
  if CAPACITY_MODE:raise RuntimeError('File acceptance must not run inside capacity mode')
- source=(b"def controlled_file_acceptance_marker(user_input):\n"
-         b"    return eval(user_input)\n")
+ filename,source,mime=file_acceptance_fixture(archive=archive)
+ if archive:unique=f'{unique}-zip'
+ marker='CONTROLLED_LAUNCH_ZIP' if archive else 'CONTROLLED_LAUNCH_FILE'
  digest=hashlib.sha256(source).hexdigest()
- prepared=http(session,'POST',f'{API_V1}/assessment-launcher/file','Assessment Launcher file prepare',{201},data={'project_id':project_id,'depth':'quick'},files={'file':('aegis-file-acceptance.py',source,'text/x-python')},timeout=20)
+ prepared=http(session,'POST',f'{API_V1}/assessment-launcher/file',f'Assessment Launcher {filename} prepare',{201},data={'project_id':project_id,'depth':'quick'},files={'file':(filename,source,mime)},timeout=20)
  if not isinstance(prepared,dict):raise RuntimeError(f'Assessment Launcher file response invalid: {prepared!r}')
  asset=prepared.get('asset') if isinstance(prepared.get('asset'),dict) else {}; authorization=prepared.get('authorization') if isinstance(prepared.get('authorization'),dict) else {}; upload=prepared.get('upload') if isinstance(prepared.get('upload'),dict) else {}; plan=prepared.get('plan') if isinstance(prepared.get('plan'),list) else []
  asset_id=asset.get('id'); scope_mode=prepared.get('scope_mode'); request=authorization.get('request') if isinstance(authorization.get('request'),dict) else None
@@ -71,15 +85,15 @@ def prove_file_assessment(session:requests.Session,approver:requests.Session,pro
  decision_id=None
  if scope_mode=='single-operator-lab':
   if authorization.get('state')!='authorized' or authorization.get('source')!='single-operator-lab' or not authorization.get('id') or request is not None:raise RuntimeError(f'Assessment Launcher file automatic authorization invalid: {prepared!r}')
-  decision_id=str(authorization['id']); print('CONTROLLED_LAUNCH_FILE_AUTH=AUTOMATIC')
+  decision_id=str(authorization['id']); print(f'{marker}_AUTH=AUTOMATIC')
  elif scope_mode=='asset-authorization':
   if authorization.get('state')!='pending' or not request or request.get('action_id')!='asset.authorization.approve':raise RuntimeError(f'Assessment Launcher file authorization request invalid: {prepared!r}')
-  print('CONTROLLED_LAUNCH_FILE_AUTH=PENDING')
+  print(f'{marker}_AUTH=PENDING')
   approved=http(approver,'POST',f'{API_V1}/assurance/governance/actions/execute','Execute governed Assessment Launcher file authorization',{200},json={'action_id':'asset.authorization.approve','project_id':project_id,'entity_type':'asset','entity_id':asset_id,'expected_version':request['expected_version'],'idempotency_key':f'e2e-file-authorization-{unique}','request_id':request['request_id'],'parameters':request['parameters']},timeout=20)
   result=approved.get('result') if isinstance(approved,dict) and isinstance(approved.get('result'),dict) else {}; decision_id=result.get('authorization_decision_id')
   if not decision_id or approved.get('request_id')!=request['request_id']:raise RuntimeError(f'Assessment Launcher file authorization did not preserve governed lineage: {approved!r}')
  else:raise RuntimeError(f'Assessment Launcher file returned unsupported scope mode: {prepared!r}')
- print('CONTROLLED_LAUNCH_FILE_PREPARE=PASS')
+ print(f'{marker}_PREPARE=PASS')
  execution=http(session,'POST',f'{API_V1}/capabilities/code.semgrep/execute','Assessment Launcher file Semgrep execution',{202},json={'project_id':project_id,'asset_id':asset_id,'depth':'quick','options':{},'credential_refs':[],'idempotency_key':f'e2e-file-semgrep-{unique}','correlation_id':f'e2e-file-semgrep-corr-{unique}'},timeout=20)
  scan=execution.get('scan') if isinstance(execution,dict) and isinstance(execution.get('scan'),dict) else {}; scan_id=scan.get('id')
  if not scan_id:raise RuntimeError(f'Assessment Launcher file execution returned no Scan id: {execution!r}')
@@ -90,18 +104,18 @@ def prove_file_assessment(session:requests.Session,approver:requests.Session,pro
   time.sleep(2)
  else:raise RuntimeError(f'Assessment Launcher file scan timed out after {TIMEOUT}s; last state={last}')
  if not isinstance(last,dict) or last.get('status')!='completed':raise RuntimeError(f'Assessment Launcher file Semgrep scan did not complete successfully: {last!r}')
- print('CONTROLLED_LAUNCH_FILE_EXECUTION=PASS')
+ print(f'{marker}_EXECUTION=PASS')
  if FILE_REQUIRE_FINDING:
   if int(last.get('findings_count') or 0)<1:raise RuntimeError(f'Production file acceptance expected a Semgrep finding: {last!r}')
   findings_data=http(session,'GET',f'{API_V1}/vulnerabilities/','Assessment Launcher file finding retrieval',{200},params={'project_id':project_id,'scan_id':scan_id,'limit':50},timeout=20); findings=collection(findings_data,'Assessment Launcher file finding retrieval')
   semgrep_findings=[item for item in findings if item.get('source_engine')=='semgrep']
   if not semgrep_findings:raise RuntimeError(f'Production file acceptance returned no Semgrep finding: {findings!r}')
-  print('CONTROLLED_LAUNCH_FILE_FINDING=PASS')
+  print(f'{marker}_FINDING=PASS')
  updated=http(session,'PATCH',f'{API_V1}/assets/{asset_id}','Deactivate file assessment asset',{200},json={'is_active':False},timeout=20)
  if updated.get('is_active') is not False:raise RuntimeError(f'File asset deactivation did not persist: {updated!r}')
  http(session,'POST',f'{API_V1}/capabilities/code.semgrep/execute','Reject inactive file assessment execution',{404},json={'project_id':project_id,'asset_id':asset_id,'depth':'quick','options':{},'credential_refs':[],'idempotency_key':f'e2e-file-semgrep-inactive-{unique}','correlation_id':f'e2e-file-semgrep-inactive-corr-{unique}'},timeout=20)
- print('CONTROLLED_LAUNCH_FILE_DEACTIVATION_GUARD=PASS')
- print(f'controlled_launch_file_scan_id={scan_id}'); print(f'controlled_launch_file_asset_id={asset_id}'); print(f'controlled_launch_file_authorization_decision_id={decision_id}')
+ print(f'{marker}_DEACTIVATION_GUARD=PASS')
+ print(f'{marker.lower()}_scan_id={scan_id}'); print(f'{marker.lower()}_asset_id={asset_id}'); print(f'{marker.lower()}_authorization_decision_id={decision_id}')
 
 def main()->int:
  if CLEANUP_ONLY:
@@ -113,6 +127,7 @@ def main()->int:
  if CAPACITY_MODE and not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD,E2E_ACCESS_TOKEN,E2E_APPROVER_ACCESS_TOKEN]):
   raise RuntimeError('Capacity mode requires pre-provisioned actor/approver credentials and access tokens')
  if FILE_REQUIRE_FINDING and not FILE_ACCEPTANCE:raise RuntimeError('AEGIS_E2E_FILE_REQUIRE_FINDING requires AEGIS_E2E_FILE_ACCEPTANCE')
+ if ZIP_ACCEPTANCE and not FILE_ACCEPTANCE:raise RuntimeError('AEGIS_E2E_ZIP_ACCEPTANCE requires AEGIS_E2E_FILE_ACCEPTANCE')
  session=requests.Session(); session.verify=VERIFY_TLS
  if CAPACITY_MODE: session.headers['Authorization']=f'Bearer {E2E_ACCESS_TOKEN}'
  http(session,'GET',f'{API_URL}/ready','FastAPI readiness',{200},timeout=15); http(session,'GET',f'{API_URL}/health','FastAPI health',{200},timeout=15)
@@ -183,6 +198,7 @@ def main()->int:
   if not isinstance(launcher_last,dict) or launcher_last.get('status')!='completed':raise RuntimeError(f'Assessment Launcher URL web.httpx scan did not complete successfully: {launcher_last!r}')
   print('CONTROLLED_LAUNCH_URL_EXECUTION=PASS'); print(f'controlled_launch_url_scope_mode={launcher_scope_mode}'); print(f'controlled_launch_url_scan_id={launcher_scan_id}'); print(f'controlled_launch_url_authorization_decision_id={launcher_authorization_decision_id}')
  prove_file_assessment(session,approver,project_id,unique)
+ if ZIP_ACCEPTANCE:prove_file_assessment(session,approver,project_id,unique,archive=True)
  authorization_execution=http(approver,'POST',f'{API_V1}/assurance/governance/actions/execute','Execute governed Nmap authorization',{200},json={'action_id':'asset.authorization.approve','project_id':project_id,'entity_type':'asset','entity_id':asset_id,'expected_version':governed_request['expected_version'],'idempotency_key':f'e2e-authorization-execute-{unique}','request_id':governed_request['request_id'],'parameters':governed_request['parameters']},timeout=20)
  authorization_result=authorization_execution.get('result') if isinstance(authorization_execution,dict) else None
  authorization_decision_id=authorization_result.get('authorization_decision_id') if isinstance(authorization_result,dict) else None
