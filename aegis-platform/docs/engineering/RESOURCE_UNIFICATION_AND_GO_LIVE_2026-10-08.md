@@ -28,7 +28,7 @@ Candidates after parity and rollback proof: stale Docker build layers and unrefe
 
 ## First isolated implementation
 
-The existing asset list route materialized all accessible rows before filters/paging. Refactored to push tenancy + filters + pagination to the database for ordinary requests, and stream Python-casefold JSON-tag search preserving existing semantics. Added three DB regression cases. This branch must pass focused tests and full CI before deployment. Changes are **not yet in production**.
+The existing asset list route materialized all accessible rows before filters/paging. Refactored to push tenancy + filters + pagination to the database for ordinary requests, and stream Python-casefold JSON-tag search preserving existing semantics. Added three DB regression cases. Also suppressed one HTTP refetch per WebSocket frame in ScanProgress, retained terminal/disconnect reconciliation and added frontend tests. Frontend lint, 32/32 Vitest tests and production build passed locally; backend DB-focused tests and full GitHub CI remain mandatory. Changes are **not yet in production**.
 
 ## Closeout thresholds
 
