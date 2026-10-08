@@ -46,6 +46,19 @@ def test_kali_foundation_rejects_rolling_suite_after_snapshot_switch() -> None:
     assert "kali-rolling" in text
     assert "/etc/apt/sources.list.d" in text
 
+
+def test_kali_foundation_uses_direct_authenticated_https_archive() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "URIs: https://archive.kali.org/kali/" in text
+    assert "https://archive.kali.org/kali/" in text
+    assert r"kali\\.download" not in text
+    assert "https://kali.download/kali/" not in text
+    assert "Acquire::https::CAInfo" in text
+    assert "test -s /etc/ssl/certs/ca-certificates.crt" in text
+    assert "refusing repository fallback" in text
+    assert "kali-last-snapshot" in text
+
+
 def test_web_profile_vendors_abi_matched_tls_perl_package_immutably() -> None:
     text = PROFILES.read_text(encoding="utf-8")
     assert "snapshot.debian.org/archive/debian/20260902T000000Z" in text
