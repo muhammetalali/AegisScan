@@ -9,6 +9,7 @@ from ..core.config import settings
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 from ..services.websocket_manager import WebSocketManager
 from ..services.enterprise_gap_closure import checkpoint_scan
+from ..services.authorization_guard import require_bound_scan_authorization
 from ..services.scan_state_machine import prepare_restart, transition_scan
 
 ENGINES = [
@@ -64,13 +65,13 @@ class ScanOrchestrator:
 
     @sync_to_async
     def _has_scan_access(self, scan_id: str, user_id: str):
-        from scans.models import Scan
+        from django_project.scans.models import Scan
         scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
         return bool(scan and (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()))
 
     @sync_to_async
     def _queue_scan(self, scan_id: str, user_id: str):
-        from scans.models import Scan
+        from django_project.scans.models import Scan
         scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
         if not scan:
             return {'status': 'error', 'message': 'Scan not found'}
@@ -78,6 +79,16 @@ class ScanOrchestrator:
             return {'status': 'error', 'message': 'Scan access denied'}
         if scan.status != Scan.Status.PENDING:
             return {'status': 'error', 'message': 'Scan is not pending; use the restart endpoint for terminal scans'}
+        if not scan.asset_id or not scan.authorization_decision_id:
+            return {'status': 'error', 'message': 'Scan requires a persisted asset and bound authorization before dispatch'}
+        if not scan.asset or not scan.asset.is_active or scan.asset.project_id != scan.project_id:
+            return {'status': 'error', 'message': 'Scan asset is inactive or outside the scan project'}
+
+        # Reuse the worker's authoritative authorization + target/egress guard.
+        # A revoked or drifted grant must never be advertised as queued.
+        authorized_scan, reason, _decision = require_bound_scan_authorization(str(scan.id))
+        if authorized_scan is None:
+            return {'status': 'error', 'message': reason}
 
         requested_engines = [str(engine).strip().lower() for engine in (scan.engines or []) if str(engine).strip()]
         if not requested_engines:
@@ -125,7 +136,7 @@ class ScanOrchestrator:
 
     @sync_to_async
     def _get_progress(self, scan_id: str, user_id: str):
-        from scans.models import Scan
+        from django_project.scans.models import Scan
         scan = Scan.objects.filter(pk=scan_id).first()
         if not scan:
             return {'status': 'error', 'message': 'Scan not found'}
