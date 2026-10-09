@@ -16,9 +16,21 @@ async def get_current_user(request: Request, credentials: HTTPAuthorizationCrede
     if not token:
         raise HTTPException(status_code=401, detail='Not authenticated')
     user = await verify_token(token)
-    if not user:
+    if not user or not await _is_active_user(str(user.get('user_id') or '')):
         raise HTTPException(status_code=401, detail='Invalid token')
     return user
+
+
+@sync_to_async
+def _is_active_user(user_id: str) -> bool:
+    from django.core.exceptions import ValidationError
+    from django_project.users.models import User
+    if not user_id:
+        return False
+    try:
+        return User.objects.filter(pk=user_id, is_active=True).exists()
+    except (TypeError, ValueError, ValidationError):
+        return False
 
 
 @sync_to_async
