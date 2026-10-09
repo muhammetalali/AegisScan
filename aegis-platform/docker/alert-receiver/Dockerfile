@@ -1,4 +1,4 @@
-FROM python:3.12-alpine
+FROM mirror.gcr.io/library/python:3.12-alpine
 
 RUN addgroup -S -g 10003 aegis-alerts \
     && adduser -S -D -H -u 10003 -G aegis-alerts aegis-alerts \

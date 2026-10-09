@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: mirror.gcr.io/library/postgres:16-alpine
         env:
           POSTGRES_DB: aegisdb
           POSTGRES_USER: aegis
@@ -46,7 +46,7 @@ jobs:
           --health-cmd "pg_isready -U aegis -d aegisdb" --health-interval 10s
           --health-timeout 5s --health-retries 5
       redis:
-        image: redis:7-alpine
+        image: mirror.gcr.io/library/redis:7-alpine
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping" --health-interval 10s

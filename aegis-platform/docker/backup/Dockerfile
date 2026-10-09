@@ -1,4 +1,4 @@
-FROM postgres:16-bookworm
+FROM mirror.gcr.io/library/postgres:16-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

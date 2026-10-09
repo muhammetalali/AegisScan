@@ -214,7 +214,7 @@ jobs:
 
           receiver_ready=0
           for attempt in $(seq 1 30); do
-            if docker run --rm --network "$DELIVERY_NET" python:3.12-alpine \
+            if docker run --rm --network "$DELIVERY_NET" mirror.gcr.io/library/python:3.12-alpine \
               python -c "import urllib.request; r=urllib.request.urlopen('http://alert_receiver:8080/ready', timeout=2); assert r.status == 200" >/dev/null 2>&1; then
               receiver_ready=1
               break
