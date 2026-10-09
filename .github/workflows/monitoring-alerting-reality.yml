@@ -98,10 +98,10 @@ jobs:
           set -euo pipefail
           docker run --rm --entrypoint=/bin/promtool \
             -v "$PWD/aegis-platform/monitoring:/etc/prometheus:ro" \
-            prom/prometheus:v3.13.3 check config /etc/prometheus/prometheus.yml
+            mirror.gcr.io/prom/prometheus:v3.13.3 check config /etc/prometheus/prometheus.yml
           docker run --rm --entrypoint=/bin/promtool \
             -v "$PWD/aegis-platform/monitoring:/etc/prometheus:ro" \
-            prom/prometheus:v3.13.3 check rules /etc/prometheus/rules/aegis.yml
+            mirror.gcr.io/prom/prometheus:v3.13.3 check rules /etc/prometheus/rules/aegis.yml
 
       - name: Prepare bounded CI runtime environment
         working-directory: aegis-platform
