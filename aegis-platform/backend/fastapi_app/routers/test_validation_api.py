@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from django_project.vulnerabilities.models import Vulnerability
 from django_project.evidence.models import Evidence, ValidationRun
 from fastapi_app.core import dependencies as core_dependencies
@@ -40,6 +40,7 @@ def api_fixture(transactional_db, monkeypatch):
         password="Strong-Test-Password-123!",
         first_name="Validation",
         last_name="API",
+        role=UserRole.SECURITY_ANALYST,
     )
     project = Project.objects.create(
         name="Validation API Regression",
