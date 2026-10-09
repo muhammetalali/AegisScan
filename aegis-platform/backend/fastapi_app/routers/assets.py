@@ -4,8 +4,9 @@ import io
 import json
 
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, Q
 from django.utils.text import slugify
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Query
 from pydantic import BaseModel, Field
@@ -71,10 +72,22 @@ def _accessible_assets(
     than loading every asset into application memory.
     """
     from django_project.assets.models import Asset
+    from django_project.users.models import User as CompanyUser
 
-    qs = Asset.objects.all()
-    if not _is_company_owner(user_id):
-        qs = qs.filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id)).distinct()
+    # Keep the primary-owner identity check inside the asset SQL statement:
+    # fetching the user first adds an extra SELECT and breaks pagination's
+    # single-query contract. Employee membership checks remain enforced.
+    owner_exists = Exists(
+        CompanyUser.objects.filter(
+            pk=user_id,
+            is_active=True,
+            is_superuser=True,
+            email__iexact=settings.AEGIS_PRIMARY_OWNER_EMAIL,
+        )
+    )
+    qs = Asset.objects.filter(
+        Q(owner_exists) | Q(project__owner_id=user_id) | Q(project__members__id=user_id)
+    ).distinct()
     if project_id:
         qs = qs.filter(project_id=project_id)
     if asset_type:
