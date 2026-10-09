@@ -220,11 +220,23 @@ class User(AbstractUser):
         return permission in self.get_effective_permissions()
 
     def can_scan_type(self, scan_type: str) -> bool:
+        # The primary owner is not subject to employee scan-type grants.
+        if self.is_company_owner:
+            return True
         if not self.has_permission(Permission.SCAN_CREATE):
             return False
         return self.enabled_scan_types is None or scan_type in self.enabled_scan_types
     def has_any_permission(self, *permissions: str) -> bool: return any(self.has_permission(p) for p in permissions)
     def has_all_permissions(self, *permissions: str) -> bool: return all(self.has_permission(p) for p in permissions)
+
+
+def primary_owner_has_access(user_id: str) -> bool:
+    """Resolve the authenticated primary company owner from persisted user state.
+
+    Never infer owner privileges from a client-supplied flag or staff role.
+    """
+    owner = User.objects.filter(pk=user_id, is_active=True, is_superuser=True).first()
+    return bool(owner and owner.is_company_owner)
 
 
 class Team(models.Model):
