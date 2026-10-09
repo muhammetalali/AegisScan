@@ -120,7 +120,7 @@ def _create_native_scan(
         project = Project.objects.select_for_update().filter(pk=project_id).first()
         if project is None:
             raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
-        if str(project.owner_id) != str(user_id) and not project.members.filter(pk=user_id).exists():
+        if not actor.is_company_owner and str(project.owner_id) != str(user_id) and not project.members.filter(pk=user_id).exists():
             raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
 
         if execution_draft.idempotency_key:
