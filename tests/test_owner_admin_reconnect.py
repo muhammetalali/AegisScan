@@ -1,7 +1,6 @@
 """Non-network regression tests for the owner SSH maintenance reconnect helper."""
 from pathlib import Path
 import os
-import shutil
 import subprocess
 
 
