@@ -1,11 +1,17 @@
 import React, { useEffect } from 'react'
 import { CATALOGS, useLanguageStore } from '@/stores/languageStore'
+import { translateExact } from './translateExact'
 
 type Language = 'ar' | 'en'
 type Catalog = Record<string, string>
 
-const EXTRA: Record<Language, Catalog> = {
-  ar: {
+const EXTRA_AR: Catalog = {
+    'System Monitoring': 'مراقبة النظام', 'Findings Center': 'مركز الثغرات',
+    'Knowledge Center': 'مركز المعرفة', 'Compliance Intelligence': 'ذكاء الامتثال',
+    'Correlated Evidence Graph': 'رسم بياني للأدلة المترابطة',
+    'Enterprise Operational Workspace': 'مساحة العمليات المؤسسية',
+    'Investigation Workspace': 'مساحة التحقيق', 'Asset registry': 'سجل الأصول',
+    'Evidence registry': 'سجل الأدلة', 'Report center': 'مركز التقارير',
     'Finding source': 'مصدر الثغرة', 'Profile': 'الملف', 'Scope & safety': 'النطاق والأمان', 'Review': 'المراجعة',
     'Preserve the assessment criteria': 'استعادة معايير التقييم', 'Choose a real finding': 'اختر ثغرة حقيقية',
     'Search, sort, inspect evidence and launch finding-linked validation from real API data.': 'ابحث ورتّب وافحص الأدلة وابدأ التحقق المرتبط بالثغرة من بيانات API الحقيقية.',
@@ -27,19 +33,15 @@ const EXTRA: Record<Language, Catalog> = {
     'Search findings, assets…': 'ابحث في الثغرات والأصول…', 'Search title, asset, category, tags, engine...': 'ابحث في العنوان أو الأصل أو الفئة أو الوسوم أو المحرك…',
     'Validation': 'التحقق', 'Actions': 'الإجراءات', 'View Evidence': 'عرض الأدلة', 'Assign': 'تعيين', 'Validate': 'تحقق', 'More': 'المزيد',
     'Create a real project in the current RBAC scope. No client-side project is synthesized.': 'أنشئ مشروعًا حقيقيًا ضمن نطاق RBAC الحالي. لا يتم إنشاء مشروع اصطناعي على الواجهة.',
-  },
-  en: {
-    'Not reported': 'Not reported', 'Unavailable': 'Unavailable', 'Untitled finding': 'Untitled finding', 'Security finding': 'Security finding',
-  },
 }
 
-const merged = (language: Language) => ({ ...CATALOGS[language], ...EXTRA[language] })
 const reverse = (catalog: Catalog) => Object.fromEntries(Object.entries(catalog).map(([key, value]) => [value, key])) as Catalog
+const AR_CATALOG: Catalog = { ...CATALOGS.ar, ...EXTRA_AR }
+const EN_CATALOG: Catalog = reverse(AR_CATALOG)
 
 const translateDocument = (language: Language) => {
-  const catalog = merged(language)
-  const map = language === 'ar' ? catalog : reverse(catalog)
-  const entries = Object.entries(map).filter(([from, to]) => from && to && from !== to).sort((a, b) => b[0].length - a[0].length)
+  // Reuse stable dictionaries and reverse the Arabic catalog on language switch.
+  const map = language === 'ar' ? AR_CATALOG : EN_CATALOG
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
   const nodes: Text[] = []
   let node: Node | null
@@ -49,8 +51,7 @@ const translateDocument = (language: Language) => {
     const raw = textNode.nodeValue
     if (!parent || !raw || !raw.trim() || raw.trim().length > 500) continue
     if (parent.closest('script,style,noscript,textarea,input,code,pre')) continue
-    let next = raw
-    for (const [from, to] of entries) next = next.split(from).join(to)
+    const next = translateExact(raw, map)
     if (next !== raw) textNode.nodeValue = next
   }
   const selector = 'input[placeholder], textarea[placeholder], [aria-label], [title]'
@@ -58,8 +59,7 @@ const translateDocument = (language: Language) => {
     for (const attr of ['placeholder', 'aria-label', 'title']) {
       const raw = element.getAttribute(attr)
       if (!raw) continue
-      let next = raw
-      for (const [from, to] of entries) next = next.split(from).join(to)
+      const next = translateExact(raw, map)
       if (next !== raw) element.setAttribute(attr, next)
     }
   })
