@@ -243,6 +243,35 @@ def test_ingress_availability_evidence_captures_real_http_failure_without_hiding
     assert "test-only-ca" not in printed
 
 
+def test_ingress_availability_monitor_reports_no_degradation_when_only_200(
+    tmp_path: Path, monkeypatch,
+):
+    """Do not report an outage merely because a nonempty generator is truthy."""
+    from contextlib import nullcontext
+
+    enterprise_ca = _private(tmp_path / "enterprise-ca.pem", "test-only-ca")
+    monkeypatch.setattr(remote_ops.remote, "_private_file", lambda *_args, **_kw: None)
+    monkeypatch.setattr(remote_ops.ssl, "create_default_context", lambda cafile: object())
+    monkeypatch.setattr(
+        remote_ops, "urlopen",
+        lambda *_args, **_kw: nullcontext(SimpleNamespace(status=200)),
+    )
+
+    result = remote_ops._observe_ingress_during(
+        lambda: {"status": "success"},
+        origin="https://aegis-prod.aegis.internal",
+        ca_bundle=enterprise_ca,
+    )
+    observation = result["ingress_availability_observation"]
+    assert observation["samples"] >= 1
+    assert observation["health_status_counts"] == {"200": observation["samples"]}
+    assert observation["ready_status_counts"] == {"200": observation["samples"]}
+    assert observation["degraded_sample_examples"] == []
+    assert observation["observed_degradation"] is False
+    # Sampling can detect observed errors, not promise absolute zero downtime.
+    assert observation["continuous_availability_proven"] is False
+
+
 def test_ingress_availability_monitor_keeps_cleanup_exception_fail_closed(
     tmp_path: Path, monkeypatch, capsys,
 ):

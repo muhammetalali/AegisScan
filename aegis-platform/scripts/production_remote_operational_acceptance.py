@@ -476,8 +476,10 @@ def _observe_ingress_during(operation, *, origin: str | None, ca_bundle: Path | 
             "health_status_counts": dict(counts["health"]),
             "ready_status_counts": dict(counts["ready"]),
             "degraded_sample_examples": degraded,
-            "observed_degradation": bool(
-                any(code != "200" for code in counts[route]) for route in ("health", "ready")
+            "observed_degradation": any(
+                code != "200"
+                for route in ("health", "ready")
+                for code in counts[route]
             ),
             "tls_verified": True,
             "sampling_interval_seconds": 0.35,
