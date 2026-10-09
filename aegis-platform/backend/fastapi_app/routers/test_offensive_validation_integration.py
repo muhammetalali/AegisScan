@@ -11,7 +11,7 @@ from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.routers import validations
 from fastapi_app.services.offensive_validation import ENGINE
@@ -24,7 +24,7 @@ class _ImmediateTaskResult:
 @pytest.fixture
 def browser_transport_finding(db, monkeypatch):
     monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', '127.0.0.1/32')
-    user = User.objects.create_user(email='offensive-api-owner@example.invalid', password='Strong-Test-Password-123!')
+    user = User.objects.create_user(email='offensive-api-owner@example.invalid', password='Strong-Test-Password-123!', role=UserRole.SECURITY_ANALYST)
     other = User.objects.create_user(email='offensive-api-other@example.invalid', password='Strong-Test-Password-123!')
     project = Project.objects.create(name='Offensive API', slug='offensive-api', owner=user)
     asset = Asset.objects.create(
@@ -90,6 +90,19 @@ def browser_transport_finding(db, monkeypatch):
         },
     )
     return SimpleNamespace(user=user, other=other, project=project, asset=asset, scan=scan, finding=finding)
+
+
+@pytest.mark.django_db
+def test_offensive_validation_rejects_unassigned_viewer(browser_transport_finding):
+    user = browser_transport_finding.user
+    user.role = UserRole.VIEWER
+    user.save(update_fields=['role'])
+    with pytest.raises(HTTPException) as denied:
+        async_to_sync(validations.create_offensive_validation)(
+            validations.OffensiveValidationCreate(finding_id=browser_transport_finding.finding.id),
+            user={'user_id': str(user.id)},
+        )
+    assert denied.value.status_code == 403
 
 
 @pytest.mark.django_db

@@ -51,7 +51,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
-    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    permission_classes = [permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts]
     required_permissions = {
         'list': 'user.read',
         'retrieve': 'user.read',
