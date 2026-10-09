@@ -22,14 +22,8 @@ interface AuthState {
   register: (data: RegisterData) => Promise<void>
   logout: () => Promise<void>
   refreshAccessToken: () => Promise<void>
-  forgotPassword: (email: string) => Promise<void>
-  resetPassword: (token: string, password: string) => Promise<void>
-  verifyEmail: (token: string) => Promise<void>
   updateProfile: (data: Partial<User>) => Promise<void>
   changePassword: (oldPassword: string, newPassword: string) => Promise<void>
-  enable2FA: () => Promise<{ secret: string; qrCode: string }>
-  verify2FA: (code: string) => Promise<void>
-  disable2FA: () => Promise<void>
   fetchUser: () => Promise<void>
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
@@ -54,10 +48,6 @@ const readError = (error: any, fallback: string) => {
 
 const ME_ENDPOINT = '/auth/users/me/'
 const CHANGE_PASSWORD_ENDPOINT = '/auth/users/me/change_password/'
-const TWO_FA_ENABLE_ENDPOINT = '/auth/users/me/2fa/enable/'
-const TWO_FA_VERIFY_ENDPOINT = '/auth/users/me/2fa/verify/'
-const TWO_FA_DISABLE_ENDPOINT = '/auth/users/me/2fa/disable/'
-
 export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   accessToken: null,
@@ -111,39 +101,6 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     setSessionHint(true)
   },
 
-  forgotPassword: async (email) => {
-    set({ loading: true, error: null })
-    try {
-      await api.post('/auth/password/reset/', { email })
-      set({ loading: false })
-    } catch (error: any) {
-      set({ loading: false, error: readError(error, 'تعذر إرسال رسالة إعادة التعيين') })
-      throw error
-    }
-  },
-
-  resetPassword: async (token, password) => {
-    set({ loading: true, error: null })
-    try {
-      await api.post('/auth/password/reset/confirm/', { token, password })
-      set({ loading: false })
-    } catch (error: any) {
-      set({ loading: false, error: readError(error, 'تعذر إعادة تعيين كلمة المرور') })
-      throw error
-    }
-  },
-
-  verifyEmail: async (token) => {
-    set({ loading: true, error: null })
-    try {
-      await api.post('/auth/verify-email/', { token })
-      set({ loading: false })
-    } catch (error: any) {
-      set({ loading: false, error: readError(error, 'تعذر التحقق من البريد الإلكتروني') })
-      throw error
-    }
-  },
-
   updateProfile: async (data) => {
     set({ loading: true, error: null })
     try {
@@ -165,10 +122,6 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       throw error
     }
   },
-
-  enable2FA: async () => (await api.post(TWO_FA_ENABLE_ENDPOINT)).data,
-  verify2FA: async (code) => { await api.post(TWO_FA_VERIFY_ENDPOINT, { code }) },
-  disable2FA: async () => { await api.post(TWO_FA_DISABLE_ENDPOINT) },
 
   fetchUser: async () => {
     const response = await api.get(ME_ENDPOINT)
