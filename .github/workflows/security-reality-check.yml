@@ -157,7 +157,7 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q django_project/users/test_auth_security.py
+        run: python -m pytest -q django_project/users/test_auth_security.py django_project/users/test_company_owner_provisioning.py
 
       - name: Audit evidence regression tests
         working-directory: aegis-platform/backend
