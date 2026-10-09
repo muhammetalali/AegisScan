@@ -46,6 +46,12 @@ def _asset_response(asset) -> AssetResponse:
     return AssetResponse(id=str(asset.id), project_id=str(asset.project_id), name=asset.name, slug=asset.slug, type=asset.type, description=asset.description, environment=asset.environment, criticality=asset.criticality, configuration=asset.configuration or {}, tags=asset.tags or [], is_active=asset.is_active, scan_count=asset.scan_count, last_scanned_at=asset.last_scanned_at.isoformat() if asset.last_scanned_at else None, created_at=asset.created_at.isoformat(), updated_at=asset.updated_at.isoformat())
 
 
+def _is_company_owner(user_id: str) -> bool:
+    from django_project.users.models import User as CompanyUser
+    actor = CompanyUser.objects.filter(pk=user_id, is_active=True).first()
+    return bool(actor and actor.is_company_owner)
+
+
 @sync_to_async
 def _accessible_assets(
     user_id: str,
@@ -66,9 +72,9 @@ def _accessible_assets(
     """
     from django_project.assets.models import Asset
 
-    qs = Asset.objects.filter(
-        Q(project__owner_id=user_id) | Q(project__members__id=user_id)
-    ).distinct()
+    qs = Asset.objects.all()
+    if not _is_company_owner(user_id):
+        qs = qs.filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id)).distinct()
     if project_id:
         qs = qs.filter(project_id=project_id)
     if asset_type:
@@ -109,13 +115,19 @@ def _accessible_assets(
 @sync_to_async
 def _has_project_access(project_id: str, user_id: str) -> bool:
     from django_project.projects.models import Project
-    return Project.objects.filter(id=project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).exists()
+    projects = Project.objects.filter(id=project_id)
+    if not _is_company_owner(user_id):
+        projects = projects.filter(Q(owner_id=user_id) | Q(members__id=user_id))
+    return projects.exists()
 
 
 @sync_to_async
 def _get_asset(asset_id: str, user_id: str):
     from django_project.assets.models import Asset
-    return Asset.objects.select_related('project','owner').filter(pk=asset_id).filter(Q(project__owner_id=user_id)|Q(project__members__id=user_id)).first()
+    assets = Asset.objects.select_related('project', 'owner').filter(pk=asset_id)
+    if not _is_company_owner(user_id):
+        assets = assets.filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
+    return assets.first()
 
 
 @router.get('/', response_model=List[AssetResponse])
@@ -132,7 +144,10 @@ async def list_assets(project_id: Optional[str]=None, asset_type: Optional[str]=
 def _create_asset(data: AssetCreate, user_id: str):
     from django_project.assets.models import Asset
     from django_project.projects.models import Project
-    project=Project.objects.filter(id=data.project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).first()
+    projects = Project.objects.filter(id=data.project_id)
+    if not _is_company_owner(user_id):
+        projects = projects.filter(Q(owner_id=user_id) | Q(members__id=user_id))
+    project = projects.first()
     if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
     base_slug=slugify(data.name) or 'asset'; slug=base_slug; suffix=2
     while Asset.objects.filter(project=project,slug=slug).exists(): slug=f'{base_slug}-{suffix}'; suffix+=1
@@ -175,7 +190,10 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
 
 def _get_asset_sync(asset_id: str,user_id: str):
     from django_project.assets.models import Asset
-    return Asset.objects.filter(pk=asset_id).filter(Q(project__owner_id=user_id)|Q(project__members__id=user_id)).first()
+    assets = Asset.objects.filter(pk=asset_id)
+    if not _is_company_owner(user_id):
+        assets = assets.filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
+    return assets.first()
 
 
 @router.patch('/{asset_id}', response_model=AssetResponse)
