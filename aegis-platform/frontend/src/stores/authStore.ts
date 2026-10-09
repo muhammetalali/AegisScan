@@ -21,8 +21,6 @@ interface AuthState {
   login: (email: string, password: string, rememberMe?: boolean) => Promise<void>
   logout: () => Promise<void>
   refreshAccessToken: () => Promise<void>
-  updateProfile: (data: Partial<User>) => Promise<void>
-  changePassword: (oldPassword: string, newPassword: string) => Promise<void>
   fetchUser: () => Promise<void>
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
@@ -37,7 +35,6 @@ const readError = (error: any, fallback: string) => {
 }
 
 const ME_ENDPOINT = '/auth/users/me/'
-const CHANGE_PASSWORD_ENDPOINT = '/auth/users/me/change_password/'
 export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   accessToken: null,
@@ -76,28 +73,6 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   refreshAccessToken: async () => {
     await api.post('/auth/refresh/')
     setSessionHint(true)
-  },
-
-  updateProfile: async (data) => {
-    set({ loading: true, error: null })
-    try {
-      const response = await api.patch(ME_ENDPOINT, data)
-      set({ user: response.data, loading: false })
-    } catch (error: any) {
-      set({ loading: false, error: readError(error, 'تعذر تحديث الملف الشخصي') })
-      throw error
-    }
-  },
-
-  changePassword: async (oldPassword, newPassword) => {
-    set({ loading: true, error: null })
-    try {
-      await api.post(CHANGE_PASSWORD_ENDPOINT, { old_password: oldPassword, new_password: newPassword })
-      set({ loading: false })
-    } catch (error: any) {
-      set({ loading: false, error: readError(error, 'تعذر تغيير كلمة المرور') })
-      throw error
-    }
   },
 
   fetchUser: async () => {

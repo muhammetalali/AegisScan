@@ -1,5 +1,6 @@
 """Owner-only company employee lifecycle; no public signup, mail or MFA required."""
 import pytest
+from django.test import override_settings
 from rest_framework.test import APIClient
 from django_project.users.models import User, UserRole
 
@@ -132,3 +133,57 @@ def test_owner_grants_must_stay_within_role_and_scan_types_are_validated(company
     },format='json')
     assert response.status_code == 400
     assert not User.objects.filter(email=base['email']).exists()
+
+
+@pytest.mark.django_db
+@override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
+def test_cookie_owner_provisions_and_revokes_staff_through_real_auth(company_owner):
+    """Exercise real CSRF + JWT cookies, not just force_authenticated mocks."""
+    owner = APIClient(enforce_csrf_checks=True)
+    owner_csrf = owner.get('/api/v1/auth/csrf/').json()['csrfToken']
+    login = owner.post('/api/v1/auth/login/', {
+        'email': company_owner.email, 'password': 'Strong-Test-Owner-Pass-2026!',
+    }, format='json', HTTP_X_CSRFTOKEN=owner_csrf)
+    assert login.status_code == 200, login.data
+    assert 'aegis_access' in login.cookies
+
+    staff_email = 'staff-cookie-lifecycle@example.invalid'
+    staff_password = 'Strong-Test-Employee!2026'
+    created = owner.post('/api/v1/auth/users/', {
+        'email': staff_email, 'first_name': 'Scoped', 'last_name': 'Employee',
+        'password': staff_password, 'password_confirm': staff_password,
+        'role': UserRole.SECURITY_ANALYST,
+        'granted_permissions': ['project.read', 'scan.create'],
+        'enabled_scan_types': ['url'],
+        'enabled_pages': ['/projects', '/assess'],
+    }, format='json', HTTP_X_CSRFTOKEN=owner_csrf)
+    assert created.status_code == 201, created.data
+    employee = User.objects.get(email=staff_email)
+    assert not employee.is_active
+
+    staff = APIClient(enforce_csrf_checks=True)
+    staff_csrf = staff.get('/api/v1/auth/csrf/').json()['csrfToken']
+    inactive_login = staff.post('/api/v1/auth/login/', {
+        'email': staff_email, 'password': staff_password,
+    }, format='json', HTTP_X_CSRFTOKEN=staff_csrf)
+    assert inactive_login.status_code == 401
+
+    detail = f'/api/v1/auth/users/{employee.pk}/'
+    assert owner.post(detail + 'activate/', {}, format='json',
+                      HTTP_X_CSRFTOKEN=owner_csrf).status_code == 200
+    live_login = staff.post('/api/v1/auth/login/', {
+        'email': staff_email, 'password': staff_password,
+    }, format='json', HTTP_X_CSRFTOKEN=staff_csrf)
+    assert live_login.status_code == 200, live_login.data
+    assert staff.get('/api/v1/auth/users/me/').status_code == 200
+    assert staff.post('/api/v1/auth/users/', {
+        'email': 'unauthorized@example.invalid',
+    }, format='json', HTTP_X_CSRFTOKEN=staff_csrf).status_code == 403
+
+    assert owner.post(detail + 'deactivate/', {}, format='json',
+                      HTTP_X_CSRFTOKEN=owner_csrf).status_code == 200
+    assert staff.get('/api/v1/auth/users/me/').status_code == 401
+    assert staff.post('/api/v1/auth/refresh/', {}, format='json',
+                      HTTP_X_CSRFTOKEN=staff_csrf).status_code == 401
+    assert not User.objects.filter(email='unauthorized@example.invalid').exists()
+    assert owner.get('/api/v1/auth/users/me/').status_code == 200
