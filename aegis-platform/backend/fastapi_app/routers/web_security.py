@@ -33,7 +33,7 @@ from fastapi_app.contracts.web_security_v2 import (
 from fastapi_app.contracts.identity_protocol_security import IdentityProtocolBatchIn
 from fastapi_app.contracts.http_protocol_security import HttpProtocolBatchIn
 from fastapi_app.contracts.cache_origin_security import CacheOriginBatchIn
-from fastapi_app.core.dependencies import get_current_user
+from fastapi_app.core.dependencies import accessible_projects_for_user, get_current_user, is_primary_company_owner
 from django_project.system.credential_vault import CredentialVaultDenied
 from fastapi_app.services.credential_execution import authorize_credential_refs_for_execution
 from fastapi_app.services.identity_protocol_security import run_identity_protocol_security
@@ -70,9 +70,8 @@ def _uid(user: dict[str, Any]) -> str:
 
 def _project_for_user_sync(project_id: str, user_id: str) -> Project | None:
     return (
-        Project.objects.filter(pk=project_id)
-        .filter(Q(owner_id=user_id) | Q(members__id=user_id))
-        .distinct()
+        accessible_projects_for_user(user_id)
+        .filter(pk=project_id)
         .first()
     )
 
@@ -81,7 +80,7 @@ def _project_admin_for_user_sync(project_id: str, user_id: str) -> Project | Non
     project = Project.objects.filter(pk=project_id).first()
     if project is None:
         return None
-    if str(project.owner_id) == str(user_id):
+    if is_primary_company_owner(user_id) or str(project.owner_id) == str(user_id):
         return project
     allowed = ProjectMembership.objects.filter(
         project=project,
@@ -95,7 +94,7 @@ def _project_security_operator_for_user_sync(project_id: str, user_id: str) -> P
     project = _project_for_user_sync(project_id, user_id)
     if project is None:
         return None
-    if str(project.owner_id) == str(user_id):
+    if is_primary_company_owner(user_id) or str(project.owner_id) == str(user_id):
         return project
     membership = ProjectMembership.objects.filter(project=project, user_id=user_id).first()
     if membership and membership.role in {ProjectMembership.Role.OWNER, ProjectMembership.Role.ADMIN}:

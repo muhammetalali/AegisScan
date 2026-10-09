@@ -4,13 +4,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from . import campaign_objectives
 from ..contracts import AttackPathEdge, AttackPathGraph, AttackPathNode, AttackPathPath
-from ..core.dependencies import get_current_user
+from ..core.dependencies import accessible_projects_for_user, get_current_user
 from assets.models import Asset, AssetRelationship
 from enterprise.models import AttackPath
 from enterprise.services import ensure_project_tenant
@@ -47,7 +46,7 @@ _INACTIVE_STATUSES = {
 
 
 def _project_access(project_id: str, user_id: str) -> bool:
-    return Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).exists()
+    return accessible_projects_for_user(user_id).filter(id=project_id).exists()
 
 
 def _criticality_weight(value: Any) -> float:

@@ -7,7 +7,7 @@ from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, is_primary_company_owner
 
 router = APIRouter()
 
@@ -44,7 +44,10 @@ def _list_evidence(user_id: str, project_id: Optional[str], finding_id: Optional
     access = Q(scan__project__owner_id=user_id) | Q(scan__project__members__id=user_id)
     access |= Q(finding__project__owner_id=user_id) | Q(finding__project__members__id=user_id)
     access |= Q(asset__project__owner_id=user_id) | Q(asset__project__members__id=user_id)
-    qs = Evidence.objects.select_related('scan__project', 'asset', 'finding__project').filter(access).distinct().order_by('-collected_at')
+    qs = Evidence.objects.select_related('scan__project', 'asset', 'finding__project')
+    if not is_primary_company_owner(user_id):
+        qs = qs.filter(access)
+    qs = qs.distinct().order_by('-collected_at')
     if project_id:
         qs = qs.filter(Q(scan__project_id=project_id) | Q(finding__project_id=project_id) | Q(asset__project_id=project_id))
     if finding_id:
@@ -100,7 +103,10 @@ def _get_evidence(evidence_id: str, user_id: str):
     access = Q(scan__project__owner_id=user_id) | Q(scan__project__members__id=user_id)
     access |= Q(finding__project__owner_id=user_id) | Q(finding__project__members__id=user_id)
     access |= Q(asset__project__owner_id=user_id) | Q(asset__project__members__id=user_id)
-    return Evidence.objects.select_related('scan__project', 'asset', 'finding__project').filter(Q(id=evidence_id) & access).distinct().first()
+    qs = Evidence.objects.select_related('scan__project', 'asset', 'finding__project').filter(id=evidence_id)
+    if not is_primary_company_owner(user_id):
+        qs = qs.filter(access)
+    return qs.distinct().first()
 
 
 @router.get('/{evidence_id}', response_model=EvidenceResponse)
