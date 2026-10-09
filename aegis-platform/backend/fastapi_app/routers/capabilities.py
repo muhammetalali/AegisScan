@@ -71,13 +71,14 @@ class CapabilityExecutionRequest(BaseModel):
 
 @sync_to_async
 def _asset_for_execution(asset_id: str, project_id: str, user_id: str):
-    return (
-        Asset.objects.select_related('project')
-        .filter(pk=asset_id, project_id=project_id, is_active=True)
-        .filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
-        .distinct()
-        .first()
+    from django_project.users.models import User as CompanyUser
+    actor = CompanyUser.objects.filter(pk=user_id, is_active=True).first()
+    assets = Asset.objects.select_related('project').filter(
+        pk=asset_id, project_id=project_id, is_active=True,
     )
+    if actor is None or not actor.is_company_owner:
+        assets = assets.filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
+    return assets.distinct().first()
 
 
 @sync_to_async
@@ -120,7 +121,7 @@ def _create_native_scan(
         project = Project.objects.select_for_update().filter(pk=project_id).first()
         if project is None:
             raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
-        if str(project.owner_id) != str(user_id) and not project.members.filter(pk=user_id).exists():
+        if not actor.is_company_owner and str(project.owner_id) != str(user_id) and not project.members.filter(pk=user_id).exists():
             raise HTTPException(status_code=404, detail='Asset not found or inaccessible')
 
         if execution_draft.idempotency_key:

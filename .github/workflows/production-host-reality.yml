@@ -142,7 +142,8 @@ jobs:
           # This is an isolated GitHub-hosted test runner, not the offline
           # production readiness gate. Stage the capability test fixture.
           for attempt in 1 2 3; do
-            if docker pull --quiet alpine:3.20; then
+            if docker pull --quiet mirror.gcr.io/library/alpine:3.20; then
+              docker tag mirror.gcr.io/library/alpine:3.20 alpine:3.20
               break
             fi
             if [ "$attempt" -eq 3 ]; then

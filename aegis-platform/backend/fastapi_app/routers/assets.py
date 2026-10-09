@@ -4,14 +4,15 @@ import io
 import json
 
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, Q
 from django.utils.text import slugify
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Query
 from pydantic import BaseModel, Field
 
 from ..core.security import verify_token
-from ..core.dependencies import get_current_user
+from ..core.dependencies import accessible_projects_for_user, get_current_user, is_primary_company_owner
 from ..services.asset_authorization_governance import (
     AssetAuthorizationGovernanceError,
     delete_asset_if_lineage_free,
@@ -65,9 +66,21 @@ def _accessible_assets(
     than loading every asset into application memory.
     """
     from django_project.assets.models import Asset
+    from django_project.users.models import User as CompanyUser
 
+    # Keep the primary-owner identity check inside the asset SQL statement:
+    # fetching the user first adds an extra SELECT and breaks pagination's
+    # single-query contract. Employee membership checks remain enforced.
+    owner_exists = Exists(
+        CompanyUser.objects.filter(
+            pk=user_id,
+            is_active=True,
+            is_superuser=True,
+            email__iexact=settings.AEGIS_PRIMARY_OWNER_EMAIL,
+        )
+    )
     qs = Asset.objects.filter(
-        Q(project__owner_id=user_id) | Q(project__members__id=user_id)
+        Q(owner_exists) | Q(project__owner_id=user_id) | Q(project__members__id=user_id)
     ).distinct()
     if project_id:
         qs = qs.filter(project_id=project_id)
@@ -109,13 +122,19 @@ def _accessible_assets(
 @sync_to_async
 def _has_project_access(project_id: str, user_id: str) -> bool:
     from django_project.projects.models import Project
-    return Project.objects.filter(id=project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).exists()
+    projects = Project.objects.filter(id=project_id)
+    if not is_primary_company_owner(user_id):
+        projects = projects.filter(Q(owner_id=user_id) | Q(members__id=user_id))
+    return projects.exists()
 
 
 @sync_to_async
 def _get_asset(asset_id: str, user_id: str):
     from django_project.assets.models import Asset
-    return Asset.objects.select_related('project','owner').filter(pk=asset_id).filter(Q(project__owner_id=user_id)|Q(project__members__id=user_id)).first()
+    assets = Asset.objects.select_related('project', 'owner').filter(pk=asset_id)
+    if not is_primary_company_owner(user_id):
+        assets = assets.filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
+    return assets.first()
 
 
 @router.get('/', response_model=List[AssetResponse])
@@ -132,7 +151,10 @@ async def list_assets(project_id: Optional[str]=None, asset_type: Optional[str]=
 def _create_asset(data: AssetCreate, user_id: str):
     from django_project.assets.models import Asset
     from django_project.projects.models import Project
-    project=Project.objects.filter(id=data.project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).first()
+    projects = Project.objects.filter(id=data.project_id)
+    if not is_primary_company_owner(user_id):
+        projects = projects.filter(Q(owner_id=user_id) | Q(members__id=user_id))
+    project = projects.first()
     if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
     base_slug=slugify(data.name) or 'asset'; slug=base_slug; suffix=2
     while Asset.objects.filter(project=project,slug=slug).exists(): slug=f'{base_slug}-{suffix}'; suffix+=1
@@ -175,7 +197,10 @@ def _update_asset(asset_id: str, update: AssetUpdate, user_id: str):
 
 def _get_asset_sync(asset_id: str,user_id: str):
     from django_project.assets.models import Asset
-    return Asset.objects.filter(pk=asset_id).filter(Q(project__owner_id=user_id)|Q(project__members__id=user_id)).first()
+    assets = Asset.objects.filter(pk=asset_id)
+    if not is_primary_company_owner(user_id):
+        assets = assets.filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
+    return assets.first()
 
 
 @router.patch('/{asset_id}', response_model=AssetResponse)
@@ -316,7 +341,7 @@ async def bulk_import_assets(project_id: str,file: UploadFile=File(...),user=Dep
 def _bulk_create_assets(items: List[AssetCreate], user_id: str):
     from django_project.assets.models import Asset
     from django_project.projects.models import Project
-    projects={str(project.id): project for project in Project.objects.filter(id__in={item.project_id for item in items}).filter(Q(owner_id=user_id)|Q(members__id=user_id)).distinct()}
+    projects = {str(project.id): project for project in accessible_projects_for_user(user_id).filter(id__in={item.project_id for item in items})}
     created=[]
     for item in items:
         project=projects.get(item.project_id)

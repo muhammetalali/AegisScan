@@ -220,6 +220,10 @@ class User(AbstractUser):
         return permission in self.get_effective_permissions()
 
     def can_scan_type(self, scan_type: str) -> bool:
+        # The primary company owner administers the entire scanner catalog.
+        # Employee scan-type restrictions must never restrict that account.
+        if self.is_company_owner:
+            return True
         if not self.has_permission(Permission.SCAN_CREATE):
             return False
         return self.enabled_scan_types is None or scan_type in self.enabled_scan_types

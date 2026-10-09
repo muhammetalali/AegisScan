@@ -58,7 +58,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16-alpine
+        image: mirror.gcr.io/library/postgres:16-alpine
         env:
           POSTGRES_USER: aegis
           POSTGRES_PASSWORD: launch-readiness-password
@@ -165,12 +165,12 @@ jobs:
           }
           trap cleanup EXIT
           docker network create aegis-launch-proof
-          docker run -d --name aegis-launch-frontend --network aegis-launch-proof --network-alias frontend nginx:alpine
-          docker run -d --name aegis-launch-django --network aegis-launch-proof --network-alias django nginx:alpine
-          docker run -d --name aegis-launch-fastapi --network aegis-launch-proof --network-alias fastapi nginx:alpine
+          docker run -d --name aegis-launch-frontend --network aegis-launch-proof --network-alias frontend mirror.gcr.io/library/nginx:1.30.5-alpine
+          docker run -d --name aegis-launch-django --network aegis-launch-proof --network-alias django mirror.gcr.io/library/nginx:1.30.5-alpine
+          docker run -d --name aegis-launch-fastapi --network aegis-launch-proof --network-alias fastapi mirror.gcr.io/library/nginx:1.30.5-alpine
           docker run -d --name aegis-launch-gateway --network aegis-launch-proof -p 8443:443 \
             -v "$PWD/aegis-platform/docker/nginx-ssl.conf:/etc/nginx/nginx.conf:ro" \
-            -v /tmp/aegis-tls:/etc/nginx/ssl:ro nginx:alpine
+            -v /tmp/aegis-tls:/etc/nginx/ssl:ro mirror.gcr.io/library/nginx:1.30.5-alpine
           for attempt in $(seq 1 20); do
             curl -ksSf -D /tmp/aegis-headers -o /dev/null https://127.0.0.1:8443/ && break
             sleep 1

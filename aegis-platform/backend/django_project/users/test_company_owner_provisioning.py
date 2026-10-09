@@ -37,6 +37,24 @@ def test_public_signup_is_disabled_and_creates_no_account():
 
 
 @pytest.mark.django_db
+def test_primary_owner_scan_types_are_not_filtered_by_employee_settings(company_owner, other_admin):
+    # Owner access must remain available while managing the company remotely.
+    company_owner.enabled_scan_types = []
+    company_owner.granted_permissions = []
+    company_owner.save(update_fields=['enabled_scan_types', 'granted_permissions'])
+    assert company_owner.is_company_owner
+    assert all(company_owner.can_scan_type(scan_type) for scan_type in (
+        'code', 'url', 'ip', 'api', 'file', 'docker', 'network', 'full_validation',
+    ))
+
+    # Employee settings still apply independently of the owner's privileges.
+    other_admin.enabled_scan_types = ['url']
+    other_admin.save(update_fields=['enabled_scan_types'])
+    assert other_admin.can_scan_type('url')
+    assert not other_admin.can_scan_type('ip')
+
+
+@pytest.mark.django_db
 def test_only_primary_owner_can_create_activate_and_assign_employee(company_owner, other_admin):
     admin = APIClient()
     admin.force_authenticate(user=other_admin)

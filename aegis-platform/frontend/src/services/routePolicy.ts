@@ -20,8 +20,10 @@ const PAGE_PERMISSIONS: Record<string, string> = {
   '/settings':'system.settings', '/system':'system.monitor',
 }
 
-export const canAccessRoute = (path: string, role?: UserRole | null, permissions?: string[] | null, enabledPages?: string[] | null): boolean => {
+export const canAccessRoute = (path: string, role?: UserRole | null, permissions?: string[] | null, enabledPages?: string[] | null, isCompanyOwner = false): boolean => {
   if (!role) return false
+  // Only the server-verified primary company owner bypasses employee UI page grants.
+  if (isCompanyOwner) return true
   if (/^\/projects\/[^/]+\/assess(?:\/|$)/.test(path) || path === '/validations/new' || path.startsWith('/validations/')) {
     const isReadOnly = path.includes('/progress') || path.includes('/results')
     const grant = isReadOnly ? 'scan.read' : 'scan.create'

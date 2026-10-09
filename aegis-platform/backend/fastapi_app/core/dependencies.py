@@ -40,6 +40,25 @@ def _has_permission(user_id: str, permission: str) -> bool:
     return bool(user and user.has_permission(permission))
 
 
+def is_primary_company_owner(user_id: str) -> bool:
+    """Identify the primary owner via the active Django user, not client claims."""
+    from django_project.users.models import User
+
+    actor = User.objects.filter(pk=user_id, is_active=True).first()
+    return bool(actor and actor.is_company_owner)
+
+
+def accessible_projects_for_user(user_id: str):
+    """Single project-access policy for the company owner and regular staff."""
+    from django.db.models import Q
+    from django_project.projects.models import Project
+
+    projects = Project.objects.all()
+    if is_primary_company_owner(user_id):
+        return projects
+    return projects.filter(Q(owner_id=user_id) | Q(members__id=user_id)).distinct()
+
+
 def require_permission(permission: str) -> Callable:
     async def dependency(user=Depends(get_current_user)):
         user_id = str(user.get('user_id'))

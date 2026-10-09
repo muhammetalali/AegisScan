@@ -2,6 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { canAccessRoute, canManageKeys } from './routePolicy'
 
 describe('real navigation and deep-link permission parity', () => {
+  it('gives only the server-identified company owner access to every workspace page', () => {
+    const ownerPages = [
+      '/dashboard', '/projects', '/projects/project-1/assess', '/assets',
+      '/assess', '/web-labs', '/validations/new', '/scan', '/scan/scan-1/results',
+      '/vulnerabilities', '/evidence', '/reports', '/compliance',
+      '/assurance/workflow', '/assurance/policies', '/digital-twin',
+      '/investigation', '/enterprise-security', '/users', '/keys',
+      '/settings', '/system', '/security-events', '/audit',
+    ]
+    for (const path of ownerPages) {
+      expect(canAccessRoute(path, 'super_admin', [], [], true), path).toBe(true)
+    }
+    expect(canAccessRoute('/users', 'super_admin', [], [], false)).toBe(false)
+    expect(canAccessRoute('/assess', 'admin', [], [], false)).toBe(false)
+    expect(canAccessRoute('/users', undefined, [], [], true)).toBe(false)
+  })
   it('keeps Viewer out of management pages even through direct routes and palette', () => {
     for (const path of ['/users','/settings','/system','/audit','/keys','/assess','/web-labs','/assurance/actions','/enterprise-security','/projects/project-1/assess','/validations/new']) {
       expect(canAccessRoute(path,'viewer'), path).toBe(false)

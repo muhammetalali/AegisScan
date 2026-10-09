@@ -175,3 +175,28 @@ def test_frontend_assets_spa_route_does_not_collide_with_vite_assets_directory()
     assert "try_files /index.html =404;" in exact_assets
     assert "try_files $uri $uri/ /index.html;" in generic
     assert config.index("location = /assets {") < config.index("location / {")
+
+
+def test_real_gateway_dns_proof_accepts_only_version_pinned_mirror_images() -> None:
+    import importlib.util
+
+    path = Path(__file__).parents[0] / "production_gateway_dns_reality.py"
+    spec = importlib.util.spec_from_file_location("gateway_dns_reality", path)
+    assert spec and spec.loader
+    reality = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reality)
+
+    valid = "mirror.gcr.io/library/nginx:1.30.5-alpine"
+    assert reality._validate_gateway_image(valid) == valid
+    for invalid in (
+        "nginx:1.30.5-alpine",
+        "nginx:latest",
+        "mirror.gcr.io/library/nginx:latest",
+        "mirror.gcr.io/library/nginx:1.30-alpine",
+    ):
+        try:
+            reality._validate_gateway_image(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Unpinned or unapproved gateway image accepted: {invalid}")
