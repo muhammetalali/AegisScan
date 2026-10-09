@@ -4,6 +4,7 @@ import os
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
+from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -94,8 +95,12 @@ def _serialize_scan(scan: Scan):
 
 @sync_to_async
 def _list_scans(user_id: str, project_id: Optional[str], status: Optional[str], limit: int, offset: int):
-    qs = (Scan.objects.select_related('project').filter(project__members=user_id)
-          | Scan.objects.select_related('project').filter(project__owner_id=user_id)).distinct().order_by('-created_at')
+    from django_project.users.models import User as CompanyUser
+    actor = CompanyUser.objects.filter(pk=user_id, is_active=True).first()
+    qs = Scan.objects.select_related('project')
+    if actor is None or not actor.is_company_owner:
+        qs = qs.filter(Q(project__members=user_id) | Q(project__owner_id=user_id)).distinct()
+    qs = qs.order_by('-created_at')
     if project_id:
         qs = qs.filter(project_id=project_id)
     if status:
@@ -162,8 +167,11 @@ def _create_scan(scan: ScanCreate, user_id: str, execution_draft: GovernedExecut
     if actor is None or not actor.can_scan_type(scan.scan_type):
         raise HTTPException(status_code=403, detail='This scan type is not enabled for your account.')
     with transaction.atomic():
-        project = (Project.objects.select_for_update().filter(id=scan.project_id, owner_id=user_id).first()
-                   or Project.objects.select_for_update().filter(id=scan.project_id, members=user_id).first())
+        if actor.is_company_owner:
+            project = Project.objects.select_for_update().filter(id=scan.project_id).first()
+        else:
+            project = (Project.objects.select_for_update().filter(id=scan.project_id, owner_id=user_id).first()
+                       or Project.objects.select_for_update().filter(id=scan.project_id, members=user_id).first())
         if not project:
             raise HTTPException(status_code=404, detail='Project not found or access denied')
         if execution_draft is not None and execution_draft.idempotency_key:
