@@ -101,6 +101,39 @@ def test_create_scan_reuses_existing_authorized_asset(api_fixture):
     assert Asset.objects.filter(project=project, slug="aegis-scan-target").count() == 1
 
 
+def test_primary_company_owner_works_across_projects_without_membership(api_fixture, settings):
+    from fastapi_app.routers import capabilities as capability_routes
+
+    client, employee, project, asset = api_fixture
+    owner = User.objects.create_superuser(
+        email=settings.AEGIS_PRIMARY_OWNER_EMAIL,
+        password='Owner-Integration-Test-2026!',
+    )
+    owner.enabled_scan_types = []
+    owner.save(update_fields=['enabled_scan_types'])
+    assert owner.id != employee.id
+    assert not project.members.filter(pk=owner.id).exists()
+    assert owner.can_scan_type('network')
+
+    app.dependency_overrides[core_dependencies.get_current_user] = lambda: {
+        'user_id': str(owner.id), 'is_staff': True,
+    }
+    assert capability_routes._asset_for_execution.__wrapped__(
+        str(asset.id), str(project.id), str(owner.id),
+    ) == asset
+
+    response = client.post('/scans/', json=_body(project.id, asset.id))
+    assert response.status_code == 201, response.json()
+    scan_id = response.json()['id']
+    listed = client.get('/scans/')
+    assert listed.status_code == 200
+    assert scan_id in {row['id'] for row in listed.json()}
+
+    asset_detail = client.get(f'/api/v1/assets/{asset.id}')
+    assert asset_detail.status_code == 200
+    assert asset_detail.json()['id'] == str(asset.id)
+
+
 def test_create_scan_rejects_authorized_target_drift(api_fixture):
     client, _, project, asset = api_fixture
     asset.configuration = {"host": "different-target"}
