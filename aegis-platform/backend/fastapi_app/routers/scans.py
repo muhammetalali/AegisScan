@@ -94,8 +94,12 @@ def _serialize_scan(scan: Scan):
 
 @sync_to_async
 def _list_scans(user_id: str, project_id: Optional[str], status: Optional[str], limit: int, offset: int):
-    qs = (Scan.objects.select_related('project').filter(project__members=user_id)
-          | Scan.objects.select_related('project').filter(project__owner_id=user_id)).distinct().order_by('-created_at')
+    from django_project.users.models import primary_owner_has_access
+    if primary_owner_has_access(user_id):
+        qs = Scan.objects.select_related('project').order_by('-created_at')
+    else:
+        qs = (Scan.objects.select_related('project').filter(project__members=user_id)
+              | Scan.objects.select_related('project').filter(project__owner_id=user_id)).distinct().order_by('-created_at')
     if project_id:
         qs = qs.filter(project_id=project_id)
     if status:
