@@ -166,8 +166,11 @@ def _create_scan(scan: ScanCreate, user_id: str, execution_draft: GovernedExecut
     if actor is None or not actor.can_scan_type(scan.scan_type):
         raise HTTPException(status_code=403, detail='This scan type is not enabled for your account.')
     with transaction.atomic():
-        project = (Project.objects.select_for_update().filter(id=scan.project_id, owner_id=user_id).first()
-                   or Project.objects.select_for_update().filter(id=scan.project_id, members=user_id).first())
+        if actor.is_company_owner:
+            project = Project.objects.select_for_update().filter(id=scan.project_id).first()
+        else:
+            project = (Project.objects.select_for_update().filter(id=scan.project_id, owner_id=user_id).first()
+                       or Project.objects.select_for_update().filter(id=scan.project_id, members=user_id).first())
         if not project:
             raise HTTPException(status_code=404, detail='Project not found or access denied')
         if execution_draft is not None and execution_draft.idempotency_key:
