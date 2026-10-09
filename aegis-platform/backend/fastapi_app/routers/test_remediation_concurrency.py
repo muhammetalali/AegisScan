@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from django.db import close_old_connections
 
-from django_project.assets.models import Asset
+from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.users.models import User
@@ -35,6 +35,13 @@ def test_remediation_create_run_allows_only_one_active_run(monkeypatch):
         criticality=Asset.Criticality.HIGH,
         configuration={'host': 'aegis-scan-target', 'authorized': True},
         owner=user,
+    )
+    # A remediation run requires an authoritative, asset-bound authorization.
+    # Supply the missing test grant without weakening the production guard.
+    AssetAuthorization.objects.create(
+        asset=asset, actor=user, authorized=True,
+        target_snapshot='aegis-scan-target',
+        reason='Remediation concurrency test authorization',
     )
     scan = Scan.objects.create(
         project=project,
