@@ -73,6 +73,21 @@ class HasPermission(permissions.BasePermission):
         return True
 
 
+class CompanyOwnerControlsAccounts(permissions.BasePermission):
+    """Only the established company owner can provision or change employee accounts."""
+
+    message = 'Only the primary company owner can manage employee accounts.'
+    protected_actions = frozenset({
+        'create', 'update', 'partial_update', 'destroy', 'activate',
+        'deactivate', 'set_password',
+    })
+
+    def has_permission(self, request, view):
+        if getattr(view, 'action', None) in self.protected_actions:
+            return bool(request.user and request.user.is_authenticated and request.user.is_company_owner)
+        return True
+
+
 class IsOwnerOrReadOnly(permissions.BasePermission):
     """Object-level permission to only allow owners to edit an object."""
     def has_object_permission(self, request, view, obj):

@@ -9,6 +9,7 @@ class UserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
+    is_company_owner = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
@@ -17,7 +18,8 @@ class UserSerializer(serializers.ModelSerializer):
             'phone', 'avatar', 'avatar_url', 'role', 'is_active',
             'is_verified', 'last_login_ip', 'last_activity',
             'language', 'theme', 'timezone', 'two_factor_enabled',
-            'permissions', 'date_joined', 'last_login',
+            'permissions', 'granted_permissions', 'enabled_scan_types', 'enabled_pages',
+            'is_company_owner', 'date_joined', 'last_login',
         ]
         read_only_fields = ['id', 'date_joined', 'last_login', 'is_verified', 'last_login_ip', 'last_activity']
 
@@ -25,7 +27,7 @@ class UserSerializer(serializers.ModelSerializer):
         return obj.get_full_name()
 
     def get_permissions(self, obj):
-        return ROLE_PERMISSIONS.get(obj.role, [])
+        return obj.get_effective_permissions()
 
     def get_avatar_url(self, obj):
         if obj.avatar:
@@ -40,39 +42,63 @@ class UserListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'role', 'is_active', 'is_verified', 'last_activity', 'date_joined']
+        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'role', 'is_active', 'is_verified', 'last_activity', 'date_joined', 'granted_permissions', 'enabled_scan_types', 'enabled_pages', 'is_company_owner']
 
     def get_full_name(self, obj):
         return obj.get_full_name()
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
+    granted_permissions = serializers.ListField(child=serializers.ChoiceField(choices=Permission.values), required=False)
+    enabled_scan_types = serializers.ListField(child=serializers.ChoiceField(choices=('code', 'url', 'ip', 'api', 'file', 'docker', 'network', 'full_validation')), required=False)
+    enabled_pages = serializers.ListField(child=serializers.RegexField(r'^/[a-z0-9][a-z0-9/-]{0,100}$'), required=False)
     password = serializers.CharField(write_only=True, min_length=8)
     password_confirm = serializers.CharField(write_only=True)
 
     class Meta:
         model = User
-        fields = ['email', 'first_name', 'last_name', 'password', 'password_confirm', 'role', 'phone', 'language', 'theme', 'timezone']
+        fields = ['email', 'first_name', 'last_name', 'password', 'password_confirm', 'role', 'phone', 'language', 'theme', 'timezone', 'granted_permissions', 'enabled_scan_types', 'enabled_pages']
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
             raise serializers.ValidationError({'password_confirm': 'Passwords do not match'})
+        role = attrs.get('role', UserRole.VIEWER)
+        if role == UserRole.SUPER_ADMIN:
+            raise serializers.ValidationError({'role': 'The company owner cannot be delegated.'})
+        allowed = {str(p) for p in ROLE_PERMISSIONS[role]}
+        grants = attrs.get('granted_permissions', [])
+        if not set(grants).issubset(allowed):
+            raise serializers.ValidationError({'granted_permissions': 'Selected permissions exceed role limits.'})
         return attrs
 
     def create(self, validated_data):
         validated_data.pop('password_confirm')
         password = validated_data.pop('password')
-        user = User.objects.create_user(**validated_data)
-        user.set_password(password)
-        user.save()
-        return user
+        # New company accounts are inert until the owner explicitly activates them.
+        validated_data.setdefault('granted_permissions', [])
+        validated_data.setdefault('enabled_scan_types', [])
+        validated_data.setdefault('enabled_pages', [])
+        validated_data['is_active'] = False
+        return User.objects.create_user(password=password, **validated_data)
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
+    granted_permissions = serializers.ListField(child=serializers.ChoiceField(choices=Permission.values), required=False)
+    enabled_scan_types = serializers.ListField(child=serializers.ChoiceField(choices=('code', 'url', 'ip', 'api', 'file', 'docker', 'network', 'full_validation')), required=False)
+    enabled_pages = serializers.ListField(child=serializers.RegexField(r'^/[a-z0-9][a-z0-9/-]{0,100}$'), required=False)
+
     class Meta:
         model = User
-        fields = ['first_name', 'last_name', 'phone', 'role', 'language', 'theme', 'timezone', 'is_active']
-        read_only_fields = ['email']
+        fields = ['first_name', 'last_name', 'phone', 'role', 'language', 'theme', 'timezone', 'granted_permissions', 'enabled_scan_types', 'enabled_pages']
+
+    def validate(self, attrs):
+        role = attrs.get('role', self.instance.role)
+        if role == UserRole.SUPER_ADMIN:
+            raise serializers.ValidationError({'role': 'The company owner cannot be delegated.'})
+        grants = attrs.get('granted_permissions', self.instance.granted_permissions)
+        if grants is not None and not set(grants).issubset({str(p) for p in ROLE_PERMISSIONS[role]}):
+            raise serializers.ValidationError({'granted_permissions': 'Selected permissions exceed role limits.'})
+        return attrs
 
 
 class ChangePasswordSerializer(serializers.Serializer):

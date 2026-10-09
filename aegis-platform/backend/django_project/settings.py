@@ -21,6 +21,8 @@ env = environ.Env(
 )
 environ.Env.read_env(BASE_DIR / '.env')
 SECRET_KEY = env('SECRET_KEY'); DEBUG = env('DEBUG'); ALLOWED_HOSTS = env('ALLOWED_HOSTS'); JWT_SECRET_KEY = env('JWT_SECRET_KEY'); REDIS_URL = env('REDIS_URL')
+# One immutable company account controls employee provisioning; no email service or MFA is required.
+AEGIS_PRIMARY_OWNER_EMAIL = 'muhammetalali199@gmail.com'
 AUTH_BRUTE_FORCE_THRESHOLD = env('AUTH_BRUTE_FORCE_THRESHOLD'); AUTH_BRUTE_FORCE_WINDOW_SECONDS = env('AUTH_BRUTE_FORCE_WINDOW_SECONDS')
 if not 3 <= AUTH_BRUTE_FORCE_THRESHOLD <= 100: raise ImproperlyConfigured('AUTH_BRUTE_FORCE_THRESHOLD must be between 3 and 100.')
 if not 60 <= AUTH_BRUTE_FORCE_WINDOW_SECONDS <= 86400: raise ImproperlyConfigured('AUTH_BRUTE_FORCE_WINDOW_SECONDS must be between 60 and 86400.')

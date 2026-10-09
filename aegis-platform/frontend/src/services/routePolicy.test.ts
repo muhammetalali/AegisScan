@@ -20,6 +20,18 @@ describe('real navigation and deep-link permission parity', () => {
       expect(canAccessRoute('/keys',role)).toBe(false)
     }
   })
+  it('restricts an Administrator to owner-granted pages even on direct deep links', () => {
+    const grants = ['project.read','scan.read']
+    expect(canAccessRoute('/dashboard','admin',grants)).toBe(true)
+    expect(canAccessRoute('/projects','admin',grants)).toBe(true)
+    expect(canAccessRoute('/scan','admin',grants)).toBe(true)
+    for (const forbidden of ['/users','/settings','/keys','/audit','/assess','/validations/new','/system']) {
+      expect(canAccessRoute(forbidden,'admin',grants),forbidden).toBe(false)
+    }
+    expect(canAccessRoute('/assess','admin',['scan.create'])).toBe(true)
+    expect(canAccessRoute('/projects/project-1/assess','admin',['project.read'])).toBe(false)
+    expect(canAccessRoute('/projects/project-1/assess','admin',['project.read','scan.create'])).toBe(true)
+  })
   it('keeps scope-specific route access consistent with existing navigation roles', () => {
     expect(canAccessRoute('/users','admin')).toBe(true)
     expect(canAccessRoute('/settings','admin')).toBe(true)

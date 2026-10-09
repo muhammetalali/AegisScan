@@ -2,6 +2,16 @@
 
 AegisScan production is an internal-only enterprise service. A production release is not required or expected to expose the application to the public Internet.
 
+## Company account ownership (private deployment)
+
+- The established `muhammetalali199@gmail.com` account is the **only** employee-provisioning owner. The owner must be active and retain Django superuser authority. No password, account duplication, or credential reset is part of this rollout.
+- The existing `Users & RBAC` interface creates **inactive** employee accounts with local passwords. The owner then selects a role, an explicit subset of the role's permissions, visible navigation pages, and permitted scan types before activating an account.
+- Other administrators may operate according to their delegated role and grants, **but cannot create, activate, deactivate, delete, change employee passwords, or promote accounts**, even by calling Django's user-management REST endpoints directly.
+- `enabled_pages` gates client navigation; the authoritative API capability allowlist is `granted_permissions`. `enabled_scan_types` is enforced at the scan/launcher/native-capability/scheduled-binding execution entrypoints. Hiding a page is never an authorization mechanism on its own.
+- Self-service public registration is disabled. Public mail verification, mail-based reset, and MFA are **not** implemented or advertised as active deployment requirements. Existing cookie authentication, CSRF protection, password verification, per-request RBAC and audit logging remain in force.
+- Existing company users have null granular grants/pages/scan types for compatibility until explicitly reviewed and updated by the owner. New company accounts default to empty allowlists and cannot authenticate until activated. Production E2E fixtures remain privileged **one-run internal bootstrap identities**; they must not register through the public website.
+- Do not delete historical project/scan evidence, PostgreSQL volumes, object stores, backups, audit logs, current release artifacts, or any Kali QuantIntelligenceOS files as part of temporary-files cleanup. Preserve the current and previous production image needed for rollback.
+
 ## Trust boundary
 
 The production application origin and production SSH management endpoint must resolve exclusively to:

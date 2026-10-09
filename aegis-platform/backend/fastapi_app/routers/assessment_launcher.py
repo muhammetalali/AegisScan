@@ -326,6 +326,13 @@ def _prepare_asset(
     }
 
 
+@sync_to_async
+def _company_user_allows_scan(user_id: str, mode: str) -> bool:
+    from django_project.users.models import User
+    user = User.objects.filter(pk=user_id, is_active=True).first()
+    return bool(user and user.can_scan_type(mode))
+
+
 @router.get('/context')
 async def assessment_context(project_id: str, user=Depends(get_current_user)):
     user_id = str(user.get('user_id'))
@@ -365,10 +372,14 @@ async def assessment_context(project_id: str, user=Depends(get_current_user)):
             if suggestions:
                 break
 
+    modes = [
+        mode for mode in ('network', 'ip', 'url', 'file')
+        if await _company_user_allows_scan(user_id, mode)
+    ]
     return {
         'project_id': project_id,
         'suggested_networks': list(dict.fromkeys(suggestions)),
-        'modes': ['network', 'ip', 'url', 'file'],
+        'modes': modes,
         'default_depth': 'standard',
         'scope_mode': _scope_mode(),
         'automatic_scope_activation': _scope_mode() == 'single-operator-lab',
@@ -377,6 +388,8 @@ async def assessment_context(project_id: str, user=Depends(get_current_user)):
 
 @router.post('/prepare', status_code=201)
 async def prepare_assessment(request: PrepareAssessmentRequest, user=Depends(get_current_user)):
+    if not await _company_user_allows_scan(str(user.get('user_id')), request.mode):
+        raise HTTPException(status_code=403, detail='This scan type is not enabled for your account.')
     asset_type, target, configuration = _normalize_target(request.mode, request.target)
     return await sync_to_async(_prepare_asset)(
         project_id=request.project_id,
@@ -435,6 +448,8 @@ async def prepare_file_assessment(
     file: UploadFile = File(...),
     user=Depends(get_current_user),
 ):
+    if not await _company_user_allows_scan(str(user.get('user_id')), 'file'):
+        raise HTTPException(status_code=403, detail='File scanning is not enabled for your account.')
     raw = await file.read(_MAX_UPLOAD_BYTES + 1)
     if len(raw) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f'File exceeds {_MAX_UPLOAD_BYTES} bytes')

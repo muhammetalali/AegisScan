@@ -9,6 +9,11 @@ export interface User {
   role: UserRole
   is_active: boolean
   is_verified: boolean
+  is_company_owner?: boolean
+  permissions?: string[]
+  granted_permissions?: string[] | null
+  enabled_scan_types?: string[] | null
+  enabled_pages?: string[] | null
   language: Language
   theme: Theme
   timezone: string
