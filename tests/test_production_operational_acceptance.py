@@ -77,10 +77,12 @@ def test_cleanup_is_repeatable_and_preserves_production_scope(monkeypatch, tmp_p
         result = ops.cleanup_e2e_scope(env_file=tmp_path / "production.env", release_sha=release)
         assert result["scan_target_stopped"] is True
         assert result["authorization_scope_restored"] is True
-    restores = [(argv, kw) for argv, kw in commands if "--remove-orphans" in argv]
-    assert len(restores) == 2
-    assert all(kw["env"]["AEGIS_LAB_NETWORK_CIDRS"] == env["AEGIS_LAB_NETWORK_CIDRS"] for _, kw in restores)
-    assert all("ci-only" not in kw["env"].get("COMPOSE_PROFILES", "") for _, kw in restores)
+    # Cleanup must never recreate production services or broaden their scope.
+    assert len(commands) == 4
+    assert not any("up" in argv or "--remove-orphans" in argv for argv, _ in commands)
+    assert sum("stop" in argv and argv[-1] == "scan_target" for argv, _ in commands) == 2
+    assert sum("rm" in argv and argv[-1] == "scan_target" for argv, _ in commands) == 2
+    assert all(kw["env"]["AEGIS_LAB_NETWORK_CIDRS"] == env["AEGIS_LAB_NETWORK_CIDRS"] for _, kw in commands)
 
     commands.clear()
     monkeypatch.setattr(ops, "_current_sha", lambda: "b" * 40)
@@ -89,18 +91,18 @@ def test_cleanup_is_repeatable_and_preserves_production_scope(monkeypatch, tmp_p
     assert not commands
 
 
-def test_e2e_scope_uses_only_canonical_lab_boundary(monkeypatch, tmp_path: Path):
+def test_e2e_scope_starts_only_fixture_without_recreating_or_expanding_production(monkeypatch, tmp_path: Path):
     env = {"AEGIS_LAB_NETWORK_CIDRS": "192.168.49.0/24"}
     monkeypatch.setattr(ops.os, "environ", {})
-    monkeypatch.setattr(ops, "_run", lambda *args, **kwargs: SimpleNamespace(stdout=""))
+    commands = []
+    monkeypatch.setattr(ops, "_run", lambda argv, **kw: (commands.append((argv, kw)), SimpleNamespace(stdout=""))[1])
     monkeypatch.setattr(ops, "_validation_target_ip", lambda: "172.31.0.9")
     monkeypatch.setattr(
         ops,
         "_wait_required_services",
         lambda *args, **kwargs: sorted(ops.REQUIRED_RUNNING_SERVICES | {"scan_target"}),
     )
-    container_env = {"AEGIS_LAB_NETWORK_CIDRS": "192.168.49.0/24,172.31.0.9/32"}
-    monkeypatch.setattr(ops, "_container_environment", lambda _: dict(container_env))
+    monkeypatch.setattr(ops, "_container_environment", lambda _: dict(env))
 
     target, runtime_env, services = ops._activate_e2e_scope(
         tmp_path / "production.env",
@@ -110,10 +112,29 @@ def test_e2e_scope_uses_only_canonical_lab_boundary(monkeypatch, tmp_path: Path)
     )
 
     assert target == "172.31.0.9"
-    assert runtime_env["AEGIS_LAB_NETWORK_CIDRS"] == "192.168.49.0/24,172.31.0.9/32"
+    assert runtime_env["AEGIS_LAB_NETWORK_CIDRS"] == env["AEGIS_LAB_NETWORK_CIDRS"]
     assert "AUTHORIZED_SCAN_TARGETS" not in runtime_env
     assert "SCANNER_EGRESS_PRIVATE_TARGETS" not in runtime_env
     assert "scan_target" in services
+    assert len(commands) == 1
+    argv, kwargs = commands[0]
+    assert argv[-4:] == ["up", "-d", "--no-deps", "scan_target"]
+    assert "--profile" in argv and "ci-only" in argv
+    assert kwargs["env"]["AEGIS_LAB_NETWORK_CIDRS"] == env["AEGIS_LAB_NETWORK_CIDRS"]
+
+
+def test_e2e_scope_fails_if_any_production_container_scope_was_modified(monkeypatch, tmp_path: Path):
+    env = {"AEGIS_LAB_NETWORK_CIDRS": "192.168.49.0/24"}
+    monkeypatch.setattr(ops.os, "environ", {})
+    monkeypatch.setattr(ops, "_run", lambda *args, **kwargs: SimpleNamespace(stdout=""))
+    monkeypatch.setattr(ops, "_validation_target_ip", lambda: "172.31.0.9")
+    monkeypatch.setattr(ops, "_wait_required_services", lambda *a, **kw: sorted(ops.REQUIRED_RUNNING_SERVICES | {"scan_target"}))
+    monkeypatch.setattr(ops, "_container_environment", lambda container: {
+        "AEGIS_LAB_NETWORK_CIDRS": "192.168.49.0/24,172.31.0.9/32"
+        if container == "aegis-fastapi" else env["AEGIS_LAB_NETWORK_CIDRS"]
+    })
+    with pytest.raises(ops.OperationalAcceptanceError, match="preserve the existing lab scope"):
+        ops._activate_e2e_scope(tmp_path / "production.env", env, timeout_seconds=30, poll_seconds=1)
 
 
 def test_alertmanager_and_backup_probes_require_real_success(monkeypatch, tmp_path: Path):

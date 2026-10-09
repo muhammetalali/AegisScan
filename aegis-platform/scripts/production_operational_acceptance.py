@@ -180,13 +180,6 @@ def _compose_environment(env: dict[str, str], *, extra_profiles: set[str] | None
     return resolved
 
 
-def _append_csv(value: str, item: str) -> str:
-    entries = [entry.strip() for entry in value.split(",") if entry.strip()]
-    if item not in entries:
-        entries.append(item)
-    return ",".join(entries)
-
-
 def _validation_target_ip() -> str:
     result = _run(
         ["docker", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}", "aegis-scan-target"],
@@ -272,45 +265,30 @@ def _activate_e2e_scope(
     poll_seconds: int,
 ) -> tuple[str, dict[str, str], list[str]]:
     profile_env = _compose_environment(env, extra_profiles={"ci-only"})
+    # Only the ephemeral fixture is created. Network execution is governed by
+    # the existing bound AssetAuthorization decisions and dynamic egress control;
+    # never recreate running production services to add a test-only CIDR.
     _run(
-        _compose(env_file, "--profile", "ci-only", "up", "-d", "scan_target"),
+        _compose(env_file, "--profile", "ci-only", "up", "-d", "--no-deps", "scan_target"),
         timeout=300,
         env=profile_env,
     )
     target_ip = _validation_target_ip()
-    runtime_env = dict(profile_env)
-    runtime_env["AEGIS_LAB_NETWORK_CIDRS"] = _append_csv(
-        env.get("AEGIS_LAB_NETWORK_CIDRS", ""),
-        f"{target_ip}/32",
-    )
-    _run(
-        _compose(env_file, "--profile", "ci-only", "up", "-d"),
-        timeout=900,
-        env=runtime_env,
-    )
     services = _wait_required_services(
         env_file,
         timeout_seconds=timeout_seconds,
         poll_seconds=poll_seconds,
-        environment=runtime_env,
+        environment=profile_env,
         required_services=REQUIRED_RUNNING_SERVICES | {"scan_target"},
     )
-    fastapi_env = _container_environment("aegis-fastapi")
-    egress_env = _container_environment("aegis-scanner-egress")
-    target_cidr = f"{target_ip}/32"
-    if target_cidr not in {
-        item.strip()
-        for item in fastapi_env.get("AEGIS_LAB_NETWORK_CIDRS", "").split(",")
-        if item.strip()
-    }:
-        raise OperationalAcceptanceError("production E2E target was not bound to the canonical lab scope")
-    if target_cidr not in {
-        item.strip()
-        for item in egress_env.get("AEGIS_LAB_NETWORK_CIDRS", "").split(",")
-        if item.strip()
-    }:
-        raise OperationalAcceptanceError("production E2E target was not bound to the canonical scanner lab scope")
-    return target_ip, runtime_env, services
+    for container in ("aegis-fastapi", "aegis-scanner-egress"):
+        if _container_environment(container).get("AEGIS_LAB_NETWORK_CIDRS", "").strip() != env.get(
+            "AEGIS_LAB_NETWORK_CIDRS", ""
+        ).strip():
+            raise OperationalAcceptanceError(
+                f"production E2E must preserve the existing lab scope on {container}"
+            )
+    return target_ip, profile_env, services
 
 
 def _wait_alertmanager(env_file: Path, *, timeout_seconds: int, poll_seconds: int) -> dict[str, object]:
@@ -556,12 +534,9 @@ def cleanup_e2e_scope(
         env=profile_env,
     )
 
+    # The base stack was never recreated for E2E, so restoration is limited
+    # to stopping/removing the ephemeral fixture without touching live services.
     normal_env = _compose_environment(env)
-    _run(
-        _compose(env_file, "up", "-d", "--remove-orphans"),
-        timeout=900,
-        env=normal_env,
-    )
     services = _wait_required_services(
         env_file,
         timeout_seconds=service_timeout_seconds,
