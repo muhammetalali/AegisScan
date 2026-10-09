@@ -112,6 +112,10 @@ def _create_native_scan(
     execution_draft: GovernedExecutionDraft,
 ) -> tuple[Scan, bool]:
     capability = get_capability(capability_id)
+    from django_project.users.models import User as CompanyUser
+    actor = CompanyUser.objects.filter(pk=user_id, is_active=True).first()
+    if actor is None or not actor.can_scan_type(capability.scan_type):
+        raise HTTPException(status_code=403, detail='This scan type is not enabled for your account.')
     with transaction.atomic():
         project = Project.objects.select_for_update().filter(pk=project_id).first()
         if project is None:

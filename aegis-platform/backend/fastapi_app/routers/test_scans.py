@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from fastapi_app.core import dependencies as core_dependencies
 from fastapi_app.main import app
 from fastapi_app.routers import scans as scans_router
@@ -31,6 +31,7 @@ def api_fixture(transactional_db, monkeypatch):
         password="Strong-Test-Password-123!",
         first_name="Scan",
         last_name="Regression",
+        role=UserRole.SECURITY_ANALYST,
     )
     project = Project.objects.create(
         name="Scan Asset Reuse Regression",

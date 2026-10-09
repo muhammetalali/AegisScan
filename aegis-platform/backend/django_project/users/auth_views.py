@@ -18,7 +18,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django_project.audit.models import AuditLog
 from django_project.audit.services import append_audit, client_ip_from_request
 from .auth_audit import record_login_event
-from .serializers import UserSerializer, UserCreateSerializer
+from .serializers import UserSerializer
 from .models import User
 
 
@@ -101,25 +101,19 @@ class LoginView(APIView):
 
 
 class RegisterView(APIView):
-    """Public account bootstrap endpoint; newly registered users are always Viewers."""
+    """Company-only: public registration is permanently unavailable."""
 
     permission_classes = [AllowAny]
 
     @method_decorator(csrf_protect)
     @method_decorator(ratelimit(key='ip', rate='5/h', method='POST', block=True))
     def post(self, request):
-        payload = request.data.copy()
-        # Never accept a caller-supplied role on public registration.
-        payload.pop('role', None)
-        serializer = UserCreateSerializer(data=payload)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        # Company-only service: public callers may not create active accounts.
+        # CI/production E2E identities use the existing protected server-side
+        # one-run fixture provisioner, never this public endpoint.
         return Response(
-            {
-                'user': UserSerializer(user, context={'request': request}).data,
-                'registered': True,
-            },
-            status=status.HTTP_201_CREATED,
+            {'detail': 'Accounts are created and activated by the primary company owner.'},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
 
@@ -167,6 +161,8 @@ class DeactivateSelfView(APIView):
 
     @method_decorator(csrf_protect)
     def post(self, request):
+        if request.user.is_company_owner:
+            return Response({'detail': 'The primary company owner account cannot self-deactivate.'}, status=status.HTTP_403_FORBIDDEN)
         password = str(request.data.get('password') or '')
         if not password or not request.user.check_password(password):
             return Response({'detail': 'Current password is invalid.'}, status=status.HTTP_400_BAD_REQUEST)

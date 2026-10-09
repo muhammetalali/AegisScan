@@ -19,7 +19,6 @@ interface AuthState {
   initialized: boolean
   error: string | null
   login: (email: string, password: string, rememberMe?: boolean) => Promise<void>
-  register: (data: RegisterData) => Promise<void>
   logout: () => Promise<void>
   refreshAccessToken: () => Promise<void>
   updateProfile: (data: Partial<User>) => Promise<void>
@@ -27,15 +26,6 @@ interface AuthState {
   fetchUser: () => Promise<void>
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
-}
-
-interface RegisterData {
-  email: string
-  password: string
-  password_confirm: string
-  first_name: string
-  last_name: string
-  phone?: string
 }
 
 const readError = (error: any, fallback: string) => {
@@ -70,19 +60,6 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     } catch (error: any) {
       const message = readError(error, 'تعذر تسجيل الدخول')
       set({ loading: false, error: message, initialized: true })
-      throw error
-    }
-  },
-
-  register: async (data) => {
-    set({ loading: true, error: null })
-    try {
-      await api.get('/auth/csrf/')
-      await api.post('/auth/register/', data)
-      await get().login(data.email, data.password)
-      set({ loading: false, initialized: true })
-    } catch (error: any) {
-      set({ loading: false, error: readError(error, 'تعذر إنشاء الحساب'), initialized: true })
       throw error
     }
   },

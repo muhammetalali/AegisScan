@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from fastapi_app.routers import scans as scans_router
 from fastapi_app.services.asset_authorization_governance import govern_asset_authorization
 from fastapi_app.routers.assets import scan_asset
@@ -23,6 +23,7 @@ def test_semgrep_scan_binds_source_code_authorization_decision():
     user = User.objects.create_user(
         email='semgrep-auth-binding@example.invalid',
         password='Strong-Test-Password-123!',
+        role=UserRole.SECURITY_ANALYST,
     )
     project = Project.objects.create(
         name='Semgrep Authorization Binding',
@@ -79,6 +80,7 @@ def test_asset_scan_uses_immutable_ledger_when_mutable_flag_is_stale(monkeypatch
     user = User.objects.create_user(
         email='asset-scan-ledger-authority@example.invalid',
         password='Strong-Test-Password-123!',
+        role=UserRole.SECURITY_ANALYST,
     )
     project = Project.objects.create(
         name='Asset Scan Ledger Authority',
@@ -129,6 +131,7 @@ def test_asset_scan_rejects_mutable_flag_without_ledger_decision():
     user = User.objects.create_user(
         email='asset-scan-no-ledger@example.invalid',
         password='Strong-Test-Password-123!',
+        role=UserRole.SECURITY_ANALYST,
     )
     project = Project.objects.create(
         name='Asset Scan No Ledger',

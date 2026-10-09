@@ -73,7 +73,7 @@ def smoke():
             results.append(metadata)
             print(json.dumps(metadata, ensure_ascii=False), flush=True)
         assert any(r["requested_path"] == "/login" and r["inputCount"] >= 2 for r in results)
-        assert any(r["requested_path"] == "/register" and r["inputCount"] >= 4 for r in results)
+        assert any(r["requested_path"] == "/register" and r["inputCount"] == 0 and "مالك الشركة" in r["mainText"] for r in results)
         assert next(r for r in results if r["requested_path"] == "/dashboard")["path"] == "/login"
     finally:
         webdriver("DELETE", f"/session/{session}")

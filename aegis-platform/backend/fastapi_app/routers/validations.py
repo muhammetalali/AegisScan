@@ -25,6 +25,13 @@ from ..tasks.offensive_validation_tasks import validate_offensive_finding
 
 router = APIRouter()
 
+@sync_to_async
+def _employee_may_validate(user_id: str, scan_type: str) -> bool:
+    from django_project.users.models import User
+    actor = User.objects.filter(pk=user_id, is_active=True).first()
+    return bool(actor and actor.can_scan_type(scan_type))
+
+
 ALLOWED_TYPES = {'url', 'ip', 'api'}
 ALLOWED_PROFILES = {'quick', 'full', 'custom'}
 OFFENSIVE_PROFILES = {'quick', 'standard', 'full'}
@@ -177,6 +184,8 @@ def _create_offensive(body: OffensiveValidationCreate, user_id: str, finding: Op
 async def create_validation(body: ValidationCreate, user=Depends(get_current_user)):
     if body.target_type not in ALLOWED_TYPES:
         raise HTTPException(status_code=400, detail=f'target_type must be one of {sorted(ALLOWED_TYPES)}')
+    if not await _employee_may_validate(str(user.get('user_id')), body.target_type):
+        raise HTTPException(status_code=403, detail='This validation type is not enabled for your account.')
     if body.profile not in ALLOWED_PROFILES:
         raise HTTPException(status_code=400, detail=f'profile must be one of {sorted(ALLOWED_PROFILES)}')
     target = (body.scope or body.target_value).strip()
@@ -225,6 +234,8 @@ async def create_offensive_validation(body: OffensiveValidationCreate, user=Depe
     if body.profile not in OFFENSIVE_PROFILES:
         raise HTTPException(status_code=400, detail=f'profile must be one of {sorted(OFFENSIVE_PROFILES)}')
     user_id = str(user.get('user_id'))
+    if not await _employee_may_validate(user_id, 'url'):
+        raise HTTPException(status_code=403, detail='URL validation is not enabled for your account.')
     finding = await _get_finding(body.finding_id, user_id)
     if not finding:
         raise HTTPException(status_code=404, detail='Finding not found')

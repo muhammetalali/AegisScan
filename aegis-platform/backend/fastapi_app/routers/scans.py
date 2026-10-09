@@ -157,6 +157,10 @@ def _create_scan(scan: ScanCreate, user_id: str, execution_draft: GovernedExecut
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    from django_project.users.models import User as CompanyUser
+    actor = CompanyUser.objects.filter(pk=user_id, is_active=True).first()
+    if actor is None or not actor.can_scan_type(scan.scan_type):
+        raise HTTPException(status_code=403, detail='This scan type is not enabled for your account.')
     with transaction.atomic():
         project = (Project.objects.select_for_update().filter(id=scan.project_id, owner_id=user_id).first()
                    or Project.objects.select_for_update().filter(id=scan.project_id, members=user_id).first())

@@ -19,7 +19,7 @@ from .serializers import (
     ChangePasswordSerializer, TeamSerializer, TeamCreateSerializer, TeamMembershipSerializer,
     APIKeySerializer, APIKeyCreateSerializer, UserSessionSerializer, LoginAttemptSerializer
 )
-from .permissions import IsOwnerOrReadOnly, HasPermission, IsTeamAdmin
+from .permissions import IsOwnerOrReadOnly, HasPermission, IsTeamAdmin, CompanyOwnerControlsAccounts
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
-    permission_classes = [permissions.IsAuthenticated, HasPermission]
+    permission_classes = [permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts]
     required_permissions = {
         'list': 'user.read',
         'retrieve': 'user.read',
@@ -75,6 +75,74 @@ class UserViewSet(viewsets.ModelViewSet):
         if user.is_superuser or user.has_permission('user.read'):
             return User.objects.all()
         return User.objects.filter(id=user.id)
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def access_options(self, request):
+        from .models import UserRole, ROLE_PERMISSIONS
+        from django_project.scans.models import Scan
+        if not request.user.is_company_owner:
+            return Response({'detail': 'Only the company owner can configure employees.'}, status=403)
+        return Response({
+            'roles': {
+                str(role): sorted(str(p) for p in ROLE_PERMISSIONS[role])
+                for role in UserRole.values if role != UserRole.SUPER_ADMIN
+            },
+            'scan_types': list(Scan.Type.values),
+        })
+
+    def perform_create(self, serializer):
+        employee = serializer.save()
+        append_audit(
+            user=self.request.user, action=AuditLog.Action.USER_CREATE,
+            result=AuditLog.Result.SUCCESS, resource_type='User',
+            resource_id=str(employee.pk), resource_repr=employee.email,
+            metadata={'event': 'owner_provisioned_inactive_employee'},
+            ip_address=client_ip_from_request(self.request),
+        )
+
+    def perform_update(self, serializer):
+        if serializer.instance.is_company_owner:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('The company owner profile cannot be changed through employee controls.')
+        member = serializer.save()
+        append_audit(
+            user=self.request.user, action=AuditLog.Action.USER_PERMISSION_CHANGE,
+            result=AuditLog.Result.SUCCESS, resource_type='User',
+            resource_id=str(member.pk), resource_repr=member.email,
+            metadata={'event': 'owner_updated_employee_access'},
+            ip_address=client_ip_from_request(self.request),
+        )
+
+    def perform_destroy(self, instance):
+        if instance.is_company_owner:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Cannot delete the primary company owner.')
+        # Preserve security/audit relations: a revoked account is never hard-deleted.
+        instance.is_active = False
+        instance.save(update_fields=['is_active'])
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
+    def set_password(self, request, pk=None):
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from rest_framework.exceptions import ValidationError
+        target = self.get_object()
+        if target.is_company_owner:
+            return Response({'detail': 'Use self-service password change for the primary owner.'}, status=403)
+        raw = request.data.get('password')
+        if not isinstance(raw, str) or not raw:
+            raise ValidationError({'password': 'A password is required.'})
+        try:
+            validate_password(raw, user=target)
+        except DjangoValidationError as exc:
+            raise ValidationError({'password': exc.messages}) from exc
+        target.set_password(raw)
+        target.save(update_fields=['password'])
+        # Revoke outstanding refresh tokens after an administrative password change.
+        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+        for token in OutstandingToken.objects.filter(user=target):
+            BlacklistedToken.objects.get_or_create(token=token)
+        return Response({'message': 'Password updated; prior refresh tokens revoked.'})
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def me(self, request):
@@ -103,18 +171,18 @@ class UserViewSet(viewsets.ModelViewSet):
             pass
         return Response({'message': 'Logged out successfully'})
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission], required_permissions=['user.update'])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
     def activate(self, request, pk=None):
         user = self.get_object()
         user.is_active = True
         user.save(update_fields=['is_active'])
         return Response({'message': 'User activated'})
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission], required_permissions=['user.update'])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
     def deactivate(self, request, pk=None):
         user = self.get_object()
-        if user == request.user:
-            return Response({'error': 'Cannot deactivate yourself'}, status=status.HTTP_400_BAD_REQUEST)
+        if user.is_company_owner:
+            return Response({'error': 'The primary company owner cannot be deactivated.'}, status=status.HTTP_400_BAD_REQUEST)
         user.is_active = False
         user.save(update_fields=['is_active'])
         return Response({'message': 'User deactivated'})

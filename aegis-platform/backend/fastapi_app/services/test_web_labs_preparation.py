@@ -22,7 +22,7 @@ from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project, ProjectMembership
 from django_project.system.credential_models import CredentialAccess, CredentialSecret
 from django_project.system import credential_vault
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from enterprise.models import Organization, OrganizationMembership, TenantProject
 from enterprise.provider_approval_models import ProviderApprovalDecision
 from enterprise.web_security_models import ProviderApprovalRecord
@@ -39,7 +39,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 @pytest.fixture
 def context():
-    user = User.objects.create_user(email='web-labs-owner@example.invalid', password='test-only')
+    user = User.objects.create_user(email='web-labs-owner@example.invalid', password='test-only', role=UserRole.SECURITY_ANALYST)
     project = Project.objects.create(name='Web Labs Preview', slug='web-labs-preview', owner=user)
     asset = Asset.objects.create(project=project, name='BAC Fixture', slug='bac-fixture',
                                  type=Asset.Type.WEBSITE,

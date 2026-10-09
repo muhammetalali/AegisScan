@@ -17,7 +17,7 @@ from django_project.assets.models import Asset, AssetAuthorization
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from django_project.vulnerabilities.models import Vulnerability
 from fastapi_app.routers import validations
 from fastapi_app.services.offensive_validation import ENGINE
@@ -26,7 +26,7 @@ from fastapi_app.services.offensive_validation import ENGINE
 def main() -> None:
     suffix = uuid4().hex[:10]
     email = f'offensive-celery-ci-{suffix}@example.invalid'
-    user = User.objects.create_user(email=email, password='Strong-Test-Password-123!')
+    user = User.objects.create_user(email=email, password='Strong-Test-Password-123!', role=UserRole.SECURITY_ANALYST)
     project = Project.objects.create(name=f'Offensive Celery CI {suffix}', slug=f'offensive-celery-ci-{suffix}', owner=user)
     target = 'http://127.0.0.1/celery-login'
     asset = Asset.objects.create(

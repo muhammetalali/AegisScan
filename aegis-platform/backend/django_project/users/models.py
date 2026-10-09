@@ -179,6 +179,11 @@ class User(AbstractUser):
     language = models.CharField(_('language'), max_length=10, default='ar')
     theme = models.CharField(_('theme'), max_length=10, choices=[('dark', 'Dark'), ('light', 'Light')], default='dark')
     timezone = models.CharField(_('timezone'), max_length=50, default='UTC')
+    # NULL preserves role grants for existing accounts. Owner-provisioned employees
+    # always receive an explicit, possibly empty, least-privilege allowlist.
+    granted_permissions = models.JSONField(null=True, blank=True, default=None)
+    enabled_scan_types = models.JSONField(null=True, blank=True, default=None)
+    enabled_pages = models.JSONField(null=True, blank=True, default=None)
     two_factor_enabled = models.BooleanField(_('2FA enabled'), default=False)
     two_factor_secret = models.CharField(_('2FA secret'), max_length=32, blank=True)
     password_reset_token = models.UUIDField(_('password reset token'), default=uuid.uuid4, editable=False)
@@ -195,10 +200,29 @@ class User(AbstractUser):
         indexes = [models.Index(fields=['email']), models.Index(fields=['role']), models.Index(fields=['is_active'])]
     def __str__(self): return self.email
     def get_full_name(self): return f"{self.first_name} {self.last_name}".strip()
+    @property
+    def is_company_owner(self) -> bool:
+        from django.conf import settings
+        return bool(
+            self.is_active and self.is_superuser
+            and self.email.casefold() == settings.AEGIS_PRIMARY_OWNER_EMAIL.casefold()
+        )
+
+    def get_effective_permissions(self) -> list[str]:
+        if self.is_superuser:
+            return [permission.value for permission in Permission]
+        role_grants = {str(permission) for permission in ROLE_PERMISSIONS.get(self.role, [])}
+        if self.granted_permissions is not None:
+            role_grants.intersection_update(self.granted_permissions)
+        return sorted(role_grants)
+
     def has_permission(self, permission: str) -> bool:
-        if self.is_superuser: return True
-        role_perms = ROLE_PERMISSIONS.get(self.role, [])
-        return permission in role_perms
+        return permission in self.get_effective_permissions()
+
+    def can_scan_type(self, scan_type: str) -> bool:
+        if not self.has_permission(Permission.SCAN_CREATE):
+            return False
+        return self.enabled_scan_types is None or scan_type in self.enabled_scan_types
     def has_any_permission(self, *permissions: str) -> bool: return any(self.has_permission(p) for p in permissions)
     def has_all_permissions(self, *permissions: str) -> bool: return all(self.has_permission(p) for p in permissions)
 

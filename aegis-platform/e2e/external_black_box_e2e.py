@@ -167,18 +167,17 @@ def main()->int:
   _deactivate_ephemeral_account(E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD,'Governance approver')
   _deactivate_ephemeral_account(E2E_EMAIL,E2E_PASSWORD,'E2E actor')
   print('EXTERNAL_E2E_CLEANUP=PASS'); return 0
- if CAPACITY_MODE and not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD,E2E_ACCESS_TOKEN,E2E_APPROVER_ACCESS_TOKEN]):
-  raise RuntimeError('Capacity mode requires pre-provisioned actor/approver credentials and access tokens')
+ if not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):
+  raise RuntimeError('Company-only E2E requires provisioned actor/approver credentials; public registration is disabled')
+ if CAPACITY_MODE and not all([E2E_ACCESS_TOKEN,E2E_APPROVER_ACCESS_TOKEN]):
+  raise RuntimeError('Capacity mode requires pre-provisioned actor/approver access tokens')
  if FILE_REQUIRE_FINDING and not FILE_ACCEPTANCE:raise RuntimeError('AEGIS_E2E_FILE_REQUIRE_FINDING requires AEGIS_E2E_FILE_ACCEPTANCE')
  if ZIP_ACCEPTANCE and not FILE_ACCEPTANCE:raise RuntimeError('AEGIS_E2E_ZIP_ACCEPTANCE requires AEGIS_E2E_FILE_ACCEPTANCE')
  if API_KEY_ACCEPTANCE and CAPACITY_MODE:raise RuntimeError('API key acceptance requires the regular one-run identity fixture')
  session=requests.Session(); session.verify=VERIFY_TLS
  if CAPACITY_MODE: session.headers['Authorization']=f'Bearer {E2E_ACCESS_TOKEN}'
  http(session,'GET',f'{API_URL}/ready','FastAPI readiness',{200},timeout=15); http(session,'GET',f'{API_URL}/health','FastAPI health',{200},timeout=15)
- csrf_token=csrf(session); unique=uuid.uuid4().hex[:12]; email=E2E_EMAIL or f'e2e-{unique}@aegisscan.local'; password=E2E_PASSWORD or f'Aegis-E2E-{unique}-StrongPass!9'; approver_email=E2E_APPROVER_EMAIL or f'e2e-approver-{unique}@aegisscan.local'; approver_password=E2E_APPROVER_PASSWORD or f'Aegis-E2E-Approver-{unique}-StrongPass!7'; headers={'X-CSRFToken':csrf_token,'Referer':f'{BASE_URL}/'}
- if not (E2E_EMAIL and E2E_PASSWORD): http(session,'POST',f'{DJANGO_URL}/auth/register/','User registration',{201},json={'email':email,'first_name':'E2E','last_name':'Harness','password':password,'password_confirm':password},headers=headers,timeout=20)
- approver_bootstrap=requests.Session(); approver_bootstrap.verify=VERIFY_TLS; approver_bootstrap_token=csrf(approver_bootstrap); approver_bootstrap_headers={'X-CSRFToken':approver_bootstrap_token,'Referer':f'{BASE_URL}/'}
- if not (E2E_APPROVER_EMAIL and E2E_APPROVER_PASSWORD): http(approver_bootstrap,'POST',f'{DJANGO_URL}/auth/register/','Governance approver registration',{201},json={'email':approver_email,'first_name':'E2E','last_name':'Approver','password':approver_password,'password_confirm':approver_password},headers=approver_bootstrap_headers,timeout=20)
+ csrf_token=csrf(session); unique=uuid.uuid4().hex[:12]; email=E2E_EMAIL; password=E2E_PASSWORD; approver_email=E2E_APPROVER_EMAIL; approver_password=E2E_APPROVER_PASSWORD; headers={'X-CSRFToken':csrf_token,'Referer':f'{BASE_URL}/'}
  csrf_token=csrf(session); headers['X-CSRFToken']=csrf_token
  if CAPACITY_MODE: print('CAPACITY_ACTOR_AUTH=PREPROVISIONED_JWT')
  else: http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)

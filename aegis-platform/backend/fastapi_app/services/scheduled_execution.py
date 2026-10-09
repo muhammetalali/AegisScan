@@ -182,6 +182,13 @@ def _normalize_binding(
     except ValueError as exc:
         raise ScheduledExecutionError('capability_invalid', str(exc), 409) from exc
 
+    # This central binding is also re-evaluated at execution/retry time:
+    # an employee cannot retain a scheduled scan after the owner revokes it.
+    if not actor.can_scan_type(capability.scan_type):
+        raise ScheduledExecutionError(
+            'scan_type_denied', 'This scan type is not enabled for your account.', 403,
+        )
+
     if asset.type not in capability.asset_types:
         raise ScheduledExecutionError(
             'asset_type_mismatch',
