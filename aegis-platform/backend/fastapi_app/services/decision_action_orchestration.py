@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import project_access_q
+
 import hashlib
 import json
 import re
@@ -8,7 +10,6 @@ from typing import Any
 from uuid import uuid4
 
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from enterprise.models import (
@@ -189,7 +190,7 @@ def _validation_project_id(validation: ValidationRun) -> str | None:
 
 
 def _scoped_actions(requested_by: str, *, include_risk_correlation: bool = True):
-    projects = Project.objects.filter(Q(owner_id=requested_by) | Q(members__id=requested_by)).values('id')
+    projects = Project.objects.filter(project_access_q(requested_by)).values('id')
     organizations = OrganizationMembership.objects.filter(user_id=requested_by, is_active=True).values('organization_id')
     queryset = DecisionAction.objects.filter(
         requested_by=requested_by,

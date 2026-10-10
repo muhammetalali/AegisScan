@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import project_access_q
+
 import hashlib
 import json
 import re
@@ -112,9 +114,7 @@ def _labels(values: list[str] | tuple[str, ...] | None) -> list[str]:
 
 
 def _project_access(project: Project, actor_id: str) -> bool:
-    if str(project.owner_id) == str(actor_id):
-        return True
-    return project.members.filter(pk=actor_id).exists()
+    return Project.objects.filter(pk=project.pk).filter(project_access_q(actor_id)).exists()
 
 
 def _lock_context(

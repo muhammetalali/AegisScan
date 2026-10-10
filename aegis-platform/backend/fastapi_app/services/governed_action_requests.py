@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import project_access_q
+
 import hashlib
 import json
 import uuid
@@ -7,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from django.db import transaction
-from django.db.models import Q
 
 from django_project.projects.models import Project
 from enterprise.governed_action_models import GovernedActionRequest
@@ -103,7 +104,7 @@ def create_governed_action_request(
             is_active=True,
         ).first()
         project_access = Project.objects.filter(pk=normalized_project).filter(
-            Q(owner_id=normalized_actor) | Q(members__id=normalized_actor)
+            project_access_q(normalized_actor)
         ).exists()
         if membership is None or not project_access:
             raise PermissionError('Active tenant and project membership are required to propose a governed action.')

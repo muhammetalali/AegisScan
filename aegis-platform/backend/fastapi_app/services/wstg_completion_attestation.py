@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import project_access_q
+
 import hashlib
 import json
 from typing import Any
@@ -31,7 +33,7 @@ def _sha(value: Any) -> str:
 
 def _project_for_actor(project_id: str, actor_id: str) -> Project:
     project = Project.objects.filter(
-        Q(id=project_id) & (Q(owner_id=actor_id) | Q(members__id=actor_id))
+        Q(id=project_id) & (project_access_q(actor_id))
     ).distinct().first()
     if project is None:
         raise WSTGAttestationError('Project not found or actor is not a member.')

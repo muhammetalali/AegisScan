@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import project_access_q
+
 import hashlib
 import json
 import re
@@ -9,7 +11,6 @@ from typing import Any
 from uuid import UUID
 
 from django.db import IntegrityError, transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from django_project.projects.models import Project
@@ -100,7 +101,7 @@ def _scope(*, project_id: str, actor_id: str, for_mutation: bool):
         raise GovernedWorkQueueError('Project is not bound to an active enterprise tenant.')
     organization = Organization.objects.filter(pk=identity['organization_id'], is_active=True).first()
     project = Project.objects.filter(pk=project_id).filter(
-        Q(owner_id=actor_id) | Q(members__id=actor_id)
+        project_access_q(actor_id)
     ).first()
     membership = OrganizationMembership.objects.filter(
         organization_id=identity['organization_id'],
@@ -359,7 +360,7 @@ def list_governed_work(
         project_ids = list(
             TenantProject.objects.filter(
                 organization_id__in=org_ids,
-                project__in=Project.objects.filter(Q(owner_id=actor_id) | Q(members__id=actor_id)),
+                project__in=Project.objects.filter(project_access_q(actor_id)),
             ).values_list('project_id', flat=True)
         )
 
@@ -674,7 +675,7 @@ def mutate_governed_work_claim(
         if link is None:
             raise GovernedWorkQueueError('Project enterprise scope changed while mutating the work queue.')
         project = Project.objects.filter(pk=project_id).filter(
-            Q(owner_id=actor_id) | Q(members__id=actor_id)
+            project_access_q(actor_id)
         ).first()
         membership = OrganizationMembership.objects.filter(
             organization=organization,
