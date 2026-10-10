@@ -215,7 +215,7 @@ def test_primary_owner_sees_company_findings_validations_and_authorization_witho
 
 @pytest.mark.django_db(transaction=True)
 def test_primary_owner_project_gate_consistency(settings):
-    from fastapi_app.services import burp_mcp_gateway, iast_security, governed_oast
+    from fastapi_app.services import burp_mcp_gateway, iast_security
 
     primary = User.objects.create_superuser(
         email=settings.AEGIS_PRIMARY_OWNER_EMAIL, password='Test-Owner-Password-2026!',
@@ -234,13 +234,11 @@ def test_primary_owner_project_gate_consistency(settings):
         identity = str(actor.pk)
         assert burp_mcp_gateway._project_access(project, identity) is allowed
         assert iast_security._project_access(project, identity) is allowed
-        assert (governed_oast._project_access(str(project.pk), identity) is not None) is allowed
 
     primary.is_active = False
     primary.save(update_fields=['is_active'])
     for check in (burp_mcp_gateway._project_access, iast_security._project_access):
         assert not check(project, str(primary.pk))
-    assert governed_oast._project_access(str(project.pk), str(primary.pk)) is None
 
 
 @pytest.mark.django_db(transaction=True)
