@@ -23,11 +23,22 @@ api.interceptors.response.use((response) => response, async (error: AxiosError) 
   const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
   const url = originalRequest?.url || ''
   const isAuthEndpoint = ['/auth/login/', '/auth/refresh/', '/auth/logout/', '/auth/csrf/'].some((path) => url.includes(path))
-  if (error.response?.status === 401 && !originalRequest?._retry && !isAuthEndpoint) {
+  if (error.response?.status === 401 && originalRequest && !isAuthEndpoint) {
+    if (originalRequest._retry) {
+      // Refresh succeeded but the server still rejected the retried request.
+      useAuthStore.getState().clearSession()
+      return Promise.reject(error)
+    }
     if (isRefreshing) return new Promise((resolve, reject) => failedQueue.push({ resolve, reject })).then(() => api(originalRequest))
     originalRequest._retry = true; isRefreshing = true
     try { await useAuthStore.getState().refreshAccessToken(); processQueue(null); return api(originalRequest) }
-    catch (refreshError) { processQueue(refreshError as Error); useAuthStore.setState({ user: null, isAuthenticated: false }); return Promise.reject(refreshError) }
+    catch (refreshError) {
+      processQueue(refreshError as Error)
+      // Only a definitive authentication rejection expires client state.
+      // A temporary server/network outage must not force a new login.
+      if ((refreshError as AxiosError)?.response?.status === 401) useAuthStore.getState().clearSession()
+      return Promise.reject(refreshError)
+    }
     finally { isRefreshing = false }
   }
   return Promise.reject(error)
