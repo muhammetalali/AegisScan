@@ -9,12 +9,17 @@ from urllib.parse import urlparse
 import psutil
 import redis
 from celery import current_app as celery_app
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 import requests
 
-router = APIRouter()
+# The SPA already grants the system monitor through system.monitor. Apply the
+# same existing permission at the API boundary, including both router prefixes;
+# never expose internal service topology merely because a URL was guessed.
+from ..core.dependencies import require_permission
+
+router = APIRouter(dependencies=[Depends(require_permission('system.monitor'))])
 
 
 class SettingResponse(BaseModel):
