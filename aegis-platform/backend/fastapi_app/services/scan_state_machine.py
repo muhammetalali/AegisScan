@@ -7,6 +7,7 @@ from celery.result import AsyncResult
 from django.db import transaction
 
 from django_project.scans.models import Scan
+from fastapi_app.core.dependencies import project_access_q
 from fastapi_app.services.enterprise_gap_closure import checkpoint_scan
 
 
@@ -32,7 +33,9 @@ def transition_scan(*, scan_id: str, user_id: str, target_status: str, reason: s
     scan = Scan.objects.select_for_update().select_related('project').filter(pk=scan_id).first()
     if scan is None:
         return {'status':'error','message':'Scan not found'}
-    if not (str(scan.project.owner_id)==str(user_id) or scan.project.members.filter(pk=user_id).exists()):
+    if not Scan.objects.filter(pk=scan.pk).filter(
+        project_access_q(user_id, relation='project')
+    ).exists():
         return {'status':'error','message':'Scan access denied'}
     if target_status not in ALLOWED.get(scan.status,set()):
         return {'status':'error','message':f'Invalid scan state transition: {scan.status} -> {target_status}'}
@@ -52,7 +55,9 @@ def prepare_restart(*, scan_id: str, user_id: str) -> dict[str, Any]:
     scan=Scan.objects.select_for_update().select_related('project').filter(pk=scan_id).first()
     if scan is None:
         return {'status':'error','message':'Scan not found'}
-    if not (str(scan.project.owner_id)==str(user_id) or scan.project.members.filter(pk=user_id).exists()):
+    if not Scan.objects.filter(pk=scan.pk).filter(
+        project_access_q(user_id, relation='project')
+    ).exists():
         return {'status':'error','message':'Scan access denied'}
     if scan.status not in {Scan.Status.FAILED,Scan.Status.CANCELLED,Scan.Status.PARTIAL,Scan.Status.COMPLETED}:
         return {'status':'error','message':'Only terminal scans can be restarted'}

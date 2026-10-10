@@ -6,6 +6,7 @@ from typing import Dict, List
 from asgiref.sync import sync_to_async
 
 from ..core.config import settings
+from ..core.dependencies import project_access_q
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 from ..services.websocket_manager import WebSocketManager
 from ..services.enterprise_gap_closure import checkpoint_scan
@@ -66,8 +67,9 @@ class ScanOrchestrator:
     @sync_to_async
     def _has_scan_access(self, scan_id: str, user_id: str):
         from django_project.scans.models import Scan
-        scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
-        return bool(scan and (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()))
+        return Scan.objects.filter(pk=scan_id).filter(
+            project_access_q(user_id, relation='project')
+        ).exists()
 
     @sync_to_async
     def _queue_scan(self, scan_id: str, user_id: str):
@@ -75,7 +77,9 @@ class ScanOrchestrator:
         scan = Scan.objects.select_related('project').filter(pk=scan_id).first()
         if not scan:
             return {'status': 'error', 'message': 'Scan not found'}
-        if not scan.project.members.filter(pk=user_id).exists() and str(scan.project.owner_id) != str(user_id):
+        if not Scan.objects.filter(pk=scan.pk).filter(
+            project_access_q(user_id, relation='project')
+        ).exists():
             return {'status': 'error', 'message': 'Scan access denied'}
         if scan.status != Scan.Status.PENDING:
             return {'status': 'error', 'message': 'Scan is not pending; use the restart endpoint for terminal scans'}
@@ -140,7 +144,9 @@ class ScanOrchestrator:
         scan = Scan.objects.filter(pk=scan_id).first()
         if not scan:
             return {'status': 'error', 'message': 'Scan not found'}
-        if not (str(scan.project.owner_id) == str(user_id) or scan.project.members.filter(pk=user_id).exists()):
+        if not Scan.objects.filter(pk=scan.pk).filter(
+            project_access_q(user_id, relation='project')
+        ).exists():
             return {'status': 'error', 'message': 'Scan access denied'}
         return {'scan_id': str(scan.id), 'status': scan.status, 'progress': round(scan.progress), 'current_phase': scan.current_phase, 'current_engine': scan.current_engine, 'celery_task_id': scan.celery_task_id, 'started_at': scan.started_at.isoformat() if scan.started_at else None, 'completed_at': scan.completed_at.isoformat() if scan.completed_at else None, 'error_message': scan.error_message}
 

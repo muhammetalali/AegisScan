@@ -20,6 +20,7 @@ from django_project.projects.models import Project, ScheduledScan, ScheduledScan
 from django_project.scans.models import Scan
 from django_project.system.credential_vault import CredentialVaultDenied
 from django_project.users.models import User
+from fastapi_app.core.dependencies import project_access_q
 
 from .authorization_guard import asset_target, current_asset_authorization
 from .capability_registry import RetiredCapabilityError, get_capability, validate_capability_options
@@ -153,7 +154,7 @@ def _actor_project(actor_id: str, project_id: str, *, lock: bool = False) -> tup
     project = projects.select_for_update().first() if lock else projects.first()
     if project is None or project.status != Project.Status.ACTIVE:
         raise ScheduledExecutionError('project_unavailable', 'Scheduled project is not active.', 409)
-    if str(project.owner_id) != str(actor.id) and not project.members.filter(pk=actor.id).exists():
+    if not Project.objects.filter(pk=project.pk).filter(project_access_q(str(actor.id))).exists():
         raise ScheduledExecutionError('project_access_revoked', 'Schedule actor no longer has project access.', 403)
     return actor, project
 

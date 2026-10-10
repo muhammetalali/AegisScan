@@ -95,3 +95,65 @@ def test_current_authorization_preserves_existing_queue_contract(pending_scan, m
     scan.refresh_from_db()
     assert scan.status == Scan.Status.QUEUED
     assert scan.celery_task_id == 'isolated-test-task-id'
+
+
+def test_primary_owner_can_control_company_scan_without_membership(pending_scan, settings, monkeypatch):
+    from django_project.projects.models import ProjectMembership
+    from types import SimpleNamespace
+
+    employee, asset, grant, scan = pending_scan
+    owner = User.objects.create_superuser(
+        email='primary-orchestrator@example.invalid', password='Owner-Test-Password123!',
+    )
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = owner.email
+    assert not ProjectMembership.objects.filter(project=scan.project, user=owner).exists()
+
+    orchestrator = module.ScanOrchestrator(websocket_manager=None)
+    assert orchestrator._has_scan_access.__wrapped__(orchestrator, str(scan.pk), str(owner.pk))
+    progress = orchestrator._get_progress.__wrapped__(orchestrator, str(scan.pk), str(owner.pk))
+    assert progress['status'] == Scan.Status.PENDING
+
+    monkeypatch.setattr(module, 'require_bound_scan_authorization',
+                        lambda scan_id: (scan, 'aegis-scan-target', grant))
+    monkeypatch.setattr(module, 'checkpoint_scan', lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.run_nmap_scan, 'delay',
+                        lambda scan_id: SimpleNamespace(id='owner-test-task'))
+    result = activate(scan, owner)
+    assert result['status'] == 'started'
+
+
+def test_nonmember_employee_cannot_read_or_start_company_scan(pending_scan, settings, monkeypatch):
+    employee, asset, grant, scan = pending_scan
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = 'different-owner@example.invalid'
+    outsider = User.objects.create_user(
+        email='outsider-orchestrator@example.invalid', password='Test-Password123!',
+    )
+    orchestrator = module.ScanOrchestrator(websocket_manager=None)
+    assert not orchestrator._has_scan_access.__wrapped__(orchestrator, str(scan.pk), str(outsider.pk))
+    assert orchestrator._get_progress.__wrapped__(orchestrator, str(scan.pk), str(outsider.pk))['status'] == 'error'
+    monkeypatch.setattr(module.run_nmap_scan, 'delay', lambda *_: pytest.fail('unexpected dispatch'))
+    assert_not_queued(scan, activate(scan, outsider))
+
+
+def test_primary_owner_can_transition_and_prepare_restart_without_project_membership(
+        pending_scan, settings, monkeypatch):
+    from django_project.projects.models import ProjectMembership
+    from fastapi_app.services import scan_state_machine as state_machine
+    from types import SimpleNamespace
+
+    employee, asset, grant, scan = pending_scan
+    owner = User.objects.create_superuser(
+        email='owner-state-machine@example.invalid', password='Owner-Test-Password123!',
+    )
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = owner.email
+    assert not ProjectMembership.objects.filter(project=scan.project, user=owner).exists()
+    monkeypatch.setattr(
+        state_machine, 'checkpoint_scan',
+        lambda *args, **kwargs: SimpleNamespace(id='test-checkpoint', resume_token='test-resume'),
+    )
+    cancelled = state_machine.transition_scan(
+        scan_id=str(scan.pk), user_id=str(owner.pk), target_status=Scan.Status.CANCELLED,
+    )
+    assert cancelled['status'] == Scan.Status.CANCELLED
+    restarted = state_machine.prepare_restart(scan_id=str(scan.pk), user_id=str(owner.pk))
+    assert restarted['status'] == 'restart_ready'
