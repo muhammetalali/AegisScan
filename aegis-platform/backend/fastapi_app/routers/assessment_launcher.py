@@ -204,6 +204,14 @@ def _ensure_authorization(asset: Asset, actor_id: str) -> dict:
             'request': None,
         }
 
+    # Repeated clicks/reloads for the *same* actor, asset and authorization
+    # version must reuse one immutable pending governance request. A new
+    # approved/revoked decision advances the version and permits a new request.
+    # Keep the server's existing canonical authorization and execution checks.
+    version = asset_authorization_version(asset)
+    request_identity = hashlib.sha256(
+        f'{asset.project_id}:{asset.id}:{actor_id}:{version}'.encode('utf-8')
+    ).hexdigest()
     try:
         submitted = create_governed_action_request(
             project_id=str(asset.project_id),
@@ -211,8 +219,8 @@ def _ensure_authorization(asset: Asset, actor_id: str) -> dict:
             action_id='asset.authorization.approve',
             entity_type='asset',
             entity_id=str(asset.id),
-            expected_version=asset_authorization_version(asset),
-            idempotency_key=f'assessment-launcher-authorization:{request_id}',
+            expected_version=version,
+            idempotency_key=f'assessment-launcher-authorization:{request_identity}',
             parameters={'reason': 'Assessment Launcher target activation request'},
             correlation_id=correlation_id,
         )
