@@ -136,7 +136,7 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: django_project.settings
           PYTHONPATH: ${{ github.workspace }}/aegis-platform/backend
-        run: python -m pytest -q fastapi_app/routers/test_scanner_tenant_isolation.py
+        run: python -m pytest -q fastapi_app/routers/test_scanner_tenant_isolation.py fastapi_app/routers/test_company_project_access_policy.py
       - name: Authorization boundary and scanner provenance reality
         working-directory: aegis-platform/backend
         env:

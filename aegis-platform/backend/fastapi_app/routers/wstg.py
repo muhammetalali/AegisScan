@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import Project
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.wstg_reporting import build_wstg_project_coverage
 from ..services.wstg_completion_attestation import WSTGAttestationError, create_wstg_methodology_attestation
 
@@ -104,7 +104,7 @@ class WSTGAttestationView(ContractModel):
 @sync_to_async
 def _authorized_project(project_id: str, user_id: str) -> Project:
     project = Project.objects.filter(
-        Q(id=project_id) & (Q(owner_id=user_id) | Q(members__id=user_id))
+        Q(id=project_id) & (project_access_q(user_id))
     ).distinct().first()
     if project is None:
         raise HTTPException(status_code=404, detail='Project not found or inaccessible')

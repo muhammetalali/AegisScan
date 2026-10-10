@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,7 +10,7 @@ from django_project.projects.models import Project
 from django_project.vulnerabilities.models import Vulnerability
 from enterprise.models import RiskCorrelationSnapshot
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.risk_correlation import ANALYSIS_VERSION, correlate_finding
 
 router = APIRouter()
@@ -78,7 +77,7 @@ def _project_for_user(project_id: str, user_id: str):
     return (
         Project.objects
         .filter(id=project_id)
-        .filter(Q(owner_id=user_id) | Q(members__id=user_id))
+        .filter(project_access_q(user_id))
         .distinct()
         .first()
     )
@@ -170,7 +169,7 @@ def _latest_finding(finding_id: str, user_id: str) -> RiskCorrelationItem:
     finding = (
         Vulnerability.objects
         .filter(id=finding_id)
-        .filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
+        .filter(project_access_q(user_id, relation="project"))
         .distinct()
         .first()
     )

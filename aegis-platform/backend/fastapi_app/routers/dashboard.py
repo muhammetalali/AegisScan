@@ -18,7 +18,7 @@ from evidence.models import Evidence
 from projects.models import Project
 from scans.models import Scan
 from vulnerabilities.models import Vulnerability
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 
 router = APIRouter()
 
@@ -65,7 +65,7 @@ class TrendPoint(BaseModel):
 @sync_to_async
 def _user_project_ids(user_id: str):
     return list(
-        Project.objects.filter(Q(owner_id=user_id) | Q(members__id=user_id))
+        Project.objects.filter(project_access_q(user_id))
         .values_list('id', flat=True)
         .distinct()
     )

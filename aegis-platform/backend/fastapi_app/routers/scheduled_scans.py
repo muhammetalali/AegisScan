@@ -3,14 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import ScheduledScan, ScheduledScanExecution
 from django_project.users.models import Permission
 
-from ..core.dependencies import get_current_user, require_permission
+from ..core.dependencies import get_current_user, require_permission, project_access_q
 from ..services.scheduled_execution import (
     ScheduledExecutionError,
     create_canonical_schedule,
@@ -158,7 +157,7 @@ def _update(schedule_id: str, payload: ScheduledScanUpdate, user_id: str):
 
 @sync_to_async
 def _list(user_id: str, project_id: str | None, active: bool | None, limit: int, offset: int):
-    access = Q(project__owner_id=user_id) | Q(project__members__id=user_id)
+    access = project_access_q(user_id, relation="project")
     qs = (
         ScheduledScan.objects.select_related('project', 'asset', 'created_by')
         .filter(access)
@@ -174,7 +173,7 @@ def _list(user_id: str, project_id: str | None, active: bool | None, limit: int,
 
 @sync_to_async
 def _get(schedule_id: str, user_id: str):
-    access = Q(project__owner_id=user_id) | Q(project__members__id=user_id)
+    access = project_access_q(user_id, relation="project")
     return (
         ScheduledScan.objects.select_related('project', 'asset', 'created_by')
         .filter(pk=schedule_id)
@@ -186,7 +185,7 @@ def _get(schedule_id: str, user_id: str):
 
 @sync_to_async
 def _executions(schedule_id: str, user_id: str, limit: int):
-    access = Q(schedule__project__owner_id=user_id) | Q(schedule__project__members__id=user_id)
+    access = project_access_q(user_id, relation="schedule__project")
     return list(
         ScheduledScanExecution.objects.select_related('scan')
         .filter(schedule_id=schedule_id)

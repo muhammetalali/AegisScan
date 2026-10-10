@@ -4,11 +4,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
 from django_project.vulnerabilities.models import Vulnerability
@@ -76,14 +75,14 @@ def _rating(score: float) -> str:
 
 @sync_to_async
 def _project(user_id: str, project_id: str):
-    project = Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).first()
+    project = Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project: raise HTTPException(status_code=404, detail='Project not found or inaccessible')
     return project
 
 
 @sync_to_async
 def _posture(project_id: str, user_id: str):
-    project = Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).first()
+    project = Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project: raise HTTPException(status_code=404, detail='Project not found or inaccessible')
     findings = list(Vulnerability.objects.filter(project=project).only('severity', 'status', 'evidence_count'))
     assets_total = project.assets.count()
@@ -114,7 +113,7 @@ def _posture(project_id: str, user_id: str):
 
 @sync_to_async
 def _history(project_id: str, user_id: str, limit: int):
-    project = Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).first()
+    project = Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project: raise HTTPException(status_code=404, detail='Project not found or inaccessible')
     rows = []
     for scan in Scan.objects.filter(project=project, status=Scan.Status.COMPLETED).order_by('-completed_at', '-created_at')[:limit]:

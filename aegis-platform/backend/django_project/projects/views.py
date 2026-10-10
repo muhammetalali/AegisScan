@@ -33,9 +33,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
         return ProjectCreateUpdateSerializer if self.action in {'create', 'update', 'partial_update'} else ProjectSerializer
 
     def get_queryset(self):
-        return Project.objects.filter(
-            Q(owner=self.request.user) | Q(members=self.request.user)
-        ).distinct().select_related('owner').prefetch_related('assets', 'scans', 'vulnerabilities')
+        projects = Project.objects.all()
+        if not self.request.user.is_company_owner:
+            projects = projects.filter(Q(owner=self.request.user) | Q(members=self.request.user))
+        return projects.distinct().select_related('owner').prefetch_related('assets', 'scans', 'vulnerabilities')
 
     def _unique_slug(self, name: str) -> str:
         base = slugify(name) or 'project'

@@ -4,7 +4,6 @@ import os
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -15,7 +14,7 @@ django.setup()
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.authorization_guard import asset_target
 from ..services.governed_execution_contract import (
     GovernedExecutionDraft, _fingerprint, _normalized_optional_ref,
@@ -95,12 +94,9 @@ def _serialize_scan(scan: Scan):
 
 @sync_to_async
 def _list_scans(user_id: str, project_id: Optional[str], status: Optional[str], limit: int, offset: int):
-    from django_project.users.models import User as CompanyUser
-    actor = CompanyUser.objects.filter(pk=user_id, is_active=True).first()
-    qs = Scan.objects.select_related('project')
-    if actor is None or not actor.is_company_owner:
-        qs = qs.filter(Q(project__members=user_id) | Q(project__owner_id=user_id)).distinct()
-    qs = qs.order_by('-created_at')
+    qs = Scan.objects.select_related('project').filter(
+        project_access_q(user_id, relation="project")
+    ).distinct().order_by('-created_at')
     if project_id:
         qs = qs.filter(project_id=project_id)
     if status:
@@ -167,11 +163,9 @@ def _create_scan(scan: ScanCreate, user_id: str, execution_draft: GovernedExecut
     if actor is None or not actor.can_scan_type(scan.scan_type):
         raise HTTPException(status_code=403, detail='This scan type is not enabled for your account.')
     with transaction.atomic():
-        if actor.is_company_owner:
-            project = Project.objects.select_for_update().filter(id=scan.project_id).first()
-        else:
-            project = (Project.objects.select_for_update().filter(id=scan.project_id, owner_id=user_id).first()
-                       or Project.objects.select_for_update().filter(id=scan.project_id, members=user_id).first())
+        project = Project.objects.select_for_update(of=('self',)).filter(id=scan.project_id).filter(
+            project_access_q(user_id)
+        ).first()
         if not project:
             raise HTTPException(status_code=404, detail='Project not found or access denied')
         if execution_draft is not None and execution_draft.idempotency_key:
@@ -300,8 +294,9 @@ async def create_scan(scan: ScanCreate, user=Depends(get_current_user)):
 
 @sync_to_async
 def _get_scan(scan_id: str, user_id: str):
-    return (Scan.objects.select_related('project').filter(id=scan_id, project__members=user_id).first()
-            or Scan.objects.select_related('project').filter(id=scan_id, project__owner_id=user_id).first())
+    return Scan.objects.select_related('project').filter(id=scan_id).filter(
+        project_access_q(user_id, relation="project")
+    ).first()
 
 
 @router.get('/{scan_id}', response_model=ScanResponse)
@@ -314,8 +309,9 @@ async def get_scan(scan_id: str, user=Depends(get_current_user)):
 
 @sync_to_async
 def _delete_scan(scan_id: str, user_id: str):
-    scan = (Scan.objects.filter(id=scan_id, project__members=user_id).first()
-            or Scan.objects.filter(id=scan_id, project__owner_id=user_id).first())
+    scan = Scan.objects.filter(id=scan_id).filter(
+        project_access_q(user_id, relation="project")
+    ).first()
     if not scan:
         return False
     scan.delete()
@@ -331,8 +327,9 @@ async def delete_scan(scan_id: str, user=Depends(get_current_user)):
 
 @sync_to_async
 def _logs(scan_id: str, user_id: str, limit: int):
-    scan = (Scan.objects.filter(id=scan_id, project__members=user_id).first()
-            or Scan.objects.filter(id=scan_id, project__owner_id=user_id).first())
+    scan = Scan.objects.filter(id=scan_id).filter(
+        project_access_q(user_id, relation="project")
+    ).first()
     if not scan:
         return None
     return [{'id': str(x.id), 'level': x.level, 'message': x.message, 'context': x.context, 'created_at': x.created_at.isoformat()} for x in scan.logs.all()[:limit]]
@@ -348,8 +345,9 @@ async def get_scan_logs(scan_id: str, limit: int = 100, user=Depends(get_current
 
 @sync_to_async
 def _executions(scan_id: str, user_id: str):
-    scan = (Scan.objects.filter(id=scan_id, project__members=user_id).first()
-            or Scan.objects.filter(id=scan_id, project__owner_id=user_id).first())
+    scan = Scan.objects.filter(id=scan_id).filter(
+        project_access_q(user_id, relation="project")
+    ).first()
     if not scan:
         return None
     return [
