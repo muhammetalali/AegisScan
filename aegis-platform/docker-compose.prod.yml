@@ -54,6 +54,10 @@ services:
       AUTHORIZED_SCAN_TARGETS: ${AUTHORIZED_SCAN_TARGETS:-}
       AEGIS_ASSESSMENT_LAUNCHER_MODE: ${AEGIS_ASSESSMENT_LAUNCHER_MODE:-single-operator-lab}
       AEGIS_SEMGREP_UPLOAD_ROOT: /var/lib/aegis-semgrep/uploads
+      # Shared service session ceilings; provider, scope and evidence guards remain unchanged.
+      AEGIS_BURP_MCP_MAX_SESSION_INVOCATIONS: ${AEGIS_BURP_MCP_MAX_SESSION_INVOCATIONS:-100}
+      AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE: ${AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE:-60}
+      AEGIS_BURP_MCP_MAX_TTL_SECONDS: ${AEGIS_BURP_MCP_MAX_TTL_SECONDS:-3600}
     depends_on: !override
       django: {condition: service_started}
       redis: {condition: service_healthy}

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core.dependencies import get_current_user
 from ..services.burp_mcp_gateway import (
@@ -16,6 +16,7 @@ from ..services.burp_mcp_gateway import (
     BurpMCPRateLimit,
     invoke_burp_mcp,
     start_burp_mcp_session,
+    burp_mcp_session_budget_limits,
 )
 
 
@@ -35,9 +36,20 @@ class BurpMCPSessionIn(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128)
     credential_ref: UUID | None = None
     lab_credential_refs: list[UUID] | None = Field(default=None, min_length=2, max_length=2)
-    max_invocations: int = Field(default=20, ge=1, le=100)
-    rate_limit_per_minute: int = Field(default=10, ge=1, le=60)
-    ttl_seconds: int = Field(default=1800, ge=60, le=3600)
+    max_invocations: int = Field(default=20, ge=1, le=65535)
+    rate_limit_per_minute: int = Field(default=10, ge=1, le=600)
+    ttl_seconds: int = Field(default=1800, ge=60, le=86400)
+
+    @model_validator(mode='after')
+    def require_configured_session_budgets(self):
+        maximum, rate, ttl = burp_mcp_session_budget_limits()
+        if self.max_invocations > maximum:
+            raise ValueError('max_invocations exceeds configured Burp session budget')
+        if self.rate_limit_per_minute > rate:
+            raise ValueError('rate_limit_per_minute exceeds configured Burp session budget')
+        if self.ttl_seconds > ttl:
+            raise ValueError('ttl_seconds exceeds configured Burp session budget')
+        return self
 
 
 class BurpMCPSessionOut(BaseModel):
