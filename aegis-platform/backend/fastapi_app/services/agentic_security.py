@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import is_primary_company_owner
+
 import hashlib
 import json
 import re
@@ -247,7 +249,7 @@ def _active_context(*, project_id: str, actor_id: str, policy_admin: bool):
         raise AgenticSecurityAuthorizationError('Project was not found.')
 
     if policy_admin:
-        project_allowed = str(project.owner_id) == str(actor_id) or ProjectMembership.objects.filter(
+        project_allowed = is_primary_company_owner(actor_id) or str(project.owner_id) == str(actor_id) or ProjectMembership.objects.filter(
             project=project,
             user_id=actor_id,
             role__in=[ProjectMembership.Role.OWNER, ProjectMembership.Role.ADMIN],
@@ -258,7 +260,7 @@ def _active_context(*, project_id: str, actor_id: str, policy_admin: bool):
             OrganizationMembership.Role.MANAGER,
         ]
     else:
-        project_allowed = str(project.owner_id) == str(actor_id) or ProjectMembership.objects.filter(
+        project_allowed = is_primary_company_owner(actor_id) or str(project.owner_id) == str(actor_id) or ProjectMembership.objects.filter(
             project=project,
             user_id=actor_id,
             role__in=[

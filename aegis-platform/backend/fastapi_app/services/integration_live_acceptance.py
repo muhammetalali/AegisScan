@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import project_access_q
+
 import hashlib
 import json
 import re
@@ -8,7 +10,6 @@ from datetime import datetime
 from typing import Any
 
 from django.db import IntegrityError, transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from django_project.projects.models import Project
@@ -119,7 +120,7 @@ def _locked_scope(*, project_id: str, actor_id: str, integration_id: str):
         is_active=True,
     ).first()
     project_access = Project.objects.filter(pk=project_id).filter(
-        Q(owner_id=actor_id) | Q(members__id=actor_id)
+        project_access_q(actor_id)
     ).exists()
     if membership is None or not project_access:
         raise PermissionError('Active tenant and project membership are required for integration acceptance operations.')

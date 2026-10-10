@@ -211,3 +211,58 @@ def test_primary_owner_sees_company_findings_validations_and_authorization_witho
     with pytest.raises(HTTPException) as denied_extra:
         async_to_sync(enterprise_extra._project)(project.id, {"user_id": outsider_id})
     assert denied_extra.value.status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_primary_owner_project_gate_consistency(settings):
+    from fastapi_app.services import burp_mcp_gateway, iast_security
+
+    primary = User.objects.create_superuser(
+        email=settings.AEGIS_PRIMARY_OWNER_EMAIL, password='Test-Owner-Password-2026!',
+    )
+    manager = User.objects.create_user(
+        email='project-manager-gate@example.invalid', password='Test-Manager-Password-2026!',
+    )
+    outsider = User.objects.create_user(
+        email='project-outsider-gate@example.invalid', password='Test-Outsider-Password-2026!',
+    )
+    project = Project.objects.create(
+        name='Scoped project access', slug='scoped-project-gates', owner=manager,
+    )
+    assert not ProjectMembership.objects.filter(project=project, user=primary).exists()
+    for actor, allowed in ((primary, True), (manager, True), (outsider, False)):
+        identity = str(actor.pk)
+        assert burp_mcp_gateway._project_access(project, identity) is allowed
+        assert iast_security._project_access(project, identity) is allowed
+
+    primary.is_active = False
+    primary.save(update_fields=['is_active'])
+    for check in (burp_mcp_gateway._project_access, iast_security._project_access):
+        assert not check(project, str(primary.pk))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_project_owner_override_preserves_tenant_role_guard(settings):
+    from enterprise.models import Organization
+    from fastapi_app.services.provider_approval import (
+        ProviderApprovalAuthorizationError, _assert_reviewer,
+    )
+
+    primary = User.objects.create_superuser(
+        email=settings.AEGIS_PRIMARY_OWNER_EMAIL, password='Test-Primary-Password-2026!',
+    )
+    employee = User.objects.create_user(
+        email='tenant-check-employee@example.invalid', password='Test-Employee-Password-2026!',
+    )
+    outsider = User.objects.create_user(
+        email='tenant-check-outsider@example.invalid', password='Test-Outsider-Password-2026!',
+    )
+    project = Project.objects.create(name='Tenant guard check', slug='tenant-guard-check', owner=employee)
+    tenant = Organization.objects.create(name='Guarded tenant', slug='guarded-tenant-check', owner=employee)
+
+    # The primary owner passes the project check, but the separate existing
+    # organization role check is deliberately unchanged by this project-only fix.
+    with pytest.raises(ProviderApprovalAuthorizationError, match='active enterprise governance authority'):
+        _assert_reviewer(project, tenant, str(primary.pk))
+    with pytest.raises(ProviderApprovalAuthorizationError, match='project owner/admin authority'):
+        _assert_reviewer(project, tenant, str(outsider.pk))

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import is_primary_company_owner
+
 import hashlib
 import json
 from dataclasses import dataclass
@@ -84,7 +86,7 @@ def _active_context(*, snapshot_id: str, actor_id: str):
     if project is None:
         raise CryptoLifecycleAuthorizationError('Project was not found.')
 
-    project_allowed = str(project.owner_id) == str(actor_id) or ProjectMembership.objects.filter(
+    project_allowed = is_primary_company_owner(actor_id) or str(project.owner_id) == str(actor_id) or ProjectMembership.objects.filter(
         project=project,
         user_id=actor_id,
         role__in=[
