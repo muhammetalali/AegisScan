@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: mirror.gcr.io/library/postgres:16-alpine
     container_name: aegis-postgres
     restart: unless-stopped
     environment:
@@ -14,7 +14,7 @@ services:
       timeout: 5s
       retries: 5
   redis:
-    image: redis:7-alpine
+    image: mirror.gcr.io/library/redis:7-alpine
     container_name: aegis-redis
     restart: unless-stopped
     volumes: [redis_data:/data]
@@ -24,7 +24,7 @@ services:
       timeout: 5s
       retries: 5
   scan_target:
-    image: nginx:alpine
+    image: mirror.gcr.io/library/nginx:alpine
     container_name: aegis-scan-target
     restart: unless-stopped
     expose: ["80"]
@@ -233,7 +233,7 @@ services:
       fastapi: {condition: service_healthy}
   nginx:
     # Open-source upstream DNS resolution requires nginx >= 1.27.3.
-    image: nginx:1.30.5-alpine
+    image: mirror.gcr.io/library/nginx:1.30.5-alpine
     container_name: aegis-nginx
     restart: unless-stopped
     ports: ["80:80"]

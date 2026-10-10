@@ -3,14 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import Project
 from enterprise.fair_risk_models import FAIRQuantitativeRiskAnalysis
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.fair_quantitative_risk import (
     FAIRRiskAuthorizationError,
     FAIRRiskError,
@@ -109,7 +108,7 @@ def _serialize(row: FAIRQuantitativeRiskAnalysis, *, replayed: bool = False) -> 
 def _project_for_user(project_id: str, user_id: str):
     return (
         Project.objects.filter(pk=project_id)
-        .filter(Q(owner_id=user_id) | Q(members__id=user_id))
+        .filter(project_access_q(user_id))
         .distinct()
         .first()
     )
@@ -148,7 +147,7 @@ def _list(project_id: str, user_id: str, limit: int) -> list[FAIRAnalysisRespons
 def _get(analysis_id: str, user_id: str) -> FAIRAnalysisResponse:
     row = (
         FAIRQuantitativeRiskAnalysis.objects.filter(pk=analysis_id)
-        .filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
+        .filter(project_access_q(user_id, relation="project"))
         .distinct()
         .first()
     )

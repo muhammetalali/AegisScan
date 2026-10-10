@@ -355,7 +355,7 @@ services:
     profiles: [ci-only]
     # Acceptance target must not depend on an external registry/CDN.
     # The same pinned image is already staged on the production host.
-    image: nginx:1.30.5-alpine
+    image: mirror.gcr.io/library/nginx:1.30.5-alpine
     pull_policy: never
 
 volumes:

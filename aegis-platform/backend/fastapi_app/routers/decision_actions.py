@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.assurance_correlation import correlate_all
 from ..services.assurance_graph_aggregator import build_assurance_graph
 from ..services.graph_intelligence import analyze_graph
@@ -72,9 +71,7 @@ def _resolve_action_scope(decision: dict[str, Any], user_id: str):
     ).filter(pk=validation_id,user_id=user_id).first()
     if validation is None:
         raise PermissionError("Validation is outside the authenticated scope")
-    project = Project.objects.filter(pk=project_id).filter(
-        Q(owner_id=user_id) | Q(members__id=user_id),
-    ).distinct().first()
+    project = Project.objects.filter(pk=project_id).filter(project_access_q(user_id)).distinct().first()
     if project is None:
         raise PermissionError("Project is outside the authenticated scope")
     validation_project_id = validation.finding.project_id if validation.finding_id else (

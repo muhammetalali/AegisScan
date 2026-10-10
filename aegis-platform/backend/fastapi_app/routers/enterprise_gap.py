@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import Project
 from django_project.vulnerabilities.models import Vulnerability
-from fastapi_app.core.dependencies import get_current_user
+from fastapi_app.core.dependencies import get_current_user, project_access_q
 from fastapi_app.services.enterprise_gap_closure import (
     append_finding_decision,
     create_investigation_case,
@@ -89,16 +89,14 @@ class ArtifactIn(StrictModel):
 @sync_to_async
 def _project_for_user(project_id:str,user_id:str):
     return (
-        Project.objects.filter(pk=project_id,owner_id=user_id).first()
-        or Project.objects.filter(pk=project_id,members__id=user_id).first()
+        Project.objects.filter(pk=project_id).filter(project_access_q(user_id)).first()
     )
 
 
 @sync_to_async
 def _finding_for_user(finding_id:str,user_id:str):
     return (
-        Vulnerability.objects.filter(pk=finding_id,project__owner_id=user_id).first()
-        or Vulnerability.objects.filter(pk=finding_id,project__members__id=user_id).first()
+        Vulnerability.objects.filter(pk=finding_id).filter(project_access_q(user_id, relation='project')).first()
     )
 
 

@@ -7,7 +7,7 @@ from asgiref.sync import sync_to_async
 from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from django_project.audit.models import AuditLog
 from django_project.evidence.models import Evidence
 from django_project.projects.models import Project
@@ -32,7 +32,7 @@ class InvestigationWorkspace(BaseModel):
     contract_version:str='1.0'; source:str='postgresql'; project_id:str; findings:list[InvestigationFinding]; evidence:list[InvestigationEvidence]; attack_paths:list[InvestigationAttackPath]; intelligence:list[InvestigationIntel]; audit_events:int
 @sync_to_async
 def _workspace(project_id:str,user_id:str,finding_id:str|None,limit:int)->InvestigationWorkspace:
-    project=Project.objects.filter(id=project_id).filter(Q(owner_id=user_id)|Q(members__id=user_id)).first()
+    project=Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
     qs=Vulnerability.objects.filter(project=project).select_related('asset').order_by('-risk_score','-updated_at')
     if finding_id: qs=qs.filter(id=finding_id)

@@ -20,6 +20,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 PORTS = {"frontend": 80, "django": 8000, "fastapi": 8001}
+FIXTURE_PYTHON_IMAGE = "mirror.gcr.io/library/python:3.12-alpine"
 BACKEND = r"""
 import base64
 import hashlib
@@ -101,7 +102,7 @@ class Proof:
             "-e", f"SERVICE={service}", "-e", f"PORT={PORTS[service]}",
             "-e", f"GENERATION={self.generations[service]}",
             "-v", f"{self.directory / 'backend.py'}:/backend.py:ro",
-            "python:3.12-alpine", "python", "-B", "/backend.py",
+            FIXTURE_PYTHON_IMAGE, "python", "-B", "/backend.py",
         )
 
     def start_stable_alert_receiver(self) -> None:
@@ -115,7 +116,7 @@ class Proof:
             "-e", "SERVICE=alert_receiver", "-e", "PORT=8080",
             "-e", "GENERATION=1",
             "-v", f"{self.directory / 'backend.py'}:/backend.py:ro",
-            "python:3.12-alpine", "python", "-B", "/backend.py",
+            FIXTURE_PYTHON_IMAGE, "python", "-B", "/backend.py",
         )
 
     def address(self, name: str) -> str:
@@ -136,7 +137,7 @@ class Proof:
             "run", "-d", "--name", holder, "--network", self.network,
             "--ip", old_address, "--read-only", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges", "--user", "65534:65534",
-            "python:3.12-alpine", "python", "-c", "import time; time.sleep(600)",
+            FIXTURE_PYTHON_IMAGE, "python", "-c", "import time; time.sleep(600)",
         )
         self.generations[service] += 1
         self.start_backend(service)
@@ -290,11 +291,18 @@ class Proof:
         docker("network", "rm", self.network, check=False)
 
 
+def _validate_gateway_image(image: str) -> str:
+    if not re.fullmatch(r"mirror\.gcr\.io/library/nginx:\d+\.\d+\.\d+-alpine", image):
+        raise ValueError(f"Gateway requires a version-pinned Nginx image from the approved registry: {image}")
+    return image
+
+
 def main() -> None:
-    image = yaml.safe_load((ROOT / "aegis-platform/docker-compose.yml").read_text())["services"]["nginx"]["image"]
-    assert re.fullmatch(r"nginx:\d+\.\d+\.\d+-alpine", image), image
+    image = _validate_gateway_image(
+        yaml.safe_load((ROOT / "aegis-platform/docker-compose.yml").read_text())["services"]["nginx"]["image"]
+    )
     docker("pull", image, timeout=180)
-    docker("pull", "python:3.12-alpine", timeout=180)
+    docker("pull", FIXTURE_PYTHON_IMAGE, timeout=180)
     with tempfile.TemporaryDirectory(prefix="aegis-gateway-reality-") as temporary:
         directory = Path(temporary)
         directory.chmod(0o755)

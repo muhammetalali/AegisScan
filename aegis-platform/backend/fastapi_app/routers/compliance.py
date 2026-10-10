@@ -12,7 +12,7 @@ from django.db.models import Count, Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from compliance.models import (
     ComplianceAssessment,
     ComplianceControl,
@@ -101,7 +101,7 @@ def _assessment_response(assessment: ComplianceAssessment) -> AssessmentResponse
 @sync_to_async
 def _has_project_access(project_id: str, user_id: str) -> bool:
     return Project.objects.filter(id=project_id).filter(
-        Q(owner_id=user_id) | Q(members__id=user_id)
+        project_access_q(user_id)
     ).exists()
 
 
@@ -135,7 +135,7 @@ async def get_framework_controls(framework_id: str, user=Depends(get_current_use
 
 @sync_to_async
 def _list_assessments(project_id: str, user_id: str, framework_id: Optional[str], status: Optional[str]):
-    if not Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).exists():
+    if not Project.objects.filter(id=project_id).filter(project_access_q(user_id)).exists():
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
     qs = ComplianceAssessment.objects.filter(project_id=project_id).select_related("framework", "control")
     if framework_id:
@@ -158,7 +158,7 @@ async def list_assessments(
 @sync_to_async
 def _update_assessment(assessment_id: str, user_id: str, update: AssessmentUpdate):
     assessment = ComplianceAssessment.objects.filter(id=assessment_id).filter(
-        Q(project__owner_id=user_id) | Q(project__members__id=user_id)
+        project_access_q(user_id, relation="project")
     ).select_related("framework", "control").first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
@@ -176,7 +176,7 @@ async def update_assessment(assessment_id: str, update: AssessmentUpdate, user=D
 
 @sync_to_async
 def _run_assessment(project_id: str, framework_id: str, user_id: str):
-    project = Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).first()
+    project = Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
     framework = ComplianceFramework.objects.filter(id=framework_id, is_active=True).first()
@@ -202,7 +202,7 @@ async def run_compliance_assessment(project_id: str, framework_id: str, user=Dep
 
 @sync_to_async
 def _generate_report(project_id: str, framework_id: str, user_id: str):
-    project = Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).first()
+    project = Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
     framework = ComplianceFramework.objects.filter(id=framework_id).first()
@@ -250,7 +250,7 @@ async def generate_compliance_report(project_id: str, framework_id: str, user=De
 
 @sync_to_async
 def _dashboard(project_id: str, user_id: str):
-    if not Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).exists():
+    if not Project.objects.filter(id=project_id).filter(project_access_q(user_id)).exists():
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
     qs = ComplianceAssessment.objects.filter(project_id=project_id)
     counts = qs.aggregate(
