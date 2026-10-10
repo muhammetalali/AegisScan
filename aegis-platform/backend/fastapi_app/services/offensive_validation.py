@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import is_primary_company_owner
+
 import hashlib
 import http.client
 import ipaddress
@@ -345,7 +347,7 @@ def _locked_context(finding_id: Any, actor: Any, target_url: str, decision_id: A
         raise PermissionError('Validation requires an active project actor')
     owner = Project.objects.filter(pk=finding.project_id, owner_id=actor.pk).exists()
     member = ProjectMembership.objects.filter(project_id=finding.project_id, user_id=actor.pk, role__in=['owner', 'admin', 'member']).exists()
-    if not owner and not member:
+    if not (is_primary_company_owner(str(actor.pk)) or owner or member):
         raise PermissionError('Actor cannot execute validation in this project')
     if not finding.asset_id or not finding.scan_id:
         raise PermissionError('Validation requires a persisted asset and scan')

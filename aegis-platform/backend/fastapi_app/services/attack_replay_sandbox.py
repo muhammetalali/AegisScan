@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import project_access_q
+
 import hashlib
 import json
 from dataclasses import dataclass
@@ -111,7 +113,7 @@ def _active_context(project_id: str, actor_id: str) -> tuple[Organization, Proje
     project = Project.objects.select_for_update().filter(pk=project_id).first()
     if project is None:
         raise AttackReplayAuthorizationError('Project was not found.')
-    if str(project.owner_id) != str(actor_id) and not project.members.filter(pk=actor_id).exists():
+    if not Project.objects.filter(pk=project.pk).filter(project_access_q(actor_id)).exists():
         raise AttackReplayAuthorizationError('Actor has no project access.')
 
     allowed_roles = {

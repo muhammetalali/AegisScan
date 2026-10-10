@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from fastapi_app.core.dependencies import project_access_q
+
 import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any
 
 from django.db import transaction
-from django.db.models import Q
 
 from django_project.projects.models import Project
 from enterprise.governed_action_models import BusinessLogicAssessment, GovernedActionRequest
@@ -105,7 +106,7 @@ def _request_for_actor(*, request_id: str, actor_id: str) -> GovernedActionReque
         is_active=True,
     ).exists()
     project_access = Project.objects.filter(pk=row.project_id).filter(
-        Q(owner_id=actor_id) | Q(members__id=actor_id)
+        project_access_q(actor_id)
     ).exists()
     if not membership or not project_access:
         raise PermissionError('Active tenant and project membership are required for business-logic assessment.')
