@@ -58,7 +58,7 @@ jobs:
       CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
     services:
       postgres:
-        image: postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_DB: aegisdb
           POSTGRES_USER: aegis

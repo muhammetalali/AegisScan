@@ -29,7 +29,7 @@ jobs:
       CORS_ALLOWED_ORIGINS: 'http://localhost:5173'
     services:
       postgres:
-        image: postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_DB: aegisdb
           POSTGRES_USER: aegis
@@ -39,7 +39,7 @@ jobs:
           --health-cmd "pg_isready -U aegis -d aegisdb"
           --health-interval 10s --health-timeout 5s --health-retries 10
       redis:
-        image: redis:7
+        image: mirror.gcr.io/library/redis:7
         ports: ['6379:6379']
         options: >-
           --health-cmd "redis-cli ping"

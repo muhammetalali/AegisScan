@@ -260,6 +260,6 @@ def test_production_e2e_target_never_pulls_an_unpinned_registry_fixture():
     production_compose = (ROOT / "aegis-platform/docker-compose.prod.yml").read_text(encoding="utf-8")
     target = production_compose.split("\n  scan_target:\n", 1)[1].split("\nvolumes:", 1)[0]
     assert "profiles: [ci-only]" in target
-    assert "image: nginx:1.30.5-alpine" in target
+    assert "image: mirror.gcr.io/library/nginx:1.30.5-alpine" in target
     assert "pull_policy: never" in target
     assert "nginx:alpine" not in target

@@ -1,5 +1,4 @@
-FROM projectdiscovery/nuclei:v3.11.1-amd64 AS nuclei
-FROM golang:1.26-bookworm AS pd_tools
+FROM mirror.gcr.io/library/golang:1.26-bookworm AS pd_tools
 RUN set -eux; \
     export CGO_ENABLED=0 GOOS=linux GOARCH=amd64; \
     export GOPROXY=https://proxy.golang.org,direct GOSUMDB=sum.golang.org GODEBUG=http2client=0; \
@@ -19,9 +18,10 @@ RUN set -eux; \
     }; \
     go_install_with_retry github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
     go_install_with_retry github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0; \
-    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0
+    go_install_with_retry github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
+    go_install_with_retry github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.11.1
 
-FROM golang:1.26-bookworm AS amass_tool
+FROM mirror.gcr.io/library/golang:1.26-bookworm AS amass_tool
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -32,15 +32,15 @@ RUN chmod 0755 /usr/local/bin/build-amass-v5-aegis \
        /opt/aegis/amass-v5.1.1-aegis-engine-auth.patch \
        /go/bin/amass
 
-FROM rust:1.90-bookworm AS rustscan
+FROM mirror.gcr.io/library/rust:1.90-bookworm AS rustscan
 RUN cargo install --locked --version 2.4.1 rustscan --root /opt/rustscan \
     && /opt/rustscan/bin/rustscan --version
 
-FROM rust:1.90-bookworm AS feroxbuster
+FROM mirror.gcr.io/library/rust:1.90-bookworm AS feroxbuster
 RUN cargo install --locked --version 2.13.1 feroxbuster --root /opt/feroxbuster \
     && /opt/feroxbuster/bin/feroxbuster --version
 
-FROM alpine/git:2.47.2 AS nikto_source
+FROM mirror.gcr.io/alpine/git:2.47.2 AS nikto_source
 ARG NIKTO_REF=2.6.0
 ARG NIKTO_COMMIT=69681e2e4213c15b85a90c53b2169ecb2a88fb01
 RUN git clone --depth 1 --branch "$NIKTO_REF" https://github.com/sullo/nikto.git /opt/nikto \
@@ -56,13 +56,13 @@ RUN mkdir -p /opt/trivy-cache /tmp/trivy-seed \
     && trivy --cache-dir /opt/trivy-cache config --format json --quiet /tmp/trivy-seed >/tmp/trivy-seed.json \
     && test -s /opt/trivy-cache/policy/metadata.json \
     && grep -q 'Digest' /opt/trivy-cache/policy/metadata.json
-FROM trufflesecurity/trufflehog:3.97.1 AS trufflehog
+FROM mirror.gcr.io/trufflesecurity/trufflehog:3.97.1 AS trufflehog
 
-FROM alpine/git:2.47.2 AS nuclei_templates
+FROM mirror.gcr.io/alpine/git:2.47.2 AS nuclei_templates
 RUN git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git /opt/nuclei-templates \
     && rm -rf /opt/nuclei-templates/.git
 
-FROM python:3.12-slim AS runtime
+FROM mirror.gcr.io/library/python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -80,7 +80,7 @@ RUN apt-get update \
         git openssh-client perl libjson-perl libxml-writer-perl libnet-ssleay-perl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=nuclei /usr/local/bin/nuclei /usr/local/bin/nuclei
+COPY --from=pd_tools /go/bin/nuclei /usr/local/bin/nuclei
 COPY --from=pd_tools /go/bin/httpx /usr/local/bin/httpx
 COPY --from=pd_tools /go/bin/subfinder /usr/local/bin/subfinder
 COPY --from=pd_tools /go/bin/katana /usr/local/bin/katana

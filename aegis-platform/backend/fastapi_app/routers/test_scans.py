@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from asgiref.sync import sync_to_async
@@ -136,6 +137,20 @@ def test_primary_company_owner_works_across_projects_without_membership(api_fixt
     asset_detail = client.get(f'/api/v1/assets/{asset.id}')
     assert asset_detail.status_code == 200
     assert asset_detail.json()['id'] == str(asset.id)
+
+    # Bulk creation must honor the same primary-owner grant as other asset routes.
+    imported = client.post(
+        '/api/v1/assets/bulk-import',
+        params={'project_id': str(project.id)},
+        files={'file': (
+            'company-assets.json',
+            json.dumps([{'name': 'owner-cross-project-import', 'type': Asset.Type.IP_ADDRESS}]),
+            'application/json',
+        )},
+    )
+    assert imported.status_code == 201, imported.text
+    assert len(imported.json()) == 1
+    assert Asset.objects.filter(project=project, name='owner-cross-project-import').exists()
 
 
 def test_create_scan_rejects_authorized_target_drift(api_fixture):

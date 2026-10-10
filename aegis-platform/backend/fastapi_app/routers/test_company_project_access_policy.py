@@ -39,9 +39,12 @@ def test_owner_can_read_company_projects_and_assets_without_membership(settings)
             .order_by("slug").values_list("slug", flat=True)
         )
     assert owner_projects == ["scope-one", "scope-two"]
+    from fastapi_app.core.dependencies import accessible_projects_for_user
+    assert list(accessible_projects_for_user(str(primary.pk)).order_by("slug").values_list("slug", flat=True)) == owner_projects
     assert len([q for q in captured if q["sql"].lstrip().upper().startswith("SELECT")]) == 1
 
     assert list(Project.objects.filter(project_access_q(str(alice.pk)))) == [first]
+    assert list(accessible_projects_for_user(str(alice.pk))) == [first]
     assert set(Project.objects.filter(project_access_q(str(bob.pk)))) == {first, second}
     assert list(Asset.objects.filter(project_access_q(str(primary.pk), relation="project"))) == [asset]
     assert not Asset.objects.filter(project_access_q(str(alice.pk), relation="project")).exists()

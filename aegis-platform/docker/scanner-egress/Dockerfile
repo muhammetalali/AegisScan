@@ -1,4 +1,4 @@
-FROM alpine:3.22
+FROM mirror.gcr.io/library/alpine:3.22
 
 RUN apk add --no-cache nftables iproute2 libc-utils ca-certificates python3
 

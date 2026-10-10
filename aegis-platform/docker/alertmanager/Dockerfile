@@ -1,6 +1,6 @@
 FROM prom/alertmanager:v0.34.0 AS upstream
 
-FROM python:3.12-alpine
+FROM mirror.gcr.io/library/python:3.12-alpine
 
 RUN apk add --no-cache ca-certificates \
     && addgroup -S -g 10003 aegis-monitoring \
