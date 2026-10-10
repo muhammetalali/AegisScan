@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from django_project.evidence.models import Evidence, FindingConfirmation, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability, VulnerabilityNote
 from ..contracts.governed_actions import GovernedActionRequestView
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from .governed_action_execution import translate_governed_action_error
 from ..services.finding_confirmation import list_confirmations
 from ..services.governed_action_executor import execute_governed_action
@@ -185,7 +185,7 @@ def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
 
 @sync_to_async
 def _list_vulnerabilities(user_id: str, project_id: Optional[str], scan_id: Optional[str], severity: Optional[str], status: Optional[str], assigned_to: Optional[str], search: Optional[str], limit: int, offset: int):
-    qs = Vulnerability.objects.filter(project__owner_id=user_id) | Vulnerability.objects.filter(project__members__id=user_id)
+    qs = Vulnerability.objects.filter(project_access_q(user_id, relation='project'))
     qs = qs.select_related('scan', 'project', 'asset', 'assigned_to').distinct()
     if project_id: qs = qs.filter(project_id=project_id)
     if scan_id: qs = qs.filter(scan_id=scan_id)
@@ -206,7 +206,7 @@ async def list_vulnerabilities(project_id: Optional[str] = None, scan_id: Option
 
 @sync_to_async
 def _get_vulnerability(vuln_id: UUID, user_id: str):
-    return Vulnerability.objects.select_related('scan', 'project', 'asset', 'assigned_to').filter(id=vuln_id, project__owner_id=user_id).first() or Vulnerability.objects.select_related('scan', 'project', 'asset', 'assigned_to').filter(id=vuln_id, project__members__id=user_id).first()
+    return Vulnerability.objects.select_related('scan', 'project', 'asset', 'assigned_to').filter(id=vuln_id).filter(project_access_q(user_id, relation='project')).first()
 
 
 @router.get('/{vuln_id}', response_model=VulnerabilityResponse)
@@ -218,7 +218,7 @@ async def get_vulnerability(vuln_id: UUID, user=Depends(get_current_user)):
 
 @sync_to_async
 def _update_vulnerability(vuln_id: UUID, user_id: str, update: VulnerabilityUpdate):
-    vulnerability = Vulnerability.objects.filter(id=vuln_id).filter(project__owner_id=user_id).first() or Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
+    vulnerability = Vulnerability.objects.filter(id=vuln_id).filter(project_access_q(user_id, relation='project')).first()
     if not vulnerability: return None
     if update.status is not None:
         allowed = {choice.value for choice in Vulnerability.Status}
@@ -246,7 +246,7 @@ async def update_vulnerability(vuln_id: UUID, update: VulnerabilityUpdate, user=
 
 @sync_to_async
 def _add_note(vuln_id: UUID, user_id: str, content: str, is_private: bool):
-    vulnerability = Vulnerability.objects.filter(id=vuln_id, project__owner_id=user_id).first() or Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
+    vulnerability = Vulnerability.objects.filter(id=vuln_id).filter(project_access_q(user_id, relation='project')).first()
     return VulnerabilityNote.objects.create(vulnerability=vulnerability, author_id=user_id, content=content, is_private=is_private) if vulnerability else None
 
 
@@ -260,7 +260,7 @@ async def add_note(vuln_id: UUID, content: str, is_private: bool = False, user=D
 
 @sync_to_async
 def _get_evidences(vuln_id: UUID, user_id: str):
-    vulnerability = Vulnerability.objects.filter(id=vuln_id, project__owner_id=user_id).first() or Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
+    vulnerability = Vulnerability.objects.filter(id=vuln_id).filter(project_access_q(user_id, relation='project')).first()
     return (vulnerability, list(Evidence.objects.filter(finding=vulnerability).order_by('-collected_at'))) if vulnerability else (None, [])
 
 
@@ -337,7 +337,7 @@ async def get_finding_confirmations(vuln_id: UUID, user=Depends(get_current_user
 
 @sync_to_async
 def _verify_fix(vuln_id: UUID, user_id: str):
-    visible = Vulnerability.objects.filter(id=vuln_id, project__owner_id=user_id).first() or Vulnerability.objects.filter(id=vuln_id, project__members__id=user_id).first()
+    visible = Vulnerability.objects.filter(id=vuln_id).filter(project_access_q(user_id, relation='project')).first()
     if not visible:
         return None, None, 'Vulnerability not found'
     candidate = ValidationRun.objects.filter(finding=visible).order_by('-created_at', '-id').first()
@@ -459,7 +459,7 @@ def _bulk_update(vuln_ids: List[str], user_id: str, update: VulnerabilityUpdate)
     allowed = {choice.value for choice in Vulnerability.Status}
     if update.status is not None and update.status not in allowed: raise ValueError(f'invalid vulnerability status: {update.status}')
     _reject_direct_governed_status(update.status)
-    qs = Vulnerability.objects.filter(id__in=vuln_ids, project__owner_id=user_id) | Vulnerability.objects.filter(id__in=vuln_ids, project__members__id=user_id); qs=qs.distinct(); values={}
+    qs = Vulnerability.objects.filter(id__in=vuln_ids).filter(project_access_q(user_id, relation='project')).distinct(); values={}
     if update.status is not None: values['status']=update.status
     if update.remediation is not None: values['remediation']=update.remediation
     if values: values['updated_at']=datetime.now(timezone.utc); return qs.update(**values)

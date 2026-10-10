@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from . import campaign_objectives
 from ..contracts import AttackPathEdge, AttackPathGraph, AttackPathNode, AttackPathPath
-from ..core.dependencies import accessible_projects_for_user, get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from assets.models import Asset, AssetRelationship
 from enterprise.models import AttackPath
 from enterprise.services import ensure_project_tenant
@@ -46,7 +46,7 @@ _INACTIVE_STATUSES = {
 
 
 def _project_access(project_id: str, user_id: str) -> bool:
-    return accessible_projects_for_user(user_id).filter(id=project_id).exists()
+    return Project.objects.filter(id=project_id).filter(project_access_q(user_id)).exists()
 
 
 def _criticality_weight(value: Any) -> float:

@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from enterprise.models import ThreatModelSnapshot
 from enterprise.services import ensure_project_tenant
-from projects.models import Project
+from django_project.projects.models import Project
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.threat_modeling import (
     METHODOLOGIES,
     ThreatModelError,
@@ -69,7 +68,7 @@ class ThreatModelView(StrictModel):
 def _project_for_user(project_id: str, user_id: str) -> Project | None:
     return (
         Project.objects.filter(pk=project_id)
-        .filter(Q(owner_id=user_id) | Q(members__id=user_id))
+        .filter(project_access_q(user_id))
         .distinct()
         .first()
     )
@@ -79,7 +78,7 @@ def _project_for_user(project_id: str, user_id: str) -> Project | None:
 def _create(project_id: str, user_id: str, payload: ThreatModelCreateIn) -> dict:
     project = (
         Project.objects.filter(pk=project_id)
-        .filter(Q(owner_id=user_id) | Q(members__id=user_id))
+        .filter(project_access_q(user_id))
         .distinct()
         .first()
     )
@@ -108,7 +107,7 @@ def _create(project_id: str, user_id: str, payload: ThreatModelCreateIn) -> dict
 def _list(project_id: str, user_id: str, limit: int) -> list[dict]:
     accessible = (
         Project.objects.filter(pk=project_id)
-        .filter(Q(owner_id=user_id) | Q(members__id=user_id))
+        .filter(project_access_q(user_id))
         .exists()
     )
     if not accessible:
@@ -125,7 +124,7 @@ def _list(project_id: str, user_id: str, limit: int) -> list[dict]:
 def _get(project_id: str, snapshot_id: str, user_id: str) -> dict | None:
     accessible = (
         Project.objects.filter(pk=project_id)
-        .filter(Q(owner_id=user_id) | Q(members__id=user_id))
+        .filter(project_access_q(user_id))
         .exists()
     )
     if not accessible:

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from enterprise.governed_action_models import BusinessLogicAssessment
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.business_logic_security import (
     BusinessLogicAssessmentError,
     assess_governed_action_request,
@@ -33,7 +33,6 @@ def _assess(request_id: str, actor_id: str) -> dict:
 
 @sync_to_async
 def _list(request_id: str, actor_id: str, limit: int) -> list[dict]:
-    from django.db.models import Q
     from django_project.projects.models import Project
     from enterprise.models import OrganizationMembership
 
@@ -51,9 +50,7 @@ def _list(request_id: str, actor_id: str, limit: int) -> list[dict]:
         user__is_active=True,
         is_active=True,
     ).exists()
-    project_access = Project.objects.filter(pk=row.project_id).filter(
-        Q(owner_id=actor_id) | Q(members__id=actor_id)
-    ).exists()
+    project_access = Project.objects.filter(pk=row.project_id).filter(project_access_q(actor_id)).exists()
     if not membership or not project_access:
         raise PermissionError('Active tenant and project membership are required for business-logic assessment reads.')
     rows = (

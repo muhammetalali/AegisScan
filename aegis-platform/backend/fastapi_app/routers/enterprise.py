@@ -20,7 +20,7 @@ from enterprise.services import ensure_project_tenant, build_twin, predict_scena
 from enterprise.tasks import build_digital_twin_task, predict_digital_twin_scenario_task, generate_attack_paths_task, map_compliance_task, claim_continuous_assurance_execution, run_continuous_assurance
 from django_project.projects.models import Project
 from django_project.users.models import Permission
-from fastapi_app.core.dependencies import require_permission
+from fastapi_app.core.dependencies import require_permission, project_access_q, is_primary_company_owner
 
 router = APIRouter()
 
@@ -58,7 +58,7 @@ class ContinuousAssuranceCreate(BaseModel):
 
 @sync_to_async
 def _project_for_user(project_id: str, user_id: str):
-    project = Project.objects.filter(id=project_id).filter(owner_id=user_id).first() or Project.objects.filter(id=project_id, members__id=user_id).first()
+    project = Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project: raise HTTPException(status_code=404, detail='Project not found or inaccessible')
     return project
 
@@ -191,25 +191,25 @@ async def create_twin(body: TwinCreate, user=Depends(__import__('fastapi_app.cor
 
 @router.get('/twins/{twin_id}')
 async def get_twin(twin_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
-    twin=await sync_to_async(lambda: DigitalTwin.objects.filter(pk=twin_id,project__owner_id=str(user.get('user_id'))).first() or DigitalTwin.objects.filter(pk=twin_id,project__members__id=str(user.get('user_id'))).first())()
+    twin=await sync_to_async(lambda: DigitalTwin.objects.filter(pk=twin_id).filter(project_access_q(str(user.get('user_id')), relation='project')).first())()
     if not twin: raise HTTPException(status_code=404,detail='Digital Twin not found')
     return {'id':str(twin.id),'project_id':str(twin.project_id),'organization_id':str(twin.organization_id),'name':twin.name,'status':twin.status,'version':twin.version,'snapshot':twin.snapshot,'built_at':twin.built_at.isoformat() if twin.built_at else None}
 
 @router.post('/twins/{twin_id}/build')
 async def build_twin_endpoint(twin_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
-    twin=await sync_to_async(lambda: DigitalTwin.objects.filter(pk=twin_id,project__owner_id=str(user.get('user_id'))).first() or DigitalTwin.objects.filter(pk=twin_id,project__members__id=str(user.get('user_id'))).first())()
+    twin=await sync_to_async(lambda: DigitalTwin.objects.filter(pk=twin_id).filter(project_access_q(str(user.get('user_id')), relation='project')).first())()
     if not twin: raise HTTPException(status_code=404,detail='Digital Twin not found')
     return {'task_id':build_digital_twin_task.delay(str(twin.id)).id,'twin_id':str(twin.id)}
 
 @router.post('/twins/{twin_id}/scenarios', status_code=201)
 async def create_scenario(twin_id: UUID, body: ScenarioCreate, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
-    twin=await sync_to_async(lambda: DigitalTwin.objects.filter(pk=twin_id,project__owner_id=str(user.get('user_id'))).first() or DigitalTwin.objects.filter(pk=twin_id,project__members__id=str(user.get('user_id'))).first())()
+    twin=await sync_to_async(lambda: DigitalTwin.objects.filter(pk=twin_id).filter(project_access_q(str(user.get('user_id')), relation='project')).first())()
     if not twin: raise HTTPException(status_code=404,detail='Digital Twin not found')
     scenario=await sync_to_async(TwinScenario.objects.create)(twin=twin,name=body.name,change_type=body.change_type,description=body.description,affected_nodes=body.affected_nodes,parameters=body.parameters,created_by_id=str(user.get('user_id'))); task=predict_digital_twin_scenario_task.delay(str(scenario.id)); return {'id':str(scenario.id),'task_id':task.id,'status':scenario.status}
 
 @router.get('/twins/{twin_id}/scenarios')
 async def list_scenarios(twin_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
-    rows=await sync_to_async(lambda:list(TwinScenario.objects.filter(twin_id=twin_id,twin__project__owner_id=str(user.get('user_id'))).values('id','name','change_type','baseline_risk','predicted_risk','risk_delta','status','recommendation','evidence')))(); return [{'id':str(x['id']),**{k:v for k,v in x.items() if k!='id'}} for x in rows]
+    rows=await sync_to_async(lambda:list(TwinScenario.objects.filter(twin_id=twin_id).filter(project_access_q(str(user.get('user_id')), relation='twin__project')).values('id','name','change_type','baseline_risk','predicted_risk','risk_delta','status','recommendation','evidence')))(); return [{'id':str(x['id']),**{k:v for k,v in x.items() if k!='id'}} for x in rows]
 
 @router.post('/projects/{project_id}/attack-paths')
 async def create_attack_paths(project_id: UUID, user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
@@ -266,11 +266,15 @@ async def run_assurance(schedule_id: UUID, user=Depends(__import__('fastapi_app.
 async def list_continuous_assurance(user=Depends(__import__('fastapi_app.core.dependencies',fromlist=['get_current_user']).get_current_user)):
     user_id=str(user.get('user_id'))
     def load():
-        schedules=(ContinuousAssuranceSchedule.objects.filter(
-            Q(project__owner_id=user_id)|Q(project__memberships__user_id=user_id),
-            organization__memberships__user_id=user_id,
-            organization__memberships__is_active=True,
-        ).select_related('organization','project','asset','authorization_decision').distinct().order_by('-created_at'))
+        scope = project_access_q(user_id, relation='project')
+        if not is_primary_company_owner(user_id):
+            scope &= Q(
+                organization__memberships__user_id=user_id,
+                organization__memberships__is_active=True,
+            )
+        schedules=(ContinuousAssuranceSchedule.objects.filter(scope)
+            .select_related('organization','project','asset','authorization_decision')
+            .distinct().order_by('-created_at'))
         rows=[]
         for schedule in schedules:
             execution=schedule.executions.select_related('scan').order_by('-scheduled_for','-created_at').first()

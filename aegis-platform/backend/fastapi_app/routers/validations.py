@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from django_project.evidence.models import Evidence, ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q, is_primary_company_owner
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 from ..services.authorization_guard import current_asset_authorization
 from ..services.offensive_validation import ENGINE as OFFENSIVE_ENGINE
@@ -30,6 +30,15 @@ def _employee_may_validate(user_id: str, scan_type: str) -> bool:
     from django_project.users.models import User
     actor = User.objects.filter(pk=user_id, is_active=True).first()
     return bool(actor and actor.can_scan_type(scan_type))
+
+
+def _visible_validation_runs(user_id: str):
+    """Only the verified primary owner may review company finding-linked runs."""
+    from django.db.models import Q
+    runs = ValidationRun.objects.all()
+    if is_primary_company_owner(user_id):
+        return runs.filter(Q(user_id=user_id) | Q(finding__project__isnull=False)).distinct()
+    return runs.filter(user_id=user_id)
 
 
 ALLOWED_TYPES = {'url', 'ip', 'api'}
@@ -115,9 +124,7 @@ def _serialize(v: ValidationRun):
 @sync_to_async
 def _get_finding(finding_id: UUID, user_id: str):
     return Vulnerability.objects.filter(id=finding_id).filter(
-        project__owner_id=user_id,
-    ).select_related('asset', 'scan').first() or Vulnerability.objects.filter(
-        id=finding_id, project__members__id=user_id,
+        project_access_q(user_id, relation="project")
     ).select_related('asset', 'scan').first()
 
 
@@ -254,7 +261,7 @@ async def create_offensive_validation(body: OffensiveValidationCreate, user=Depe
 
 @sync_to_async
 def _list(user_id: str, limit: int):
-    return list(ValidationRun.objects.filter(user_id=user_id).order_by('-created_at')[:limit])
+    return list(_visible_validation_runs(user_id).order_by('-created_at')[:limit])
 
 
 @router.get('/validations', response_model=List[ValidationOut])
@@ -264,12 +271,12 @@ async def list_validations(limit: int = Query(20, le=100), user=Depends(get_curr
 
 @sync_to_async
 def _get(vid: UUID, user_id: str):
-    return ValidationRun.objects.filter(id=vid, user_id=user_id).first()
+    return _visible_validation_runs(user_id).filter(id=vid).first()
 
 
 @sync_to_async
 def _get_result(vid: UUID, user_id: str):
-    v = ValidationRun.objects.filter(id=vid, user_id=user_id).first()
+    v = _visible_validation_runs(user_id).filter(id=vid).first()
     if not v:
         return None
     return ValidationResultOut(
@@ -288,7 +295,7 @@ def _get_result(vid: UUID, user_id: str):
 
 @sync_to_async
 def _get_validation_evidence(vid: UUID, user_id: str, limit: int):
-    v = ValidationRun.objects.filter(id=vid, user_id=user_id).first()
+    v = _visible_validation_runs(user_id).filter(id=vid).first()
     if not v:
         return None
     rows = []
@@ -353,7 +360,7 @@ async def get_validation_progress(vid: UUID, user=Depends(get_current_user)):
 
 @sync_to_async
 def _cancel(vid: UUID, user_id: str):
-    v = ValidationRun.objects.filter(id=vid, user_id=user_id).first()
+    v = _visible_validation_runs(user_id).filter(id=vid).first()
     if not v:
         return None
     if v.status in {ValidationRun.Status.COMPLETED, ValidationRun.Status.FAILED, ValidationRun.Status.CANCELLED}:

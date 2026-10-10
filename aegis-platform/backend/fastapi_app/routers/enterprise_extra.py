@@ -9,7 +9,7 @@ from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from django_project.projects.models import Project
 from enterprise.models import ExternalIntegration, IntegrationSyncRun, Notification, SBOMArtifact
 from enterprise.services import ensure_project_tenant
@@ -43,7 +43,7 @@ class SBOMCreate(BaseModel):
     document:dict[str,Any]
 
 async def _project(project_id:UUID,user):
-    project=await sync_to_async(lambda:Project.objects.filter(id=project_id,owner_id=str(user.get('user_id'))).first() or Project.objects.filter(id=project_id,members__id=str(user.get('user_id'))).first())()
+    project=await sync_to_async(lambda:Project.objects.filter(id=project_id).filter(project_access_q(str(user.get('user_id')))).first())()
     if not project: raise HTTPException(status_code=404,detail='Project not found or inaccessible')
     return project
 

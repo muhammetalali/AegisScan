@@ -4,12 +4,11 @@ from typing import List
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..contracts import ScenarioSimulationResponse
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from django_project.projects.models import Project
 from enterprise.models import DigitalTwin, TwinNode, TwinScenario
 from enterprise.services import ensure_project_tenant
@@ -57,7 +56,7 @@ class ScenarioResponse(BaseModel):
 
 @sync_to_async
 def _project(project_id: str, user_id: str):
-    project = Project.objects.filter(id=project_id).filter(Q(owner_id=user_id) | Q(members__id=user_id)).first()
+    project = Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project:
         raise HTTPException(status_code=404, detail='Project not found or inaccessible')
     return project
@@ -99,7 +98,7 @@ async def create_twin(project_id: str, name: str, user=Depends(get_current_user)
 
 @router.get('/twins/{twin_id}', response_model=TwinResponse)
 async def get_twin(twin_id: UUID, user=Depends(get_current_user)):
-    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(Q(project__owner_id=str(user.get('user_id'))) | Q(project__members__id=str(user.get('user_id')))).first())()
+    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(project_access_q(str(user.get('user_id')), relation='project')).first())()
     if not twin:
         raise HTTPException(status_code=404, detail='Digital Twin not found')
     return TwinResponse(id=str(twin.id), project_id=str(twin.project_id), name=twin.name, status=twin.status, environment=twin.snapshot or {}, created_at=twin.created_at.isoformat())
@@ -107,7 +106,7 @@ async def get_twin(twin_id: UUID, user=Depends(get_current_user)):
 
 @router.post('/twins/{twin_id}/build')
 async def build_twin(twin_id: UUID, user=Depends(get_current_user)):
-    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(Q(project__owner_id=str(user.get('user_id'))) | Q(project__members__id=str(user.get('user_id')))).first())()
+    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(project_access_q(str(user.get('user_id')), relation='project')).first())()
     if not twin:
         raise HTTPException(status_code=404, detail='Digital Twin not found')
     task = build_digital_twin_task.delay(str(twin.id))
@@ -116,7 +115,7 @@ async def build_twin(twin_id: UUID, user=Depends(get_current_user)):
 
 @router.get('/twins/{twin_id}/scenarios', response_model=List[ScenarioResponse])
 async def list_scenarios(twin_id: UUID, user=Depends(get_current_user)):
-    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(Q(project__owner_id=str(user.get('user_id'))) | Q(project__members__id=str(user.get('user_id')))).first())()
+    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(project_access_q(str(user.get('user_id')), relation='project')).first())()
     if not twin:
         raise HTTPException(status_code=404, detail='Digital Twin not found')
     rows = await sync_to_async(lambda: list(TwinScenario.objects.filter(twin=twin).order_by('-created_at')))()
@@ -125,7 +124,7 @@ async def list_scenarios(twin_id: UUID, user=Depends(get_current_user)):
 
 @router.post('/twins/{twin_id}/scenarios', response_model=ScenarioResponse, status_code=201)
 async def create_scenario(twin_id: UUID, scenario: ScenarioCreate, user=Depends(get_current_user)):
-    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(Q(project__owner_id=str(user.get('user_id'))) | Q(project__members__id=str(user.get('user_id')))).first())()
+    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(project_access_q(str(user.get('user_id')), relation='project')).first())()
     if not twin:
         raise HTTPException(status_code=404, detail='Digital Twin not found')
     parameters = dict(scenario.parameters or {})
@@ -137,7 +136,7 @@ async def create_scenario(twin_id: UUID, scenario: ScenarioCreate, user=Depends(
 
 @router.post('/scenarios/{scenario_id}/simulate', response_model=ScenarioSimulationResponse)
 async def simulate_scenario(scenario_id: UUID, user=Depends(get_current_user)):
-    item = await sync_to_async(lambda: TwinScenario.objects.filter(id=scenario_id).filter(Q(twin__project__owner_id=str(user.get('user_id'))) | Q(twin__project__members__id=str(user.get('user_id')))).first())()
+    item = await sync_to_async(lambda: TwinScenario.objects.filter(id=scenario_id).filter(project_access_q(str(user.get('user_id')), relation='twin__project')).first())()
     if not item:
         raise HTTPException(status_code=404, detail='Scenario not found')
     task = predict_digital_twin_scenario_task.delay(str(item.id))
@@ -153,7 +152,7 @@ async def simulate_scenario(scenario_id: UUID, user=Depends(get_current_user)):
 
 @router.post('/twins/{twin_id}/drift-check')
 async def check_drift(twin_id: UUID, current_assets: List[dict], user=Depends(get_current_user)):
-    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(Q(project__owner_id=str(user.get('user_id'))) | Q(project__members__id=str(user.get('user_id')))).first())()
+    twin = await sync_to_async(lambda: DigitalTwin.objects.filter(id=twin_id).filter(project_access_q(str(user.get('user_id')), relation='project')).first())()
     if not twin:
         raise HTTPException(status_code=404, detail='Digital Twin not found')
     modeled = await sync_to_async(lambda: set(TwinNode.objects.filter(twin=twin, kind=TwinNode.Kind.ASSET).values_list('external_id', flat=True)))()

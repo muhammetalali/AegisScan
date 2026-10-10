@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from django_project.projects.models import Project
 from enterprise.provider_approval_models import ProviderApprovalDecision
 
-from ..core.dependencies import accessible_projects_for_user, get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.provider_approval import (
     ProviderApprovalAuthorizationError,
     ProviderApprovalConflict,
@@ -55,7 +55,9 @@ def _actor_id(user: dict[str, Any]) -> str:
 
 @sync_to_async
 def _project_access(project_id: str, actor_id: str) -> bool:
-    return accessible_projects_for_user(actor_id).filter(pk=project_id).exists()
+    return Project.objects.filter(pk=project_id).filter(
+        project_access_q(actor_id)
+    ).distinct().exists()
 
 
 def _serialize(decision: ProviderApprovalDecision) -> dict[str, Any]:

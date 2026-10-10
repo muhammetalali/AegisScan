@@ -20,7 +20,7 @@ from django.utils import timezone as django_timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..core.dependencies import accessible_projects_for_user, get_current_user, require_permission
+from ..core.dependencies import get_current_user, require_permission, project_access_q
 from django_project.audit.models import DataExport
 from django_project.evidence.models import Evidence
 from django_project.projects.models import Project
@@ -109,7 +109,7 @@ class ReportRecipientDeliveryResponse(BaseModel):
 
 @sync_to_async
 def _project_access(project_id: str, user_id: str):
-    project = accessible_projects_for_user(user_id).filter(id=project_id).first()
+    project = Project.objects.filter(id=project_id).filter(project_access_q(user_id)).first()
     if not project:
         raise HTTPException(status_code=404, detail='Project not found or inaccessible')
     return project

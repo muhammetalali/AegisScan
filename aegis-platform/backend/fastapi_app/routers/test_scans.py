@@ -130,6 +130,10 @@ def test_primary_company_owner_works_across_projects_without_membership(api_fixt
     assert listed.status_code == 200
     assert scan_id in {row['id'] for row in listed.json()}
 
+    for suffix in ('', '/logs', '/engine-executions'):
+        detail = client.get(f'/api/v1/scans/{scan_id}{suffix}')
+        assert detail.status_code == 200, detail.text
+
     asset_detail = client.get(f'/api/v1/assets/{asset.id}')
     assert asset_detail.status_code == 200
     assert asset_detail.json()['id'] == str(asset.id)
