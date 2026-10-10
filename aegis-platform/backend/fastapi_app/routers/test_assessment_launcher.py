@@ -20,6 +20,43 @@ def _dns(address: str):
     return (family, socket.SOCK_STREAM, 6, '', sockaddr)
 
 
+@pytest.mark.django_db
+def test_primary_company_owner_can_prepare_another_users_project_without_membership(settings):
+    from django_project.users.models import User
+    from django_project.projects.models import Project, ProjectMembership
+    primary = User.objects.create_superuser(
+        email='primary-launcher@example.invalid', password='Test-Password-456!',
+    )
+    other = User.objects.create_user(
+        email='project-launcher@example.invalid', password='Test-Password-789!',
+    )
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = primary.email
+    project = Project.objects.create(name='Company-wide authorization', slug='launcher-owner-access', owner=other)
+    assert not ProjectMembership.objects.filter(project=project, user=primary).exists()
+
+    assert launcher._project_for_launcher(str(project.id), str(primary.id)).pk == project.pk
+
+
+@pytest.mark.django_db
+def test_delegated_staff_cannot_bypass_its_project_membership_scope(settings):
+    from django_project.users.models import User, UserRole
+    from django_project.projects.models import Project, ProjectMembership
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = 'separate-owner@example.invalid'
+    project_owner = User.objects.create_user(
+        email='project-owner@example.invalid', password='Test-Password-012!',
+    )
+    delegated = User.objects.create_user(
+        email='delegated-manager@example.invalid', password='Test-Password-345!',
+        is_staff=True, role=UserRole.SUPER_ADMIN, is_superuser=False,
+    )
+    project = Project.objects.create(name='Delegated project policy', slug='launcher-delegated-policy', owner=project_owner)
+    with pytest.raises(HTTPException, match='Project membership is required') as denied:
+        launcher._project_for_launcher(str(project.id), str(delegated.id))
+    assert denied.value.status_code == 403
+    ProjectMembership.objects.create(project=project, user=delegated)
+    assert launcher._project_for_launcher(str(project.id), str(delegated.id)).pk == project.pk
+
+
 def test_launcher_normalizes_network_and_ip_targets():
     asset_type, target, config = launcher._normalize_target('network', '192.168.49.33/24')
     assert asset_type == 'network_range'
@@ -135,6 +172,55 @@ def test_single_operator_lab_mode_routes_through_governance_service(monkeypatch)
     assert calls['expected_version'] == 7
     assert calls['authorized'] is True
 
+
+
+def test_governed_launcher_reuses_request_identity_for_same_actor_asset_and_version(monkeypatch):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'asset-authorization')
+    monkeypatch.setattr(launcher, '_current_authorization', lambda _asset: None)
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 11)
+    calls = []
+
+    def submit(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(request=SimpleNamespace(id='request-1'), replayed=len(calls) > 1)
+
+    monkeypatch.setattr(launcher, 'create_governed_action_request', submit)
+    monkeypatch.setattr(
+        launcher, 'governed_action_request_view',
+        lambda result: {'request_id': result.request.id, 'replayed': result.replayed},
+    )
+    asset = SimpleNamespace(id='asset-1', project_id='project-1')
+    first = launcher._ensure_authorization(asset, 'owner-1')
+    again = launcher._ensure_authorization(asset, 'owner-1')
+
+    assert first['state'] == 'pending'
+    assert again['state'] == 'pending'
+    assert first['request']['request_id'] == again['request']['request_id']
+    assert calls[0]['idempotency_key'] == calls[1]['idempotency_key']
+    assert calls[0]['expected_version'] == calls[1]['expected_version'] == 11
+    assert calls[0]['idempotency_key'].startswith('assessment-launcher-authorization:')
+    assert len(calls[0]['idempotency_key']) <= 128
+    assert first['request']['replayed'] is False
+    assert again['request']['replayed'] is True
+
+
+def test_governed_launcher_changes_request_identity_for_different_actor_or_version(monkeypatch):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'asset-authorization')
+    monkeypatch.setattr(launcher, '_current_authorization', lambda _asset: None)
+    version = [5]
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: version[0])
+    keys = []
+    def submit(**kwargs):
+        keys.append(kwargs['idempotency_key'])
+        return SimpleNamespace(request=SimpleNamespace(id='request'), replayed=False)
+    monkeypatch.setattr(launcher, 'create_governed_action_request', submit)
+    monkeypatch.setattr(launcher, 'governed_action_request_view', lambda _result: {})
+    asset = SimpleNamespace(id='asset-1', project_id='project-1')
+    launcher._ensure_authorization(asset, 'owner-1')
+    launcher._ensure_authorization(asset, 'owner-2')
+    version[0] = 6
+    launcher._ensure_authorization(asset, 'owner-1')
+    assert len(set(keys)) == 3
 
 
 def test_dynamic_egress_configured_controller_fails_closed_without_control_root(monkeypatch):
