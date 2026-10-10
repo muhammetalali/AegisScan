@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
+from fastapi_app.core.dependencies import project_access_q
 from django_project.system.credential_models import CredentialSecret
 from enterprise.models import OrganizationMembership, TenantProject
 from enterprise.provider_approval_models import ProviderApprovalDecision
@@ -38,10 +39,8 @@ class UnknownLabDefinition(ValueError):
 def _accessible_scope(*, actor_id: str, project_id: str, asset_id: str):
     actor = get_user_model().objects.filter(pk=actor_id, is_active=True).first()
     project = Project.objects.filter(pk=project_id, status=Project.Status.ACTIVE).first()
-    if (not actor or not project or not (
-        str(project.owner_id) == actor_id
-        or project.members.filter(pk=actor_id).exists()
-    )):
+    if (not actor or not project or not Project.objects.filter(pk=project.pk)
+            .filter(project_access_q(actor_id)).exists()):
         raise WebLabsAccessError('المشروع أو الأصل غير متاح ضمن وصولك الحالي.')
     asset = Asset.objects.filter(
         pk=asset_id, project_id=project_id, is_active=True
@@ -226,14 +225,9 @@ def list_web_lab_credential_options(*, actor_id: str, project_id: str, asset_id:
 def prepare_web_lab(*, actor_id: str, project_id: str, asset_id: str,
                     lab_definition_id: str, credential_refs: list[str], depth: str) -> dict[str, Any]:
     """Preview existing records only. Execution must re-check all mutable state."""
-    actor = get_user_model().objects.filter(pk=actor_id, is_active=True).first()
-    project = Project.objects.filter(pk=project_id, status=Project.Status.ACTIVE).first()
-    if (not actor or not project or not (str(project.owner_id) == actor_id
-                                        or project.members.filter(pk=actor_id).exists())):
-        raise WebLabsAccessError('المشروع أو الأصل غير متاح ضمن وصولك الحالي.')
-    asset = Asset.objects.filter(pk=asset_id, project_id=project_id, is_active=True).first()
-    if not asset:
-        raise WebLabsAccessError('المشروع أو الأصل غير متاح ضمن وصولك الحالي.')
+    actor, project, asset = _accessible_scope(
+        actor_id=actor_id, project_id=project_id, asset_id=asset_id,
+    )
     definition = lab_definition(lab_definition_id)
     refs = normalize_credential_refs(credential_refs)
     requirements, blockers = [], []

@@ -233,3 +233,26 @@ def test_custom_schedule_rejects_invalid_cron(scheduled_fixture):
             cron_expression='not-a-cron',
         )
     assert caught.value.code == 'invalid_cron_expression'
+
+
+def test_primary_owner_scheduled_scope_does_not_require_project_membership(scheduled_fixture, settings):
+    from django_project.projects.models import ProjectMembership
+    from fastapi_app.services import scheduled_execution
+
+    employee, project, asset, _auth = scheduled_fixture
+    owner = User.objects.create_superuser(
+        email='company-owner-scheduler@example.invalid', password='Owner-Test-Password123!',
+    )
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = owner.email
+    assert not ProjectMembership.objects.filter(project=project, user=owner).exists()
+    actor, bound_project = scheduled_execution._actor_project(
+        str(owner.pk), str(project.pk),
+    )
+    assert actor.pk == owner.pk
+    assert bound_project.pk == project.pk
+
+    outsider = User.objects.create_user(
+        email='company-outsider-scheduler@example.invalid', password='Other-Test-Password123!',
+    )
+    with pytest.raises(ScheduledExecutionError, match='no longer has project access'):
+        scheduled_execution._actor_project(str(outsider.pk), str(project.pk))

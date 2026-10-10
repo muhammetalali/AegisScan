@@ -365,3 +365,18 @@ def test_main_registration_and_fixture_revision_are_real_source_metadata():
     repository = Path(__file__).resolve().parents[4]
     fixture = repository / definition['fixture_path']
     assert hashlib.sha256(fixture.read_bytes()).hexdigest() == definition['fixture_revision_sha256']
+
+
+def test_primary_owner_web_lab_scope_uses_company_project_access(context, settings):
+    user, project, asset, *_ = context
+    owner = User.objects.create_superuser(
+        email='company-owner-lab@example.invalid', password='Owner-Test-Password123!',
+    )
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = owner.email
+    assert not ProjectMembership.objects.filter(project=project, user=owner).exists()
+    actor, scope_project, scope_asset = preparation._accessible_scope(
+        actor_id=str(owner.pk), project_id=str(project.pk), asset_id=str(asset.pk),
+    )
+    assert actor.pk == owner.pk
+    assert scope_project.pk == project.pk
+    assert scope_asset.pk == asset.pk
