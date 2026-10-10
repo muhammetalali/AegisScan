@@ -123,13 +123,87 @@ def test_owner_credential_and_identity_are_not_delegable(company_owner, other_ad
     assert owner.delete(owner_detail).status_code == 403
     assert owner.patch(owner_detail, {'role':UserRole.VIEWER}, format='json').status_code == 403
     assert owner.post('/api/v1/auth/deactivate-self/', {'password':'Strong-Test-Owner-Pass-2026!'},format='json').status_code == 403
-    assert owner.post('/api/v1/auth/users/', {
-        'email':'fake-owner@example.invalid','password':'Strong-Test-Password!2026',
-        'password_confirm':'Strong-Test-Password!2026',
-        'role':UserRole.SUPER_ADMIN,
-    },format='json').status_code == 400
     assert company_owner.is_company_owner is True
     assert other_admin.is_company_owner is False
+
+
+@pytest.mark.django_db
+def test_owner_delegates_scoped_super_admin_without_delegating_company_ownership(company_owner):
+    owner = APIClient()
+    owner.force_authenticate(user=company_owner)
+    response = owner.get('/api/v1/auth/users/access_options/')
+    assert response.status_code == 200
+    assert UserRole.SUPER_ADMIN in response.data['roles']
+    assert 'user.update' in response.data['roles'][UserRole.SUPER_ADMIN]
+
+    email = 'operational-delegate@example.invalid'
+    created = owner.post('/api/v1/auth/users/', {
+        'email': email, 'first_name': 'Operational', 'last_name': 'Delegate',
+        'password': 'Strong-Delegate-Pass!2026',
+        'password_confirm': 'Strong-Delegate-Pass!2026',
+        'role': UserRole.SUPER_ADMIN,
+        'granted_permissions': ['project.read', 'scan.create', 'system.monitor', 'user.update'],
+        'enabled_scan_types': ['url'],
+        'enabled_pages': ['/projects', '/system'],
+    }, format='json')
+    assert created.status_code == 201, created.data
+
+    delegate = User.objects.get(email=email)
+    assert delegate.role == UserRole.SUPER_ADMIN
+    assert delegate.is_active is False
+    assert delegate.is_superuser is False
+    assert delegate.is_staff is False
+    assert delegate.is_company_owner is False
+    assert delegate.get_effective_permissions() == ['project.read', 'scan.create', 'system.monitor', 'user.update']
+    assert delegate.can_scan_type('url') is True
+    assert delegate.can_scan_type('ip') is False
+
+    delegate_detail = f'/api/v1/auth/users/{delegate.pk}/'
+    assert owner.post(delegate_detail + 'activate/', {}, format='json').status_code == 200
+    delegate.refresh_from_db()
+    assert delegate.is_active
+    assert delegate.is_company_owner is False
+    secondary = APIClient()
+    secondary.force_authenticate(user=delegate)
+    assert secondary.post('/api/v1/auth/users/', {
+        'email': 'not-delegated@example.invalid',
+        'first_name': 'Cannot', 'last_name': 'Provision',
+        'password': 'Strong-Password-Test!2026',
+        'password_confirm': 'Strong-Password-Test!2026',
+    }, format='json').status_code == 403
+    assert secondary.patch(
+        f'/api/v1/auth/users/{company_owner.pk}/',
+        {'role': UserRole.VIEWER}, format='json',
+    ).status_code == 403
+    assert secondary.post(
+        delegate_detail + 'deactivate/', {}, format='json',
+    ).status_code == 403
+    assert company_owner.is_company_owner is True
+
+
+@pytest.mark.django_db
+def test_promoting_legacy_admin_with_null_grants_cannot_implicitly_grant_everything(company_owner):
+    legacy = User.objects.create_user(
+        email='legacy-delegate@example.invalid',
+        password='Strong-Legacy-Test-Password!2026',
+        role=UserRole.ADMIN,
+    )
+    assert legacy.granted_permissions is None
+    owner = APIClient()
+    owner.force_authenticate(user=company_owner)
+    response = owner.patch(
+        f'/api/v1/auth/users/{legacy.pk}/',
+        {'role': UserRole.SUPER_ADMIN},
+        format='json',
+    )
+    assert response.status_code == 200, response.data
+    legacy.refresh_from_db()
+    assert legacy.role == UserRole.SUPER_ADMIN
+    assert legacy.granted_permissions == []
+    assert legacy.get_effective_permissions() == []
+    assert not legacy.is_superuser
+    assert not legacy.is_company_owner
+
 
 
 @pytest.mark.django_db

@@ -85,7 +85,7 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response({
             'roles': {
                 str(role): sorted(str(p) for p in ROLE_PERMISSIONS[role])
-                for role in UserRole.values if role != UserRole.SUPER_ADMIN
+                for role in UserRole.values
             },
             'scan_types': list(Scan.Type.values),
         })

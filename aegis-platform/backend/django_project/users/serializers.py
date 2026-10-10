@@ -63,8 +63,6 @@ class UserCreateSerializer(serializers.ModelSerializer):
         if attrs['password'] != attrs['password_confirm']:
             raise serializers.ValidationError({'password_confirm': 'Passwords do not match'})
         role = attrs.get('role', UserRole.VIEWER)
-        if role == UserRole.SUPER_ADMIN:
-            raise serializers.ValidationError({'role': 'The company owner cannot be delegated.'})
         allowed = {str(p) for p in ROLE_PERMISSIONS[role]}
         grants = attrs.get('granted_permissions', [])
         if not set(grants).issubset(allowed):
@@ -93,8 +91,10 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         role = attrs.get('role', self.instance.role)
-        if role == UserRole.SUPER_ADMIN:
-            raise serializers.ValidationError({'role': 'The company owner cannot be delegated.'})
+        # Legacy NULL means role defaults. A delegated super admin must never
+        # inherit every capability merely because an old account had NULL.
+        if role == UserRole.SUPER_ADMIN and attrs.get('granted_permissions', self.instance.granted_permissions) is None:
+            attrs['granted_permissions'] = []
         grants = attrs.get('granted_permissions', self.instance.granted_permissions)
         if grants is not None and not set(grants).issubset({str(p) for p in ROLE_PERMISSIONS[role]}):
             raise serializers.ValidationError({'granted_permissions': 'Selected permissions exceed role limits.'})
