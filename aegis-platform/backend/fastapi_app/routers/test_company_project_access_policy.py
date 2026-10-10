@@ -129,3 +129,85 @@ def test_django_project_api_includes_company_projects_for_owner_only(settings):
         force_authenticate(request, user=actor)
         response = view(request, pk=str(project.pk))
         assert response.status_code == expected, response.data
+
+
+@pytest.mark.django_db(transaction=True)
+def test_primary_owner_sees_company_findings_validations_and_authorization_without_employee_leak(settings):
+    from asgiref.sync import async_to_sync
+    from fastapi import HTTPException
+    from django_project.evidence.models import ValidationRun
+    from django_project.scans.models import Scan
+    from django_project.vulnerabilities.models import Vulnerability
+    from fastapi_app.routers import (
+        asset_authorization, remediation, validations, vulnerabilities,
+        compliance_validation, crypto_assets, agentic_security, crypto_lifecycle,
+    )
+
+    primary = User.objects.create_superuser(
+        email=settings.AEGIS_PRIMARY_OWNER_EMAIL, password="Owner-Test-2026!"
+    )
+    employee = User.objects.create_user(
+        email="employee-validation@example.invalid", password="Employee-Test-2026!"
+    )
+    outsider = User.objects.create_user(
+        email="outsider-validation@example.invalid", password="Outsider-Test-2026!"
+    )
+    project = Project.objects.create(name="Other employee company project", slug="employee-company-project", owner=employee)
+    asset = Asset.objects.create(
+        project=project, owner=employee, name="Company IP", slug="company-ip",
+        type=Asset.Type.IP_ADDRESS,
+    )
+    scan = Scan.objects.create(
+        project=project, name="Company scan", scan_type=Scan.Type.IP,
+        depth=Scan.Depth.QUICK, asset=asset, engines=["nmap"],
+        config={"host": "aegis-scan-target"}, initiated_by=employee,
+        status=Scan.Status.COMPLETED,
+    )
+    finding = Vulnerability.objects.create(
+        scan=scan, project=project, asset=asset, title="Company evidence",
+        description="Owner should see company results", severity=Vulnerability.Severity.MEDIUM,
+        source_engine="nmap", remediation="Review",
+    )
+    validation = ValidationRun.objects.create(
+        user=employee, finding=finding, target_type="ip",
+        target_value="192.0.2.1", scope="192.0.2.1",
+        engines=["nmap"], authorized=False,
+    )
+    owner_id, employee_id, outsider_id = str(primary.pk), str(employee.pk), str(outsider.pk)
+    assert async_to_sync(vulnerabilities._get_vulnerability)(finding.id, owner_id) == finding
+    assert async_to_sync(vulnerabilities._get_vulnerability)(finding.id, employee_id) == finding
+    assert async_to_sync(vulnerabilities._get_vulnerability)(finding.id, outsider_id) is None
+    assert async_to_sync(remediation._get_finding)(finding.id, owner_id) == finding
+    assert async_to_sync(remediation._get_finding)(finding.id, outsider_id) is None
+    assert async_to_sync(validations._get_finding)(finding.id, owner_id) == finding
+    assert async_to_sync(validations._get_finding)(finding.id, outsider_id) is None
+    assert validation in list(validations._visible_validation_runs(owner_id))
+    assert validation in list(validations._visible_validation_runs(employee_id))
+    assert validation not in list(validations._visible_validation_runs(outsider_id))
+    assert async_to_sync(validations._get)(validation.id, owner_id) == validation
+    assert async_to_sync(validations._get)(validation.id, outsider_id) is None
+    assert async_to_sync(asset_authorization._authorization_history)(str(asset.id), owner_id) == []
+    assert async_to_sync(asset_authorization._authorization_history)(str(asset.id), outsider_id) is None
+    assert async_to_sync(compliance_validation._get_items)(str(validation.id), owner_id) == []
+    with pytest.raises(HTTPException) as blocked:
+        async_to_sync(compliance_validation._get_items)(str(validation.id), outsider_id)
+    assert blocked.value.status_code == 404
+    for router in (crypto_assets, agentic_security, crypto_lifecycle):
+        assert async_to_sync(router._project_access)(str(project.id), owner_id)
+        assert not async_to_sync(router._project_access)(str(project.id), outsider_id)
+    from fastapi_app.routers import (
+        enterprise, enterprise_extra, enterprise_gap, digital_twin, threat_modeling,
+    )
+    assert async_to_sync(enterprise._project_for_user)(str(project.id), owner_id) == project
+    with pytest.raises(HTTPException) as denied_enterprise:
+        async_to_sync(enterprise._project_for_user)(str(project.id), outsider_id)
+    assert denied_enterprise.value.status_code == 404
+    assert async_to_sync(enterprise_gap._project_for_user)(str(project.id), owner_id) == project
+    assert async_to_sync(enterprise_gap._project_for_user)(str(project.id), outsider_id) is None
+    assert async_to_sync(digital_twin._project)(str(project.id), owner_id) == project
+    assert async_to_sync(threat_modeling._project_for_user)(str(project.id), owner_id) == project
+    assert async_to_sync(threat_modeling._project_for_user)(str(project.id), outsider_id) is None
+    assert async_to_sync(enterprise_extra._project)(project.id, {"user_id": owner_id}) == project
+    with pytest.raises(HTTPException) as denied_extra:
+        async_to_sync(enterprise_extra._project)(project.id, {"user_id": outsider_id})
+    assert denied_extra.value.status_code == 404

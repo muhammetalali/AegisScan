@@ -4,14 +4,13 @@ from typing import Any
 from uuid import UUID
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from django_project.projects.models import Project
 from enterprise.crypto_asset_models import CryptographicInventorySnapshot
 
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.crypto_asset_plane import (
     CryptoAssetAuthorizationError,
     CryptoAssetError,
@@ -58,9 +57,7 @@ def _actor_id(user: dict[str, Any]) -> str:
 
 @sync_to_async
 def _project_access(project_id: str, actor_id: str) -> bool:
-    return Project.objects.filter(pk=project_id).filter(
-        Q(owner_id=actor_id) | Q(members__id=actor_id)
-    ).distinct().exists()
+    return Project.objects.filter(pk=project_id).filter(project_access_q(actor_id)).distinct().exists()
 
 
 def _serialize(snapshot: CryptographicInventorySnapshot) -> dict[str, Any]:

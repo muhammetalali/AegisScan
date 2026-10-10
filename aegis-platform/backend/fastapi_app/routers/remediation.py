@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from django_project.audit.models import AuditLog
 from django_project.evidence.models import ValidationRun
 from django_project.vulnerabilities.models import Vulnerability
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q
 from ..services.audit_writer import add_audit_entry
 from ..services.authorization_guard import current_asset_authorization
 from ..services.finding_closure import FindingClosureError, StaleFindingClosureVersion
@@ -56,12 +56,8 @@ class RemediationValidationConflict(Exception):
 @sync_to_async
 def _get_finding(vuln_id: UUID, user_id: str) -> Optional[Vulnerability]:
     return Vulnerability.objects.select_related('asset', 'scan', 'project').filter(
-        id=vuln_id,
-        project__owner_id=user_id,
-    ).first() or Vulnerability.objects.select_related('asset', 'scan', 'project').filter(
-        id=vuln_id,
-        project__members__id=user_id,
-    ).first()
+        id=vuln_id
+    ).filter(project_access_q(user_id, relation="project")).first()
 
 
 def _dispatch_validation_task(validation_id: str, engine: str) -> None:

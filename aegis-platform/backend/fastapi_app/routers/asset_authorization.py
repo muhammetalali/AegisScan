@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from django_project.assets.models import Asset, AssetAuthorization
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, project_access_q, is_primary_company_owner
 from ..services.asset_authorization_governance import asset_authorization_version
 from ..services.governed_action_requests import (
     GovernedActionRequestConflict,
@@ -66,10 +66,12 @@ def _submit_authorization_request(
     update: AuthorizationUpdate,
     request_id: UUID,
 ) -> dict:
-    asset = Asset.objects.select_related('project').filter(pk=asset_id, is_active=True).first()
+    asset = Asset.objects.select_related('project').filter(pk=asset_id, is_active=True).filter(
+        project_access_q(user_id, relation="project")
+    ).first()
     if asset is None:
         raise HTTPException(status_code=404, detail='Asset not found')
-    if not is_staff and str(asset.project.owner_id) != str(user_id):
+    if not is_staff and not is_primary_company_owner(user_id) and str(asset.project.owner_id) != str(user_id):
         raise HTTPException(status_code=403, detail='Only the project owner or staff may propose asset network authorization')
     if not update.authorized and update.expires_at:
         raise HTTPException(status_code=422, detail='expires_at is not valid for an authorization revocation request')
@@ -119,7 +121,9 @@ async def set_asset_authorization(asset_id: str, update: AuthorizationUpdate, re
 
 @sync_to_async
 def _authorization_history(asset_id: str, user_id: str):
-    asset = Asset.objects.filter(pk=asset_id).filter(project__owner_id=user_id).first() or Asset.objects.filter(pk=asset_id, project__members__id=user_id).first()
+    asset = Asset.objects.filter(pk=asset_id).filter(
+        project_access_q(user_id, relation="project")
+    ).first()
     if not asset:
         return None
     return list(AssetAuthorization.objects.filter(asset=asset).order_by('-created_at', '-id'))

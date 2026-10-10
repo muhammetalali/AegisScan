@@ -12,10 +12,10 @@ from django.db.models import Count
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..contracts import ComplianceValidationItem
-from ..core.dependencies import get_current_user
-from compliance.models import ComplianceAssessment
-from evidence.models import Evidence, ValidationRun
-from projects.models import Project
+from ..core.dependencies import get_current_user, project_access_q, is_primary_company_owner
+from django_project.compliance.models import ComplianceAssessment
+from django_project.evidence.models import Evidence, ValidationRun
+from django_project.projects.models import Project
 
 router = APIRouter()
 
@@ -33,12 +33,15 @@ def _status(value: str) -> str:
 
 @sync_to_async
 def _get_items(validation_id: str, user_id: str) -> list[ComplianceValidationItem]:
-    validation = ValidationRun.objects.select_related("finding__project").filter(id=validation_id, user_id=user_id).first()
+    validations = ValidationRun.objects.select_related("finding__project").filter(id=validation_id)
+    if not is_primary_company_owner(user_id):
+        validations = validations.filter(user_id=user_id)
+    validation = validations.first()
     if not validation or not validation.finding_id:
         raise HTTPException(status_code=404, detail="Validation not found or has no finding")
 
     project = validation.finding.project
-    if not Project.objects.filter(id=project.id).filter(owner_id=user_id).exists() and not project.members.filter(pk=user_id).exists():
+    if not Project.objects.filter(id=project.id).filter(project_access_q(user_id)).exists():
         raise HTTPException(status_code=404, detail="Project not found or inaccessible")
 
     assessments = (
