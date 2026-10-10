@@ -602,6 +602,30 @@ def _session_contract(
     }
 
 
+def burp_mcp_session_budget_limits() -> tuple[int, int, int]:
+    """Configured finite Burp session ceilings, shared by API and execution.
+
+    Defaults preserve existing behavior. Operators may raise budgets without
+    changing source; storage bounds and finite session expiry remain enforced.
+    """
+    def configured(name: str, default: int, minimum: int, maximum: int) -> int:
+        raw = os.getenv(name, '').strip()
+        if not raw:
+            return default
+        if not raw.isdecimal():
+            raise BurpMCPError(f'{name} must be an integer.')
+        value = int(raw)
+        if not minimum <= value <= maximum:
+            raise BurpMCPError(f'{name} must be between {minimum} and {maximum}.')
+        return value
+
+    return (
+        configured('AEGIS_BURP_MCP_MAX_SESSION_INVOCATIONS', 100, 1, 65535),
+        configured('AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE', 60, 1, 600),
+        configured('AEGIS_BURP_MCP_MAX_TTL_SECONDS', 3600, 60, 86400),
+    )
+
+
 def start_burp_mcp_session(
     *,
     project_id: str,
@@ -623,9 +647,10 @@ def start_burp_mcp_session(
     name = _provider_name(provider_name, 'provider_name')
     version = _provider_name(provider_version, 'provider_version')
     idem = _idempotency(idempotency_key)
-    maximum = _positive_int(max_invocations, field='max_invocations', minimum=1, maximum=100)
-    per_minute = _positive_int(rate_limit_per_minute, field='rate_limit_per_minute', minimum=1, maximum=60)
-    ttl = _positive_int(ttl_seconds, field='ttl_seconds', minimum=60, maximum=3600)
+    invocation_limit, rate_limit, ttl_limit = burp_mcp_session_budget_limits()
+    maximum = _positive_int(max_invocations, field='max_invocations', minimum=1, maximum=invocation_limit)
+    per_minute = _positive_int(rate_limit_per_minute, field='rate_limit_per_minute', minimum=1, maximum=rate_limit)
+    ttl = _positive_int(ttl_seconds, field='ttl_seconds', minimum=60, maximum=ttl_limit)
     requested = sorted({str(item or '').strip() for item in requested_operations if str(item or '').strip()})
     if not requested or len(requested) > len(_OPERATION_ARGUMENTS):
         raise BurpMCPError('requested_operations must contain one or more bounded Burp gateway operations.')

@@ -512,3 +512,55 @@ def test_conflicting_session_idempotency_fails_closed(disposition_fixture):
             requested_operations=['burp.passive_scan'],
             idempotency_key='burp-conflict',
         )
+
+def test_session_budget_limits_are_shared_and_configurable(monkeypatch):
+    from uuid import uuid4
+    from pydantic import ValidationError
+    from fastapi_app.routers.burp_mcp import BurpMCPSessionIn
+    from fastapi_app.services.burp_mcp_gateway import (
+        BurpMCPError, burp_mcp_session_budget_limits,
+    )
+
+    base = {
+        'project_id': uuid4(),
+        'asset_id': uuid4(),
+        'scan_id': uuid4(),
+        'authorization_id': uuid4(),
+        'provider_name': 'burp-provider',
+        'provider_version': '2026.10',
+        'requested_operations': ['burp.site_map'],
+        'idempotency_key': 'stage08-budget-regression',
+    }
+
+    assert burp_mcp_session_budget_limits() == (100, 60, 3600)
+    assert BurpMCPSessionIn(**base).max_invocations == 20
+    with pytest.raises(ValidationError):
+        BurpMCPSessionIn(**base, max_invocations=101)
+
+    monkeypatch.setenv('AEGIS_BURP_MCP_MAX_SESSION_INVOCATIONS', '250')
+    monkeypatch.setenv('AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE', '180')
+    monkeypatch.setenv('AEGIS_BURP_MCP_MAX_TTL_SECONDS', '7200')
+    assert burp_mcp_session_budget_limits() == (250, 180, 7200)
+    model = BurpMCPSessionIn(
+        **base, max_invocations=250, rate_limit_per_minute=180, ttl_seconds=7200,
+    )
+    assert model.max_invocations == 250
+    assert model.rate_limit_per_minute == 180
+    assert model.ttl_seconds == 7200
+    for override in (
+        {'max_invocations': 251},
+        {'rate_limit_per_minute': 181},
+        {'ttl_seconds': 7201},
+    ):
+        with pytest.raises(ValidationError):
+            BurpMCPSessionIn(**(base | override))
+    monkeypatch.setenv('AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE', 'unbounded')
+    with pytest.raises(BurpMCPError):
+        burp_mcp_session_budget_limits()
+    # Pydantic wraps the gateway's ValueError as its request ValidationError.
+    with pytest.raises(ValidationError):
+        BurpMCPSessionIn(**base)
+
+    monkeypatch.setenv('AEGIS_BURP_MCP_MAX_RATE_PER_MINUTE', '700')
+    with pytest.raises(BurpMCPError):
+        burp_mcp_session_budget_limits()
