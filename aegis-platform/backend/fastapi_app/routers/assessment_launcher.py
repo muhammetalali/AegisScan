@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project, ProjectMembership
-from ..core.dependencies import get_current_user
+from ..core.dependencies import get_current_user, is_primary_company_owner
 from ..services.asset_authorization_governance import (
     AssetAuthorizationGovernanceError,
     asset_authorization_version,
@@ -54,11 +54,14 @@ class PrepareAssessmentRequest(BaseModel):
     name: str = Field(default='', max_length=200)
 
 
-def _project_for_launcher(project_id: str, user_id: str, is_staff: bool) -> Project:
+def _project_for_launcher(project_id: str, user_id: str) -> Project:
     project = Project.objects.filter(pk=project_id, status=Project.Status.ACTIVE).first()
     if project is None:
         raise HTTPException(status_code=404, detail='Project not found')
-    if is_staff or str(project.owner_id) == str(user_id):
+    # JWT access tokens carry user_id, not a trustworthy is_staff claim.
+    # The primary owner's company-wide access comes from the canonical live
+    # database identity; delegated admins still require project membership.
+    if str(project.owner_id) == str(user_id) or is_primary_company_owner(user_id):
         return project
     if not ProjectMembership.objects.filter(project=project, user_id=user_id).exists():
         raise HTTPException(status_code=403, detail='Project membership is required.')
@@ -268,7 +271,6 @@ def _prepare_asset(
     *,
     project_id: str,
     user_id: str,
-    is_staff: bool,
     asset_type: str,
     target: str,
     configuration: dict,
@@ -276,7 +278,7 @@ def _prepare_asset(
     name: str,
     tags: list[str],
 ) -> dict:
-    project = _project_for_launcher(project_id, user_id, is_staff)
+    project = _project_for_launcher(project_id, user_id)
     asset = _existing_asset(project, asset_type, target)
     created = False
     if asset is None:
@@ -344,8 +346,7 @@ def _company_user_allows_scan(user_id: str, mode: str) -> bool:
 @router.get('/context')
 async def assessment_context(project_id: str, user=Depends(get_current_user)):
     user_id = str(user.get('user_id'))
-    is_staff = bool(user.get('is_staff'))
-    await sync_to_async(_project_for_launcher)(project_id, user_id, is_staff)
+    await sync_to_async(_project_for_launcher)(project_id, user_id)
 
     suggestions: list[str] = []
     configured = [
@@ -402,7 +403,6 @@ async def prepare_assessment(request: PrepareAssessmentRequest, user=Depends(get
     return await sync_to_async(_prepare_asset)(
         project_id=request.project_id,
         user_id=str(user.get('user_id')),
-        is_staff=bool(user.get('is_staff')),
         asset_type=asset_type,
         target=target,
         configuration=configuration,
@@ -487,8 +487,7 @@ async def prepare_file_assessment(
         result = await sync_to_async(_prepare_asset)(
             project_id=project_id,
             user_id=str(user.get('user_id')),
-            is_staff=bool(user.get('is_staff')),
-            asset_type='file',
+                asset_type='file',
             target=str(scan_path),
             configuration={
                 'path': str(scan_path),

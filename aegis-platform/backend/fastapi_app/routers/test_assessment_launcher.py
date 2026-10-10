@@ -20,6 +20,43 @@ def _dns(address: str):
     return (family, socket.SOCK_STREAM, 6, '', sockaddr)
 
 
+@pytest.mark.django_db
+def test_primary_company_owner_can_prepare_another_users_project_without_membership(settings):
+    from django_project.users.models import User
+    from django_project.projects.models import Project, ProjectMembership
+    primary = User.objects.create_superuser(
+        email='primary-launcher@example.invalid', password='Test-Password-456!',
+    )
+    other = User.objects.create_user(
+        email='project-launcher@example.invalid', password='Test-Password-789!',
+    )
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = primary.email
+    project = Project.objects.create(name='Company-wide authorization', slug='launcher-owner-access', owner=other)
+    assert not ProjectMembership.objects.filter(project=project, user=primary).exists()
+
+    assert launcher._project_for_launcher(str(project.id), str(primary.id)).pk == project.pk
+
+
+@pytest.mark.django_db
+def test_delegated_staff_cannot_bypass_its_project_membership_scope(settings):
+    from django_project.users.models import User, UserRole
+    from django_project.projects.models import Project, ProjectMembership
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = 'separate-owner@example.invalid'
+    project_owner = User.objects.create_user(
+        email='project-owner@example.invalid', password='Test-Password-012!',
+    )
+    delegated = User.objects.create_user(
+        email='delegated-manager@example.invalid', password='Test-Password-345!',
+        is_staff=True, role=UserRole.SUPER_ADMIN, is_superuser=False,
+    )
+    project = Project.objects.create(name='Delegated project policy', slug='launcher-delegated-policy', owner=project_owner)
+    with pytest.raises(HTTPException, match='Project membership is required') as denied:
+        launcher._project_for_launcher(str(project.id), str(delegated.id))
+    assert denied.value.status_code == 403
+    ProjectMembership.objects.create(project=project, user=delegated)
+    assert launcher._project_for_launcher(str(project.id), str(delegated.id)).pk == project.pk
+
+
 def test_launcher_normalizes_network_and_ip_targets():
     asset_type, target, config = launcher._normalize_target('network', '192.168.49.33/24')
     assert asset_type == 'network_range'
