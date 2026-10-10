@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "zero-error-patch-approved-20261001T015545Z",
+  "request_id": "stage08-burp-20261011-20261010223421",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "46bf2bac17b6fb8818c823397251e6db8f0eb390",
-  "requested_at": "2026-10-01T01:55:45Z",
-  "expires_at": "2026-10-02T01:55:45Z"
+  "requested_base_sha": "057bc638aeffcb563710b3d28bf5bac6a1f34b85",
+  "requested_at": "2026-10-10T22:34:21Z",
+  "expires_at": "2026-10-11T18:34:21Z"
 }
