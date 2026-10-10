@@ -82,6 +82,25 @@ def test_launcher_url_defaults_https_and_pins_dns(monkeypatch):
     assert config['resolved_ips'] == ['192.168.49.20']
 
 
+def test_launcher_preserves_request_query_without_expanding_host_scope(monkeypatch):
+    monkeypatch.setattr(
+        launcher.socket, 'getaddrinfo',
+        lambda *_args, **_kwargs: [_dns('192.168.49.20')],
+    )
+    asset_type, target, config = launcher._normalize_target(
+        'url', 'https://internal.example/search?q=red%20team&page=2',
+    )
+    assert asset_type == 'website'
+    assert target == 'https://internal.example/search?q=red%20team&page=2'
+    assert config['url'] == target
+    assert config['resolved_ips'] == ['192.168.49.20']
+
+
+def test_launcher_rejects_url_fragment():
+    with pytest.raises(HTTPException, match='fragments'):
+        launcher._normalize_web_target('https://internal.example/a?x=1#section')
+
+
 def test_launcher_rejects_unresolvable_url(monkeypatch):
     def fail(*_args, **_kwargs):
         raise socket.gaierror('synthetic failure')

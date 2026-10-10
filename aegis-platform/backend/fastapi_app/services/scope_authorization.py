@@ -51,11 +51,13 @@ def _canonical_hostname(value: str, *, require_http_scheme: bool = False) -> str
             raise ScopeAuthorizationError('URL scan targets require http or https')
         if parsed.username is not None or parsed.password is not None:
             raise ScopeAuthorizationError('Target userinfo is not allowed')
-        if parsed.fragment or parsed.query:
-            raise ScopeAuthorizationError('Target fragments and query strings are not allowed')
+        if parsed.fragment or (parsed.query and not require_http_scheme):
+            raise ScopeAuthorizationError('Target fragments and non-URL query strings are not allowed')
         if parsed.path not in {'', '/'} and parsed.scheme == '':
             raise ScopeAuthorizationError('Host targets cannot contain a path')
         host = parsed.hostname
+    except ScopeAuthorizationError:
+        raise
     except ValueError as exc:
         raise ScopeAuthorizationError('Target host syntax is invalid') from exc
     if not host:
@@ -187,7 +189,7 @@ def _enforce_resolved_egress(host: str, *, approved_addresses: tuple[str, ...] =
     return tuple(str(item) for item in resolved)
 
 
-def is_target_authorized(target: str, *, resolve_dns: bool = False) -> bool:
+def is_target_authorized(target: str, *, resolve_dns: bool = False, url: bool = False) -> bool:
     """Match a target against the explicit server-side authorization allow-list.
 
     With ``resolve_dns=True`` every non-global address reached through a FQDN
@@ -212,7 +214,7 @@ def is_target_authorized(target: str, *, resolve_dns: bool = False) -> bool:
         return False
 
     try:
-        host = _canonical_hostname(target)
+        host = _canonical_hostname(target, require_http_scheme=url)
     except ScopeAuthorizationError:
         return False
     try:
@@ -262,6 +264,16 @@ def _approved_snapshot_matches(target: str, approved_target: str | None) -> bool
     if not approved_target:
         return False
 
+    # Query parameters are part of an authorized request URL, not its host.
+    # A bound decision for one query must never silently cover another.
+    if '?' in target or '?' in approved_target:
+        try:
+            _canonical_hostname(target, require_http_scheme=True)
+            _canonical_hostname(approved_target, require_http_scheme=True)
+        except ScopeAuthorizationError:
+            return False
+        return target == approved_target
+
     target_network = _target_network(target)
     approved_network = _target_network(approved_target)
     if target_network is not None or approved_network is not None:
@@ -299,7 +311,7 @@ def require_authorized_target(
         return (str(network_target),) if resolve_dns else ()
 
     host = _canonical_hostname(target, require_http_scheme=url)
-    if not snapshot_authorized and not is_target_authorized(target):
+    if not snapshot_authorized and not is_target_authorized(target, url=url):
         raise ScopeAuthorizationError(
             'Target is outside the server-side authorized scan scope. '
             'Bind a current AssetAuthorization decision or configure AEGIS_LAB_NETWORK_CIDRS.'
