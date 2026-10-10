@@ -22,6 +22,7 @@ interface AuthState {
   logout: () => Promise<void>
   refreshAccessToken: () => Promise<void>
   fetchUser: () => Promise<void>
+  clearSession: () => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
 }
@@ -46,6 +47,10 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
 
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
+  clearSession: () => {
+    setSessionHint(false)
+    set({ user: null, isAuthenticated: false, loading: false, initialized: true, error: null })
+  },
 
   login: async (email, password) => {
     set({ loading: true, error: null })
@@ -56,6 +61,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       set({ user: response.data.user, isAuthenticated: true, loading: false, initialized: true, error: null })
     } catch (error: any) {
       const message = readError(error, 'تعذر تسجيل الدخول')
+      if (error?.response?.status === 401) get().clearSession()
       set({ loading: false, error: message, initialized: true })
       throw error
     }
@@ -65,8 +71,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await api.post('/auth/logout/')
     } finally {
-      setSessionHint(false)
-      set({ user: null, isAuthenticated: false, loading: false, initialized: true, error: null })
+      get().clearSession()
     }
   },
 
@@ -98,20 +103,13 @@ export const initAuth = async () => {
     try {
       await api.get('/auth/csrf/')
       await store.fetchUser()
-    } catch (firstError: any) {
-      if (firstError?.response?.status === 401) {
-        try {
-          await store.refreshAccessToken()
-          await store.fetchUser()
-        } catch (refreshError: any) {
-          if (refreshError?.response?.status === 401) {
-            setSessionHint(false)
-            useAuthStore.setState({ user: null, isAuthenticated: false, error: null })
-          }
-        }
+    } catch (error: any) {
+      // The shared API interceptor already makes one refresh attempt when
+      // /users/me/ returns 401. Repeating it here causes duplicate rotations.
+      if (error?.response?.status === 401) {
+        useAuthStore.getState().clearSession()
       } else if (hasSessionHint()) {
-        // Preserve the session across a transient network/reverse-proxy failure.
-        // The next authenticated API request remains authoritative and can clear the hint on a real 401.
+        // Temporary transport faults are not grounds to discard a session.
         useAuthStore.setState({ isAuthenticated: true })
       }
     } finally {
