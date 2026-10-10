@@ -21,20 +21,15 @@ from ..services.governed_execution_contract import (
     finalize_governed_execution_contract,
 )
 from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
-from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
-from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
+from ..services.scan_orchestrator import (
+    ENGINE_TASKS as _PRIMARY_SCAN_TASKS,
+    run_nmap_scan, run_nuclei_scan, run_masscan_scan, run_semgrep_scan,
+)
 
 router = APIRouter()
-SUPPORTED_ENGINES = {'nmap', 'nuclei', 'masscan', 'semgrep'}
-# One existing-task registry shared by both the manual and asset entrypoints.
-# Queue choice and worker behavior are unchanged; governed capability/Beat
-# dispatchers retain their deliberately separate contracts.
-_PRIMARY_SCAN_TASKS = {
-    'nmap': run_nmap_scan,
-    'nuclei': run_nuclei_scan,
-    'masscan': run_masscan_scan,
-    'semgrep': run_semgrep_scan,
-}
+# A single task registry is shared by the manual scan router and orchestrator.
+# Capability/Beat dispatchers retain their distinct governed execution contracts.
+SUPPORTED_ENGINES = frozenset(_PRIMARY_SCAN_TASKS)
 
 
 def _dispatch_primary_scan(scan_id: str, engine: str):
