@@ -211,6 +211,10 @@ class User(AbstractUser):
     def get_effective_permissions(self) -> list[str]:
         if self.is_superuser:
             return [permission.value for permission in Permission]
+        # The delegable role alone must not turn an old NULL grant field into
+        # every capability. The true owner uses the is_superuser branch above.
+        if self.role == UserRole.SUPER_ADMIN and self.granted_permissions is None:
+            return []
         role_grants = {str(permission) for permission in ROLE_PERMISSIONS.get(self.role, [])}
         if self.granted_permissions is not None:
             role_grants.intersection_update(self.granted_permissions)

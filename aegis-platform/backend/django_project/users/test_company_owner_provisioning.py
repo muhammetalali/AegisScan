@@ -182,6 +182,24 @@ def test_owner_delegates_scoped_super_admin_without_delegating_company_ownership
 
 
 @pytest.mark.django_db
+def test_existing_nonowner_super_admin_with_null_grants_is_not_implicitly_unrestricted(company_owner):
+    legacy = User.objects.create_user(
+        email='preexisting-super-admin@example.invalid',
+        password='Strong-Legacy-Password!2026',
+        role=UserRole.SUPER_ADMIN,
+    )
+    assert legacy.granted_permissions is None
+    assert not legacy.is_superuser
+    assert not legacy.is_company_owner
+    assert legacy.get_effective_permissions() == []
+    assert legacy.has_permission('scan.create') is False
+    assert legacy.can_scan_type('url') is False
+    # The established company owner remains unrestricted.
+    assert company_owner.is_company_owner
+    assert company_owner.has_permission('scan.create') is True
+
+
+@pytest.mark.django_db
 def test_promoting_legacy_admin_with_null_grants_cannot_implicitly_grant_everything(company_owner):
     legacy = User.objects.create_user(
         email='legacy-delegate@example.invalid',
