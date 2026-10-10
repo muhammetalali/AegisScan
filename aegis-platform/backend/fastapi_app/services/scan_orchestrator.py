@@ -8,36 +8,51 @@ from asgiref.sync import sync_to_async
 from ..core.config import settings
 from ..core.dependencies import project_access_q
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
+from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
 from ..services.websocket_manager import WebSocketManager
 from ..services.enterprise_gap_closure import checkpoint_scan
 from ..services.authorization_guard import require_bound_scan_authorization
 from ..services.scan_state_machine import prepare_restart, transition_scan
+from ..services.capability_registry import CAPABILITIES
 
-ENGINES = [
-    {'name': 'nmap', 'display_name': 'Nmap Service Discovery', 'category': 'network', 'order': 1, 'timeout': 300, 'execution': 'real'},
-    {'name': 'nuclei', 'display_name': 'Nuclei Web Security Scanner', 'category': 'web', 'order': 2, 'timeout': 600, 'execution': 'real'},
-    {'name': 'web', 'display_name': 'Web Scanner Provider', 'category': 'web', 'order': 3, 'timeout': 600, 'execution': 'provider-required'},
-    {'name': 'ad', 'display_name': 'Active Directory Scanner Provider', 'category': 'active_directory', 'order': 4, 'timeout': 600, 'execution': 'provider-required'},
-    {'name': 'exploitation', 'display_name': 'Safe Exploitation Assessment', 'category': 'exploitation', 'order': 5, 'timeout': 900, 'execution': 'non-destructive-only'},
-]
-
+# Bind the four real, registered specialized scan engines to their existing
+# Celery tasks.  The manual scan router imports this mapping rather than
+# maintaining a second dispatch registry.
 ENGINE_TASKS = {
     'nmap': run_nmap_scan,
     'nuclei': run_nuclei_scan,
+    'masscan': run_masscan_scan,
+    'semgrep': run_semgrep_scan,
 }
+
+# Fail closed if a specialized capability is added/retired without a real task,
+# or if a task has no corresponding governed capability in the canonical registry.
+_SPECIALIZED_CAPABILITIES = {
+    item.tool: item for item in CAPABILITIES.values() if item.adapter == 'specialized'
+}
+if set(ENGINE_TASKS) != set(_SPECIALIZED_CAPABILITIES):
+    raise RuntimeError('Primary engine tasks must match the canonical specialized capability registry')
+
+ENGINES = [
+    {
+        'name': name, 'display_name': label, 'category': category,
+        'order': index, 'timeout': timeout, 'execution': 'real',
+        'capability_id': _SPECIALIZED_CAPABILITIES[name].id,
+    }
+    for index, (name, label, category, timeout) in enumerate((
+        ('nmap', 'Nmap Service Discovery', 'network', 300),
+        ('nuclei', 'Nuclei Web Security Scanner', 'web', 600),
+        ('masscan', 'Masscan Network Discovery', 'network', 600),
+        ('semgrep', 'Semgrep Source Code Analysis', 'code', 600),
+    ), start=1)
+]
 
 class ScanOrchestrator:
     """Single orchestration surface for authorized security assessment jobs."""
 
     def __init__(self, websocket_manager: WebSocketManager):
         self.websocket_manager = websocket_manager
-        self.engine_status = {
-            'nmap': 'active',
-            'nuclei': 'active',
-            'web': 'inactive',
-            'ad': 'inactive',
-            'exploitation': 'inactive',
-        }
+        self.engine_status = {name: 'active' for name in ENGINE_TASKS}
         self.running = False
         self.max_concurrent = settings.MAX_CONCURRENT_SCANS
 

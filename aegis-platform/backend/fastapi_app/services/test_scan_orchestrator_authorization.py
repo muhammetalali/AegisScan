@@ -157,3 +157,32 @@ def test_primary_owner_can_transition_and_prepare_restart_without_project_member
     assert cancelled['status'] == Scan.Status.CANCELLED
     restarted = state_machine.prepare_restart(scan_id=str(scan.pk), user_id=str(owner.pk))
     assert restarted['status'] == 'restart_ready'
+
+
+@pytest.mark.asyncio
+async def test_primary_engine_list_equals_supported_registered_tasks():
+    from fastapi_app.routers.scans import SUPPORTED_ENGINES, _PRIMARY_SCAN_TASKS
+    from fastapi_app.services.capability_registry import CAPABILITIES
+
+    registry_tools = {
+        capability.tool for capability in CAPABILITIES.values()
+        if capability.adapter == 'specialized'
+    }
+    entries = await module.ScanOrchestrator(websocket_manager=None).list_engines()
+    listed = {entry['name'] for entry in entries}
+    assert len(entries) == len(listed), 'duplicate primary engine listings'
+    assert listed == registry_tools == SUPPORTED_ENGINES == set(_PRIMARY_SCAN_TASKS)
+    assert listed == set(module.ENGINE_TASKS)
+    assert all(entry['execution'] == 'real' for entry in entries)
+    assert all(entry['status'] == 'active' for entry in entries)
+    assert all(entry['name'] in _PRIMARY_SCAN_TASKS for entry in entries)
+
+
+
+def test_manual_and_orchestrated_primary_dispatch_share_existing_real_tasks():
+    from fastapi_app.routers import scans
+
+    assert scans._PRIMARY_SCAN_TASKS is module.ENGINE_TASKS
+    assert set(module.ENGINE_TASKS) == {'nmap', 'nuclei', 'masscan', 'semgrep'}
+    assert module.ENGINE_TASKS['masscan'] is scans._PRIMARY_SCAN_TASKS['masscan']
+    assert module.ENGINE_TASKS['semgrep'] is scans._PRIMARY_SCAN_TASKS['semgrep']
