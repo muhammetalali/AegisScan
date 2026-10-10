@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from fastapi_app.core.dependencies import project_access_q
-
 import base64
 import hashlib
 import hmac
@@ -15,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid5
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from django_project.assets.models import Asset, AssetAuthorization
@@ -137,7 +136,7 @@ def _callback_contract(session: GovernedOASTSession) -> dict[str, str]:
 def _project_access(project_id: str, user_id: str) -> Project | None:
     return (
         Project.objects.filter(pk=project_id)
-        .filter(project_access_q(user_id))
+        .filter(Q(owner_id=user_id) | Q(members__id=user_id))
         .distinct()
         .first()
     )
@@ -720,7 +719,7 @@ def get_oast_session(*, session_id: str, user_id: str) -> dict[str, Any]:
     session = (
         GovernedOASTSession.objects.select_related('project')
         .filter(pk=session_uuid)
-        .filter(project_access_q(user_id, relation='project'))
+        .filter(Q(project__owner_id=user_id) | Q(project__members__id=user_id))
         .distinct()
         .first()
     )
