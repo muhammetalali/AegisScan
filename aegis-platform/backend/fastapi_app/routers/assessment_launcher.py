@@ -80,8 +80,8 @@ def _normalize_web_target(value: str) -> str:
             raise HTTPException(status_code=422, detail='Only HTTP and HTTPS targets are supported')
         if parsed.username is not None or parsed.password is not None:
             raise HTTPException(status_code=422, detail='Target credentials must not be embedded in the URL')
-        if parsed.query or parsed.fragment:
-            raise HTTPException(status_code=422, detail='Use a base URL without query strings or fragments')
+        if parsed.fragment:
+            raise HTTPException(status_code=422, detail='URL fragments are not supported for scanning')
         if not parsed.hostname:
             raise HTTPException(status_code=422, detail='Target hostname is missing')
         host = parsed.hostname.encode('idna').decode('ascii').lower().rstrip('.')
@@ -94,7 +94,7 @@ def _normalize_web_target(value: str) -> str:
     if port is not None:
         netloc = f'{netloc}:{port}'
     path = parsed.path or ''
-    return urlunsplit((parsed.scheme.lower(), netloc, path, '', ''))
+    return urlunsplit((parsed.scheme.lower(), netloc, path, parsed.query, ''))
 
 
 def _normalize_target(mode: TargetMode, value: str) -> tuple[str, str, dict]:

@@ -50,6 +50,32 @@ def test_invalid_configured_wildcard_fails_closed(monkeypatch):
     assert scope.is_target_authorized('api.example.com') is False
 
 
+def test_url_query_requires_exact_bound_snapshot(monkeypatch):
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    approved = 'https://internal.example/api?item=1'
+    assert scope.require_authorized_target(
+        approved, url=True, approved_target=approved,
+    ) == ()
+    with pytest.raises(scope.ScopeAuthorizationError, match='outside'):
+        scope.require_authorized_target(
+            'https://internal.example/api?item=2',
+            url=True, approved_target=approved,
+        )
+    with pytest.raises(scope.ScopeAuthorizationError, match='fragments'):
+        scope.require_authorized_target(
+            approved + '#frag', url=True, approved_target=approved,
+        )
+
+
+def test_url_query_matches_existing_static_host_scope(monkeypatch):
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'internal.example')
+    assert scope.require_authorized_target(
+        'https://internal.example/path?item=1', url=True,
+    ) == ()
+
+
 def test_url_scope_requires_http(monkeypatch):
     monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'example.com')
     with pytest.raises(scope.ScopeAuthorizationError):
