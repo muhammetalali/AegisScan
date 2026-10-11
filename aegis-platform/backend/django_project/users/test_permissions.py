@@ -3,7 +3,7 @@ from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from django_project.users.models import Team, TeamMembership, User, UserRole
-from django_project.users.permissions import HasPermission, IsProjectAdmin, IsProjectMember, IsTeamAdmin
+from django_project.users.permissions import CompanyOwnerControlsAccounts, HasPermission, IsProjectAdmin, IsProjectMember, IsTeamAdmin
 from django_project.users.views import TeamViewSet
 from django_project.projects.models import Project, ProjectMembership
 
@@ -161,3 +161,28 @@ def test_project_membership_is_tenant_boundary():
 
     assert IsProjectMember().has_permission(request, view) is False
     assert IsProjectAdmin().has_permission(request, view) is False
+
+
+@pytest.mark.django_db
+def test_delegated_employee_management_respects_action_grants():
+    admin = User.objects.create_user(
+        email='delegated-admin@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Delegated', last_name='Admin', role=UserRole.ADMIN,
+        granted_permissions=['user.create', 'user.update'],
+    )
+    viewer = User.objects.create_user(
+        email='delegated-viewer@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Delegated', last_name='Viewer', role=UserRole.VIEWER,
+    )
+    factory = APIRequestFactory()
+    permission = CompanyOwnerControlsAccounts()
+    for user, expected in ((admin, True), (viewer, False)):
+        request = factory.post('/api/v1/users/')
+        force_authenticate(request, user=user)
+        request = Request(request)
+        view = type('V', (), {'action': 'create'})()
+        assert permission.has_permission(request, view) is expected
+        view.action = 'update'
+        assert permission.has_permission(request, view) is expected
+        view.action = 'destroy'
+        assert permission.has_permission(request, view) is False
