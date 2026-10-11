@@ -67,6 +67,16 @@ class UserCreateSerializer(serializers.ModelSerializer):
         grants = attrs.get('granted_permissions', [])
         if not set(grants).issubset(allowed):
             raise serializers.ValidationError({'granted_permissions': 'Selected permissions exceed role limits.'})
+        actor = self.context.get('request').user if self.context.get('request') else None
+        if actor and not actor.is_company_owner:
+            if role == UserRole.SUPER_ADMIN:
+                raise serializers.ValidationError({'role': 'Only the primary owner can assign the super admin role.'})
+            if role != UserRole.VIEWER and not actor.has_permission('user.manage_roles'):
+                raise serializers.ValidationError({'role': 'Role management permission required.'})
+            if grants and not actor.has_permission('user.manage_permissions'):
+                raise serializers.ValidationError({'granted_permissions': 'Permission management grant required.'})
+            if not set(grants).issubset(set(actor.get_effective_permissions())):
+                raise serializers.ValidationError({'granted_permissions': 'Cannot delegate permissions you do not hold.'})
         return attrs
 
     def create(self, validated_data):
@@ -98,6 +108,17 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         grants = attrs.get('granted_permissions', self.instance.granted_permissions)
         if grants is not None and not set(grants).issubset({str(p) for p in ROLE_PERMISSIONS[role]}):
             raise serializers.ValidationError({'granted_permissions': 'Selected permissions exceed role limits.'})
+        actor = self.context.get('request').user if self.context.get('request') else None
+        if actor and not actor.is_company_owner:
+            if 'role' in attrs and attrs['role'] != self.instance.role and not actor.has_permission('user.manage_roles'):
+                raise serializers.ValidationError({'role': 'Role management permission required.'})
+            if role == UserRole.SUPER_ADMIN and role != self.instance.role:
+                raise serializers.ValidationError({'role': 'Only the primary owner can assign the super admin role.'})
+            if 'granted_permissions' in attrs:
+                if not actor.has_permission('user.manage_permissions'):
+                    raise serializers.ValidationError({'granted_permissions': 'Permission management grant required.'})
+                if not set(attrs['granted_permissions']).issubset(set(actor.get_effective_permissions())):
+                    raise serializers.ValidationError({'granted_permissions': 'Cannot delegate permissions you do not hold.'})
         return attrs
 
 
