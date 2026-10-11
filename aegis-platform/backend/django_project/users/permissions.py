@@ -73,30 +73,35 @@ class HasPermission(permissions.BasePermission):
         return True
 
 
-class CompanyOwnerControlsAccounts(permissions.BasePermission):
-    """Only the established company owner can provision or change employee accounts."""
+def is_privileged_account(user):
+    """One definition of accounts protected from delegated administration."""
+    from .models import UserRole
+    return bool(user.is_superuser or user.role == UserRole.SUPER_ADMIN)
 
-    message = 'Only the primary company owner can manage employee accounts.'
-    protected_actions = frozenset({
-        'create', 'update', 'partial_update', 'destroy', 'activate',
-        'deactivate', 'set_password',
-    })
+
+def can_manage_account(actor, target):
+    """The primary owner may administer privileged accounts; delegates may not."""
+    return bool(actor and actor.is_authenticated and
+                (actor.is_company_owner or not is_privileged_account(target)))
+
+
+class CompanyOwnerControlsAccounts(permissions.BasePermission):
+    """Honor existing RBAC grants for employee account actions."""
+    message = 'Employee account management permission required.'
+    action_permissions = {
+        'create': 'user.create', 'update': 'user.update',
+        'partial_update': 'user.update', 'destroy': 'user.delete',
+        'activate': 'user.update', 'deactivate': 'user.update',
+        'set_password': 'user.update',
+    }
 
     def has_permission(self, request, view):
-        if getattr(view, 'action', None) in self.protected_actions:
-            return bool(
-                request.user and request.user.is_authenticated
-                and (request.user.is_company_owner or request.user.has_permission({
-                    'create': 'user.create',
-                    'update': 'user.update',
-                    'partial_update': 'user.update',
-                    'destroy': 'user.delete',
-                    'activate': 'user.update',
-                    'deactivate': 'user.update',
-                    'set_password': 'user.update',
-                }[view.action]))
-            )
-        return True
+        required = self.action_permissions.get(getattr(view, 'action', None))
+        if not required:
+            return True
+        user = request.user
+        return bool(user and user.is_authenticated and
+                    (user.is_company_owner or user.has_permission(required)))
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
