@@ -507,6 +507,11 @@ def _s3_client(args: argparse.Namespace):
         verify=verify,
         config=Config(
             signature_version="s3v4",
+            # S3-compatible B2 Object Lock requires a concrete checksum header.
+            # Avoid botocore default aws-chunked/trailer checksums; _push binds
+            # an explicit SHA-256 to both the encrypted payload and manifest.
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
             connect_timeout=10,
             read_timeout=60,
             retries={"max_attempts": 3, "mode": "standard"},
@@ -613,6 +618,11 @@ def _push(args: argparse.Namespace) -> dict[str, Any]:
             object_key,
             ExtraArgs={
                 "ContentType": "application/octet-stream",
+                # Require byte-for-byte integrity on versioned Object Lock PUT.
+                # Keep upload_file multipart capability for larger backups.
+                "ChecksumSHA256": base64.b64encode(
+                    bytes.fromhex(envelope["cipher_sha256"])
+                ).decode("ascii"),
                 "Metadata": {
                     "aegis-schema": SCHEMA,
                     "aegis-backup-id": backup_id,
@@ -657,6 +667,9 @@ def _push(args: argparse.Namespace) -> dict[str, Any]:
             Key=manifest_key,
             Body=manifest_bytes,
             ContentType="application/json",
+            ChecksumSHA256=base64.b64encode(
+                hashlib.sha256(manifest_bytes).digest()
+            ).decode("ascii"),
             Metadata={
                 "aegis-schema": SCHEMA,
                 "aegis-backup-id": backup_id,
