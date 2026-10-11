@@ -1,4 +1,5 @@
 import pytest
+from django.test import override_settings
 from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory, force_authenticate
 
@@ -161,3 +162,42 @@ def test_project_membership_is_tenant_boundary():
 
     assert IsProjectMember().has_permission(request, view) is False
     assert IsProjectAdmin().has_permission(request, view) is False
+
+
+@override_settings(AEGIS_PRIMARY_OWNER_EMAIL='primary-owner@example.invalid')
+@pytest.mark.django_db
+def test_primary_owner_can_access_existing_project_without_membership():
+    owner = User.objects.create_user(
+        email='primary-owner@example.invalid',
+        password='Strong-Test-Password-123!',
+        first_name='Primary',
+        last_name='Owner',
+        is_superuser=True,
+        is_staff=True,
+    )
+    employee = User.objects.create_user(
+        email='project-employee@example.invalid',
+        password='Strong-Test-Password-123!',
+        first_name='Project',
+        last_name='Employee',
+    )
+    project = Project.objects.create(name='Owner Access Project', slug='owner-access-project', owner=employee)
+    assert not ProjectMembership.objects.filter(project=project, user=owner).exists()
+    view = type('V', (), {'kwargs': {'project_pk': str(project.pk)}})()
+    factory = APIRequestFactory()
+
+    owner_request = factory.get(f'/api/v1/projects/{project.pk}/')
+    force_authenticate(owner_request, user=owner)
+    owner_request = Request(owner_request)
+    assert IsProjectMember().has_permission(owner_request, view) is True
+    assert IsProjectAdmin().has_permission(owner_request, view) is True
+
+    employee_request = factory.get(f'/api/v1/projects/{project.pk}/')
+    force_authenticate(employee_request, user=employee)
+    employee_request = Request(employee_request)
+    assert IsProjectMember().has_permission(employee_request, view) is False
+    assert IsProjectAdmin().has_permission(employee_request, view) is False
+
+    unscoped_view = type('V', (), {'kwargs': {}})()
+    assert IsProjectMember().has_permission(owner_request, unscoped_view) is False
+    assert IsProjectAdmin().has_permission(owner_request, unscoped_view) is False
