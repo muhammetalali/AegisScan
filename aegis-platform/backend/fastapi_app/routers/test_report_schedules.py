@@ -40,6 +40,7 @@ from fastapi_app.routers.reports import (
     share_report,
 )
 from starlette.routing import Match
+from starlette.responses import FileResponse as ASGIFileResponse
 
 
 @pytest.fixture
@@ -475,6 +476,37 @@ def test_report_retention_setting_controls_new_artifact_expiry(report_projects, 
     report = DataExport.objects.get(pk=result["report_id"])
     assert before+timedelta(days=31) <= report.expires_at <= django_timezone.now()+timedelta(days=31)
 
+
+
+@pytest.mark.django_db
+def test_completed_report_download_is_asgi_file_response_for_owner_and_share(report_projects, settings, tmp_path):
+    owner, _, project, _ = report_projects
+    settings.MEDIA_ROOT = tmp_path
+    schedule = async_to_sync(_create_report_schedules)(ReportScheduleCreate(
+        project_id=str(project.id), template_id="full", frequency="daily",
+        recipients=[owner.email], formats=["pdf"],
+    ), str(owner.id))[0]
+    created = execute_report_schedule.run(str(schedule.id), delivery_id="report-asgi-download-acceptance")
+    report = DataExport.objects.get(pk=created["report_id"])
+    assert report.status == DataExport.Status.COMPLETED
+    assert report.file.name.endswith(".pdf")
+
+    response = async_to_sync(download_report)(str(report.id), {"user_id": str(owner.id)})
+    assert isinstance(response, ASGIFileResponse)
+    assert str(response.path) == str(report.file.path)
+    assert response.media_type == "application/octet-stream"
+    report.refresh_from_db()
+    assert report.downloaded_at is not None
+
+    shared_token = dumps({
+        "report_id": str(report.id), "permission": "download",
+        "recipient": owner.email,
+        "expires_at": (django_timezone.now() + timedelta(days=1)).timestamp(),
+    }, salt="aegisscan-report-share")
+    shared_response = async_to_sync(download_shared_report)(shared_token)
+    assert isinstance(shared_response, ASGIFileResponse)
+    assert str(shared_response.path) == str(report.file.path)
+    assert shared_response.media_type == "application/octet-stream"
 
 @pytest.mark.django_db
 def test_expired_report_and_expired_share_token_are_denied(report_projects, settings, tmp_path):
