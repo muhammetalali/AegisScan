@@ -84,7 +84,18 @@ class CompanyOwnerControlsAccounts(permissions.BasePermission):
 
     def has_permission(self, request, view):
         if getattr(view, 'action', None) in self.protected_actions:
-            return bool(request.user and request.user.is_authenticated and request.user.is_company_owner)
+            return bool(
+                request.user and request.user.is_authenticated
+                and (request.user.is_company_owner or request.user.has_permission({
+                    'create': 'user.create',
+                    'update': 'user.update',
+                    'partial_update': 'user.update',
+                    'destroy': 'user.delete',
+                    'activate': 'user.update',
+                    'deactivate': 'user.update',
+                    'set_password': 'user.update',
+                }[view.action]))
+            )
         return True
 
 
