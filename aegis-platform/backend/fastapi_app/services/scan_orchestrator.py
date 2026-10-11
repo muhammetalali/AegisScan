@@ -5,7 +5,6 @@ from typing import Dict, List
 
 from asgiref.sync import sync_to_async
 
-from ..core.config import settings
 from ..core.dependencies import project_access_q
 from ..tasks.security_scan import run_nmap_scan, run_nuclei_scan
 from ..tasks.advanced_scans import run_masscan_scan, run_semgrep_scan
@@ -54,7 +53,6 @@ class ScanOrchestrator:
         self.websocket_manager = websocket_manager
         self.engine_status = {name: 'active' for name in ENGINE_TASKS}
         self.running = False
-        self.max_concurrent = settings.MAX_CONCURRENT_SCANS
 
     async def start(self):
         self.running = True
