@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from .permissions import can_manage_account
 from django.contrib.auth import get_user_model
 from .models import User, Team, TeamMembership, APIKey, UserSession, LoginAttempt, UserRole, Permission, ROLE_PERMISSIONS
 
@@ -110,7 +111,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'granted_permissions': 'Selected permissions exceed role limits.'})
         actor = self.context.get('request').user if self.context.get('request') else None
         if actor and not actor.is_company_owner:
-            if self.instance.role == UserRole.SUPER_ADMIN or self.instance.is_superuser:
+            if not can_manage_account(actor, self.instance):
                 raise serializers.ValidationError({'role': 'Only the primary owner can manage privileged accounts.'})
             if 'role' in attrs and attrs['role'] != self.instance.role and not actor.has_permission('user.manage_roles'):
                 raise serializers.ValidationError({'role': 'Role management permission required.'})
