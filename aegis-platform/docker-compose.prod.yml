@@ -45,6 +45,8 @@ services:
     env_file: !reset []
     ports: !reset []
     volumes: !override
+      # Existing shared Django/Nginx media volume, without widening container privileges.
+      - media_data:/app/media
       - semgrep_workspace:/var/lib/aegis-semgrep
     read_only: true
     tmpfs: [/tmp]
