@@ -4,6 +4,7 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from django_project.users.models import Team, TeamMembership, User, UserRole
 from django_project.users.permissions import CompanyOwnerControlsAccounts, HasPermission, IsProjectAdmin, IsProjectMember, IsTeamAdmin
+from django_project.users.serializers import UserCreateSerializer, UserUpdateSerializer
 from django_project.users.views import TeamViewSet
 from django_project.projects.models import Project, ProjectMembership
 
@@ -186,3 +187,30 @@ def test_delegated_employee_management_respects_action_grants():
         assert permission.has_permission(request, view) is expected
         view.action = 'destroy'
         assert permission.has_permission(request, view) is False
+
+
+@pytest.mark.django_db
+def test_delegated_admin_cannot_escalate_role_or_permissions():
+    admin = User.objects.create_user(
+        email='limited-delegate@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Limited', last_name='Delegate', role=UserRole.ADMIN,
+        granted_permissions=['user.create', 'user.update'],
+    )
+    employee = User.objects.create_user(
+        email='limited-employee@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Limited', last_name='Employee', role=UserRole.VIEWER,
+    )
+    request = APIRequestFactory().post('/api/v1/users/')
+    force_authenticate(request, user=admin)
+    request = Request(request)
+    create = UserCreateSerializer(data={
+        'email': 'escalated@example.invalid', 'first_name': 'Escalated',
+        'last_name': 'Account', 'password': 'Strong-Test-Password-123!',
+        'password_confirm': 'Strong-Test-Password-123!',
+        'role': UserRole.SUPER_ADMIN, 'granted_permissions': ['system.settings'],
+    }, context={'request': request})
+    assert not create.is_valid()
+    update = UserUpdateSerializer(employee, data={
+        'role': UserRole.SUPER_ADMIN, 'granted_permissions': ['system.settings'],
+    }, partial=True, context={'request': request})
+    assert not update.is_valid()
