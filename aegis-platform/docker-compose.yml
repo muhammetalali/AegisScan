@@ -105,7 +105,7 @@ services:
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-celery-worker
     restart: unless-stopped
-    command: celery -A fastapi_app.celery_app worker -l info -c 4 -Q default
+    command: celery -A fastapi_app.celery_app worker -l info -c ${AEGIS_CELERY_WORKER_CONCURRENCY:-4} -Q default
     volumes: [./backend:/app]
     env_file: ./backend/.env
     security_opt: [no-new-privileges:true]

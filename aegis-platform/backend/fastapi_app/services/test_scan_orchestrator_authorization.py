@@ -186,3 +186,15 @@ def test_manual_and_orchestrated_primary_dispatch_share_existing_real_tasks():
     assert set(module.ENGINE_TASKS) == {'nmap', 'nuclei', 'masscan', 'semgrep'}
     assert module.ENGINE_TASKS['masscan'] is scans._PRIMARY_SCAN_TASKS['masscan']
     assert module.ENGINE_TASKS['semgrep'] is scans._PRIMARY_SCAN_TASKS['semgrep']
+
+
+def test_stage09_scan_orchestrator_has_no_phantom_worker_capacity_setting():
+    """Scanner concurrency belongs to the existing Celery scanner worker, not API state."""
+    from fastapi_app.core.config import settings as api_settings
+
+    orchestrator = module.ScanOrchestrator(websocket_manager=None)
+    assert not hasattr(orchestrator, 'max_concurrent')
+    assert not hasattr(api_settings, 'MAX_CONCURRENT_SCANS')
+    assert not hasattr(api_settings, 'DEFAULT_SCAN_TIMEOUT')
+    assert not hasattr(api_settings, 'ENGINE_TIMEOUT')
+    assert set(orchestrator.engine_status) == set(module.ENGINE_TASKS)

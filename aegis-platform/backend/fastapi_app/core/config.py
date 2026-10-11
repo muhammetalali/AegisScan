@@ -39,9 +39,6 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
     CELERY_RESULT_BACKEND: str = getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
     CELERY_VISIBILITY_TIMEOUT_SECONDS: int = int(getenv("CELERY_VISIBILITY_TIMEOUT_SECONDS", "3600"))
-    MAX_CONCURRENT_SCANS: int = 5
-    DEFAULT_SCAN_TIMEOUT: int = 3600
-    ENGINE_TIMEOUT: int = 300
     MAX_FILE_SIZE: int = 100 * 1024 * 1024
     UPLOAD_DIR: str = "/tmp/aegis_uploads"
     PROMETHEUS_ENABLED: bool = True
