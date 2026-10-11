@@ -8,12 +8,52 @@ from fastapi import HTTPException
 from fastapi_app.routers import system
 
 
-def test_unsupported_admin_operation_is_explicit_501():
-    for operation in ('Settings management', 'Backup management', 'Maintenance window management', 'Feature flag management'):
-        with pytest.raises(HTTPException) as exc:
-            system._unsupported(operation)
-        assert exc.value.status_code == 501
-        assert operation in str(exc.value.detail)
+def test_unsupported_mutation_routes_are_not_advertised():
+    # No fake button may suggest a backup/restore/flag write happened.
+    advertised = {(route.path, method) for route in system.router.routes
+                  for method in getattr(route, 'methods', [])}
+    for path in ('/settings', '/backups', '/maintenance-windows', '/feature-flags'):
+        assert (path, 'GET') in advertised
+    assert ('/settings/{key}', 'GET') in advertised
+    assert ('/settings/{key}', 'PATCH') not in advertised
+    assert ('/backups', 'POST') not in advertised
+    assert ('/backups/{backup_id}/restore', 'POST') not in advertised
+    assert ('/maintenance-windows', 'POST') not in advertised
+    assert ('/feature-flags', 'POST') not in advertised
+
+
+def test_sensitive_system_settings_are_never_returned():
+    from types import SimpleNamespace
+    base = {
+        'id': '123', 'key': 'access_token', 'name': 'Access token',
+        'description': '', 'category': 'security',
+        'value': {'token': 'must-not-leak'}, 'value_type': 'json',
+        'requires_restart': False,
+    }
+    sensitive = system._setting_response(SimpleNamespace(**base, is_sensitive=True))
+    assert sensitive.value == {}
+    public = system._setting_response(SimpleNamespace(**{**base, 'key': 'worker_limit', 'value': 4}, is_sensitive=False))
+    assert public.value == {'value': 4}
+
+
+@pytest.mark.asyncio
+async def test_system_management_reads_reuse_existing_orm_readers(monkeypatch):
+    async def records(*args):
+        return [{'id': 'reused-db-record'}]
+    async def absent(*args):
+        return None
+    monkeypatch.setattr(system, '_read_settings', records)
+    monkeypatch.setattr(system, '_read_backups', records)
+    monkeypatch.setattr(system, '_read_maintenance_windows', records)
+    monkeypatch.setattr(system, '_read_feature_flags', records)
+    monkeypatch.setattr(system, '_read_setting', absent)
+    assert await system.list_settings() == [{'id': 'reused-db-record'}]
+    assert await system.list_backups() == [{'id': 'reused-db-record'}]
+    assert await system.list_maintenance_windows() == [{'id': 'reused-db-record'}]
+    assert await system.list_feature_flags() == [{'id': 'reused-db-record'}]
+    with pytest.raises(HTTPException) as exc:
+        await system.get_setting('missing')
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.asyncio
