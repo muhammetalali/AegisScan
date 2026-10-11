@@ -214,3 +214,22 @@ def test_delegated_admin_cannot_escalate_role_or_permissions():
         'role': UserRole.SUPER_ADMIN, 'granted_permissions': ['system.settings'],
     }, partial=True, context={'request': request})
     assert not update.is_valid()
+
+
+@pytest.mark.django_db
+def test_delegated_admin_cannot_modify_existing_privileged_account():
+    admin = User.objects.create_user(
+        email='role-delegate@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Role', last_name='Delegate', role=UserRole.ADMIN,
+        granted_permissions=['user.update', 'user.manage_roles', 'user.manage_permissions'],
+    )
+    privileged = User.objects.create_user(
+        email='existing-privileged@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Existing', last_name='Privileged', role=UserRole.SUPER_ADMIN,
+        granted_permissions=[],
+    )
+    request = APIRequestFactory().patch('/api/v1/users/')
+    force_authenticate(request, user=admin)
+    serializer = UserUpdateSerializer(privileged, data={'first_name': 'Changed'},
+                                      partial=True, context={'request': Request(request)})
+    assert not serializer.is_valid()
