@@ -9,8 +9,11 @@ from urllib.parse import urlparse
 import psutil
 import redis
 from celery import current_app as celery_app
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query, Depends
 from pydantic import BaseModel
+from asgiref.sync import sync_to_async
+
+from ..core.dependencies import require_permission
 
 import requests
 
@@ -27,10 +30,6 @@ class SettingResponse(BaseModel):
     value_type: str
     is_sensitive: bool
     requires_restart: bool
-
-
-class SettingUpdate(BaseModel):
-    value: dict
 
 
 class MetricResponse(BaseModel):
@@ -60,13 +59,6 @@ class BackupResponse(BaseModel):
     file_size: int
     created_at: str
     completed_at: Optional[str] = None
-
-
-class BackupCreate(BaseModel):
-    name: str
-    backup_type: str
-    storage: str
-    retention_days: int = 30
 
 
 def _now() -> str:
@@ -176,26 +168,46 @@ def _service(name: str, result: tuple[str, str, Optional[int], float, Optional[s
     )
 
 
-def _unsupported(operation: str) -> None:
-    raise HTTPException(status_code=501, detail=f'{operation} is not implemented; no server-side capability is available')
+def _setting_response(obj) -> SettingResponse:
+    # Never disclose stored credentials even to settings administrators.
+    value = {} if obj.is_sensitive or obj.value_type == 'password' else obj.value
+    return SettingResponse(
+        id=str(obj.id), key=obj.key, name=obj.name, description=obj.description,
+        category=obj.category,
+        value=value if isinstance(value, dict) else {'value': value},
+        value_type=obj.value_type, is_sensitive=obj.is_sensitive,
+        requires_restart=obj.requires_restart,
+    )
+
+
+@sync_to_async
+def _read_settings(category: Optional[str] = None) -> List[SettingResponse]:
+    from django_project.system.models import SystemSettings
+    records = SystemSettings.objects.order_by('category', 'order', 'key')
+    if category:
+        records = records.filter(category=category)
+    return [_setting_response(obj) for obj in records[:500]]
+
+
+@sync_to_async
+def _read_setting(key: str) -> SettingResponse | None:
+    from django_project.system.models import SystemSettings
+    obj = SystemSettings.objects.filter(key=key).first()
+    return _setting_response(obj) if obj else None
 
 
 @router.get('/settings', response_model=List[SettingResponse])
-async def list_settings(category: Optional[str] = None):
-    del category
-    _unsupported('Settings management')
+async def list_settings(category: Optional[str] = None, user=Depends(require_permission('system.settings'))):
+    return await _read_settings(category)
 
 
 @router.get('/settings/{key}', response_model=SettingResponse)
-async def get_setting(key: str):
-    del key
-    _unsupported('Settings management')
-
-
-@router.patch('/settings/{key}', response_model=SettingResponse)
-async def update_setting(key: str, update: SettingUpdate):
-    del key, update
-    _unsupported('Settings management')
+async def get_setting(key: str, user=Depends(require_permission('system.settings'))):
+    result = await _read_setting(key)
+    if result is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail='Setting does not exist')
+    return result
 
 
 @router.get('/metrics', response_model=List[MetricResponse])
@@ -243,40 +255,57 @@ async def get_services():
     ]
 
 
+@sync_to_async
+def _read_backups() -> List[BackupResponse]:
+    from django_project.system.models import Backup
+    return [
+        BackupResponse(
+            id=str(obj.id), name=obj.name, backup_type=obj.backup_type,
+            storage=obj.storage, status=obj.status, file_size=obj.file_size,
+            created_at=obj.created_at.isoformat(),
+            completed_at=obj.completed_at.isoformat() if obj.completed_at else None,
+        )
+        for obj in Backup.objects.order_by('-created_at')[:200]
+    ]
+
+
 @router.get('/backups', response_model=List[BackupResponse])
-async def list_backups():
-    _unsupported('Backup management')
+async def list_backups(user=Depends(require_permission('system.backup'))):
+    return await _read_backups()
 
 
-@router.post('/backups', response_model=BackupResponse, status_code=201)
-async def create_backup(backup: BackupCreate):
-    del backup
-    _unsupported('Backup management')
-
-
-@router.post('/backups/{backup_id}/restore')
-async def restore_backup(backup_id: str):
-    del backup_id
-    _unsupported('Backup management')
+@sync_to_async
+def _read_maintenance_windows() -> list[dict]:
+    from django_project.system.models import MaintenanceWindow
+    return [
+        {
+            'id': str(obj.id), 'name': obj.name,
+            'start_time': obj.start_time.isoformat(),
+            'end_time': obj.end_time.isoformat(),
+            'affected_services': obj.affected_services,
+        }
+        for obj in MaintenanceWindow.objects.order_by('start_time')[:200]
+    ]
 
 
 @router.get('/maintenance-windows')
-async def list_maintenance_windows():
-    _unsupported('Maintenance window management')
+async def list_maintenance_windows(user=Depends(require_permission('system.settings'))):
+    return await _read_maintenance_windows()
 
 
-@router.post('/maintenance-windows')
-async def create_maintenance_window(name: str, start_time: str, end_time: str, affected_services: List[str] = []):
-    del name, start_time, end_time, affected_services
-    _unsupported('Maintenance window management')
+@sync_to_async
+def _read_feature_flags() -> list[dict]:
+    from django_project.system.models import FeatureFlag
+    return [
+        {
+            'id': str(obj.id), 'key': obj.key, 'name': obj.name,
+            'description': obj.description, 'enabled': obj.is_enabled,
+            'rollout_percentage': obj.rollout_percentage,
+        }
+        for obj in FeatureFlag.objects.order_by('key')[:300]
+    ]
 
 
 @router.get('/feature-flags')
-async def list_feature_flags():
-    _unsupported('Feature flag management')
-
-
-@router.post('/feature-flags')
-async def create_feature_flag(key: str, name: str, description: str = '', enabled: bool = False):
-    del key, name, description, enabled
-    _unsupported('Feature flag management')
+async def list_feature_flags(user=Depends(require_permission('system.settings'))):
+    return await _read_feature_flags()
