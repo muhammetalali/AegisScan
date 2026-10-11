@@ -15,7 +15,7 @@ from django.core.validators import validate_email
 from django.conf import settings as django_settings
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
-from django.http import FileResponse
+from fastapi.responses import FileResponse
 from django.utils import timezone as django_timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
