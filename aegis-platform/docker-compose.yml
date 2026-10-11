@@ -186,6 +186,8 @@ services:
       retries: 12
       start_period: 5s
   browser_worker:
+    # Reap orphaned Chromium subprocesses without changing the Celery worker or egress.
+    init: true
     build: {context: ./backend, dockerfile: Dockerfile.django}
     container_name: aegis-browser-worker
     restart: unless-stopped
