@@ -114,6 +114,9 @@ class UserViewSet(viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        if not self.request.user.is_company_owner and (instance.is_superuser or instance.role == 'super_admin'):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only the primary owner can deactivate privileged accounts.')
         if instance.is_company_owner:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('Cannot delete the primary company owner.')
@@ -127,6 +130,8 @@ class UserViewSet(viewsets.ModelViewSet):
         from django.core.exceptions import ValidationError as DjangoValidationError
         from rest_framework.exceptions import ValidationError
         target = self.get_object()
+        if not request.user.is_company_owner and (target.is_superuser or target.role == 'super_admin'):
+            return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
         if target.is_company_owner:
             return Response({'detail': 'Use self-service password change for the primary owner.'}, status=403)
         raw = request.data.get('password')
@@ -174,6 +179,8 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
     def activate(self, request, pk=None):
         user = self.get_object()
+        if not request.user.is_company_owner and (user.is_superuser or user.role == 'super_admin'):
+            return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
         user.is_active = True
         user.save(update_fields=['is_active'])
         return Response({'message': 'User activated'})
@@ -181,6 +188,8 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
     def deactivate(self, request, pk=None):
         user = self.get_object()
+        if not request.user.is_company_owner and (user.is_superuser or user.role == 'super_admin'):
+            return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
         if user.is_company_owner:
             return Response({'error': 'The primary company owner cannot be deactivated.'}, status=status.HTTP_400_BAD_REQUEST)
         user.is_active = False
