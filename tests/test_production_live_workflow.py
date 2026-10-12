@@ -368,6 +368,23 @@ def test_file_acceptance_is_explicit_one_release_opt_in_with_production_finding_
     ci = (ROOT / ".github/workflows/external-black-box-e2e.yml").read_text(encoding="utf-8")
     assert "AEGIS_E2E_FILE_ACCEPTANCE: 'true'" in ci
     assert "AEGIS_E2E_FILE_REQUIRE_FINDING: 'false'" in ci
+    ci_workflow = yaml.safe_load(ci)
+    ci_job = ci_workflow["jobs"]["external-black-box"]
+    assert ci_job["env"]["AEGIS_E2E_FILE_ACCEPTANCE"] == "true"
+    assert ci_job["env"]["AEGIS_E2E_FILE_REQUIRE_FINDING"] == "false"
+    assert ci_job["env"]["AEGIS_E2E_ZIP_ACCEPTANCE"] == "true"
+    ci_step = next(step for step in ci_job["steps"] if step.get("name") == "Run HTTP black-box E2E")
+    ci_script = ci_step["run"]
+    for variable in (
+        "AEGIS_E2E_FILE_ACCEPTANCE", "AEGIS_E2E_FILE_REQUIRE_FINDING", "AEGIS_E2E_ZIP_ACCEPTANCE",
+    ):
+        assert f"-e {variable} " in ci_script
+    for marker in (
+        "CONTROLLED_LAUNCH_FILE_EXECUTION", "CONTROLLED_LAUNCH_FILE_DEACTIVATION_GUARD",
+        "CONTROLLED_LAUNCH_ZIP_EXECUTION", "CONTROLLED_LAUNCH_ZIP_DEACTIVATION_GUARD",
+    ):
+        assert f"grep -Fx '{marker}=PASS'" in ci_script
+    assert "set -euo pipefail" in ci_script
 
 
 def test_production_zip_acceptance_is_opt_in_and_requires_semgrep_findings():
