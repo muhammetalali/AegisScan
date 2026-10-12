@@ -132,6 +132,13 @@ class IsProjectMember(permissions.BasePermission):
         if not project_id:
             return False
 
+        # The primary owner does not need a manual project membership row.
+        # Preserve a valid project scope and do not elevate scoped API keys.
+        from .models import APIKey
+        if request.user.is_company_owner and not isinstance(request.auth, APIKey):
+            from django_project.projects.models import Project
+            return Project.objects.filter(pk=project_id).exists()
+
         from django_project.projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
             project_id=project_id,
@@ -150,6 +157,13 @@ class IsProjectAdmin(permissions.BasePermission):
         project_id = view.kwargs.get('project_pk') or request.data.get('project')
         if not project_id:
             return False
+
+        # The primary owner does not need a manual project membership row.
+        # Preserve a valid project scope and do not elevate scoped API keys.
+        from .models import APIKey
+        if request.user.is_company_owner and not isinstance(request.auth, APIKey):
+            from django_project.projects.models import Project
+            return Project.objects.filter(pk=project_id).exists()
 
         from django_project.projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
