@@ -1,9 +1,11 @@
+import uuid
+
 import pytest
 from django.test import override_settings
 from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from django_project.users.models import Team, TeamMembership, User, UserRole
+from django_project.users.models import APIKey, Team, TeamMembership, User, UserRole
 from django_project.users.permissions import HasPermission, IsProjectAdmin, IsProjectMember, IsTeamAdmin
 from django_project.users.views import TeamViewSet
 from django_project.projects.models import Project, ProjectMembership
@@ -201,3 +203,15 @@ def test_primary_owner_can_access_existing_project_without_membership():
     unscoped_view = type('V', (), {'kwargs': {}})()
     assert IsProjectMember().has_permission(owner_request, unscoped_view) is False
     assert IsProjectAdmin().has_permission(owner_request, unscoped_view) is False
+
+    # An owner bypass still requires a real project, and must not apply when
+    # the request authenticates with a scoped API key.
+    missing_view = type('V', (), {'kwargs': {'project_pk': str(uuid.uuid4())}})()
+    assert IsProjectMember().has_permission(owner_request, missing_view) is False
+    assert IsProjectAdmin().has_permission(owner_request, missing_view) is False
+
+    key_request = factory.get(f'/api/v1/projects/{project.pk}/')
+    force_authenticate(key_request, user=owner, token=APIKey(user=owner))
+    key_request = Request(key_request)
+    assert IsProjectMember().has_permission(key_request, view) is False
+    assert IsProjectAdmin().has_permission(key_request, view) is False
