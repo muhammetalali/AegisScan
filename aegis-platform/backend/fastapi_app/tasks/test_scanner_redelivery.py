@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from django_project.assets.models import Asset, AssetAuthorization
+from django_project.assets.models import Asset, AssetAuthorization, TechnologyFingerprint
 from django_project.evidence.models import Evidence
 from django_project.projects.models import Project
 from django_project.scans.models import Scan, ScanEngine, ScanEngineExecution, ScanLog
 from django_project.users.models import User
 from django_project.vulnerabilities.models import Vulnerability
-from fastapi_app.services import nmap_execution_provider
+from fastapi_app.services import authorization_guard, nmap_execution_provider
 from fastapi_app.services.scanner_adapters import ScanResult
 from fastapi_app.tasks import advanced_scans, security_scan
 
@@ -44,6 +44,11 @@ def test_nmap_redelivery_does_not_rerun_or_duplicate_durable_state(monkeypatch):
 
     stub = StubNmap()
     monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'aegis-scan-target')
+    # This test runs without a network resolver; dedicated scope/egress tests
+    # validate the real boundary. Admit only this already-authorized fixture.
+    monkeypatch.setattr(authorization_guard, '_require_worker_egress',
+                        lambda target, **_kwargs: (True, '') if target == 'aegis-scan-target'
+                        else (False, 'Execution blocked: fixture target out of scope'))
     # Redelivery must traverse the authoritative provider-routing layer while
     # replacing only its legacy tool adapter for deterministic test execution.
     monkeypatch.setattr(nmap_execution_provider, 'get_tool', lambda name: stub)
@@ -52,6 +57,25 @@ def test_nmap_redelivery_does_not_rerun_or_duplicate_durable_state(monkeypatch):
     assert first['status'] == Scan.Status.COMPLETED; assert second['status'] == Scan.Status.COMPLETED; assert second['redelivered'] is True; assert stub.calls == 1
     assert ScanEngineExecution.objects.filter(scan=scan).count() == 1; assert ScanLog.objects.filter(scan=scan, message='nmap execution started').count() == 1
     assert Vulnerability.objects.filter(scan=scan, source_engine='nmap').count() == 1; assert Evidence.objects.filter(scan=scan, source='nmap', evidence_type='scanner_output').count() == 1
+    fingerprints = TechnologyFingerprint.objects.filter(asset=asset, source='nmap', category='network_service')
+    assert fingerprints.count() == 1
+    assert fingerprints.get().name == '172.18.0.4 nginx tcp/80'
+    assert fingerprints.get().version == '1.27'
+    assert str(scan.id) in fingerprints.get().evidence
+
+    # A later authorized scan updates the same inventory observation instead
+    # of inventing a second asset or accumulating duplicate service records.
+    next_scan = Scan.objects.create(
+        project=project, name='Subsequent Nmap', scan_type=Scan.Type.IP,
+        depth=Scan.Depth.QUICK, asset=asset, authorization_decision=decision,
+        engines=['nmap'], config={'target': 'aegis-scan-target'},
+        initiated_by=user, status=Scan.Status.QUEUED,
+    )
+    followup = security_scan.run_nmap_scan.run(str(next_scan.id))
+    assert followup['status'] == Scan.Status.COMPLETED
+    assert stub.calls == 2
+    assert fingerprints.count() == 1
+    assert str(next_scan.id) in fingerprints.get().evidence
 
 
 @pytest.mark.django_db

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
+from django_project.assets.models import TechnologyFingerprint
 from django_project.evidence.models import Evidence
 from django_project.scans.models import Scan
 from django_project.vulnerabilities.models import Vulnerability
@@ -97,6 +99,26 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
 
             vulnerability.evidence_count = vulnerability.evidence_records.count()
             vulnerability.save(update_fields=['evidence_count', 'updated_at'])
+
+            # Reuse the asset inventory's existing service endpoint: observation
+            # only, never a newly authorized scan target or an active child asset.
+            # The stable identity preserves one record per host/protocol/port on
+            # scanner retries and on later scans of the same project asset.
+            fingerprint_id = uuid5(
+                NAMESPACE_URL, f'aegisscan:nmap:{scan.asset_id}:{ip}:{protocol}:{port_number}',
+            )
+            TechnologyFingerprint.objects.update_or_create(
+                id=fingerprint_id,
+                defaults={
+                    'asset': scan.asset,
+                    'name': f'{ip or scan.asset.name} {product_label} {protocol}/{port_number}'[:100],
+                    'version': version[:50],
+                    'category': 'network_service',
+                    'confidence': 0.8 if service else 0.5,
+                    'source': 'nmap',
+                    'evidence': f'scan:{scan.id};finding:{vulnerability.id};evidence:{evidence.id}',
+                },
+            )
             findings.append(vulnerability)
 
     if duplicate_input_evidence and not primary_evidence_used:
