@@ -19,7 +19,7 @@ from .serializers import (
     ChangePasswordSerializer, TeamSerializer, TeamCreateSerializer, TeamMembershipSerializer,
     APIKeySerializer, APIKeyCreateSerializer, UserSessionSerializer, LoginAttemptSerializer
 )
-from .permissions import IsOwnerOrReadOnly, HasPermission, IsTeamAdmin, CompanyOwnerControlsAccounts
+from .permissions import IsOwnerOrReadOnly, HasPermission, IsTeamAdmin, CompanyOwnerControlsAccounts, can_manage_account
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -72,7 +72,11 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_superuser or user.has_permission('user.read'):
+        # A delegated mutation grant must also locate its target even without
+        # user.read; list/retrieve remain protected by HasPermission.
+        required = CompanyOwnerControlsAccounts.action_permissions.get(getattr(self, 'action', None))
+        if (user.is_superuser or user.has_permission('user.read') or
+                (required and user.has_permission(required))):
             return User.objects.all()
         return User.objects.filter(id=user.id)
 
@@ -80,14 +84,28 @@ class UserViewSet(viewsets.ModelViewSet):
     def access_options(self, request):
         from .models import UserRole, ROLE_PERMISSIONS
         from django_project.scans.models import Scan
-        if not request.user.is_company_owner:
-            return Response({'detail': 'Only the company owner can configure employees.'}, status=403)
+        actor = request.user
+        owner = actor.is_company_owner
+        if not owner and not any(actor.has_permission(grant) for grant in (
+            'user.create', 'user.update', 'user.delete',
+        )):
+            return Response({'detail': 'Employee management permission required.'}, status=403)
+        roles = (list(UserRole.values) if owner or actor.has_permission('user.manage_roles')
+                 else [UserRole.VIEWER])
+        if not owner:
+            roles = [role for role in roles if role != UserRole.SUPER_ADMIN]
+        can_grant = owner or actor.has_permission('user.manage_permissions')
         return Response({
             'roles': {
-                str(role): sorted(str(p) for p in ROLE_PERMISSIONS[role])
-                for role in UserRole.values
+                str(role): sorted(
+                    str(permission) for permission in ROLE_PERMISSIONS[role]
+                    if owner or (can_grant and actor.has_permission(str(permission)))
+                ) for role in roles
             },
-            'scan_types': list(Scan.Type.values),
+            'scan_types': [
+                scan_type for scan_type in Scan.Type.values
+                if owner or actor.can_scan_type(scan_type)
+            ],
         })
 
     def perform_create(self, serializer):
@@ -114,6 +132,9 @@ class UserViewSet(viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        if not can_manage_account(self.request.user, instance):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only the primary owner can deactivate privileged accounts.')
         if instance.is_company_owner:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('Cannot delete the primary company owner.')
@@ -127,6 +148,8 @@ class UserViewSet(viewsets.ModelViewSet):
         from django.core.exceptions import ValidationError as DjangoValidationError
         from rest_framework.exceptions import ValidationError
         target = self.get_object()
+        if not can_manage_account(request.user, target):
+            return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
         if target.is_company_owner:
             return Response({'detail': 'Use self-service password change for the primary owner.'}, status=403)
         raw = request.data.get('password')
@@ -174,6 +197,8 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
     def activate(self, request, pk=None):
         user = self.get_object()
+        if not can_manage_account(request.user, user):
+            return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
         user.is_active = True
         user.save(update_fields=['is_active'])
         return Response({'message': 'User activated'})
@@ -181,6 +206,8 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
     def deactivate(self, request, pk=None):
         user = self.get_object()
+        if not can_manage_account(request.user, user):
+            return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
         if user.is_company_owner:
             return Response({'error': 'The primary company owner cannot be deactivated.'}, status=status.HTTP_400_BAD_REQUEST)
         user.is_active = False

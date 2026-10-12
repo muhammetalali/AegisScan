@@ -1,8 +1,23 @@
 from rest_framework import serializers
+from .permissions import can_manage_account
 from django.contrib.auth import get_user_model
 from .models import User, Team, TeamMembership, APIKey, UserSession, LoginAttempt, UserRole, Permission, ROLE_PERMISSIONS
 
 User = get_user_model()
+
+
+def validate_delegated_scope_allowlists(actor, attrs):
+    """Prevent delegated scan/page allowlists from exceeding the actor's own."""
+    if 'enabled_scan_types' in attrs and actor.enabled_scan_types is not None:
+        if not set(attrs['enabled_scan_types']).issubset(set(actor.enabled_scan_types)):
+            raise serializers.ValidationError({
+                'enabled_scan_types': 'Cannot delegate scan types outside your own allowlist.'
+            })
+    if 'enabled_pages' in attrs and actor.enabled_pages is not None:
+        if not set(attrs['enabled_pages']).issubset(set(actor.enabled_pages)):
+            raise serializers.ValidationError({
+                'enabled_pages': 'Cannot delegate pages outside your own allowlist.'
+            })
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -67,6 +82,17 @@ class UserCreateSerializer(serializers.ModelSerializer):
         grants = attrs.get('granted_permissions', [])
         if not set(grants).issubset(allowed):
             raise serializers.ValidationError({'granted_permissions': 'Selected permissions exceed role limits.'})
+        actor = self.context.get('request').user if self.context.get('request') else None
+        if actor and not actor.is_company_owner:
+            if role == UserRole.SUPER_ADMIN:
+                raise serializers.ValidationError({'role': 'Only the primary owner can assign the super admin role.'})
+            if role != UserRole.VIEWER and not actor.has_permission('user.manage_roles'):
+                raise serializers.ValidationError({'role': 'Role management permission required.'})
+            if grants and not actor.has_permission('user.manage_permissions'):
+                raise serializers.ValidationError({'granted_permissions': 'Permission management grant required.'})
+            if not set(grants).issubset(set(actor.get_effective_permissions())):
+                raise serializers.ValidationError({'granted_permissions': 'Cannot delegate permissions you do not hold.'})
+            validate_delegated_scope_allowlists(actor, attrs)
         return attrs
 
     def create(self, validated_data):
@@ -98,6 +124,20 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         grants = attrs.get('granted_permissions', self.instance.granted_permissions)
         if grants is not None and not set(grants).issubset({str(p) for p in ROLE_PERMISSIONS[role]}):
             raise serializers.ValidationError({'granted_permissions': 'Selected permissions exceed role limits.'})
+        actor = self.context.get('request').user if self.context.get('request') else None
+        if actor and not actor.is_company_owner:
+            if not can_manage_account(actor, self.instance):
+                raise serializers.ValidationError({'role': 'Only the primary owner can manage privileged accounts.'})
+            if 'role' in attrs and attrs['role'] != self.instance.role and not actor.has_permission('user.manage_roles'):
+                raise serializers.ValidationError({'role': 'Role management permission required.'})
+            if role == UserRole.SUPER_ADMIN and role != self.instance.role:
+                raise serializers.ValidationError({'role': 'Only the primary owner can assign the super admin role.'})
+            if 'granted_permissions' in attrs:
+                if not actor.has_permission('user.manage_permissions'):
+                    raise serializers.ValidationError({'granted_permissions': 'Permission management grant required.'})
+                if not set(attrs['granted_permissions']).issubset(set(actor.get_effective_permissions())):
+                    raise serializers.ValidationError({'granted_permissions': 'Cannot delegate permissions you do not hold.'})
+            validate_delegated_scope_allowlists(actor, attrs)
         return attrs
 
 

@@ -6,7 +6,8 @@ from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from django_project.users.models import APIKey, Team, TeamMembership, User, UserRole
-from django_project.users.permissions import HasPermission, IsProjectAdmin, IsProjectMember, IsTeamAdmin
+from django_project.users.permissions import CompanyOwnerControlsAccounts, HasPermission, IsProjectAdmin, IsProjectMember, IsTeamAdmin
+from django_project.users.serializers import UserCreateSerializer, UserUpdateSerializer
 from django_project.users.views import TeamViewSet
 from django_project.projects.models import Project, ProjectMembership
 
@@ -164,6 +165,77 @@ def test_project_membership_is_tenant_boundary():
 
     assert IsProjectMember().has_permission(request, view) is False
     assert IsProjectAdmin().has_permission(request, view) is False
+
+
+@pytest.mark.django_db
+def test_delegated_employee_management_respects_action_grants():
+    admin = User.objects.create_user(
+        email='delegated-admin@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Delegated', last_name='Admin', role=UserRole.ADMIN,
+        granted_permissions=['user.create', 'user.update'],
+    )
+    viewer = User.objects.create_user(
+        email='delegated-viewer@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Delegated', last_name='Viewer', role=UserRole.VIEWER,
+    )
+    factory = APIRequestFactory()
+    permission = CompanyOwnerControlsAccounts()
+    for user, expected in ((admin, True), (viewer, False)):
+        request = factory.post('/api/v1/users/')
+        force_authenticate(request, user=user)
+        request = Request(request)
+        view = type('V', (), {'action': 'create'})()
+        assert permission.has_permission(request, view) is expected
+        view.action = 'update'
+        assert permission.has_permission(request, view) is expected
+        view.action = 'destroy'
+        assert permission.has_permission(request, view) is False
+
+
+@pytest.mark.django_db
+def test_delegated_admin_cannot_escalate_role_or_permissions():
+    admin = User.objects.create_user(
+        email='limited-delegate@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Limited', last_name='Delegate', role=UserRole.ADMIN,
+        granted_permissions=['user.create', 'user.update'],
+    )
+    employee = User.objects.create_user(
+        email='limited-employee@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Limited', last_name='Employee', role=UserRole.VIEWER,
+    )
+    request = APIRequestFactory().post('/api/v1/users/')
+    force_authenticate(request, user=admin)
+    request = Request(request)
+    create = UserCreateSerializer(data={
+        'email': 'escalated@example.invalid', 'first_name': 'Escalated',
+        'last_name': 'Account', 'password': 'Strong-Test-Password-123!',
+        'password_confirm': 'Strong-Test-Password-123!',
+        'role': UserRole.SUPER_ADMIN, 'granted_permissions': ['system.settings'],
+    }, context={'request': request})
+    assert not create.is_valid()
+    update = UserUpdateSerializer(employee, data={
+        'role': UserRole.SUPER_ADMIN, 'granted_permissions': ['system.settings'],
+    }, partial=True, context={'request': request})
+    assert not update.is_valid()
+
+
+@pytest.mark.django_db
+def test_delegated_admin_cannot_modify_existing_privileged_account():
+    admin = User.objects.create_user(
+        email='role-delegate@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Role', last_name='Delegate', role=UserRole.ADMIN,
+        granted_permissions=['user.update', 'user.manage_roles', 'user.manage_permissions'],
+    )
+    privileged = User.objects.create_user(
+        email='existing-privileged@example.invalid', password='Strong-Test-Password-123!',
+        first_name='Existing', last_name='Privileged', role=UserRole.SUPER_ADMIN,
+        granted_permissions=[],
+    )
+    request = APIRequestFactory().patch('/api/v1/users/')
+    force_authenticate(request, user=admin)
+    serializer = UserUpdateSerializer(privileged, data={'first_name': 'Changed'},
+                                      partial=True, context={'request': Request(request)})
+    assert not serializer.is_valid()
 
 
 @override_settings(AEGIS_PRIMARY_OWNER_EMAIL='primary-owner@example.invalid')

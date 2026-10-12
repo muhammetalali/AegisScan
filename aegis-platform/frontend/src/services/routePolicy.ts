@@ -45,7 +45,12 @@ export const canAccessRoute = (path: string, role?: UserRole | null, permissions
     const entry = Object.entries(PAGE_PERMISSIONS)
       .filter(([prefix]) => path === prefix || path.startsWith(prefix + '/'))
       .sort((a,b)=>b[0].length-a[0].length)[0]
-    if (entry && !permissions.includes(entry[1])) return false
+    if (entry && !permissions.includes(entry[1])) {
+      const delegatedAccountManager = entry[0] === '/users' && [
+        'user.create', 'user.update', 'user.delete',
+      ].some(grant => permissions.includes(grant))
+      if (!delegatedAccountManager) return false
+    }
   }
   return true
 }

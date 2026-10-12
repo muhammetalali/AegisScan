@@ -55,7 +55,10 @@ def test_primary_owner_scan_types_are_not_filtered_by_employee_settings(company_
 
 
 @pytest.mark.django_db
-def test_only_primary_owner_can_create_activate_and_assign_employee(company_owner, other_admin):
+def test_ungranted_admin_cannot_create_activate_and_assign_employee(company_owner, other_admin):
+    # Earlier owner-only expectations now apply to an admin with no grants.
+    other_admin.granted_permissions = []
+    other_admin.save(update_fields=['granted_permissions'])
     admin = APIClient()
     admin.force_authenticate(user=other_admin)
     payload = {
@@ -297,3 +300,128 @@ def test_cookie_owner_provisions_and_revokes_staff_through_real_auth(company_own
                       HTTP_X_CSRFTOKEN=staff_csrf).status_code == 401
     assert not User.objects.filter(email='unauthorized@example.invalid').exists()
     assert owner.get('/api/v1/auth/users/me/').status_code == 200
+
+
+@pytest.mark.django_db
+def test_delegated_update_without_read_grant_can_edit_employee_but_not_owner(company_owner):
+    delegated = User.objects.create_user(
+        email='update-only-delegate@example.invalid',
+        password='Strong-Test-Admin-Pass-2026!',
+        role=UserRole.ADMIN,
+        granted_permissions=['user.update'],
+    )
+    employee = User.objects.create_user(
+        email='update-only-employee@example.invalid',
+        password='Strong-Test-Employee!2026',
+        role=UserRole.VIEWER,
+        granted_permissions=[],
+    )
+    assert delegated.has_permission('user.update')
+    assert not delegated.has_permission('user.read')
+    client = APIClient()
+    client.force_authenticate(user=delegated)
+    response = client.patch(
+        f'/api/v1/auth/users/{employee.pk}/',
+        {'first_name': 'Updated'}, format='json',
+    )
+    assert response.status_code == 200, response.data
+    employee.refresh_from_db()
+    assert employee.first_name == 'Updated'
+    denied = client.patch(
+        f'/api/v1/auth/users/{company_owner.pk}/',
+        {'first_name': 'CannotModifyOwner'}, format='json',
+    )
+    assert denied.status_code == 403, denied.data
+
+
+
+@pytest.mark.django_db
+def test_delegated_access_options_only_expose_assignable_permissions(company_owner):
+    delegate = User.objects.create_user(
+        email='access-options-delegate@example.invalid',
+        password='Strong-Test-Delegate!2026',
+        role=UserRole.SUPER_ADMIN,
+        granted_permissions=[
+            'user.create', 'user.read', 'user.manage_roles',
+            'user.manage_permissions', 'scan.create',
+        ],
+    )
+    client = APIClient()
+    client.force_authenticate(user=delegate)
+    options = client.get('/api/v1/auth/users/access_options/')
+    assert options.status_code == 200, options.data
+    assert UserRole.SUPER_ADMIN not in options.data['roles']
+    assert 'scan.create' in options.data['roles'][UserRole.SECURITY_ANALYST]
+    assert 'system.settings' not in options.data['roles'][UserRole.SECURITY_ANALYST]
+    # A normal ADMIN cannot acquire user.manage_permissions simply by adding
+    # it to the grants array: the role capability ceiling still applies.
+    limited = User.objects.create_user(
+        email='access-options-limited@example.invalid',
+        password='Strong-Test-Limited!2026',
+        role=UserRole.ADMIN,
+        granted_permissions=[
+            'user.create', 'user.read', 'user.manage_roles',
+            'user.manage_permissions', 'scan.create',
+        ],
+    )
+    client.force_authenticate(user=limited)
+    limited_options = client.get('/api/v1/auth/users/access_options/')
+    assert limited_options.status_code == 200, limited_options.data
+    assert limited_options.data['roles'][UserRole.SECURITY_ANALYST] == []
+    observer = User.objects.create_user(
+        email='access-options-observer@example.invalid',
+        password='Strong-Test-Observer!2026',
+        role=UserRole.ADMIN,
+        granted_permissions=['user.read'],
+    )
+    client.force_authenticate(user=observer)
+    assert client.get('/api/v1/auth/users/access_options/').status_code == 403
+
+
+@pytest.mark.django_db
+def test_delegated_employee_scan_and_page_allowlists_cannot_escalate(company_owner):
+    delegate = User.objects.create_user(
+        email='scope-limited-delegate@example.invalid',
+        password='Strong-Test-Delegate!2026',
+        role=UserRole.SUPER_ADMIN,
+        granted_permissions=[
+            'user.create', 'user.update', 'user.manage_roles',
+            'user.manage_permissions', 'scan.create',
+        ],
+        enabled_scan_types=['url'],
+        enabled_pages=['/projects', '/users'],
+    )
+    client = APIClient()
+    client.force_authenticate(user=delegate)
+    payload = {
+        'email': 'scoped-employee@example.invalid',
+        'first_name': 'Scoped', 'last_name': 'Employee',
+        'password': 'Strong-Test-Employee!2026',
+        'password_confirm': 'Strong-Test-Employee!2026',
+        'role': UserRole.SECURITY_ANALYST,
+        'granted_permissions': ['scan.create'],
+        'enabled_scan_types': ['ip'],
+        'enabled_pages': ['/settings'],
+    }
+    refused = client.post('/api/v1/auth/users/', payload, format='json')
+    assert refused.status_code == 400, refused.data
+    rejected_fields = refused.data['error']['details']
+    assert 'enabled_scan_types' in rejected_fields or 'enabled_pages' in rejected_fields
+    assert not User.objects.filter(email=payload['email']).exists()
+
+    allowed = client.post('/api/v1/auth/users/', {
+        **payload,
+        'enabled_scan_types': ['url'],
+        'enabled_pages': ['/projects'],
+    }, format='json')
+    assert allowed.status_code == 201, allowed.data
+    employee = User.objects.get(email=payload['email'])
+    refused_update = client.patch(
+        f'/api/v1/auth/users/{employee.pk}/',
+        {'enabled_scan_types': ['ip'], 'enabled_pages': ['/settings']},
+        format='json',
+    )
+    assert refused_update.status_code == 400, refused_update.data
+    employee.refresh_from_db()
+    assert employee.enabled_scan_types == ['url']
+    assert employee.enabled_pages == ['/projects']
