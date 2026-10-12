@@ -62,7 +62,11 @@ export const CompanyAccountControls = () => {
     setPages(current=>current.filter(page=>allowedPages.includes(page)))
   }
   const roleOptions = Object.keys(options?.roles || {}) as UserRole[]
-  const pageChoices = NAV_GROUPS.flatMap(group=>group.items).filter(item=>item.href!=='/dashboard' && (item.roles.includes(role) || item.roles.includes('all')))
+  const pageChoices = NAV_GROUPS.flatMap(group=>group.items).filter(item=>
+    item.href!=='/dashboard' &&
+    (item.roles.includes(role) || item.roles.includes('all')) &&
+    (isOwner || actor?.enabled_pages == null || actor.enabled_pages.includes(item.href))
+  )
   const permitted = options?.roles[role] || []
   const selectedProtected = selected?.is_company_owner || (!isOwner && selected?.role === 'super_admin')
 

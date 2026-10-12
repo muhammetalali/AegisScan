@@ -6,6 +6,20 @@ from .models import User, Team, TeamMembership, APIKey, UserSession, LoginAttemp
 User = get_user_model()
 
 
+def validate_delegated_scope_allowlists(actor, attrs):
+    """Prevent delegated scan/page allowlists from exceeding the actor's own."""
+    if 'enabled_scan_types' in attrs and actor.enabled_scan_types is not None:
+        if not set(attrs['enabled_scan_types']).issubset(set(actor.enabled_scan_types)):
+            raise serializers.ValidationError({
+                'enabled_scan_types': 'Cannot delegate scan types outside your own allowlist.'
+            })
+    if 'enabled_pages' in attrs and actor.enabled_pages is not None:
+        if not set(attrs['enabled_pages']).issubset(set(actor.enabled_pages)):
+            raise serializers.ValidationError({
+                'enabled_pages': 'Cannot delegate pages outside your own allowlist.'
+            })
+
+
 class UserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
@@ -78,6 +92,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'granted_permissions': 'Permission management grant required.'})
             if not set(grants).issubset(set(actor.get_effective_permissions())):
                 raise serializers.ValidationError({'granted_permissions': 'Cannot delegate permissions you do not hold.'})
+            validate_delegated_scope_allowlists(actor, attrs)
         return attrs
 
     def create(self, validated_data):
@@ -122,6 +137,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({'granted_permissions': 'Permission management grant required.'})
                 if not set(attrs['granted_permissions']).issubset(set(actor.get_effective_permissions())):
                     raise serializers.ValidationError({'granted_permissions': 'Cannot delegate permissions you do not hold.'})
+            validate_delegated_scope_allowlists(actor, attrs)
         return attrs
 
 

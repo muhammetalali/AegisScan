@@ -376,3 +376,51 @@ def test_delegated_access_options_only_expose_assignable_permissions(company_own
     )
     client.force_authenticate(user=observer)
     assert client.get('/api/v1/auth/users/access_options/').status_code == 403
+
+
+@pytest.mark.django_db
+def test_delegated_employee_scan_and_page_allowlists_cannot_escalate(company_owner):
+    delegate = User.objects.create_user(
+        email='scope-limited-delegate@example.invalid',
+        password='Strong-Test-Delegate!2026',
+        role=UserRole.SUPER_ADMIN,
+        granted_permissions=[
+            'user.create', 'user.update', 'user.manage_roles',
+            'user.manage_permissions', 'scan.create',
+        ],
+        enabled_scan_types=['url'],
+        enabled_pages=['/projects', '/users'],
+    )
+    client = APIClient()
+    client.force_authenticate(user=delegate)
+    payload = {
+        'email': 'scoped-employee@example.invalid',
+        'first_name': 'Scoped', 'last_name': 'Employee',
+        'password': 'Strong-Test-Employee!2026',
+        'password_confirm': 'Strong-Test-Employee!2026',
+        'role': UserRole.SECURITY_ANALYST,
+        'granted_permissions': ['scan.create'],
+        'enabled_scan_types': ['ip'],
+        'enabled_pages': ['/settings'],
+    }
+    refused = client.post('/api/v1/auth/users/', payload, format='json')
+    assert refused.status_code == 400, refused.data
+    assert 'enabled_scan_types' in refused.data or 'enabled_pages' in refused.data
+    assert not User.objects.filter(email=payload['email']).exists()
+
+    allowed = client.post('/api/v1/auth/users/', {
+        **payload,
+        'enabled_scan_types': ['url'],
+        'enabled_pages': ['/projects'],
+    }, format='json')
+    assert allowed.status_code == 201, allowed.data
+    employee = User.objects.get(email=payload['email'])
+    refused_update = client.patch(
+        f'/api/v1/auth/users/{employee.pk}/',
+        {'enabled_scan_types': ['ip'], 'enabled_pages': ['/settings']},
+        format='json',
+    )
+    assert refused_update.status_code == 400, refused_update.data
+    employee.refresh_from_db()
+    assert employee.enabled_scan_types == ['url']
+    assert employee.enabled_pages == ['/projects']
