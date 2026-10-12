@@ -31,6 +31,7 @@ const renderPage = () => {
     <MemoryRouter initialEntries={['/assets']}>
       <Routes>
         <Route path="/assets" element={<Assets />} />
+        <Route path="/assess" element={<div>Existing assessment entry</div>} />
         <Route path="/scan" element={<ScanPickerResult />} />
       </Routes>
     </MemoryRouter>
@@ -45,6 +46,13 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks())
 
 describe('Assets existing authorization one-click scan', () => {
+  it('opens the existing assessment entry to add an asset without a duplicate create route', async () => {
+    renderPage()
+    fireEvent.click(screen.getByRole('link', { name: 'Add asset' }))
+    expect(await screen.findByText('Existing assessment entry')).toBeTruthy()
+    expect(post).not.toHaveBeenCalled()
+  })
+
   it('opens the existing scan picker with project and asset preselected', async () => {
     renderPage()
     const button = await screen.findByRole('button', { name: 'Scan Permitted lab IP' })
