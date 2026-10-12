@@ -103,6 +103,14 @@ class CompanyOwnerControlsAccounts(permissions.BasePermission):
         return bool(user and user.is_authenticated and
                     (user.is_company_owner or user.has_permission(required)))
 
+    def has_object_permission(self, request, view, obj):
+        if getattr(view, 'action', None) in {
+            'update', 'partial_update', 'destroy', 'activate',
+            'deactivate', 'set_password',
+        }:
+            return can_manage_account(request.user, obj)
+        return True
+
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
     """Object-level permission to only allow owners to edit an object."""

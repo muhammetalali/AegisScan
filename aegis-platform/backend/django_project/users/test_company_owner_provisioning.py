@@ -55,7 +55,10 @@ def test_primary_owner_scan_types_are_not_filtered_by_employee_settings(company_
 
 
 @pytest.mark.django_db
-def test_only_primary_owner_can_create_activate_and_assign_employee(company_owner, other_admin):
+def test_ungranted_admin_cannot_create_activate_and_assign_employee(company_owner, other_admin):
+    # Earlier owner-only expectations now apply to an admin with no grants.
+    other_admin.granted_permissions = []
+    other_admin.save(update_fields=['granted_permissions'])
     admin = APIClient()
     admin.force_authenticate(user=other_admin)
     payload = {
@@ -297,3 +300,35 @@ def test_cookie_owner_provisions_and_revokes_staff_through_real_auth(company_own
                       HTTP_X_CSRFTOKEN=staff_csrf).status_code == 401
     assert not User.objects.filter(email='unauthorized@example.invalid').exists()
     assert owner.get('/api/v1/auth/users/me/').status_code == 200
+
+
+@pytest.mark.django_db
+def test_delegated_update_without_read_grant_can_edit_employee_but_not_owner(company_owner):
+    delegated = User.objects.create_user(
+        email='update-only-delegate@example.invalid',
+        password='Strong-Test-Admin-Pass-2026!',
+        role=UserRole.ADMIN,
+        granted_permissions=['user.update'],
+    )
+    employee = User.objects.create_user(
+        email='update-only-employee@example.invalid',
+        password='Strong-Test-Employee!2026',
+        role=UserRole.VIEWER,
+        granted_permissions=[],
+    )
+    assert delegated.has_permission('user.update')
+    assert not delegated.has_permission('user.read')
+    client = APIClient()
+    client.force_authenticate(user=delegated)
+    response = client.patch(
+        f'/api/v1/auth/users/{employee.pk}/',
+        {'first_name': 'Updated'}, format='json',
+    )
+    assert response.status_code == 200, response.data
+    employee.refresh_from_db()
+    assert employee.first_name == 'Updated'
+    denied = client.patch(
+        f'/api/v1/auth/users/{company_owner.pk}/',
+        {'first_name': 'CannotModifyOwner'}, format='json',
+    )
+    assert denied.status_code == 403, denied.data

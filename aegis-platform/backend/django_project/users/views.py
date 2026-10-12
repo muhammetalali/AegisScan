@@ -72,7 +72,11 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_superuser or user.has_permission('user.read'):
+        # A delegated mutation grant must also locate its target even without
+        # user.read; list/retrieve remain protected by HasPermission.
+        required = CompanyOwnerControlsAccounts.action_permissions.get(getattr(self, 'action', None))
+        if (user.is_superuser or user.has_permission('user.read') or
+                (required and user.has_permission(required))):
             return User.objects.all()
         return User.objects.filter(id=user.id)
 
