@@ -405,7 +405,8 @@ def test_delegated_employee_scan_and_page_allowlists_cannot_escalate(company_own
     }
     refused = client.post('/api/v1/auth/users/', payload, format='json')
     assert refused.status_code == 400, refused.data
-    assert 'enabled_scan_types' in refused.data or 'enabled_pages' in refused.data
+    rejected_fields = refused.data['error']['details']
+    assert 'enabled_scan_types' in rejected_fields or 'enabled_pages' in rejected_fields
     assert not User.objects.filter(email=payload['email']).exists()
 
     allowed = client.post('/api/v1/auth/users/', {
