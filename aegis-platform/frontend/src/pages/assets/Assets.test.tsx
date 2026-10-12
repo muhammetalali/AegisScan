@@ -51,6 +51,27 @@ describe('Assets existing authorization one-click scan', () => {
     await waitFor(() => expect(screen.getByText('Scan progress')).toBeTruthy())
   })
 
+
+  it('reads discovered services and linked assets through the existing APIs', async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url === '/assets/') return [permittedAsset]
+      if (url === '/assets/asset-existing/technologies') return [{
+        id: 'svc-1', name: 'nginx tcp/443', version: '1.2',
+        category: 'network_service', source: 'nmap',
+      }]
+      if (url === '/assets/asset-existing/relationships') return [{
+        id: 'link-1', target_id: 'related-ip-id', relationship_type: 'contains',
+      }]
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Permitted lab IP' }))
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/assets/asset-existing/technologies'))
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/assets/asset-existing/relationships'))
+    expect(await screen.findByText('nginx tcp/443')).toBeTruthy()
+    expect(await screen.findByText('related-ip-id')).toBeTruthy()
+  })
+
   it('does not offer scan execution for inactive assets', async () => {
     get.mockResolvedValue([{ ...permittedAsset, is_active: false }])
     renderPage()
