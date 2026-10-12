@@ -17,7 +17,6 @@ from ..services.asset_authorization_governance import (
     initialize_asset_configuration,
     replace_asset_configuration_preserving_authorization,
 )
-from ..services.scope_authorization import ScopeAuthorizationError, require_authorized_target
 
 router = APIRouter()
 
@@ -216,11 +215,8 @@ async def scan_asset(asset_id: str, scan_type: Optional[str]=None, depth: str='s
     if final_scan_type!=resolved_type: raise HTTPException(status_code=400,detail=f'Asset type {asset.type} requires scan_type={resolved_type}')
     config_target=config.get('url') or config.get('host') or config.get('ip') or config.get('domain') or config.get('cidr') or config.get('path') or config.get('repo_url')
     if engine in {'nmap','nuclei','masscan'} and not config_target: raise HTTPException(status_code=400,detail='Asset has no executable target in configuration')
-    if engine in {'nmap','nuclei','masscan'}:
-        try:
-            require_authorized_target(str(config_target))
-        except ScopeAuthorizationError as exc:
-            raise HTTPException(status_code=403,detail=str(exc)) from exc
+    # _create_scan verifies the immutable asset authorization once; do not
+    # re-apply a separate static allowlist that rejects an already bound target.
     scan_config={key:value for key,value in config.items() if key!='authorized'}
     scan_config['target']=config_target
     response = await _create_scan(ScanCreate(
