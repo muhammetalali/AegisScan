@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Assets } from './Assets'
@@ -23,13 +23,15 @@ const permittedAsset = {
   updated_at: '2026-10-12T00:00:00Z',
 }
 
+const ScanPickerResult = () => { const location = useLocation(); return <div>Scan picker: {location.search}</div> }
+
 const renderPage = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(<QueryClientProvider client={queryClient}>
     <MemoryRouter initialEntries={['/assets']}>
       <Routes>
         <Route path="/assets" element={<Assets />} />
-        <Route path="/scan/:id/progress" element={<div>Scan progress</div>} />
+        <Route path="/scan" element={<ScanPickerResult />} />
       </Routes>
     </MemoryRouter>
   </QueryClientProvider>)
@@ -43,12 +45,12 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks())
 
 describe('Assets existing authorization one-click scan', () => {
-  it('uses the canonical asset scan route without requesting ports or a second target', async () => {
+  it('opens the existing scan picker with project and asset preselected', async () => {
     renderPage()
     const button = await screen.findByRole('button', { name: 'Scan Permitted lab IP' })
     fireEvent.click(button)
-    await waitFor(() => expect(post).toHaveBeenCalledWith('/assets/asset-existing/scan'))
-    await waitFor(() => expect(screen.getByText('Scan progress')).toBeTruthy())
+    expect(await screen.findByText('Scan picker: ?project_id=project-existing&asset_id=asset-existing')).toBeTruthy()
+    expect(post).not.toHaveBeenCalled()
   })
 
 
