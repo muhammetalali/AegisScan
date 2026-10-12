@@ -45,6 +45,7 @@ jobs:
       AEGIS_E2E_TIMEOUT: '600'
       AEGIS_E2E_FILE_ACCEPTANCE: 'true'
       AEGIS_E2E_FILE_REQUIRE_FINDING: 'false'
+      AEGIS_E2E_ZIP_ACCEPTANCE: 'true'
       AEGIS_E2E_EMAIL: e2e-operator@aegisscan.local
     steps:
       - uses: actions/checkout@v4
@@ -368,6 +369,9 @@ jobs:
             -e AEGIS_E2E_TARGET=aegis-scan-target \
             -e AEGIS_E2E_TIMEOUT=600 \
             -e AEGIS_VERIFY_TLS=false \
+            -e AEGIS_E2E_FILE_ACCEPTANCE \
+            -e AEGIS_E2E_FILE_REQUIRE_FINDING \
+            -e AEGIS_E2E_ZIP_ACCEPTANCE \
             -e AEGIS_E2E_EMAIL="$AEGIS_E2E_EMAIL" \
             -e AEGIS_E2E_PASSWORD="$AEGIS_E2E_PASSWORD" \
             -e AEGIS_E2E_APPROVER_EMAIL="$AEGIS_E2E_APPROVER_EMAIL" \
@@ -375,7 +379,11 @@ jobs:
             -e AEGIS_E2E_GOV_ORG_ID="$AEGIS_E2E_GOV_ORG_ID" \
             -e AEGIS_E2E_APPROVER_MEMBERSHIP_ID="$AEGIS_E2E_APPROVER_MEMBERSHIP_ID" \
             -e AEGIS_E2E_STATE_PATH=/ci-artifacts/governed-execution-state.json \
-            fastapi python /e2e/external_black_box_e2e.py
+            fastapi python /e2e/external_black_box_e2e.py | tee /tmp/aegis-external-black-box.log
+          grep -Fx 'CONTROLLED_LAUNCH_FILE_EXECUTION=PASS' /tmp/aegis-external-black-box.log
+          grep -Fx 'CONTROLLED_LAUNCH_FILE_DEACTIVATION_GUARD=PASS' /tmp/aegis-external-black-box.log
+          grep -Fx 'CONTROLLED_LAUNCH_ZIP_EXECUTION=PASS' /tmp/aegis-external-black-box.log
+          grep -Fx 'CONTROLLED_LAUNCH_ZIP_DEACTIVATION_GUARD=PASS' /tmp/aegis-external-black-box.log
           test -s ci-artifacts/governed-execution-state.json
       - name: Prove automation and installed CLI share governed execution
         env:
