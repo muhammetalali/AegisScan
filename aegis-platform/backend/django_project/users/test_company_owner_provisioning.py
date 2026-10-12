@@ -332,3 +332,32 @@ def test_delegated_update_without_read_grant_can_edit_employee_but_not_owner(com
         {'first_name': 'CannotModifyOwner'}, format='json',
     )
     assert denied.status_code == 403, denied.data
+
+
+
+@pytest.mark.django_db
+def test_delegated_access_options_only_expose_assignable_permissions(company_owner):
+    delegate = User.objects.create_user(
+        email='access-options-delegate@example.invalid',
+        password='Strong-Test-Delegate!2026',
+        role=UserRole.ADMIN,
+        granted_permissions=[
+            'user.create', 'user.read', 'user.manage_roles',
+            'user.manage_permissions', 'scan.create',
+        ],
+    )
+    client = APIClient()
+    client.force_authenticate(user=delegate)
+    options = client.get('/api/v1/auth/users/access_options/')
+    assert options.status_code == 200, options.data
+    assert UserRole.SUPER_ADMIN not in options.data['roles']
+    assert 'scan.create' in options.data['roles'][UserRole.SECURITY_ANALYST]
+    assert 'system.settings' not in options.data['roles'][UserRole.SECURITY_ANALYST]
+    observer = User.objects.create_user(
+        email='access-options-observer@example.invalid',
+        password='Strong-Test-Observer!2026',
+        role=UserRole.ADMIN,
+        granted_permissions=['user.read'],
+    )
+    client.force_authenticate(user=observer)
+    assert client.get('/api/v1/auth/users/access_options/').status_code == 403

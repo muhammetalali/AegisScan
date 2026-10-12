@@ -19,7 +19,11 @@ const TABS: {id:Tab; label:string; icon:any}[] = [
 
 export const Users = () => {
   const [tab, setTab] = useState<Tab>('users')
-  const owner = useAuthStore(s=>s.user?.is_company_owner === true)
+  const actor = useAuthStore(s=>s.user)
+  const owner = actor?.is_company_owner === true
+  const canManageEmployees = owner || ['user.create', 'user.update', 'user.delete'].some(
+    grant => actor?.permissions?.includes(grant)
+  )
   const usersQuery = useQuery({ queryKey:['audit-users'], queryFn:()=>apiHelpers.get<any>('/audit/users'), enabled: tab==='users', retry:false })
   const teamsQuery = useQuery({ queryKey:['audit-teams'], queryFn:()=>apiHelpers.get<any>('/audit/teams'), enabled: tab==='teams', retry:false })
   const rolesQuery = useQuery({ queryKey:['audit-roles'], queryFn:()=>apiHelpers.get<any>('/audit/roles'), enabled: tab==='roles', retry:false })
@@ -39,7 +43,7 @@ export const Users = () => {
       </div>
 
       {tab!=='keys' && activeQuery?.isError && <p role="alert" className="rounded-xl border border-destructive p-4 text-sm text-destructive">{(activeQuery.error as any)?.response?.status===403?'403 · Your role is not allowed to read this audit collection.':'Unable to retrieve this audit collection.'}</p>}
-      {tab==='users' && owner && <CompanyAccountControls />}
+      {tab==='users' && canManageEmployees && <CompanyAccountControls />}
       {tab==='users' && (
         <div className="rounded-xl border bg-card overflow-hidden">
           <table className="w-full text-xs"><thead><tr className="border-b bg-muted/20 text-muted-foreground"><th className="text-start px-3 py-2">User</th><th className="text-start px-3 py-2">Role</th><th className="text-start px-3 py-2">Team</th><th className="text-start px-3 py-2">Status</th><th className="text-start px-3 py-2">Last login</th></tr></thead>

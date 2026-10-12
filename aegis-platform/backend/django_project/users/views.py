@@ -84,14 +84,28 @@ class UserViewSet(viewsets.ModelViewSet):
     def access_options(self, request):
         from .models import UserRole, ROLE_PERMISSIONS
         from django_project.scans.models import Scan
-        if not request.user.is_company_owner:
-            return Response({'detail': 'Only the company owner can configure employees.'}, status=403)
+        actor = request.user
+        owner = actor.is_company_owner
+        if not owner and not any(actor.has_permission(grant) for grant in (
+            'user.create', 'user.update', 'user.delete',
+        )):
+            return Response({'detail': 'Employee management permission required.'}, status=403)
+        roles = (list(UserRole.values) if owner or actor.has_permission('user.manage_roles')
+                 else [UserRole.VIEWER])
+        if not owner:
+            roles = [role for role in roles if role != UserRole.SUPER_ADMIN]
+        can_grant = owner or actor.has_permission('user.manage_permissions')
         return Response({
             'roles': {
-                str(role): sorted(str(p) for p in ROLE_PERMISSIONS[role])
-                for role in UserRole.values
+                str(role): sorted(
+                    str(permission) for permission in ROLE_PERMISSIONS[role]
+                    if owner or (can_grant and actor.has_permission(str(permission)))
+                ) for role in roles
             },
-            'scan_types': list(Scan.Type.values),
+            'scan_types': [
+                scan_type for scan_type in Scan.Type.values
+                if owner or actor.can_scan_type(scan_type)
+            ],
         })
 
     def perform_create(self, serializer):
