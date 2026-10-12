@@ -340,7 +340,7 @@ def test_delegated_access_options_only_expose_assignable_permissions(company_own
     delegate = User.objects.create_user(
         email='access-options-delegate@example.invalid',
         password='Strong-Test-Delegate!2026',
-        role=UserRole.ADMIN,
+        role=UserRole.SUPER_ADMIN,
         granted_permissions=[
             'user.create', 'user.read', 'user.manage_roles',
             'user.manage_permissions', 'scan.create',
@@ -353,6 +353,21 @@ def test_delegated_access_options_only_expose_assignable_permissions(company_own
     assert UserRole.SUPER_ADMIN not in options.data['roles']
     assert 'scan.create' in options.data['roles'][UserRole.SECURITY_ANALYST]
     assert 'system.settings' not in options.data['roles'][UserRole.SECURITY_ANALYST]
+    # A normal ADMIN cannot acquire user.manage_permissions simply by adding
+    # it to the grants array: the role capability ceiling still applies.
+    limited = User.objects.create_user(
+        email='access-options-limited@example.invalid',
+        password='Strong-Test-Limited!2026',
+        role=UserRole.ADMIN,
+        granted_permissions=[
+            'user.create', 'user.read', 'user.manage_roles',
+            'user.manage_permissions', 'scan.create',
+        ],
+    )
+    client.force_authenticate(user=limited)
+    limited_options = client.get('/api/v1/auth/users/access_options/')
+    assert limited_options.status_code == 200, limited_options.data
+    assert limited_options.data['roles'][UserRole.SECURITY_ANALYST] == []
     observer = User.objects.create_user(
         email='access-options-observer@example.invalid',
         password='Strong-Test-Observer!2026',
