@@ -1,11 +1,21 @@
-from rest_framework.authentication import BaseAuthentication
+from rest_framework.authentication import BaseAuthentication, SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from django.conf import settings
 
 
 class CookieJWTAuthentication(JWTAuthentication):
-    """Authenticate DRF requests with the access JWT stored in an HttpOnly cookie."""
+    """Authenticate cookie or Bearer JWTs, rejecting stale MFA-bypassing sessions."""
+
+    def get_user(self, validated_token):
+        user = super().get_user(validated_token)
+        # The current persistent MFA policy is authoritative on EVERY JWT
+        # request, including tokens issued before this flag was enabled.
+        if user.two_factor_enabled:
+            raise AuthenticationFailed(
+                'Second-factor verification is required; password-only sessions are disabled.'
+            )
+        return user
 
     def authenticate(self, request):
         raw_token = request.COOKIES.get(settings.AUTH_ACCESS_COOKIE)
@@ -17,6 +27,18 @@ class CookieJWTAuthentication(JWTAuthentication):
             return self.get_user(validated_token), validated_token
         except Exception as exc:
             raise AuthenticationFailed('Invalid or expired authentication cookie.') from exc
+
+
+class MFAConstrainedSessionAuthentication(SessionAuthentication):
+    """Apply the same fail-closed MFA policy to pre-existing Django sessions."""
+
+    def authenticate(self, request):
+        result = super().authenticate(request)
+        if result is not None and result[0].two_factor_enabled:
+            raise AuthenticationFailed(
+                'Second-factor verification is required; password-only sessions are disabled.'
+            )
+        return result
 
 
 class ScopedAPIKeyAuthentication(BaseAuthentication):

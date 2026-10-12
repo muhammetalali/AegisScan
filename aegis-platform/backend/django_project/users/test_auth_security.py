@@ -239,6 +239,59 @@ def test_mfa_flag_never_issues_password_only_jwt_when_challenge_unavailable():
 
 
 @pytest.mark.django_db
+def test_existing_cookie_bearer_and_refresh_cannot_bypass_new_mfa_requirement():
+    """A user who becomes MFA-required must not retain password-only JWT access."""
+    account = User.objects.create_user(
+        email='mfa-transition@example.invalid',
+        password='Strong-Test-Password-123!',
+        first_name='MFA',
+        last_name='Transition',
+    )
+    client = Client(enforce_csrf_checks=True, REMOTE_ADDR='198.51.100.77')
+    csrf = client.get('/api/v1/auth/csrf/').json()['csrfToken']
+    login = client.post(
+        '/api/v1/auth/login/',
+        {'email': account.email, 'password': 'Strong-Test-Password-123!'},
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert login.status_code == 200
+    access = login.cookies['aegis_access'].value
+    assert client.get('/api/v1/auth/users/me/').status_code == 200
+    bearer = Client(HTTP_AUTHORIZATION='Bearer ' + access)
+    assert bearer.get('/api/v1/auth/users/me/').status_code == 200
+
+    # A persisted MFA policy transition after an ordinary authenticated login.
+    account.two_factor_enabled = True
+    account.save(update_fields=['two_factor_enabled'])
+
+    assert client.get('/api/v1/auth/users/me/').status_code == 401
+    assert bearer.get('/api/v1/auth/users/me/').status_code == 401
+
+    # Refresh has its own HttpOnly token and must not require a valid access token.
+    client.cookies.pop('aegis_access', None)
+    refreshed = client.post('/api/v1/auth/refresh/', HTTP_X_CSRFTOKEN=csrf)
+    assert refreshed.status_code == 403
+    assert 'aegis_access' not in refreshed.cookies
+    assert 'aegis_refresh' not in refreshed.cookies
+
+
+@pytest.mark.django_db
+def test_existing_django_session_cannot_bypass_new_mfa_requirement():
+    """SessionAuthentication must not bypass an MFA flag set after login."""
+    account = User.objects.create_user(
+        email='mfa-session-transition@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    session_client = Client()
+    session_client.force_login(account)
+    assert session_client.get('/api/v1/auth/users/me/').status_code == 200
+
+    account.two_factor_enabled = True
+    account.save(update_fields=['two_factor_enabled'])
+    assert session_client.get('/api/v1/auth/users/me/').status_code == 401
+
+
+@pytest.mark.django_db
 def test_mfa_flag_wrong_password_does_not_disclose_enrollment():
     account = User.objects.create_user(
         email='mfa-wrong-password@example.invalid',

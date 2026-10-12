@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
 
 from django_project.audit.models import AuditLog
 from django_project.audit.services import append_audit, client_ip_from_request
@@ -127,6 +128,20 @@ class RefreshView(APIView):
         if not refresh:
             return Response({'detail': 'Refresh token is required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
+        # Refresh tokens authenticate separately from access tokens, but must
+        # honor the user's current MFA flag before minting any new JWTs.
+        # Defer malformed/expired tokens to the existing SimpleJWT serializer.
+        try:
+            token = RefreshToken(refresh)
+        except TokenError:
+            token = None
+        if token is not None:
+            user_id = token.get(settings.SIMPLE_JWT.get('USER_ID_CLAIM', 'user_id'))
+            if user_id and User.objects.filter(pk=user_id, two_factor_enabled=True).exists():
+                return Response(
+                    {'detail': 'Second-factor verification is required; password-only sessions are disabled.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         serializer = TokenRefreshSerializer(data={'refresh': refresh})
         serializer.is_valid(raise_exception=True)
         access = serializer.validated_data['access']
