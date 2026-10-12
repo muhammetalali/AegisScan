@@ -70,14 +70,19 @@ export const ScanPage = () => {
   })
 
   const readyCapabilities = (capabilityPlan.data?.plan || []).filter((item) => item.execution_ready)
+  // A deep link from the asset registry already identifies the project and asset.
+  // Prefer the sole available capability without requiring another manual selection.
+  const resolvedCapabilityId = capabilityId || (
+    requestedAssetId && readyCapabilities.length === 1 ? readyCapabilities[0].capability_id : ''
+  )
 
   const create = async () => {
-    if (!projectId || !assetId || !capabilityId) return
+    if (!projectId || !assetId || !resolvedCapabilityId) return
     setBusy(true)
     try {
       const idempotencyKey = `ui-${crypto.randomUUID()}`
       const correlationId = `ui-corr-${crypto.randomUUID()}`
-      const raw = await apiHelpers.post<unknown>(apiContractPaths.capabilityExecute(capabilityId), {
+      const raw = await apiHelpers.post<unknown>(apiContractPaths.capabilityExecute(resolvedCapabilityId), {
         project_id: projectId,
         asset_id: assetId,
         depth,
@@ -293,7 +298,7 @@ export const ScanPage = () => {
               <label className="block">
                 <span className="text-sm font-medium">{t('Capability')}</span>
                 <select
-                  value={capabilityId}
+                  value={resolvedCapabilityId}
                   onChange={(event) => setCapabilityId(event.target.value)}
                   disabled={!assetId || capabilityPlan.isLoading}
                   className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
@@ -320,7 +325,7 @@ export const ScanPage = () => {
               </button>
               <button
                 onClick={create}
-                disabled={busy || !projectId || !assetId || !capabilityId}
+                disabled={busy || !projectId || !assetId || !resolvedCapabilityId}
                 className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground disabled:opacity-50"
               >
                 {busy ? t('Creating…') : t('Run capability')}

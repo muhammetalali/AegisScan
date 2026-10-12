@@ -237,7 +237,6 @@ def test_asset_scan_idempotency_key_reuses_existing_scan(api_fixture, monkeypatc
         return SimpleNamespace(id=f"test-task-{scan_id}")
 
     monkeypatch.setattr(scans_router.run_nmap_scan, "delay", counted_delay)
-    monkeypatch.setattr(assets_router, "require_authorized_target", lambda target: target)
     url = f"/api/v1/assets/{asset.id}/scan?idempotency_key=repeat.asset.scan-20261008"
 
     first = client.post(url)
@@ -251,6 +250,38 @@ def test_asset_scan_idempotency_key_reuses_existing_scan(api_fixture, monkeypatc
     assert len(calls) == 1
     assert Scan.objects.filter(project=project).count() == 1
 
+
+
+def test_asset_scan_reuses_single_authoritative_scope_check(api_fixture, monkeypatch):
+    client, _, project, asset = api_fixture
+    checked = []
+
+    def verify_bound_target(target, **kwargs):
+        checked.append((target, kwargs.get('approved_target')))
+        assert target == asset.configuration['host']
+        assert kwargs.get('approved_target') == target
+        return target
+
+    # This is the _create_scan bound-authorization check, not a second
+    # unenforced static-allowlist call from the asset convenience route.
+    monkeypatch.setattr(scans_router, 'require_authorized_target', verify_bound_target)
+    response = client.post(f'/api/v1/assets/{asset.id}/scan')
+    assert response.status_code == 200, response.text
+    assert len(checked) == 1
+    assert response.json()['authorization_decision_id']
+    assert Scan.objects.filter(project=project, asset=asset).count() == 1
+
+
+def test_asset_one_click_scan_honors_revoke_after_existing_approval(api_fixture):
+    client, user, project, asset = api_fixture
+    AssetAuthorization.objects.create(
+        asset=asset, actor=user, authorized=False,
+        target_snapshot=asset.configuration['host'],
+        reason='Revoke prior authorization before convenience scan',
+    )
+    response = client.post(f'/api/v1/assets/{asset.id}/scan')
+    assert response.status_code == 403
+    assert Scan.objects.filter(project=project).count() == 0
 
 def test_rejects_invalid_scan_idempotency_key(api_fixture):
     client, _, project, asset = api_fixture
