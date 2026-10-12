@@ -266,3 +266,82 @@ def test_project_owner_override_preserves_tenant_role_guard(settings):
         _assert_reviewer(project, tenant, str(primary.pk))
     with pytest.raises(ProviderApprovalAuthorizationError, match='project owner/admin authority'):
         _assert_reviewer(project, tenant, str(outsider.pk))
+
+
+
+@pytest.mark.django_db(transaction=True)
+def test_tenant_bound_projects_require_existing_active_org_membership(settings):
+    """A global primary owner cannot inherit a foreign tenant's projects."""
+    from rest_framework.test import APIRequestFactory, force_authenticate
+    from django_project.projects.views import ProjectViewSet
+    from enterprise.models import Organization, OrganizationMembership, TenantProject
+    from fastapi_app.core.dependencies import accessible_projects_for_user
+
+    primary = User.objects.create_superuser(
+        email=settings.AEGIS_PRIMARY_OWNER_EMAIL,
+        password="Primary-Tenant-Test-2026!",
+    )
+    tenant_owner = User.objects.create_user(
+        email="tenant-owner-boundary@example.invalid",
+        password="Tenant-Owner-Test-2026!",
+    )
+    project_member = User.objects.create_user(
+        email="tenant-project-member@example.invalid",
+        password="Tenant-Project-Member-Test-2026!",
+    )
+    tenant = Organization.objects.create(
+        name="Isolated Org", slug="isolated-org-boundary",
+        owner=tenant_owner,
+    )
+    project = Project.objects.create(
+        name="Isolated Tenant Project",
+        slug="isolated-tenant-project",
+        owner=tenant_owner,
+    )
+    TenantProject.objects.create(project=project, organization=tenant)
+    OrganizationMembership.objects.create(
+        organization=tenant, user=tenant_owner,
+        role=OrganizationMembership.Role.OWNER,
+    )
+    ProjectMembership.objects.create(project=project, user=project_member)
+    asset = Asset.objects.create(
+        project=project, owner=tenant_owner,
+        name="Scoped asset", slug="tenant-scoped-asset",
+        type=Asset.Type.IP_ADDRESS,
+    )
+
+    def visible(actor):
+        return accessible_projects_for_user(str(actor.pk)).filter(pk=project.pk).exists()
+
+    def django_read(actor):
+        request = APIRequestFactory().get(f"/api/v1/projects/{project.pk}/")
+        force_authenticate(request, user=actor)
+        return ProjectViewSet.as_view({"get": "retrieve"})(
+            request, pk=str(project.pk)
+        ).status_code
+
+    assert not visible(primary)
+    assert not visible(project_member)
+    assert django_read(primary) == 404
+    assert django_read(project_member) == 404
+    assert not Asset.objects.filter(
+        project_access_q(str(primary.pk), relation="project"),
+        pk=asset.pk,
+    ).exists()
+    assert visible(tenant_owner)
+    assert django_read(tenant_owner) == 200
+
+    membership = OrganizationMembership.objects.create(
+        organization=tenant, user=primary,
+        role=OrganizationMembership.Role.ADMIN,
+    )
+    assert visible(primary)
+    assert django_read(primary) == 200
+    assert Asset.objects.filter(
+        project_access_q(str(primary.pk), relation="project"),
+        pk=asset.pk,
+    ).exists()
+    membership.is_active = False
+    membership.save(update_fields=["is_active"])
+    assert not visible(primary)
+    assert django_read(primary) == 404

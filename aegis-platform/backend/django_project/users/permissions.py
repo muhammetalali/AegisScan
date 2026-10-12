@@ -137,7 +137,10 @@ class IsProjectMember(permissions.BasePermission):
         from .models import APIKey
         if request.user.is_company_owner and not isinstance(request.auth, APIKey):
             from django_project.projects.models import Project
-            return Project.objects.filter(pk=project_id).exists()
+            from fastapi_app.core.dependencies import project_access_q
+            return Project.objects.filter(pk=project_id).filter(
+                project_access_q(str(request.user.pk))
+            ).exists()
 
         from django_project.projects.models import ProjectMembership
         return ProjectMembership.objects.filter(
@@ -163,7 +166,10 @@ class IsProjectAdmin(permissions.BasePermission):
         from .models import APIKey
         if request.user.is_company_owner and not isinstance(request.auth, APIKey):
             from django_project.projects.models import Project
-            return Project.objects.filter(pk=project_id).exists()
+            from fastapi_app.core.dependencies import project_access_q
+            return Project.objects.filter(pk=project_id).filter(
+                project_access_q(str(request.user.pk))
+            ).exists()
 
         from django_project.projects.models import ProjectMembership
         return ProjectMembership.objects.filter(

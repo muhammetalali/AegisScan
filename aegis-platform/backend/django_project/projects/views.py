@@ -1,4 +1,3 @@
-from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework import permissions, status, viewsets
 from rest_framework.authentication import SessionAuthentication
@@ -12,6 +11,7 @@ from .models import Project
 from .serializers import ProjectSerializer, ProjectCreateUpdateSerializer
 from django_project.users.permissions import HasPermission
 from django_project.users.authentication import ScopedAPIKeyAuthentication, CookieJWTAuthentication
+from fastapi_app.core.dependencies import project_access_q
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
@@ -33,10 +33,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
         return ProjectCreateUpdateSerializer if self.action in {'create', 'update', 'partial_update'} else ProjectSerializer
 
     def get_queryset(self):
-        projects = Project.objects.all()
-        if not self.request.user.is_company_owner:
-            projects = projects.filter(Q(owner=self.request.user) | Q(members=self.request.user))
-        return projects.distinct().select_related('owner').prefetch_related('assets', 'scans', 'vulnerabilities')
+        # Share the existing project/tenant predicate with FastAPI.
+        # In particular, a primary owner does not inherit other tenants.
+        return (Project.objects.filter(project_access_q(str(self.request.user.pk)))
+                .distinct().select_related('owner')
+                .prefetch_related('assets', 'scans', 'vulnerabilities'))
 
     def _unique_slug(self, name: str) -> str:
         base = slugify(name) or 'project'

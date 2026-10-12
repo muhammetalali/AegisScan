@@ -61,11 +61,21 @@ def project_access_q(user_id: str, *, relation: str = ""):
             email__iexact=settings.AEGIS_PRIMARY_OWNER_EMAIL,
         )
     )
+    # Tenant membership remains authoritative for tenant-bound projects.
+    # Unbound projects retain their existing owner-wide and employee visibility.
+    # This is a SQL predicate, not a side-effecting auto-membership grant.
+    tenant_scope = (
+        Q(**{f"{prefix}tenant_link__isnull": True})
+        | Q(**{
+            f"{prefix}tenant_link__organization__memberships__user_id": user_id,
+            f"{prefix}tenant_link__organization__memberships__is_active": True,
+        })
+    )
     owner_branch = Q(primary_owner)
     if relation:
-        # Do not grant owner access to records without a linked project.
+        # Never admit evidence records without an associated project.
         owner_branch &= Q(**{f"{relation}__isnull": False})
-    return (
+    return tenant_scope & (
         owner_branch
         | Q(**{f"{prefix}owner_id": user_id})
         | Q(**{f"{prefix}members__id": user_id})
