@@ -208,9 +208,16 @@ def test_actor_requires_project_access_and_active_tenant_membership(disposition_
         last_name='Outsider',
     )
     project.members.add(outsider)
+    # Tenant-bound projects are rejected by the shared project access predicate
+    # before the downstream per-capability organization-membership check.
+    from django_project.projects.models import Project
+    from fastapi_app.core.dependencies import project_access_q
+    assert not Project.objects.filter(pk=project.pk).filter(
+        project_access_q(str(outsider.pk))
+    ).exists()
     _approval(project, _owner, 'https://burp-mcp.example.invalid/mcp')
 
-    with pytest.raises(BurpMCPAuthorizationError, match='no active enterprise tenant membership'):
+    with pytest.raises(BurpMCPAuthorizationError, match='Actor is not authorized for the requested project'):
         start_burp_mcp_session(
             project_id=str(project.id),
             asset_id=str(asset.id),
@@ -222,6 +229,10 @@ def test_actor_requires_project_access_and_active_tenant_membership(disposition_
             requested_operations=['burp.site_map'],
             idempotency_key='burp-cross-tenant',
         )
+
+    assert BurpMCPSession.objects.count() == 0
+    assert BurpMCPInvocation.objects.count() == 0
+    assert Evidence.objects.filter(source='burp_mcp').count() == 0
 
 
 def test_real_mcp_jsonrpc_call_creates_qualified_redacted_immutable_evidence(disposition_fixture, monkeypatch):

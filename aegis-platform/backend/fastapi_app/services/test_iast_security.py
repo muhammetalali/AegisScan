@@ -189,8 +189,15 @@ def test_actor_must_have_both_project_access_and_active_enterprise_membership(di
         last_name='Outsider',
     )
     project.members.add(outsider)
+    # Tenant-bound projects are rejected by the shared project access predicate
+    # before the downstream per-capability organization-membership check.
+    from django_project.projects.models import Project
+    from fastapi_app.core.dependencies import project_access_q
+    assert not Project.objects.filter(pk=project.pk).filter(
+        project_access_q(str(outsider.pk))
+    ).exists()
 
-    with pytest.raises(IASTAuthorizationError, match='no active enterprise tenant membership'):
+    with pytest.raises(IASTAuthorizationError, match='Actor is not authorized for the requested project'):
         start_iast_session(
             project_id=str(project.id),
             asset_id=str(asset.id),
