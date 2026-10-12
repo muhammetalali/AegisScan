@@ -65,6 +65,32 @@ def _wait_disposable_postgres(name: str, *, attempts: int = 60) -> None:
     )
 
 
+def _run_restore_verifier(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+    """Report safe failure phase without exposing backup contents or credentials."""
+    try:
+        return host._run(argv, **kwargs)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr or ""
+        stages = re.findall(r"AEGIS_RESTORE_STAGE=(download|postgres_verification)", stderr)
+        stage = stages[-1] if stages else "startup"
+        symptoms = (
+            ("password authentication failed", "authentication"),
+            ("could not translate host name", "dns-resolution"),
+            ("connection refused", "connection-refused"),
+            ("permission denied", "permission-denied"),
+            ("No space left on device", "storage-exhausted"),
+            ("createdb: error:", "database-create"),
+            ("pg_restore: error:", "database-restore"),
+            ("psql: error:", "database-assertion"),
+            ("sha256sum:", "checksum"),
+        )
+        reason = next((code for marker, code in symptoms if marker in stderr), "undetermined")
+        raise host.DeployError(
+            f"isolated PostgreSQL restore failed at {stage}: {reason} "
+            f"(exit={exc.returncode}; protected stdout/stderr omitted)"
+        ) from exc
+
+
 def _restore_drill(
     *,
     backup: dict[str, object],
@@ -79,6 +105,9 @@ def _restore_drill(
     password = secrets.token_urlsafe(32)
     drill_env = dict(env)
     drill_env["POSTGRES_PASSWORD"] = password
+    # The backup service normally carries production DB credentials. Override both
+    # client and Compose interpolation credentials for this disposable restore.
+    drill_env["PGPASSWORD"] = password
     started = False
     try:
         host._run(
@@ -105,18 +134,22 @@ def _restore_drill(
             "set -eu; "
             "work=/tmp/aegis-resilience-restore; "
             "rm -rf \"$work\"; mkdir -p \"$work\"; chmod 0700 \"$work\"; "
+            "printf 'AEGIS_RESTORE_STAGE=download\\n' >&2; "
             "python3 /app/scripts/remote_backup.py restore "
             "--manifest-key \"$1\" --manifest-version-id \"$2\" "
             "--output \"$work/production.dump\" --work-dir \"$work\"; "
+            "printf 'AEGIS_RESTORE_STAGE=postgres_verification\\n' >&2; "
             "/app/scripts/verify_postgres_restore.sh \"$work/production.dump\""
         )
-        result = host._run(
+        result = _run_restore_verifier(
             host._compose(
                 env_file,
                 "run", "--rm", "--no-deps",
                 "-e", f"PGHOST={alias}",
                 "-e", "PGPORT=5432",
                 "-e", "PGUSER=aegis",
+                "-e", "PGDATABASE=aegis_restore_control",
+                "-e", "PGPASSWORD",
                 "-e", "AEGIS_RESTORE_REQUIRED_TABLES=django_migrations,users_user",
                 "--entrypoint", "/bin/sh",
                 "backup", "-ec", script, "sh",

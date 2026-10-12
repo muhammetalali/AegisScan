@@ -192,6 +192,7 @@ def test_host_restore_drill_is_isolated_bounded_and_matches_exact_backup(tmp_pat
     monkeypatch.setattr(host.host, '_compose', lambda _env, *args: ['docker', 'compose', *args])
 
     calls = []
+    command_envs = []
     restore = {
         'status': 'restored-locally',
         'backup_id': 'backup-1',
@@ -202,6 +203,7 @@ def test_host_restore_drill_is_isolated_bounded_and_matches_exact_backup(tmp_pat
 
     def fake_run(argv, **kwargs):
         calls.append(argv)
+        command_envs.append(kwargs.get('env', {}))
         if argv[:2] == ['docker', 'run']:
             return SimpleNamespace(stdout='container-id\n')
         return SimpleNamespace(stdout=json.dumps(restore) + '\nRESTORE_VERIFICATION=PASS database=proof\n')
@@ -226,12 +228,35 @@ def test_host_restore_drill_is_isolated_bounded_and_matches_exact_backup(tmp_pat
     assert '--no-deps' in compose_run
     assert '--entrypoint' in compose_run and '/bin/sh' in compose_run
     assert 'backup' in compose_run
+    assert 'PGDATABASE=aegis_restore_control' in compose_run
+    assert 'PGPASSWORD' in compose_run
+    assert command_envs[1]['POSTGRES_PASSWORD'] == 'disposable-restore-password'
+    assert command_envs[1]['PGPASSWORD'] == 'disposable-restore-password'
     assert 'disposable-restore-password' not in ' '.join(compose_run)
     assert result['postgres_restore_verified'] is True
     assert result['network_scope'] == 'isolated-backup-db'
     assert result['plaintext_scope'] == 'ephemeral-backup-container-tmpfs'
     assert result['postgres_image_id'] == 'sha256:' + 'a' * 64
     assert cleanup[-1][:3] == ['docker', 'rm', '-f']
+
+
+def test_restore_verifier_reports_phase_without_exposing_secret(monkeypatch):
+    import subprocess
+    import production_host_resilience as host
+
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, args[0],
+            output='opaque backup manifest, protected-token',
+            stderr='AEGIS_RESTORE_STAGE=download\\n'
+                   'AEGIS_RESTORE_STAGE=postgres_verification\\n'
+                   'createdb: error: password authentication failed (protected-token)',
+        )
+
+    monkeypatch.setattr(host.host, '_run', fail)
+    with pytest.raises(host.host.DeployError, match='postgres_verification: authentication') as error:
+        host._run_restore_verifier(['docker', 'compose', 'run'])
+    assert 'protected-token' not in str(error.value)
 
 
 def test_host_restore_drill_preserves_primary_failure_when_cleanup_also_fails(tmp_path, monkeypatch):
