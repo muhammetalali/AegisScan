@@ -224,3 +224,130 @@ def test_due_listing_is_bounded_and_only_returns_expired_ready_rows(context):
         with pytest.raises(lifecycle.WebLabLifecycleError, match='due limit'):
             lifecycle.due_web_lab_instances(
                 actor_id=str(context[0].id), project_id=str(context[1].id), limit=limit)
+
+
+@pytest.mark.parametrize('role,allowed', [
+    (OrganizationMembership.Role.OWNER, True),
+    (OrganizationMembership.Role.ADMIN, True),
+    (OrganizationMembership.Role.MANAGER, True),
+    (OrganizationMembership.Role.ANALYST, False),
+    (OrganizationMembership.Role.AUDITOR, False),
+    (OrganizationMembership.Role.VIEWER, False),
+])
+def test_lab_management_and_inspector_use_same_tenant_roles(context, role, allowed):
+    from django_project.system.credential_vault import CredentialVaultDenied
+    from fastapi_app.services.lab_verification import record_runtime_inspection
+
+    actor, _project, asset, _authorization, organization = context
+    membership = OrganizationMembership.objects.get(organization=organization, user=actor)
+    membership.role = role
+    membership.save(update_fields=['role'])
+    if allowed:
+        scoped_actor, scoped_organization, scoped_asset = lifecycle._management_scope(
+            actor_id=str(actor.pk), asset_id=str(asset.pk),
+        )
+        assert (scoped_actor.pk, scoped_organization.pk, scoped_asset.pk) == (
+            actor.pk, organization.pk, asset.pk,
+        )
+        evidence = record_runtime_inspection(
+            asset=asset, actor_id=str(actor.pk), inspection=inspection(),
+        )
+        assert evidence.asset_id == asset.pk
+    else:
+        with pytest.raises(lifecycle.WebLabLifecycleAccessError):
+            lifecycle._management_scope(actor_id=str(actor.pk), asset_id=str(asset.pk))
+        with pytest.raises(CredentialVaultDenied):
+            record_runtime_inspection(
+                asset=asset, actor_id=str(actor.pk), inspection=inspection(),
+            )
+
+
+def test_lab_management_and_inspector_reject_inactive_tenant_membership(context):
+    from django_project.system.credential_vault import CredentialVaultDenied
+    from fastapi_app.services.lab_verification import record_runtime_inspection
+
+    actor, _project, asset, _authorization, organization = context
+    membership = OrganizationMembership.objects.get(organization=organization, user=actor)
+    membership.role = OrganizationMembership.Role.ADMIN
+    membership.is_active = False
+    membership.save(update_fields=['role', 'is_active'])
+    with pytest.raises(lifecycle.WebLabLifecycleAccessError):
+        lifecycle._management_scope(actor_id=str(actor.pk), asset_id=str(asset.pk))
+    with pytest.raises(CredentialVaultDenied):
+        record_runtime_inspection(
+            asset=asset, actor_id=str(actor.pk), inspection=inspection(),
+        )
+
+
+def test_lab_tenant_management_does_not_cross_organization_boundary(context):
+    from django_project.system.credential_vault import CredentialVaultDenied
+    from fastapi_app.services.lab_verification import record_runtime_inspection
+
+    actor, _project, _asset, _authorization, _organization = context
+    other_owner = User.objects.create_user(
+        email='other-lab-tenant@example.invalid', password='Test-Tenant-Password-123!',
+    )
+    other_organization = Organization.objects.create(
+        name='Other Lab Tenant', slug='other-lab-tenant', owner=other_owner,
+    )
+    other_project = Project.objects.create(
+        name='Other Tenant Project', slug='other-tenant-project', owner=actor,
+    )
+    other_asset = Asset.objects.create(
+        project=other_project, owner=actor, name='Other Tenant Asset',
+        slug='other-tenant-asset', type=Asset.Type.WEBSITE,
+        configuration={'url': 'http://127.0.0.1:18081'},
+    )
+    TenantProject.objects.create(
+        organization=other_organization, project=other_project,
+    )
+    assert not OrganizationMembership.objects.filter(
+        organization=other_organization, user=actor, is_active=True,
+    ).exists()
+    with pytest.raises(lifecycle.WebLabLifecycleAccessError):
+        lifecycle._management_scope(actor_id=str(actor.pk), asset_id=str(other_asset.pk))
+    with pytest.raises(CredentialVaultDenied):
+        record_runtime_inspection(
+            asset=other_asset, actor_id=str(actor.pk), inspection=inspection(),
+        )
+
+
+def test_lab_admin_must_manage_the_project_linked_tenant_not_another_tenant(context):
+    from django_project.projects.models import ProjectMembership
+    from django_project.system.credential_vault import CredentialVaultDenied
+    from fastapi_app.services.lab_verification import record_runtime_inspection
+
+    owner, project, asset, _authorization, actual_tenant = context
+    outsider = User.objects.create_user(
+        email='web-lab-other-tenant-admin@example.invalid', password='test-only',
+    )
+    ProjectMembership.objects.create(
+        project=project, user=outsider, role=ProjectMembership.Role.ADMIN,
+    )
+    unrelated_tenant = Organization.objects.create(
+        name='Unrelated Web Lab Tenant', slug='unrelated-web-lab-tenant', owner=outsider,
+    )
+    OrganizationMembership.objects.create(
+        organization=unrelated_tenant, user=outsider,
+        role=OrganizationMembership.Role.ADMIN,
+    )
+    with pytest.raises(lifecycle.WebLabLifecycleAccessError):
+        lifecycle._management_scope(actor_id=str(outsider.pk), asset_id=str(asset.pk))
+    with pytest.raises(CredentialVaultDenied):
+        record_runtime_inspection(
+            asset=asset, actor_id=str(outsider.pk), inspection=inspection(),
+        )
+
+    OrganizationMembership.objects.create(
+        organization=actual_tenant, user=outsider,
+        role=OrganizationMembership.Role.ADMIN,
+    )
+    actor, tenant, scoped_asset = lifecycle._management_scope(
+        actor_id=str(outsider.pk), asset_id=str(asset.pk),
+    )
+    assert actor.pk == outsider.pk and tenant.pk == actual_tenant.pk
+    assert scoped_asset.pk == asset.pk
+    evidence = record_runtime_inspection(
+        asset=asset, actor_id=str(outsider.pk), inspection=inspection(),
+    )
+    assert evidence.asset_id == asset.pk

@@ -5,14 +5,15 @@ import pytest
 from django_project.assets.models import Asset, AssetAuthorization
 from django_project.projects.models import Project
 from django_project.scans.models import Scan
-from django_project.users.models import User
+from django_project.users.models import User, UserRole
 from fastapi_app.services import scan_orchestrator as module
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 @pytest.fixture
 def pending_scan():
-    user = User.objects.create_user(email='orchestration-check@example.invalid', password='LocalTestPassword123!')
+    user = User.objects.create_user(email='orchestration-check@example.invalid', password='LocalTestPassword123!',
+                                    role=UserRole.SECURITY_ANALYST)
     project = Project.objects.create(name='Permission check', slug='permission-check', owner=user)
     asset = Asset.objects.create(project=project, owner=user, name='Test host', slug='test-host',
                                  type=Asset.Type.IP_ADDRESS, configuration={'host': 'aegis-scan-target'})
@@ -198,3 +199,47 @@ def test_stage09_scan_orchestrator_has_no_phantom_worker_capacity_setting():
     assert not hasattr(api_settings, 'DEFAULT_SCAN_TIMEOUT')
     assert not hasattr(api_settings, 'ENGINE_TIMEOUT')
     assert set(orchestrator.engine_status) == set(module.ENGINE_TASKS)
+
+
+def test_existing_pending_scan_cannot_start_after_scan_create_is_revoked(pending_scan, monkeypatch):
+    user, asset, grant, scan = pending_scan
+    user.granted_permissions = ['project.read']
+    user.enabled_scan_types = ['ip']
+    user.save(update_fields=['granted_permissions', 'enabled_scan_types'])
+    monkeypatch.setattr(module.run_nmap_scan, 'delay', lambda *_: pytest.fail('unexpected dispatch'))
+    result = activate(scan, user)
+    assert_not_queued(scan, result)
+    assert 'scan.create' in result['message']
+
+
+def test_cancel_and_restart_require_their_existing_permissions(pending_scan, monkeypatch):
+    from fastapi_app.services import scan_state_machine as state_machine
+    from types import SimpleNamespace
+
+    user, _asset, _grant, scan = pending_scan
+    user.role = UserRole.SECURITY_MANAGER
+    user.granted_permissions = ['project.read']
+    user.save(update_fields=['role', 'granted_permissions'])
+    denied = state_machine.transition_scan(
+        scan_id=str(scan.pk), user_id=str(user.pk), target_status=Scan.Status.CANCELLED,
+    )
+    assert denied['status'] == 'error' and 'scan.cancel' in denied['message']
+    scan.refresh_from_db()
+    assert scan.status == Scan.Status.PENDING
+
+    monkeypatch.setattr(
+        state_machine, 'checkpoint_scan',
+        lambda *args, **kwargs: SimpleNamespace(id='test-checkpoint', resume_token='test-resume'),
+    )
+    user.granted_permissions = ['scan.cancel', 'project.read']
+    user.save(update_fields=['granted_permissions'])
+    cancelled = state_machine.transition_scan(
+        scan_id=str(scan.pk), user_id=str(user.pk), target_status=Scan.Status.CANCELLED,
+    )
+    assert cancelled['status'] == Scan.Status.CANCELLED
+    denied_restart = state_machine.prepare_restart(scan_id=str(scan.pk), user_id=str(user.pk))
+    assert denied_restart['status'] == 'error' and 'scan.restart' in denied_restart['message']
+    user.granted_permissions = ['scan.cancel', 'scan.restart', 'project.read']
+    user.save(update_fields=['granted_permissions'])
+    restarted = state_machine.prepare_restart(scan_id=str(scan.pk), user_id=str(user.pk))
+    assert restarted['status'] == 'restart_ready'

@@ -7,6 +7,7 @@ from celery.result import AsyncResult
 from django.db import transaction
 
 from django_project.scans.models import Scan
+from django_project.users.models import User
 from fastapi_app.core.dependencies import project_access_q
 from fastapi_app.services.enterprise_gap_closure import checkpoint_scan
 
@@ -37,6 +38,10 @@ def transition_scan(*, scan_id: str, user_id: str, target_status: str, reason: s
         project_access_q(user_id, relation='project')
     ).exists():
         return {'status':'error','message':'Scan access denied'}
+    required_permission = 'scan.cancel' if target_status == Scan.Status.CANCELLED else 'scan.restart'
+    actor = User.objects.filter(pk=user_id, is_active=True).first()
+    if not actor or not actor.has_permission(required_permission):
+        return {'status': 'error', 'message': f'Permission required: {required_permission}'}
     if target_status not in ALLOWED.get(scan.status,set()):
         return {'status':'error','message':f'Invalid scan state transition: {scan.status} -> {target_status}'}
     previous=scan.status
@@ -59,6 +64,9 @@ def prepare_restart(*, scan_id: str, user_id: str) -> dict[str, Any]:
         project_access_q(user_id, relation='project')
     ).exists():
         return {'status':'error','message':'Scan access denied'}
+    actor = User.objects.filter(pk=user_id, is_active=True).first()
+    if not actor or not actor.has_permission('scan.restart'):
+        return {'status': 'error', 'message': 'Permission required: scan.restart'}
     if scan.status not in {Scan.Status.FAILED,Scan.Status.CANCELLED,Scan.Status.PARTIAL,Scan.Status.COMPLETED}:
         return {'status':'error','message':'Only terminal scans can be restarted'}
     previous=scan.status
