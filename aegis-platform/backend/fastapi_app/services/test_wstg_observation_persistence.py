@@ -176,3 +176,60 @@ def test_reingestion_refreshes_trusted_lineage_without_reopening_governed_state(
     assert 'attacker_controlled' not in second.raw_data['_aegisscan_wstg']
     assert second.raw_data['_aegisscan_wstg']['completion_claim_allowed'] is False
     assert FindingConfirmation.objects.filter(finding=second).count() == 0
+
+
+
+@pytest.mark.django_db
+def test_nmap_multi_host_same_port_keeps_finding_evidence_and_fingerprint_identity_on_retry():
+    from django_project.assets.models import TechnologyFingerprint
+
+    User = get_user_model()
+    user = User.objects.create_user(
+        email='nmap-multihost-identity@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    project = Project.objects.create(
+        name='Nmap Multi Host Identity', slug='nmap-multi-host-identity', owner=user,
+    )
+    asset = Asset.objects.create(
+        project=project, owner=user, name='Nmap CIDR', slug='nmap-multi-host-cidr',
+        type=Asset.Type.IP_ADDRESS, configuration={'ip': '192.0.2.0'},
+    )
+    scan = Scan.objects.create(
+        project=project, asset=asset, name='Nmap Multi Host',
+        scan_type=Scan.Type.IP, engines=['nmap'], initiated_by=user,
+    )
+    parsed = {'hosts': [
+        {'ip': ip, 'ports': [{'port': 443, 'protocol': 'tcp', 'state': 'open',
+                             'service': 'https', 'product': 'fixture'}]}
+        for ip in ('192.0.2.10', '192.0.2.11')
+    ]}
+    identities = None
+    for attempt in range(2):
+        evidence = Evidence.objects.create(
+            scan=scan, asset=asset, source='nmap',
+            evidence_type='scanner_output', raw_output='<multi-host/>',
+            collected_by=user,
+        )
+        findings = ingest_nmap_findings(scan, evidence, parsed)
+        actual = {finding.raw_data['ip']: finding.id for finding in findings}
+        assert len(findings) == len(actual) == 2
+        if identities is not None:
+            assert actual == identities
+            assert not Evidence.objects.filter(pk=evidence.pk).exists()
+        identities = actual
+        assert Vulnerability.objects.filter(scan=scan, source_engine='nmap').count() == 2
+        assert TechnologyFingerprint.objects.filter(
+            asset=asset, source='nmap', category='network_service',
+        ).count() == 2
+        for ip, finding_id in actual.items():
+            linked = Evidence.objects.filter(
+                scan=scan, finding_id=finding_id, source='nmap',
+            )
+            assert linked.count() == 1
+            fingerprint = TechnologyFingerprint.objects.get(
+                asset=asset, source='nmap', category='network_service',
+                name__startswith=ip,
+            )
+            assert f'finding:{finding_id}' in fingerprint.evidence
+            assert f'evidence:{linked.get().id}' in fingerprint.evidence
