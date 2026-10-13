@@ -49,7 +49,7 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
 
             vulnerability = Vulnerability.objects.filter(
                 scan=scan, asset=scan.asset, source_engine='nmap',
-                raw_data__port=port_number, raw_data__protocol=protocol,
+                raw_data__ip=ip, raw_data__port=port_number, raw_data__protocol=protocol,
             ).first()
             if vulnerability is None:
                 vulnerability = Vulnerability.objects.create(
@@ -78,12 +78,14 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
             ).exclude(pk=evidence.pk).first()
             if existing:
                 duplicate_input_evidence = True
+                linked_evidence = existing
             elif not primary_evidence_used and evidence.finding_id in {None, vulnerability.id}:
                 evidence.finding = vulnerability
                 evidence.save(update_fields=['finding'])
                 primary_evidence_used = True
+                linked_evidence = evidence
             else:
-                Evidence.objects.update_or_create(
+                linked_evidence, _ = Evidence.objects.update_or_create(
                     id=evidence_id('scan', str(scan.id), 'nmap', 'scanner_output', str(vulnerability.id)),
                     defaults={
                         'scan': scan,
@@ -116,7 +118,7 @@ def ingest_nmap_findings(scan: Scan, evidence: Evidence, parsed: dict[str, Any])
                     'category': 'network_service',
                     'confidence': 0.8 if service else 0.5,
                     'source': 'nmap',
-                    'evidence': f'scan:{scan.id};finding:{vulnerability.id};evidence:{evidence.id}',
+                    'evidence': f'scan:{scan.id};finding:{vulnerability.id};evidence:{linked_evidence.id}',
                 },
             )
             findings.append(vulnerability)
