@@ -15,12 +15,13 @@ const renderPage=()=>{
   return render(<QueryClientProvider client={client}><CompanyAccountControls/></QueryClientProvider>)
 }
 beforeEach(()=>{
+  useAuthStore.setState({user:{role:'super_admin',is_company_owner:true} as never})
   get.mockImplementation(async (path:string)=>{
     if(path==='/auth/users/access_options/')return {roles:{viewer:['project.read'],admin:['project.read','scan.create','system.monitor']},scan_types:['url','file','ip']} as never
     if(path==='/auth/users/')return {count:1,next:null,results:[employee]} as never
     throw Error('unknown '+path)
   })
-  post.mockResolvedValue({id:'staff-2'} as never)
+  post.mockResolvedValue({id:'staff-2',email:'new@company.invalid',role:'admin',is_active:false,granted_permissions:[],enabled_scan_types:[],enabled_pages:[]} as never)
   patch.mockResolvedValue({id:'staff-1'} as never)
 })
 afterEach(()=>{cleanup();vi.clearAllMocks()})
@@ -43,6 +44,8 @@ describe('owner-only company account UI',()=>{
       role:'admin',granted_permissions:['project.read'],enabled_scan_types:['url'],enabled_pages:[],
     }))
     expect((await screen.findByRole('status')).textContent).toContain('created inactive')
+    expect(await screen.findByText('Selected: new@company.invalid')).toBeTruthy()
+    expect(screen.getByText('Activate employee')).toBeTruthy()
     expect((screen.getByLabelText('Initial employee password') as HTMLInputElement).value).toBe('')
   })
   it('activates an existing employee and updates only existing canonical routes',async()=>{

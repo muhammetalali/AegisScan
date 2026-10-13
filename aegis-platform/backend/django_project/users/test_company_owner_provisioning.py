@@ -116,6 +116,46 @@ def test_ungranted_admin_cannot_create_activate_and_assign_employee(company_owne
     assert not employee.is_active
 
 
+
+@pytest.mark.django_db
+def test_delegated_manager_can_activate_own_created_account_without_user_read(company_owner):
+    """The manager console must use the newly returned identity without a list grant."""
+    manager = User.objects.create_user(
+        email='manager-no-inventory@example.invalid',
+        password='Strong-Test-Manager!2026',
+        role=UserRole.ADMIN,
+        granted_permissions=['user.create', 'user.update'],
+    )
+    assert manager.has_permission('user.create')
+    assert manager.has_permission('user.update')
+    assert not manager.has_permission('user.read')
+
+    client = APIClient()
+    client.force_authenticate(user=manager)
+    assert client.get('/api/v1/auth/users/').status_code == 403
+    created = client.post('/api/v1/auth/users/', {
+        'email': 'staff-created-by-manager@example.invalid',
+        'first_name': 'Managed', 'last_name': 'Staff',
+        'password': 'Strong-Test-Employee!2026',
+        'password_confirm': 'Strong-Test-Employee!2026',
+        'role': UserRole.VIEWER,
+        'granted_permissions': [],
+        'enabled_scan_types': [],
+        'enabled_pages': [],
+    }, format='json')
+    assert created.status_code == 201, created.data
+    employee = User.objects.get(email='staff-created-by-manager@example.invalid')
+    assert str(created.data['id']) == str(employee.pk)
+    assert created.data['is_active'] is False
+    assert 'password' not in created.data
+    assert employee.is_active is False
+    assert client.post(f'/api/v1/auth/users/{employee.pk}/activate/', {}, format='json').status_code == 200
+    employee.refresh_from_db()
+    assert employee.is_active is True
+
+    # No privilege escalation through a manager with limited grants.
+    assert client.post(f'/api/v1/auth/users/{company_owner.pk}/deactivate/', {}, format='json').status_code == 403
+
 @pytest.mark.django_db
 def test_owner_credential_and_identity_are_not_delegable(company_owner, other_admin):
     owner = APIClient()

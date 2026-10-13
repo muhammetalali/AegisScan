@@ -88,7 +88,10 @@ export const CompanyAccountControls = () => {
       <fieldset className="grid gap-1 sm:grid-cols-2"><legend className="mb-2 text-sm font-medium">Allowed scan types</legend>{(options?.scan_types||[]).map(mode=><label className="flex items-center gap-2 text-xs" key={mode}><input type="checkbox" checked={scanTypes.includes(mode)} onChange={()=>setScanTypes(x=>toggle(x,mode))}/>{mode}</label>)}</fieldset>
     </div>
     {canCreate&&<button disabled={busy||!email||!password||!first||!last} className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50" onClick={()=>transact(async()=>{
-      await apiHelpers.post('/auth/users/',{email,first_name:first,last_name:last,password,password_confirm:password,role:canAssignRoles?role:'viewer',granted_permissions:canAssignGrants?grants:[],enabled_scan_types:scanTypes,enabled_pages:pages})
+      const created = await apiHelpers.post<Employee>('/auth/users/',{email,first_name:first,last_name:last,password,password_confirm:password,role:canAssignRoles?role:'viewer',granted_permissions:canAssignGrants?grants:[],enabled_scan_types:scanTypes,enabled_pages:pages})
+      // The manager already knows this newly created account's ID. Do not
+      // require user.read or a second inventory lookup to activate it.
+      if (canUpdate && created?.id) select({...created,is_active:false,is_company_owner:false})
       setEmail('');setPassword('');setFirst('');setLast('');setGrants([]);setScanTypes([]);setPages([])
     },'Employee created inactive. Choose the employee below and activate when ready.')}>Create inactive employee</button>}
     {accountsError&&<p role="alert" className="text-sm text-destructive">{(accountsErrorCause as any)?.response?.status===403?'403 · Employee inventory requires the user.read grant.':'Employee inventory unavailable. No changes made.'}</p>}
