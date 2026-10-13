@@ -310,3 +310,44 @@ def test_lab_tenant_management_does_not_cross_organization_boundary(context):
         record_runtime_inspection(
             asset=other_asset, actor_id=str(actor.pk), inspection=inspection(),
         )
+
+
+def test_lab_admin_must_manage_the_project_linked_tenant_not_another_tenant(context):
+    from django_project.projects.models import ProjectMembership
+    from django_project.system.credential_vault import CredentialVaultDenied
+    from fastapi_app.services.lab_verification import record_runtime_inspection
+
+    owner, project, asset, _authorization, actual_tenant = context
+    outsider = User.objects.create_user(
+        email='web-lab-other-tenant-admin@example.invalid', password='test-only',
+    )
+    ProjectMembership.objects.create(
+        project=project, user=outsider, role=ProjectMembership.Role.ADMIN,
+    )
+    unrelated_tenant = Organization.objects.create(
+        name='Unrelated Web Lab Tenant', slug='unrelated-web-lab-tenant', owner=outsider,
+    )
+    OrganizationMembership.objects.create(
+        organization=unrelated_tenant, user=outsider,
+        role=OrganizationMembership.Role.ADMIN,
+    )
+    with pytest.raises(lifecycle.WebLabLifecycleAccessError):
+        lifecycle._management_scope(actor_id=str(outsider.pk), asset_id=str(asset.pk))
+    with pytest.raises(CredentialVaultDenied):
+        record_runtime_inspection(
+            asset=asset, actor_id=str(outsider.pk), inspection=inspection(),
+        )
+
+    OrganizationMembership.objects.create(
+        organization=actual_tenant, user=outsider,
+        role=OrganizationMembership.Role.ADMIN,
+    )
+    actor, tenant, scoped_asset = lifecycle._management_scope(
+        actor_id=str(outsider.pk), asset_id=str(asset.pk),
+    )
+    assert actor.pk == outsider.pk and tenant.pk == actual_tenant.pk
+    assert scoped_asset.pk == asset.pk
+    evidence = record_runtime_inspection(
+        asset=asset, actor_id=str(outsider.pk), inspection=inspection(),
+    )
+    assert evidence.asset_id == asset.pk
