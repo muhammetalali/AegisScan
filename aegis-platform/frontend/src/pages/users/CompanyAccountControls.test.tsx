@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apiHelpers } from '@/services/api'
+import { useAuthStore } from '@/stores/authStore'
 import { CompanyAccountControls } from './CompanyAccountControls'
 
 vi.mock('@/services/api',()=>({apiHelpers:{get:vi.fn(),post:vi.fn(),patch:vi.fn()}}))
