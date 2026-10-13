@@ -94,6 +94,10 @@ class ScanOrchestrator:
             project_access_q(user_id, relation='project')
         ).exists():
             return {'status': 'error', 'message': 'Scan access denied'}
+        from django_project.users.models import User
+        actor = User.objects.filter(pk=user_id, is_active=True).first()
+        if not actor or not actor.can_scan_type(scan.scan_type):
+            return {'status': 'error', 'message': 'Permission required: scan.create and enabled scan type'}
         if scan.status != Scan.Status.PENDING:
             return {'status': 'error', 'message': 'Scan is not pending; use the restart endpoint for terminal scans'}
         if not scan.asset_id or not scan.authorization_decision_id:

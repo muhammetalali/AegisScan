@@ -304,13 +304,27 @@ async def get_scan(scan_id: str, user=Depends(get_current_user)):
 
 @sync_to_async
 def _delete_scan(scan_id: str, user_id: str):
-    scan = Scan.objects.filter(id=scan_id).filter(
-        project_access_q(user_id, relation="project")
-    ).first()
-    if not scan:
-        return False
-    scan.delete()
-    return True
+    from django_project.users.models import User
+
+    # Deletion must not be a side effect of project read access. Preserve
+    # produced findings/evidence and never remove an active queued task.
+    with transaction.atomic():
+        scan = Scan.objects.select_for_update().filter(id=scan_id).filter(
+            project_access_q(user_id, relation="project")
+        ).first()
+        if not scan:
+            return False
+        actor = User.objects.filter(pk=user_id, is_active=True).first()
+        if not actor or not actor.has_permission('scan.cancel'):
+            raise HTTPException(status_code=403, detail='Permission required: scan.cancel')
+        if (scan.status in {Scan.Status.QUEUED, Scan.Status.RUNNING, Scan.Status.PAUSED}
+                or scan.celery_task_id):
+            raise HTTPException(status_code=409, detail='Active or dispatched scans cannot be deleted')
+        if (scan.evidence.exists() or scan.vulnerabilities.exists()
+                or scan.engine_executions.exists()):
+            raise HTTPException(status_code=409, detail='Scans with findings, evidence, or execution history cannot be deleted')
+        scan.delete()
+        return True
 
 
 @router.delete('/{scan_id}')

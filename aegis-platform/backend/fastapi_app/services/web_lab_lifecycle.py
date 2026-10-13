@@ -71,7 +71,8 @@ def _management_scope(*, actor_id: str, asset_id: str):
     link = TenantProject.objects.filter(project=asset.project, organization__is_active=True).first()
     if (not link or not OrganizationMembership.objects.filter(
             organization=link.organization, user=actor, is_active=True,
-            role__in=[OrganizationMembership.Role.OWNER, OrganizationMembership.Role.MANAGER]).exists()):
+            role__in=[OrganizationMembership.Role.OWNER, OrganizationMembership.Role.ADMIN,
+                      OrganizationMembership.Role.MANAGER]).exists()):
         raise WebLabLifecycleAccessError('Web Lab lifecycle requires current tenant management authority.')
     return actor, link.organization, asset
 

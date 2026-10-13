@@ -92,7 +92,8 @@ def record_runtime_inspection(*, asset, actor_id, inspection):
     if (not link or not _project_access(asset.project, str(actor_id))
             or not OrganizationMembership.objects.filter(organization=link.organization,
                 user_id=actor_id, user__is_active=True, is_active=True,
-                role__in=[OrganizationMembership.Role.OWNER, OrganizationMembership.Role.MANAGER]).exists()):
+                role__in=[OrganizationMembership.Role.OWNER, OrganizationMembership.Role.ADMIN,
+                          OrganizationMembership.Role.MANAGER]).exists()):
         raise CredentialVaultDenied('The runtime inspector requires current project/tenant management authority.')
     value = _inspection_shape({**inspection, 'schema': RUNTIME_SCHEMA,
                               'project_ref': str(asset.project_id), 'asset_ref': str(asset.id)})

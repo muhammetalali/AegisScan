@@ -330,3 +330,50 @@ def test_intentional_rescans_without_key_remain_distinct(api_fixture):
     assert first.status_code == second.status_code == 201
     assert first.json()['id'] != second.json()['id']
     assert Scan.objects.filter(project=project).count() == 2
+
+
+def test_scan_create_requires_scan_create_even_when_type_is_enabled(api_fixture):
+    client, user, project, asset = api_fixture
+    user.granted_permissions = ['project.read']
+    user.enabled_scan_types = [Scan.Type.NETWORK]
+    user.save(update_fields=['granted_permissions', 'enabled_scan_types'])
+    denied = client.post('/scans/', json=_body(project.id, asset.id))
+    assert denied.status_code == 403
+    assert Scan.objects.filter(project=project).count() == 0
+
+    user.granted_permissions = ['project.read', 'scan.create']
+    user.save(update_fields=['granted_permissions'])
+    allowed = client.post('/scans/', json=_body(project.id, asset.id))
+    assert allowed.status_code == 201, allowed.text
+    assert Scan.objects.filter(project=project).count() == 1
+
+
+def test_scan_delete_requires_scan_control_permission_and_preserves_evidence(api_fixture):
+    from django_project.evidence.models import Evidence
+
+    client, user, project, asset = api_fixture
+    scan = Scan.objects.create(
+        project=project, asset=asset, name='Evidence-backed Scan',
+        scan_type=Scan.Type.NETWORK, initiated_by=user, status=Scan.Status.COMPLETED,
+    )
+    evidence = Evidence.objects.create(
+        scan=scan, asset=asset, source='nmap', evidence_type='scanner_output',
+        raw_output='<retained-evidence/>', collected_by=user,
+    )
+    response = client.delete(f'/scans/{scan.pk}')
+    assert response.status_code == 403, response.text
+    user.role = UserRole.SECURITY_MANAGER
+    user.granted_permissions = ['scan.cancel', 'project.read']
+    user.save(update_fields=['role', 'granted_permissions'])
+    protected = client.delete(f'/scans/{scan.pk}')
+    assert protected.status_code == 409, protected.text
+    assert Scan.objects.filter(pk=scan.pk).exists()
+    assert Evidence.objects.filter(pk=evidence.pk).exists()
+
+    pending = Scan.objects.create(
+        project=project, asset=asset, name='Never Executed',
+        scan_type=Scan.Type.NETWORK, initiated_by=user, status=Scan.Status.PENDING,
+    )
+    removed = client.delete(f'/scans/{pending.pk}')
+    assert removed.status_code == 200, removed.text
+    assert not Scan.objects.filter(pk=pending.pk).exists()
