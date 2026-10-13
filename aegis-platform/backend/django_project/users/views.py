@@ -131,6 +131,7 @@ class UserViewSet(viewsets.ModelViewSet):
             ip_address=client_ip_from_request(self.request),
         )
 
+    @transaction.atomic
     def perform_destroy(self, instance):
         if not can_manage_account(self.request.user, instance):
             from rest_framework.exceptions import PermissionDenied
@@ -141,6 +142,13 @@ class UserViewSet(viewsets.ModelViewSet):
         # Preserve security/audit relations: a revoked account is never hard-deleted.
         instance.is_active = False
         instance.save(update_fields=['is_active'])
+        append_audit(
+            user=self.request.user, action=AuditLog.Action.USER_DELETE,
+            result=AuditLog.Result.SUCCESS, resource_type='User',
+            resource_id=str(instance.pk), resource_repr=instance.email,
+            metadata={'event': 'company_account_access_revoked', 'record_retained': True},
+            ip_address=client_ip_from_request(self.request),
+        )
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
     def set_password(self, request, pk=None):

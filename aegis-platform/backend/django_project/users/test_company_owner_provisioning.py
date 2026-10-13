@@ -116,6 +116,37 @@ def test_ungranted_admin_cannot_create_activate_and_assign_employee(company_owne
     assert not employee.is_active
 
 
+@pytest.mark.django_db
+def test_delete_account_uses_existing_route_with_audit_and_protected_owner(company_owner, other_admin):
+    """DELETE revokes access without destroying audited account history."""
+    from django_project.audit.models import AuditLog
+
+    employee = User.objects.create_user(
+        email='deletion-regression@example.invalid',
+        password='Strong-Test-Employee!2026',
+        role=UserRole.VIEWER,
+        is_active=True,
+    )
+    target = f'/api/v1/auth/users/{employee.pk}/'
+    delegated = APIClient()
+    delegated.force_authenticate(user=other_admin)
+    assert delegated.delete(target).status_code == 403
+
+    owner = APIClient()
+    owner.force_authenticate(user=company_owner)
+    assert owner.delete(f'/api/v1/auth/users/{company_owner.pk}/').status_code == 403
+    assert owner.delete(target).status_code == 204
+
+    employee.refresh_from_db()
+    assert employee.is_active is False
+    assert User.objects.filter(pk=employee.pk).exists()
+    deletion = AuditLog.objects.get(
+        action=AuditLog.Action.USER_DELETE, resource_id=str(employee.pk),
+    )
+    assert deletion.user_id == company_owner.pk
+    assert deletion.metadata['event'] == 'company_account_access_revoked'
+    assert deletion.metadata['record_retained'] is True
+
 
 @pytest.mark.django_db
 def test_delegated_manager_can_activate_own_created_account_without_user_read(company_owner):
