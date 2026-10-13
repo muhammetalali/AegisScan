@@ -28,7 +28,7 @@ def _is_active_user(user_id: str) -> bool:
     if not user_id:
         return False
     try:
-        return User.objects.filter(pk=user_id, is_active=True).exists()
+        return User.objects.filter(pk=user_id, is_active=True, two_factor_enabled=False).exists()
     except (TypeError, ValueError, ValidationError):
         return False
 

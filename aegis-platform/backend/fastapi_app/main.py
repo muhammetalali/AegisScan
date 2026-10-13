@@ -17,7 +17,7 @@ from .services.decision_action_orchestration import initialize_action_store
 from .services.workflow_live_bridge import WorkflowLiveBridge
 from .services.policy_engine import initialize_policy_store
 from .core.config import settings
-from .core.dependencies import get_current_user, require_permission
+from .core.dependencies import get_current_user, require_permission, _is_active_user
 from .core.security import verify_token
 from django_project.users.models import Permission, User
 logging.basicConfig(level=logging.INFO); logger=logging.getLogger(__name__)
@@ -55,7 +55,8 @@ async def _authenticate_socket(websocket:WebSocket):
     token=websocket.cookies.get(settings.AUTH_ACCESS_COOKIE)
     if not token: await websocket.close(code=4001); return None
     user=await verify_token(token)
-    if not user: await websocket.close(code=4001); return None
+    if not user or not await _is_active_user(str(user.get('user_id') or '')):
+        await websocket.close(code=4001); return None
     return user
 @app.websocket('/ws/workflow')
 async def websocket_workflow(websocket:WebSocket):

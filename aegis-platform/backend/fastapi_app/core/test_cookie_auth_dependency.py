@@ -85,3 +85,69 @@ def test_unknown_or_invalid_signed_identity_is_denied(monkeypatch):
             _request_with_cookie("otherwise-valid-token"), credentials=None,
         ))
     assert exc.value.status_code == 401
+
+
+@pytest.mark.django_db(transaction=True)
+def test_existing_fastapi_cookie_and_bearer_expire_on_mfa_policy_change(monkeypatch):
+    """Already-issued signed credentials cannot bypass current MFA requirements."""
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    employee = User.objects.create_user(
+        email="mfa-policy-transition@example.invalid",
+        password="Strong-Test-Password-123!",
+    )
+
+    async def signed_access(_token: str):
+        return {"user_id": str(employee.pk), "token_type": "access"}
+
+    monkeypatch.setattr(dependencies, "verify_token", signed_access)
+    request = _request_with_cookie("previously-valid-cookie")
+    bearer = HTTPAuthorizationCredentials(
+        scheme="Bearer", credentials="previously-valid-bearer",
+    )
+
+    for credentials in (None, bearer):
+        user = asyncio.run(dependencies.get_current_user(request, credentials=credentials))
+        assert user["user_id"] == str(employee.pk)
+
+    employee.two_factor_enabled = True
+    employee.save(update_fields=["two_factor_enabled"])
+    for credentials in (None, bearer):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(dependencies.get_current_user(request, credentials=credentials))
+        assert exc.value.status_code == 401
+
+
+@pytest.mark.django_db(transaction=True)
+def test_websocket_handshake_respects_current_mfa_policy(monkeypatch):
+    """A previously signed cookie must not open a socket after MFA is required."""
+    import importlib
+
+    main_module = importlib.import_module("fastapi_app.main")
+    employee = User.objects.create_user(
+        email="mfa-websocket-transition@example.invalid",
+        password="Strong-Test-Password-123!",
+    )
+
+    async def signed_access(_token: str):
+        return {"user_id": str(employee.pk), "token_type": "access"}
+
+    class SocketProbe:
+        cookies = {"aegis_access": "previously-valid-cookie"}
+
+        def __init__(self):
+            self.close_code = None
+
+        async def close(self, code):
+            self.close_code = code
+
+    monkeypatch.setattr(main_module, "verify_token", signed_access)
+    before = SocketProbe()
+    assert asyncio.run(main_module._authenticate_socket(before))["user_id"] == str(employee.pk)
+    assert before.close_code is None
+
+    employee.two_factor_enabled = True
+    employee.save(update_fields=["two_factor_enabled"])
+    after = SocketProbe()
+    assert asyncio.run(main_module._authenticate_socket(after)) is None
+    assert after.close_code == 4001
