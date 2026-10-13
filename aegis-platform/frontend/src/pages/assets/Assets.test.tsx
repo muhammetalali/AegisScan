@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -43,7 +43,7 @@ beforeEach(() => {
   get.mockResolvedValue([permittedAsset])
   post.mockResolvedValue({ scan_id: 'scan-existing' })
 })
-afterEach(() => vi.clearAllMocks())
+afterEach(() => { cleanup(); vi.clearAllMocks() })
 
 describe('Assets existing authorization one-click scan', () => {
   it('opens the existing assessment entry to add an asset without a duplicate create route', async () => {

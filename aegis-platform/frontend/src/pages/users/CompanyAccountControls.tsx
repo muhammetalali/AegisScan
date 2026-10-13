@@ -22,6 +22,7 @@ export const CompanyAccountControls = () => {
   const has = (grant: string) => isOwner || actor?.permissions?.includes(grant) === true
   const canCreate = has('user.create')
   const canUpdate = has('user.update')
+  const canDelete = has('user.delete')
   const canAssignRoles = has('user.manage_roles')
   const canAssignGrants = has('user.manage_permissions')
   const cache = useQueryClient()
@@ -116,6 +117,16 @@ export const CompanyAccountControls = () => {
         await apiHelpers.post('/auth/users/'+selected.id+'/set_password/',{password:resetPassword})
         setResetPassword('')
       },'Employee password changed; existing refresh sessions revoked.')}>Set new password</button>
+    </div>}
+    {selected&&!selectedProtected&&canDelete&&<div className="rounded-xl border border-destructive/40 p-3 space-y-2">
+      <button className="rounded-lg border border-destructive px-3 py-2 text-sm text-destructive disabled:opacity-50" disabled={busy} onClick={()=>{
+        if (!window.confirm(`Delete account ${selected.email}? This revokes sign-in access but retains the account and audit history. Continue?`)) return
+        void transact(async()=>{
+          await apiHelpers.delete('/auth/users/'+selected.id+'/')
+          setSelected(null)
+        },'Account access revoked; the account record is retained for audit.')
+      }}>Delete account</button>
+      <p className="text-xs text-muted-foreground">Deletion revokes account access; the record is preserved for audit rather than permanently erased.</p>
     </div>}
     {feedback&&<p role={failed?'alert':'status'} className={'text-sm '+(failed?'text-destructive':'text-muted-foreground')}>{feedback}</p>}
   </section>
