@@ -22,7 +22,7 @@ beforeEach(()=>{
     if(path==='/auth/users/')return {count:1,next:null,results:[employee]} as never
     throw Error('unknown '+path)
   })
-  post.mockResolvedValue({id:'staff-2',email:'new@company.invalid',role:'admin',is_active:false,granted_permissions:[],enabled_scan_types:[],enabled_pages:[]} as never)
+  post.mockResolvedValue({id:'staff-2',email:'new@company.invalid',role:'admin',is_active:false,granted_permissions:['project.read'],enabled_scan_types:['url'],enabled_pages:['/projects']} as never)
   patch.mockResolvedValue({id:'staff-1'} as never)
 })
 afterEach(()=>{cleanup();vi.clearAllMocks()})
@@ -47,6 +47,10 @@ describe('owner-only company account UI',()=>{
     expect((await screen.findByRole('status')).textContent).toContain('created inactive')
     expect(await screen.findByText('Selected: new@company.invalid')).toBeTruthy()
     expect(screen.getByText('Activate employee')).toBeTruthy()
+    // The selected employee must retain the scopes returned by the backend:
+    // clearing the creation form must not clear future Save permissions state.
+    expect((screen.getByLabelText('project.read') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('url') as HTMLInputElement).checked).toBe(true)
     expect((screen.getByLabelText('Initial employee password') as HTMLInputElement).value).toBe('')
   })
   it('activates an existing employee and updates only existing canonical routes',async()=>{

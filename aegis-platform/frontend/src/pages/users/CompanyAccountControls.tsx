@@ -91,9 +91,12 @@ export const CompanyAccountControls = () => {
       const created = await apiHelpers.post<Employee>('/auth/users/',{email,first_name:first,last_name:last,password,password_confirm:password,role:canAssignRoles?role:'viewer',granted_permissions:canAssignGrants?grants:[],enabled_scan_types:scanTypes,enabled_pages:pages})
       // The manager already knows this newly created account's ID. Do not
       // require user.read or a second inventory lookup to activate it.
-      if (canUpdate && created?.id) select({...created,is_active:false,is_company_owner:false})
       setEmail('');setPassword('');setFirst('');setLast('');setGrants([]);setScanTypes([]);setPages([])
-    },'Employee created inactive. Choose the employee below and activate when ready.')}>Create inactive employee</button>}
+      // Restore the selected account's real scopes AFTER clearing the create form.
+      // Both forms share permission/page state; reversing this order would silently
+      // reset the newly selected employee's grants before a subsequent Save.
+      if (canUpdate && created?.id) select({...created,is_active:false,is_company_owner:false})
+    },canUpdate?'Employee created inactive. Activate it below when ready.':'Employee created inactive. An authorized manager with update permission can activate it.')}>Create inactive employee</button>}
     {accountsError&&<p role="alert" className="text-sm text-destructive">{(accountsErrorCause as any)?.response?.status===403?'403 · Employee inventory requires the user.read grant.':'Employee inventory unavailable. No changes made.'}</p>}
     <div className="space-y-2">
       <h3 className="font-medium text-sm">Existing company accounts</h3>
