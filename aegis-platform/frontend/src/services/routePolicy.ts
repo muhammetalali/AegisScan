@@ -54,6 +54,3 @@ export const canAccessRoute = (path: string, role?: UserRole | null, permissions
   }
   return true
 }
-
-export const canManageKeys = (role?: UserRole | null): boolean =>
-  role === 'super_admin' || role === 'admin' || role === 'security_manager'
