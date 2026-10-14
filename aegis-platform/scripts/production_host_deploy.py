@@ -15,6 +15,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,6 +27,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PLATFORM_DIR = SCRIPT_DIR.parent
 REPO_ROOT = PLATFORM_DIR.parent
 TRUST_BOOTSTRAP = SCRIPT_DIR / "production_execution_trust_bootstrap.py"
+GIT_REPAIR_BACKUPS = Path("/var/lib/aegisscan/git-object-repair")
+EXPECTED_GIT_ORIGIN = "https://github.com/muhammetalali/AegisScan.git"
 COMPOSE_FILES = (
     "docker-compose.yml",
     "docker-compose.prod.yml",
@@ -536,9 +539,82 @@ def _assert_clean_repo() -> None:
         raise DeployError("production checkout has tracked local modifications")
 
 
+def _require_root_git_directory(path: Path, *, private: bool = False) -> None:
+    info = path.lstat()
+    forbidden = 0o077 if private else (stat.S_IWGRP | stat.S_IWOTH)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & forbidden:
+        raise DeployError(f"Git object repair requires a protected root-owned directory: {path}")
+
+
+def _private_git_object_backup(head: str) -> Path:
+    """Back up the original root-owned .git database before any object refetch."""
+    git_directory = REPO_ROOT / ".git"
+    _require_root_git_directory(git_directory)
+    _require_root_git_directory(GIT_REPAIR_BACKUPS.parent)
+    GIT_REPAIR_BACKUPS.mkdir(mode=0o700, exist_ok=True)
+    _require_root_git_directory(GIT_REPAIR_BACKUPS, private=True)
+    backup = GIT_REPAIR_BACKUPS / (
+        f"pre-refetch-{head[:12]}-"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.tar.gz"
+    )
+    descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        with tarfile.open(fileobj=output, mode="w:gz", dereference=False) as archive:
+            archive.add(git_directory, arcname=".git")
+        output.flush()
+        os.fsync(output.fileno())
+    if backup.stat().st_size == 0:
+        raise DeployError("Git object repair backup is empty")
+    return backup
+
+
+def _ensure_git_object_integrity() -> None:
+    """Restore incomplete Git objects in the *existing* checkout from the pinned origin.
+
+    Object recovery is a deployment preflight, not a filesystem reset or
+    permission bypass. The privileged gate already checks the root-owned tree.
+    """
+    try:
+        _git("fsck", "--connectivity-only", "--no-reflogs")
+        return
+    except subprocess.CalledProcessError as exc:
+        diagnostics = (exc.stderr or exc.stdout or "")
+        if "missing " not in diagnostics and "broken link" not in diagnostics:
+            raise DeployError("unexpected Git integrity error; object repair not attempted") from exc
+
+    if _git("remote", "get-url", "origin").stdout.strip() != EXPECTED_GIT_ORIGIN:
+        raise DeployError("Git object repair requires the pinned official origin")
+    _assert_clean_repo()
+    head_before = _current_sha()
+
+    backup = _private_git_object_backup(head_before)
+
+    # --refetch requests complete objects even when the existing pack index
+    # incorrectly advertises them. Restore all origin branches, not just HEAD,
+    # since fsck must also cover remote-tracking references.
+    _git("fetch", "--refetch", "--no-tags", "origin",
+         "+refs/heads/*:refs/remotes/origin/*", capture=False)
+    if _current_sha() != head_before:
+        raise DeployError("Git object repair unexpectedly changed the checked-out release")
+    _assert_clean_repo()
+    try:
+        _git("fsck", "--connectivity-only", "--no-reflogs")
+    except subprocess.CalledProcessError as exc:
+        raise DeployError(
+            "Git object repair did not restore full connectivity; private backup retained"
+        ) from exc
+    print(json.dumps({
+        "event": "production-git-object-integrity-restored",
+        "status": "success",
+        "release_sha": head_before,
+        "backup_path": str(backup),
+    }, sort_keys=True), flush=True)
+
+
 def _ensure_release(release_sha: str) -> None:
     if not SHA_RE.fullmatch(release_sha):
         raise DeployError("release SHA must be exactly 40 lowercase hexadecimal characters")
+    _ensure_git_object_integrity()
     try:
         _git("cat-file", "-e", f"{release_sha}^{{commit}}")
     except subprocess.CalledProcessError:
