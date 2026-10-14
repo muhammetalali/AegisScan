@@ -360,21 +360,40 @@ def cleanup_remote(
         ),
         command,
     ]
-    try:
-        result = subprocess.run(
-            argv,
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-        )
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip()[-8000:]
-        raise RemoteOperationalAcceptanceError(
-            f"remote E2E scope cleanup failed with exit {exc.returncode}: {detail}"
-        ) from exc
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise RemoteOperationalAcceptanceError(f"remote E2E scope cleanup failed: {exc}") from exc
+    # The remote cleanup is idempotent: stopping/removing an already absent
+    # scan_target is safe. Retry only SSH transport failures, never a remote
+    # command failure, host-key rejection, or ambiguous subprocess timeout.
+    for attempt in range(3):
+        try:
+            result = subprocess.run(
+                argv,
+                check=True,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+            break
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()[-8000:]
+            retryable_transport = exc.returncode == 255 and any(
+                marker in detail.lower()
+                for marker in (
+                    "network is unreachable",
+                    "no route to host",
+                    "connection timed out",
+                    "temporary failure in name resolution",
+                )
+            )
+            if retryable_transport and attempt < 2:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise RemoteOperationalAcceptanceError(
+                f"remote E2E scope cleanup failed with exit {exc.returncode}: {detail}"
+            ) from exc
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            raise RemoteOperationalAcceptanceError(
+                f"remote E2E scope cleanup failed: {exc}"
+            ) from exc
 
     payload = None
     for line in reversed([line.strip() for line in result.stdout.splitlines() if line.strip()]):
