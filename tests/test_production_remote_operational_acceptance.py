@@ -325,7 +325,7 @@ def test_transient_ssh_transport_cleanup_is_bounded_and_fail_closed(
 ):
     """Never retry identity/pinning failures or silently accept incomplete cleanup."""
     key = _private(tmp_path / "retry-id", "private")
-    known = _private(tmp_path / "retry-host", "deploy.internal ssh-ed25519 AAAA\\n")
+    known = _private(tmp_path / "retry-host", "deploy.internal ssh-ed25519 AAAA\n")
     sha = "f" * 40
     monkeypatch.setattr(remote_ops.remote, "_host", lambda host: host)
     monkeypatch.setattr(
@@ -355,7 +355,7 @@ def test_transient_ssh_transport_cleanup_is_bounded_and_fail_closed(
             "authorization_scope_restored": True,
             "scanner_egress_scope_restored": True,
         }
-        return SimpleNamespace(stdout=json.dumps(payload) + "\\n")
+        return SimpleNamespace(stdout=json.dumps(payload) + "\n")
 
     monkeypatch.setattr(remote_ops.subprocess, "run", fake_run)
     args = dict(
