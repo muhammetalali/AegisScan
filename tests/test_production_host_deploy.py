@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import stat
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1410,3 +1411,224 @@ def test_build_stack_fails_closed_after_bounded_registry_dns_failures(tmp_path, 
 
     assert len(readiness_calls) == deploy.PRODUCTION_BUILD_ATTEMPTS
     assert sleeps == [deploy.PRODUCTION_BUILD_BACKOFF_SECONDS]
+
+
+def _missing_git_object():
+    return subprocess.CalledProcessError(
+        74, ["git", "fsck"], stderr="missing blob ba00a004388c40cae730458797d034446fc1f6a8\n"
+    )
+
+
+def test_git_object_integrity_noop_on_complete_repository(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        deploy, "_git",
+        lambda *args, **kwargs: calls.append(args) or SimpleNamespace(stdout=""),
+    )
+    monkeypatch.setattr(
+        deploy, "_private_git_object_backup",
+        lambda *_: pytest.fail("healthy Git must not be backed up or changed"),
+    )
+    deploy._ensure_git_object_integrity()
+    assert calls == [("fsck", "--connectivity-only", "--no-reflogs")]
+
+
+def test_git_object_integrity_recovers_from_pinned_origin_without_checkout_changes(monkeypatch, capsys):
+    head = "a" * 40
+    calls = []
+    integrity_attempts = []
+    monkeypatch.setattr(deploy, "_private_git_object_backup", lambda sha: (
+        calls.append(("backup", sha)) or Path("/private/pre-refetch.tar.gz")
+    ))
+
+    def git(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "fsck":
+            integrity_attempts.append(args)
+            if len(integrity_attempts) == 1:
+                raise _missing_git_object()
+        if args[:3] == ("remote", "get-url", "origin"):
+            return SimpleNamespace(stdout=deploy.EXPECTED_GIT_ORIGIN + "\n")
+        if args[:2] == ("rev-parse", "HEAD"):
+            return SimpleNamespace(stdout=head + "\n")
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_git", git)
+    deploy._ensure_git_object_integrity()
+    assert ("backup", head) in calls
+    assert calls.index(("backup", head)) < next(i for i, call in enumerate(calls) if call[0] == "fetch")
+    assert ("fetch", "--refetch", "--no-tags", "origin",
+            "+refs/heads/*:refs/remotes/origin/*") in calls
+    assert len(integrity_attempts) == 2
+    assert json.loads(capsys.readouterr().out)["release_sha"] == head
+
+
+def test_git_object_integrity_rejects_unexpected_errors_and_wrong_origin(monkeypatch):
+    errors = [
+        subprocess.CalledProcessError(128, ["git", "fsck"], stderr="permission denied"),
+        _missing_git_object(),
+    ]
+    origins = [deploy.EXPECTED_GIT_ORIGIN, "https://unexpected.example/repo.git"]
+    monkeypatch.setattr(deploy, "_private_git_object_backup",
+                        lambda *_: pytest.fail("must not back up an untrusted repository"))
+    for error, origin in zip(errors, origins):
+        def git(*args, **kwargs):
+            if args[0] == "fsck":
+                raise error
+            if args[0] == "remote":
+                return SimpleNamespace(stdout=origin + "\n")
+            return SimpleNamespace(stdout="")
+        monkeypatch.setattr(deploy, "_git", git)
+        with pytest.raises(deploy.DeployError):
+            deploy._ensure_git_object_integrity()
+
+
+def test_git_object_integrity_fails_closed_if_refetch_still_incomplete(monkeypatch):
+    head = "b" * 40
+    calls = []
+    monkeypatch.setattr(deploy, "_private_git_object_backup", lambda sha: (
+        calls.append(("backup", sha)) or Path("/private/pre-refetch.tar.gz")
+    ))
+
+    def git(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "fsck":
+            raise _missing_git_object()
+        if args[0] == "remote":
+            return SimpleNamespace(stdout=deploy.EXPECTED_GIT_ORIGIN)
+        if args[:2] == ("rev-parse", "HEAD"):
+            return SimpleNamespace(stdout=head)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_git", git)
+    with pytest.raises(deploy.DeployError, match="did not restore full connectivity"):
+        deploy._ensure_git_object_integrity()
+    assert ("backup", head) in calls
+    assert any(call[0] == "fetch" for call in calls)
+
+
+def test_git_object_integrity_rejects_head_change_after_refetch(monkeypatch):
+    calls = []
+    head_calls = []
+    monkeypatch.setattr(deploy, "_private_git_object_backup",
+                        lambda sha: Path("/private/pre-refetch.tar.gz"))
+
+    def git(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "fsck":
+            raise _missing_git_object()
+        if args[0] == "remote":
+            return SimpleNamespace(stdout=deploy.EXPECTED_GIT_ORIGIN)
+        if args[:2] == ("rev-parse", "HEAD"):
+            head_calls.append(True)
+            return SimpleNamespace(stdout=("a" if len(head_calls) == 1 else "b") * 40)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_git", git)
+    with pytest.raises(deploy.DeployError, match="unexpectedly changed"):
+        deploy._ensure_git_object_integrity()
+
+
+def test_git_object_backup_is_private_and_preserves_original_metadata(tmp_path, monkeypatch):
+    repository = tmp_path / "repo"
+    git_dir = repository / ".git"
+    (git_dir / "objects").mkdir(parents=True)
+    (git_dir / "config").write_text("[core]\nrepositoryformatversion = 0\n")
+    (git_dir / "objects" / "original").write_bytes(b"original-byte-evidence")
+    monkeypatch.setattr(deploy, "REPO_ROOT", repository)
+    monkeypatch.setattr(deploy, "GIT_REPAIR_BACKUPS", tmp_path / "git-backups")
+    monkeypatch.setattr(deploy, "_require_root_git_directory", lambda *args, **kwargs: None)
+
+    archive_path = deploy._private_git_object_backup("c" * 40)
+    assert archive_path.parent == tmp_path / "git-backups"
+    assert stat.S_IMODE(archive_path.stat().st_mode) == 0o600
+    with tarfile.open(archive_path, "r:gz") as backup:
+        assert backup.extractfile(".git/objects/original").read() == b"original-byte-evidence"
+        assert backup.extractfile(".git/config").read().startswith(b"[core]")
+    assert (git_dir / "objects" / "original").read_bytes() == b"original-byte-evidence"
+
+
+def test_git_backup_refuses_symlink_git_directory_before_writing(tmp_path, monkeypatch):
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repository / ".git").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(deploy, "REPO_ROOT", repository)
+    monkeypatch.setattr(deploy, "GIT_REPAIR_BACKUPS", tmp_path / "backups")
+    with pytest.raises(deploy.DeployError, match="protected root-owned directory"):
+        deploy._private_git_object_backup("d" * 40)
+    assert not (tmp_path / "backups").exists()
+
+
+def test_real_git_refetch_recovers_missing_historical_objects_without_changing_head(
+    tmp_path, monkeypatch,
+):
+    """Offline Git fixture: current checkout valid; an ancestor commit is missing."""
+    import shutil
+
+    if shutil.which("git") is None:
+        pytest.skip("Git executable is required for the native recovery acceptance")
+    source = tmp_path / "source"
+    source.mkdir()
+
+    def git(cwd, *args, input_data=None, check=True):
+        return subprocess.run(
+            ["git", *args], cwd=cwd, input=input_data,
+            capture_output=True, check=check,
+        )
+
+    git(source, "init", "-q", "--initial-branch=main")
+    git(source, "config", "user.name", "Aegis Fixture")
+    git(source, "config", "user.email", "fixture@example.invalid")
+    evidence = source / "evidence.txt"
+    evidence.write_text("first-history-version", encoding="utf-8")
+    git(source, "add", ".")
+    git(source, "commit", "-qm", "historical")
+    evidence.write_text("current-history-version", encoding="utf-8")
+    git(source, "add", ".")
+    git(source, "commit", "-qm", "current")
+
+    origin = tmp_path / "origin"
+    git(tmp_path, "clone", "--quiet", "--bare", str(source), str(origin))
+    checkout = tmp_path / "checkout"
+    git(tmp_path, "clone", "--quiet", "--shared", str(origin), str(checkout))
+    head_before = git(checkout, "rev-parse", "HEAD").stdout.decode().strip()
+    current_objects = [
+        ("commit", head_before),
+        ("tree", git(checkout, "rev-parse", "HEAD^{tree}").stdout.decode().strip()),
+        ("blob", git(checkout, "rev-parse", "HEAD:evidence.txt").stdout.decode().strip()),
+    ]
+    contents = [
+        (kind, oid, git(source, "cat-file", kind, oid).stdout)
+        for kind, oid in current_objects
+    ]
+    (checkout / ".git/objects/info/alternates").unlink()
+    for kind, oid, data in contents:
+        result = git(checkout, "hash-object", "-t", kind, "-w", "--stdin", input_data=data)
+        assert result.stdout.decode().strip() == oid
+
+    assert git(checkout, "status", "--porcelain").stdout == b""
+    assert git(checkout, "fsck", "--connectivity-only", "--no-reflogs", check=False).returncode != 0
+    monkeypatch.setattr(deploy, "REPO_ROOT", checkout)
+    monkeypatch.setattr(deploy, "EXPECTED_GIT_ORIGIN", str(origin))
+    backups = []
+    monkeypatch.setattr(
+        deploy, "_private_git_object_backup",
+        lambda sha: backups.append(sha) or tmp_path / "private-fixture-backup.tar.gz",
+    )
+
+    def real_git(*args, **kwargs):
+        return subprocess.run(
+            ["git", *args], cwd=checkout, check=True,
+            capture_output=True, text=True,
+        )
+
+    monkeypatch.setattr(deploy, "_git", real_git)
+    deploy._ensure_git_object_integrity()
+
+    assert backups == [head_before]
+    assert git(checkout, "fsck", "--connectivity-only", "--no-reflogs").returncode == 0
+    assert git(checkout, "rev-parse", "HEAD").stdout.decode().strip() == head_before
+    assert git(checkout, "status", "--porcelain").stdout == b""
+    assert (checkout / "evidence.txt").read_text() == "current-history-version"
