@@ -215,6 +215,7 @@ async def get_metrics(
     metric_type: Optional[str] = Query(default=None),
     since: Optional[str] = Query(default=None),
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    user=Depends(require_permission('system.monitor')),
 ):
     del since
     limit_value = int(limit)
@@ -236,7 +237,7 @@ async def get_metrics(
 
 
 @router.get('/services', response_model=List[ServiceStatusResponse])
-async def get_services():
+async def get_services(user=Depends(require_permission('system.monitor'))):
     django_url = os.getenv('DJANGO_HEALTH_URL', 'http://django:8000/health/')
     fastapi_url = os.getenv('FASTAPI_HEALTH_URL', 'http://fastapi:8001/health')
     probes = await asyncio.gather(

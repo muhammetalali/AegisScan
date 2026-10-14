@@ -68,3 +68,78 @@ async def test_metrics_are_measured_without_static_fallbacks(monkeypatch):
         'disk_usage': 33.75,
     }
     assert all(item.timestamp for item in metrics)
+
+
+@pytest.mark.parametrize('route', [
+    '/system/metrics',
+    '/system/services',
+    '/api/v1/system/metrics',
+    '/api/v1/system/services',
+])
+def test_system_telemetry_rejects_anonymous_access_before_collecting(route, monkeypatch):
+    from fastapi.testclient import TestClient
+    from fastapi_app.main import app
+
+    def unexpected_probe(*_args, **_kwargs):
+        pytest.fail('unauthenticated telemetry must never invoke a service probe')
+
+    for function in (
+        '_system_cpu_percent', '_system_memory_percent', '_disk_percent',
+        '_postgres_probe', '_redis_probe', '_celery_probe', '_http_probe',
+    ):
+        monkeypatch.setattr(system, function, unexpected_probe)
+    with TestClient(app) as client:
+        result = client.get(route)
+    assert result.status_code == 401
+
+
+@pytest.mark.django_db(transaction=True)
+def test_system_telemetry_uses_existing_owner_and_delegated_permission_grants(settings, monkeypatch):
+    from django.db import close_old_connections
+    from fastapi.testclient import TestClient
+    from django_project.users.models import User, UserRole
+    from fastapi_app.core.dependencies import get_current_user
+    from fastapi_app.main import app
+
+    owner = User.objects.create_superuser(
+        email='telemetry-owner@example.invalid', password='Strong-Test-Password-123!',
+    )
+    settings.AEGIS_PRIMARY_OWNER_EMAIL = owner.email
+    viewer = User.objects.create_user(
+        email='telemetry-viewer@example.invalid', password='Strong-Test-Password-123!',
+        role=UserRole.VIEWER,
+    )
+    delegate = User.objects.create_user(
+        email='telemetry-delegate@example.invalid', password='Strong-Test-Password-123!',
+        role=UserRole.ADMIN, granted_permissions=['system.monitor'],
+    )
+    restricted_manager = User.objects.create_user(
+        email='telemetry-manager@example.invalid', password='Strong-Test-Password-123!',
+        role=UserRole.SECURITY_MANAGER, granted_permissions=['system.monitor'],
+    )
+    # The tests must neither connect to real services nor disclose their topology.
+    for name, result in (
+        ('_postgres_probe', ('healthy', 'fixture', 0, 0.0, None)),
+        ('_redis_probe', ('healthy', 'fixture', 0, 0.0, None)),
+        ('_celery_probe', ('healthy', 'fixture', 0, 0.0, None)),
+    ):
+        monkeypatch.setattr(system, name, lambda result=result: result)
+    monkeypatch.setattr(system, '_http_probe', lambda *_: ('healthy', 'fixture', 0, 0.0, None))
+    monkeypatch.setattr(system, '_system_cpu_percent', lambda: 10.0)
+    monkeypatch.setattr(system, '_system_memory_percent', lambda: 20.0)
+    monkeypatch.setattr(system, '_disk_percent', lambda: 30.0)
+
+    try:
+        with TestClient(app) as client:
+            for actor, expected in ((viewer, 403), (restricted_manager, 403), (delegate, 200), (owner, 200)):
+                app.dependency_overrides[get_current_user] = (
+                    lambda actor_id=str(actor.id): {'user_id': actor_id}
+                )
+                for route in ('/api/v1/system/metrics', '/api/v1/system/services'):
+                    response = client.get(route)
+                    assert response.status_code == expected, (actor.role, route, response.text)
+                    if expected == 200:
+                        assert isinstance(response.json(), list)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        close_old_connections()
