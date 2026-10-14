@@ -63,7 +63,19 @@ def prove_detection_response(session:requests.Session,email:str,password:str)->s
  if final.get('status')!='resolved':raise RuntimeError(f'Terminal security event state was not durable: {final!r}')
  print(f'security_event_id={event_id}'); print(f'notification_id={delivered.get("id")}'); return str(event_id)
 def _deactivate_ephemeral_account(email:str,password:str,label:str)->None:
- session=requests.Session(); session.verify=VERIFY_TLS; token=csrf(session); headers={'X-CSRFToken':token,'Referer':f'{BASE_URL}/'}
+ # Retry only failures before an HTTPS connection is established. Never retry
+ # sent login/deactivation POST requests or 4xx/5xx responses: their effects
+ # may have committed and replays would make one-run cleanup ambiguous.
+ from requests.adapters import HTTPAdapter
+ from urllib3.util.retry import Retry
+ session=requests.Session()
+ session.verify=VERIFY_TLS
+ session.mount('https://',HTTPAdapter(max_retries=Retry(
+  total=4,connect=4,read=0,status=0,redirect=0,other=0,
+  backoff_factor=1.5,backoff_max=10,allowed_methods=None,
+  raise_on_status=False,
+ )))
+ token=csrf(session); headers={'X-CSRFToken':token,'Referer':f'{BASE_URL}/'}
  http(session,'POST',f'{DJANGO_URL}/auth/login/',f'{label} login for cleanup',{200},json={'email':email,'password':password},headers=headers,timeout=20)
  token=csrf(session); headers['X-CSRFToken']=token
  http(session,'POST',f'{DJANGO_URL}/auth/deactivate-self/',f'{label} self-deactivation',{200},json={'password':password},headers=headers,timeout=20)
