@@ -496,57 +496,67 @@ def test_live_api_key_acceptance_revokes_fixtures_on_success_and_error(monkeypat
 
 
 def test_one_run_identity_cleanup_retries_connect_only(monkeypatch):
-    """Cleanup tolerates DNS/connect outages, never ambiguous POST replays."""
+    """Assert transport-only retry policy without adding dependencies to CI."""
     import importlib.util
-    from types import SimpleNamespace
-    from urllib3.connectionpool import HTTPSConnectionPool
-    from urllib3.exceptions import MaxRetryError, NewConnectionError, ReadTimeoutError
+    import sys
+    import types
+    from unittest.mock import patch
 
     harness = ROOT / "aegis-platform/e2e/external_black_box_e2e.py"
+    fake_requests = types.ModuleType("requests")
+    fake_adapters = types.ModuleType("requests.adapters")
+    fake_retry_module = types.ModuleType("urllib3.util.retry")
+    mounts = []
+
+    class RetryPolicy:
+        def __init__(self, **kwargs):
+            self.options = kwargs
+
+    class Adapter:
+        def __init__(self, *, max_retries):
+            self.max_retries = max_retries
+
+    fake_retry_module.Retry = RetryPolicy
+    fake_adapters.HTTPAdapter = Adapter
+    fake_requests.Session = lambda: types.SimpleNamespace(
+        verify=True,
+        mount=lambda prefix, adapter: mounts.append((prefix, adapter)),
+    )
     spec = importlib.util.spec_from_file_location("isolated_cleanup_network_retry", harness)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    fake_modules = {
+        "requests": fake_requests,
+        "requests.adapters": fake_adapters,
+        "urllib3": types.ModuleType("urllib3"),
+        "urllib3.util": types.ModuleType("urllib3.util"),
+        "urllib3.util.retry": fake_retry_module,
+    }
+    with patch.dict(sys.modules, fake_modules):
+        spec.loader.exec_module(module)
+        monkeypatch.setattr(module, "csrf", lambda _session: "test-csrf")
+        operations = []
 
-    mounted = []
-    session = SimpleNamespace(
-        verify=True,
-        mount=lambda prefix, adapter: mounted.append((prefix, adapter)),
-    )
-    monkeypatch.setattr(module.requests, "Session", lambda: session)
-    monkeypatch.setattr(module, "csrf", lambda _session: "test-csrf")
-    operations = []
+        def fake_http(_session, method, url, label, expected, **kwargs):
+            operations.append((method, url, label))
+            return {}
 
-    def fake_http(_session, method, url, label, expected, **kwargs):
-        operations.append((method, url, label))
-        return {}
+        monkeypatch.setattr(module, "http", fake_http)
+        module._deactivate_ephemeral_account(
+            "temporary-fixture@example.invalid", "only-a-fixture", "One-run actor"
+        )
 
-    monkeypatch.setattr(module, "http", fake_http)
-    module._deactivate_ephemeral_account(
-        "temporary-fixture@example.invalid", "only-a-fixture", "One-run actor"
-    )
-    assert len(mounted) == 1
-    prefix, adapter = mounted[0]
+    assert len(mounts) == 1
+    prefix, adapter = mounts[0]
     assert prefix == "https://"
-    policy = adapter.max_retries
-    assert policy.total == 4
-    assert policy.connect == 4
-    assert policy.read == policy.status == policy.other == 0
-    assert policy.allowed_methods is None
+    policy = adapter.max_retries.options
+    assert policy["total"] == policy["connect"] == 4
+    assert policy["read"] == policy["status"] == policy["other"] == 0
+    assert policy["redirect"] == 0
+    assert policy["allowed_methods"] is None
+    assert policy["raise_on_status"] is False
     assert [label for _, _, label in operations] == [
         "One-run actor login for cleanup",
         "One-run actor self-deactivation",
     ]
     assert all(method == "POST" for method, _, _ in operations)
-    pool = HTTPSConnectionPool("aegis-prod.aegis.internal")
-    continued = policy.increment(
-        method="POST", url="/api/v1/auth/login/",
-        error=NewConnectionError(None, "Network is unreachable"), _pool=pool,
-    )
-    assert continued.connect == 3
-    with pytest.raises(MaxRetryError):
-        policy.increment(
-            method="POST", url="/api/v1/auth/deactivate-self/",
-            error=ReadTimeoutError(pool, "/auth/deactivate-self/", "read timed out"),
-            _pool=pool,
-        )
