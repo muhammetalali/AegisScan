@@ -493,3 +493,60 @@ def test_live_api_key_acceptance_revokes_fixtures_on_success_and_error(monkeypat
             assert ("GET", "Revoked key rejected", {401}) in calls
         expected_count = 1 if fail_read else 2
         assert sum(label == "API key fixture cleanup" for _, label, _ in calls) == expected_count
+
+
+def test_one_run_identity_cleanup_retries_connect_only(monkeypatch):
+    """Cleanup tolerates DNS/connect outages, never ambiguous POST replays."""
+    import importlib.util
+    from types import SimpleNamespace
+    from urllib3.connectionpool import HTTPSConnectionPool
+    from urllib3.exceptions import MaxRetryError, NewConnectionError, ReadTimeoutError
+
+    harness = ROOT / "aegis-platform/e2e/external_black_box_e2e.py"
+    spec = importlib.util.spec_from_file_location("isolated_cleanup_network_retry", harness)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    mounted = []
+    session = SimpleNamespace(
+        verify=True,
+        mount=lambda prefix, adapter: mounted.append((prefix, adapter)),
+    )
+    monkeypatch.setattr(module.requests, "Session", lambda: session)
+    monkeypatch.setattr(module, "csrf", lambda _session: "test-csrf")
+    operations = []
+
+    def fake_http(_session, method, url, label, expected, **kwargs):
+        operations.append((method, url, label))
+        return {}
+
+    monkeypatch.setattr(module, "http", fake_http)
+    module._deactivate_ephemeral_account(
+        "temporary-fixture@example.invalid", "only-a-fixture", "One-run actor"
+    )
+    assert len(mounted) == 1
+    prefix, adapter = mounted[0]
+    assert prefix == "https://"
+    policy = adapter.max_retries
+    assert policy.total == 4
+    assert policy.connect == 4
+    assert policy.read == policy.status == policy.other == 0
+    assert policy.allowed_methods is None
+    assert [label for _, _, label in operations] == [
+        "One-run actor login for cleanup",
+        "One-run actor self-deactivation",
+    ]
+    assert all(method == "POST" for method, _, _ in operations)
+    pool = HTTPSConnectionPool("aegis-prod.aegis.internal")
+    continued = policy.increment(
+        method="POST", url="/api/v1/auth/login/",
+        error=NewConnectionError(None, "Network is unreachable"), _pool=pool,
+    )
+    assert continued.connect == 3
+    with pytest.raises(MaxRetryError):
+        policy.increment(
+            method="POST", url="/api/v1/auth/deactivate-self/",
+            error=ReadTimeoutError(pool, "/auth/deactivate-self/", "read timed out"),
+            _pool=pool,
+        )
