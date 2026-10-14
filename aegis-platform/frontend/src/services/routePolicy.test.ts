@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canAccessRoute, canManageKeys } from './routePolicy'
+import { canAccessRoute } from './routePolicy'
 
 describe('real navigation and deep-link permission parity', () => {
   it('gives only the server-identified company owner access to every workspace page', () => {
@@ -28,13 +28,15 @@ describe('real navigation and deep-link permission parity', () => {
   })
   it('permits only genuine key managers to open the one canonical key surface', () => {
     for (const role of ['admin','super_admin','security_manager'] as const) {
-      expect(canManageKeys(role)).toBe(true)
-      expect(canAccessRoute('/keys',role)).toBe(true)
+      expect(canAccessRoute('/keys',role,['api_key.manage'])).toBe(true)
+      expect(canAccessRoute('/keys',role,['project.read'])).toBe(false)
     }
     for (const role of ['viewer','developer','auditor','security_analyst'] as const) {
-      expect(canManageKeys(role)).toBe(false)
-      expect(canAccessRoute('/keys',role)).toBe(false)
+      expect(canAccessRoute('/keys',role,['api_key.manage'])).toBe(false)
     }
+    expect(canAccessRoute('/keys','admin',['api_key.manage'],['/users'])).toBe(false)
+    expect(canAccessRoute('/keys','admin',['api_key.manage'],['/keys'])).toBe(true)
+    expect(canAccessRoute('/keys','admin',[],[],true)).toBe(true)
   })
   it('restricts an Administrator to owner-granted pages even on direct deep links', () => {
     const grants = ['project.read','scan.read']

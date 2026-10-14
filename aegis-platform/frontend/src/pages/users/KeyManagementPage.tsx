@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiHelpers } from '@/services/api'
 import { useAuthStore } from '@/stores/authStore'
-import { canManageKeys } from '@/services/routePolicy'
+import { canAccessRoute } from '@/services/routePolicy'
 
 type ApiKey = { id:string; name:string; key_prefix:string; is_active:boolean; permissions:string[]; created_at:string; last_used_at?:string|null }
 type VaultCredential = { id:string; credential_ref:string; name:string; kind:string; status:string; version:number; project_id:string }
@@ -21,7 +21,9 @@ const button='rounded-lg border px-3 py-2 text-sm hover:bg-accent disabled:curso
 const fields='w-full rounded-lg border bg-background px-3 py-2 text-sm'
 
 export const KeyManagementPage = () => {
-  const role=useAuthStore(s=>s.user?.role)
+  const actor=useAuthStore(s=>s.user)
+  // Use the same effective permissions and per-employee page grants as direct /keys.
+  const canOpenKeys=canAccessRoute('/keys',actor?.role,actor?.permissions??[],actor?.enabled_pages,actor?.is_company_owner===true)
   const qc=useQueryClient()
   const [mode,setMode]=useState<'api'|'vault'>('api')
   const [name,setName]=useState('')
@@ -35,9 +37,9 @@ export const KeyManagementPage = () => {
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
   const [revealed,setRevealed]=useState('')
-  const apiKeys=useQuery<ListResult<ApiKey>>({queryKey:['owned-api-keys'],queryFn:()=>apiHelpers.get<ListResult<ApiKey>>('/auth/api-keys/'),enabled:canManageKeys(role)&&mode==='api',retry:false})
-  const projects=useQuery<ProjectResult>({queryKey:['key-vault-projects'],queryFn:()=>apiHelpers.get<ProjectResult>('/projects/'),enabled:canManageKeys(role)&&mode==='vault',retry:false})
-  const vault=useQuery<ListResult<VaultCredential>>({queryKey:['key-vault',project],queryFn:()=>apiHelpers.get<ListResult<VaultCredential>>('/credentials/',{params:{project}}),enabled:canManageKeys(role)&&mode==='vault'&&!!project,retry:false})
+  const apiKeys=useQuery<ListResult<ApiKey>>({queryKey:['owned-api-keys'],queryFn:()=>apiHelpers.get<ListResult<ApiKey>>('/auth/api-keys/'),enabled:canOpenKeys&&mode==='api',retry:false})
+  const projects=useQuery<ProjectResult>({queryKey:['key-vault-projects'],queryFn:()=>apiHelpers.get<ProjectResult>('/projects/'),enabled:canOpenKeys&&mode==='vault',retry:false})
+  const vault=useQuery<ListResult<VaultCredential>>({queryKey:['key-vault',project],queryFn:()=>apiHelpers.get<ListResult<VaultCredential>>('/credentials/',{params:{project}}),enabled:canOpenKeys&&mode==='vault'&&!!project,retry:false})
   const refresh=async()=>{await qc.invalidateQueries({queryKey:['owned-api-keys']});await qc.invalidateQueries({queryKey:['key-vault']})}
   const transact=async (call:()=>Promise<unknown>,done:string)=>{
     setBusy(true);setError('');setNotice('');setRevealed('')
@@ -48,7 +50,7 @@ export const KeyManagementPage = () => {
       setNotice(done);setSecret('');setName('');setReplacement('');setRotating('');await refresh()
     }catch(e){setError(errorMessage(e))}finally{setBusy(false)}
   }
-  if(!canManageKeys(role))return <main role="alert" className="rounded-xl border p-8"><h1 className="text-xl font-bold">403 · Access denied</h1><p>Your role cannot manage credentials.</p></main>
+  if(!canOpenKeys)return <main role="alert" className="rounded-xl border p-8"><h1 className="text-xl font-bold">403 · Access denied</h1><p>Your account is not authorized to manage credentials.</p></main>
   return <main className="mx-auto max-w-5xl space-y-5 pb-10">
     <header><h1 className="text-2xl font-bold">Access keys & project vault</h1>
       <p className="mt-2 text-sm text-muted-foreground">Access keys belong to your user. Scanner credentials are encrypted and scoped to projects. These are separate existing backend stores; no secrets are returned in inventory responses.</p>

@@ -6,6 +6,7 @@ import { apiHelpers } from '@/services/api'
 import { KeyManagementPage } from './KeyManagementPage'
 import { CompanyAccountControls } from './CompanyAccountControls'
 import { useAuthStore } from '@/stores/authStore'
+import { canAccessRoute } from '@/services/routePolicy'
 
 type Tab = 'users'|'teams'|'roles'|'sessions'|'keys'|'attempts'
 const TABS: {id:Tab; label:string; icon:any}[] = [
@@ -21,6 +22,7 @@ export const Users = () => {
   const [tab, setTab] = useState<Tab>('users')
   const actor = useAuthStore(s=>s.user)
   const owner = actor?.is_company_owner === true
+  const canOpenKeys = canAccessRoute('/keys',actor?.role,actor?.permissions??[],actor?.enabled_pages,owner)
   const canManageEmployees = owner || ['user.create', 'user.update', 'user.delete'].some(
     grant => actor?.permissions?.includes(grant)
   )
@@ -39,7 +41,7 @@ export const Users = () => {
         <p className="text-sm text-muted-foreground">Users • Teams • 7 Roles • Sessions • API Keys • Login Attempts — with permissions & audit trail</p>
       </div>
       <div className="flex gap-1 border-b overflow-auto">
-        {TABS.map(t=> <button key={t.id} onClick={()=>setTab(t.id)} className={cn('px-3 py-2 text-xs font-medium border-b-2 inline-flex items-center gap-1 whitespace-nowrap', tab===t.id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground')}><t.icon className="h-3.5 w-3.5" />{t.label}</button>)}
+        {TABS.filter(t=>t.id!=='keys'||canOpenKeys).map(t=> <button key={t.id} onClick={()=>setTab(t.id)} className={cn('px-3 py-2 text-xs font-medium border-b-2 inline-flex items-center gap-1 whitespace-nowrap', tab===t.id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground')}><t.icon className="h-3.5 w-3.5" />{t.label}</button>)}
       </div>
 
       {tab!=='keys' && activeQuery?.isError && <p role="alert" className="rounded-xl border border-destructive p-4 text-sm text-destructive">{(activeQuery.error as any)?.response?.status===403?'403 · Your role is not allowed to read this audit collection.':'Unable to retrieve this audit collection.'}</p>}
@@ -65,7 +67,7 @@ export const Users = () => {
       {tab==='sessions' && (
         <div className="rounded-xl border bg-card p-3 space-y-2">{(sessions?.items||[]).map((s:any)=> <div key={s.id} className="rounded border p-2 text-xs font-mono"><div>{s.user} — {s.ip}</div><div className="text-muted-foreground">{s.user_agent}</div></div>)}</div>
       )}
-      {tab==='keys' && <KeyManagementPage />}
+      {tab==='keys' && canOpenKeys && <KeyManagementPage />}
       {tab==='attempts' && (
         <div className="rounded-xl border bg-card overflow-hidden"><table className="w-full text-xs"><thead><tr className="border-b bg-muted/20 text-muted-foreground"><th className="text-start px-3 py-2">User</th><th className="text-start px-3 py-2">IP</th><th className="text-start px-3 py-2">Result</th><th className="text-start px-3 py-2">Time</th></tr></thead><tbody>{(attempts?.items||[]).map((a:any)=> <tr key={a.id} className="border-b"><td className="px-3 py-2 font-mono">{a.email}</td><td className="px-3 py-2 font-mono">{a.ip}</td><td className="px-3 py-2"><span className={cn('px-1.5 py-0.5 rounded text-[11px]', a.success ? 'bg-emerald-500 text-white' : 'bg-destructive text-destructive-foreground')}>{a.success?'success':'failed'}</span></td><td className="px-3 py-2 text-[11px]">{new Date(a.timestamp).toLocaleString()}</td></tr>)}</tbody></table></div>
       )}

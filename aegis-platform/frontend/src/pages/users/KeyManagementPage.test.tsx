@@ -15,7 +15,7 @@ const renderPage=()=>{
   return render(<QueryClientProvider client={client}><KeyManagementPage/></QueryClientProvider>)
 }
 beforeEach(()=>{
-  useAuthStore.setState({user:{role:'admin'} as never})
+  useAuthStore.setState({user:{role:'admin',permissions:['api_key.manage','project.read']} as never})
   get.mockImplementation(async (path:string)=>{
     if(path==='/auth/api-keys/')return {count:1,results:[{id:'key-1',name:'Access 1',key_prefix:'aegis_123',is_active:true,permissions:['project.read']}]} as never
     if(path==='/projects/')return {results:[{id:'project-1',name:'Project 1'}]} as never
@@ -35,10 +35,29 @@ describe('live key-management control contracts',()=>{
     expect(screen.getByText(/Verified X-API-Key consumer/).textContent).toContain('do not currently enable access')
   })
   it('rejects viewing key-management controls for Viewer',()=>{
-    useAuthStore.setState({user:{role:'viewer'} as never})
+    useAuthStore.setState({user:{role:'viewer',permissions:[]} as never})
     renderPage()
     expect(screen.getByRole('alert').textContent).toContain('403')
     expect(get).not.toHaveBeenCalled()
+  })
+  it('denies an admin without the actual api_key.manage grant',()=>{
+    useAuthStore.setState({user:{role:'admin',permissions:['user.read','project.read']} as never})
+    renderPage()
+    expect(screen.getByRole('alert').textContent).toContain('403')
+    expect(screen.queryByRole('button',{name:'Create key'})).toBeNull()
+    expect(get).not.toHaveBeenCalled()
+  })
+  it('denies a granted admin when the owner did not enable the keys page',()=>{
+    useAuthStore.setState({user:{role:'admin',permissions:['api_key.manage'],enabled_pages:['/users']} as never})
+    renderPage()
+    expect(screen.getByRole('alert').textContent).toContain('403')
+    expect(get).not.toHaveBeenCalled()
+  })
+  it('preserves the company owner bypass for full key management',async()=>{
+    useAuthStore.setState({user:{role:'admin',permissions:[],enabled_pages:[],is_company_owner:true} as never})
+    renderPage()
+    expect(await screen.findByText('Access 1')).toBeTruthy()
+    expect(screen.getByRole('button',{name:'Create key'})).toBeTruthy()
   })
   it('reads paginated server keys and shows newly generated key only once',async()=>{
     renderPage()
