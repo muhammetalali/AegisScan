@@ -269,7 +269,7 @@ async def list_audit_logs(limit: int = Query(20, ge=1, le=100), action: Optional
 
 @router.get('/audit/roles')
 async def list_roles(current_user=Depends(_require_audit)):
-    return {'items': [{'id': value, 'name': label} for value, label in UserRole.choices]}
+    return {'items': [{'id': value, 'name': str(label)} for value, label in UserRole.choices]}
 
 
 @router.get('/audit/users')
