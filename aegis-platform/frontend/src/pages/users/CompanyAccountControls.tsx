@@ -31,7 +31,6 @@ export const CompanyAccountControls = () => {
   const [page,setPage]=useState(1)
   const [visibility,setVisibility]=useState<'active'|'all'>('active')
   const [search,setSearch]=useState('')
-  const [showCreate,setShowCreate]=useState(false)
   const [submittedSearch,setSubmittedSearch]=useState('')
   const {data:accounts, isError:accountsError, error:accountsErrorCause} = useQuery({
     queryKey:['company-accounts',page,visibility,submittedSearch],
@@ -85,8 +84,7 @@ export const CompanyAccountControls = () => {
       <h2 className="text-lg font-semibold">Company accounts — authorized management</h2>
       <p className="text-sm text-muted-foreground">Manage employee accounts according to your existing delegated grants. No public registration, email activation or MFA.</p>
     </div>
-    {canCreate&&<button type="button" aria-expanded={showCreate} onClick={()=>setShowCreate(v=>!v)} className="w-full rounded-lg border border-dashed px-3 py-2 text-start text-sm font-medium hover:bg-muted">{showCreate?'Close employee form':'+ Add employee'}</button>}
-    {canCreate&&showCreate&&<div className="grid gap-3 sm:grid-cols-2">
+    {canCreate&&<div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Employee identifier (email-style login)<input aria-label="Employee login" type="email" autoComplete="off" value={email} onChange={e=>setEmail(e.target.value)} className="mt-1 w-full rounded-lg border bg-background p-2"/></label>
       <label className="text-sm">Initial password<input aria-label="Initial employee password" type="password" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} className="mt-1 w-full rounded-lg border bg-background p-2"/></label>
       <label className="text-sm">First name<input aria-label="Employee first name" value={first} onChange={e=>setFirst(e.target.value)} className="mt-1 w-full rounded-lg border bg-background p-2"/></label>
@@ -100,11 +98,11 @@ export const CompanyAccountControls = () => {
       <fieldset className="grid gap-1 sm:grid-cols-2"><legend className="mb-2 text-sm font-medium">Allowed scan types</legend>{(options?.scan_types||[]).map(mode=><label className="flex items-center gap-2 text-xs" key={mode}><input type="checkbox" checked={scanTypes.includes(mode)} onChange={()=>setScanTypes(x=>toggle(x,mode))}/>{mode}</label>)}</fieldset>
       </div></details>
     </div>
-    {canCreate&&showCreate&&<button disabled={busy||!email||!password||!first||!last} className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50" onClick={()=>transact(async()=>{
+    {canCreate&&<button disabled={busy||!email||!password||!first||!last} className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50" onClick={()=>transact(async()=>{
       const created = await apiHelpers.post<Employee>('/auth/users/',{email,first_name:first,last_name:last,password,password_confirm:password,role:canAssignRoles?role:'viewer',granted_permissions:canAssignGrants?grants:[],enabled_scan_types:scanTypes,enabled_pages:pages})
       // The manager already knows this newly created account's ID. Do not
       // require user.read or a second inventory lookup to activate it.
-      setEmail('');setPassword('');setFirst('');setLast('');setGrants([]);setScanTypes([]);setPages([]);setShowCreate(false)
+      setEmail('');setPassword('');setFirst('');setLast('');setGrants([]);setScanTypes([]);setPages([])
       // Restore the selected account's real scopes AFTER clearing the create form.
       // Both forms share permission/page state; reversing this order would silently
       // reset the newly selected employee's grants before a subsequent Save.
