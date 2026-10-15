@@ -47,6 +47,7 @@ export const CompanyAccountControls = () => {
   const [pages,setPages]=useState<string[]>([])
   const [selected,setSelected]=useState<Employee|null>(null)
   const [resetPassword,setResetPassword]=useState('')
+  const [additionalKeepEmail,setAdditionalKeepEmail]=useState('')
   const [busy,setBusy]=useState(false)
   const [feedback,setFeedback]=useState('')
   const [failed,setFailed]=useState(false)
@@ -56,6 +57,62 @@ export const CompanyAccountControls = () => {
     try {await action();setFeedback(message);await refresh()}
     catch(e){setFeedback(displayError(e));setFailed(true)}
     finally{setBusy(false)}
+  }
+  const revokeOtherActiveAccounts=async()=>{
+    if(!isOwner||!canDelete||!actor?.email){setFailed(true);setFeedback('Only the authenticated company owner can run account cleanup.');return}
+    const keepEmail=additionalKeepEmail.trim().toLowerCase()
+    if(!keepEmail||keepEmail===actor.email.toLowerCase()){
+      setFailed(true);setFeedback('Enter the existing second account email to retain in addition to the owner.');return
+    }
+    setBusy(true);setFailed(false);setFeedback('')
+    let revoked=0
+    try {
+      // Read-only preflight on the canonical owner-scoped list. An exact existing
+      // second account must be confirmed before even offering the operation.
+      const retained=await apiHelpers.get<Accounts>('/auth/users/',{params:{page:1,status:'all',q:keepEmail}})
+      if(retained.count!==1||retained.results.length!==1||retained.results[0].email.toLowerCase()!==keepEmail||retained.results[0].is_company_owner){
+        throw new Error('The additional retained account was not found uniquely. No changes made.')
+      }
+      const active:Employee[]=[]
+      const seen=new Set<string>()
+      let pageNumber=1
+      let next=true
+      let expectedCount:number|undefined
+      while(next && pageNumber<=30){
+        const batch=await apiHelpers.get<Accounts>('/auth/users/',{params:{page:pageNumber,status:'active',q:''}})
+        if(expectedCount!==undefined&&batch.count!==expectedCount)throw new Error('Account inventory changed during review. No changes made.')
+        expectedCount=batch.count
+        for(const account of batch.results){
+          if(!account.is_active||seen.has(account.id))throw new Error('Account inventory is inconsistent. No changes made.')
+          seen.add(account.id);active.push(account)
+        }
+        next=Boolean(batch.next)
+        pageNumber++
+      }
+      if(next||expectedCount===undefined||active.length!==expectedCount){
+        throw new Error('Could not verify the complete active inventory. No changes made.')
+      }
+      const owners=active.filter(account=>account.is_company_owner)
+      if(owners.length!==1||owners[0].email.toLowerCase()!==actor.email.toLowerCase()){
+        throw new Error('The authenticated primary owner could not be verified in the active inventory. No changes made.')
+      }
+      const toRevoke=active.filter(account=>!account.is_company_owner&&account.email.toLowerCase()!==keepEmail)
+      if(!toRevoke.length){setFeedback('No other active accounts need revocation. Existing inactive audit records are retained.');return}
+      if(!window.confirm('Revoke sign-in access for '+toRevoke.length+' other active accounts? The owner and '+keepEmail+' will be preserved; audit history stays intact.\n\n'+toRevoke.map(account=>account.email).join('\n'))){
+        setFeedback('Cleanup canceled; no accounts changed.');return
+      }
+      // Reuse the same one-account soft-revocation endpoint and append-only
+      // audit flow, sequentially. Stop at the first failure and report partials.
+      for(const account of toRevoke){
+        await apiHelpers.delete('/auth/users/'+account.id+'/')
+        revoked++
+      }
+      setSelected(null)
+      setFeedback('Revoked '+revoked+' active accounts. Both retained identities preserved; audit records remain.')
+    }catch(error){
+      setFailed(true)
+      setFeedback('Cleanup stopped after '+revoked+' revocations. '+(error instanceof Error?error.message:displayError(error)))
+    }finally{setBusy(false);void refresh()}
   }
   const select=(u:Employee)=>{
     setSelected(u);setRole(u.role)
@@ -150,6 +207,14 @@ export const CompanyAccountControls = () => {
       }}>Revoke account access</button>
       <p className="text-xs text-muted-foreground">Revoking access deactivates the account; its history remains protected for audit.</p>
     </div>}
+    {isOwner&&canDelete&&<details className="rounded-xl border border-dashed p-3 space-y-2">
+      <summary className="cursor-pointer text-sm font-medium">Clean up other active accounts</summary>
+      <p className="mt-2 text-xs text-muted-foreground">Keep the signed-in primary owner and one additional existing account. Other active accounts are revoked through the audited account action; inactive historical records remain available in All history.</p>
+      <label className="mt-2 block text-sm">Additional account to keep
+        <input aria-label="Additional account to keep" type="email" autoComplete="off" value={additionalKeepEmail} onChange={e=>setAdditionalKeepEmail(e.target.value)} placeholder="second-account@example.com" className="mt-1 w-full rounded-lg border bg-background px-3 py-2"/>
+      </label>
+      <button type="button" disabled={busy||!additionalKeepEmail.trim()} className="mt-3 rounded-lg border border-destructive/60 px-3 py-2 text-sm disabled:opacity-50" onClick={()=>void revokeOtherActiveAccounts()}>Review and revoke other active accounts</button>
+    </details>}
     {feedback&&<p role={failed?'alert':'status'} className={'text-sm '+(failed?'text-destructive':'text-muted-foreground')}>{feedback}</p>}
   </section>
 }
