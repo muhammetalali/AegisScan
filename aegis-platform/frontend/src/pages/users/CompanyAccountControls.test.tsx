@@ -134,4 +134,81 @@ describe('owner-only company account UI',()=>{
     expect((await screen.findByRole('alert')).textContent).toContain('Account deletion forbidden.')
     expect(screen.getByText('Selected: staff@company.invalid')).toBeTruthy()
   })
+}
+  it('revokes only other active users after verifying both identities and one confirmation',async()=>{
+    useAuthStore.setState({user:{role:'super_admin',is_company_owner:true,email:'owner@company.invalid'} as never})
+    get.mockImplementation(async (path:string, options?:unknown)=>{
+      if(path==='/auth/users/access_options/')return {roles:{viewer:[]},scan_types:[]} as never
+      if(path!=='/auth/users/')throw Error('unexpected route '+path)
+      const params=(options as {params?:{q?:string;status?:string}})?.params
+      if(params?.q==='keep@company.invalid')return {count:1,next:null,results:[{...employee,id:'retained',email:'keep@company.invalid',is_active:false}]} as never
+      if(params?.status==='active')return {count:3,next:null,results:[
+        {...employee,id:'owner',email:'owner@company.invalid',is_company_owner:true,is_active:true},
+        {...employee,id:'one',email:'one@company.invalid',is_active:true},
+        {...employee,id:'two',email:'two@company.invalid',is_active:true},
+      ]} as never
+      throw Error('unexpected account inventory')
+    })
+    const confirm=vi.fn().mockReturnValue(true)
+    vi.stubGlobal('confirm',confirm)
+    renderPage()
+    fireEvent.click(screen.getByText('Clean up other active accounts'))
+    fireEvent.change(screen.getByLabelText('Additional account to keep'),{target:{value:'keep@company.invalid'}})
+    fireEvent.click(screen.getByRole('button',{name:'Review and revoke other active accounts'}))
+    await waitFor(()=>expect(remove).toHaveBeenCalledTimes(2))
+    expect(remove).toHaveBeenNthCalledWith(1,'/auth/users/one/')
+    expect(remove).toHaveBeenNthCalledWith(2,'/auth/users/two/')
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(confirm.mock.calls[0][0]).toContain('2 other active accounts')
+    expect(confirm.mock.calls[0][0]).toContain('keep@company.invalid')
+    expect((await screen.findByRole('status')).textContent).toContain('Revoked 2 active accounts')
+  })
+
+  it('refuses account cleanup when retained account is not uniquely verified',async()=>{
+    useAuthStore.setState({user:{role:'super_admin',is_company_owner:true,email:'owner@company.invalid'} as never})
+    get.mockImplementation(async (path:string)=>{
+      if(path==='/auth/users/access_options/')return {roles:{viewer:[]},scan_types:[]} as never
+      if(path==='/auth/users/')return {count:0,next:null,results:[]} as never
+      throw Error('unexpected route')
+    })
+    const confirm=vi.fn()
+    vi.stubGlobal('confirm',confirm)
+    renderPage()
+    fireEvent.click(screen.getByText('Clean up other active accounts'))
+    fireEvent.change(screen.getByLabelText('Additional account to keep'),{target:{value:'missing@company.invalid'}})
+    fireEvent.click(screen.getByRole('button',{name:'Review and revoke other active accounts'}))
+    expect((await screen.findByRole('alert')).textContent).toContain('No changes made')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('stops bulk cleanup at the first endpoint failure with partial count',async()=>{
+    useAuthStore.setState({user:{role:'super_admin',is_company_owner:true,email:'owner@company.invalid'} as never})
+    get.mockImplementation(async (path:string, options?:unknown)=>{
+      if(path==='/auth/users/access_options/')return {roles:{viewer:[]},scan_types:[]} as never
+      if(path!=='/auth/users/')throw Error('unexpected route')
+      const p=(options as {params?:{q?:string}})?.params
+      if(p?.q==='keep@company.invalid')return {count:1,next:null,results:[{...employee,email:'keep@company.invalid'}]} as never
+      return {count:3,next:null,results:[
+        {...employee,id:'owner',email:'owner@company.invalid',is_company_owner:true,is_active:true},
+        {...employee,id:'first',email:'first@company.invalid',is_active:true},
+        {...employee,id:'failed',email:'failed@company.invalid',is_active:true},
+      ]} as never
+    })
+    vi.stubGlobal('confirm',vi.fn().mockReturnValue(true))
+    remove.mockResolvedValueOnce(undefined as never).mockRejectedValueOnce(new Error('Connection lost'))
+    renderPage()
+    fireEvent.click(screen.getByText('Clean up other active accounts'))
+    fireEvent.change(screen.getByLabelText('Additional account to keep'),{target:{value:'keep@company.invalid'}})
+    fireEvent.click(screen.getByRole('button',{name:'Review and revoke other active accounts'}))
+    expect((await screen.findByRole('alert')).textContent).toContain('stopped after 1 revocations')
+    expect(remove).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not expose bulk cleanup to delegated administrators',async()=>{
+    useAuthStore.setState({user:{role:'super_admin',is_company_owner:false,permissions:['user.delete'],email:'delegate@company.invalid'} as never})
+    renderPage()
+    await screen.findByText(/staff@company.invalid/)
+    expect(screen.queryByText('Clean up other active accounts')).toBeNull()
+  })
 })
