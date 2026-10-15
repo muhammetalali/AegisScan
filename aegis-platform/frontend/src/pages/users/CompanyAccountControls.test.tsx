@@ -134,7 +134,6 @@ describe('owner-only company account UI',()=>{
     expect((await screen.findByRole('alert')).textContent).toContain('Account deletion forbidden.')
     expect(screen.getByText('Selected: staff@company.invalid')).toBeTruthy()
   })
-}
   it('revokes only other active users after verifying both identities and one confirmation',async()=>{
     useAuthStore.setState({user:{role:'super_admin',is_company_owner:true,email:'owner@company.invalid'} as never})
     get.mockImplementation(async (path:string, options?:unknown)=>{
