@@ -31,6 +31,7 @@ export const CompanyAccountControls = () => {
   const [page,setPage]=useState(1)
   const [visibility,setVisibility]=useState<'active'|'all'>('active')
   const [search,setSearch]=useState('')
+  const [showCreate,setShowCreate]=useState(false)
   const [submittedSearch,setSubmittedSearch]=useState('')
   const {data:accounts, isError:accountsError, error:accountsErrorCause} = useQuery({
     queryKey:['company-accounts',page,visibility,submittedSearch],
@@ -84,7 +85,8 @@ export const CompanyAccountControls = () => {
       <h2 className="text-lg font-semibold">Company accounts — authorized management</h2>
       <p className="text-sm text-muted-foreground">Manage employee accounts according to your existing delegated grants. No public registration, email activation or MFA.</p>
     </div>
-    {canCreate&&<div className="grid gap-3 sm:grid-cols-2">
+    {canCreate&&<button type="button" aria-expanded={showCreate} onClick={()=>setShowCreate(v=>!v)} className="w-full rounded-lg border border-dashed px-3 py-2 text-start text-sm font-medium hover:bg-muted">{showCreate?'Close employee form':'+ Add employee'}</button>}
+    {canCreate&&showCreate&&<div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Employee identifier (email-style login)<input aria-label="Employee login" type="email" autoComplete="off" value={email} onChange={e=>setEmail(e.target.value)} className="mt-1 w-full rounded-lg border bg-background p-2"/></label>
       <label className="text-sm">Initial password<input aria-label="Initial employee password" type="password" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} className="mt-1 w-full rounded-lg border bg-background p-2"/></label>
       <label className="text-sm">First name<input aria-label="Employee first name" value={first} onChange={e=>setFirst(e.target.value)} className="mt-1 w-full rounded-lg border bg-background p-2"/></label>
@@ -92,15 +94,17 @@ export const CompanyAccountControls = () => {
     </div>}
     <div className="rounded-xl border p-3 space-y-3">
       {canAssignRoles&&<label className="text-sm">Assigned role <select aria-label="Employee role" className="ms-2 rounded border bg-background p-2" value={role} onChange={e=>changeRole(e.target.value as UserRole)}>{roleOptions.map(r=><option key={r} value={r}>{r}</option>)}</select></label>}
+      <details className="rounded-lg border border-dashed p-3"><summary className="cursor-pointer text-xs font-semibold text-muted-foreground">Advanced access: permissions, pages and scan types</summary><div className="mt-3 space-y-3">
       {canAssignGrants&&<fieldset className="grid gap-1 sm:grid-cols-2"><legend className="mb-2 text-sm font-medium">Enabled workspace capabilities and pages</legend>{permitted.map(permission=><label className="flex items-center gap-2 text-xs" key={permission}><input type="checkbox" checked={grants.includes(permission)} onChange={()=>setGrants(x=>toggle(x,permission))}/>{permission}</label>)}</fieldset>}
       <fieldset className="grid gap-1 sm:grid-cols-2"><legend className="mb-2 text-sm font-medium">Visible pages</legend>{pageChoices.map(item=><label className="flex items-center gap-2 text-xs" key={item.href}><input type="checkbox" checked={pages.includes(item.href)} onChange={()=>setPages(x=>toggle(x,item.href))}/>{item.name} ({item.href})</label>)}</fieldset>
       <fieldset className="grid gap-1 sm:grid-cols-2"><legend className="mb-2 text-sm font-medium">Allowed scan types</legend>{(options?.scan_types||[]).map(mode=><label className="flex items-center gap-2 text-xs" key={mode}><input type="checkbox" checked={scanTypes.includes(mode)} onChange={()=>setScanTypes(x=>toggle(x,mode))}/>{mode}</label>)}</fieldset>
+      </div></details>
     </div>
-    {canCreate&&<button disabled={busy||!email||!password||!first||!last} className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50" onClick={()=>transact(async()=>{
+    {canCreate&&showCreate&&<button disabled={busy||!email||!password||!first||!last} className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50" onClick={()=>transact(async()=>{
       const created = await apiHelpers.post<Employee>('/auth/users/',{email,first_name:first,last_name:last,password,password_confirm:password,role:canAssignRoles?role:'viewer',granted_permissions:canAssignGrants?grants:[],enabled_scan_types:scanTypes,enabled_pages:pages})
       // The manager already knows this newly created account's ID. Do not
       // require user.read or a second inventory lookup to activate it.
-      setEmail('');setPassword('');setFirst('');setLast('');setGrants([]);setScanTypes([]);setPages([])
+      setEmail('');setPassword('');setFirst('');setLast('');setGrants([]);setScanTypes([]);setPages([]);setShowCreate(false)
       // Restore the selected account's real scopes AFTER clearing the create form.
       // Both forms share permission/page state; reversing this order would silently
       // reset the newly selected employee's grants before a subsequent Save.
@@ -140,7 +144,7 @@ export const CompanyAccountControls = () => {
     </div>}
     {selected&&!selectedProtected&&canDelete&&<div className="rounded-xl border border-destructive/40 p-3 space-y-2">
       <button className="rounded-lg border border-destructive px-3 py-2 text-sm text-destructive disabled:opacity-50" disabled={busy} onClick={()=>{
-        if (!window.confirm(`Delete account ${selected.email}? This revokes sign-in access but retains the account and audit history. Continue?`)) return
+        if (!window.confirm(`Revoke access for ${selected.email}? The account will become inactive and its audit history will remain. Continue?`)) return
         void transact(async()=>{
           await apiHelpers.delete('/auth/users/'+selected.id+'/')
           setSelected(null)
