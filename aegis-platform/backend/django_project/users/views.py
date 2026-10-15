@@ -203,15 +203,24 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response({'message': 'Logged out successfully'})
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
+    @transaction.atomic
     def activate(self, request, pk=None):
         user = self.get_object()
         if not can_manage_account(request.user, user):
             return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
         user.is_active = True
         user.save(update_fields=['is_active'])
+        append_audit(
+            user=request.user, action=AuditLog.Action.USER_UPDATE,
+            result=AuditLog.Result.SUCCESS, resource_type='User',
+            resource_id=str(user.pk), resource_repr=user.email,
+            metadata={'event': 'company_account_activated'},
+            ip_address=client_ip_from_request(request),
+        )
         return Response({'message': 'User activated'})
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
+    @transaction.atomic
     def deactivate(self, request, pk=None):
         user = self.get_object()
         if not can_manage_account(request.user, user):
@@ -220,6 +229,13 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response({'error': 'The primary company owner cannot be deactivated.'}, status=status.HTTP_400_BAD_REQUEST)
         user.is_active = False
         user.save(update_fields=['is_active'])
+        append_audit(
+            user=request.user, action=AuditLog.Action.USER_UPDATE,
+            result=AuditLog.Result.SUCCESS, resource_type='User',
+            resource_id=str(user.pk), resource_repr=user.email,
+            metadata={'event': 'company_account_deactivated'},
+            ip_address=client_ip_from_request(request),
+        )
         return Response({'message': 'User deactivated'})
 
 

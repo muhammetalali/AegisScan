@@ -114,6 +114,23 @@ def test_ungranted_admin_cannot_create_activate_and_assign_employee(company_owne
     assert owner.post(detail + 'deactivate/', {}, format='json').status_code == 200
     employee.refresh_from_db()
     assert not employee.is_active
+    from django_project.audit.models import AuditLog
+    from django_project.audit.services import verify_audit_chain
+
+    lifecycle = AuditLog.objects.filter(
+        resource_type='User', resource_id=str(employee.pk),
+        action=AuditLog.Action.USER_UPDATE,
+    ).order_by('created_at')
+    assert [entry.metadata.get('event') for entry in lifecycle] == [
+        'company_account_activated', 'company_account_deactivated',
+    ]
+    assert all(
+        entry.user_id == company_owner.pk
+        and entry.result == AuditLog.Result.SUCCESS
+        and bool(entry.entry_hash)
+        for entry in lifecycle
+    )
+    assert verify_audit_chain()[0] is True
 
 
 @pytest.mark.django_db
