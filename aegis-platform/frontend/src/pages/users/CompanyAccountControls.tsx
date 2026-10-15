@@ -14,6 +14,7 @@ const displayError = (error: unknown) => {
   return Array.isArray(reason?.password) ? reason.password.join(' ') : reason?.detail || ('Request denied or failed (' + (e?.response?.status || 'network') + ')')
 }
 const toggle = (items:string[],item:string) => items.includes(item) ? items.filter(x=>x!==item) : [...items,item]
+const cnFilter = (selected:boolean) => 'rounded-md px-3 py-1.5 transition-colors ' + (selected?'bg-primary text-primary-foreground':'text-muted-foreground hover:bg-muted')
 
 /** The one canonical company account screen; the Django user API is authoritative. */
 export const CompanyAccountControls = () => {
@@ -28,7 +29,14 @@ export const CompanyAccountControls = () => {
   const cache = useQueryClient()
   const {data:options} = useQuery({queryKey:['company-access-options'],queryFn:()=>apiHelpers.get<Options>('/auth/users/access_options/'),retry:false})
   const [page,setPage]=useState(1)
-  const {data:accounts, isError:accountsError, error:accountsErrorCause} = useQuery({queryKey:['company-accounts',page],queryFn:()=>apiHelpers.get<Accounts>('/auth/users/',{params:{page}}),retry:false})
+  const [visibility,setVisibility]=useState<'active'|'all'>('active')
+  const [search,setSearch]=useState('')
+  const [submittedSearch,setSubmittedSearch]=useState('')
+  const {data:accounts, isError:accountsError, error:accountsErrorCause} = useQuery({
+    queryKey:['company-accounts',page,visibility,submittedSearch],
+    queryFn:()=>apiHelpers.get<Accounts>('/auth/users/',{params:{page,status:visibility,q:submittedSearch}}),
+    retry:false,
+  })
   const [email,setEmail]=useState('')
   const [first,setFirst]=useState('')
   const [last,setLast]=useState('')
@@ -100,8 +108,20 @@ export const CompanyAccountControls = () => {
     },canUpdate?'Employee created inactive. Activate it below when ready.':'Employee created inactive. An authorized manager with update permission can activate it.')}>Create inactive employee</button>}
     {accountsError&&<p role="alert" className="text-sm text-destructive">{(accountsErrorCause as any)?.response?.status===403?'403 · Employee inventory requires the user.read grant.':'Employee inventory unavailable. No changes made.'}</p>}
     <div className="space-y-2">
-      <h3 className="font-medium text-sm">Existing company accounts</h3>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-medium text-sm">Company accounts</h3>
+        <div className="flex rounded-lg border p-0.5 text-xs" aria-label="Account visibility">
+          <button type="button" aria-pressed={visibility==='active'} className={cnFilter(visibility==='active')} onClick={()=>{setVisibility('active');setPage(1);setSelected(null)}}>Active</button>
+          <button type="button" aria-pressed={visibility==='all'} className={cnFilter(visibility==='all')} onClick={()=>{setVisibility('all');setPage(1);setSelected(null)}}>All history</button>
+        </div>
+      </div>
+      <form className="flex flex-wrap gap-2" onSubmit={event=>{event.preventDefault();setSubmittedSearch(search.trim());setPage(1);setSelected(null)}}>
+        <input type="search" aria-label="Search account email" placeholder="Find account by email" value={search} onChange={event=>setSearch(event.target.value)} className="min-w-0 flex-1 rounded-lg border bg-background px-3 py-2 text-sm"/>
+        <button type="submit" className="rounded-lg border px-3 py-2 text-xs">Find account</button>
+      </form>
+      <p className="text-xs text-muted-foreground">{visibility==='active'?'Only active accounts are shown. Use All history to find inactive accounts for activation.':'Inactive records remain available for audit; revoking access does not erase history.'} Select an account to view its actions.</p>
       {(accounts?.results||[]).map(u=><button key={u.id} className="block w-full rounded-lg border p-2 text-start text-sm hover:bg-muted" onClick={()=>select(u)}>{u.email} — {u.role} — {u.is_active?'Active':'Inactive'}</button>)}
+      {!accountsError&&accounts?.results?.length===0&&<p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">No matching accounts in this view.</p>}
       <div className="flex items-center gap-3 text-sm"><button className="rounded border px-3 py-1 disabled:opacity-50" disabled={page===1} onClick={()=>setPage(current=>Math.max(1,current-1))}>Previous</button><span>Page {page} · {accounts?.count||0} accounts</span><button className="rounded border px-3 py-1 disabled:opacity-50" disabled={!accounts?.next} onClick={()=>setPage(current=>current+1)}>Next</button></div>
     </div>
     {selectedProtected&&<p role="status" className="text-sm">This privileged account is protected from delegated changes.</p>}
@@ -125,8 +145,8 @@ export const CompanyAccountControls = () => {
           await apiHelpers.delete('/auth/users/'+selected.id+'/')
           setSelected(null)
         },'Account access revoked; the account record is retained for audit.')
-      }}>Delete account</button>
-      <p className="text-xs text-muted-foreground">Deletion revokes account access; the record is preserved for audit rather than permanently erased.</p>
+      }}>Revoke account access</button>
+      <p className="text-xs text-muted-foreground">Revoking access deactivates the account; its history remains protected for audit.</p>
     </div>}
     {feedback&&<p role={failed?'alert':'status'} className={'text-sm '+(failed?'text-destructive':'text-muted-foreground')}>{feedback}</p>}
   </section>
