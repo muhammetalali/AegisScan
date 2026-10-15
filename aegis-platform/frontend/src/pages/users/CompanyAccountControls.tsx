@@ -113,7 +113,7 @@ export const CompanyAccountControls = () => {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-medium text-sm">Company accounts</h3>
         <div className="flex rounded-lg border p-0.5 text-xs" aria-label="Account visibility">
-          <button type="button" aria-pressed={visibility==='active'} className={cnFilter(visibility==='active')} onClick={()=>{setVisibility('active');setPage(1);setSelected(null)}}>Active</button>
+          <button type="button" aria-pressed={visibility==='active'} className={cnFilter(visibility==='active')} onClick={()=>{setVisibility('active');setPage(1);setSelected(null)}}>Active accounts</button>
           <button type="button" aria-pressed={visibility==='all'} className={cnFilter(visibility==='all')} onClick={()=>{setVisibility('all');setPage(1);setSelected(null)}}>All history</button>
         </div>
       </div>
