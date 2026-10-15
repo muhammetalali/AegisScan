@@ -77,8 +77,21 @@ class UserViewSet(viewsets.ModelViewSet):
         required = CompanyOwnerControlsAccounts.action_permissions.get(getattr(self, 'action', None))
         if (user.is_superuser or user.has_permission('user.read') or
                 (required and user.has_permission(required))):
-            return User.objects.all()
-        return User.objects.filter(id=user.id)
+            queryset = User.objects.all()
+        else:
+            queryset = User.objects.filter(id=user.id)
+        # Only the existing account inventory can opt into the smaller active
+        # view. Every result still passes through the same RBAC/tenant scope.
+        if self.action == 'list':
+            visibility = self.request.query_params.get('status', 'all')
+            if visibility == 'active':
+                queryset = queryset.filter(is_active=True)
+            elif visibility == 'inactive':
+                queryset = queryset.filter(is_active=False)
+            query = self.request.query_params.get('q', '').strip()
+            if query:
+                queryset = queryset.filter(email__icontains=query[:120])
+        return queryset
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def access_options(self, request):
