@@ -26,7 +26,13 @@ def test_live_cve_enrichment_persists_provenance():
     assert payload['persisted'] is True
     assert payload['cve_id'] == 'CVE-2021-44228'
     assert payload['snapshot_sha256']
-    assert payload['source_urls']['nvd'].startswith('https://services.nvd.nist.gov/')
+    # NVD may throttle live anonymous requests. A missing provider must be
+    # represented explicitly as failed, never as fabricated successful evidence.
+    if 'nvd' in payload['source_urls']:
+        assert payload['source_urls']['nvd'].startswith('https://services.nvd.nist.gov/')
+        assert not any(item.startswith('nvd:') for item in payload['provider_failures'])
+    else:
+        assert any(item.startswith('nvd:') for item in payload['provider_failures'])
     assert payload['source_urls']['epss'].startswith('https://api.first.org/')
     assert payload['source_urls']['osv'].startswith('https://api.osv.dev/')
     assert payload['source_urls']['cisa_kev'].startswith('https://www.cisa.gov/')
@@ -35,7 +41,11 @@ def test_live_cve_enrichment_persists_provenance():
     assert snapshot.cve_id == payload['cve_id']
     assert snapshot.snapshot_sha256 == payload['snapshot_sha256']
     assert snapshot.observed_by_id == user.id
-    assert 'nvd' in snapshot.sources
+    if 'nvd' in payload['source_urls']:
+        assert 'nvd' in snapshot.sources
+    else:
+        assert 'nvd' not in snapshot.sources
+        assert snapshot.provider_failures == payload['provider_failures']
     assert 'epss' in snapshot.sources
     assert 'osv' in snapshot.sources
     assert 'cisa_kev' in snapshot.sources
