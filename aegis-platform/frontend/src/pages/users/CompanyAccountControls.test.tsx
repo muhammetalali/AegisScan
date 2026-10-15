@@ -30,6 +30,16 @@ beforeEach(()=>{
 afterEach(()=>{cleanup();vi.clearAllMocks();vi.unstubAllGlobals()})
 
 describe('owner-only company account UI',()=>{
+  it('keeps account history available without cluttering the active view',async()=>{
+    renderPage()
+    await waitFor(()=>expect(get).toHaveBeenCalledWith('/auth/users/',{params:{page:1,status:'active',q:''}}))
+    fireEvent.click(screen.getByRole('button',{name:'All history'}))
+    await waitFor(()=>expect(get).toHaveBeenCalledWith('/auth/users/',{params:{page:1,status:'all',q:''}}))
+    fireEvent.change(screen.getByRole('searchbox',{name:'Search account email'}),{target:{value:'staff@company.invalid'}})
+    fireEvent.click(screen.getByRole('button',{name:'Find account'}))
+    await waitFor(()=>expect(get).toHaveBeenCalledWith('/auth/users/',{params:{page:1,status:'all',q:'staff@company.invalid'}}))
+    expect(screen.getByText(/Inactive records remain available for audit/)).toBeTruthy()
+  })
   it('provisions a disabled employee with owner-selected role, password and scan scopes',async()=>{
     renderPage()
     await screen.findByText(/staff@company.invalid/)
@@ -83,7 +93,7 @@ describe('owner-only company account UI',()=>{
     vi.stubGlobal('confirm',vi.fn().mockReturnValue(false))
     renderPage()
     fireEvent.click(await screen.findByText(/staff@company.invalid/))
-    fireEvent.click(screen.getByRole('button',{name:'Delete account'}))
+    fireEvent.click(screen.getByRole('button',{name:'Revoke account access'}))
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('staff@company.invalid'))
     expect(remove).not.toHaveBeenCalled()
     expect(screen.getByText('Selected: staff@company.invalid')).toBeTruthy()
@@ -92,7 +102,7 @@ describe('owner-only company account UI',()=>{
     vi.stubGlobal('confirm',vi.fn().mockReturnValue(true))
     renderPage()
     fireEvent.click(await screen.findByText(/staff@company.invalid/))
-    fireEvent.click(screen.getByRole('button',{name:'Delete account'}))
+    fireEvent.click(screen.getByRole('button',{name:'Revoke account access'}))
     await waitFor(()=>expect(remove).toHaveBeenCalledWith('/auth/users/staff-1/'))
     await waitFor(()=>expect(screen.getByRole('status').textContent).toContain('record is retained'))
     expect(screen.queryByText('Selected: staff@company.invalid')).toBeNull()
@@ -101,7 +111,7 @@ describe('owner-only company account UI',()=>{
     useAuthStore.setState({user:{role:'admin',is_company_owner:false,permissions:['user.read','user.update']} as never})
     renderPage()
     fireEvent.click(await screen.findByText(/staff@company.invalid/))
-    expect(screen.queryByRole('button',{name:'Delete account'})).toBeNull()
+    expect(screen.queryByRole('button',{name:'Revoke account access'})).toBeNull()
     cleanup()
     useAuthStore.setState({user:{role:'super_admin',is_company_owner:true} as never})
     get.mockImplementation(async (path:string)=>{
@@ -112,7 +122,7 @@ describe('owner-only company account UI',()=>{
     renderPage()
     fireEvent.click(await screen.findByText(/owner@company.invalid/))
     expect(screen.getByText('This privileged account is protected from delegated changes.')).toBeTruthy()
-    expect(screen.queryByRole('button',{name:'Delete account'})).toBeNull()
+    expect(screen.queryByRole('button',{name:'Revoke account access'})).toBeNull()
     expect(remove).not.toHaveBeenCalled()
   })
   it('retains selection and shows an error when the server denies deletion',async()=>{
@@ -120,7 +130,7 @@ describe('owner-only company account UI',()=>{
     remove.mockRejectedValueOnce(Object.assign(new Error('forbidden'),{response:{status:403,data:{detail:'Account deletion forbidden.'}}}))
     renderPage()
     fireEvent.click(await screen.findByText(/staff@company.invalid/))
-    fireEvent.click(screen.getByRole('button',{name:'Delete account'}))
+    fireEvent.click(screen.getByRole('button',{name:'Revoke account access'}))
     expect((await screen.findByRole('alert')).textContent).toContain('Account deletion forbidden.')
     expect(screen.getByText('Selected: staff@company.invalid')).toBeTruthy()
   })
