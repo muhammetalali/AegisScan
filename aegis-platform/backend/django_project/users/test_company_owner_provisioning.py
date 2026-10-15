@@ -513,3 +513,50 @@ def test_delegated_employee_scan_and_page_allowlists_cannot_escalate(company_own
     employee.refresh_from_db()
     assert employee.enabled_scan_types == ['url']
     assert employee.enabled_pages == ['/projects']
+
+
+
+@pytest.mark.django_db
+def test_existing_account_inventory_can_filter_active_and_search(company_owner):
+    """A compact list must preserve all history and the existing RBAC boundary."""
+    from django_project.audit.models import AuditLog
+
+    active = User.objects.create_user(
+        email='operations-active@example.invalid',
+        password='Strong-Test-Employee!2026',
+        role=UserRole.VIEWER,
+        is_active=True,
+    )
+    inactive = User.objects.create_user(
+        email='operations-archived@example.invalid',
+        password='Strong-Test-Employee!2026',
+        role=UserRole.VIEWER,
+        is_active=False,
+    )
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=company_owner)
+    url = '/api/v1/auth/users/'
+
+    full = owner_client.get(url)
+    assert full.status_code == 200
+    assert full.data['count'] == 3  # Existing API behavior is unchanged.
+
+    active_view = owner_client.get(url, {'status': 'active'})
+    assert active_view.status_code == 200
+    assert active_view.data['count'] == 2
+    active_emails = {item['email'] for item in active_view.data['results']}
+    assert active.email in active_emails
+    assert inactive.email not in active_emails
+
+    inactive_view = owner_client.get(url, {'status': 'inactive', 'q': 'ARCHIVED'})
+    assert inactive_view.status_code == 200
+    assert inactive_view.data['count'] == 1
+    assert inactive_view.data['results'][0]['email'] == inactive.email
+    assert User.objects.filter(pk=inactive.pk, is_active=False).exists()
+    assert AuditLog.objects.filter(action=AuditLog.Action.USER_DELETE).count() == 0
+
+    # Search never overrides RBAC. A Viewer cannot enumerate accounts.
+    viewer_client = APIClient()
+    viewer_client.force_authenticate(user=active)
+    denied = viewer_client.get(url, {'status': 'all', 'q': 'operations'})
+    assert denied.status_code == 403
