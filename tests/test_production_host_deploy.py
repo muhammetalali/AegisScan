@@ -476,6 +476,11 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
         "_retire_legacy_alert_delivery_network",
         lambda: events.append("legacy-network-cleanup") or {"status": "removed", "removed": True},
     )
+    monkeypatch.setattr(
+        deploy,
+        "_post_release_storage_retention",
+        lambda *_args: events.append("retention") or {"status": "success"},
+    )
 
     result = deploy.deploy(release_sha, env_file, "https://security.example.com")
 
@@ -488,6 +493,8 @@ def test_deploy_bootstraps_exact_runtime_trust_before_full_preflight(tmp_path: P
     assert events.index(("trust", release_sha)) < events.index("preflight")
     assert events.index("preflight") < events.index("build") < events.index("deploy")
     assert events.index("deploy") < events.index("execution") < events.index("accept") < events.index("alerts") < events.index("legacy-network-cleanup")
+    assert events.index("legacy-network-cleanup") < events.index("retention")
+    assert result["post_release_storage_retention"]["status"] == "success"
 
 
 def test_alert_delivery_acceptance_rejects_unrelated_counter_increment(tmp_path: Path, monkeypatch):
@@ -1632,3 +1639,169 @@ def test_real_git_refetch_recovers_missing_historical_objects_without_changing_h
     assert git(checkout, "rev-parse", "HEAD").stdout.decode().strip() == head_before
     assert git(checkout, "status", "--porcelain").stdout == b""
     assert (checkout / "evidence.txt").read_text() == "current-history-version"
+
+def test_post_release_retention_keeps_three_verified_release_image_sets(monkeypatch):
+    release, previous, older, obsolete = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+    profiles = (
+        "base", "profile-code", "profile-web", "profile-network", "profile-recon",
+        "code-provider", "web-provider", "network-provider", "masscan-provider",
+    )
+    tags = [f"{p}-{sha[:12]}" for sha in (release, previous, older, obsolete) for p in profiles]
+    deleted = []
+    stages = []
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release)
+    monkeypatch.setattr(
+        deploy, "_git", lambda *args: SimpleNamespace(stdout="\n".join(
+            [release, previous, older, obsolete]
+        )),
+    )
+
+    def fake_run(argv, **_kwargs):
+        if argv[:3] == ["docker", "image", "ls"]:
+            return SimpleNamespace(stdout="\n".join(tags))
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return SimpleNamespace(stdout="\n".join(["2026-10-01T00:00:00Z"] * 9))
+        if argv[:3] == ["docker", "image", "rm"]:
+            deleted.append(argv[-1])
+            return SimpleNamespace(stdout="")
+        raise AssertionError(f"unexpected docker command {argv}")
+
+    monkeypatch.setattr(deploy, "_run", fake_run)
+    monkeypatch.setattr(
+        deploy, "_storage_stage",
+        lambda name, argv: stages.append(list(argv)) or {"name": name, "reclaimed_bytes": 0},
+    )
+    result = deploy._post_release_storage_retention(release, previous)
+    assert result["status"] == "success"
+    assert result["protected_releases"] == sorted([release[:12], previous[:12], older[:12]])
+    assert result["deleted_image_tags"] == 9
+    assert set(deleted) == {"aegis-kali-production:" + p + "-" + obsolete[:12] for p in profiles}
+    assert len(stages) == 1
+    assert stages[0] == [
+        "docker", "buildx", "prune", "--force",
+        "--filter", "until=24h", "--reserved-space", "15GB",
+    ]
+    assert result["volume_prune_performed"] is False
+
+
+def test_post_release_retention_redeploy_keeps_two_prior_image_sets(monkeypatch):
+    release, older1, older2, obsolete = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+    profiles = (
+        "base", "profile-code", "profile-web", "profile-network", "profile-recon",
+        "code-provider", "web-provider", "network-provider", "masscan-provider",
+    )
+    tags = [f"{p}-{sha[:12]}" for sha in (release, older1, older2, obsolete) for p in profiles]
+    deleted = []
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release)
+    monkeypatch.setattr(
+        deploy, "_git",
+        lambda *args: SimpleNamespace(stdout="\n".join((release, older1, older2, obsolete))),
+    )
+
+    def fake_run(argv, **_kwargs):
+        if argv[:3] == ["docker", "image", "ls"]:
+            return SimpleNamespace(stdout="\n".join(tags))
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return SimpleNamespace(stdout="\n".join(["2026-10-01T00:00:00Z"] * 9))
+        if argv[:3] == ["docker", "image", "rm"]:
+            deleted.append(argv[-1])
+            return SimpleNamespace(stdout="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(deploy, "_run", fake_run)
+    monkeypatch.setattr(deploy, "_storage_stage", lambda *args: {"reclaimed_bytes": 0})
+    result = deploy._post_release_storage_retention(release, release)
+    assert result["status"] == "success"
+    assert set(result["protected_releases"]) == {release[:12], older1[:12], older2[:12]}
+    assert len(deleted) == 9
+    assert all(obsolete[:12] in tag for tag in deleted)
+
+
+def test_post_release_retention_fails_safe_if_rollback_images_incomplete(monkeypatch):
+    release, previous = ("a" * 40, "b" * 40)
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release)
+    monkeypatch.setattr(deploy, "_run", lambda *_args, **_kwargs: SimpleNamespace(
+        stdout=f"code-provider-{release[:12]}\ncode-provider-{previous[:12]}"
+    ))
+    monkeypatch.setattr(
+        deploy, "_storage_stage",
+        lambda *_args, **_kwargs: pytest.fail("no retention without verified rollback"),
+    )
+    result = deploy._post_release_storage_retention(release, previous)
+    assert result["status"] == "deferred-unverified-protected-release"
+    assert result["deleted_image_tags"] == 0
+
+
+def test_post_release_retention_never_interrupts_accepted_release_on_docker_failure(monkeypatch):
+    monkeypatch.setattr(deploy, "_current_sha", lambda: "a" * 40)
+
+    def broken_docker(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, ["docker"], stderr="daemon unavailable")
+
+    monkeypatch.setattr(deploy, "_run", broken_docker)
+    result = deploy._post_release_storage_retention("a" * 40, "b" * 40)
+    assert result["status"] == "deferred-inventory-unavailable"
+    assert result["deleted_image_tags"] == 0
+    assert result["volume_prune_performed"] is False
+
+
+def test_post_release_retention_skips_recent_and_partial_image_sets(monkeypatch):
+    release, previous, older, recent, partial = ("a" * 40, "b" * 40, "c" * 40, "d" * 40, "e" * 40)
+    profiles = (
+        "base", "profile-code", "profile-web", "profile-network", "profile-recon",
+        "code-provider", "web-provider", "network-provider", "masscan-provider",
+    )
+    tags = [f"{p}-{sha[:12]}" for sha in (release, previous, older, recent) for p in profiles]
+    tags.append(f"base-{partial[:12]}")
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release)
+    monkeypatch.setattr(deploy, "_git", lambda *args: SimpleNamespace(
+        stdout="\n".join([release, previous, older, recent, partial])
+    ))
+
+    def fake_run(argv, **_kwargs):
+        if argv[:3] == ["docker", "image", "ls"]:
+            return SimpleNamespace(stdout="\n".join(tags))
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return SimpleNamespace(stdout="\n".join(
+                [deploy.datetime.now(deploy.timezone.utc).isoformat()] * 9
+            ))
+        if argv[:3] == ["docker", "image", "rm"]:
+            pytest.fail("recent and incomplete image sets must not be deleted")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(deploy, "_run", fake_run)
+    monkeypatch.setattr(deploy, "_storage_stage", lambda *args: {"reclaimed_bytes": 0})
+    result = deploy._post_release_storage_retention(release, previous)
+    assert result["deleted_image_tags"] == 0
+    assert result["skipped_recent_releases"] == 1
+    assert result["skipped_incomplete_releases"] == 1
+
+
+def test_post_release_retention_requires_every_profile_image_to_be_aged(monkeypatch):
+    release, previous, older, mixed = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+    profiles = (
+        "base", "profile-code", "profile-web", "profile-network", "profile-recon",
+        "code-provider", "web-provider", "network-provider", "masscan-provider",
+    )
+    tags = [f"{p}-{sha[:12]}" for sha in (release, previous, older, mixed) for p in profiles]
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release)
+    monkeypatch.setattr(deploy, "_git", lambda *args: SimpleNamespace(
+        stdout="\n".join([release, previous, older, mixed])
+    ))
+
+    def fake_run(argv, **_kwargs):
+        if argv[:3] == ["docker", "image", "ls"]:
+            return SimpleNamespace(stdout="\n".join(tags))
+        if argv[:3] == ["docker", "image", "inspect"]:
+            old = ["2026-10-01T00:00:00Z"] * 8
+            new = [deploy.datetime.now(deploy.timezone.utc).isoformat()]
+            return SimpleNamespace(stdout="\n".join(old + new))
+        if argv[:3] == ["docker", "image", "rm"]:
+            pytest.fail("one recent profile must protect the entire image group")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(deploy, "_run", fake_run)
+    monkeypatch.setattr(deploy, "_storage_stage", lambda *args: {"reclaimed_bytes": 0})
+    result = deploy._post_release_storage_retention(release, previous)
+    assert result["deleted_image_tags"] == 0
+    assert result["skipped_recent_releases"] == 1

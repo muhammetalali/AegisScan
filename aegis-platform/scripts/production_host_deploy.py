@@ -257,6 +257,119 @@ def _host_storage_reclaim(
     return result
 
 
+
+def _post_release_storage_retention(release_sha: str, previous_sha: str) -> dict[str, object]:
+    """Bounded post-acceptance cleanup, preserving current and two rollback image sets.
+
+    Never prune volumes, arbitrary tagged images, active containers, or evidence.
+    This is noncritical maintenance: a Docker or Git inventory failure is reported,
+    never allowed to roll back an otherwise accepted production release.
+    """
+    profiles = {
+        "base", "profile-code", "profile-web", "profile-network", "profile-recon",
+        "code-provider", "web-provider", "network-provider", "masscan-provider",
+    }
+    keep = {release_sha[:12], previous_sha[:12]}
+    result: dict[str, object] = {
+        "schema": "aegisscan.post-release-storage-retention.v1",
+        "status": "success",
+        "protected_releases": sorted(keep),
+        "deleted_image_tags": 0,
+        "skipped_recent_releases": 0,
+        "skipped_incomplete_releases": 0,
+        "volume_prune_performed": False,
+        "container_prune_performed": False,
+        "minimum_image_age_hours": 24,
+        "max_deleted_image_tags": 81,
+        "cache_reserved_space": "15GB",
+    }
+    try:
+        if _current_sha() != release_sha:
+            raise DeployError("release changed during post-acceptance maintenance")
+        listing = _run(
+            ["docker", "image", "ls", "aegis-kali-production", "--format", "{{.Tag}}"],
+            timeout=60,
+        ).stdout
+        by_release: dict[str, dict[str, str]] = {}
+        for tag in listing.splitlines():
+            match = re.fullmatch(
+                r"(base|profile-code|profile-web|profile-network|profile-recon|"
+                r"code-provider|web-provider|network-provider|masscan-provider)-([0-9a-f]{12})",
+                tag,
+            )
+            if match:
+                by_release.setdefault(match.group(2), {})[match.group(1)] = (
+                    "aegis-kali-production:" + tag
+                )
+        # No guessing which tag is the only recoverable rollback release.
+        if any(set(by_release.get(sha, {})) != profiles for sha in keep):
+            result["status"] = "deferred-unverified-protected-release"
+            return result
+
+        history = _git("rev-list", "--first-parent", "--max-count=1000", "HEAD").stdout
+        for commit in history.splitlines():
+            candidate = commit[:12]
+            if candidate not in keep and set(by_release.get(candidate, {})) == profiles:
+                keep.add(candidate)
+                if len(keep) >= 3:
+                    break
+        result["protected_releases"] = sorted(keep)
+
+        now = datetime.now(timezone.utc)
+        errors: list[str] = []
+        for sha, tags in sorted(by_release.items()):
+            if sha in keep:
+                continue
+            if set(tags) != profiles:
+                result["skipped_incomplete_releases"] += 1
+                continue
+            # Every one of the nine profile images must be old. A single old
+            # image is not evidence that the entire release group is retired.
+            try:
+                raw = _run(
+                    ["docker", "image", "inspect", "--format", "{{.Created}}",
+                     *sorted(tags.values())],
+                    timeout=90,
+                ).stdout.splitlines()
+                if len(raw) != len(profiles):
+                    raise ValueError("incomplete image creation-time inventory")
+                created_at = [datetime.fromisoformat(line.strip().replace("Z", "+00:00")) for line in raw]
+                if any(created.tzinfo is None for created in created_at):
+                    raise ValueError("Docker image creation time has no timezone")
+                if any((now - created).total_seconds() < 24 * 3600 for created in created_at):
+                    result["skipped_recent_releases"] += 1
+                    continue
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                errors.append(f"image timestamp check failed for {sha}: {type(exc).__name__}")
+                continue
+            if result["deleted_image_tags"] + len(tags) > 81:
+                break
+            for image_tag in sorted(tags.values()):
+                try:
+                    _run(["docker", "image", "rm", image_tag], timeout=120)
+                    result["deleted_image_tags"] += 1
+                except (OSError, subprocess.SubprocessError) as exc:
+                    errors.append(f"image removal refused for {sha}: {type(exc).__name__}")
+                    break
+        result["image_errors"] = errors[:5]
+        result["image_retention_status"] = "partial" if errors else "success"
+
+        # Unlike the low-disk emergency gate, maintenance runs after success
+        # even when ample capacity remains; recent cache and 15GB are retained.
+        try:
+            result["cache"] = _storage_stage(
+                "aged-build-cache-with-reserve",
+                ["docker", "buildx", "prune", "--force", "--filter", "until=24h",
+                 "--reserved-space", "15GB"],
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            result["cache_error"] = type(exc).__name__
+            result["status"] = "partial"
+    except (OSError, subprocess.SubprocessError, DeployError, ValueError) as exc:
+        result["status"] = "deferred-inventory-unavailable"
+        result["error_type"] = type(exc).__name__
+    return result
+
 def _private_file(path: Path, *, max_bytes: int = 1024 * 1024) -> None:
     if not path.is_file():
         raise DeployError(f"required private file does not exist: {path}")
@@ -1418,6 +1531,9 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
                 ) from failure
         raise
 
+    # Only after the protected release has passed all host-side acceptance.
+    # An unavailable cleanup dependency must not undo the healthy release.
+    storage_retention = _post_release_storage_retention(release_sha, previous_sha)
     result: dict[str, object] = {
         "schema": "aegisscan.production-deploy.v1",
         "status": "success",
@@ -1427,6 +1543,7 @@ def deploy(release_sha: str, env_file: Path, origin: str) -> dict[str, object]:
         "pre_deploy_backup": backup,
         "storage_reclaim": storage_reclaim,
         "application_build_storage": build_storage,
+        "post_release_storage_retention": storage_retention,
         "alert_delivery": alert_delivery,
         "legacy_alert_network_cleanup": legacy_alert_network_cleanup,
     }
