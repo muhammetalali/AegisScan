@@ -310,3 +310,68 @@ def test_production_workflow_pins_enterprise_tls_monitor_around_both_scope_chang
     assert workflow.count(
         "--probe-ca-bundle /tmp/aegis-production/enterprise-ca.pem"
     ) == 2
+
+
+@pytest.mark.parametrize(
+    ("failure_detail", "should_retry"),
+    [
+        ("ssh: connect to host deploy.internal port 22: Network is unreachable", True),
+        ("Host key verification failed.", False),
+        ("Permission denied (publickey).", False),
+    ],
+)
+def test_transient_ssh_transport_cleanup_is_bounded_and_fail_closed(
+    tmp_path: Path, monkeypatch, failure_detail: str, should_retry: bool
+):
+    """Never retry identity/pinning failures or silently accept incomplete cleanup."""
+    key = _private(tmp_path / "retry-id", "private")
+    known = _private(tmp_path / "retry-host", "deploy.internal ssh-ed25519 AAAA\n")
+    sha = "f" * 40
+    monkeypatch.setattr(remote_ops.remote, "_host", lambda host: host)
+    monkeypatch.setattr(
+        remote_ops.remote, "_resolved_enterprise_addresses",
+        lambda *args: ["10.20.30.10"],
+    )
+    monkeypatch.setattr(
+        remote_ops.remote, "_require_known_host", lambda *args, **kwargs: "10.20.30.10",
+    )
+    calls = []
+    delays = []
+    monkeypatch.setattr(remote_ops.time, "sleep", delays.append)
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        assert "StrictHostKeyChecking=yes" in argv
+        assert "cleanup-e2e-scope" in argv[-1]
+        if len(calls) == 1 or not should_retry:
+            raise remote_ops.subprocess.CalledProcessError(
+                255, argv, stderr=failure_detail
+            )
+        payload = {
+            "schema": "aegisscan.production-e2e-scope-cleanup.v1",
+            "status": "success",
+            "release_sha": sha,
+            "scan_target_stopped": True,
+            "authorization_scope_restored": True,
+            "scanner_egress_scope_restored": True,
+        }
+        return SimpleNamespace(stdout=json.dumps(payload) + "\n")
+
+    monkeypatch.setattr(remote_ops.subprocess, "run", fake_run)
+    args = dict(
+        host="deploy.internal", port=22, user="aegisdeploy",
+        private_key=key, known_hosts=known, release_sha=sha,
+        repo_path="/opt/aegisscan/AegisScan",
+        env_path="/etc/aegisscan/production.env", timeout_seconds=120,
+    )
+    if should_retry:
+        assert remote_ops.cleanup_remote(**args)["scope_cleanup"]["scan_target_stopped"]
+        assert len(calls) == 2
+        assert delays == [2]
+    else:
+        with pytest.raises(
+            remote_ops.RemoteOperationalAcceptanceError, match="cleanup failed"
+        ):
+            remote_ops.cleanup_remote(**args)
+        assert len(calls) == 1
+        assert delays == []

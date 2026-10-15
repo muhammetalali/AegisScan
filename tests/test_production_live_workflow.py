@@ -493,3 +493,70 @@ def test_live_api_key_acceptance_revokes_fixtures_on_success_and_error(monkeypat
             assert ("GET", "Revoked key rejected", {401}) in calls
         expected_count = 1 if fail_read else 2
         assert sum(label == "API key fixture cleanup" for _, label, _ in calls) == expected_count
+
+
+def test_one_run_identity_cleanup_retries_connect_only(monkeypatch):
+    """Assert transport-only retry policy without adding dependencies to CI."""
+    import importlib.util
+    import sys
+    import types
+    from unittest.mock import patch
+
+    harness = ROOT / "aegis-platform/e2e/external_black_box_e2e.py"
+    fake_requests = types.ModuleType("requests")
+    fake_adapters = types.ModuleType("requests.adapters")
+    fake_retry_module = types.ModuleType("urllib3.util.retry")
+    mounts = []
+
+    class RetryPolicy:
+        def __init__(self, **kwargs):
+            self.options = kwargs
+
+    class Adapter:
+        def __init__(self, *, max_retries):
+            self.max_retries = max_retries
+
+    fake_retry_module.Retry = RetryPolicy
+    fake_adapters.HTTPAdapter = Adapter
+    fake_requests.Session = lambda: types.SimpleNamespace(
+        verify=True,
+        mount=lambda prefix, adapter: mounts.append((prefix, adapter)),
+    )
+    spec = importlib.util.spec_from_file_location("isolated_cleanup_network_retry", harness)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    fake_modules = {
+        "requests": fake_requests,
+        "requests.adapters": fake_adapters,
+        "urllib3": types.ModuleType("urllib3"),
+        "urllib3.util": types.ModuleType("urllib3.util"),
+        "urllib3.util.retry": fake_retry_module,
+    }
+    with patch.dict(sys.modules, fake_modules):
+        spec.loader.exec_module(module)
+        monkeypatch.setattr(module, "csrf", lambda _session: "test-csrf")
+        operations = []
+
+        def fake_http(_session, method, url, label, expected, **kwargs):
+            operations.append((method, url, label))
+            return {}
+
+        monkeypatch.setattr(module, "http", fake_http)
+        module._deactivate_ephemeral_account(
+            "temporary-fixture@example.invalid", "only-a-fixture", "One-run actor"
+        )
+
+    assert len(mounts) == 1
+    prefix, adapter = mounts[0]
+    assert prefix == "https://"
+    policy = adapter.max_retries.options
+    assert policy["total"] == policy["connect"] == 4
+    assert policy["read"] == policy["status"] == policy["other"] == 0
+    assert policy["redirect"] == 0
+    assert policy["allowed_methods"] is None
+    assert policy["raise_on_status"] is False
+    assert [label for _, _, label in operations] == [
+        "One-run actor login for cleanup",
+        "One-run actor self-deactivation",
+    ]
+    assert all(method == "POST" for method, _, _ in operations)
