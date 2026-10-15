@@ -323,16 +323,20 @@ def _post_release_storage_retention(release_sha: str, previous_sha: str) -> dict
             if set(tags) != profiles:
                 result["skipped_incomplete_releases"] += 1
                 continue
-            sample = tags["code-provider"]
+            # Every one of the nine profile images must be old. A single old
+            # image is not evidence that the entire release group is retired.
             try:
                 raw = _run(
-                    ["docker", "image", "inspect", sample, "--format", "{{.Created}}"],
-                    timeout=30,
-                ).stdout.strip()
-                created = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-                if created.tzinfo is None:
+                    ["docker", "image", "inspect", "--format", "{{.Created}}",
+                     *sorted(tags.values())],
+                    timeout=90,
+                ).stdout.splitlines()
+                if len(raw) != len(profiles):
+                    raise ValueError("incomplete image creation-time inventory")
+                created_at = [datetime.fromisoformat(line.strip().replace("Z", "+00:00")) for line in raw]
+                if any(created.tzinfo is None for created in created_at):
                     raise ValueError("Docker image creation time has no timezone")
-                if (now - created).total_seconds() < 24 * 3600:
+                if any((now - created).total_seconds() < 24 * 3600 for created in created_at):
                     result["skipped_recent_releases"] += 1
                     continue
             except (ValueError, OSError, subprocess.SubprocessError) as exc:

@@ -1660,7 +1660,7 @@ def test_post_release_retention_keeps_three_verified_release_image_sets(monkeypa
         if argv[:3] == ["docker", "image", "ls"]:
             return SimpleNamespace(stdout="\n".join(tags))
         if argv[:3] == ["docker", "image", "inspect"]:
-            return SimpleNamespace(stdout="2026-10-01T00:00:00Z")
+            return SimpleNamespace(stdout="\n".join(["2026-10-01T00:00:00Z"] * 9))
         if argv[:3] == ["docker", "image", "rm"]:
             deleted.append(argv[-1])
             return SimpleNamespace(stdout="")
@@ -1702,7 +1702,7 @@ def test_post_release_retention_redeploy_keeps_two_prior_image_sets(monkeypatch)
         if argv[:3] == ["docker", "image", "ls"]:
             return SimpleNamespace(stdout="\n".join(tags))
         if argv[:3] == ["docker", "image", "inspect"]:
-            return SimpleNamespace(stdout="2026-10-01T00:00:00Z")
+            return SimpleNamespace(stdout="\n".join(["2026-10-01T00:00:00Z"] * 9))
         if argv[:3] == ["docker", "image", "rm"]:
             deleted.append(argv[-1])
             return SimpleNamespace(stdout="")
@@ -1762,7 +1762,9 @@ def test_post_release_retention_skips_recent_and_partial_image_sets(monkeypatch)
         if argv[:3] == ["docker", "image", "ls"]:
             return SimpleNamespace(stdout="\n".join(tags))
         if argv[:3] == ["docker", "image", "inspect"]:
-            return SimpleNamespace(stdout=deploy.datetime.now(deploy.timezone.utc).isoformat())
+            return SimpleNamespace(stdout="\n".join(
+                [deploy.datetime.now(deploy.timezone.utc).isoformat()] * 9
+            ))
         if argv[:3] == ["docker", "image", "rm"]:
             pytest.fail("recent and incomplete image sets must not be deleted")
         raise AssertionError(argv)
@@ -1773,3 +1775,33 @@ def test_post_release_retention_skips_recent_and_partial_image_sets(monkeypatch)
     assert result["deleted_image_tags"] == 0
     assert result["skipped_recent_releases"] == 1
     assert result["skipped_incomplete_releases"] == 1
+
+
+def test_post_release_retention_requires_every_profile_image_to_be_aged(monkeypatch):
+    release, previous, older, mixed = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+    profiles = (
+        "base", "profile-code", "profile-web", "profile-network", "profile-recon",
+        "code-provider", "web-provider", "network-provider", "masscan-provider",
+    )
+    tags = [f"{p}-{sha[:12]}" for sha in (release, previous, older, mixed) for p in profiles]
+    monkeypatch.setattr(deploy, "_current_sha", lambda: release)
+    monkeypatch.setattr(deploy, "_git", lambda *args: SimpleNamespace(
+        stdout="\n".join([release, previous, older, mixed])
+    ))
+
+    def fake_run(argv, **_kwargs):
+        if argv[:3] == ["docker", "image", "ls"]:
+            return SimpleNamespace(stdout="\n".join(tags))
+        if argv[:3] == ["docker", "image", "inspect"]:
+            old = ["2026-10-01T00:00:00Z"] * 8
+            new = [deploy.datetime.now(deploy.timezone.utc).isoformat()]
+            return SimpleNamespace(stdout="\n".join(old + new))
+        if argv[:3] == ["docker", "image", "rm"]:
+            pytest.fail("one recent profile must protect the entire image group")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(deploy, "_run", fake_run)
+    monkeypatch.setattr(deploy, "_storage_stage", lambda *args: {"reclaimed_bytes": 0})
+    result = deploy._post_release_storage_retention(release, previous)
+    assert result["deleted_image_tags"] == 0
+    assert result["skipped_recent_releases"] == 1
