@@ -178,18 +178,109 @@ def selected_target_route(target: str) -> dict[str, Any]:
     }
 
 
+def windows_host_identity(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Normalize Windows physical-LAN network context, without granting scan rights."""
+    if not isinstance(records, list):
+        raise NetworkDiscoveryError("invalid Windows adapter inventory")
+    available: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict) or record.get("up") is not True:
+            continue
+        name = record.get("name")
+        description = str(record.get("description", "")).lower()
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if any(part in description for part in ("vmware", "virtual", "vpn", "hyper-v", "loopback", "tap-", "docker")):
+            continue
+        try:
+            address = ipaddress.IPv4Interface(f'{record["ipv4"]}/{int(record["prefix"])}')
+            index = int(record["index"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if index < 1 or not _approved(address.ip):
+            continue
+        gateway_string = record.get("gateway")
+        if gateway_string:
+            try:
+                gateway = ipaddress.IPv4Address(str(gateway_string))
+            except ValueError:
+                continue
+            if gateway not in address.network or gateway == address.ip:
+                continue
+            gateway_string = str(gateway)
+        available.append({
+            "interface": name,
+            "interface_index": index,
+            "ipv4": str(address.ip),
+            "subnet": str(address.network),
+            "gateway": gateway_string or None,
+            "origin": "windows-active-adapter",
+        })
+    available.sort(key=lambda x: (x["gateway"] is None, x["interface_index"], x["ipv4"]))
+    return {
+        "schema": "aegisscan.windows-host-lan.v1",
+        "platform": "windows",
+        "networks": available,
+        "scan_authorization": "not-inferred-from-network-access",
+    }
+
+
+def discover_windows_host() -> dict[str, Any]:
+    """Read native Windows interface information on whichever PC runs this."""
+    if sys.platform != "win32":
+        raise NetworkDiscoveryError("Windows host discovery must run on the Windows host")
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$records = @()
+$physical = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })
+foreach ($adapter in $physical) {
+  $idx = [int]$adapter.ifIndex
+  $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $idx -ErrorAction SilentlyContinue |
+      Where-Object { $_.AddressState -eq 'Preferred' })
+  $routes = @(Get-NetRoute -AddressFamily IPv4 -InterfaceIndex $idx -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+      Sort-Object RouteMetric)
+  $gw = $null
+  if ($routes.Count -gt 0) { $gw = [string]$routes[0].NextHop }
+  foreach ($addr in $addresses) {
+    $records += @{
+      name = [string]$adapter.Name
+      description = [string]$adapter.InterfaceDescription
+      index = $idx
+      up = $true
+      ipv4 = [string]$addr.IPAddress
+      prefix = [int]$addr.PrefixLength
+      gateway = $gw
+    }
+  }
+}
+ConvertTo-Json -InputObject @($records) -Compress -Depth 4
+"""
+    try:
+        process = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, check=True, timeout=25,
+        )
+        raw = json.loads(process.stdout.lstrip("\ufeff"))
+    except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError) as exc:
+        raise NetworkDiscoveryError("failed to read Windows active LAN adapters") from exc
+    if isinstance(raw, dict):
+        raw = [raw]
+    return windows_host_identity(raw)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interface", help="approved override for a multi-homed host")
     parser.add_argument("--target-route", help="read-only route selection for one chosen IPv4; never runs scans")
+    parser.add_argument("--windows-host", action="store_true", help="detect active physical host LAN on Windows")
     parser.add_argument("--format", choices=("json", "tsv"), default="json")
     args = parser.parse_args()
     try:
-        identity = selected_target_route(args.target_route) if args.target_route else current_identity(args.interface)
+        identity = (discover_windows_host() if args.windows_host or (sys.platform == "win32" and not args.target_route) else selected_target_route(args.target_route) if args.target_route else current_identity(args.interface))
     except NetworkDiscoveryError as exc:
         print(f"AEGIS_NETWORK_DISCOVERY_FAILED: {exc}", file=sys.stderr)
         return 1
-    if args.target_route and args.format == "tsv":
+    if (args.target_route or args.windows_host or sys.platform == "win32") and args.format == "tsv":
         print("Target route selection supports JSON output only", file=sys.stderr)
         return 2
     if args.format == "tsv":
