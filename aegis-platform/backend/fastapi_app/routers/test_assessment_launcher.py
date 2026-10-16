@@ -440,3 +440,41 @@ def test_unknown_network_does_not_get_auto_authorized(monkeypatch):
     )
     assert result['state'] == 'pending'
     assert result['request']['request_id'] == 'request-1'
+
+
+def test_concurrent_preapproved_network_launch_reuses_immutable_decision(monkeypatch):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'asset-authorization')
+    decision = SimpleNamespace(id='decision-1', authorized=True, target_snapshot='10.64.20.11')
+    calls = {'current': 0}
+    def current(_asset):
+        calls['current'] += 1
+        return decision if calls['current'] > 1 else None
+    monkeypatch.setattr(launcher, '_current_authorization', current)
+    monkeypatch.setattr(launcher, '_new_company_network_asset_is_preapproved', lambda _asset: True)
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 1)
+    monkeypatch.setattr(launcher, 'asset_target', lambda _asset: '10.64.20.11')
+    monkeypatch.setattr(launcher, 'is_target_authorized', lambda _target: True)
+    monkeypatch.setattr(
+        launcher, 'govern_asset_authorization',
+        lambda **_kwargs: (_ for _ in ()).throw(launcher.StaleAssetAuthorizationVersion('concurrent insert'))
+    )
+    asset = SimpleNamespace(type='ip_address', id='asset-1', project_id='project-1')
+    result = launcher._ensure_authorization(asset, 'employee-1')
+    assert result['state'] == 'authorized'
+    assert result['source'] == 'existing-company-network'
+    assert result['decision'] is decision
+
+
+def test_concurrent_preapproved_network_does_not_reactivate_revoked_target(monkeypatch):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'asset-authorization')
+    monkeypatch.setattr(launcher, '_current_authorization', lambda _asset: None)
+    monkeypatch.setattr(launcher, '_new_company_network_asset_is_preapproved', lambda _asset: True)
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 1)
+    monkeypatch.setattr(
+        launcher, 'govern_asset_authorization',
+        lambda **_kwargs: (_ for _ in ()).throw(launcher.StaleAssetAuthorizationVersion('revoked'))
+    )
+    asset = SimpleNamespace(type='ip_address', id='asset-1', project_id='project-1')
+    with pytest.raises(HTTPException) as exc:
+        launcher._ensure_authorization(asset, 'employee-1')
+    assert exc.value.status_code == 409
