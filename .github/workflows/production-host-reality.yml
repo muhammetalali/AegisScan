@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'aegis-platform/scripts/production_host_bootstrap.sh'
+      - 'aegis-platform/scripts/production_network_identity.py'
       - '.github/workflows/production-live-deploy.yml'
       - 'aegis-platform/scripts/production_runner_bootstrap.sh'
       - 'aegis-platform/scripts/production_host_reality.py'
@@ -31,6 +32,7 @@ on:
       - 'tests/test_production_aws_backup_bootstrap.py'
       - 'tests/test_production_ddns_reconcile.py'
       - 'tests/test_production_internal_dns_contract.py'
+      - 'tests/test_production_network_identity.py'
       - '.github/workflows/production-host-reality.yml'
   push:
     branches: [main]
@@ -67,6 +69,7 @@ jobs:
           sh -n aegis-platform/scripts/production_tls_acme.sh
           python -m py_compile \
             aegis-platform/scripts/production_ddns_reconcile.py \
+            aegis-platform/scripts/production_network_identity.py \
             aegis-platform/scripts/production_execution_trust_bootstrap.py \
             aegis-platform/scripts/production_storage_reclaim.py
 
@@ -79,6 +82,7 @@ jobs:
             tests/test_production_runner_bootstrap_contract.py \
             tests/test_production_ddns_reconcile.py \
             tests/test_production_internal_dns_contract.py \
+            tests/test_production_network_identity.py \
             tests/test_production_secret_init.py \
             tests/test_production_execution_trust_bootstrap.py \
             tests/test_production_aws_backup_bootstrap.py
