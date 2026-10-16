@@ -1,4 +1,8 @@
 from pathlib import Path
+import subprocess
+import sys
+
+import yaml
 
 ROOT = Path(__file__).parents[1]
 
@@ -18,15 +22,22 @@ def test_systemd_ddns_contract_is_hardened_periodic_and_environment_bound():
     assert "WantedBy=timers.target" in timer
 
 
-def test_host_bootstrap_scopes_internal_ingress_and_preserves_dns():
+def test_host_bootstrap_uses_actual_dhcp_subnet_not_vmware_defaults():
     script = (ROOT / "aegis-platform/scripts/production_host_bootstrap.sh").read_text()
-    assert 'INTERNAL_CIDR="${AEGIS_INTERNAL_CIDR:-192.168.49.0/24}"' in script
-    assert 'DNS_SERVICE_IP="${AEGIS_DNS_SERVICE_IP:-192.168.49.53}"' in script
+    assert 'apt-get install -y --no-install-recommends python3 iproute2' in script
+    assert 'production_network_identity.py" --format tsv' in script
+    assert 'INTERNAL_CIDR="${AEGIS_INTERNAL_CIDR:-$DISCOVERED_CIDR}"' in script
+    assert 'DNS_SERVICE_IP="${AEGIS_DNS_SERVICE_IP:-}"' in script
+    assert 'INTERFACE="${AEGIS_PRODUCTION_INTERFACE:-ens33}"' not in script
+    assert 'INTERNAL_CIDR="${AEGIS_INTERNAL_CIDR:-192.168.49.0/24}"' not in script
+    assert "ingress excludes the DHCP subnet" in script
     assert 'from "$INTERNAL_CIDR" to any port "$SSH_PORT" proto tcp' in script
-    assert 'to "$DNS_SERVICE_IP" port 53 proto udp' in script
-    assert 'to "$DNS_SERVICE_IP" port 53 proto tcp' in script
     assert 'from "$INTERNAL_CIDR" to any port 80 proto tcp' in script
     assert 'from "$INTERNAL_CIDR" to any port 443 proto tcp' in script
+    assert 'if [ "$CONFIGURE_INTERNAL_DNS" = 1 ]; then' in script
+    assert 'to "$DNS_SERVICE_IP" port 53 proto udp' in script
+    assert 'to "$DNS_SERVICE_IP" port 53 proto tcp' in script
+    assert 'legacy internal DNS requires an explicitly provisioned DNS service IP' in script
     assert 'ufw allow "$SSH_PORT/tcp"' not in script
 
 
@@ -81,3 +92,151 @@ def test_internal_dns_bootstrap_emits_runtime_environment_and_zone_coherently():
     assert 'ns1.$ZONE_NAME.' in script
     assert '$HOST_LABEL IN  A   $APP_IP' in script
     assert '-e "s|^IPAddressAllow=.*$|IPAddressAllow=$DNS_SERVICE_IP/32|"' in script
+
+
+def _run_mac_independent_repair(tmp_path, *, source, actual_mac="00:50:56:31:fe:8b"):
+    """Exercise the real embedded production repair against an isolated Netplan file."""
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    marker = """python3 - "$INSTALLER_NETPLAN_FILE" "$INTERFACE" "$HOST_MAC" <<'PYMAC'\n"""
+    assert script.count(marker) == 1
+    repair = script.split(marker, 1)[1].split("\nPYMAC\n", 1)[0]
+    installer = tmp_path / "00-installer-config.yaml"
+    installer.write_text(source)
+    installer.chmod(0o600)
+    proc = subprocess.run(
+        [sys.executable, "-c", repair, str(installer), "ens33", actual_mac],
+        text=True, capture_output=True, check=False,
+    )
+    return installer, proc
+
+
+def test_dns_bootstrap_removes_stale_vmware_mac_match_but_keeps_dynamic_dhcp(tmp_path):
+    source = """network:
+  version: 2
+  ethernets:
+    ens33:
+      dhcp4: true
+      dhcp6: true
+      match:
+        macaddress: 00:0c:29:66:78:bf
+      set-name: ens33
+"""
+    installer, attempt = _run_mac_independent_repair(tmp_path, source=source)
+    assert attempt.returncode == 0, attempt.stderr
+    rendered = yaml.safe_load(installer.read_text())
+    nic = rendered["network"]["ethernets"]["ens33"]
+    assert nic["dhcp4"] is True
+    assert nic["dhcp6"] is True
+    assert "match" not in nic
+    assert "set-name" not in nic
+    assert installer.stat().st_mode & 0o777 == 0o600
+    saved = installer.read_bytes()
+    # A second boot/bootstrap must not mutate the already-correct settings.
+    installer, repeated = _run_mac_independent_repair(tmp_path, source=saved.decode())
+    assert repeated.returncode == 0, repeated.stderr
+    assert installer.read_bytes() == saved
+
+
+def test_dns_bootstrap_rejects_unknown_mac_match_without_mutation(tmp_path):
+    source = """network:
+  version: 2
+  ethernets:
+    ens33:
+      dhcp4: true
+      match:
+        macaddress: 00:0c:29:66:78:bf
+        driver: e1000
+      set-name: ens33
+"""
+    installer, attempt = _run_mac_independent_repair(tmp_path, source=source)
+    assert attempt.returncode != 0
+    assert installer.read_text() == source
+
+
+def test_dns_bootstrap_requires_dhcp_and_rejects_interface_rename(tmp_path):
+    source = """network:
+  version: 2
+  ethernets:
+    ens33:
+      dhcp4: false
+      match:
+        macaddress: 00:0c:29:66:78:bf
+      set-name: another-interface
+"""
+    installer, attempt = _run_mac_independent_repair(tmp_path, source=source)
+    assert attempt.returncode != 0
+    assert installer.read_text() == source
+
+
+def test_dns_bootstrap_repair_precedes_generation_and_is_safely_backed_up():
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    assert 'INSTALLER_NETPLAN_FILE=' in script
+    assert script.index('backup_file "$INSTALLER_NETPLAN_FILE"') < script.index(
+        'python3 - "$INSTALLER_NETPLAN_FILE" "$INTERFACE" "$HOST_MAC"')
+    assert script.index("NETPLAN_DHCP_MAC_MATCH=removed-for-mac-independent-boot") < script.index(
+        'cat >"$NETPLAN_FILE" <<EOF')
+    assert script.index('cat >"$NETPLAN_FILE" <<EOF') < script.index("netplan generate")
+    assert 'if [ "$APPLY_NETWORK" -eq 1 ]; then' in script
+    # The DNS listener is stable; the application host address remains DHCP.
+    assert 'addresses:\n        - $DNS_SERVICE_IP/32' in script
+
+
+def _run_gateway_dns_guard(tmp_path, upstream):
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    anchor = '''python3 - "$GATEWAY_DNS" "$DNS_SERVICE_IP" "$APP_IP" "$INTERNAL_CIDR" <<'PYGATEWAY'\n'''
+    assert script.count(anchor) == 1
+    check = script.split(anchor, 1)[1].split("\nPYGATEWAY\n", 1)[0]
+    return subprocess.run(
+        [sys.executable, "-c", check, upstream, "192.168.49.53", "192.168.49.136", "192.168.49.0/24"],
+        text=True, capture_output=True, check=False,
+    )
+
+
+def test_dns_bootstrap_routes_only_private_zone_to_bind(tmp_path):
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    nblock = script.split('cat >"$NETPLAN_FILE" <<EOF\n', 1)[1].split("\nEOF\n", 1)[0]
+    expanded = (
+        nblock.replace("$INTERFACE", "ens33")
+        .replace("$DNS_SERVICE_IP", "192.168.49.53")
+        .replace("$ZONE_NAME", "aegis.internal")
+    )
+    conf = yaml.safe_load(expanded)
+    network = conf["network"]["ethernets"]
+    ens33 = network["ens33"]
+    assert ens33["addresses"] == ["192.168.49.53/32"]
+    assert ens33["dhcp4-overrides"]["use-dns"] is True
+    assert ens33["dhcp6-overrides"]["use-dns"] is True
+    lo = network["lo"]
+    assert lo["match"] == {"name": "lo"}
+    assert lo["nameservers"]["addresses"] == ["127.0.0.1"]
+    assert lo["nameservers"]["search"] == ["~aegis.internal"]
+    assert lo["dhcp4"] is False
+    assert lo["dhcp6"] is False
+    assert "forwarders { $UPSTREAM_DNS; };" not in script
+    assert "forward only;" not in script
+    assert "dnssec-validation auto;" in script
+    assert "dnssec-validation no;" not in script
+    assert script.index("GATEWAY_ANSWER=") < script.index('cat >"$NETPLAN_FILE" <<EOF')
+    assert script.index("GATEWAY_ANSWER=") < script.index('cat >/etc/bind/named.conf.options <<EOF')
+
+
+def test_dns_bootstrap_validates_dynamic_gateway_and_keeps_existing_service_ordering(tmp_path):
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    assert 'ip -4 route show default dev "$INTERFACE"' in script
+    assert 'dig @"$GATEWAY_DNS" github.com. A +short' in script
+    assert "for ATTEMPT in 1 2 3 4 5; do" in script
+    assert 'GATEWAY_READY=1' in script
+    assert "DHCP gateway DNS cannot resolve public A records" in script
+    assert 'BIND_NETWORK_ORDER_FILE=/etc/systemd/system/named.service.d/10-aegisscan-network-online.conf' in script
+    assert 'backup_file "$BIND_NETWORK_ORDER_FILE"' in script
+    assert 'Wants=network-online.target' in script
+    assert 'After=network-online.target' in script
+    assert script.index('BIND_NETWORK_ORDER_FILE=/etc/systemd/system/named.service.d') < script.index('systemctl daemon-reload')
+    assert script.index('cat >"$BIND_NETWORK_ORDER_FILE"') < script.index('systemctl restart named')
+    assert _run_gateway_dns_guard(tmp_path, "192.168.49.2").returncode == 0
+
+
+def test_dns_bootstrap_rejects_bad_dhcp_gateway(tmp_path):
+    for upstream in ("192.168.49.53", "192.168.49.136", "8.8.8.8", "::1", "not-an-ip"):
+        result = _run_gateway_dns_guard(tmp_path, upstream)
+        assert result.returncode != 0, (upstream, result.stdout, result.stderr)

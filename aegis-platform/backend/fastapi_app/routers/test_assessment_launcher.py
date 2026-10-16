@@ -340,3 +340,141 @@ def test_safe_zip_extract_rejects_empty_directory_only_archive(tmp_path):
     with pytest.raises(HTTPException, match='no regular files') as exc:
         launcher._safe_extract_zip(stream.getvalue(), tmp_path)
     assert exc.value.status_code == 422
+
+
+def test_assessment_network_suggestions_follow_preapproved_scope_not_login_or_host_ip(monkeypatch):
+    # Neither the employee NAT address nor the hosting origin describes a target.
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    monkeypatch.setenv('CSRF_TRUSTED_ORIGINS', 'https://aegis-prod.aegis.internal')
+    monkeypatch.setattr(launcher.socket, 'getaddrinfo', lambda *_a, **_k: (_ for _ in ()).throw(AssertionError('must not infer target network from DNS')))
+    assert launcher._suggest_authorized_networks() == []
+
+    # Existing explicitly approved project/company CIDRs can still be suggested.
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', '10.12.4.0/24,172.20.0.0/16,10.12.4.0/24')
+    assert launcher._suggest_authorized_networks() == ['10.12.4.0/24', '172.20.0.0/16']
+
+
+def test_assessment_network_suggestions_ignore_invalid_entries(monkeypatch):
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', 'not-network,192.168.11.42/24,')
+    assert launcher._suggest_authorized_networks() == ['192.168.11.0/24']
+
+
+def test_preapproved_company_network_inherits_only_existing_registered_scope(monkeypatch):
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', '10.64.20.0/24,172.20.0.0/16')
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(launcher, 'asset_target', lambda asset: asset.target)
+
+    history = {'has_prior_decision': False}
+    class History:
+        def exists(self):
+            return history['has_prior_decision']
+    monkeypatch.setattr(launcher.AssetAuthorization.objects, 'filter', lambda **_kwargs: History())
+
+    assert launcher._new_company_network_asset_is_preapproved(
+        SimpleNamespace(type='ip_address', target='10.64.20.11')
+    )
+    assert launcher._new_company_network_asset_is_preapproved(
+        SimpleNamespace(type='network_range', target='10.64.20.0/27')
+    )
+    assert not launcher._new_company_network_asset_is_preapproved(
+        SimpleNamespace(type='ip_address', target='10.65.0.1')
+    )
+    assert not launcher._new_company_network_asset_is_preapproved(
+        SimpleNamespace(type='network_range', target='10.64.0.0/16')
+    )
+    assert not launcher._new_company_network_asset_is_preapproved(
+        SimpleNamespace(type='website', target='https://portal.example.com')
+    )
+    history['has_prior_decision'] = True
+    # A revoked or expired prior decision cannot silently auto-renew on reconnect.
+    assert not launcher._new_company_network_asset_is_preapproved(
+        SimpleNamespace(type='ip_address', target='10.64.20.11')
+    )
+
+
+def test_first_use_company_network_scope_auto_records_audited_authorization(monkeypatch):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'asset-authorization')
+    monkeypatch.setattr(launcher, '_current_authorization', lambda _asset: None)
+    monkeypatch.setattr(launcher, '_new_company_network_asset_is_preapproved', lambda _asset: True)
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 1)
+
+    decision = SimpleNamespace(id='decision-1', authorized=True, target_snapshot='10.64.20.11')
+    observed = []
+    monkeypatch.setattr(
+        launcher, 'govern_asset_authorization',
+        lambda **kwargs: (observed.append(kwargs) or SimpleNamespace(decision=decision))
+    )
+    monkeypatch.setattr(
+        launcher, 'create_governed_action_request',
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError('per-IP approval request is redundant'))
+    )
+    asset = SimpleNamespace(type='ip_address', id='asset-1', project_id='project-1')
+    result = launcher._ensure_authorization(asset, 'employee-1')
+    assert result['state'] == 'authorized'
+    assert result['source'] == 'preapproved-company-network'
+    assert result['request'] is None
+    assert result['decision'] is decision
+    assert len(observed) == 1
+    assert observed[0]['authorized'] is True
+    assert observed[0]['actor_id'] == 'employee-1'
+    assert observed[0]['project_id'] == 'project-1'
+    assert observed[0]['expected_version'] == 1
+
+
+def test_unknown_network_does_not_get_auto_authorized(monkeypatch):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'asset-authorization')
+    monkeypatch.setattr(launcher, '_current_authorization', lambda _asset: None)
+    monkeypatch.setattr(launcher, '_new_company_network_asset_is_preapproved', lambda _asset: False)
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 2)
+    monkeypatch.setattr(
+        launcher, 'govern_asset_authorization',
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError('must not grant unknown target'))
+    )
+    monkeypatch.setattr(
+        launcher, 'create_governed_action_request',
+        lambda **_kwargs: SimpleNamespace(request=SimpleNamespace(id='request-1'), replayed=False)
+    )
+    monkeypatch.setattr(launcher, 'governed_action_request_view', lambda _result: {'request_id': 'request-1'})
+    result = launcher._ensure_authorization(
+        SimpleNamespace(type='ip_address', id='asset-1', project_id='project-1'), 'employee-1'
+    )
+    assert result['state'] == 'pending'
+    assert result['request']['request_id'] == 'request-1'
+
+
+def test_concurrent_preapproved_network_launch_reuses_immutable_decision(monkeypatch):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'asset-authorization')
+    decision = SimpleNamespace(id='decision-1', authorized=True, target_snapshot='10.64.20.11')
+    calls = {'current': 0}
+    def current(_asset):
+        calls['current'] += 1
+        return decision if calls['current'] > 1 else None
+    monkeypatch.setattr(launcher, '_current_authorization', current)
+    monkeypatch.setattr(launcher, '_new_company_network_asset_is_preapproved', lambda _asset: True)
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 1)
+    monkeypatch.setattr(launcher, 'asset_target', lambda _asset: '10.64.20.11')
+    monkeypatch.setattr(launcher, 'is_target_authorized', lambda _target: True)
+    monkeypatch.setattr(
+        launcher, 'govern_asset_authorization',
+        lambda **_kwargs: (_ for _ in ()).throw(launcher.StaleAssetAuthorizationVersion('concurrent insert'))
+    )
+    asset = SimpleNamespace(type='ip_address', id='asset-1', project_id='project-1')
+    result = launcher._ensure_authorization(asset, 'employee-1')
+    assert result['state'] == 'authorized'
+    assert result['source'] == 'existing-company-network'
+    assert result['decision'] is decision
+
+
+def test_concurrent_preapproved_network_does_not_reactivate_revoked_target(monkeypatch):
+    monkeypatch.setenv('AEGIS_ASSESSMENT_LAUNCHER_MODE', 'asset-authorization')
+    monkeypatch.setattr(launcher, '_current_authorization', lambda _asset: None)
+    monkeypatch.setattr(launcher, '_new_company_network_asset_is_preapproved', lambda _asset: True)
+    monkeypatch.setattr(launcher, 'asset_authorization_version', lambda _asset: 1)
+    monkeypatch.setattr(
+        launcher, 'govern_asset_authorization',
+        lambda **_kwargs: (_ for _ in ()).throw(launcher.StaleAssetAuthorizationVersion('revoked'))
+    )
+    asset = SimpleNamespace(type='ip_address', id='asset-1', project_id='project-1')
+    with pytest.raises(HTTPException) as exc:
+        launcher._ensure_authorization(asset, 'employee-1')
+    assert exc.value.status_code == 409

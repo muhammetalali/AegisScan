@@ -27,11 +27,37 @@ if [ "$ARCH" != "amd64" ]; then
 fi
 
 SSH_PORT="${AEGIS_SSH_PORT:-22}"
-INTERFACE="${AEGIS_PRODUCTION_INTERFACE:-ens33}"
-INTERNAL_CIDR="${AEGIS_INTERNAL_CIDR:-192.168.49.0/24}"
-DNS_SERVICE_IP="${AEGIS_DNS_SERVICE_IP:-192.168.49.53}"
 CONFIGURE_INTERNAL_DNS="${AEGIS_CONFIGURE_INTERNAL_DNS:-0}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# Minimal Debian/Ubuntu machines may not ship Python or iproute2 yet.
+# Bootstrap only these read-only discovery prerequisites before detecting DHCP.
+if ! command -v python3 >/dev/null 2>&1 || ! command -v ip >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 iproute2
+fi
+if [ -n "${AEGIS_PRODUCTION_INTERFACE:-}" ]; then
+  DISCOVERED_NETWORK="$(python3 "$SCRIPT_DIR/production_network_identity.py" --format tsv --interface "$AEGIS_PRODUCTION_INTERFACE")"
+else
+  DISCOVERED_NETWORK="$(python3 "$SCRIPT_DIR/production_network_identity.py" --format tsv)"
+fi
+IFS="$(printf '\t')" read -r DISCOVERED_INTERFACE DISCOVERED_CIDR DISCOVERED_IP DISCOVERED_GATEWAY <<EOFNETWORK
+$DISCOVERED_NETWORK
+EOFNETWORK
+INTERFACE="$DISCOVERED_INTERFACE"
+INTERNAL_CIDR="${AEGIS_INTERNAL_CIDR:-$DISCOVERED_CIDR}"
+DNS_SERVICE_IP="${AEGIS_DNS_SERVICE_IP:-}"
+# Never assume a local office subnet. Explicit cross-VLAN access must be an
+# approved enterprise ingress scope; by default use only the DHCP subnet.
+python3 - "$INTERNAL_CIDR" "$DISCOVERED_CIDR" "$DISCOVERED_IP" <<'PYNETWORK'
+import ipaddress, sys
+scope, active = (ipaddress.ip_network(x) for x in sys.argv[1:3])
+address = ipaddress.ip_address(sys.argv[3])
+allowed = tuple(ipaddress.ip_network(x) for x in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"))
+if scope.version != 4 or not any(scope.subnet_of(x) for x in allowed):
+    raise SystemExit("ingress must be an approved private corporate network")
+if not active.subnet_of(scope) or address not in scope:
+    raise SystemExit("ingress excludes the DHCP subnet")
+PYNETWORK
 
 case "$SSH_PORT" in
   ''|*[!0-9]*) echo "AEGIS_SSH_PORT must be numeric" >&2; exit 1 ;;
@@ -49,11 +75,19 @@ case "$CONFIGURE_INTERNAL_DNS" in
     ;;
 esac
 
+if [ "$CONFIGURE_INTERNAL_DNS" = 1 ] && [ -z "$DNS_SERVICE_IP" ]; then
+  echo "legacy internal DNS requires an explicitly provisioned DNS service IP" >&2
+  exit 1
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl gnupg git openssl ufw fail2ban jq sudo python3 \
-  postgresql-client certbot bind9 bind9-utils dnsutils
+  postgresql-client certbot dnsutils
+if [ "$CONFIGURE_INTERNAL_DNS" = 1 ]; then
+  apt-get install -y --no-install-recommends bind9 bind9-utils
+fi
 
 install -m 0755 -d /etc/apt/keyrings
 if [ ! -f /etc/apt/keyrings/docker.asc ]; then
@@ -82,7 +116,9 @@ apt-get install -y --no-install-recommends \
 
 systemctl enable --now docker
 systemctl enable --now fail2ban
-systemctl enable named
+if [ "$CONFIGURE_INTERNAL_DNS" = 1 ]; then
+  systemctl enable named
+fi
 
 cat >/etc/sysctl.d/99-aegisscan-production.conf <<'EOF'
 net.ipv4.ip_forward=1
@@ -104,15 +140,18 @@ ufw default deny incoming
 ufw default allow outgoing
 ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to any port "$SSH_PORT" proto tcp \
   comment 'Aegis internal SSH'
-ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to "$DNS_SERVICE_IP" port 53 proto udp \
-  comment 'Aegis internal DNS UDP'
-ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to "$DNS_SERVICE_IP" port 53 proto tcp \
-  comment 'Aegis internal DNS TCP'
+if [ "$CONFIGURE_INTERNAL_DNS" = 1 ]; then
+  ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to "$DNS_SERVICE_IP" port 53 proto udp \
+    comment 'Aegis legacy internal DNS UDP'
+  ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to "$DNS_SERVICE_IP" port 53 proto tcp \
+    comment 'Aegis legacy internal DNS TCP'
+fi
 ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to any port 80 proto tcp \
   comment 'Aegis internal HTTP'
 ufw allow in on "$INTERFACE" from "$INTERNAL_CIDR" to any port 443 proto tcp \
   comment 'Aegis internal HTTPS'
 ufw --force enable
+printf 'AEGISSCAN_DHCP_DISCOVERY=PASS uplink=%s subnet=%s\n' "$INTERFACE" "$DISCOVERED_CIDR"
 
 install -d -m 0750 /opt/aegisscan
 install -d -m 0700 /etc/aegisscan
@@ -167,7 +206,9 @@ docker compose version
 git --version
 openssl version
 certbot --version
-named -V | head -n 1
+if [ "$CONFIGURE_INTERNAL_DNS" = 1 ]; then
+  named -V | head -n 1
+fi
 ufw status verbose
 sysctl net.ipv4.ip_forward
 
