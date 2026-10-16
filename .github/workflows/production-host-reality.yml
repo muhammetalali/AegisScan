@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'START_WINDOWS.bat'
       - 'aegis-platform/scripts/production_host_bootstrap.sh'
       - 'aegis-platform/scripts/production_network_identity.py'
       - '.github/workflows/production-live-deploy.yml'
