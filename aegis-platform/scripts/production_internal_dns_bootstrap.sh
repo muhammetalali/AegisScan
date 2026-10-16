@@ -240,7 +240,8 @@ network:
           - 127.0.0.1
         search:
           - ~$ZONE_NAME
-EOFchmod 0600 "$NETPLAN_FILE"
+EOF
+chmod 0600 "$NETPLAN_FILE"
 netplan generate
 
 if [ "$APPLY_NETWORK" -eq 1 ]; then
