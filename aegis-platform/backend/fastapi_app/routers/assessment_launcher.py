@@ -22,6 +22,7 @@ from django_project.projects.models import Project, ProjectMembership
 from ..core.dependencies import get_current_user, is_primary_company_owner
 from ..services.asset_authorization_governance import (
     AssetAuthorizationGovernanceError,
+    StaleAssetAuthorizationVersion,
     asset_authorization_version,
     govern_asset_authorization,
     initialize_asset_configuration,
@@ -217,6 +218,19 @@ def _ensure_authorization(asset: Asset, actor_id: str) -> dict:
                 governed_request_id=str(request_id),
                 correlation_id=str(correlation_id),
             )
+        except StaleAssetAuthorizationVersion as exc:
+            # A concurrent first-use request may already have recorded the
+            # same scoped approval. Reuse only the still-current decision;
+            # an explicit revocation must never be silently overwritten.
+            existing = _current_authorization(asset)
+            if existing is None or not is_target_authorized(asset_target(asset)):
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {
+                'state': 'authorized',
+                'source': 'existing-company-network',
+                'decision': existing,
+                'request': None,
+            }
         except AssetAuthorizationGovernanceError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
