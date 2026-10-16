@@ -180,7 +180,7 @@ def _new_company_network_asset_is_preapproved(asset: Asset) -> bool:
     Merely joining Wi-Fi or entering an IP must never expand the authorized
     scan boundary. Previously revoked/expired assets require a fresh decision.
     """
-    if asset.type not in {'ip_address', 'network_range'}:
+    if getattr(asset, 'type', None) not in {'ip_address', 'network_range'}:
         return False
     if AssetAuthorization.objects.filter(asset=asset).exists():
         return False
