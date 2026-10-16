@@ -127,16 +127,71 @@ def current_identity(selected_interface: str | None = None) -> dict[str, str]:
 
 
 
+def selected_target_route(target: str) -> dict[str, Any]:
+    """Describe the guest OS route to one requested IPv4, without probing it.
+
+    When a Bridged NIC is attached, Linux chooses its connected subnet; under
+    VMware NAT the default route may instead go through the NAT gateway. Neither
+    result establishes that a target is reachable or authorized for scanning.
+    """
+    try:
+        destination = ipaddress.IPv4Address(target.strip())
+    except (ValueError, AttributeError) as exc:
+        raise NetworkDiscoveryError("target route requires an IPv4 address") from exc
+    if (
+        destination.is_multicast
+        or destination.is_unspecified
+        or destination.is_loopback
+        or destination.is_link_local
+        or destination.is_reserved
+    ):
+        raise NetworkDiscoveryError("target is not a routable IPv4 host")
+    routes = _ip_json("route", "get", str(destination))
+    if len(routes) != 1:
+        raise NetworkDiscoveryError("expected one unambiguous kernel route for target")
+    entry = routes[0]
+    name = entry.get("dev")
+    if not isinstance(name, str) or not IFACE_RE.fullmatch(name):
+        raise NetworkDiscoveryError("no valid route interface")
+    if name.startswith(("docker", "br-", "veth", "virbr")):
+        raise NetworkDiscoveryError("target resolves to a container-only bridge, not an office uplink")
+    try:
+        source = ipaddress.IPv4Address(str(entry["prefsrc"]))
+    except (KeyError, ValueError, TypeError) as exc:
+        raise NetworkDiscoveryError("kernel route lacks a valid source IPv4") from exc
+    via = entry.get("gateway")
+    gateway = None
+    if via is not None:
+        try:
+            gateway = str(ipaddress.IPv4Address(str(via)))
+        except ValueError as exc:
+            raise NetworkDiscoveryError("kernel route has invalid IPv4 gateway") from exc
+    return {
+        "schema": "aegisscan.target-route-context.v1",
+        "target": str(destination),
+        "interface": name,
+        "source_ipv4": str(source),
+        "gateway": gateway,
+        "route_type": "via-gateway" if gateway else "on-link",
+        "reachable": "not-proven-by-route",
+        "scan_authorization": "not-inferred-from-connectivity",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interface", help="approved override for a multi-homed host")
+    parser.add_argument("--target-route", help="read-only route selection for one chosen IPv4; never runs scans")
     parser.add_argument("--format", choices=("json", "tsv"), default="json")
     args = parser.parse_args()
     try:
-        identity = current_identity(args.interface)
+        identity = selected_target_route(args.target_route) if args.target_route else current_identity(args.interface)
     except NetworkDiscoveryError as exc:
         print(f"AEGIS_NETWORK_DISCOVERY_FAILED: {exc}", file=sys.stderr)
         return 1
+    if args.target_route and args.format == "tsv":
+        print("Target route selection supports JSON output only", file=sys.stderr)
+        return 2
     if args.format == "tsv":
         print("\t".join(identity[key] for key in ("interface", "cidr", "ipv4", "gateway")))
     else:
