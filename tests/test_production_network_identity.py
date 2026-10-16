@@ -220,3 +220,14 @@ def test_windows_host_discovery_is_not_executed_on_ubuntu(monkeypatch):
     monkeypatch.setattr(network.sys, "platform", "linux")
     with pytest.raises(network.NetworkDiscoveryError, match="Windows host"):
         network.discover_windows_host()
+
+
+def test_windows_entrypoint_detects_lan_from_relative_project_tree():
+    starter = (ROOT / "START_WINDOWS.bat").read_text(encoding="utf-8")
+    assert 'pushd "%~dp0"' in starter
+    assert 'production_network_identity.py" --windows-host' in starter
+    assert '.venv\Scripts\python.exe' in starter
+    assert "ExecutionPolicy Bypass" not in starter
+    assert "C:\Users\" not in starter
+    assert "192.168.49." not in starter
+    assert "VMnet8" not in starter
