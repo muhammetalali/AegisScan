@@ -78,7 +78,10 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl gnupg git openssl ufw fail2ban jq sudo python3 \
-  postgresql-client certbot bind9 bind9-utils dnsutils
+  postgresql-client certbot dnsutils
+if [ "$CONFIGURE_INTERNAL_DNS" = 1 ]; then
+  apt-get install -y --no-install-recommends bind9 bind9-utils
+fi
 
 install -m 0755 -d /etc/apt/keyrings
 if [ ! -f /etc/apt/keyrings/docker.asc ]; then
@@ -107,7 +110,9 @@ apt-get install -y --no-install-recommends \
 
 systemctl enable --now docker
 systemctl enable --now fail2ban
-systemctl enable named
+if [ "$CONFIGURE_INTERNAL_DNS" = 1 ]; then
+  systemctl enable named
+fi
 
 cat >/etc/sysctl.d/99-aegisscan-production.conf <<'EOF'
 net.ipv4.ip_forward=1
@@ -195,7 +200,9 @@ docker compose version
 git --version
 openssl version
 certbot --version
-named -V | head -n 1
+if [ "$CONFIGURE_INTERNAL_DNS" = 1 ]; then
+  named -V | head -n 1
+fi
 ufw status verbose
 sysctl net.ipv4.ip_forward
 
