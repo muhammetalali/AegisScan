@@ -1,4 +1,8 @@
 from pathlib import Path
+import subprocess
+import sys
+
+import yaml
 
 ROOT = Path(__file__).parents[1]
 
@@ -81,3 +85,90 @@ def test_internal_dns_bootstrap_emits_runtime_environment_and_zone_coherently():
     assert 'ns1.$ZONE_NAME.' in script
     assert '$HOST_LABEL IN  A   $APP_IP' in script
     assert '-e "s|^IPAddressAllow=.*$|IPAddressAllow=$DNS_SERVICE_IP/32|"' in script
+
+
+def _run_mac_independent_repair(tmp_path, *, source, actual_mac="00:50:56:31:fe:8b"):
+    """Exercise the real embedded production repair against an isolated Netplan file."""
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    marker = """python3 - "$INSTALLER_NETPLAN_FILE" "$INTERFACE" "$HOST_MAC" <<'PYMAC'\n"""
+    assert script.count(marker) == 1
+    repair = script.split(marker, 1)[1].split("\nPYMAC\n", 1)[0]
+    installer = tmp_path / "00-installer-config.yaml"
+    installer.write_text(source)
+    installer.chmod(0o600)
+    proc = subprocess.run(
+        [sys.executable, "-c", repair, str(installer), "ens33", actual_mac],
+        text=True, capture_output=True, check=False,
+    )
+    return installer, proc
+
+
+def test_dns_bootstrap_removes_stale_vmware_mac_match_but_keeps_dynamic_dhcp(tmp_path):
+    source = """network:
+  version: 2
+  ethernets:
+    ens33:
+      dhcp4: true
+      dhcp6: true
+      match:
+        macaddress: 00:0c:29:66:78:bf
+      set-name: ens33
+"""
+    installer, attempt = _run_mac_independent_repair(tmp_path, source=source)
+    assert attempt.returncode == 0, attempt.stderr
+    rendered = yaml.safe_load(installer.read_text())
+    nic = rendered["network"]["ethernets"]["ens33"]
+    assert nic["dhcp4"] is True
+    assert nic["dhcp6"] is True
+    assert "match" not in nic
+    assert "set-name" not in nic
+    assert installer.stat().st_mode & 0o777 == 0o600
+    saved = installer.read_bytes()
+    # A second boot/bootstrap must not mutate the already-correct settings.
+    installer, repeated = _run_mac_independent_repair(tmp_path, source=saved.decode())
+    assert repeated.returncode == 0, repeated.stderr
+    assert installer.read_bytes() == saved
+
+
+def test_dns_bootstrap_rejects_unknown_mac_match_without_mutation(tmp_path):
+    source = """network:
+  version: 2
+  ethernets:
+    ens33:
+      dhcp4: true
+      match:
+        macaddress: 00:0c:29:66:78:bf
+        driver: e1000
+      set-name: ens33
+"""
+    installer, attempt = _run_mac_independent_repair(tmp_path, source=source)
+    assert attempt.returncode != 0
+    assert installer.read_text() == source
+
+
+def test_dns_bootstrap_requires_dhcp_and_rejects_interface_rename(tmp_path):
+    source = """network:
+  version: 2
+  ethernets:
+    ens33:
+      dhcp4: false
+      match:
+        macaddress: 00:0c:29:66:78:bf
+      set-name: another-interface
+"""
+    installer, attempt = _run_mac_independent_repair(tmp_path, source=source)
+    assert attempt.returncode != 0
+    assert installer.read_text() == source
+
+
+def test_dns_bootstrap_repair_precedes_generation_and_is_safely_backed_up():
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    assert 'INSTALLER_NETPLAN_FILE=' in script
+    assert script.index('backup_file "$INSTALLER_NETPLAN_FILE"') < script.index(
+        'python3 - "$INSTALLER_NETPLAN_FILE" "$INTERFACE" "$HOST_MAC"')
+    assert script.index("NETPLAN_DHCP_MAC_MATCH=removed-for-mac-independent-boot") < script.index(
+        'cat >"$NETPLAN_FILE" <<EOF')
+    assert script.index('cat >"$NETPLAN_FILE" <<EOF') < script.index("netplan generate")
+    assert 'if [ "$APPLY_NETWORK" -eq 1 ]; then' in script
+    # The DNS listener is stable; the application host address remains DHCP.
+    assert 'addresses:\n        - $DNS_SERVICE_IP/32' in script
