@@ -343,43 +343,31 @@ def _company_user_allows_scan(user_id: str, mode: str) -> bool:
     return bool(user and user.can_scan_type(mode))
 
 
+def _suggest_authorized_networks() -> list[str]:
+    """Suggest only configured company/lab scope; never infer a target from login or server IP.
+
+    Browser clients may sit behind NAT, reverse proxies and completely different
+    enterprise LANs. A CSRF trusted origin is not evidence of scan authorization.
+    """
+    approved = os.getenv('AEGIS_LAB_NETWORK_CIDRS', '')
+    result: list[str] = []
+    for raw in approved.split(','):
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        try:
+            result.append(str(ipaddress.ip_network(candidate, strict=False)))
+        except ValueError:
+            continue
+    return list(dict.fromkeys(result))
+
+
 @router.get('/context')
 async def assessment_context(project_id: str, user=Depends(get_current_user)):
     user_id = str(user.get('user_id'))
     await sync_to_async(_project_for_launcher)(project_id, user_id)
 
-    suggestions: list[str] = []
-    configured = [
-        item.strip()
-        for item in os.getenv('AEGIS_LAB_NETWORK_CIDRS', '').split(',')
-        if item.strip()
-    ]
-    for item in configured:
-        try:
-            suggestions.append(str(ipaddress.ip_network(item, strict=False)))
-        except ValueError:
-            continue
-
-    if not suggestions:
-        origins = [
-            item.strip()
-            for item in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
-            if item.strip()
-        ]
-        for origin in origins:
-            try:
-                host = urlsplit(origin).hostname
-                if not host:
-                    continue
-                for answer in socket.getaddrinfo(host, None, family=socket.AF_INET, type=socket.SOCK_STREAM):
-                    address = ipaddress.ip_address(answer[4][0])
-                    if address.is_private:
-                        suggestions.append(str(ipaddress.ip_network(f'{address}/24', strict=False)))
-                        break
-            except (OSError, ValueError):
-                continue
-            if suggestions:
-                break
+    suggestions = _suggest_authorized_networks()
 
     modes = [
         mode for mode in ('network', 'ip', 'url', 'file')
