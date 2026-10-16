@@ -14,6 +14,7 @@ FQDN="${AEGIS_DDNS_FQDN:-aegis-prod.aegis.internal.}"
 ZONE="${AEGIS_DDNS_ZONE:-aegis.internal.}"
 TSIG_NAME="${AEGIS_DDNS_TSIG_NAME:-aegis-prod-ddns}"
 NETPLAN_FILE="${AEGIS_DNS_NETPLAN_FILE:-/etc/netplan/90-aegisscan-dns-service.yaml}"
+INSTALLER_NETPLAN_FILE="${AEGIS_INSTALLER_NETPLAN_FILE:-/etc/netplan/00-installer-config.yaml}"
 BIND_KEY_FILE="${AEGIS_BIND_DDNS_KEY:-/etc/bind/keys/aegis-prod-ddns.key}"
 RUNTIME_KEY_FILE="${AEGIS_DDNS_KEY:-/etc/aegisscan/ddns.key}"
 RUNTIME_ENV_FILE="/etc/aegisscan/ddns-reconcile.env"
@@ -113,6 +114,70 @@ backup_file() {
 }
 
 backup_file "$NETPLAN_FILE"
+
+# Netplan's older installer profile may still pin an obsolete VMware MAC.
+# Then systemd-networkd silently uses dracut's generic DHCP profile instead,
+# leaving the dedicated DNS service address inactive after every reboot.
+# Preserve DHCP and the interface name, remove only that stale matching pin.
+if [ -f "$INSTALLER_NETPLAN_FILE" ]; then
+  backup_file "$INSTALLER_NETPLAN_FILE"
+  if [ ! -r "/sys/class/net/$INTERFACE/address" ]; then
+    echo "production interface MAC is unavailable: $INTERFACE" >&2
+    exit 1
+  fi
+  IFS= read -r HOST_MAC <"/sys/class/net/$INTERFACE/address"
+  python3 - "$INSTALLER_NETPLAN_FILE" "$INTERFACE" "$HOST_MAC" <<'PYMAC'
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+import yaml
+
+path, interface, host_mac = Path(sys.argv[1]), sys.argv[2], sys.argv[3].lower()
+if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", host_mac):
+    raise SystemExit("interface MAC is not valid")
+config = yaml.safe_load(path.read_text())
+if not isinstance(config, dict):
+    raise SystemExit("installer Netplan config is invalid")
+network = config.get("network")
+ethernets = network.get("ethernets") if isinstance(network, dict) else None
+settings = ethernets.get(interface) if isinstance(ethernets, dict) else None
+if not isinstance(settings, dict) or settings.get("dhcp4") is not True:
+    raise SystemExit("installer profile does not preserve DHCPv4 on the approved interface")
+
+match = settings.get("match")
+if match is None:
+    print("NETPLAN_DHCP_MAC_MATCH=already-independent")
+    raise SystemExit(0)
+if not isinstance(match, dict) or set(match) != {"macaddress"}:
+    raise SystemExit("unrecognized Netplan interface matcher: no change")
+pinned = str(match["macaddress"]).lower()
+if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", pinned):
+    raise SystemExit("invalid installer MAC matcher: no change")
+if settings.get("set-name", interface) != interface:
+    raise SystemExit("unexpected installer interface renaming: no change")
+settings.pop("match")
+settings.pop("set-name", None)
+
+stat = path.stat()
+payload = yaml.safe_dump(config, sort_keys=False)
+fd, staged = tempfile.mkstemp(prefix=".aegisscan-netplan-", dir=path.parent)
+try:
+    with os.fdopen(fd, "w") as stream:
+        os.fchmod(stream.fileno(), stat.st_mode & 0o777)
+        os.fchown(stream.fileno(), stat.st_uid, stat.st_gid)
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(staged, path)
+finally:
+    if os.path.exists(staged):
+        os.unlink(staged)
+print("NETPLAN_DHCP_MAC_MATCH=removed-for-mac-independent-boot")
+PYMAC
+fi
 
 cat >"$NETPLAN_FILE" <<EOF
 network:
