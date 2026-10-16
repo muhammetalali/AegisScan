@@ -173,3 +173,50 @@ def test_target_route_reads_only_iproute2_without_triggering_scan(monkeypatch, c
     output = json.loads(capsys.readouterr().out)
     assert output["route_type"] == "on-link"
     assert output["scan_authorization"] == "not-inferred-from-connectivity"
+
+
+def test_windows_host_detects_physical_wifi_without_vmnet_hardcoding():
+    context = network.windows_host_identity([
+        {"name": "VMware Network Adapter VMnet8", "description": "VMware Virtual Ethernet",
+         "index": 21, "up": True, "ipv4": "192.168.49.1", "prefix": 24, "gateway": None},
+        {"name": "Wi-Fi", "description": "Intel Wi-Fi 6", "index": 18, "up": True,
+         "ipv4": "192.168.2.121", "prefix": 24, "gateway": "192.168.2.1"},
+    ])
+    assert context["platform"] == "windows"
+    assert context["scan_authorization"] == "not-inferred-from-network-access"
+    assert context["networks"] == [{
+        "interface": "Wi-Fi", "interface_index": 18,
+        "ipv4": "192.168.2.121", "subnet": "192.168.2.0/24",
+        "gateway": "192.168.2.1", "origin": "windows-active-adapter",
+    }]
+
+
+def test_windows_host_lan_reacts_to_dhcp_and_adapter_changes():
+    first = network.windows_host_identity([{
+        "name": "Wi-Fi", "description": "Intel Wi-Fi", "index": 18, "up": True,
+        "ipv4": "10.88.5.15", "prefix": 24, "gateway": "10.88.5.1",
+    }])
+    second = network.windows_host_identity([{
+        "name": "Ethernet", "description": "Intel Ethernet", "index": 7, "up": True,
+        "ipv4": "172.22.9.88", "prefix": 23, "gateway": "172.22.8.1",
+    }])
+    assert first["networks"][0]["subnet"] == "10.88.5.0/24"
+    assert second["networks"][0]["subnet"] == "172.22.8.0/23"
+
+
+def test_windows_host_does_not_claim_authorization_or_guess_missing_adapter():
+    assert network.windows_host_identity([])["networks"] == []
+    result = network.windows_host_identity([
+        {"name": "VPN", "description": "Corporate VPN virtual adapter", "index": 18,
+         "up": True, "ipv4": "10.9.1.3", "prefix": 24, "gateway": "10.9.1.1"},
+        {"name": "Wireless", "description": "Intel Wi-Fi", "index": 24,
+         "up": False, "ipv4": "192.168.4.6", "prefix": 24, "gateway": "192.168.4.1"},
+    ])
+    assert not result["networks"]
+    assert result["scan_authorization"] == "not-inferred-from-network-access"
+
+
+def test_windows_host_discovery_is_not_executed_on_ubuntu(monkeypatch):
+    monkeypatch.setattr(network.sys, "platform", "linux")
+    with pytest.raises(network.NetworkDiscoveryError, match="Windows host"):
+        network.discover_windows_host()
