@@ -172,3 +172,33 @@ def test_dns_bootstrap_repair_precedes_generation_and_is_safely_backed_up():
     assert 'if [ "$APPLY_NETWORK" -eq 1 ]; then' in script
     # The DNS listener is stable; the application host address remains DHCP.
     assert 'addresses:\n        - $DNS_SERVICE_IP/32' in script
+
+
+def _run_upstream_dns_guard(tmp_path, upstream):
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    anchor = '''python3 - "$UPSTREAM_DNS" "$DNS_SERVICE_IP" "$APP_IP" "$INTERNAL_CIDR" <<'PYUPSTREAM'\n'''
+    assert script.count(anchor) == 1
+    check = script.split(anchor, 1)[1].split("\nPYUPSTREAM\n", 1)[0]
+    return subprocess.run(
+        [sys.executable, "-c", check, upstream, "192.168.49.53", "192.168.49.136", "192.168.49.0/24"],
+        text=True, capture_output=True, check=False,
+    )
+
+
+def test_dns_bootstrap_forwards_public_lookups_via_verified_dhcp_gateway(tmp_path):
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    assert 'ip -4 route show default dev "$INTERFACE"' in script
+    assert 'UPSTREAM_DNS="${EXPLICIT_DNS_FORWARDER:-$GATEWAY_DNS}"' in script
+    assert 'dig @"$UPSTREAM_DNS" github.com. A +short' in script
+    assert "forwarders { $UPSTREAM_DNS; };" in script
+    assert "forward only;" in script
+    assert "dnssec-validation auto;" in script
+    assert script.index("UPSTREAM_ANSWER=") < script.index('cat >"$NETPLAN_FILE" <<EOF')
+    assert script.index("UPSTREAM_ANSWER=") < script.index('cat >/etc/bind/named.conf.options <<EOF')
+    assert _run_upstream_dns_guard(tmp_path, "192.168.49.2").returncode == 0
+
+
+def test_dns_bootstrap_rejects_self_referential_or_off_lan_forwarder(tmp_path):
+    for upstream in ("192.168.49.53", "192.168.49.136", "8.8.8.8", "::1", "not-an-ip"):
+        result = _run_upstream_dns_guard(tmp_path, upstream)
+        assert result.returncode != 0, (upstream, result.stdout, result.stderr)
