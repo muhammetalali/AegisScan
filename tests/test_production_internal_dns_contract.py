@@ -196,6 +196,12 @@ def test_dns_bootstrap_forwards_public_lookups_via_verified_dhcp_gateway(tmp_pat
     assert "forwarders { $UPSTREAM_DNS; };" in script
     assert "forward only;" in script
     assert "dnssec-validation auto;" in script
+    assert 'BIND_NETWORK_ORDER_FILE=/etc/systemd/system/named.service.d/10-aegisscan-network-online.conf' in script
+    assert 'backup_file "$BIND_NETWORK_ORDER_FILE"' in script
+    assert 'Wants=network-online.target' in script
+    assert 'After=network-online.target' in script
+    assert script.index('BIND_NETWORK_ORDER_FILE=/etc/systemd/system/named.service.d') < script.index('systemctl daemon-reload')
+    assert script.index('cat >"$BIND_NETWORK_ORDER_FILE"') < script.index('systemctl restart named')
     assert script.index("UPSTREAM_ANSWER=") < script.index('cat >"$NETPLAN_FILE" <<EOF')
     assert script.index("UPSTREAM_ANSWER=") < script.index('cat >/etc/bind/named.conf.options <<EOF')
     assert _run_upstream_dns_guard(tmp_path, "192.168.49.2").returncode == 0
