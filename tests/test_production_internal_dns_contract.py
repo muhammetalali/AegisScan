@@ -174,40 +174,62 @@ def test_dns_bootstrap_repair_precedes_generation_and_is_safely_backed_up():
     assert 'addresses:\n        - $DNS_SERVICE_IP/32' in script
 
 
-def _run_upstream_dns_guard(tmp_path, upstream):
+def _run_gateway_dns_guard(tmp_path, upstream):
     script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
-    anchor = '''python3 - "$UPSTREAM_DNS" "$DNS_SERVICE_IP" "$APP_IP" "$INTERNAL_CIDR" <<'PYUPSTREAM'\n'''
+    anchor = '''python3 - "$GATEWAY_DNS" "$DNS_SERVICE_IP" "$APP_IP" "$INTERNAL_CIDR" <<'PYGATEWAY'\n'''
     assert script.count(anchor) == 1
-    check = script.split(anchor, 1)[1].split("\nPYUPSTREAM\n", 1)[0]
+    check = script.split(anchor, 1)[1].split("\nPYGATEWAY\n", 1)[0]
     return subprocess.run(
         [sys.executable, "-c", check, upstream, "192.168.49.53", "192.168.49.136", "192.168.49.0/24"],
         text=True, capture_output=True, check=False,
     )
 
 
-def test_dns_bootstrap_forwards_public_lookups_via_verified_dhcp_gateway(tmp_path):
+def test_dns_bootstrap_routes_only_private_zone_to_bind(tmp_path):
+    script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
+    nblock = script.split('cat >"$NETPLAN_FILE" <<EOF\n', 1)[1].split("\nEOF\n", 1)[0]
+    expanded = (
+        nblock.replace("$INTERFACE", "ens33")
+        .replace("$DNS_SERVICE_IP", "192.168.49.53")
+        .replace("$ZONE_NAME", "aegis.internal")
+    )
+    conf = yaml.safe_load(expanded)
+    network = conf["network"]["ethernets"]
+    ens33 = network["ens33"]
+    assert ens33["addresses"] == ["192.168.49.53/32"]
+    assert ens33["dhcp4-overrides"]["use-dns"] is True
+    assert ens33["dhcp6-overrides"]["use-dns"] is True
+    lo = network["lo"]
+    assert lo["match"] == {"name": "lo"}
+    assert lo["nameservers"]["addresses"] == ["127.0.0.1"]
+    assert lo["nameservers"]["search"] == ["~aegis.internal"]
+    assert lo["dhcp4"] is False
+    assert lo["dhcp6"] is False
+    assert "forwarders { $UPSTREAM_DNS; };" not in script
+    assert "forward only;" not in script
+    assert "dnssec-validation auto;" in script
+    assert "dnssec-validation no;" not in script
+    assert script.index("GATEWAY_ANSWER=") < script.index('cat >"$NETPLAN_FILE" <<EOF')
+    assert script.index("GATEWAY_ANSWER=") < script.index('cat >/etc/bind/named.conf.options <<EOF')
+
+
+def test_dns_bootstrap_validates_dynamic_gateway_and_keeps_existing_service_ordering(tmp_path):
     script = (ROOT / "aegis-platform/scripts/production_internal_dns_bootstrap.sh").read_text()
     assert 'ip -4 route show default dev "$INTERFACE"' in script
-    assert 'UPSTREAM_DNS="${EXPLICIT_DNS_FORWARDER:-$GATEWAY_DNS}"' in script
-    assert 'dig @"$UPSTREAM_DNS" github.com. A +short' in script
+    assert 'dig @"$GATEWAY_DNS" github.com. A +short' in script
     assert "for ATTEMPT in 1 2 3 4 5; do" in script
-    assert 'UPSTREAM_READY=1' in script
-    assert "Upstream $UPSTREAM_DNS cannot resolve public A records after five attempts" in script
-    assert "forwarders { $UPSTREAM_DNS; };" in script
-    assert "forward only;" in script
-    assert "dnssec-validation auto;" in script
+    assert 'GATEWAY_READY=1' in script
+    assert "DHCP gateway DNS cannot resolve public A records" in script
     assert 'BIND_NETWORK_ORDER_FILE=/etc/systemd/system/named.service.d/10-aegisscan-network-online.conf' in script
     assert 'backup_file "$BIND_NETWORK_ORDER_FILE"' in script
     assert 'Wants=network-online.target' in script
     assert 'After=network-online.target' in script
     assert script.index('BIND_NETWORK_ORDER_FILE=/etc/systemd/system/named.service.d') < script.index('systemctl daemon-reload')
     assert script.index('cat >"$BIND_NETWORK_ORDER_FILE"') < script.index('systemctl restart named')
-    assert script.index("UPSTREAM_ANSWER=") < script.index('cat >"$NETPLAN_FILE" <<EOF')
-    assert script.index("UPSTREAM_ANSWER=") < script.index('cat >/etc/bind/named.conf.options <<EOF')
-    assert _run_upstream_dns_guard(tmp_path, "192.168.49.2").returncode == 0
+    assert _run_gateway_dns_guard(tmp_path, "192.168.49.2").returncode == 0
 
 
-def test_dns_bootstrap_rejects_self_referential_or_off_lan_forwarder(tmp_path):
+def test_dns_bootstrap_rejects_bad_dhcp_gateway(tmp_path):
     for upstream in ("192.168.49.53", "192.168.49.136", "8.8.8.8", "::1", "not-an-ip"):
-        result = _run_upstream_dns_guard(tmp_path, upstream)
+        result = _run_gateway_dns_guard(tmp_path, upstream)
         assert result.returncode != 0, (upstream, result.stdout, result.stderr)
