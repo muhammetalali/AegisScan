@@ -405,6 +405,18 @@ systemd-analyze verify \
   /etc/systemd/system/aegisscan-ddns-reconcile.service \
   /etc/systemd/system/aegisscan-ddns-reconcile.timer
 
+# Ensure BIND binds the DHCP-independent DNS service address after Netplan
+# has configured ens33. Keep the existing named.service; no extra daemon.
+BIND_NETWORK_ORDER_FILE=/etc/systemd/system/named.service.d/10-aegisscan-network-online.conf
+install -d -m 0755 /etc/systemd/system/named.service.d
+backup_file "$BIND_NETWORK_ORDER_FILE"
+cat >"$BIND_NETWORK_ORDER_FILE" <<'EOFBINDNETWORK'
+[Unit]
+Wants=network-online.target
+After=network-online.target
+EOFBINDNETWORK
+chmod 0644 "$BIND_NETWORK_ORDER_FILE"
+
 systemctl daemon-reload
 systemctl enable named
 systemctl restart named
