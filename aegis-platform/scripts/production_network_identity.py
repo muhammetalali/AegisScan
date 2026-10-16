@@ -47,19 +47,11 @@ def _approved(address: ipaddress.IPv4Address) -> bool:
     return any(address in network for network in APPROVED_PRIVATE_NETWORKS)
 
 
-def discover(
-    routes: list[dict[str, Any]],
-    interface_rows: list[dict[str, Any]],
-    *,
-    selected_interface: str | None = None,
-) -> dict[str, str]:
-    """Return the DHCP interface/subnet/gateway; never guess a static identity."""
+def _primary_route(routes: list[dict[str, Any]], selected_interface: str | None) -> tuple[str, ipaddress.IPv4Address]:
     candidates: list[tuple[int, str, ipaddress.IPv4Address]] = []
     for route in routes:
-        if route.get("dst") != "default":
-            continue
         name = route.get("dev")
-        if not isinstance(name, str) or not IFACE_RE.fullmatch(name):
+        if route.get("dst") != "default" or not isinstance(name, str) or not IFACE_RE.fullmatch(name):
             continue
         if selected_interface is not None and name != selected_interface:
             continue
@@ -68,15 +60,25 @@ def discover(
             metric = int(route.get("metric", 0))
         except (KeyError, ValueError, TypeError):
             continue
-        if metric < 0 or not _approved(gateway):
-            continue
-        candidates.append((metric, name, gateway))
+        if metric >= 0 and _approved(gateway):
+            candidates.append((metric, name, gateway))
+    candidates.sort(key=lambda route: route[0])
     if not candidates:
         raise NetworkDiscoveryError("no approved private IPv4 default gateway")
-    candidates.sort(key=lambda route: route[0])
     if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
         raise NetworkDiscoveryError("multiple equally preferred IPv4 default routes")
-    _, name, gateway = candidates[0]
+    _, interface, gateway = candidates[0]
+    return interface, gateway
+
+
+def discover(
+    routes: list[dict[str, Any]],
+    interface_rows: list[dict[str, Any]],
+    *,
+    selected_interface: str | None = None,
+) -> dict[str, str]:
+    """Return DHCP interface/subnet/gateway, rejecting unsafe ambiguity."""
+    name, gateway = _primary_route(routes, selected_interface)
     matching = [row for row in interface_rows if row.get("ifname") == name]
     if len(matching) != 1:
         raise NetworkDiscoveryError("chosen uplink interface is missing or ambiguous")
@@ -119,35 +121,10 @@ def discover(
 def current_identity(selected_interface: str | None = None) -> dict[str, str]:
     routes = _ip_json("route", "show", "default")
     # Enumerate addresses only on the elected primary uplink without relying on ens33.
-    primary = discover_route_interface(routes, selected_interface)
+    primary, _ = _primary_route(routes, selected_interface)
     rows = _ip_json("addr", "show", "dev", primary)
     return discover(routes, rows, selected_interface=primary)
 
-
-def discover_route_interface(
-    routes: list[dict[str, Any]], selected_interface: str | None
-) -> str:
-    # Derive the device using the same primary-route arbitration as discover().
-    candidates: list[tuple[int, str]] = []
-    for route in routes:
-        name = route.get("dev")
-        if route.get("dst") != "default" or not isinstance(name, str):
-            continue
-        if not IFACE_RE.fullmatch(name):
-            continue
-        if selected_interface is not None and name != selected_interface:
-            continue
-        try:
-            gateway = ipaddress.IPv4Address(str(route["gateway"]))
-            metric = int(route.get("metric", 0))
-        except (KeyError, ValueError, TypeError):
-            continue
-        if metric >= 0 and _approved(gateway):
-            candidates.append((metric, name))
-    candidates.sort()
-    if not candidates or (len(candidates) > 1 and candidates[0][0] == candidates[1][0]):
-        raise NetworkDiscoveryError("missing or ambiguous primary corporate IPv4 route")
-    return candidates[0][1]
 
 
 def main() -> int:
