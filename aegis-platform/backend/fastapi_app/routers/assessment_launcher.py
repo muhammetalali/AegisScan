@@ -28,6 +28,7 @@ from ..services.asset_authorization_governance import (
     replace_asset_configuration_preserving_authorization,
 )
 from ..services.authorization_guard import asset_target
+from ..services.scope_authorization import is_target_authorized
 from ..services.capability_planner import plan_capabilities
 from ..services.capability_registry import get_capability
 from ..services.governed_action_requests import (
@@ -172,6 +173,20 @@ def _current_authorization(asset: Asset) -> AssetAuthorization | None:
     return None
 
 
+def _new_company_network_asset_is_preapproved(asset: Asset) -> bool:
+    """Permit first-use inheritance from an existing explicit company scope.
+
+    Merely joining Wi-Fi or entering an IP must never expand the authorized
+    scan boundary. Previously revoked/expired assets require a fresh decision.
+    """
+    if asset.type not in {'ip_address', 'network_range'}:
+        return False
+    if AssetAuthorization.objects.filter(asset=asset).exists():
+        return False
+    target = asset_target(asset)
+    return bool(target and is_target_authorized(target))
+
+
 def _ensure_authorization(asset: Asset, actor_id: str) -> dict:
     latest = _current_authorization(asset)
     if latest is not None:
@@ -185,6 +200,31 @@ def _ensure_authorization(asset: Asset, actor_id: str) -> dict:
     request_id = uuid.uuid4()
     correlation_id = uuid.uuid4()
     mode = _scope_mode()
+
+    if mode == 'asset-authorization' and _new_company_network_asset_is_preapproved(asset):
+        # The corporate CIDR was already admitted by deployment policy.
+        # Record an ordinary governed, immutable asset decision, not another
+        # per-IP approval request. Project membership and scan-type checks
+        # remain enforced by the existing request and execution paths.
+        try:
+            result = govern_asset_authorization(
+                asset_id=str(asset.id),
+                project_id=str(asset.project_id),
+                actor_id=str(actor_id),
+                expected_version=asset_authorization_version(asset),
+                authorized=True,
+                reason='First-use IP assessment within previously configured company network scope',
+                governed_request_id=str(request_id),
+                correlation_id=str(correlation_id),
+            )
+        except AssetAuthorizationGovernanceError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            'state': 'authorized',
+            'source': 'preapproved-company-network',
+            'decision': result.decision,
+            'request': None,
+        }
 
     if mode == 'single-operator-lab':
         try:
