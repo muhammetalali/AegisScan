@@ -24,6 +24,7 @@ def test_systemd_ddns_contract_is_hardened_periodic_and_environment_bound():
 
 def test_host_bootstrap_uses_actual_dhcp_subnet_not_vmware_defaults():
     script = (ROOT / "aegis-platform/scripts/production_host_bootstrap.sh").read_text()
+    assert 'apt-get install -y --no-install-recommends python3 iproute2' in script
     assert 'production_network_identity.py" --format tsv' in script
     assert 'INTERNAL_CIDR="${AEGIS_INTERNAL_CIDR:-$DISCOVERED_CIDR}"' in script
     assert 'DNS_SERVICE_IP="${AEGIS_DNS_SERVICE_IP:-}"' in script
