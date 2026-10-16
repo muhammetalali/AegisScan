@@ -29,6 +29,12 @@ fi
 SSH_PORT="${AEGIS_SSH_PORT:-22}"
 CONFIGURE_INTERNAL_DNS="${AEGIS_CONFIGURE_INTERNAL_DNS:-0}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# Minimal Debian/Ubuntu machines may not ship Python or iproute2 yet.
+# Bootstrap only these read-only discovery prerequisites before detecting DHCP.
+if ! command -v python3 >/dev/null 2>&1 || ! command -v ip >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 iproute2
+fi
 if [ -n "${AEGIS_PRODUCTION_INTERFACE:-}" ]; then
   DISCOVERED_NETWORK="$(python3 "$SCRIPT_DIR/production_network_identity.py" --format tsv --interface "$AEGIS_PRODUCTION_INTERFACE")"
 else
