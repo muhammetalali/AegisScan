@@ -340,3 +340,20 @@ def test_safe_zip_extract_rejects_empty_directory_only_archive(tmp_path):
     with pytest.raises(HTTPException, match='no regular files') as exc:
         launcher._safe_extract_zip(stream.getvalue(), tmp_path)
     assert exc.value.status_code == 422
+
+
+def test_assessment_network_suggestions_follow_preapproved_scope_not_login_or_host_ip(monkeypatch):
+    # Neither the employee NAT address nor the hosting origin describes a target.
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    monkeypatch.setenv('CSRF_TRUSTED_ORIGINS', 'https://aegis-prod.aegis.internal')
+    monkeypatch.setattr(launcher.socket, 'getaddrinfo', lambda *_a, **_k: (_ for _ in ()).throw(AssertionError('must not infer target network from DNS')))
+    assert launcher._suggest_authorized_networks() == []
+
+    # Existing explicitly approved project/company CIDRs can still be suggested.
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', '10.12.4.0/24,172.20.0.0/16,10.12.4.0/24')
+    assert launcher._suggest_authorized_networks() == ['10.12.4.0/24', '172.20.0.0/16']
+
+
+def test_assessment_network_suggestions_ignore_invalid_entries(monkeypatch):
+    monkeypatch.setenv('AEGIS_LAB_NETWORK_CIDRS', 'not-network,192.168.11.42/24,')
+    assert launcher._suggest_authorized_networks() == ['192.168.11.0/24']
