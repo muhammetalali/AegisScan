@@ -110,3 +110,66 @@ def test_cli_fails_closed_if_no_route(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["identity"])
     assert network.main() == 1
     assert "DISCOVERY_FAILED" in capsys.readouterr().err
+
+
+
+def test_target_route_uses_bridged_interface_without_static_nic_or_gateway(monkeypatch):
+    def ip_json(*parts):
+        assert parts == ("route", "get", "192.168.2.48")
+        return [{
+            "dst": "192.168.2.48",
+            "dev": "ens37",
+            "prefsrc": "192.168.2.121",
+            "uid": 1000,
+        }]
+    monkeypatch.setattr(network, "_ip_json", ip_json)
+    result = network.selected_target_route("192.168.2.48")
+    assert result["interface"] == "ens37"
+    assert result["source_ipv4"] == "192.168.2.121"
+    assert result["route_type"] == "on-link"
+    assert result["gateway"] is None
+    assert result["scan_authorization"] == "not-inferred-from-connectivity"
+    assert result["reachable"] == "not-proven-by-route"
+
+
+def test_target_route_detects_vmware_nat_route_without_claiming_lan_access(monkeypatch):
+    monkeypatch.setattr(network, "_ip_json", lambda *parts: [{
+        "dst": "192.168.2.48",
+        "dev": "ens33",
+        "gateway": "192.168.49.2",
+        "prefsrc": "192.168.49.136",
+    }])
+    result = network.selected_target_route("192.168.2.48")
+    assert result["interface"] == "ens33"
+    assert result["gateway"] == "192.168.49.2"
+    assert result["route_type"] == "via-gateway"
+    assert result["reachable"] == "not-proven-by-route"
+
+
+def test_target_route_does_not_mistake_docker_bridge_for_company_nic(monkeypatch):
+    monkeypatch.setattr(network, "_ip_json", lambda *parts: [{
+        "dst": "172.20.0.35",
+        "dev": "br-82bcd330ec4b",
+        "prefsrc": "172.20.0.1",
+    }])
+    with pytest.raises(network.NetworkDiscoveryError, match="container-only"):
+        network.selected_target_route("172.20.0.35")
+
+
+@pytest.mark.parametrize("target", ["127.0.0.1", "0.0.0.0", "224.0.0.1", "169.254.1.1", "not-an-ip"])
+def test_target_route_rejects_unroutable_or_invalid_targets(target):
+    with pytest.raises(network.NetworkDiscoveryError):
+        network.selected_target_route(target)
+
+
+def test_target_route_reads_only_iproute2_without_triggering_scan(monkeypatch, capsys):
+    monkeypatch.setattr(network, "_ip_json", lambda *parts: [{
+        "dst": "10.42.7.25",
+        "dev": "enp7s0",
+        "prefsrc": "10.42.7.3",
+    }])
+    monkeypatch.setattr("sys.argv", ["network-identity", "--target-route", "10.42.7.25"])
+    assert network.main() == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["route_type"] == "on-link"
+    assert output["scan_authorization"] == "not-inferred-from-connectivity"
