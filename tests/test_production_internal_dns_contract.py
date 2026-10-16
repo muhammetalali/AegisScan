@@ -190,6 +190,9 @@ def test_dns_bootstrap_forwards_public_lookups_via_verified_dhcp_gateway(tmp_pat
     assert 'ip -4 route show default dev "$INTERFACE"' in script
     assert 'UPSTREAM_DNS="${EXPLICIT_DNS_FORWARDER:-$GATEWAY_DNS}"' in script
     assert 'dig @"$UPSTREAM_DNS" github.com. A +short' in script
+    assert "for ATTEMPT in 1 2 3 4 5; do" in script
+    assert 'UPSTREAM_READY=1' in script
+    assert "Upstream $UPSTREAM_DNS cannot resolve public A records after five attempts" in script
     assert "forwarders { $UPSTREAM_DNS; };" in script
     assert "forward only;" in script
     assert "dnssec-validation auto;" in script
