@@ -50,47 +50,42 @@ if [ "$APP_COUNT" -ne 1 ]; then
   exit 1
 fi
 
-# Keep public DNS independent of local authoritative records.
-# Production VMware DHCP gateway resolves public names while direct BIND
-# recursive queries return SERVFAIL. Discover and validate the gateway.
+# Preserve the DHCP-provided resolver for public internet names.
+# BIND remains authoritative for aegis.internal, with DNSSEC validation
+# enabled, and systemd-resolved routes only that zone to local BIND.
+# A working DHCP gateway DNS is required before changing network profiles.
 GATEWAY_DNS="$(
   ip -4 route show default dev "$INTERFACE" |
     awk '$1 == "default" && $2 == "via" { print $3 }'
 )"
 GATEWAY_COUNT="$(printf '%s\n' "$GATEWAY_DNS" | awk 'NF { count++ } END { print count+0 }')"
 if [ "$GATEWAY_COUNT" -ne 1 ]; then
-  echo "expected one IPv4 DHCP gateway on $INTERFACE, found $GATEWAY_COUNT" >&2
+  echo "expected one DHCP gateway on $INTERFACE, found $GATEWAY_COUNT" >&2
   exit 1
 fi
-UPSTREAM_DNS="${EXPLICIT_DNS_FORWARDER:-$GATEWAY_DNS}"
-python3 - "$UPSTREAM_DNS" "$DNS_SERVICE_IP" "$APP_IP" "$INTERNAL_CIDR" <<'PYUPSTREAM'
+python3 - "$GATEWAY_DNS" "$DNS_SERVICE_IP" "$APP_IP" "$INTERNAL_CIDR" <<'PYGATEWAY'
 import ipaddress
 import sys
-upstream, service, application = map(ipaddress.ip_address, sys.argv[1:4])
+gateway, service, app = map(ipaddress.ip_address, sys.argv[1:4])
 network = ipaddress.ip_network(sys.argv[4])
-if not all(
-    isinstance(addr, ipaddress.IPv4Address) and addr in network
-    for addr in (upstream, service, application)
-):
-    raise SystemExit("DNS forwarder, service, and application must be IPv4 in the approved LAN")
-if upstream in (service, application):
-    raise SystemExit("DNS forwarder must not loop to the application or DNS service")
-PYUPSTREAM
-# DHCP DNS lookups can time out transiently during a lease renewal.
-# Retrying only this read-only preflight does not change Netplan or BIND.
-UPSTREAM_READY=0
+if not all(isinstance(x, ipaddress.IPv4Address) and x in network for x in (gateway, service, app)):
+    raise SystemExit("gateway, service, and DHCP application address must be IPv4 in approved LAN")
+if gateway in (service, app):
+    raise SystemExit("invalid self-referential DHCP gateway")
+PYGATEWAY
+GATEWAY_READY=0
 for ATTEMPT in 1 2 3 4 5; do
-  UPSTREAM_ANSWER="$(dig @"$UPSTREAM_DNS" github.com. A +short +time=4 +tries=2 2>&1)" && UPSTREAM_RC=0 || UPSTREAM_RC=$?
-  if [ "$UPSTREAM_RC" -eq 0 ] &&
-     printf '%s\n' "$UPSTREAM_ANSWER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-    UPSTREAM_READY=1
+  GATEWAY_ANSWER="$(dig @"$GATEWAY_DNS" github.com. A +short +time=4 +tries=2 2>&1)" && GATEWAY_RC=0 || GATEWAY_RC=$?
+  if [ "$GATEWAY_RC" -eq 0 ] &&
+     printf '%s\n' "$GATEWAY_ANSWER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    GATEWAY_READY=1
     break
   fi
-  echo "DNS upstream preflight retry $ATTEMPT/5 on $UPSTREAM_DNS (dig exit $UPSTREAM_RC)" >&2
+  echo "DHCP DNS preflight retry $ATTEMPT/5 via $GATEWAY_DNS (exit $GATEWAY_RC)" >&2
   sleep 2
 done
-if [ "$UPSTREAM_READY" -ne 1 ]; then
-  echo "Upstream $UPSTREAM_DNS cannot resolve public A records after five attempts; refusing to break internet DNS" >&2
+if [ "$GATEWAY_READY" -ne 1 ]; then
+  echo "DHCP gateway DNS cannot resolve public A records; refusing network change" >&2
   exit 1
 fi
 
@@ -231,15 +226,21 @@ network:
     $INTERFACE:
       addresses:
         - $DNS_SERVICE_IP/32
+      dhcp4-overrides:
+        use-dns: true
+      dhcp6-overrides:
+        use-dns: true
+    lo:
+      match:
+        name: lo
+      dhcp4: false
+      dhcp6: false
       nameservers:
         addresses:
-          - $DNS_SERVICE_IP
-      dhcp4-overrides:
-        use-dns: false
-      dhcp6-overrides:
-        use-dns: false
-EOF
-chmod 0600 "$NETPLAN_FILE"
+          - 127.0.0.1
+        search:
+          - ~$ZONE_NAME
+EOFchmod 0600 "$NETPLAN_FILE"
 netplan generate
 
 if [ "$APPLY_NETWORK" -eq 1 ]; then
@@ -328,9 +329,8 @@ options {
 
     recursion yes;
 
-    # The private zone remains authoritative locally, public DNS is forwarded.
-    forwarders { $UPSTREAM_DNS; };
-    forward only;
+    # No public forwarding: DNSSEC validation remains enabled.
+    # Host routes only the private zone to this authoritative instance.
 
     allow-query { aegis_lan; };
     allow-recursion { aegis_lan; };
