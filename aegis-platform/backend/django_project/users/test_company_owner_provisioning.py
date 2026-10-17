@@ -504,6 +504,13 @@ def test_delegated_employee_scan_and_page_allowlists_cannot_escalate(company_own
     }, format='json')
     assert allowed.status_code == 201, allowed.data
     employee = User.objects.get(email=payload['email'])
+    from django_project.audit.models import AuditLog
+    created_event = AuditLog.objects.get(
+        resource_type='User', resource_id=str(employee.pk),
+        action=AuditLog.Action.USER_CREATE,
+    )
+    assert created_event.user_id == delegate.pk
+    assert created_event.metadata['event'] == 'company_account_provisioned_inactive_employee'
     refused_update = client.patch(
         f'/api/v1/auth/users/{employee.pk}/',
         {'enabled_scan_types': ['ip'], 'enabled_pages': ['/settings']},
@@ -514,6 +521,18 @@ def test_delegated_employee_scan_and_page_allowlists_cannot_escalate(company_own
     assert employee.enabled_scan_types == ['url']
     assert employee.enabled_pages == ['/projects']
 
+    updated = client.patch(
+        f'/api/v1/auth/users/{employee.pk}/',
+        {'enabled_scan_types': ['url'], 'enabled_pages': ['/projects']},
+        format='json',
+    )
+    assert updated.status_code == 200, updated.data
+    updated_event = AuditLog.objects.get(
+        resource_type='User', resource_id=str(employee.pk),
+        action=AuditLog.Action.USER_PERMISSION_CHANGE,
+    )
+    assert updated_event.user_id == delegate.pk
+    assert updated_event.metadata['event'] == 'company_account_updated_employee_access'
 
 
 @pytest.mark.django_db
