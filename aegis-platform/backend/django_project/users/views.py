@@ -127,7 +127,7 @@ class UserViewSet(viewsets.ModelViewSet):
             user=self.request.user, action=AuditLog.Action.USER_CREATE,
             result=AuditLog.Result.SUCCESS, resource_type='User',
             resource_id=str(employee.pk), resource_repr=employee.email,
-            metadata={'event': 'owner_provisioned_inactive_employee'},
+            metadata={'event': 'company_account_provisioned_inactive_employee'},
             ip_address=client_ip_from_request(self.request),
         )
 
@@ -140,7 +140,7 @@ class UserViewSet(viewsets.ModelViewSet):
             user=self.request.user, action=AuditLog.Action.USER_PERMISSION_CHANGE,
             result=AuditLog.Result.SUCCESS, resource_type='User',
             resource_id=str(member.pk), resource_repr=member.email,
-            metadata={'event': 'owner_updated_employee_access'},
+            metadata={'event': 'company_account_updated_employee_access'},
             ip_address=client_ip_from_request(self.request),
         )
 
