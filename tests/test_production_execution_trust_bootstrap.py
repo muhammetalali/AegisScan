@@ -212,3 +212,34 @@ def test_existing_exact_release_tag_fails_closed_on_manifest_profile_mismatch(mo
 
     with pytest.raises(trust.TrustBootstrapError, match="profile mismatch"):
         trust._verified_runtime_tag("tag", "b" * 40, expected_profile="web")
+
+def test_production_image_build_uses_host_egress_without_changing_runtime_networks(monkeypatch):
+    """Builder-only egress: preserve immutable exact-release tags and runtime isolation."""
+    release_sha = "b" * 40
+    built = set()
+    calls = []
+
+    def verified(tag, _sha, **_kwargs):
+        return ("sha256:" + "c" * 64) if tag in built else None
+
+    def build(argv, *, label):
+        assert argv[:4] == ["docker", "build", "--network", "host"], label
+        assert argv.count("--network") == 1
+        assert "--privileged" not in argv
+        assert "--no-cache" not in argv
+        assert "-t" in argv
+        tag = argv[argv.index("-t") + 1]
+        assert tag.endswith(release_sha[:12])
+        calls.append((label, tag))
+        built.add(tag)
+
+    monkeypatch.setattr(trust, "_verified_base_tag", verified)
+    monkeypatch.setattr(trust, "_verified_runtime_tag", verified)
+    monkeypatch.setattr(trust, "_build_with_retry", build)
+    results = trust._build_images(release_sha, "1790000000")
+    assert len(calls) >= len(trust.PROFILE_TARGETS) + 1
+    assert set(results) == set(trust.PROVIDER_SPECS)
+    assert all(tag in built for tag in results.values())
+    compose = (ROOT / "aegis-platform/docker-compose.prod.yml").read_text(encoding="utf-8")
+    assert "network_mode: host" not in compose
+    assert "privileged: true" not in compose
