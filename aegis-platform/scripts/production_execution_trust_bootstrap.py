@@ -266,6 +266,11 @@ def _build_with_retry(
 
 
 def _build_images(release_sha: str, source_date_epoch: str) -> dict[str, str]:
+    # Build-time package egress only: production Docker bridge namespaces cannot
+    # reach upstream Kali/PyPI, while the trusted host uplink can.  Explicitly
+    # select the host network for Dockerfile RUN steps, not for any launched
+    # provider container. Exact-release digests, pinned dependencies, and the
+    # existing isolated production Compose networks remain mandatory.
     short = release_sha[:12]
     base_tag = f"aegis-kali-production:base-{short}"
 
@@ -274,6 +279,8 @@ def _build_images(release_sha: str, source_date_epoch: str) -> dict[str, str]:
             [
                 "docker",
                 "build",
+                "--network",
+                "host",
                 "--pull",
                 "--build-arg",
                 f"BUILD_COMMIT={release_sha}",
@@ -302,6 +309,8 @@ def _build_images(release_sha: str, source_date_epoch: str) -> dict[str, str]:
                 [
                     "docker",
                     "build",
+                    "--network",
+                    "host",
                     "--build-arg",
                     f"AEGIS_BASE_IMAGE={base_tag}",
                     "--build-arg",
@@ -339,6 +348,8 @@ def _build_images(release_sha: str, source_date_epoch: str) -> dict[str, str]:
                 [
                     "docker",
                     "build",
+                    "--network",
+                    "host",
                     "--build-arg",
                     f"{spec['base_arg']}={profile_tag}",
                     "-t",
