@@ -91,3 +91,39 @@ def test_listing_excludes_other_tenants_even_without_project_filter():
     result = async_to_sync(_accessible_assets)(str(owner.id), limit=5, offset=0)
 
     assert [asset.name for asset in result] == ["allowed"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_asset_list_and_detail_derive_scan_metadata_from_existing_scan_records():
+    """Existing scans must appear in UI without rewriting historical production records."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from django_project.scans.models import Scan
+    from fastapi_app.routers.assets import _asset_response, _get_asset
+
+    owner = User.objects.create_user(email="asset-history-owner@example.invalid", password="Strong-Test-Password-123!")
+    outsider = User.objects.create_user(email="asset-history-outsider@example.invalid", password="Strong-Test-Password-123!")
+    project = Project.objects.create(name="Recorded scans", slug="recorded-scans", owner=owner)
+    foreign_project = Project.objects.create(name="Other scans", slug="other-scans", owner=outsider)
+    asset = Asset.objects.create(project=project, owner=owner, name="Audited target", slug="audited-target", type=Asset.Type.IP_ADDRESS)
+    foreign_asset = Asset.objects.create(project=foreign_project, owner=outsider, name="Unrelated", slug="unrelated", type=Asset.Type.IP_ADDRESS)
+
+    now = timezone.now()
+    Scan.objects.create(project=project, asset=asset, name="Older scan", scan_type=Scan.Type.IP, status=Scan.Status.COMPLETED, started_at=now-timedelta(hours=2))
+    Scan.objects.create(project=project, asset=asset, name="Recent scan", scan_type=Scan.Type.IP, status=Scan.Status.FAILED, started_at=now)
+    Scan.objects.create(project=foreign_project, asset=foreign_asset, name="Foreign scan", scan_type=Scan.Type.IP, status=Scan.Status.COMPLETED, started_at=now)
+    asset.refresh_from_db()
+    assert asset.scan_count == 0 and asset.last_scanned_at is None  # historical stale denormalized fields
+
+    with CaptureQueriesContext(connection) as queries:
+        assets = async_to_sync(_accessible_assets)(str(owner.id), limit=10, offset=0)
+    assert [str(a.id) for a in assets] == [str(asset.id)]
+    assert len([q for q in queries if q["sql"].lstrip().upper().startswith("SELECT")]) == 1
+    listed = _asset_response(assets[0])
+    assert listed.scan_count == 2
+    assert listed.last_scanned_at == now.isoformat()
+
+    detailed = async_to_sync(_get_asset)(str(asset.id), str(owner.id))
+    assert _asset_response(detailed).scan_count == 2
+    assert _asset_response(detailed).last_scanned_at == now.isoformat()
+    assert async_to_sync(_get_asset)(str(foreign_asset.id), str(owner.id)) is None

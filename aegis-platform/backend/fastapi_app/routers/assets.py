@@ -5,6 +5,7 @@ import json
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
+from django.db.models import Count, Max
 from django.utils.text import slugify
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Query
 from pydantic import BaseModel, Field
@@ -40,8 +41,17 @@ class AssetUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; environment: Optional[str] = None; criticality: Optional[str] = None; configuration: Optional[dict] = None; tags: Optional[List[str]] = None; is_active: Optional[bool] = None
 
 
+def _with_scan_metadata(queryset):
+    """Return persisted Scan activity in the same scoped SQL query, without N+1 reads."""
+    return queryset.annotate(
+        recorded_scan_count=Count('scans', distinct=True),
+        recorded_last_scanned_at=Max('scans__started_at'),
+    )
+
+
 def _asset_response(asset) -> AssetResponse:
-    return AssetResponse(id=str(asset.id), project_id=str(asset.project_id), name=asset.name, slug=asset.slug, type=asset.type, description=asset.description, environment=asset.environment, criticality=asset.criticality, configuration=asset.configuration or {}, tags=asset.tags or [], is_active=asset.is_active, scan_count=asset.scan_count, last_scanned_at=asset.last_scanned_at.isoformat() if asset.last_scanned_at else None, created_at=asset.created_at.isoformat(), updated_at=asset.updated_at.isoformat())
+    scanned_at = getattr(asset, 'recorded_last_scanned_at', asset.last_scanned_at)
+    return AssetResponse(id=str(asset.id), project_id=str(asset.project_id), name=asset.name, slug=asset.slug, type=asset.type, description=asset.description, environment=asset.environment, criticality=asset.criticality, configuration=asset.configuration or {}, tags=asset.tags or [], is_active=asset.is_active, scan_count=getattr(asset, 'recorded_scan_count', asset.scan_count), last_scanned_at=scanned_at.isoformat() if scanned_at else None, created_at=asset.created_at.isoformat(), updated_at=asset.updated_at.isoformat())
 
 
 @sync_to_async
@@ -75,7 +85,7 @@ def _accessible_assets(
     if is_active is not None:
         qs = qs.filter(is_active=is_active)
 
-    ordered = qs.order_by('-created_at')
+    ordered = _with_scan_metadata(qs).order_by('-created_at')
     if not search:
         page = ordered[offset:offset + limit] if limit is not None else ordered[offset:]
         return list(page)
@@ -114,7 +124,7 @@ def _get_asset(asset_id: str, user_id: str):
     from django_project.assets.models import Asset
     assets = Asset.objects.select_related('project', 'owner').filter(pk=asset_id)
     assets = assets.filter(project_access_q(user_id, relation="project"))
-    return assets.first()
+    return _with_scan_metadata(assets).first()
 
 
 @router.get('/', response_model=List[AssetResponse])
@@ -178,7 +188,7 @@ def _get_asset_sync(asset_id: str,user_id: str):
     from django_project.assets.models import Asset
     assets = Asset.objects.filter(pk=asset_id)
     assets = assets.filter(project_access_q(user_id, relation="project"))
-    return assets.first()
+    return _with_scan_metadata(assets).first()
 
 
 @router.patch('/{asset_id}', response_model=AssetResponse)
