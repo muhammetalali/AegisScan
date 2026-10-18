@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -88,4 +88,37 @@ describe('Assets existing authorization one-click scan', () => {
     expect(await screen.findByRole('button', { name: 'Scan Permitted lab IP' })).toHaveProperty('disabled', true)
     expect(post).not.toHaveBeenCalled()
   })
+
+  it('shows last persisted scan time in existing asset details', async () => {
+    get.mockResolvedValue([{ ...permittedAsset, scan_count: 3, last_scanned_at: '2026-10-17T19:00:00Z' }])
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Permitted lab IP' }))
+    expect(await screen.findByText('Last scanned')).toBeTruthy()
+    expect(within(screen.getByRole('dialog')).getByText('3')).toBeTruthy()
+  })
+
+  it('can load assets past the backend default page size without creating duplicate endpoints', async () => {
+    get.mockImplementation(async (url: string, config?: any) => {
+      if (url !== '/assets/') throw new Error('Unexpected asset request')
+      const offset = Number(config?.params?.offset ?? 0)
+      if (offset === 0) return Array.from({ length: 200 }, (_, i) => ({
+        ...permittedAsset, id: `asset-${i}`, name: `Permitted asset ${i}`,
+        scan_count: i + 1,
+      }))
+      if (offset === 200) return [{
+        ...permittedAsset, id: 'asset-last', name: 'Final permitted asset',
+        scan_count: 201,
+      }]
+      return []
+    })
+    renderPage()
+    const loadMore = await screen.findByRole('button', { name: 'Load more assets' })
+    expect(screen.queryByRole('button', { name: 'Final permitted asset' })).toBeNull()
+    fireEvent.click(loadMore)
+    expect(await screen.findByRole('button', { name: 'Final permitted asset' })).toBeTruthy()
+    expect(get).toHaveBeenCalledWith('/assets/', {
+      params: expect.objectContaining({ limit: 200, offset: 200 }),
+    })
+    expect(screen.queryByRole('button', { name: 'Load more assets' })).toBeNull()
+  }, 20000)
 })
