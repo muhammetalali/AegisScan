@@ -127,7 +127,7 @@ export const ScanPage = () => {
             </div>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight">{t('Scan registry')}</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              {t('Every execution shown here is a persisted Scan and engine execution from the platform backend.')}
+              {t('Choose a scan to see its target, findings and evidence. Technical identifiers are available when needed.')}
             </p>
           </div>
           <div className="flex gap-2">
@@ -184,7 +184,7 @@ export const ScanPage = () => {
                         <Link to={`/scan/${scan.id}/results`} className="font-semibold hover:text-primary">
                           {scan.name}
                         </Link>
-                        <div className="mt-1 font-mono text-[10px] text-muted-foreground">{scan.id}</div>
+                        <details className="mt-1 text-xs text-muted-foreground"><summary className="cursor-pointer">{t('Technical details')}</summary><code dir="ltr" className="select-all break-all">{scan.id}</code></details>
                       </td>
                       <td className="px-4 py-4">{scan.scan_type}</td>
                       <td className="px-4 py-4">

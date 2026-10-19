@@ -6,6 +6,7 @@ import { ShieldCheck, Layers, Bug, FileText, Network, Route, Shield, ClipboardCh
 import { cn } from '@/utils/cn'
 import { apiHelpers } from '@/services/api'
 import Editor from '@monaco-editor/react'
+import { useLanguageStore } from '@/stores/languageStore'
 
 type Tab = 'overview'|'findings'|'evidence'|'graph'|'paths'|'controls'|'compliance'
 
@@ -19,6 +20,8 @@ const TABS: {id: Tab; label: string; icon: any}[] = [
   {id:'compliance', label:'Compliance', icon: ClipboardCheck},
 ]
 
+const TAB_GUIDE: Record<Tab,string> = { overview: 'Review the result summary and affected assets.', findings: 'See each observation and its severity. Select one for details.', evidence: 'Review the recorded proof linked to findings.', graph: 'Explore how assets and findings are connected.', paths: 'Review possible paths identified by the validation.', controls: 'See the suggested remediation and verification steps.', compliance: 'Review the available compliance mappings.' }
+
 const sevColor: Record<string,string> = {
   critical:'bg-red-600 text-white',
   high:'bg-orange-500 text-white',
@@ -29,6 +32,7 @@ const sevColor: Record<string,string> = {
 
 export const ValidationResults = () => {
   const { id } = useParams<{id:string}>()
+  const t = useLanguageStore(s => s.t)
   const [tab, setTab] = useState<Tab>('overview')
   const [sevFilter, setSevFilter] = useState<string>('')
   const [q, setQ] = useState('')
@@ -109,10 +113,10 @@ export const ValidationResults = () => {
           <div>
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-primary" />
-              <span className="font-mono text-sm font-semibold">Validation #{id}</span>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs">COMPLETED ✓</span>
+              <span className="font-semibold text-base">{validationMeta?.target_value || results.assets?.[0]?.ip || t('Target not recorded')}</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs">{t('Completed')}</span>
             </div>
-            <div className="text-xs text-muted-foreground mt-1 font-mono" dir="ltr">{validationMeta?.target_value || results.assets?.[0]?.name || 'Target unavailable'} • {validationMeta?.created_at ? new Date(validationMeta.created_at).toLocaleString() : ''}</div>
+            <p className="mt-2 text-xs text-muted-foreground">{t('This page summarizes findings, affected assets and saved evidence.')}</p><details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">{t('Technical details')}</summary><div className="mt-2 font-mono" dir="ltr">{id} • {validationMeta?.created_at ? new Date(validationMeta.created_at).toLocaleString() : ''}</div></details>
           </div>
           <div className="flex gap-2">
             <button onClick={exportJson} className="px-3 py-1.5 rounded-lg border bg-card text-xs inline-flex items-center gap-1 hover:bg-muted"><Download className="h-3 w-3" /> JSON</button>
@@ -134,13 +138,15 @@ export const ValidationResults = () => {
       </div>
 
       <div className="flex gap-1 overflow-auto border-b pb-0">
-        {TABS.map(t=> (
+        {TABS.slice(0, 3).map(t=> (
           <button key={t.id} onClick={()=>setTab(t.id)} className={cn('px-3 py-2 text-xs font-medium border-b-2 whitespace-nowrap inline-flex items-center gap-1', tab===t.id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')}>
             <t.icon className="h-3.5 w-3.5" />{t.label}
           </button>
         ))}
       </div>
 
+      <details className="rounded-xl border px-3 py-2 text-xs"><summary className="cursor-pointer font-semibold">{t('Advanced analysis')}</summary><div className="mt-2 flex flex-wrap gap-1">{TABS.slice(3).map(item => <button key={item.id} onClick={() => setTab(item.id)} className={cn('rounded-lg border px-3 py-2', tab === item.id ? 'border-primary bg-primary/10 text-primary' : 'text-muted-foreground')}><item.icon className="me-1 inline h-3.5 w-3.5" />{t(item.label)}</button>)}</div></details>
+      <p className="text-sm text-muted-foreground">{t(TAB_GUIDE[tab])}</p>
       {tab==='overview' && (
         <div className="grid md:grid-cols-2 gap-4">
           <div className="rounded-xl border bg-card p-4">
