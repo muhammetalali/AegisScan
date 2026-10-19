@@ -61,7 +61,7 @@ def test_kali_foundation_uses_direct_authenticated_https_archive() -> None:
 
 def test_web_profile_vendors_abi_matched_tls_perl_package_immutably() -> None:
     text = PROFILES.read_text(encoding="utf-8")
-    assert "snapshot.debian.org/archive/debian/20260902T000000Z" in text
+    assert "snapshot.debian.org/file/02a5fe4cfa437be95b886c42ba1043fdc480978a" in text
     assert "libnet-ssleay-perl_1.96-2_amd64.deb" in text
     assert "sha256:72981b62a6d2b999a35d0f2836fde79689e9020f9fe1fd57139c52259d4c405d" in text
     assert "/tmp/libnet-ssleay-perl.deb" in text
