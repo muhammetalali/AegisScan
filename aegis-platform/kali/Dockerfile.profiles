@@ -113,9 +113,10 @@ USER 10001:10001
 FROM profile-common AS profile-web
 # Kali last-snapshot currently omits the Net::SSLeay binary during the Perl
 # 5.42 transition. Import exactly one ABI-compatible Debian binary by immutable
-# snapshot URL and digest; no Debian repository is enabled in the image.
+# archived content-addressed URL and digest (snapshot redirect is not
+# reliable for Docker ADD); no Debian repository is enabled in the image.
 ADD --checksum=sha256:72981b62a6d2b999a35d0f2836fde79689e9020f9fe1fd57139c52259d4c405d \
-    https://snapshot.debian.org/archive/debian/20260902T000000Z/pool/main/libn/libnet-ssleay-perl/libnet-ssleay-perl_1.96-2_amd64.deb \
+    https://snapshot.debian.org/file/02a5fe4cfa437be95b886c42ba1043fdc480978a/libnet-ssleay-perl_1.96-2_amd64.deb \
     /tmp/libnet-ssleay-perl.deb
 ENV AEGIS_RUNNER_PROFILE=web \
     NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates \
@@ -153,7 +154,7 @@ FROM profile-common AS profile-browser
 ENV AEGIS_RUNNER_PROFILE=browser
 LABEL io.aegisscan.runner.profile=browser
 ADD --checksum=sha256:bbe8776c74132a8d33ea97e4957e52ae22001f9e9f4924889ad5466967ee9219 \
-    https://snapshot.debian.org/archive/debian/20260820T235959Z/pool/main/f/firefox-esr/firefox-esr_140.14.0esr-2_amd64.deb \
+    https://snapshot.debian.org/file/d6adbba782b491c4be7ecad7a7fa26280a97ff0a/firefox-esr_140.14.0esr-2_amd64.deb \
     /tmp/firefox-esr.deb
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium=150.0.7871.181-1 /tmp/firefox-esr.deb \
