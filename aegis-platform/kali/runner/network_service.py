@@ -312,9 +312,32 @@ def _control_execution(execution_ref: str, token: str, state: str) -> str:
         return record.state
 
 
+def _nmap_command(target: str) -> list[str]:
+    """Choose bounded host discovery for CIDR; preserve exact host parity.
+
+    Nmap's default host-discovery stage runs before -sV for a network.
+    -Pn must not mark every offline address in a subnet as responsive.
+    Fixed options, no caller-controlled argv, and the existing global provider
+    deadline/cancel/retry safeguards remain authoritative.
+    """
+    canonical = _canonical_target(target)
+    if '/' not in canonical:
+        return [NMAP, '-Pn', '-sV', '-oX', '-', '--', canonical]
+    network = ipaddress.ip_network(canonical, strict=True)
+    if network.num_addresses == 1:
+        return [NMAP, '-Pn', '-sV', '-oX', '-', '--', canonical]
+    if network.num_addresses > 1024:
+        raise ProtocolError('Nmap CIDR service discovery is limited to 1024 addresses per authorized scan')
+    return [
+        NMAP, '-n', '-sV', '--version-light', '--top-ports', '200',
+        '-T3', '--max-retries', '1', '--host-timeout', '60s',
+        '-oX', '-', '--', canonical,
+    ]
+
+
 def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
     os.makedirs('/tmp/aegis-home', mode=0o700, exist_ok=True)
-    command = [NMAP, '-Pn', '-sV', '-oX', '-', '--', request['target']]
+    command = _nmap_command(request['target'])
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
     overflow = threading.Event()

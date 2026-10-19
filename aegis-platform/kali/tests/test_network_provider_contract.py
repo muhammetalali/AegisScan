@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 from pathlib import Path
 
 KALI = Path(__file__).resolve().parents[1]
@@ -42,7 +43,8 @@ def test_provider_bundle_enables_only_nmap_semantic_dispatch():
 
 
 def test_network_service_has_fixed_nmap_semantics_and_no_shell_authority():
-    assert "command = [NMAP, '-Pn', '-sV', '-oX', '-', '--', request['target']]" in SERVICE
+    assert "command = _nmap_command(request['target'])" in SERVICE
+    assert "return [NMAP, '-Pn', '-sV', '-oX', '-', '--', canonical]" in SERVICE
     assert 'shell=False' in SERVICE
     assert "payload.get('argv')" not in SERVICE
     assert "payload.get('binary')" not in SERVICE
@@ -108,3 +110,35 @@ def test_default_kali_compose_promotes_nmap_without_broadening_provider_privileg
     assert 'security_opt: [no-new-privileges:true]' in DEFAULT_KALI_COMPOSE
     assert 'read_only: true' in DEFAULT_KALI_COMPOSE
     assert 'NET_ADMIN' not in DEFAULT_KALI_COMPOSE
+
+
+def test_cidr_nmap_only_services_discovered_hosts_with_bounded_work():
+    namespace = runpy.run_path(str(KALI / 'runner' / 'network_service.py'))
+    command = namespace['_nmap_command']
+    # Keep per-host semantics exact (including canonical /32).
+    assert command('192.168.49.1') == ['/usr/bin/nmap', '-Pn', '-sV', '-oX', '-', '--', '192.168.49.1']
+    assert command('192.168.49.1/32') == ['/usr/bin/nmap', '-Pn', '-sV', '-oX', '-', '--', '192.168.49.1/32']
+    for network in ('192.168.49.0/24', '10.8.0.0/22'):
+        args = command(network)
+        assert args[-2:] == ['--', network]
+        assert '-Pn' not in args
+        assert '-sV' in args and '--version-light' in args
+        assert '--top-ports' in args and args[args.index('--top-ports') + 1] == '200'
+        assert '--max-retries' in args and args[args.index('--max-retries') + 1] == '1'
+        assert '--host-timeout' in args and args[args.index('--host-timeout') + 1] == '60s'
+        assert '-oX' in args and args[args.index('-oX') + 1] == '-'
+    assert command('192.168.49.32/24')[-1] == '192.168.49.0/24'
+
+
+def test_cidr_nmap_scope_limits_and_no_dynamic_argument_injection():
+    namespace = runpy.run_path(str(KALI / 'runner' / 'network_service.py'))
+    command = namespace['_nmap_command']
+    for value in ('0.0.0.0/0', '10.8.0.0/20', '2001:db8::/64',
+                  '192.168.49.0/24 --script=all'):
+        try:
+            command(value)
+        except namespace['ProtocolError']:
+            pass
+        else:
+            raise AssertionError(f'An unsafe CIDR command was accepted: {value!r}')
+    assert command('example.internal') == ['/usr/bin/nmap', '-Pn', '-sV', '-oX', '-', '--', 'example.internal']
