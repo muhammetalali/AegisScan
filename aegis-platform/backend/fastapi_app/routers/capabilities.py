@@ -22,7 +22,7 @@ from ..services.burp_mcp_gateway import BurpMCPError
 from ..tasks.burp_mcp import run_burp_mcp_probe
 from ..services.governed_execution_contract import GovernedExecutionDraft, finalize_governed_execution_contract, prepare_governed_execution_draft
 from ..services.capability_planner import planning_summary
-from ..services.capability_registry import RETIRED_CAPABILITIES, RetiredCapabilityError, get_capability, list_capabilities, validate_capability_options
+from ..services.capability_registry import RETIRED_CAPABILITIES, RetiredCapabilityError, get_capability, list_capabilities, scan_type_for_asset, validate_capability_options
 from ..services.credential_execution import (
     authorize_credential_refs_for_execution,
     empty_credential_context,
@@ -427,7 +427,7 @@ async def execute_capability(
             project_id=request.project_id,
             asset_id=request.asset_id,
             name=f'{capability.id} validation for {asset.name}',
-            scan_type=capability.scan_type,
+            scan_type=scan_type_for_asset(capability, asset.type),
             engines=[capability.tool],
             depth=request.depth,
             config=config,

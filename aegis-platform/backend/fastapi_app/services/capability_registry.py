@@ -67,7 +67,7 @@ CAPABILITIES: dict[str, Capability] = {
     'network.nmap': Capability(
         id='network.nmap', tool='nmap', category='network-reconnaissance',
         description='Authorized host and network service discovery using the native Nmap adapter.',
-        scan_type='ip', asset_types=('ip_address', 'domain'), risk='active-low',
+        scan_type='ip', asset_types=('ip_address', 'domain', 'network_range'), risk='active-low',
         runner_profile=resolve_kali_profile('network.nmap'),
     ),
     'network.masscan': Capability(
@@ -139,6 +139,20 @@ CAPABILITIES[BURP_GATEWAY_ID] = Capability(
 )
 
 validate_profile_policy(set(CAPABILITIES))
+
+
+def scan_type_for_asset(capability: Capability, asset_type: str) -> str:
+    """Use the actual scan category for an eligible asset, without altering capability identity.
+
+    Nmap's existing Kali provider supports bounded authorized hosts and CIDRs.
+    A network range must persist as a NETWORK scan so permission, scope and
+    results contracts agree with the target's canonical asset category.
+    """
+    if asset_type not in capability.asset_types:
+        raise ValueError(f'Capability {capability.id} does not support asset type {asset_type}')
+    if capability.id == 'network.nmap' and asset_type == 'network_range':
+        return 'network'
+    return capability.scan_type
 
 
 def list_capabilities() -> list[Capability]:
