@@ -20,6 +20,13 @@ export async function loadAssessmentProjects(): Promise<Project[]> {
   return projects.filter((project) => project.status !== 'archived')
 }
 
+/** Hide E2E fixture projects in everyday selectors while preserving explicit legacy selections. */
+export function visibleAssessmentProjects(projects: Project[], selectedId = ''): Project[] {
+  const regular = projects.filter((project) => !/^External E2E(?:\s|$)/i.test(project.name))
+  if (!regular.length) return projects
+  return projects.filter((project) => !/^External E2E(?:\s|$)/i.test(project.name) || project.id === selectedId)
+}
+
 export function preferAssessmentProject(projects: Project[], requested: string, selected: string): Project | undefined {
   const relevant = projects.filter((p) => !/^External E2E\s/i.test(p.name))
   return projects.find((p) => p.id === requested)
@@ -80,7 +87,7 @@ export const AssessmentEntry = ({ preferredMode = 'network' }: { preferredMode?:
           <span className="font-semibold">{t('Project for saving scan results')}</span>
         </div>
         <select aria-label={t('Project for saving scan results')} value={project.id} onChange={(e) => setSelection(e.target.value)} className="max-w-full rounded-xl border bg-background px-3 py-2 text-sm">
-          {projects.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+          {visibleAssessmentProjects(projects, project.id).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
         </select>
       </section>
       <AssessmentLauncher projectOverride={project.id} preferredMode={preferredMode} />

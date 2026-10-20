@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
-import { loadAssessmentProjects, preferAssessmentProject } from './AssessmentEntry'
+import { loadAssessmentProjects, preferAssessmentProject, visibleAssessmentProjects } from './AssessmentEntry'
 import { apiHelpers } from '@/services/api'
 
 vi.mock('@/services/api', () => ({ apiHelpers: { get: vi.fn(), post: vi.fn() } }))
@@ -14,6 +14,15 @@ describe('one-step assessment project selection', () => {
     expect(preferAssessmentProject(projects,'','')?.id).toBe('real-1')
     expect(preferAssessmentProject(projects,'test-1','')?.id).toBe('test-1')
     expect(preferAssessmentProject(projects,'','real-2')?.id).toBe('real-2')
+  })
+  it('keeps E2E test workspaces out of normal project pickers without breaking explicit legacy selection', () => {
+    const projects = [
+      {id:'test-1',name:'External E2E abc',status:'active'},
+      {id:'real-1',name:'mi-kali',status:'active'},
+      {id:'real-2',name:'Client lab',status:'active'},
+    ]
+    expect(visibleAssessmentProjects(projects).map((item) => item.id)).toEqual(['real-1','real-2'])
+    expect(visibleAssessmentProjects(projects, 'test-1').map((item) => item.id)).toEqual(['test-1','real-1','real-2'])
   })
   it('loads all authorized DRF pages instead of displaying only first-page E2E workspaces', async () => {
     const get=vi.mocked(apiHelpers.get)

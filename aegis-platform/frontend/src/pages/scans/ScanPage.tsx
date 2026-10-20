@@ -7,6 +7,7 @@ import { CapabilityPlanSchema, GovernedCapabilityExecutionSchema, apiContractPat
 import { useLanguageStore } from '@/stores/languageStore'
 import { toast } from 'sonner'
 import { cn } from '@/utils/cn'
+import { loadAssessmentProjects, visibleAssessmentProjects } from '@/pages/assessments/AssessmentEntry'
 
 type Scan = {
   id: string
@@ -49,9 +50,11 @@ export const ScanPage = () => {
     queryKey: ['scans'],
     queryFn: () => apiHelpers.get<Scan[]>('/scans/?limit=100'),
   })
+  // Projects are DRF-paginated. Reuse the existing paginated loader rather than
+  // treating the first-page object as an array (which crashed the scan modal).
   const projects = useQuery<Project[]>({
     queryKey: ['projects'],
-    queryFn: () => apiHelpers.get<Project[]>('/projects/'),
+    queryFn: loadAssessmentProjects,
   })
   const assets = useQuery<Asset[]>({
     queryKey: ['assets-scan-picker', projectId],
@@ -252,7 +255,7 @@ export const ScanPage = () => {
                   className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
                 >
                   <option value="">{t('Select project')}</option>
-                  {(projects.data || []).map((project) => (
+                  {visibleAssessmentProjects(projects.data || [], projectId).map((project) => (
                     <option key={project.id} value={project.id}>
                       {project.name}
                     </option>
