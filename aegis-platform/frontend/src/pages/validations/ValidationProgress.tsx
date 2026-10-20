@@ -108,7 +108,7 @@ export const ValidationProgress = () => {
   if (query.isLoading && !display) return <div className="mx-auto w-full max-w-5xl space-y-4"><div className="h-32 animate-pulse rounded-3xl bg-muted" /><div className="h-72 animate-pulse rounded-3xl bg-muted" /></div>
 
   if (query.isError || !display) {
-    return <div className="mx-auto flex min-h-[420px] max-w-3xl items-center justify-center"><div className="w-full rounded-3xl border bg-card p-8 text-center shadow-xl"><XCircle className="mx-auto h-10 w-10 text-destructive" /><h1 className="mt-4 text-xl font-semibold">Validation غير متاحة</h1><p className="mt-2 text-sm text-muted-foreground">تعذر تحميل الحالة الحقيقية من API. لم يتم إنشاء أو عرض أي بيانات محلية أو تجريبية.</p><Link to="/validations/new" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">Back to validation creation <ArrowRight className="h-4 w-4" /></Link></div></div>
+    return <div className="mx-auto flex min-h-[420px] max-w-3xl items-center justify-center"><div className="w-full rounded-3xl border bg-card p-8 text-center shadow-xl"><XCircle className="mx-auto h-10 w-10 text-destructive" /><h1 className="mt-4 text-xl font-semibold">{t('Validation unavailable')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('The validation status could not be loaded. No demonstration data is shown.')}</p><Link to="/validations/new" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">{t('Back to validation creation')} <ArrowRight className="h-4 w-4" /></Link></div></div>
   }
 
   return (
