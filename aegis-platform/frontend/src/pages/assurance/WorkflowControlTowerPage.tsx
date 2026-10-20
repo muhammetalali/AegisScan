@@ -17,7 +17,7 @@ import {
 import { agomSdk, buildAgomIdempotencyKey, getAgomErrorMessage } from '@/services/agom'
 import type { AgomClaimState, AgomWorkItem, AgomWorkSourceType } from '@/contracts/agom'
 import { useLanguageStore } from '@/stores/languageStore'
-import { loadAssessmentProjects, preferAssessmentProject } from '@/pages/assessments/AssessmentEntry'
+import { loadAssessmentProjects, preferAssessmentProject, visibleAssessmentProjects } from '@/pages/assessments/AssessmentEntry'
 
 const SOURCE_OPTIONS: Array<{ value: AgomWorkSourceType | ''; label: string }> = [
   { value: '', label: 'All sources' },
@@ -232,7 +232,7 @@ export function WorkflowControlTowerPage() {
             className="mt-1.5 h-10 w-full rounded-xl border bg-background px-3 text-sm text-foreground"
           >
             {!projects.length && <option value="">No project available</option>}
-            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            {visibleAssessmentProjects(projects, projectId).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
         </label>
         <label className="text-xs font-medium text-muted-foreground">
