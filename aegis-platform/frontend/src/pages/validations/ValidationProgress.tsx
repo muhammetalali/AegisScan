@@ -132,7 +132,11 @@ export const ValidationProgress = () => {
 
       <section className="rounded-3xl border bg-card p-5 shadow-sm md:p-7">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Execution controls</h2><p className="mt-1 text-xs text-muted-foreground">كل الأوامر أدناه تعتمد على endpoints حقيقية. لا يوجد local fallback.</p></div><div className="flex flex-wrap gap-2">{!completed && !failed && <><button onClick={handlePauseResume} className="inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold hover:bg-muted">{display.status === 'paused' ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}{display.status === 'paused' ? 'Resume' : 'Pause'}</button><button onClick={handleCancel} className="inline-flex items-center gap-2 rounded-xl border border-red-500/20 px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-500/5"><Ban className="h-3.5 w-3.5" />Cancel</button></>}{completed && <button onClick={() => navigate(`/validations/${id}/results`)} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">View Results <ArrowRight className="h-3.5 w-3.5" /></button>}</div></div>
-        {display.error_message && <div className="mt-5 rounded-2xl border border-red-500/20 bg-red-500/5 p-4 text-xs text-red-600 dark:text-red-400">{display.error_message}</div>}
+        {display.error_message && <div className="mt-5 rounded-2xl border border-red-500/20 bg-red-500/5 p-4 text-sm leading-6 text-red-600 dark:text-red-400">
+          {/Nuclei is not installed on the worker/i.test(display.error_message)
+            ? t('The Nuclei engine was unavailable during this past validation attempt. This historical failure does not establish the engine current availability.')
+            : display.error_message}
+        </div>}
       </section>
     </div>
   )

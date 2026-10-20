@@ -14,16 +14,10 @@ import {
   UserCheck,
 } from 'lucide-react'
 
-import { apiHelpers } from '@/services/api'
 import { agomSdk, buildAgomIdempotencyKey, getAgomErrorMessage } from '@/services/agom'
 import type { AgomClaimState, AgomWorkItem, AgomWorkSourceType } from '@/contracts/agom'
 import { useLanguageStore } from '@/stores/languageStore'
-
-type Project = { id: string; name: string }
-type ProjectsResponse = Project[] | { items?: Project[]; results?: Project[] }
-
-const unwrapProjects = (value: ProjectsResponse | undefined): Project[] =>
-  Array.isArray(value) ? value : value?.items ?? value?.results ?? []
+import { loadAssessmentProjects, preferAssessmentProject } from '@/pages/assessments/AssessmentEntry'
 
 const SOURCE_OPTIONS: Array<{ value: AgomWorkSourceType | ''; label: string }> = [
   { value: '', label: 'All sources' },
@@ -97,13 +91,13 @@ export function WorkflowControlTowerPage() {
 
   const projectsQuery = useQuery({
     queryKey: ['operations-projects'],
-    queryFn: () => apiHelpers.get<ProjectsResponse>('/projects/'),
+    queryFn: loadAssessmentProjects,
     staleTime: 30_000,
   })
-  const projects = unwrapProjects(projectsQuery.data)
+  const projects = projectsQuery.data ?? []
 
   useEffect(() => {
-    if (!projectId && projects[0]?.id) setProjectId(projects[0].id)
+    if (!projectId && projects.length) setProjectId(preferAssessmentProject(projects, '', '')?.id || '')
   }, [projectId, projects])
 
   const queue = useQuery({

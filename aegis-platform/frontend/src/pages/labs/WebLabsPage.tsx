@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, AlertTriangle, CheckCircle2, FlaskConical, Loader2, Play, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { AssessmentEntry } from '@/pages/assessments/AssessmentEntry'
 import { toast } from 'sonner'
 import { z } from 'zod'
 import { apiHelpers } from '@/services/api'
@@ -80,7 +81,7 @@ type Depth = 'quick' | 'standard' | 'deep' | 'comprehensive'
 export const unwrapWebLabProjects = (data: ProjectsResponse | undefined): Project[] =>
   Array.isArray(data) ? data : data?.items ?? data?.results ?? []
 
-export const WebLabsPage = () => {
+const AdvancedGovernedWebLab = () => {
   const t = useLanguageStore((s) => s.t)
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -336,4 +337,21 @@ export const WebLabsPage = () => {
       )}
     </div>
   )
+}
+
+
+// The same Assessment Launcher handles a website link, creates/reuses its
+// asset, and routes all authorized scanners automatically. The specialist
+// two-identity BAC fixture remains available but no longer blocks normal scans.
+export const WebLabsPage = () => {
+  const t = useLanguageStore((state) => state.t)
+  const [advanced, setAdvanced] = useState(false)
+  return <div className="space-y-4">
+    <AssessmentEntry preferredMode="url" />
+    <details className="enterprise-card rounded-2xl p-5" onToggle={(event) => setAdvanced(event.currentTarget.open)}>
+      <summary className="cursor-pointer text-sm font-semibold">{t('Specialized web lab tests (optional)')}</summary>
+      <p className="mt-2 text-sm text-muted-foreground">{t('For BAC multi-identity laboratory testing only. Normal website scans require just the URL above.')}</p>
+      {advanced && <div className="mt-4 border-t pt-4"><AdvancedGovernedWebLab /></div>}
+    </details>
+  </div>
 }
