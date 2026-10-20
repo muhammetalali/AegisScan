@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { motion } from 'framer-motion'
 import { Activity, ArrowRight, Ban, CheckCircle2, Clock, Loader2, Pause, Play, Radio, Shield, ShieldCheck, XCircle } from 'lucide-react'
 import { cn } from '@/utils/cn'
+import { useLanguageStore } from '@/stores/languageStore'
 import { apiHelpers, createWebSocket } from '@/services/api'
 
 interface ProgressResponse {
@@ -28,6 +29,7 @@ const statusIcon = (status: string) => {
 
 export const ValidationProgress = () => {
   const { id } = useParams<{ id: string }>()
+  const t = useLanguageStore(s => s.t)
   const navigate = useNavigate()
   const [live, setLive] = useState<ProgressResponse | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
@@ -106,7 +108,7 @@ export const ValidationProgress = () => {
   if (query.isLoading && !display) return <div className="mx-auto w-full max-w-5xl space-y-4"><div className="h-32 animate-pulse rounded-3xl bg-muted" /><div className="h-72 animate-pulse rounded-3xl bg-muted" /></div>
 
   if (query.isError || !display) {
-    return <div className="mx-auto flex min-h-[420px] max-w-3xl items-center justify-center"><div className="w-full rounded-3xl border bg-card p-8 text-center shadow-xl"><XCircle className="mx-auto h-10 w-10 text-destructive" /><h1 className="mt-4 text-xl font-semibold">Validation غير متاحة</h1><p className="mt-2 text-sm text-muted-foreground">تعذر تحميل الحالة الحقيقية من API. لم يتم إنشاء أو عرض أي بيانات محلية أو تجريبية.</p><Link to="/validations/new" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">Back to validation creation <ArrowRight className="h-4 w-4" /></Link></div></div>
+    return <div className="mx-auto flex min-h-[420px] max-w-3xl items-center justify-center"><div className="w-full rounded-3xl border bg-card p-8 text-center shadow-xl"><XCircle className="mx-auto h-10 w-10 text-destructive" /><h1 className="mt-4 text-xl font-semibold">{t('Validation unavailable')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('The validation status could not be loaded. No demonstration data is shown.')}</p><Link to="/validations/new" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">{t('Back to validation creation')} <ArrowRight className="h-4 w-4" /></Link></div></div>
   }
 
   return (
@@ -114,17 +116,12 @@ export const ValidationProgress = () => {
       <section className="relative overflow-hidden rounded-[2rem] border bg-card p-6 shadow-[0_30px_90px_rgba(0,0,0,.14)] md:p-8">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,color-mix(in_srgb,var(--primary)_11%,transparent),transparent_32%)]" />
         <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-primary"><ShieldCheck className="h-4 w-4" /> Real Validation Execution</div><h1 className="mt-3 text-3xl font-semibold tracking-tight">Execution Timeline</h1><p className="mt-2 text-sm text-muted-foreground">الحالة التالية مأخوذة مباشرة من ValidationRun والـWebSocket المرتبط به.</p></div>
+          <div><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-primary"><ShieldCheck className="h-4 w-4" /> Real Validation Execution</div><h1 className="mt-3 text-3xl font-semibold tracking-tight">{t('Validation status')}</h1><p className="mt-2 text-sm text-muted-foreground">{t('Track progress and open results when validation completes.')}</p></div>
           <div className="flex items-center gap-2 text-xs"><span className={cn('inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-semibold', completed ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : failed ? 'border-red-500/30 bg-red-500/10 text-red-600' : 'border-primary/30 bg-primary/10 text-primary')}>{statusIcon(display.status)} {display.status.toUpperCase()}</span><span className={cn('inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5', wsConnected ? 'border-emerald-500/20 text-emerald-600' : 'border-border text-muted-foreground')}><Radio className="h-3 w-3" />{wsConnected ? 'WebSocket LIVE' : 'API polling'}</span></div>
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Fact label="Validation ID" value={display.id} mono />
-        <Fact label="Finding ID" value={display.finding_id || 'Unavailable'} mono />
-        <Fact label="Current phase" value={display.current_phase} />
-        <Fact label="Progress" value={`${display.progress}%`} />
-      </section>
+      <section className="space-y-3"><div className="grid gap-3 sm:grid-cols-2"><Fact label="Current phase" value={display.current_phase} /><Fact label="Progress" value={String(display.progress) + '%'} /></div><details className="rounded-xl border p-3 text-xs"><summary className="cursor-pointer font-semibold">{t('Technical details')}</summary><div className="mt-3 grid gap-3 sm:grid-cols-2"><Fact label="Validation ID" value={display.id} mono /><Fact label="Finding ID" value={display.finding_id || 'Unavailable'} mono /></div></details></section>
 
       <section className="rounded-3xl border bg-card p-5 shadow-sm md:p-7">
         <div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Execution state</p><h2 className="mt-1 text-xl font-semibold">Server-authoritative progress</h2></div><Activity className="h-5 w-5 text-primary" /></div>

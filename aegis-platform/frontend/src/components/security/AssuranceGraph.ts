@@ -63,6 +63,42 @@ export function neighbors(graph: AssuranceGraph, nodeId: string): AssuranceNode[
 }
 
 export function graphFromCorrelationPayload(payload: any): AssuranceGraph {
+  // The live assurance aggregator returns kind/source/target, while our graph
+  // renderer uses type/from/to. Adapt at the existing contract boundary.
+  if (Array.isArray(payload?.nodes) && Array.isArray(payload?.edges)) {
+    const supportedTypes: AssuranceNodeType[] = ['finding','asset','service','endpoint','evidence','validation','control','threat','data','remediation']
+    const supportedStatuses: AssuranceNodeStatus[] = ['open','verified','impacted','unverified','failed','resolved','unknown']
+    const supportedEdges: AssuranceEdgeType[] = ['affects','depends-on','detected-by','supported-by','validated-by','maps-to','threatens','remediated-by','related-to']
+    const numeric = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined
+    const nodes: AssuranceNode[] = payload.nodes.filter((n: any) => n && typeof n.id === 'string').map((n: any) => {
+      const rawKind = n.type || n.kind
+      const type: AssuranceNodeType = supportedTypes.includes(rawKind) ? rawKind : rawKind === 'engine' ? 'service' : 'data'
+      const status: AssuranceNodeStatus = supportedStatuses.includes(n.status) ? n.status : 'unknown'
+      return {
+        id: n.id, label: typeof n.label === 'string' ? n.label : n.id,
+        type, status, risk: numeric(n.risk), confidence: numeric(n.confidence),
+        conflictCount: numeric(n.conflictCount ?? n.conflicts),
+        sourceCount: numeric(n.sourceCount ?? n.sources),
+        metadata: {
+          ...(n.metadata && typeof n.metadata === 'object' && !Array.isArray(n.metadata) ? n.metadata : {}),
+          validationId: typeof n.validationId === 'string' ? n.validationId : null,
+          projectId: typeof n.projectId === 'string' ? n.projectId : null,
+        },
+      }
+    })
+    const ids = new Set(nodes.map(n => n.id))
+    const edges: AssuranceEdge[] = payload.edges
+      .map((edge: any) => {
+        const from = edge?.from ?? edge?.source
+        const to = edge?.to ?? edge?.target
+        if (typeof from !== 'string' || typeof to !== 'string' || !ids.has(from) || !ids.has(to)) return null
+        const rawType = edge?.type ?? edge?.relation
+        const type: AssuranceEdgeType = supportedEdges.includes(rawType) ? rawType : 'related-to'
+        return { id: String(edge.id || from + '->' + to), from, to, type, confidence: numeric(edge.confidence) }
+      })
+      .filter((edge: AssuranceEdge | null): edge is AssuranceEdge => edge !== null)
+    return { nodes, edges, generatedAt: payload.generatedAt, version: payload.version }
+  }
   const conflicts = Array.isArray(payload?.items) ? payload.items : []
   const nodes = new Map<string, AssuranceNode>()
   const edges: AssuranceEdge[] = []

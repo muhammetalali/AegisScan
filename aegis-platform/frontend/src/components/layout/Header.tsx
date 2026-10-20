@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { useLanguageStore } from '@/stores/languageStore'
 import { Breadcrumbs } from './Breadcrumbs'
+import { PageGuide } from './PageGuide'
 import { Menu, Sun, Moon, Globe, Bell, User, LogOut, Settings, ChevronDown, Search, Command, Shield } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { useQuery } from '@tanstack/react-query'
@@ -50,6 +51,7 @@ export const Header = ({ sidebarOpen, onSidebarToggle, onMobileToggle, onCommand
         <div className="hidden min-w-0 flex-col justify-center md:flex"><Breadcrumbs /><div className="hidden text-[10px] font-medium tracking-wide text-muted-foreground lg:block">AegisScan / {t('Security Validation')}</div></div>
         <div className="flex flex-1 justify-center px-2"><button onClick={onCommandOpen} className="enterprise-control hidden w-full max-w-xl items-center gap-2 rounded-2xl border border-border/70 bg-background/35 px-4 py-2.5 text-sm text-muted-foreground shadow-inner transition-all hover:border-primary/35 hover:bg-background/55 sm:flex"><Search className="h-4 w-4" /><span className="flex-1 text-start">{t('Search validations, findings, assets...')}</span><span className="hidden items-center gap-1 rounded-md border border-border/70 bg-card/70 px-1.5 py-0.5 text-[10px] md:inline-flex"><Command className="h-3 w-3"/>K</span></button><button onClick={onCommandOpen} className="enterprise-icon-button rounded-xl border border-border/60 bg-background/30 p-2 sm:hidden" aria-label={t('Search')}><Search className="h-4 w-4"/></button></div>
         <div className="flex items-center gap-1.5">
+          <PageGuide />
           <Link to="/notifications" className="enterprise-icon-button relative rounded-xl border border-border/60 bg-background/30 p-2 transition-all" aria-label={t('Notifications')}><Bell className="h-4 w-4" />{notificationQuery.data?.length ? <span className="absolute -end-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-center text-[9px] font-bold text-primary-foreground">{notificationQuery.data.length}</span> : null}</Link>
           <button onClick={toggleTheme} className="enterprise-icon-button rounded-xl border border-border/60 bg-background/30 p-2 transition-all" aria-label={t('Toggle theme')}>{resolvedTheme === 'dark' ? <Sun className="h-4 w-4"/> : <Moon className="h-4 w-4"/>}</button>
           <button onClick={switchLanguage} className="enterprise-control hidden items-center gap-1 rounded-xl border border-border/60 bg-background/30 px-2.5 py-2 text-xs font-semibold transition-all sm:flex" aria-label={t('Change language')}><Globe className="h-3.5 w-3.5"/>{language === 'ar' ? 'EN' : 'العربية'}</button>
