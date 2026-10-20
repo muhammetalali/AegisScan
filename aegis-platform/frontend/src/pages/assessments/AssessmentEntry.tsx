@@ -1,144 +1,97 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, FolderKanban, Radar, ShieldCheck } from 'lucide-react'
+import { FolderKanban, Loader2, ShieldCheck } from 'lucide-react'
 import { apiHelpers } from '@/services/api'
 import { useLanguageStore } from '@/stores/languageStore'
-import { cn } from '@/utils/cn'
+import { AssessmentLauncher } from './AssessmentLauncher'
 
-type Project = {
-  id: string
-  name: string
-  environment?: string | null
-  status?: string | null
+type Project = { id: string; name: string; status?: string | null }
+type ProjectsPage = Project[] | { results?: Project[]; items?: Project[]; next?: string | null }
+
+/** Read the existing DRF pages instead of relying on the first 20 E2E records. */
+export async function loadAssessmentProjects(): Promise<Project[]> {
+  const projects: Project[] = []
+  for (let page = 1; page <= 20; page += 1) {
+    const response = await apiHelpers.get<ProjectsPage>('/projects/', { params: { page } })
+    if (Array.isArray(response)) return response.filter((project) => project.status !== 'archived')
+    projects.push(...(response.results ?? response.items ?? []))
+    if (!response.next) break
+  }
+  return projects.filter((project) => project.status !== 'archived')
 }
-type ProjectsResponse = Project[] | { items?: Project[]; results?: Project[] }
 
-const unwrapProjects = (data?: ProjectsResponse): Project[] =>
-  Array.isArray(data) ? data : data?.items ?? data?.results ?? []
+export function preferAssessmentProject(projects: Project[], requested: string, selected: string): Project | undefined {
+  const relevant = projects.filter((p) => !/^External E2E\s/i.test(p.name))
+  return projects.find((p) => p.id === requested)
+    ?? projects.find((p) => p.id === selected)
+    ?? relevant.find((p) => p.name === 'mi-kali')
+    ?? relevant[0]
+    ?? projects[0]
+}
 
-export const AssessmentEntry = () => {
-  const t = useLanguageStore((state) => state.t)
-  const navigate = useNavigate()
-  const [params] = useSearchParams()
-  const requestedProjectId = params.get('project_id') || ''
-  const [projectId, setProjectId] = useState(requestedProjectId)
-  const projectsQuery = useQuery<ProjectsResponse>({
-    queryKey: ['assessment-entry-projects'],
-    queryFn: () => apiHelpers.get<ProjectsResponse>('/projects/'),
-    staleTime: 30_000,
-  })
-  const projects = useMemo(
-    () => unwrapProjects(projectsQuery.data).filter((project) => project.status !== 'archived'),
-    [projectsQuery.data],
-  )
+/**
+ * A single assessment entry point: user enters an IP, URL, CIDR or file directly.
+ * The project only persists evidence and is chosen automatically when available.
+ * It is NOT a pre-existing assessment or a prerequisite user workflow.
+ */
+export const AssessmentEntry = ({ preferredMode = 'network' }: { preferredMode?: 'network' | 'ip' | 'url' | 'file' }) => {
+  const t = useLanguageStore((s) => s.t)
+  const [selection, setSelection] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+  const projectsQuery = useQuery({ queryKey: ['assessment-entry-projects-all'], queryFn: loadAssessmentProjects, staleTime: 30_000 })
+  const [params] = useState(() => new URLSearchParams(window.location.search))
+  const requestedId = params.get('project_id') || ''
+  const projects = useMemo(() => projectsQuery.data || [], [projectsQuery.data])
+  const project = preferAssessmentProject(projects, requestedId, selection)
 
-  useEffect(() => {
-    if (requestedProjectId && projects.some((project) => project.id === requestedProjectId)) {
-      setProjectId(requestedProjectId)
+  const createFirstWorkspace = async () => {
+    if (creating) return
+    setCreating(true)
+    setError('')
+    try {
+      // Fail closed on ambiguous network retries: re-read before creating.
+      const existing = preferAssessmentProject(await loadAssessmentProjects(), '', '')
+      if (existing) { setSelection(existing.id); await projectsQuery.refetch(); return }
+      const created = await apiHelpers.post<{ id: string }>('/projects/', {
+        name: 'مساحة الفحوص', description: 'مساحة تلقائية لحفظ الفحوص والأدلة',
+        environment: 'development', status: 'active', tags: [], settings: {}, default_scan_config: {},
+      })
+      setSelection(created.id)
+      await projectsQuery.refetch()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('Unable to create an assessment workspace.'))
+    } finally {
+      setCreating(false)
     }
-  }, [projects, requestedProjectId])
-
-  const selectedProject = projects.find((project) => project.id === projectId)
-  const launch = () => {
-    if (!selectedProject) return
-    navigate(`/projects/${encodeURIComponent(selectedProject.id)}/assess`)
   }
 
-  if (projectsQuery.isLoading) {
-    return <div className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground">{t('Loading...')}</div>
-  }
+  if (projectsQuery.isLoading) return <p className="p-8 text-sm">{t('Loading...')}</p>
+  if (projectsQuery.isError) return <div className="enterprise-card p-6">
+    <p className="text-sm">{t('Projects could not be loaded')}</p>
+    <button type="button" className="mt-3 rounded-xl border px-4 py-2" onClick={() => projectsQuery.refetch()}>{t('Retry')}</button>
+  </div>
 
-  if (projectsQuery.isError) {
-    return (
-      <div className="mx-auto max-w-3xl">
-        <section className="enterprise-card rounded-3xl p-10 text-center">
-          <FolderKanban className="mx-auto h-8 w-8 text-destructive" />
-          <h1 className="mt-4 text-xl font-semibold">{t('Projects could not be loaded')}</h1>
-          <button
-            type="button"
-            onClick={() => projectsQuery.refetch()}
-            className="mt-5 rounded-xl border px-4 py-2 text-sm font-medium"
-          >
-            {t('Retry')}
-          </button>
-        </section>
-      </div>
-    )
-  }
-
-  return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 pb-12">
-      <section className="enterprise-card rounded-[2rem] p-6 md:p-8">
-        <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-primary">
-          <Radar className="h-3.5 w-3.5" />
-          {t('New Assessment')}
+  return <div className="mx-auto w-full max-w-6xl space-y-4 pb-12">
+    {project ? <>
+      <section className="enterprise-card flex flex-wrap items-center justify-between gap-3 rounded-2xl p-4">
+        <div className="flex items-center gap-2 text-sm">
+          <ShieldCheck className="h-4 w-4 text-primary" />
+          <span className="font-semibold">{t('Project for saving scan results')}</span>
         </div>
-        <h1 className="mt-4 text-3xl font-semibold tracking-tight md:text-4xl">{t('Choose a project')}</h1>
-        <p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">
-          {t('Choose the security workspace for this assessment. AegisScan will then open the existing Assessment Launcher for URL, IP, network or file input.')}
-        </p>
-        <div className="mt-4 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold text-muted-foreground">
-          <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-          {t('Assets remain an internal evidence anchor and are created or reused automatically.')}
-        </div>
+        <select aria-label={t('Project for saving scan results')} value={project.id} onChange={(e) => setSelection(e.target.value)} className="max-w-full rounded-xl border bg-background px-3 py-2 text-sm">
+          {projects.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+        </select>
       </section>
-
-      {projects.length === 0 ? (
-        <section className="enterprise-card rounded-3xl p-10 text-center">
-          <FolderKanban className="mx-auto h-8 w-8 text-muted-foreground" />
-          <h2 className="mt-4 text-lg font-semibold">{t('No projects yet')}</h2>
-          <p className="mt-2 text-sm text-muted-foreground">{t('Create a project to start organizing assets and validations.')}</p>
-          <Link to="/projects" className="mt-5 inline-flex rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">
-            {t('Create project')}
-          </Link>
-        </section>
-      ) : (
-        <section className="enterprise-card rounded-3xl p-5 md:p-6">
-          <div className="grid gap-3 md:grid-cols-2">
-            {projects.map((project) => {
-              const selected = project.id === projectId
-              return (
-                <button
-                  key={project.id}
-                  type="button"
-                  onClick={() => setProjectId(project.id)}
-                  aria-pressed={selected}
-                  className={cn(
-                    'rounded-2xl border p-5 text-start transition-all',
-                    selected ? 'border-primary bg-primary/5 shadow-lg' : 'hover:-translate-y-0.5 hover:border-primary/30',
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="grid h-9 w-9 place-items-center rounded-xl border bg-background">
-                      <FolderKanban className="h-4 w-4 text-primary" />
-                    </span>
-                    <span className="rounded-full border px-2 py-1 text-[10px] text-muted-foreground">
-                      {project.environment || t('Not reported')}
-                    </span>
-                  </div>
-                  <div className="mt-4 font-semibold">{project.name}</div>
-                  <div className="mt-1 font-mono text-[10px] text-muted-foreground">{project.id}</div>
-                </button>
-              )
-            })}
-          </div>
-          <div className="mt-6 flex flex-col gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-xs text-muted-foreground">
-              {selectedProject ? selectedProject.name : t('Select project')}
-            </div>
-            <button
-              type="button"
-              onClick={launch}
-              disabled={!selectedProject}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t('Continue')}
-              <ArrowRight className="h-4 w-4" />
-            </button>
-          </div>
-        </section>
-      )}
-    </div>
-  )
+      <AssessmentLauncher projectOverride={project.id} preferredMode={preferredMode} />
+    </> : <section className="enterprise-card rounded-2xl p-6">
+      <div className="flex items-center gap-2 text-lg font-semibold"><FolderKanban className="h-5 w-5 text-primary" />{t('Start a new assessment')}</div>
+      <p className="mt-2 text-sm text-muted-foreground">{t('AegisScan will create one workspace automatically to save your first scan and evidence. No earlier scan is needed.')}</p>
+      {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
+      <button type="button" onClick={createFirstWorkspace} disabled={creating} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground disabled:opacity-50">
+        {creating && <Loader2 className="h-4 w-4 animate-spin" />}
+        {t('Prepare my first assessment')}
+      </button>
+    </section>}
+  </div>
 }

@@ -104,7 +104,18 @@ export const ValidationResults = () => {
   }
 
   if (isLoading) return <div className="p-6 max-w-6xl mx-auto animate-pulse space-y-4"><div className="h-24 bg-muted rounded" /><div className="h-96 bg-muted rounded" /></div>
-  if (!results || !overview) return <div className="p-6 max-w-6xl mx-auto"><p className="text-muted-foreground">No validation results are available from the API yet.</p><Link to={`/validations/${id}/progress`} className="text-primary underline text-sm">View Progress</Link></div>
+  if (!results || !overview) return <section className="mx-auto max-w-3xl rounded-2xl border bg-card p-6">
+    <h1 className="text-xl font-semibold">{t('No completed findings for this validation')}</h1>
+    <p className="mt-3 text-sm leading-7 text-muted-foreground">
+      {validationMeta?.status === 'failed'
+        ? t('This validation attempt failed, so no confirmed results were generated. Open its progress page to see the recorded cause. You may start a new assessment independently.')
+        : t('No result record is currently available. Open progress to check execution status; do not assume the scan succeeded.')}
+    </p>
+    <div className="mt-4 flex flex-wrap gap-3">
+      <Link to={`/validations/${id}/progress`} className="rounded-xl border px-4 py-2 text-sm font-semibold">{t('View progress and error')}</Link>
+      <Link to="/assess" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">{t('New independent assessment')}</Link>
+    </div>
+  </section>
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-4">

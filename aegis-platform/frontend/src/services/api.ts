@@ -15,7 +15,17 @@ export const api = axios.create({
 
 const platformApi = axios.create({ baseURL: configuredApiUrl ? configuredApiUrl.replace(/\/api\/v1$/, '') : (import.meta.env.DEV ? 'http://localhost:8000' : ''), timeout: 10000, withCredentials: true })
 
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => config, (error) => Promise.reject(error))
+// API contracts sometimes return fully prefixed paths; our Axios instance
+// already points at /api/v1. Normalize once at the boundary (never add /api/v1 twice).
+export const normalizePlatformApiPath = (path: string) =>
+  /\/api\/v1$/.test(API_BASE_URL) && (path === '/api/v1' || path.startsWith('/api/v1/'))
+    ? path.slice('/api/v1'.length) || '/'
+    : path
+
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  if (config.url) config.url = normalizePlatformApiPath(config.url)
+  return config
+}, (error) => Promise.reject(error))
 let isRefreshing = false
 let failedQueue: Array<{ resolve: (value: unknown) => void; reject: (reason: unknown) => void }> = []
 const processQueue = (error: Error | null) => { failedQueue.forEach((prom) => error ? prom.reject(error) : prom.resolve(true)); failedQueue = [] }

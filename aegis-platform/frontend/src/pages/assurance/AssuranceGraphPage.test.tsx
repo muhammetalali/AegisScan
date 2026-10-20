@@ -20,7 +20,7 @@ describe('live assurance page smoke regression', () => {
     })
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<QueryClientProvider client={client}><AssuranceGraphPage /></QueryClientProvider>)
-    expect(await screen.findByRole('heading', { name: 'Unified Assurance Graph' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: /Unified Assurance Graph|رسم العلاقات الأمنية الموحّد/ })).toBeTruthy()
     expect(screen.getByText('Nmap engine')).toBeTruthy()
     expect(screen.getAllByText('Lab check').length).toBeGreaterThan(0)
     await waitFor(() => expect(api.get).toHaveBeenCalledWith('/assurance/graph'))

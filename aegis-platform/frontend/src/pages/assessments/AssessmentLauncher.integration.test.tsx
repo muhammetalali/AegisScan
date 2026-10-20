@@ -45,7 +45,7 @@ describe('single target input selects existing assessment mode and respects gran
     ['192.168.49.33/24','network'],
   ])('submits %s to the existing backend with mode %s',async(target,mode)=>{
     renderLauncher()
-    await screen.findByText(/Authorized lab /)
+    await screen.findByRole('heading', { name: /Start a new assessment|بدء فحص جديد/ })
     const input=screen.getByPlaceholderText('192.168.49.0/24')
     fireEvent.change(input,{target:{value:target}})
     fireEvent.click(screen.getByText('Start Assessment'))
@@ -60,7 +60,7 @@ describe('single target input selects existing assessment mode and respects gran
       throw Error('Unexpected '+path)
     })
     renderLauncher()
-    await screen.findByText(/Authorized lab /)
+    await screen.findByRole('heading', { name: /Start a new assessment|بدء فحص جديد/ })
     fireEvent.change(screen.getByPlaceholderText('192.168.49.0/24'),{target:{value:'https://internal.example'}})
     fireEvent.click(screen.getByText('Start Assessment'))
     const {toast}=await import('sonner')
