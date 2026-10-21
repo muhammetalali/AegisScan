@@ -223,7 +223,7 @@ def test_e2e_fixture_bootstrap_uses_scoped_roles_and_never_prints_passwords(monk
     def fake_run(argv, **kwargs):
         captured["argv"] = argv
         captured["input_text"] = kwargs.get("input_text", "")
-        return SimpleNamespace(stdout='{"actor_id":"a-1","approver_id":"b-1"}\n')
+        return SimpleNamespace(stdout='{"actor_id":"a-1","approver_id":"b-1","project_id":"p-1","organization_id":"o-1","approver_membership_id":"m-1"}\n')
 
     monkeypatch.setattr(ops, "_run", fake_run)
     fixture = ops._provision_e2e_fixture(
@@ -241,6 +241,19 @@ def test_e2e_fixture_bootstrap_uses_scoped_roles_and_never_prints_passwords(monk
     assert "role=UserRole.SECURITY_MANAGER" in script
     assert "role=UserRole.VIEWER" in script
     assert "stale_release_e2e_identity_deactivated" in script
+    assert "release-e2e-managed-actor@aegisscan.local" in script
+    assert "release-e2e-managed-approver@aegisscan.local" in script
+    assert "User.objects.get_or_create" in script
+    assert "Project.objects.get_or_create" in script
+    assert "Organization.objects.get_or_create" in script
+    assert "TenantProject.objects.get_or_create" in script
+    assert "OrganizationMembership.objects.get_or_create" in script
+    assert "user.set_password(password)" in script
+    assert "User.objects.create_user" not in script
+    assert "Project.objects.create(" not in script
+    assert fixture["project_id"] == "p-1"
+    assert fixture["organization_id"] == "o-1"
+    assert fixture["approver_membership_id"] == "m-1"
     assert fixture["actor_password"] in script
     assert fixture["actor_password"] not in captured.get("stdout", "")
 
@@ -263,3 +276,39 @@ def test_production_e2e_target_never_pulls_an_unpinned_registry_fixture():
     assert "image: mirror.gcr.io/library/nginx:1.30.5-alpine" in target
     assert "pull_policy: never" in target
     assert "nginx:alpine" not in target
+
+
+def test_bounded_fixture_rotates_secrets_without_new_identity_or_project(monkeypatch, tmp_path):
+    """A second release reuses exactly the managed identities and project references."""
+    env_file = tmp_path / "production.env"
+    env_file.write_text("X=1\n")
+    calls = []
+    def fake_run(argv, **kwargs):
+        calls.append(kwargs["input_text"])
+        return SimpleNamespace(stdout=json.dumps({
+            "actor_id": "fixed-actor", "approver_id": "fixed-approver",
+            "project_id": "fixed-project", "organization_id": "fixed-org",
+            "approver_membership_id": "fixed-membership",
+        }) + "\n")
+    monkeypatch.setattr(ops, "_run", fake_run)
+    first = ops._provision_e2e_fixture(env_file, "a" * 40, "172.31.0.9", environment={})
+    second = ops._provision_e2e_fixture(env_file, "b" * 40, "172.31.0.9", environment={})
+    for key in ("actor_id", "approver_id", "actor_email", "approver_email",
+                "project_id", "organization_id", "approver_membership_id"):
+        assert first[key] == second[key], key
+    assert first["actor_password"] != second["actor_password"]
+    assert first["approver_password"] != second["approver_password"]
+    assert first["release_sha"] != second["release_sha"]
+    assert len(calls) == 2
+    assert all("Project.objects.get_or_create" in script for script in calls)
+    assert all("user.set_password(password)" in script for script in calls)
+    assert all("release_e2e_identity_rotated" in script for script in calls)
+
+
+def test_managed_fixture_rejects_incomplete_production_tenant_references(monkeypatch, tmp_path):
+    env_file = tmp_path / "production.env"
+    env_file.write_text("X=1\n")
+    monkeypatch.setattr(ops, "_run", lambda *args, **kwargs: SimpleNamespace(
+        stdout=json.dumps({"actor_id": "a", "approver_id": "b"}) + "\n"))
+    with pytest.raises(ops.OperationalAcceptanceError, match="bounded identity/tenant references"):
+        ops._provision_e2e_fixture(env_file, "a" * 40, "172.31.0.9", environment={})
