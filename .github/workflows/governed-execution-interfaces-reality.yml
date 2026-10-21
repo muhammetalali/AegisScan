@@ -11,6 +11,10 @@ name: Governed Execution Interfaces Reality
       - 'aegis-platform/frontend/src/contracts/api.ts'
       - 'aegis-platform/frontend/src/pages/scans/ScanPage.tsx'
       - 'aegis-platform/frontend/src/pages/scans/ScanPage.test.tsx'
+      - 'aegis-platform/frontend/src/pages/reports/Reports.tsx'
+      - 'aegis-platform/frontend/src/pages/reports/Reports.test.tsx'
+      - 'aegis-platform/frontend/src/components/layout/Layout.tsx'
+      - 'aegis-platform/frontend/src/index.css'
       - 'aegis-platform/frontend/scripts/ui-contract-audit.mjs'
       - 'aegis-platform/e2e/external_black_box_e2e.py'
       - 'aegis-platform/e2e/governed_interfaces_e2e.py'
@@ -27,6 +31,10 @@ name: Governed Execution Interfaces Reality
       - 'aegis-platform/frontend/src/contracts/api.ts'
       - 'aegis-platform/frontend/src/pages/scans/ScanPage.tsx'
       - 'aegis-platform/frontend/src/pages/scans/ScanPage.test.tsx'
+      - 'aegis-platform/frontend/src/pages/reports/Reports.tsx'
+      - 'aegis-platform/frontend/src/pages/reports/Reports.test.tsx'
+      - 'aegis-platform/frontend/src/components/layout/Layout.tsx'
+      - 'aegis-platform/frontend/src/index.css'
       - 'aegis-platform/frontend/scripts/ui-contract-audit.mjs'
       - 'aegis-platform/e2e/external_black_box_e2e.py'
       - 'aegis-platform/e2e/governed_interfaces_e2e.py'
@@ -78,7 +86,7 @@ jobs:
           npm run build
       - name: Prove governed scan picker regression tests
         working-directory: aegis-platform/frontend
-        run: npx vitest run src/pages/scans/ScanPage.test.tsx
+        run: npx vitest run src/pages/scans/ScanPage.test.tsx src/pages/reports/Reports.test.tsx
       - name: Prove no direct UI execution authority regression
         shell: bash
         run: |
