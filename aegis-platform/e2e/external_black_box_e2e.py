@@ -172,6 +172,32 @@ def prove_api_key_consumer(actor:requests.Session,project_id:str,unique:str)->No
    http(actor,'DELETE',f'{DJANGO_URL}/auth/api-keys/{key_id}/',
     'API key fixture cleanup',{204},headers=headers,timeout=20)
 
+def resolve_e2e_project(session:requests.Session,headers:dict[str,str],unique:str)->str:
+ """Use the private managed production fixture, preserving the existing CI project-creation path."""
+ if E2E_PROJECT_ID:
+  project=http(session,'GET',f'{DJANGO_URL}/projects/{E2E_PROJECT_ID}/','Bounded production project retrieval',{200},timeout=20)
+  if not isinstance(project,dict) or str(project.get('id'))!=E2E_PROJECT_ID:
+   raise RuntimeError('Pre-provisioned E2E project identity mismatch')
+  print('E2E_BOUNDED_PROJECT_REUSED=PASS',flush=True)
+  return E2E_PROJECT_ID
+ project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},
+  json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},
+  headers=headers,timeout=20)
+ return str(project['id'])
+
+
+def resolve_e2e_organization(session:requests.Session,unique:str)->str:
+ """Never create a fresh tenant when a provisioned managed organization is available."""
+ if E2E_GOV_ORG_ID:
+  print('E2E_BOUNDED_TENANT_REUSED=PASS',flush=True)
+  return E2E_GOV_ORG_ID
+ organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},
+  json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
+ if not isinstance(organization,dict) or not organization.get('id'):
+  raise RuntimeError(f'Tenant creation did not return id: {organization!r}')
+ return str(organization['id'])
+
+
 def main()->int:
  if CLEANUP_ONLY:
   if not all([E2E_EMAIL,E2E_PASSWORD,E2E_APPROVER_EMAIL,E2E_APPROVER_PASSWORD]):
@@ -193,22 +219,10 @@ def main()->int:
  csrf_token=csrf(session); headers['X-CSRFToken']=csrf_token
  if CAPACITY_MODE: print('CAPACITY_ACTOR_AUTH=PREPROVISIONED_JWT')
  else: http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)
- if E2E_PROJECT_ID:
-  project=http(session,'GET',f'{DJANGO_URL}/projects/{E2E_PROJECT_ID}/','Bounded production project retrieval',{200},timeout=20)
-  if not isinstance(project,dict) or str(project.get('id'))!=E2E_PROJECT_ID:raise RuntimeError('Pre-provisioned E2E project identity mismatch')
-  project_id=E2E_PROJECT_ID
-  print('E2E_BOUNDED_PROJECT_REUSED=PASS',flush=True)
- else:
-  project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20); project_id=project['id']
+ project_id=resolve_e2e_project(session,headers,unique)
  if API_KEY_ACCEPTANCE:prove_api_key_consumer(session,str(project_id),unique)
  reports_data=http(session,'GET',f'{API_V1}/reports/','Authenticated report listing',{200},params={'project_id':project_id,'limit':100},timeout=20); collection(reports_data,'Authenticated report listing'); print('REPORT_LISTING=PASS')
- if E2E_GOV_ORG_ID:
-  organization_id=E2E_GOV_ORG_ID
-  print('E2E_BOUNDED_TENANT_REUSED=PASS',flush=True)
- else:
-  created_organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
-  if not isinstance(created_organization,dict) or not created_organization.get('id'):raise RuntimeError(f'Tenant creation did not return id: {created_organization!r}')
-  organization_id=str(created_organization['id'])
+ organization_id=resolve_e2e_organization(session,unique)
  approver_membership_id=E2E_APPROVER_MEMBERSHIP_ID
  if not approver_membership_id:
   membership=http(session,'POST',f'{API_V1}/enterprise/organizations/{organization_id}/members','Governance approver organization membership',{201},json={'email':approver_email,'role':'admin'},timeout=20)
