@@ -85,3 +85,14 @@ async def test_nmap_rejects_unsupported_asset_before_creating_any_scan(monkeypat
             user={'user_id': 'owner-1'},
         )
     assert rejected.value.status_code == 409
+
+
+def test_saved_nmap_observation_host_projection_rejects_non_ip_data():
+    from fastapi_app.routers.vulnerabilities import _safe_observation_ip
+
+    assert _safe_observation_ip({'ip': '192.168.49.128', 'port': 21}) == '192.168.49.128'
+    assert _safe_observation_ip({'observation_ip': '192.168.49.137'}) == '192.168.49.137'
+    assert _safe_observation_ip({'ip': 'not-an-address'}) is None
+    assert _safe_observation_ip({'ip': '192.168.49.128;unexpected'}) is None
+    assert _safe_observation_ip('not a saved observation') is None
+    assert _safe_observation_ip({}) is None
