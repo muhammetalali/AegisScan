@@ -67,4 +67,37 @@ describe('governed Scan registry project picker', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run capability' }).hasAttribute('disabled')).toBe(false))
   })
 
+  it('shows an actionable error and safely retries a failed capability plan', async () => {
+    let attempts = 0
+    api.post.mockReset()
+    api.get.mockImplementation(async (path: string) => {
+      if (path === '/scans/?limit=100') return []
+      if (path === '/projects/') return { count: 1, next: null, results: [actual] }
+      if (path === '/assets/') return [{
+        id: 'asset-cidr', project_id: 'real-1', name: '192.168.49.0/24',
+        type: 'network_range', is_active: true, configuration: { cidr: '192.168.49.0/24' },
+      }]
+      if (path === '/capabilities/plan/asset-cidr') {
+        attempts += 1
+        if (attempts === 1) throw new Error('Temporary capability plan failure')
+        return {
+          policy_version: 'capability-execution.v4',
+          asset_type: 'network_range', depth: 'standard',
+          total: 1, ready: 1, pending_packaging: 0, pending_provider_runtime: 0,
+          plan: [{
+            capability_id: 'network.nmap', tool: 'nmap',
+            category: 'network-reconnaissance', risk: 'active-low',
+            execution_ready: true, reason: 'packaged and eligible for governed execution', order: 1,
+          }],
+        }
+      }
+      throw new Error('Unexpected request: ' + path)
+    })
+    mount('/scan?project_id=real-1&asset_id=asset-cidr')
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('Unable to load available scan capabilities.'))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('option', { name: /network\.nmap/ })).toBeTruthy()
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
 })
