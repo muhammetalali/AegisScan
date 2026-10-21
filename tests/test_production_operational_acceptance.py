@@ -313,3 +313,54 @@ def test_managed_fixture_rejects_incomplete_production_tenant_references(monkeyp
         stdout=json.dumps({"actor_id": "a", "approver_id": "b"}) + "\n"))
     with pytest.raises(ops.OperationalAcceptanceError, match="bounded identity/tenant references"):
         ops._provision_e2e_fixture(env_file, "a" * 40, "172.31.0.9", environment={})
+
+
+def test_external_e2e_reuses_managed_project_and_tenant_without_creation(monkeypatch):
+    """The production-only managed fixture must never POST an extra project or tenant."""
+    import importlib.util
+    src = ROOT / "aegis-platform/e2e/external_black_box_e2e.py"
+    spec = importlib.util.spec_from_file_location("external_e2e_managed", src)
+    assert spec and spec.loader
+    e2e = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(e2e)
+    monkeypatch.setattr(e2e, "E2E_PROJECT_ID", "managed-project")
+    monkeypatch.setattr(e2e, "E2E_GOV_ORG_ID", "managed-org")
+    calls = []
+    def fake_http(session, method, url, label, expected, **kwargs):
+        calls.append((method, url, expected))
+        if method == "GET" and url.endswith("/projects/managed-project/"):
+            return {"id": "managed-project", "owner": "managed-actor"}
+        raise AssertionError("Unexpected mutation or API call: " + method + " " + url)
+    monkeypatch.setattr(e2e, "http", fake_http)
+    assert e2e.resolve_e2e_project(object(), {}, "run") == "managed-project"
+    assert e2e.resolve_e2e_organization(object(), "run") == "managed-org"
+    assert calls == [("GET", e2e.DJANGO_URL + "/projects/managed-project/", {200})]
+
+
+def test_external_e2e_preserves_ci_creation_mode_and_rejects_wrong_managed_project(monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "external_e2e_ci", ROOT / "aegis-platform/e2e/external_black_box_e2e.py")
+    assert spec and spec.loader
+    e2e = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(e2e)
+    calls = []
+    def fake_http(session, method, url, label, expected, **kwargs):
+        calls.append((method, url))
+        if method == "POST" and url.endswith("/projects/"):
+            return {"id": "fresh-ci-project"}
+        if method == "POST" and url.endswith("/enterprise/organizations"):
+            return {"id": "fresh-ci-org"}
+        if method == "GET":
+            return {"id": "WRONG-ID"}
+        raise AssertionError("Unexpected API request")
+    monkeypatch.setattr(e2e, "http", fake_http)
+    monkeypatch.setattr(e2e, "E2E_PROJECT_ID", "")
+    monkeypatch.setattr(e2e, "E2E_GOV_ORG_ID", "")
+    assert e2e.resolve_e2e_project(object(), {}, "run") == "fresh-ci-project"
+    assert e2e.resolve_e2e_organization(object(), "run") == "fresh-ci-org"
+    assert [method for method, _ in calls] == ["POST", "POST"]
+    monkeypatch.setattr(e2e, "E2E_PROJECT_ID", "managed-project")
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        e2e.resolve_e2e_project(object(), {}, "run")
+
