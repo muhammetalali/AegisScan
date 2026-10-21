@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, AlertCircle, ArrowUpRight, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
@@ -228,8 +229,8 @@ export const ScanPage = () => {
         </section>
       )}
 
-      {open && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4 backdrop-blur-sm">
+      {open && createPortal(
+        <div role="dialog" aria-modal="true" aria-label={t('New scan')} className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4 backdrop-blur-sm">
           <div className="enterprise-card w-full max-w-xl rounded-3xl p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -343,7 +344,8 @@ export const ScanPage = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
