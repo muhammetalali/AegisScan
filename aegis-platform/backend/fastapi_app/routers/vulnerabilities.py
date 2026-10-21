@@ -158,6 +158,18 @@ def _serialize_confirmation(
     )
 
 
+def _safe_observation_ip(raw_data: object) -> Optional[str]:
+    """Expose only a syntactically valid IP from saved per-service observations."""
+    record = raw_data if isinstance(raw_data, dict) else {}
+    candidate = record.get('ip') or record.get('observation_ip')
+    if not candidate:
+        return None
+    try:
+        return str(ip_address(str(candidate)))
+    except ValueError:
+        return None
+
+
 @sync_to_async
 def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
     config = (vulnerability.asset.configuration or {}) if vulnerability.asset else {}
@@ -168,12 +180,7 @@ def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
     else:
         asset_target = config.get('host') or config.get('ip') or config.get('domain') or vulnerability.url or None
 
-    raw_observation = vulnerability.raw_data if isinstance(vulnerability.raw_data, dict) else {}
-    claimed_ip = raw_observation.get('ip') or raw_observation.get('observation_ip')
-    try:
-        observation_ip = str(ip_address(str(claimed_ip))) if claimed_ip else None
-    except ValueError:
-        observation_ip = None
+    observation_ip = _safe_observation_ip(vulnerability.raw_data)
 
     return VulnerabilityResponse(
         id=str(vulnerability.id), scan_id=str(vulnerability.scan_id), project_id=str(vulnerability.project_id),
