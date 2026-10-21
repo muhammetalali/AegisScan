@@ -351,11 +351,15 @@ def _provision_e2e_fixture(
     *,
     environment: dict[str, str],
 ) -> dict[str, str]:
-    unique = uuid.uuid4().hex[:16]
-    actor_email = f"release-e2e-{unique}@aegisscan.local"
-    actor_password = f"Aegis-E2E-{unique}-!9-{secrets.token_urlsafe(24)}"
-    approver_email = f"release-e2e-approver-{unique}@aegisscan.local"
-    approver_password = f"Aegis-E2E-Approver-{unique}-!7-{secrets.token_urlsafe(24)}"
+    """Rotate one bounded pair and one dedicated test tenant instead of accumulating new identities/projects.
+
+    The E2E runs still create distinct scans, findings, evidence and audit records.
+    Credentials are single-release, transported only in the existing 0600 fixture.
+    """
+    actor_email = "release-e2e-managed-actor@aegisscan.local"
+    approver_email = "release-e2e-managed-approver@aegisscan.local"
+    actor_password = f"Aegis-E2E-{secrets.token_urlsafe(32)}-!9"
+    approver_password = f"Aegis-E2E-Approver-{secrets.token_urlsafe(32)}-!7"
 
     bootstrap = f"""
 import json
@@ -363,6 +367,8 @@ from django.db import transaction
 from django_project.audit.models import AuditLog
 from django_project.audit.services import append_audit
 from django_project.users.models import User, UserRole
+from django_project.projects.models import Project
+from enterprise.models import Organization, OrganizationMembership, TenantProject
 
 actor_email = {actor_email!r}
 actor_password = {actor_password!r}
@@ -371,13 +377,14 @@ approver_password = {approver_password!r}
 release_sha = {release_sha!r}
 
 with transaction.atomic():
+    # Previously issued transient identities are retained (including their
+    # linked immutable evidence) but can never remain logged in.
     stale = User.objects.filter(
         email__startswith='release-e2e-',
         email__endswith='@aegisscan.local',
         is_active=True,
     )
     for stale_user in stale:
-        old_role = stale_user.role
         stale_user.is_active = False
         stale_user.save(update_fields=['is_active'])
         append_audit(
@@ -386,59 +393,81 @@ with transaction.atomic():
             resource_type='User',
             resource_id=str(stale_user.id),
             resource_repr=stale_user.email,
-            changes={{'is_active': {{'from': True, 'to': False}}, 'role': old_role}},
-            metadata={{
-                'event': 'stale_release_e2e_identity_deactivated',
-                'release_sha': release_sha,
-            }},
+            changes={{'is_active': {{'from': True, 'to': False}}}},
+            metadata={{'event':'stale_release_e2e_identity_deactivated','release_sha':release_sha}},
             ip_address='127.0.0.1',
             user_agent='production-operational-acceptance',
         )
 
-    actor = User.objects.create_user(
-        email=actor_email,
-        password=actor_password,
-        first_name='Release',
-        last_name='E2E Actor',
-        role=UserRole.SECURITY_MANAGER,
-    )
-    approver = User.objects.create_user(
-        email=approver_email,
-        password=approver_password,
-        first_name='Release',
-        last_name='E2E Approver',
-        role=UserRole.VIEWER,
-    )
-    for user, purpose in ((actor, 'actor'), (approver, 'approver')):
+    identities = []
+    for email, password, role, first, last, purpose in (
+        (actor_email, actor_password, UserRole.SECURITY_MANAGER, 'Release', 'Managed Actor', 'actor'),
+        (approver_email, approver_password, UserRole.VIEWER, 'Release', 'Managed Approver', 'approver'),
+    ):
+        user, created = User.objects.get_or_create(
+            email=email, defaults={{'role':role,'first_name':first,'last_name':last,'is_active':False}}
+        )
+        if user.role != role or user.is_superuser or user.is_staff or user.is_company_owner:
+            raise RuntimeError('Reserved production E2E identity has unsafe privileges')
+        user.set_password(password)
+        user.is_active = True
+        user.save(update_fields=['password','is_active'])
         append_audit(
-            action=AuditLog.Action.USER_CREATE,
+            action=AuditLog.Action.USER_CREATE if created else AuditLog.Action.USER_UPDATE,
             result=AuditLog.Result.SUCCESS,
             resource_type='User',
             resource_id=str(user.id),
             resource_repr=user.email,
-            metadata={{
-                'event': 'release_e2e_identity_created',
-                'purpose': purpose,
-                'release_sha': release_sha,
-            }},
+            changes={{'is_active':{{'from':False,'to':True}}}},
+            metadata={{'event':'release_e2e_identity_created' if created else 'release_e2e_identity_rotated',
+                      'purpose':purpose,'release_sha':release_sha}},
             ip_address='127.0.0.1',
             user_agent='production-operational-acceptance',
         )
+        identities.append(user)
+    actor, approver = identities
+
+    project, project_created = Project.objects.get_or_create(
+        slug='release-e2e-managed-acceptance',
+        defaults={{'name':'External E2E Managed Acceptance','owner':actor,
+                  'environment':Project.Environment.DEVELOPMENT,
+                  'description':'Bounded repeatable governed black-box production fixture'}}
+    )
+    if project.owner_id != actor.pk or project.status != Project.Status.ACTIVE:
+        raise RuntimeError('Reserved E2E project has unexpected owner/status')
+    org, org_created = Organization.objects.get_or_create(
+        slug='release-e2e-managed-tenant',
+        defaults={{'name':'External E2E Managed Tenant','owner':actor}}
+    )
+    if org.owner_id != actor.pk or not org.is_active:
+        raise RuntimeError('Reserved E2E tenant has unexpected owner/status')
+    link, _ = TenantProject.objects.get_or_create(
+        project=project, defaults={{'organization':org}})
+    if link.organization_id != org.pk:
+        raise RuntimeError('Reserved E2E project is linked to another organization')
+    owner_membership, _ = OrganizationMembership.objects.get_or_create(
+        organization=org,user=actor,
+        defaults={{'role':OrganizationMembership.Role.OWNER,'is_active':True}})
+    if owner_membership.role != OrganizationMembership.Role.OWNER or not owner_membership.is_active:
+        raise RuntimeError('Reserved E2E tenant owner membership is inconsistent')
+    approver_membership, _ = OrganizationMembership.objects.get_or_create(
+        organization=org,user=approver,
+        defaults={{'role':OrganizationMembership.Role.ADMIN,'is_active':True}})
+    if approver_membership.role != OrganizationMembership.Role.ADMIN or not approver_membership.is_active:
+        raise RuntimeError('Reserved E2E approver membership is inconsistent')
+
 print(json.dumps({{
     'actor_id': str(actor.id),
     'approver_id': str(approver.id),
+    'project_id': str(project.id),
+    'organization_id': str(org.id),
+    'approver_membership_id': str(approver_membership.id),
+    'project_created': project_created,
+    'organization_created': org_created,
 }}, sort_keys=True))
 """
     result = _run(
-        _compose(
-            env_file,
-            "exec",
-            "-T",
-            "django",
-            "python",
-            "manage.py",
-            "shell",
-        ),
+        _compose(env_file, "exec", "-T", "django", "python", "manage.py", "shell"),
         timeout=60,
         input_text=bootstrap,
         env=environment,
@@ -450,10 +479,11 @@ print(json.dumps({{
         identity = json.loads(lines[-1])
     except json.JSONDecodeError as exc:
         raise OperationalAcceptanceError("production E2E identity bootstrap returned invalid JSON") from exc
-    if not identity.get("actor_id") or not identity.get("approver_id"):
-        raise OperationalAcceptanceError("production E2E identity bootstrap did not return both identities")
+    required = ("actor_id", "approver_id", "project_id", "organization_id", "approver_membership_id")
+    if any(not identity.get(key) for key in required):
+        raise OperationalAcceptanceError("production E2E fixture is missing bounded identity/tenant references")
 
-    fixture = {
+    return {
         "schema": "aegisscan.production-e2e-fixture.v1",
         "release_sha": release_sha,
         "actor_id": str(identity["actor_id"]),
@@ -462,9 +492,11 @@ print(json.dumps({{
         "approver_id": str(identity["approver_id"]),
         "approver_email": approver_email,
         "approver_password": approver_password,
+        "project_id": str(identity["project_id"]),
+        "organization_id": str(identity["organization_id"]),
+        "approver_membership_id": str(identity["approver_membership_id"]),
         "target": target,
     }
-    return fixture
 
 
 def _persist_e2e_fixture_for_deploy_user(fixture: dict[str, str]) -> str:
