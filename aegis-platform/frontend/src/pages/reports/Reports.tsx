@@ -5,18 +5,17 @@ import { Download, FileText, Plus, RefreshCw, ShieldCheck, X } from 'lucide-reac
 import { apiHelpers } from '@/services/api'
 import { useLanguageStore } from '@/stores/languageStore'
 import { toast } from 'sonner'
+import { loadAssessmentProjects } from '@/pages/assessments/AssessmentEntry'
 
 type Report={id:string;project_id:string;scan_id?:string|null;title:string;report_type:string;format:string;status:string;file_size:number;generated_by:string;created_at:string;completed_at?:string|null}
 type Project={id:string;name:string}
-type ProjectsResponse=Project[]|{items?:Project[];results?:Project[]}
-const unwrapProjects=(data:ProjectsResponse|undefined):Project[]=>Array.isArray(data)?data:data?.items??data?.results??[]
 
 export const Reports=()=>{
  const t=useLanguageStore(s=>s.t); const qc=useQueryClient(); const [open,setOpen]=useState(false); const [projectId,setProjectId]=useState(''); const [scanId,setScanId]=useState(''); const [title,setTitle]=useState(''); const [type,setType]=useState('full'); const [format,setFormat]=useState('pdf'); const [creating,setCreating]=useState(false)
  const reports=useQuery<Report[]>({queryKey:['reports-center'],queryFn:()=>apiHelpers.get<Report[]>('/reports/?limit=100')})
  const summary=useQuery<any>({queryKey:['reports-summary'],queryFn:()=>apiHelpers.get<any>('/dashboard/summary')})
  const risk=useQuery<any>({queryKey:['reports-risk'],queryFn:()=>apiHelpers.get<any>('/dashboard/risk-distribution')})
- const projects=useQuery<ProjectsResponse>({queryKey:['reports-projects'],queryFn:()=>apiHelpers.get<ProjectsResponse>('/projects/')}); const projectItems=unwrapProjects(projects.data)
+ const projects=useQuery<Project[]>({queryKey:['reports-projects'],queryFn:loadAssessmentProjects}); const projectItems=projects.data ?? []
  const create=async()=>{if(!projectId||!title.trim())return;setCreating(true);try{await apiHelpers.post('/reports/',{project_id:projectId,scan_id:scanId||null,title:title.trim(),description:'',report_type:type,format,template_id:type});await qc.invalidateQueries({queryKey:['reports-center']});setOpen(false);setTitle('');setScanId('');toast.success(t('Report created successfully'))}catch(e:any){toast.error(e?.response?.data?.detail||e?.message||t('Unable to create report'))}finally{setCreating(false)}}
  const download=(id:string)=>{window.open(`/api/v1/reports/${id}/download`,'_blank','noopener,noreferrer')}
  return <div className="space-y-6 pb-10">
