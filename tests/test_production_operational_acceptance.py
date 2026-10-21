@@ -329,7 +329,10 @@ def test_external_e2e_reuses_managed_project_and_tenant_without_creation(monkeyp
     def fake_http(session, method, url, label, expected, **kwargs):
         calls.append((method, url, expected))
         if method == "GET" and url.endswith("/projects/managed-project/"):
-            return {"id": "managed-project", "owner": "managed-actor"}
+            return {"project": {"id": "managed-project",
+                                "slug": "release-e2e-managed-acceptance",
+                                "status": "active", "owner": "managed-actor"},
+                    "assets": [], "validations": [], "findings": []}
         raise AssertionError("Unexpected mutation or API call: " + method + " " + url)
     monkeypatch.setattr(e2e, "http", fake_http)
     assert e2e.resolve_e2e_project(object(), {}, "run") == "managed-project"
@@ -352,7 +355,9 @@ def test_external_e2e_preserves_ci_creation_mode_and_rejects_wrong_managed_proje
         if method == "POST" and url.endswith("/enterprise/organizations"):
             return {"id": "fresh-ci-org"}
         if method == "GET":
-            return {"id": "WRONG-ID"}
+            return {"project": {"id": "WRONG-ID",
+                                "slug": "release-e2e-managed-acceptance",
+                                "status": "active"}}
         raise AssertionError("Unexpected API request")
     monkeypatch.setattr(e2e, "http", fake_http)
     monkeypatch.setattr(e2e, "E2E_PROJECT_ID", "")
@@ -364,3 +369,31 @@ def test_external_e2e_preserves_ci_creation_mode_and_rejects_wrong_managed_proje
     with pytest.raises(RuntimeError, match="identity mismatch"):
         e2e.resolve_e2e_project(object(), {}, "run")
 
+
+
+
+@pytest.mark.parametrize("payload", [
+    {"id": "managed-project", "slug": "release-e2e-managed-acceptance", "status": "active"},
+    {"project": {"id": "WRONG-ID", "slug": "release-e2e-managed-acceptance", "status": "active"}},
+    {"project": {"id": "managed-project", "slug": "wrong-slug", "status": "active"}},
+    {"project": {"id": "managed-project", "slug": "release-e2e-managed-acceptance", "status": "archived"}},
+    {"project": None},
+    {"results": [{"id": "managed-project"}]},
+])
+def test_external_e2e_managed_project_rejects_untrusted_or_incorrect_detail(payload, monkeypatch):
+    """The production-only project GET requires the actual DRF detail envelope and active pinned fixture."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "external_e2e_bad_detail", ROOT / "aegis-platform/e2e/external_black_box_e2e.py")
+    assert spec and spec.loader
+    e2e = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(e2e)
+    monkeypatch.setattr(e2e, "E2E_PROJECT_ID", "managed-project")
+    calls = []
+    def mock_http(session, method, url, label, expected, **kwargs):
+        calls.append(method)
+        return payload
+    monkeypatch.setattr(e2e, "http", mock_http)
+    with pytest.raises(RuntimeError, match="Pre-provisioned E2E project identity mismatch"):
+        e2e.resolve_e2e_project(object(), {}, "run")
+    assert calls == ["GET"]
