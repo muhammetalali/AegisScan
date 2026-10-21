@@ -19,6 +19,7 @@ const EXTRA_AR: Catalog = {
     'All severity': 'كل مستويات الشدة', 'Any status': 'أي حالة', 'Sort: Severity': 'ترتيب: الشدة', 'Sort: Confidence': 'ترتيب: الثقة',
     'No findings': 'لا توجد ثغرات', 'Run a real scan or validation to populate the findings registry.': 'شغّل فحصًا أو تحققًا حقيقيًا لملء سجل الثغرات.',
     'Results are unavailable': 'النتائج غير متاحة', 'View execution': 'عرض التنفيذ', 'Retry': 'إعادة المحاولة',
+    'Unable to load available scan capabilities.': 'تعذر تحميل قدرات الفحص المتاحة.',
     'The validation result could not be loaded from the API. No demo or fallback data is shown.': 'تعذر تحميل نتيجة التحقق من API. لا يتم عرض بيانات تجريبية أو بديلة.',
     'Not reported': 'غير مُبلغ عنه', 'Unavailable': 'غير متاح', 'Untitled finding': 'ثغرة بدون عنوان', 'Security finding': 'ثغرة أمنية',
     'Inspect': 'فحص', 'Engines executed': 'المحركات المنفذة', 'Validation status': 'حالة التحقق',

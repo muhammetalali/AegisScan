@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, AlertCircle, ArrowUpRight, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
@@ -228,8 +229,8 @@ export const ScanPage = () => {
         </section>
       )}
 
-      {open && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4 backdrop-blur-sm">
+      {open && createPortal(
+        <div role="dialog" aria-modal="true" aria-label={t('New scan')} className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4 backdrop-blur-sm">
           <div className="enterprise-card w-full max-w-xl rounded-3xl p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -315,6 +316,14 @@ export const ScanPage = () => {
                     </option>
                   ))}
                 </select>
+                {assetId && capabilityPlan.isError ? (
+                  <div role="alert" className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-destructive/30 p-3 text-xs text-destructive">
+                    <span>{t('Unable to load available scan capabilities.')}</span>
+                    <button type="button" onClick={() => { void capabilityPlan.refetch() }} className="rounded-lg border px-3 py-1.5">
+                      {t('Retry')}
+                    </button>
+                  </div>
+                ) : null}
                 {assetId && capabilityPlan.isSuccess && readyCapabilities.length === 0 ? (
                   <p className="mt-2 text-xs text-muted-foreground">
                     {t('No governed capability is execution-ready for this asset and depth.')}
@@ -335,7 +344,8 @@ export const ScanPage = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
