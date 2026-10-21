@@ -84,7 +84,10 @@ jobs:
       - name: Prove Nmap service host projection is bounded to recorded IPs
         shell: bash
         run: |
-          docker run --rm --entrypoint python aegisscan-native-capability:ci -c '
+          docker run --rm --network none \
+            -e SECRET_KEY=isolated-ci-nmap-projection-not-production \
+            -e JWT_SECRET_KEY=isolated-ci-nmap-jwt-not-production \
+            --entrypoint python aegisscan-native-capability:ci -c '
           from fastapi_app.routers.vulnerabilities import _safe_observation_ip
           assert _safe_observation_ip({"ip": "192.168.49.128"}) == "192.168.49.128"
           assert _safe_observation_ip({"observation_ip": "192.168.49.137"}) == "192.168.49.137"
