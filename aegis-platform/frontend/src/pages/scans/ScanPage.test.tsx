@@ -100,4 +100,18 @@ describe('governed Scan registry project picker', () => {
     expect(api.post).not.toHaveBeenCalled()
   })
 
+  it('mounts the scan dialog at document body, outside route stacking contexts, and closes without scheduling', async () => {
+    api.post.mockReset()
+    mount()
+    expect(await screen.findByText('No scans available')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'New scan' }))
+    const dialog = await screen.findByRole('dialog', { name: 'New scan' })
+    expect(dialog.parentElement).toBe(document.body)
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Run capability' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
 })
