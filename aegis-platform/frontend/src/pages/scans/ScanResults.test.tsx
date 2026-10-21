@@ -102,7 +102,7 @@ describe('simple scan identity and evidence UI', () => {
     mount()
     const hosts = await screen.findAllByTitle('Observed host')
     expect(hosts.map((item) => item.textContent).sort()).toEqual(['192.168.49.128', '192.168.49.137'])
-    expect(screen.getByRole('heading', { name: '192.168.49.0/24' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: '192.168.49.0/24' })).toBeTruthy()
   })
 
 })
