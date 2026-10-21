@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from ipaddress import ip_address
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 from uuid import UUID
@@ -34,6 +35,7 @@ class VulnerabilityResponse(BaseModel):
     asset_id: Optional[str] = None
     asset_name: Optional[str] = None
     asset_target: Optional[str] = None
+    observation_ip: Optional[str] = None
     source_engine: str = ''
     title: str
     description: str
@@ -166,11 +168,19 @@ def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
     else:
         asset_target = config.get('host') or config.get('ip') or config.get('domain') or vulnerability.url or None
 
+    raw_observation = vulnerability.raw_data if isinstance(vulnerability.raw_data, dict) else {}
+    claimed_ip = raw_observation.get('ip') or raw_observation.get('observation_ip')
+    try:
+        observation_ip = str(ip_address(str(claimed_ip))) if claimed_ip else None
+    except ValueError:
+        observation_ip = None
+
     return VulnerabilityResponse(
         id=str(vulnerability.id), scan_id=str(vulnerability.scan_id), project_id=str(vulnerability.project_id),
         asset_id=str(vulnerability.asset_id) if vulnerability.asset_id else None,
         asset_name=vulnerability.asset.name if vulnerability.asset else None,
         asset_target=str(asset_target) if asset_target else None,
+        observation_ip=observation_ip,
         source_engine=source_engine, title=vulnerability.title, description=vulnerability.description,
         severity=vulnerability.severity, status=vulnerability.status, confidence=vulnerability.confidence,
         cvss_score=vulnerability.cvss_score, risk_score=vulnerability.risk_score,
