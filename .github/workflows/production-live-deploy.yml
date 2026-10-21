@@ -32,7 +32,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: aegisscan-internal-production-${{ github.sha }}
+  group: aegisscan-internal-production
   cancel-in-progress: false
 
 jobs:
@@ -300,7 +300,7 @@ jobs:
               raise SystemExit('private E2E fixture schema mismatch')
           if payload.get('release_sha') != os.environ['AEGIS_RELEASE_SHA']:
               raise SystemExit('private E2E fixture release SHA mismatch')
-          required = ('actor_email','actor_password','approver_email','approver_password','target')
+          required = ('actor_email','actor_password','approver_email','approver_password','project_id','organization_id','approver_membership_id','target')
           missing = [name for name in required if not str(payload.get(name) or '').strip()]
           if missing:
               raise SystemExit(f'private E2E fixture fields missing: {missing}')
@@ -312,6 +312,9 @@ jobs:
               handle.write(f"AEGIS_E2E_APPROVER_EMAIL={payload['approver_email']}\n")
               handle.write(f"AEGIS_E2E_APPROVER_PASSWORD={payload['approver_password']}\n")
               handle.write(f"AEGIS_E2E_TARGET={payload['target']}\n")
+              handle.write(f"AEGIS_E2E_PROJECT_ID={payload['project_id']}\n")
+              handle.write(f"AEGIS_E2E_GOV_ORG_ID={payload['organization_id']}\n")
+              handle.write(f"AEGIS_E2E_APPROVER_MEMBERSHIP_ID={payload['approver_membership_id']}\n")
               handle.write('AEGIS_E2E_EPHEMERAL_FIXTURE=true\n')
           PY
       - name: Run real internal-network black-box production E2E
