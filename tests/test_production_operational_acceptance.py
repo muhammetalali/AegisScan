@@ -238,8 +238,9 @@ def test_e2e_fixture_bootstrap_uses_scoped_roles_and_never_prints_passwords(monk
     assert len(fixture["actor_password"]) >= 24
     assert len(fixture["approver_password"]) >= 24
     script = captured["input_text"]
-    assert "role=UserRole.SECURITY_MANAGER" in script
-    assert "role=UserRole.VIEWER" in script
+    assert "UserRole.SECURITY_MANAGER" in script
+    assert "UserRole.VIEWER" in script
+    assert "if user.role != role or user.is_superuser or user.is_staff or user.is_company_owner" in script
     assert "stale_release_e2e_identity_deactivated" in script
     assert "release-e2e-managed-actor@aegisscan.local" in script
     assert "release-e2e-managed-approver@aegisscan.local" in script
