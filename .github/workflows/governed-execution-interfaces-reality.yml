@@ -13,6 +13,8 @@ name: Governed Execution Interfaces Reality
       - 'aegis-platform/frontend/src/pages/scans/ScanPage.test.tsx'
       - 'aegis-platform/frontend/src/pages/reports/Reports.tsx'
       - 'aegis-platform/frontend/src/pages/reports/Reports.test.tsx'
+      - 'aegis-platform/frontend/src/pages/scans/ScanResults.tsx'
+      - 'aegis-platform/frontend/src/pages/scans/ScanResults.test.tsx'
       - 'aegis-platform/frontend/src/components/layout/Layout.tsx'
       - 'aegis-platform/frontend/src/index.css'
       - 'aegis-platform/frontend/scripts/ui-contract-audit.mjs'
@@ -33,6 +35,8 @@ name: Governed Execution Interfaces Reality
       - 'aegis-platform/frontend/src/pages/scans/ScanPage.test.tsx'
       - 'aegis-platform/frontend/src/pages/reports/Reports.tsx'
       - 'aegis-platform/frontend/src/pages/reports/Reports.test.tsx'
+      - 'aegis-platform/frontend/src/pages/scans/ScanResults.tsx'
+      - 'aegis-platform/frontend/src/pages/scans/ScanResults.test.tsx'
       - 'aegis-platform/frontend/src/components/layout/Layout.tsx'
       - 'aegis-platform/frontend/src/index.css'
       - 'aegis-platform/frontend/scripts/ui-contract-audit.mjs'
@@ -86,7 +90,7 @@ jobs:
           npm run build
       - name: Prove governed scan picker regression tests
         working-directory: aegis-platform/frontend
-        run: npx vitest run src/pages/scans/ScanPage.test.tsx src/pages/reports/Reports.test.tsx
+        run: npx vitest run src/pages/scans/ScanPage.test.tsx src/pages/reports/Reports.test.tsx src/pages/scans/ScanResults.test.tsx
       - name: Prove no direct UI execution authority regression
         shell: bash
         run: |

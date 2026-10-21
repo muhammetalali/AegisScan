@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from ipaddress import ip_address
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 from uuid import UUID
@@ -34,6 +35,7 @@ class VulnerabilityResponse(BaseModel):
     asset_id: Optional[str] = None
     asset_name: Optional[str] = None
     asset_target: Optional[str] = None
+    observation_ip: Optional[str] = None
     source_engine: str = ''
     title: str
     description: str
@@ -156,6 +158,18 @@ def _serialize_confirmation(
     )
 
 
+def _safe_observation_ip(raw_data: object) -> Optional[str]:
+    """Expose only a syntactically valid IP from saved per-service observations."""
+    record = raw_data if isinstance(raw_data, dict) else {}
+    candidate = record.get('ip') or record.get('observation_ip')
+    if not candidate:
+        return None
+    try:
+        return str(ip_address(str(candidate)))
+    except ValueError:
+        return None
+
+
 @sync_to_async
 def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
     config = (vulnerability.asset.configuration or {}) if vulnerability.asset else {}
@@ -166,11 +180,14 @@ def _serialize(vulnerability: Vulnerability) -> VulnerabilityResponse:
     else:
         asset_target = config.get('host') or config.get('ip') or config.get('domain') or vulnerability.url or None
 
+    observation_ip = _safe_observation_ip(vulnerability.raw_data)
+
     return VulnerabilityResponse(
         id=str(vulnerability.id), scan_id=str(vulnerability.scan_id), project_id=str(vulnerability.project_id),
         asset_id=str(vulnerability.asset_id) if vulnerability.asset_id else None,
         asset_name=vulnerability.asset.name if vulnerability.asset else None,
         asset_target=str(asset_target) if asset_target else None,
+        observation_ip=observation_ip,
         source_engine=source_engine, title=vulnerability.title, description=vulnerability.description,
         severity=vulnerability.severity, status=vulnerability.status, confidence=vulnerability.confidence,
         cvss_score=vulnerability.cvss_score, risk_score=vulnerability.risk_score,

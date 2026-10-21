@@ -87,4 +87,22 @@ describe('simple scan identity and evidence UI', () => {
     expect(screen.queryByText(scan.name)).toBeNull()
     expect(screen.queryByText('192.168.49.137')).toBeNull()
   })
+  it('shows each saved Nmap service with its own observed host on a multi-host CIDR', async () => {
+    api.get.mockImplementation(async (path: string) => {
+      if (path === '/scans/scan-137') return { ...scan, scan_type: 'network', findings_count: 2 }
+      if (path === '/assets/asset-137') return { id: 'asset-137', name: '192.168.49.0/24', type: 'network_range', configuration: { cidr: '192.168.49.0/24' } }
+      if (path.startsWith('/vulnerabilities/')) return [
+        { ...findings[0], id: 'finding-128', observation_ip: '192.168.49.128' },
+        { ...findings[0], id: 'finding-137', observation_ip: '192.168.49.137' },
+      ]
+      if (path.startsWith('/evidence/')) return evidence
+      if (path.includes('/engine-executions')) return executions
+      throw new Error('Unexpected API request: ' + path)
+    })
+    mount()
+    const hosts = await screen.findAllByTitle('Observed host')
+    expect(hosts.map((item) => item.textContent).sort()).toEqual(['192.168.49.128', '192.168.49.137'])
+    expect(await screen.findByRole('heading', { name: '192.168.49.0/24' })).toBeTruthy()
+  })
+
 })

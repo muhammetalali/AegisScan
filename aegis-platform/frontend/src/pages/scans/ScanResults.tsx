@@ -7,7 +7,7 @@ import { cn } from '@/utils/cn'
 
 type Scan = { id: string; asset_id?: string | null; project_id: string; name: string; scan_type: string; status: string; progress: number; current_phase: string; security_score: number; risk_level: string; findings_count: number; created_at: string; completed_at?: string | null }
 type Asset = { id: string; name: string; type: string; configuration: Record<string, unknown> }
-type Finding = { id: string; title: string; severity: string; status: string; asset_name?: string | null; source_engine?: string | null; risk_score?: number | null }
+type Finding = { id: string; title: string; severity: string; status: string; observation_ip?: string | null; asset_name?: string | null; source_engine?: string | null; risk_score?: number | null }
 type Evidence = { id: string; source: string; evidence_type: string; target?: string | null; sha256: string; collected_at: string; finding_id?: string | null }
 type Execution = { id: string; engine: string; status: string; progress: number; findings_found: number; evidences_collected: number }
 
@@ -106,6 +106,7 @@ export const ScanResults = () => {
               <Link key={finding.id} to={'/vulnerabilities/' + finding.id} className="block rounded-xl border p-3 transition-colors hover:bg-muted/30">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={cn('rounded-full border px-2 py-1 text-xs font-semibold', tone(finding.severity))}>{finding.severity}</span>
+                  {finding.observation_ip ? <span dir="ltr" className="rounded-md bg-muted px-2 py-1 font-mono text-xs" title={t('Observed host')}>{finding.observation_ip}</span> : null}
                   <span className="font-semibold">{finding.title}</span>
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">{finding.source_engine || t('Not reported')} · {finding.status}</div>
