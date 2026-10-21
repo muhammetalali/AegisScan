@@ -315,6 +315,14 @@ export const ScanPage = () => {
                     </option>
                   ))}
                 </select>
+                {assetId && capabilityPlan.isError ? (
+                  <div role="alert" className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-destructive/30 p-3 text-xs text-destructive">
+                    <span>{t('Unable to load available scan capabilities.')}</span>
+                    <button type="button" onClick={() => { void capabilityPlan.refetch() }} className="rounded-lg border px-3 py-1.5">
+                      {t('Retry')}
+                    </button>
+                  </div>
+                ) : null}
                 {assetId && capabilityPlan.isSuccess && readyCapabilities.length === 0 ? (
                   <p className="mt-2 text-xs text-muted-foreground">
                     {t('No governed capability is execution-ready for this asset and depth.')}
