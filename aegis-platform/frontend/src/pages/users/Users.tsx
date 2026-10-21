@@ -26,11 +26,14 @@ export const Users = () => {
   const canManageEmployees = owner || ['user.create', 'user.update', 'user.delete'].some(
     grant => actor?.permissions?.includes(grant)
   )
-  const usersQuery = useQuery({ queryKey:['audit-users'], queryFn:()=>apiHelpers.get<any>('/audit/users'), enabled: tab==='users', retry:false })
-  const teamsQuery = useQuery({ queryKey:['audit-teams'], queryFn:()=>apiHelpers.get<any>('/audit/teams'), enabled: tab==='teams', retry:false })
-  const rolesQuery = useQuery({ queryKey:['audit-roles'], queryFn:()=>apiHelpers.get<any>('/audit/roles'), enabled: tab==='roles', retry:false })
-  const sessionsQuery = useQuery({ queryKey:['audit-sessions'], queryFn:()=>apiHelpers.get<any>('/audit/sessions'), enabled: tab==='sessions', retry:false })
-  const attemptsQuery = useQuery({ queryKey:['audit-attempts'], queryFn:()=>apiHelpers.get<any>('/audit/login-attempts'), enabled: tab==='attempts', retry:false })
+  const canReadAccounts = owner || actor?.permissions?.includes('user.read') === true
+  const canReadAudit = owner || actor?.permissions?.includes('audit.read') === true
+  const canOpenAccounts = canManageEmployees || canReadAccounts
+  const usersQuery = useQuery({ queryKey:['audit-users'], queryFn:()=>apiHelpers.get<any>('/audit/users'), enabled: canReadAudit && tab==='users', retry:false })
+  const teamsQuery = useQuery({ queryKey:['audit-teams'], queryFn:()=>apiHelpers.get<any>('/audit/teams'), enabled: canReadAudit && tab==='teams', retry:false })
+  const rolesQuery = useQuery({ queryKey:['audit-roles'], queryFn:()=>apiHelpers.get<any>('/audit/roles'), enabled: canReadAudit && tab==='roles', retry:false })
+  const sessionsQuery = useQuery({ queryKey:['audit-sessions'], queryFn:()=>apiHelpers.get<any>('/audit/sessions'), enabled: canReadAudit && tab==='sessions', retry:false })
+  const attemptsQuery = useQuery({ queryKey:['audit-attempts'], queryFn:()=>apiHelpers.get<any>('/audit/login-attempts'), enabled: canReadAudit && tab==='attempts', retry:false })
 
   const users=usersQuery.data, teams=teamsQuery.data, roles=rolesQuery.data, sessions=sessionsQuery.data, attempts=attemptsQuery.data
   const activeQuery=({users:usersQuery,teams:teamsQuery,roles:rolesQuery,sessions:sessionsQuery,attempts:attemptsQuery} as const)[tab as Exclude<Tab,'keys'>]
@@ -41,12 +44,12 @@ export const Users = () => {
         <p className="text-sm text-muted-foreground">Users • Teams • 7 Roles • Sessions • API Keys • Login Attempts — with permissions & audit trail</p>
       </div>
       <div className="flex gap-1 border-b overflow-auto">
-        {TABS.filter(t=>t.id!=='keys'||canOpenKeys).map(t=> <button key={t.id} onClick={()=>setTab(t.id)} className={cn('px-3 py-2 text-xs font-medium border-b-2 inline-flex items-center gap-1 whitespace-nowrap', tab===t.id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground')}><t.icon className="h-3.5 w-3.5" />{t.label}</button>)}
+        {TABS.filter(t=>t.id==='keys' ? canOpenKeys : t.id==='users' ? (canOpenAccounts || canReadAudit) : canReadAudit).map(t=> <button key={t.id} onClick={()=>setTab(t.id)} className={cn('px-3 py-2 text-xs font-medium border-b-2 inline-flex items-center gap-1 whitespace-nowrap', tab===t.id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground')}><t.icon className="h-3.5 w-3.5" />{t.label}</button>)}
       </div>
 
-      {tab!=='keys' && activeQuery?.isError && <p role="alert" className="rounded-xl border border-destructive p-4 text-sm text-destructive">{(activeQuery.error as any)?.response?.status===403?'403 · Your role is not allowed to read this audit collection.':'Unable to retrieve this audit collection.'}</p>}
-      {tab==='users' && canManageEmployees && <CompanyAccountControls />}
-      {tab==='users' && (
+      {tab!=='keys' && canReadAudit && activeQuery?.isError && <p role="alert" className="rounded-xl border border-destructive p-4 text-sm text-destructive">{(activeQuery.error as any)?.response?.status===403?'403 · Your role is not allowed to read this audit collection.':'Unable to retrieve this audit collection.'}</p>}
+      {tab==='users' && canOpenAccounts && <CompanyAccountControls />}
+      {tab==='users' && canReadAudit && (
         <div className="rounded-xl border bg-card overflow-hidden">
           <table className="w-full text-xs"><thead><tr className="border-b bg-muted/20 text-muted-foreground"><th className="text-start px-3 py-2">User</th><th className="text-start px-3 py-2">Role</th><th className="text-start px-3 py-2">Team</th><th className="text-start px-3 py-2">Status</th><th className="text-start px-3 py-2">Last login</th></tr></thead>
             <tbody>{(users?.items||[]).map((u:any)=> <tr key={u.id} className="border-b"><td className="px-3 py-2"><div className="font-medium">{u.name}</div><div className="font-mono text-[11px] text-muted-foreground">{u.email}</div></td><td className="px-3 py-2"><span className="px-1.5 py-0.5 rounded bg-primary text-primary-foreground text-[11px]">{u.role}</span></td><td className="px-3 py-2">{u.team||'—'}</td><td className="px-3 py-2">{u.status}</td><td className="px-3 py-2 text-[11px]">{u.last_login?new Date(u.last_login).toLocaleString():'Never'}</td></tr>)}</tbody>
