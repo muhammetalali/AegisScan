@@ -5,7 +5,7 @@ import hashlib,io,json,os,sys,time,uuid,zipfile
 from pathlib import Path
 from typing import Any
 import requests
-BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_ACCESS_TOKEN=os.getenv('AEGIS_E2E_ACCESS_TOKEN'); E2E_APPROVER_ACCESS_TOKEN=os.getenv('AEGIS_E2E_APPROVER_ACCESS_TOKEN'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}; CAPACITY_MODE=os.getenv('AEGIS_E2E_CAPACITY_MODE','').lower() in {'1','true','yes','on'}; FILE_ACCEPTANCE=os.getenv('AEGIS_E2E_FILE_ACCEPTANCE','').lower() in {'1','true','yes','on'}; FILE_REQUIRE_FINDING=os.getenv('AEGIS_E2E_FILE_REQUIRE_FINDING','').lower() in {'1','true','yes','on'}
+BASE_URL=os.getenv('AEGIS_BASE_URL','http://localhost'); DJANGO_URL=os.getenv('AEGIS_DJANGO_URL',f'{BASE_URL}/api/v1'); API_URL=os.getenv('AEGIS_FASTAPI_URL',BASE_URL); API_V1=f'{API_URL}/api/v1'; TARGET=os.getenv('AEGIS_E2E_TARGET','aegis-scan-target'); TIMEOUT=int(os.getenv('AEGIS_E2E_TIMEOUT','180')); VERIFY_TLS=os.getenv('AEGIS_VERIFY_TLS','true').lower() not in {'0','false','no'}; E2E_EMAIL=os.getenv('AEGIS_E2E_EMAIL'); E2E_PASSWORD=os.getenv('AEGIS_E2E_PASSWORD'); E2E_APPROVER_EMAIL=os.getenv('AEGIS_E2E_APPROVER_EMAIL'); E2E_APPROVER_PASSWORD=os.getenv('AEGIS_E2E_APPROVER_PASSWORD'); E2E_ACCESS_TOKEN=os.getenv('AEGIS_E2E_ACCESS_TOKEN'); E2E_APPROVER_ACCESS_TOKEN=os.getenv('AEGIS_E2E_APPROVER_ACCESS_TOKEN'); E2E_PROJECT_ID=os.getenv('AEGIS_E2E_PROJECT_ID'); E2E_GOV_ORG_ID=os.getenv('AEGIS_E2E_GOV_ORG_ID'); E2E_APPROVER_MEMBERSHIP_ID=os.getenv('AEGIS_E2E_APPROVER_MEMBERSHIP_ID'); STATE_PATH=os.getenv('AEGIS_E2E_STATE_PATH','').strip(); EPHEMERAL_FIXTURE=os.getenv('AEGIS_E2E_EPHEMERAL_FIXTURE','').lower() in {'1','true','yes','on'}; CLEANUP_ONLY=os.getenv('AEGIS_E2E_CLEANUP_ONLY','').lower() in {'1','true','yes','on'}; CAPACITY_MODE=os.getenv('AEGIS_E2E_CAPACITY_MODE','').lower() in {'1','true','yes','on'}; FILE_ACCEPTANCE=os.getenv('AEGIS_E2E_FILE_ACCEPTANCE','').lower() in {'1','true','yes','on'}; FILE_REQUIRE_FINDING=os.getenv('AEGIS_E2E_FILE_REQUIRE_FINDING','').lower() in {'1','true','yes','on'}
 ZIP_ACCEPTANCE=os.getenv('AEGIS_E2E_ZIP_ACCEPTANCE','').lower() in {'1','true','yes','on'}
 API_KEY_ACCEPTANCE=os.getenv('AEGIS_E2E_API_KEY_ACCEPTANCE','').lower() in {'1','true','yes','on'}
 
@@ -193,12 +193,22 @@ def main()->int:
  csrf_token=csrf(session); headers['X-CSRFToken']=csrf_token
  if CAPACITY_MODE: print('CAPACITY_ACTOR_AUTH=PREPROVISIONED_JWT')
  else: http(session,'POST',f'{DJANGO_URL}/auth/login/','Login',{200},json={'email':email,'password':password},headers=headers,timeout=20)
- project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20); project_id=project['id']
+ if E2E_PROJECT_ID:
+  project=http(session,'GET',f'{DJANGO_URL}/projects/{E2E_PROJECT_ID}/','Bounded production project retrieval',{200},timeout=20)
+  if not isinstance(project,dict) or str(project.get('id'))!=E2E_PROJECT_ID:raise RuntimeError('Pre-provisioned E2E project identity mismatch')
+  project_id=E2E_PROJECT_ID
+  print('E2E_BOUNDED_PROJECT_REUSED=PASS',flush=True)
+ else:
+  project=http(session,'POST',f'{DJANGO_URL}/projects/','Project creation',{201},json={'name':f'External E2E {unique}','description':'Real HTTP black-box validation project','environment':'development'},headers=headers,timeout=20); project_id=project['id']
  if API_KEY_ACCEPTANCE:prove_api_key_consumer(session,str(project_id),unique)
  reports_data=http(session,'GET',f'{API_V1}/reports/','Authenticated report listing',{200},params={'project_id':project_id,'limit':100},timeout=20); collection(reports_data,'Authenticated report listing'); print('REPORT_LISTING=PASS')
- created_organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
- if not isinstance(created_organization,dict) or not created_organization.get('id'):raise RuntimeError(f'Tenant creation did not return id: {created_organization!r}')
- organization_id=E2E_GOV_ORG_ID or str(created_organization['id'])
+ if E2E_GOV_ORG_ID:
+  organization_id=E2E_GOV_ORG_ID
+  print('E2E_BOUNDED_TENANT_REUSED=PASS',flush=True)
+ else:
+  created_organization=http(session,'POST',f'{API_V1}/enterprise/organizations','Tenant creation',{201},json={'name':f'External E2E API Tenant {unique}','slug':f'external-e2e-api-{unique}'},timeout=20)
+  if not isinstance(created_organization,dict) or not created_organization.get('id'):raise RuntimeError(f'Tenant creation did not return id: {created_organization!r}')
+  organization_id=str(created_organization['id'])
  approver_membership_id=E2E_APPROVER_MEMBERSHIP_ID
  if not approver_membership_id:
   membership=http(session,'POST',f'{API_V1}/enterprise/organizations/{organization_id}/members','Governance approver organization membership',{201},json={'email':approver_email,'role':'admin'},timeout=20)
