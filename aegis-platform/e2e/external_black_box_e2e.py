@@ -216,7 +216,7 @@ def main()->int:
   if not approver_membership_id:raise RuntimeError(f'Governance approver membership did not return id: {membership!r}')
  binding=http(session,'POST',f'{API_V1}/enterprise/projects/{project_id}/tenant','Project tenant binding',{200},params={'organization_id':organization_id},timeout=20)
  if binding.get('organization_id')!=organization_id:raise RuntimeError(f'Project tenant binding did not persist: {binding!r}')
- grant=http(session,'POST',f'{API_V1}/assurance/governance/responsibilities/grants','Governed authorization responsibility grant',{200},json={'organization_id':organization_id,'membership_id':approver_membership_id,'responsibility':'authorization_approver','scope_kind':'project','project_id':project_id,'reason':'Independent CI asset authorization approval duty.','idempotency_key':f'e2e-authorization-responsibility-{unique}'},timeout=20)
+ grant=http(session,'POST',f'{API_V1}/assurance/governance/responsibilities/grants','Governed authorization responsibility grant',{200},json={'organization_id':organization_id,'membership_id':approver_membership_id,'responsibility':'authorization_approver','scope_kind':'project','project_id':project_id,'reason':'Independent CI asset authorization approval duty.','idempotency_key':f'e2e-authorization-responsibility-{project_id if E2E_PROJECT_ID else unique}'},timeout=20)
  if grant.get('membership_id')!=approver_membership_id or grant.get('responsibility')!='authorization_approver':raise RuntimeError(f'Authorization responsibility grant did not persist: {grant!r}')
  launcher_scope_mode=None; launcher_asset_id=None; launcher_request=None; launcher_authorization_decision_id=None
  if not CAPACITY_MODE:
