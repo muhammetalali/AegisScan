@@ -176,7 +176,13 @@ def resolve_e2e_project(session:requests.Session,headers:dict[str,str],unique:st
  """Use the private managed production fixture, preserving the existing CI project-creation path."""
  if E2E_PROJECT_ID:
   project=http(session,'GET',f'{DJANGO_URL}/projects/{E2E_PROJECT_ID}/','Bounded production project retrieval',{200},timeout=20)
-  if not isinstance(project,dict) or str(project.get('id'))!=E2E_PROJECT_ID:
+  # DRF ProjectViewSet.retrieve wraps the serialized project under "project";
+  # the other keys are assets/validations/findings, not project fields.
+  payload=project.get('project') if isinstance(project,dict) else None
+  if (not isinstance(payload,dict)
+      or str(payload.get('id'))!=E2E_PROJECT_ID
+      or payload.get('slug')!='release-e2e-managed-acceptance'
+      or payload.get('status')!='active'):
    raise RuntimeError('Pre-provisioned E2E project identity mismatch')
   print('E2E_BOUNDED_PROJECT_REUSED=PASS',flush=True)
   return E2E_PROJECT_ID
