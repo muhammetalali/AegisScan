@@ -58,7 +58,6 @@ def test_live_production_workflow_has_only_manual_or_one_time_main_request_trigg
     assert deploy["runs-on"] == ["self-hosted", "linux", "x64", "aegisscan-production"]
     assert data["concurrency"]["group"] == "aegisscan-internal-production"
     assert data["concurrency"]["cancel-in-progress"] is False
-    assert data["concurrency"]["cancel-in-progress"] is False
 
 
 def test_checkout_repair_is_explicit_manual_opt_in_and_uses_protected_transport():
