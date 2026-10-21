@@ -204,10 +204,38 @@ describe('owner-only company account UI',()=>{
     expect(remove).toHaveBeenCalledTimes(2)
   })
 
-  it('does not expose bulk cleanup to delegated administrators',async()=>{
+  it('does not expose bulk cleanup or account inventory to an unscoped delegate',async()=>{
     useAuthStore.setState({user:{role:'super_admin',is_company_owner:false,permissions:['user.delete'],email:'delegate@company.invalid'} as never})
     renderPage()
-    await screen.findByText(/staff@company.invalid/)
+    expect(screen.getByText(/Account inventory requires user.read/)).toBeTruthy()
     expect(screen.queryByText('Clean up other active accounts')).toBeNull()
+    expect(get.mock.calls.some(([path])=>path==='/auth/users/')).toBe(false)
+  })
+})
+
+describe('G2 delegated account operations without inventory grants', () => {
+  it('creates and activates the returned employee without user.read or audit.read', async () => {
+    useAuthStore.setState({user:{role:'admin',permissions:['user.create','user.update'],enabled_pages:['/users'],is_company_owner:false} as never})
+    renderPage()
+    await waitFor(()=>expect(get).toHaveBeenCalledWith('/auth/users/access_options/'))
+    expect(get.mock.calls.some(([path])=>path==='/auth/users/')).toBe(false)
+    expect(screen.getByText(/Account inventory requires user.read/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Employee login'),{target:{value:'new@company.invalid'}})
+    fireEvent.change(screen.getByLabelText('Initial employee password'),{target:{value:'Strong-New-Password!2026'}})
+    fireEvent.change(screen.getByLabelText('Employee first name'),{target:{value:'New'}})
+    fireEvent.change(screen.getByLabelText('Employee last name'),{target:{value:'Staff'}})
+    fireEvent.click(screen.getByText('Create inactive employee'))
+    await waitFor(()=>expect(post).toHaveBeenCalledWith('/auth/users/',expect.objectContaining({role:'viewer'})))
+    expect(await screen.findByText('Selected: new@company.invalid')).toBeTruthy()
+    fireEvent.click(screen.getByText('Activate employee'))
+    await waitFor(()=>expect(post).toHaveBeenCalledWith('/auth/users/staff-2/activate/',{}))
+    expect(get.mock.calls.some(([path])=>path==='/auth/users/')).toBe(false)
+  })
+  it('permits read-only inventory without an account-management options request', async () => {
+    useAuthStore.setState({user:{role:'admin',permissions:['user.read'],enabled_pages:['/users'],is_company_owner:false} as never})
+    renderPage()
+    await screen.findByText(/staff@company.invalid/)
+    expect(screen.queryByText('Create inactive employee')).toBeNull()
+    expect(get.mock.calls.some(([path])=>path==='/auth/users/access_options/')).toBe(false)
   })
 })
