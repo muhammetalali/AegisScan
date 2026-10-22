@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -19,9 +16,7 @@ from django.db import transaction
 from django_project.evidence.models import Evidence, ValidationRun
 from fastapi_app.services.evidence_identity import evidence_id
 from fastapi_app.services.authorization_guard import authorization_snapshot, require_bound_validation_authorization
-
-
-_DEFAULT_NUCLEI_TEMPLATES = '/opt/nuclei-templates'
+from fastapi_app.services.kali_nuclei_provider import execute_kali_nuclei
 
 
 def _authorized_web_url(asset_config: dict[str, Any]) -> str:
@@ -39,26 +34,26 @@ def _authorized_host(asset_config: dict[str, Any]) -> str:
     return value
 
 
-def _run_nuclei_template(target: str, template_path: str, timeout: int) -> tuple[int, str, str]:
-    executable = shutil.which('nuclei')
-    if not executable:
-        raise RuntimeError('Nuclei is not installed on the worker')
-    templates_dir = Path(os.getenv('NUCLEI_TEMPLATES_DIR', _DEFAULT_NUCLEI_TEMPLATES)).resolve()
-    candidate = Path(template_path).resolve()
-    try:
-        candidate.relative_to(templates_dir)
-    except ValueError as exc:
-        raise ValueError('Finding template path is outside the configured Nuclei templates directory') from exc
-    if not candidate.is_file():
-        raise ValueError(f'Finding template file is missing: {candidate}')
-    completed = subprocess.run(
-        [executable, '-u', target, '-t', str(candidate), '-jsonl', '-silent', '-no-color', '-dr'],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
+def _run_nuclei_template(
+    target: str, template_path: str, timeout: int, *,
+    authorization_ref: str, scope_ref: str, execution_ref: str,
+    state_getter: Any,
+) -> tuple[int, str, str]:
+    """Revalidate one finding through the *existing* attested Kali web provider.
+
+    The production scanners queue intentionally has no local Nuclei binary.
+    The provider validates the pinned exact template path before executing.
+    """
+    result = execute_kali_nuclei(
+        target=target,
+        timeout_seconds=timeout,
+        execution_ref=execution_ref,
+        authorization_ref=authorization_ref,
+        scope_ref=scope_ref,
+        state_getter=state_getter,
+        template_path=template_path,
     )
-    return completed.returncode, completed.stdout, completed.stderr
+    return int(result['exit_code']), str(result['stdout']), str(result['stderr'])
 
 
 def _jsonl_records(raw_output: str) -> list[dict[str, Any]]:
@@ -132,7 +127,17 @@ def validate_finding_e2e(self, validation_id: str) -> dict[str, Any]:
                 raise ValueError('Nuclei finding has no template-path for exact re-validation')
             if validation.target_value.strip() != target:
                 raise ValueError('Validation target must exactly match the finding asset URL')
-            exit_code, evidence_raw, stderr = _run_nuclei_template(target, template_path, timeout=600)
+            exit_code, evidence_raw, stderr = _run_nuclei_template(
+                target, template_path, timeout=600,
+                authorization_ref=str(authorization.id),
+                scope_ref=f'project:{finding.scan.project_id}:asset:{finding.asset_id}',
+                execution_ref=f'validation:{validation_id}:nuclei',
+                state_getter=lambda: (
+                    'cancelled' if ValidationRun.objects.filter(
+                        pk=validation_id, status=ValidationRun.Status.CANCELLED
+                    ).exists() else 'running'
+                ),
+            )
             records = _jsonl_records(evidence_raw)
             matching_records = [
                 record for record in records

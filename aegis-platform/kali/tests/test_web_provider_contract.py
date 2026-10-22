@@ -48,7 +48,7 @@ def test_web_service_has_fixed_nuclei_semantics_and_no_shell_authority():
     assert "payload.get('binary')" not in SERVICE
     assert "payload.get('command')" not in SERVICE
     assert "payload.get('capability_id') != 'web.nuclei'" in SERVICE
-    assert 'web.nuclei does not accept provider options' in SERVICE
+    assert 'web.nuclei accepts only the exact template_path option' in SERVICE
 
 
 def test_provider_requires_loopback_auth_provenance_and_zero_capabilities():
@@ -94,3 +94,47 @@ def test_canary_compose_override_is_opt_in_least_privilege_and_fail_closed():
     assert 'security_opt: [no-new-privileges:true]' in CANARY_COMPOSE
     assert 'read_only: true' in CANARY_COMPOSE
     assert 'user: "10001:10001"' in CANARY_COMPOSE
+
+
+def test_exact_template_option_is_restricted_to_pinned_installed_templates(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+
+    path = KALI / 'runner' / 'web_service.py'
+    spec = importlib.util.spec_from_file_location('aegis_exact_nuclei_contract', path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    pinned = tmp_path / 'pinned'
+    pinned.mkdir()
+    allowed = pinned / 'approved.yaml'
+    allowed.write_text('id: exact-nuclei-test\n', encoding='utf-8')
+    outside = tmp_path / 'outside.yaml'
+    outside.write_text('id: not-pinned\n', encoding='utf-8')
+    (pinned / 'escape.yaml').symlink_to(outside)
+    monkeypatch.setattr(module, 'TEMPLATES', pinned)
+    payload = {
+        'schema_version': 1,
+        'execution_ref': 'validation:v1:nuclei',
+        'authorization_ref': 'asset-authorization:v1',
+        'scope_ref': 'project:p1:asset:a1',
+        'control_token': 'a' * 64,
+        'capability_id': 'web.nuclei',
+        'target': 'http://192.0.2.20',
+        'timeout_seconds': 60,
+        'options': {'template_path': str(allowed)},
+    }
+    runtime = {'dispatch_capabilities': ['web.nuclei']}
+    result = module._validate_request(payload, runtime)
+    assert result['template_path'] == str(allowed)
+    assert module._validate_request({**payload, 'options': {}}, runtime)['template_path'] is None
+
+    import pytest
+    for value in (str(outside), str(pinned / 'escape.yaml'), '/etc/passwd', '../outside.yaml', '', 42):
+        with pytest.raises(module.ProtocolError):
+            module._validate_request({**payload, 'options': {'template_path': value}}, runtime)
+    with pytest.raises(module.ProtocolError):
+        module._validate_request({**payload, 'options': {'argv': ['-t', '/etc/passwd']}}, runtime)
+    with pytest.raises(module.ProtocolError):
+        module._validate_request({**payload, 'options': ['unexpected']}, runtime)
