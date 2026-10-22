@@ -272,3 +272,61 @@ def test_nmap_validation_requires_exact_target(finding_fixture):
     assert result['status'] == 'blocked'
     assert validation.status == ValidationRun.Status.FAILED
     assert 'requested target does not match' in validation.error_message
+
+
+@pytest.mark.django_db
+def test_nuclei_exact_template_revalidation_uses_governed_kali_and_persists_evidence(
+    finding_fixture, monkeypatch
+):
+    """Once asset authorization passes, exact revalidation must use the pinned scanner provider."""
+    from fastapi_app.tasks import finding_validation
+    user, finding = finding_fixture
+    finding.source_engine = 'nuclei'
+    finding.raw_data = {
+        'template-path': '/opt/nuclei-templates/http/cves/exact.yaml',
+        'template-id': 'approved-template',
+        'matcher-name': 'approved-matcher',
+    }
+    finding.asset.configuration = {
+        'url': 'https://approved.example',
+        'authorized': True,
+    }
+    finding.asset.save(update_fields=['configuration'])
+    finding.save(update_fields=['source_engine', 'raw_data'])
+    validation = _validation(user, finding)
+    validation.engines = ['nuclei']
+    validation.target_type = 'url'
+    validation.target_value = 'https://approved.example'
+    validation.save(update_fields=['engines', 'target_type', 'target_value'])
+    # Authorization/egress has its own independent tests. Isolate here the
+    # downstream route, exact template and evidence commit, without network I/O.
+    monkeypatch.setattr(
+        finding_validation, 'require_bound_validation_authorization',
+        lambda current: (finding.asset, '', current.authorization_decision),
+    )
+    calls = []
+
+    def execute(**kwargs):
+        calls.append(kwargs)
+        return {
+            'exit_code': 0, 'stderr': '',
+            'stdout': '{"template-id":"approved-template","matcher-name":"approved-matcher"}\n',
+        }
+
+    monkeypatch.setattr(finding_validation, 'execute_kali_nuclei', execute)
+    first = finding_validation.validate_finding_e2e.run(str(validation.id))
+    second = finding_validation.validate_finding_e2e.run(str(validation.id))
+    validation.refresh_from_db()
+    assert first['status'] == ValidationRun.Status.COMPLETED
+    assert second['redelivered'] is True
+    assert first['evidence_id'] == second['evidence_id']
+    assert len(calls) == 1
+    assert calls[0]['template_path'] == finding.raw_data['template-path']
+    assert calls[0]['authorization_ref'] == str(validation.authorization_decision_id)
+    assert calls[0]['scope_ref'] == f'project:{finding.scan.project_id}:asset:{finding.asset_id}'
+    assert calls[0]['state_getter']() == 'running'
+    assert validation.result['template_id'] == 'approved-template'
+    evidence = Evidence.objects.get(id=first['evidence_id'])
+    assert evidence.finding_id == finding.id
+    assert evidence.metadata['finding_present'] is True
+    assert Evidence.objects.filter(finding=finding, evidence_type='validation_output').count() == 1

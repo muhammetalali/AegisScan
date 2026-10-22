@@ -317,6 +317,7 @@ def execute_kali_nuclei(
     authorization_ref: str,
     scope_ref: str,
     state_getter: Callable[[], str] | None,
+    template_path: str | None = None,
     poll_interval: float = 1.0,
 ) -> dict[str, Any]:
     for name, value in (
@@ -338,7 +339,7 @@ def execute_kali_nuclei(
         'control_token': control_token,
         'capability_id': 'web.nuclei',
         'target': target,
-        'options': {},
+        'options': {'template_path': template_path} if template_path is not None else {},
         'timeout_seconds': int(timeout_seconds),
     }
     holder: dict[str, Any] = {}

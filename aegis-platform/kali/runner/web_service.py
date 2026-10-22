@@ -210,8 +210,20 @@ def _validate_request(payload: dict[str, Any], runtime: dict[str, Any]) -> dict[
     if not _TOKEN_RE.fullmatch(token):
         raise ProtocolError('control_token is missing or invalid')
     options = payload.get('options', {})
-    if not isinstance(options, dict) or options:
-        raise ProtocolError('web.nuclei does not accept provider options')
+    if not isinstance(options, dict) or set(options) - {'template_path'}:
+        raise ProtocolError('web.nuclei accepts only the exact template_path option')
+    # Finding revalidation reuses the same pinned Nuclei worker, but executes
+    # exactly the template that generated the original finding.
+    exact_template: str | None = None
+    if 'template_path' in options:
+        raw_template = options['template_path']
+        if not isinstance(raw_template, str) or len(raw_template) > 512 or not raw_template.startswith('/'):
+            raise ProtocolError('exact template_path must be a bounded absolute path')
+        root = TEMPLATES.resolve()
+        candidate = Path(raw_template).resolve()
+        if root not in candidate.parents or candidate.suffix not in {'.yaml', '.yml'} or not candidate.is_file():
+            raise ProtocolError('exact template_path must name an installed file inside the pinned template root')
+        exact_template = str(candidate)
     raw_timeout = payload.get('timeout_seconds')
     if isinstance(raw_timeout, bool):
         raise ProtocolError('timeout_seconds must be an integer')
@@ -228,6 +240,7 @@ def _validate_request(payload: dict[str, Any], runtime: dict[str, Any]) -> dict[
         'control_token': token,
         'capability_id': 'web.nuclei',
         'target': _canonical_target(payload.get('target')),
+        'template_path': exact_template,
         'timeout_seconds': timeout,
     }
 
@@ -357,7 +370,7 @@ def _execute(request: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]
             '-u',
             request['target'],
             '-t',
-            str(TEMPLATES),
+            request.get('template_path') or str(TEMPLATES),
             '-jsonl',
             '-silent',
             '-no-color',
