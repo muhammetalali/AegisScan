@@ -53,7 +53,7 @@ class HasPermission(permissions.BasePermission):
                 for scope in required
             )
 
-        if request.user.is_superuser:
+        if request.user.is_company_owner:
             return True
 
         action = getattr(view, 'action', None) or request.method.lower()
@@ -117,7 +117,7 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.method in permissions.SAFE_METHODS:
             return True
-        return obj.owner == request.user or request.user.is_superuser
+        return obj.owner == request.user or request.user.is_company_owner
 
 
 class IsProjectMember(permissions.BasePermission):
@@ -180,7 +180,7 @@ class IsTeamAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        if request.user.is_superuser:
+        if request.user.is_company_owner:
             return True
 
         team_id = view.kwargs.get('pk') or view.kwargs.get('team_pk')
@@ -198,7 +198,7 @@ class IsTeamAdmin(permissions.BasePermission):
 class IsScanOwnerOrProjectMember(permissions.BasePermission):
     """Check if user owns the scan or is a project member."""
     def has_object_permission(self, request, view, obj):
-        if request.user.is_superuser:
+        if request.user.is_company_owner:
             return True
         if obj.initiated_by == request.user:
             return True
@@ -212,7 +212,7 @@ class IsScanOwnerOrProjectMember(permissions.BasePermission):
 class IsVulnerabilityAssigneeOrProjectMember(permissions.BasePermission):
     """Check if user is assigned to vulnerability or is a project member."""
     def has_object_permission(self, request, view, obj):
-        if request.user.is_superuser:
+        if request.user.is_company_owner:
             return True
         if obj.assigned_to == request.user:
             return True

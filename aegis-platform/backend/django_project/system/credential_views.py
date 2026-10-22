@@ -49,12 +49,12 @@ class CredentialSecretViewSet(viewsets.ModelViewSet):
         return CredentialSecretSerializer
 
     def _visible_projects(self):
-        if self.request.user.is_superuser:
+        if self.request.user.is_company_owner:
             return Project.objects.all()
         return Project.objects.filter(Q(owner=self.request.user) | Q(members=self.request.user)).distinct()
 
     def _manageable_projects(self):
-        if self.request.user.is_superuser:
+        if self.request.user.is_company_owner:
             return Project.objects.all()
         return Project.objects.filter(
             Q(owner=self.request.user)

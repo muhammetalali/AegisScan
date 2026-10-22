@@ -69,4 +69,11 @@ describe('real navigation and deep-link permission parity', () => {
     expect(canAccessRoute('/posture','viewer')).toBe(false)
     expect(canAccessRoute('/keys',undefined)).toBe(false)
   })
+  it('lets an explicitly granted security manager read company accounts without audit elevation', () => {
+    expect(canAccessRoute('/users','security_manager',['user.read'],['/users'])).toBe(true)
+    expect(canAccessRoute('/users','security_manager',['user.read'],[])).toBe(false)
+    expect(canAccessRoute('/users','security_manager',['scan.read'],['/users'])).toBe(false)
+    expect(canAccessRoute('/audit','security_manager',['user.read'],['/users'])).toBe(false)
+    expect(canAccessRoute('/users','viewer',['user.read'],['/users'])).toBe(false)
+  })
 })

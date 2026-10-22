@@ -287,3 +287,45 @@ def test_primary_owner_can_access_existing_project_without_membership():
     key_request = Request(key_request)
     assert IsProjectMember().has_permission(key_request, view) is False
     assert IsProjectAdmin().has_permission(key_request, view) is False
+
+
+@pytest.mark.django_db
+def test_non_primary_superuser_cannot_bypass_owner_identity_or_grants(settings):
+    """Only the configured primary company owner, not a superuser flag, has owner authority."""
+    from types import SimpleNamespace
+    from django_project.users.permissions import (
+        IsOwnerOrReadOnly, IsScanOwnerOrProjectMember,
+        IsVulnerabilityAssigneeOrProjectMember,
+    )
+    owner = User.objects.create_superuser(
+        email=settings.AEGIS_PRIMARY_OWNER_EMAIL,
+        password='Test-Owner-Only-2026!',
+    )
+    rogue = User.objects.create_user(
+        email='different-superuser@example.invalid',
+        password='Test-Rogue-Only-2026!',
+        role=UserRole.SUPER_ADMIN,
+        is_superuser=True,
+        is_staff=True,
+        granted_permissions=[],
+    )
+    assert owner.is_company_owner
+    assert rogue.is_superuser and not rogue.is_company_owner
+    assert owner.has_permission('user.update')
+    assert rogue.get_effective_permissions() == []
+    assert not rogue.has_permission('user.update')
+
+    request = APIRequestFactory().patch('/api/v1/auth/users/1/')
+    force_authenticate(request, user=rogue)
+    request = Request(request)
+    assert HasPermission().has_permission(request, PermissionView()) is False
+
+    team = Team.objects.create(name='Other team', owner=owner)
+    admin_view = type('AdminV', (), {'kwargs': {'pk': str(team.pk)}})()
+    assert IsTeamAdmin().has_permission(request, admin_view) is False
+    target = SimpleNamespace(owner=owner, initiated_by=owner,
+                             assigned_to=owner, project=Project.objects.create(
+                                 name='Other owner project', slug='other-owner-project', owner=owner))
+    assert IsOwnerOrReadOnly().has_object_permission(request, PermissionView(), target) is False
+    assert IsScanOwnerOrProjectMember().has_object_permission(request, PermissionView(), target) is False
+    assert IsVulnerabilityAssigneeOrProjectMember().has_object_permission(request, PermissionView(), target) is False

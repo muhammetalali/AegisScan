@@ -34,7 +34,11 @@ export const canAccessRoute = (path: string, role?: UserRole | null, permissions
   const matching = NAV_GROUPS.flatMap(group => group.items)
     .filter(item => path === item.href || path.startsWith(item.href + '/'))
     .sort((a, b) => b.href.length - a.href.length)[0]
-  const roleAllowed = !matching || matching.roles.includes('all') || matching.roles.includes(role)
+  // A security manager with an effective user.read grant can open the
+  // existing read-only account inventory; audit and mutations stay separately gated.
+  const delegatedAccountReader = matching?.href === '/users'
+    && role === 'security_manager' && permissions?.includes('user.read') === true
+  const roleAllowed = !matching || matching.roles.includes('all') || matching.roles.includes(role) || delegatedAccountReader
   if (!roleAllowed) return false
   // Effective permissions never enlarge the configured UI page allowlist.
   if (enabledPages != null && path !== '/' && path !== '/dashboard') {
