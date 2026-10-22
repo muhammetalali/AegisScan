@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "stage08-burp-20261011-20261010223421",
+  "request_id": "g3-nuclei-release-20261022-204226",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "057bc638aeffcb563710b3d28bf5bac6a1f34b85",
-  "requested_at": "2026-10-10T22:34:21Z",
-  "expires_at": "2026-10-11T18:34:21Z"
+  "requested_base_sha": "cf695b62d5e8e0502499cc32cc5b6505c08a60e6",
+  "requested_at": "2026-10-22T20:42:26Z",
+  "expires_at": "2026-10-23T18:42:26Z"
 }
