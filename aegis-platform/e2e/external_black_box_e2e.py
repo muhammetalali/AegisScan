@@ -35,6 +35,16 @@ def collection(data:dict[str,Any]|list[Any],label:str)->list[dict[str,Any]]:
  if isinstance(data,list): return data
  if isinstance(data,dict) and isinstance(data.get('results'),list): return data['results']
  raise RuntimeError(f'{label} response contract invalid: expected list or paginated results, got {type(data).__name__}')
+def require_durable_launcher_decision(authorization:dict[str,Any], target:str, sources:set[str])->str:
+ # An existing governed approval is reusable; re-approve neither the same target
+ # nor an unrelated decision. All authorization evidence must match precisely.
+ if not isinstance(authorization,dict) or authorization.get('state')!='authorized' or authorization.get('authorized') is not True or authorization.get('source') not in sources or authorization.get('target')!=target or authorization.get('request') is not None:
+  raise RuntimeError('Assessment Launcher returned no valid current governed authorization for the exact target')
+ try:
+  return str(uuid.UUID(str(authorization['id'])))
+ except (TypeError,ValueError,KeyError,AttributeError) as exc:
+  raise RuntimeError('Assessment Launcher decision id is invalid') from exc
+
 def prove_detection_response(session:requests.Session,email:str,password:str)->str:
  attack=requests.Session(); attack.verify=VERIFY_TLS; attack_token=csrf(attack); attack_headers={'X-CSRFToken':attack_token,'Referer':f'{BASE_URL}/'}
  for number in range(5):
@@ -244,9 +254,10 @@ def main()->int:
   launcher_prepared=http(session,'POST',f'{API_V1}/assessment-launcher/prepare','Assessment Launcher URL prepare',{201},json={'project_id':project_id,'mode':'url','target':launcher_target,'depth':'quick'},timeout=20)
   launcher_scope_mode=launcher_prepared.get('scope_mode') if isinstance(launcher_prepared,dict) else None; launcher_asset=launcher_prepared.get('asset') if isinstance(launcher_prepared,dict) else None; launcher_authorization=launcher_prepared.get('authorization') if isinstance(launcher_prepared,dict) else None; launcher_asset_id=launcher_asset.get('id') if isinstance(launcher_asset,dict) else None; launcher_request=launcher_authorization.get('request') if isinstance(launcher_authorization,dict) else None
   if not launcher_asset_id or launcher_asset.get('type')!='website' or launcher_asset.get('target')!=launcher_target:raise RuntimeError(f'Assessment Launcher URL asset contract invalid: {launcher_prepared!r}')
-  if launcher_scope_mode=='single-operator-lab':
-   if not isinstance(launcher_authorization,dict) or launcher_authorization.get('state')!='authorized' or launcher_authorization.get('source')!='single-operator-lab' or not launcher_authorization.get('id') or launcher_request is not None:raise RuntimeError(f'Assessment Launcher automatic authorization invalid: {launcher_prepared!r}')
-   launcher_authorization_decision_id=str(launcher_authorization['id']); print('CONTROLLED_LAUNCH_URL_AUTH=AUTOMATIC')
+  if launcher_scope_mode in {'single-operator-lab','asset-authorization'} and isinstance(launcher_authorization,dict) and launcher_authorization.get('state')=='authorized':
+   sources=({'single-operator-lab','existing-governed-decision'} if launcher_scope_mode=='single-operator-lab' else {'existing-governed-decision','existing-company-network','preapproved-company-network'})
+   launcher_authorization_decision_id=require_durable_launcher_decision(launcher_authorization,launcher_target,sources)
+   print('CONTROLLED_LAUNCH_URL_AUTH=REUSED' if launcher_authorization.get('source')=='existing-governed-decision' else 'CONTROLLED_LAUNCH_URL_AUTH=AUTOMATIC')
   elif launcher_scope_mode=='asset-authorization':
    if not isinstance(launcher_request,dict) or launcher_authorization.get('state')!='pending' or launcher_request.get('action_id')!='asset.authorization.approve':raise RuntimeError(f'Assessment Launcher URL authorization request invalid: {launcher_prepared!r}')
    print('CONTROLLED_LAUNCH_URL_AUTH=PENDING')
@@ -263,7 +274,7 @@ def main()->int:
  if CAPACITY_MODE: print('CAPACITY_APPROVER_AUTH=PREPROVISIONED_JWT')
  else: http(approver,'POST',f'{DJANGO_URL}/auth/login/','Governance approver login',{200},json={'email':approver_email,'password':approver_password},headers=approver_headers,timeout=20)
  if not CAPACITY_MODE:
-  if launcher_scope_mode=='asset-authorization':
+  if launcher_scope_mode=='asset-authorization' and launcher_request is not None:
    launcher_authorization_execution=http(approver,'POST',f'{API_V1}/assurance/governance/actions/execute','Execute governed Assessment Launcher URL authorization',{200},json={'action_id':'asset.authorization.approve','project_id':project_id,'entity_type':'asset','entity_id':launcher_asset_id,'expected_version':launcher_request['expected_version'],'idempotency_key':f'e2e-launcher-url-authorization-{unique}','request_id':launcher_request['request_id'],'parameters':launcher_request['parameters']},timeout=20)
    launcher_authorization_result=launcher_authorization_execution.get('result') if isinstance(launcher_authorization_execution,dict) else None; launcher_authorization_decision_id=launcher_authorization_result.get('authorization_decision_id') if isinstance(launcher_authorization_result,dict) else None
    if not launcher_authorization_decision_id or launcher_authorization_execution.get('request_id')!=launcher_request['request_id']:raise RuntimeError(f'Assessment Launcher URL authorization did not preserve governed lineage: {launcher_authorization_execution!r}')

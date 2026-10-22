@@ -348,3 +348,28 @@ def test_revoked_api_returns_conflict_and_preserves_denial(project, actor, actio
     assert CredentialAccess.objects.filter(
         credential=credential, operation=operation, result=CredentialAccess.Result.DENIED,
     ).count() == 1
+
+
+@pytest.mark.django_db
+def test_nonprimary_superuser_does_not_bypass_credential_project_scope(project, actor):
+    """Superuser bit on an unrelated account cannot expose project credentials."""
+    from types import SimpleNamespace
+    from django_project.system.credential_views import CredentialSecretViewSet
+
+    other = User.objects.create_user(
+        email='secondary-superuser@example.invalid',
+        password='Test-Secondary-Pass-2026!',
+        role=UserRole.SUPER_ADMIN,
+        is_staff=True,
+        is_superuser=True,
+        granted_permissions=[],
+    )
+    assert other.is_superuser and not other.is_company_owner
+    view = CredentialSecretViewSet()
+    view.request = SimpleNamespace(user=other)
+    assert not view._visible_projects().filter(pk=project.pk).exists()
+    assert not view._manageable_projects().filter(pk=project.pk).exists()
+    # The owning account retains normal project-scoped access.
+    view.request = SimpleNamespace(user=actor)
+    assert view._visible_projects().filter(pk=project.pk).exists()
+    assert view._manageable_projects().filter(pk=project.pk).exists()

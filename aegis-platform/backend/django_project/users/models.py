@@ -209,10 +209,11 @@ class User(AbstractUser):
         )
 
     def get_effective_permissions(self) -> list[str]:
-        if self.is_superuser:
+        # Only the database-identified primary company owner bypasses grants.
+        if self.is_company_owner:
             return [permission.value for permission in Permission]
         # The delegable role alone must not turn an old NULL grant field into
-        # every capability. The true owner uses the is_superuser branch above.
+        # every capability. Only the verified primary owner uses the unrestricted branch.
         if self.role == UserRole.SUPER_ADMIN and self.granted_permissions is None:
             return []
         role_grants = {str(permission) for permission in ROLE_PERMISSIONS.get(self.role, [])}

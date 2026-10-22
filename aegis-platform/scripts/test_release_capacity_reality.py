@@ -128,3 +128,37 @@ def test_capacity_black_box_uses_preprovisioned_jwt_and_preserves_normal_login_p
     assert "CAPACITY_APPROVER_AUTH=PREPROVISIONED_JWT" in text
     assert "Governance approver login" in text
     assert "f'{DJANGO_URL}/auth/login/'" in text
+
+
+def test_reused_governed_assessment_launcher_decision_has_exact_target_and_lineage():
+    """Repeated protected deploys reuse durable approval instead of failing E2E."""
+    import importlib.util
+    from uuid import uuid4
+
+    import pytest
+
+    script = Path(__file__).parents[1] / "e2e" / "external_black_box_e2e.py"
+    spec = importlib.util.spec_from_file_location("aegis_external_black_box_reuse_contract", script)
+    assert spec and spec.loader
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)
+    target = "http://172.20.0.11"
+    identifier = str(uuid4())
+    valid = {
+        "state": "authorized", "source": "existing-governed-decision",
+        "id": identifier, "target": target, "authorized": True, "request": None,
+    }
+    allowed = {"existing-governed-decision", "single-operator-lab"}
+    assert harness.require_durable_launcher_decision(valid, target, allowed) == identifier
+    fresh = dict(valid, source="single-operator-lab")
+    assert harness.require_durable_launcher_decision(fresh, target, allowed) == identifier
+    for invalid in (
+        dict(valid, target="http://other-host.invalid"),
+        dict(valid, authorized=False),
+        dict(valid, state="pending"),
+        dict(valid, request={"request_id": "unexpected"}),
+        dict(valid, source="unreviewed-source"),
+        dict(valid, id="not-a-uuid"),
+    ):
+        with pytest.raises(RuntimeError):
+            harness.require_durable_launcher_decision(invalid, target, allowed)
