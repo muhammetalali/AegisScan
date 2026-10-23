@@ -13,7 +13,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
-from rest_framework_simplejwt.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.exceptions import AuthenticationFailed, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from django_project.audit.models import AuditLog
@@ -57,7 +57,10 @@ class VersionedTokenObtainPairSerializer(TokenObtainPairSerializer):
 class VersionedTokenRefreshSerializer(TokenRefreshSerializer):
     def validate(self, attrs):
         # Validate the persisted generation BEFORE minting or rotating any JWT.
-        refresh = self.token_class(attrs['refresh'])
+        try:
+            refresh = self.token_class(attrs['refresh'])
+        except TokenError as exc:
+            raise AuthenticationFailed('Authentication session revoked.', code='session_revoked') from exc
         uid = refresh.payload.get('user_id')
         generation = refresh.payload.get('auth_version')
         account = User.objects.filter(pk=uid).first() if uid is not None else None
@@ -65,7 +68,10 @@ class VersionedTokenRefreshSerializer(TokenRefreshSerializer):
                 or type(generation) is not int
                 or generation != account.auth_version):
             raise AuthenticationFailed('Authentication session revoked.', code='session_revoked')
-        return super().validate(attrs)
+        try:
+            return super().validate(attrs)
+        except TokenError as exc:
+            raise AuthenticationFailed('Authentication session revoked.', code='session_revoked') from exc
 
 
 class PublicCredentialAPIView(APIView):
