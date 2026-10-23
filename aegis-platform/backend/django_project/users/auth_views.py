@@ -18,6 +18,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django_project.audit.models import AuditLog
 from django_project.audit.services import append_audit, client_ip_from_request
 from .auth_audit import record_login_event
+from .authentication import revoke_outstanding_refresh_tokens
 from .serializers import UserSerializer
 from .models import User
 
@@ -176,6 +177,7 @@ class DeactivateSelfView(APIView):
         with transaction.atomic():
             request.user.is_active = False
             request.user.save(update_fields=['is_active'])
+            revoke_outstanding_refresh_tokens(request.user)
             append_audit(
                 user=request.user,
                 action=AuditLog.Action.USER_UPDATE,
