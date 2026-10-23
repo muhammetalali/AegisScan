@@ -221,6 +221,9 @@ class UserViewSet(viewsets.ModelViewSet):
         user = self.get_object()
         if not can_manage_account(request.user, user):
             return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
+        # Legacy disabled accounts may still carry pre-fix refresh credentials.
+        # Invalidate them before reactivation, without resetting the password.
+        revoke_outstanding_refresh_tokens(user)
         user.is_active = True
         user.save(update_fields=['is_active'])
         append_audit(
