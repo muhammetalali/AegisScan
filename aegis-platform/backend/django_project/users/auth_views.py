@@ -68,11 +68,21 @@ class VersionedTokenRefreshSerializer(TokenRefreshSerializer):
         return super().validate(attrs)
 
 
-class LoginView(APIView):
-    # Stale access cookies must not prevent credential login, refresh denial,
-    # or logout cleanup. Each endpoint validates its own supplied credential.
+class PublicCredentialAPIView(APIView):
+    """Allow re-login with an obsolete cookie while preserving 401 semantics.
+
+    DRF translates AuthenticationFailed to HTTP 403 when no authentication
+    scheme supplies an authenticate header. These public credential endpoints
+    deliberately skip old cookies, but must retain their 401 API contract.
+    """
     authentication_classes = []
     permission_classes = [AllowAny]
+
+    def get_authenticate_header(self, request):
+        return 'Bearer'
+
+
+class LoginView(PublicCredentialAPIView):
 
     @method_decorator(csrf_protect)
     @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=False))
@@ -144,11 +154,7 @@ class RegisterView(APIView):
         )
 
 
-class RefreshView(APIView):
-    # Stale access cookies must not prevent credential login, refresh denial,
-    # or logout cleanup. Each endpoint validates its own supplied credential.
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class RefreshView(PublicCredentialAPIView):
 
     @method_decorator(csrf_protect)
     @method_decorator(ratelimit(key='ip', rate='20/m', method='POST', block=True))
@@ -166,11 +172,7 @@ class RefreshView(APIView):
         return response
 
 
-class LogoutView(APIView):
-    # Stale access cookies must not prevent credential login, refresh denial,
-    # or logout cleanup. Each endpoint validates its own supplied credential.
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class LogoutView(PublicCredentialAPIView):
 
     @method_decorator(csrf_protect)
     def post(self, request):
