@@ -257,3 +257,26 @@ def test_nikto_distinct_security_headers_and_uncommon_headers_never_collapse_ide
             'nikto.999100.x-audit-key',
             'nikto.999100.refresh'} == {s.rule_id for s in specs}
 
+
+def test_nikto_vercel_error_on_one_probe_does_not_hide_independent_actionable_finding():
+    import json
+    from fastapi_app.services.native_finding_projection import native_observation_finding_specs
+
+    raw = json.dumps([{
+        'host': 'reserved.example.invalid', 'port': 443,
+        'vulnerabilities': [
+            {'id': '999100', 'method': 'GET', 'url': '/',
+             'msg': "Uncommon header(s) 'x-vercel-error' found, with contents: DEPLOYMENT_NOT_FOUND."},
+            {'id': '999001', 'method': 'GET', 'url': '/admin',
+             'msg': 'Administrative endpoint is exposed'},
+        ],
+    }])
+    result = normalize_native_output('web.nikto', raw)
+    specs = native_observation_finding_specs(
+        result, observation_kind='web-vulnerability',
+        category='web-vulnerability-assessment',
+    )
+    assert len(specs) == 2
+    assert {spec.severity for spec in specs} == {'info', 'medium'}
+    assert 'nikto.999001' in {spec.rule_id for spec in specs}
+
