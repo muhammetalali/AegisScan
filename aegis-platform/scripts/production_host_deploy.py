@@ -1076,7 +1076,6 @@ def _build_images_with_host_uplink(
 
 
 def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, object]:
-    build_argv = _compose(env_file, "build", "--pull")
     dns_readiness: dict[str, object] = {}
     build_attempt = 0
     for build_attempt in range(1, PRODUCTION_BUILD_ATTEMPTS + 1):
