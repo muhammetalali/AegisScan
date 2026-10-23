@@ -869,7 +869,8 @@ def test_production_buildx_host_uplink_uses_only_explicit_network_entitlement(tm
 
     assert calls[0][0] == ["docker", "compose", "build", "--print", "--pull"]
     assert calls[1][0] == [
-        "docker", "buildx", "bake", "--file", "-", "--allow=network.host", "--pull"
+        "docker", "buildx", "bake", "--file", "-", "--allow=network.host",
+        f"--allow=fs.read={deploy.PLATFORM_DIR.resolve()}", "--pull"
     ]
 
 
