@@ -132,11 +132,18 @@ class UserViewSet(viewsets.ModelViewSet):
             ip_address=client_ip_from_request(self.request),
         )
 
+    @transaction.atomic
     def perform_update(self, serializer):
         if serializer.instance.is_company_owner:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('The company owner profile cannot be changed through employee controls.')
+        protected_fields = ('role', 'granted_permissions', 'enabled_scan_types',
+                            'enabled_pages', 'two_factor_enabled', 'is_active')
+        before = {field: getattr(serializer.instance, field) for field in protected_fields}
         member = serializer.save()
+        if any(before[field] != getattr(member, field) for field in protected_fields):
+            revoke_outstanding_refresh_tokens(member)
+            bump_auth_version(member)
         append_audit(
             user=self.request.user, action=AuditLog.Action.USER_PERMISSION_CHANGE,
             result=AuditLog.Result.SUCCESS, resource_type='User',
