@@ -1038,9 +1038,27 @@ def _build_images_with_host_uplink(
     if not isinstance(bake, dict) or not isinstance(bake.get("target"), dict) or not bake["target"]:
         raise DeployError("production Compose Bake configuration has no build targets")
     targets = bake["target"]
+    trusted_build_root = PLATFORM_DIR.resolve()
     for name, target in targets.items():
         if not isinstance(target, dict):
             raise DeployError(f"invalid production Bake target: {name}")
+        context = target.get("context")
+        dockerfile = target.get("dockerfile")
+        if not isinstance(context, str) or not context:
+            raise DeployError(f"production Bake target has no local context: {name}")
+        context_path = Path(context)
+        if not context_path.is_absolute():
+            context_path = PLATFORM_DIR / context_path
+        context_path = context_path.resolve()
+        if not context_path.is_relative_to(trusted_build_root):
+            raise DeployError(f"production Bake context outside trusted project root: {name}")
+        if not isinstance(dockerfile, str) or not dockerfile:
+            raise DeployError(f"production Bake target has no Dockerfile: {name}")
+        dockerfile_path = Path(dockerfile)
+        if not dockerfile_path.is_absolute():
+            dockerfile_path = context_path / dockerfile_path
+        if not dockerfile_path.resolve().is_relative_to(trusted_build_root):
+            raise DeployError(f"production Bake Dockerfile outside trusted project root: {name}")
         existing = target.get("entitlements", [])
         if not isinstance(existing, list) or any(not isinstance(x, str) for x in existing):
             raise DeployError(f"invalid production Bake entitlements: {name}")
@@ -1066,7 +1084,8 @@ def _build_images_with_host_uplink(
         flush=True,
     )
     _run(
-        ["docker", "buildx", "bake", "--file", "-", "--allow=network.host", "--pull"],
+        ["docker", "buildx", "bake", "--file", "-", "--allow=network.host",
+         f"--allow=fs.read={trusted_build_root}", "--pull"],
         cwd=PLATFORM_DIR,
         env=deployment_env,
         input_data=json.dumps(bake, separators=(",", ":")),
