@@ -194,3 +194,66 @@ def test_trivy_config_json_is_normalized_to_iac_findings():
     assert observation['location'] == 'main.tf:4'
     assert observation['resource'] == 'aws_s3_bucket.bad'
 
+
+def test_nikto_vercel_deployment_missing_retains_raw_diagnostics_without_medium_false_positives():
+    import json
+    from fastapi_app.services.native_finding_projection import native_observation_finding_specs
+
+    report = [{
+        'host': 'reserved.example.invalid', 'ip': '192.0.2.40', 'port': 443,
+        'vulnerabilities': [
+            {'id': '999979', 'method': 'GET', 'url': '/doc',
+             'msg': 'IP address found in the x-vercel-id header. The IP is "a1::9".'},
+            {'id': '999100', 'method': 'GET', 'url': '/doc',
+             'msg': "Uncommon header(s) 'refresh' found, with contents: 0;url=/doc."},
+            {'id': '999100', 'method': 'GET', 'url': '/doc',
+             'msg': "Uncommon header(s) 'x-vercel-error' found, with contents: DEPLOYMENT_NOT_FOUND."},
+            {'id': '013587', 'method': 'GET', 'url': '/doc',
+             'msg': 'Suggested security header missing: content-security-policy.'},
+            {'id': '013587', 'method': 'GET', 'url': '/doc',
+             'msg': 'Suggested security header missing: permissions-policy.'},
+        ],
+    }]
+    result = normalize_native_output('web.nikto', json.dumps(report))
+    assert result['count'] == 6
+    assert sum(o['kind'] == 'web-target-diagnostic' for o in result['observations']) == 5
+    specs = native_observation_finding_specs(
+        result, observation_kind='web-vulnerability',
+        category='web-vulnerability-assessment',
+    )
+    assert len(specs) == 1
+    assert specs[0].severity == 'info'
+    assert specs[0].rule_id == 'nikto.target-unavailable.vercel-deployment-not-found'
+    assert 'not a confirmed vulnerability' in specs[0].title
+
+
+def test_nikto_distinct_security_headers_and_uncommon_headers_never_collapse_identity():
+    import json
+    from fastapi_app.services.native_finding_projection import native_observation_finding_specs
+
+    report = [{
+        'host': 'reserved.example.invalid', 'port': 443,
+        'vulnerabilities': [
+            {'id': '013587', 'method': 'GET', 'url': '/valid',
+             'msg': 'Suggested security header missing: content-security-policy.'},
+            {'id': '013587', 'method': 'GET', 'url': '/valid',
+             'msg': 'Suggested security header missing: referrer-policy.'},
+            {'id': '999100', 'method': 'GET', 'url': '/valid',
+             'msg': "Uncommon header(s) 'x-audit-key' found, with contents: value-one."},
+            {'id': '999100', 'method': 'GET', 'url': '/valid',
+             'msg': "Uncommon header(s) 'refresh' found, with contents: 0;url=/valid."},
+        ],
+    }]
+    normalized = normalize_native_output('web.nikto', json.dumps(report))
+    specs = native_observation_finding_specs(
+        normalized, observation_kind='web-vulnerability',
+        category='web-vulnerability-assessment',
+    )
+    assert len(specs) == 4
+    assert len({s.identity_key for s in specs}) == 4
+    assert {s.severity for s in specs} == {'low', 'info'}
+    assert {'nikto.013587.content-security-policy',
+            'nikto.013587.referrer-policy',
+            'nikto.999100.x-audit-key',
+            'nikto.999100.refresh'} == {s.rule_id for s in specs}
+
