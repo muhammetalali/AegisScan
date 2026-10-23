@@ -161,6 +161,15 @@ def test_authenticated_user_can_self_deactivate_with_current_password():
     )
     assert login.status_code == 200
 
+    # Simulate a second device refresh credential; it must be revoked as well.
+    from rest_framework_simplejwt.tokens import RefreshToken
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken, OutstandingToken,
+    )
+    other_device_token = RefreshToken.for_user(user)
+    previous_refresh = OutstandingToken.objects.get(jti=other_device_token['jti'])
+    assert not BlacklistedToken.objects.filter(token=previous_refresh).exists()
+
     csrf_token = client.get('/api/v1/auth/csrf/').json()['csrfToken']
     response = client.post(
         '/api/v1/auth/deactivate-self/',
@@ -170,6 +179,10 @@ def test_authenticated_user_can_self_deactivate_with_current_password():
 
     assert response.status_code == 200
     assert response.json()['deactivated'] is True
+    assert BlacklistedToken.objects.filter(token=previous_refresh).exists()
+    assert not OutstandingToken.objects.filter(
+        user=user, blacklistedtoken__isnull=True,
+    ).exists()
     user.refresh_from_db()
     assert user.is_active is False
     audit = AuditLog.objects.get(action=AuditLog.Action.USER_UPDATE, user=user)
