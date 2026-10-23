@@ -88,16 +88,17 @@ def _run(
     timeout: int = 3600,
     input_data: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv,
-        cwd=cwd,
-        env=env,
-        check=True,
-        text=True,
-        capture_output=capture,
-        timeout=timeout,
-        input=input_data,
-    )
+    run_kwargs = {
+        "cwd": cwd,
+        "env": env,
+        "check": True,
+        "text": True,
+        "capture_output": capture,
+        "timeout": timeout,
+    }
+    if input_data is not None:
+        run_kwargs["input"] = input_data
+    return subprocess.run(argv, **run_kwargs)
 
 
 def _free_bytes(path: Path = PLATFORM_DIR) -> int:
