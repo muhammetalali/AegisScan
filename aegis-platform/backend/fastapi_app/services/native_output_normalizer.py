@@ -586,6 +586,9 @@ def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
             rule = str(item.get('id') or 'unknown').strip()[:100]
             uri = str(item.get('url') or '').strip()[:2048]
             refs = item.get('references')
+            # Do not suppress independently actionable rules when only a subset
+            # of probes returned a hosting error page on the same report.
+            error_page_header = missing_deployment and rule in {'999100', '999979', '013587'}
             rule_id = f'nikto.{rule}'
             severity = 'medium'
             confidence = 'medium'
@@ -615,13 +618,13 @@ def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
                 remediation = 'A Vercel request ID is not proof of a disclosed server IP address.'
 
             observations.append({
-                'kind': 'web-target-diagnostic' if missing_deployment else 'web-vulnerability',
+                'kind': 'web-target-diagnostic' if error_page_header else 'web-vulnerability',
                 'rule_id': rule_id,
                 'title': (message[:500] or f'Nikto observation {rule}'),
                 'description': message or 'Nikto reported a web-server observation.',
-                'severity': 'info' if missing_deployment else severity,
-                'confidence': 'low' if missing_deployment else confidence,
-                'category': 'web-target-diagnostic' if missing_deployment else 'web-vulnerability-assessment',
+                'severity': 'info' if error_page_header else severity,
+                'confidence': 'low' if error_page_header else confidence,
+                'category': 'web-target-diagnostic' if error_page_header else 'web-vulnerability-assessment',
                 'host': host, 'ip': ip, 'port': port,
                 'location': uri,
                 'method': str(item.get('method') or 'GET').upper()[:16],
