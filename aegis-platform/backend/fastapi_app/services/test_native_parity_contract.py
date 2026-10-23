@@ -172,3 +172,18 @@ def test_nikto_adapter_disables_updates_and_uses_secure_file_capture():
     assert spec.suffix_args[-2:] == ('-Format', 'json')
     assert spec.capture_mode == 'nikto-json-file'
     assert '/dev/stdout' not in spec.suffix_args
+
+
+def test_content_discovery_adapters_bounded_wildcard_and_autocalibration_contract():
+    from fastapi_app.services.native_tool_runtime import get_native_tool_spec, validate_native_options
+
+    gobuster = get_native_tool_spec('web.gobuster')
+    assert validate_native_options(gobuster, {'exclude_length': 15})['exclude_length'] == 15
+    for invalid in (0, -1, 1000001, 'not-a-length'):
+        with pytest.raises(ValueError):
+            validate_native_options(gobuster, {'exclude_length': invalid})
+    assert gobuster.option_map['exclude_length'].flag == '--exclude-length'
+    assert '-ac' in get_native_tool_spec('web.ffuf').suffix_args
+    assert '-r' not in get_native_tool_spec('web.ffuf').suffix_args
+    # Nikto must not follow unchecked redirects into a different authorization scope.
+    assert '-followredirects' not in get_native_tool_spec('web.nikto').suffix_args
