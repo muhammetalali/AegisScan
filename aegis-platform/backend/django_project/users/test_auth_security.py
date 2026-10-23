@@ -342,3 +342,25 @@ def test_legacy_versionless_jwt_is_denied_without_recreating_user():
     client.cookies['aegis_refresh'] = legacy_refresh
     assert client.post('/api/v1/auth/refresh/', {},
                        HTTP_X_CSRFTOKEN=csrf).status_code == 401
+
+
+@pytest.mark.django_db
+def test_django_session_hash_invalidated_on_auth_version_change():
+    """Django sessions cannot return after account suspension/reactivation."""
+    from django_project.users.authentication import bump_auth_version
+    account = User.objects.create_user(
+        email='generation-django-session@example.invalid',
+        password='Strong-Test-Password-123!',
+    )
+    old_hash = account.get_session_auth_hash()
+    client = Client()
+    client.force_login(account)
+    assert client.get('/api/v1/auth/users/me/').status_code == 200
+
+    account.is_active = False
+    account.save(update_fields=['is_active'])
+    bump_auth_version(account)
+    account.is_active = True
+    account.save(update_fields=['is_active'])
+    assert account.get_session_auth_hash() != old_hash
+    assert client.get('/api/v1/auth/users/me/').status_code in (401, 403)
