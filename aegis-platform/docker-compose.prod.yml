@@ -28,7 +28,6 @@ services:
       - media_data:/usr/share/nginx/html/media:ro
 
   django:
-    build: {network: host}
     env_file: !reset []
     ports: !reset []
     volumes: !override
@@ -43,7 +42,6 @@ services:
       AUTH_COOKIE_SECURE: "True"
 
   fastapi:
-    build: {network: host}
     env_file: !reset []
     ports: !reset []
     volumes: !override
@@ -68,7 +66,6 @@ services:
       redis: {condition: service_healthy}
 
   scanner_egress:
-    build: {network: host}
     environment:
       SCANNER_EGRESS_INTERFACE: ${SCANNER_EGRESS_INTERFACE:-eth0}
       SCANNER_CONTROL_ENDPOINTS: ${SCANNER_CONTROL_ENDPOINTS:-postgres:5432/tcp,redis:6379/tcp,django:8000/tcp}
@@ -81,7 +78,6 @@ services:
       django: {condition: service_started}
 
   celery_worker:
-    build: {network: host}
     env_file: !reset []
     volumes: !reset []
     read_only: true
@@ -99,7 +95,6 @@ services:
       context: ./backend
       dockerfile: Dockerfile.django
       target: production-no-legacy-recon
-      network: host
       args:
         AEGIS_RETIRE_NMAP: "1"
         AEGIS_RETIRE_NUCLEI: "1"
@@ -325,7 +320,6 @@ services:
       start_period: 5s
 
   browser_worker:
-    build: {network: host}
     env_file: !reset []
     volumes: !reset []
     read_only: true
@@ -345,7 +339,6 @@ services:
       django: {condition: service_started}
 
   celery_beat:
-    build: {network: host}
     env_file: !reset []
     volumes: !reset []
     read_only: true
@@ -358,22 +351,6 @@ services:
     depends_on: !override
       redis: {condition: service_healthy}
       postgres: {condition: service_healthy}
-
-  # The frontend, monitoring, and backup builds are declared in other Compose
-  # files. Restrict host networking to build steps only: Debian package
-  # indexes are unreachable from the production Docker build bridge, while
-  # host package endpoints are reachable. No runtime network_mode is changed.
-  frontend:
-    build: {network: host}
-
-  alert_receiver:
-    build: {network: host}
-
-  alertmanager:
-    build: {network: host}
-
-  backup:
-    build: {network: host}
 
   postgres:
     ports: !reset []
