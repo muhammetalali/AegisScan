@@ -20,7 +20,7 @@ from .serializers import (
     APIKeySerializer, APIKeyCreateSerializer, UserSessionSerializer, LoginAttemptSerializer
 )
 from .permissions import IsOwnerOrReadOnly, HasPermission, IsTeamAdmin, CompanyOwnerControlsAccounts, can_manage_account
-from .authentication import revoke_outstanding_refresh_tokens
+from .authentication import revoke_outstanding_refresh_tokens, bump_auth_version
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -157,6 +157,7 @@ class UserViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save(update_fields=['is_active'])
         revoke_outstanding_refresh_tokens(instance)
+        bump_auth_version(instance)
         append_audit(
             user=self.request.user, action=AuditLog.Action.USER_DELETE,
             result=AuditLog.Result.SUCCESS, resource_type='User',
@@ -166,6 +167,7 @@ class UserViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated, HasPermission, CompanyOwnerControlsAccounts], required_permissions=['user.update'])
+    @transaction.atomic
     def set_password(self, request, pk=None):
         from django.contrib.auth.password_validation import validate_password
         from django.core.exceptions import ValidationError as DjangoValidationError
@@ -184,8 +186,9 @@ class UserViewSet(viewsets.ModelViewSet):
             raise ValidationError({'password': exc.messages}) from exc
         target.set_password(raw)
         target.save(update_fields=['password'])
-        # Revoke outstanding refresh tokens after an administrative password change.
+        # Revoke both stored refresh and signed access tokens across all devices.
         revoke_outstanding_refresh_tokens(target)
+        bump_auth_version(target)
         return Response({'message': 'Password updated; prior refresh tokens revoked.'})
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
@@ -194,6 +197,7 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    @transaction.atomic
     def change_password(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -202,6 +206,8 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Current password is incorrect'}, status=status.HTTP_400_BAD_REQUEST)
         user.set_password(serializer.validated_data['new_password'])
         user.save()
+        revoke_outstanding_refresh_tokens(user)
+        bump_auth_version(user)
         return Response({'message': 'Password changed successfully'})
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
@@ -224,6 +230,7 @@ class UserViewSet(viewsets.ModelViewSet):
         # Legacy disabled accounts may still carry pre-fix refresh credentials.
         # Invalidate them before reactivation, without resetting the password.
         revoke_outstanding_refresh_tokens(user)
+        bump_auth_version(user)
         user.is_active = True
         user.save(update_fields=['is_active'])
         append_audit(
@@ -246,6 +253,7 @@ class UserViewSet(viewsets.ModelViewSet):
         user.is_active = False
         user.save(update_fields=['is_active'])
         revoke_outstanding_refresh_tokens(user)
+        bump_auth_version(user)
         append_audit(
             user=request.user, action=AuditLog.Action.USER_UPDATE,
             result=AuditLog.Result.SUCCESS, resource_type='User',
