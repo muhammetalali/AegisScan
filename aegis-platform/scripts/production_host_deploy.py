@@ -86,16 +86,19 @@ def _run(
     env: dict[str, str] | None = None,
     capture: bool = True,
     timeout: int = 3600,
+    input_data: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv,
-        cwd=cwd,
-        env=env,
-        check=True,
-        text=True,
-        capture_output=capture,
-        timeout=timeout,
-    )
+    run_kwargs = {
+        "cwd": cwd,
+        "env": env,
+        "check": True,
+        "text": True,
+        "capture_output": capture,
+        "timeout": timeout,
+    }
+    if input_data is not None:
+        run_kwargs["input"] = input_data
+    return subprocess.run(argv, **run_kwargs)
 
 
 def _free_bytes(path: Path = PLATFORM_DIR) -> int:
@@ -1011,8 +1014,68 @@ def _wait_for_registry_dns(
     )
 
 
+def _build_images_with_host_uplink(
+    env_file: Path, deployment_env: dict[str, str]
+) -> None:
+    """Use a build-only host uplink without changing Compose/runtime networks.
+
+    The Ubuntu host can reach Debian mirrors but the production Docker build
+    bridge cannot. Docker Compose 5.6.0 does not forward network.host grants
+    correctly to Buildx Bake; explicitly grant the sole network.host entitlement
+    to Buildx for trusted, exact-SHA image builds. No project YAML or running
+    container namespace is modified and no temporary bake file is created.
+    """
+    bake_text = _run(
+        _compose(env_file, "build", "--print", "--pull"),
+        cwd=PLATFORM_DIR,
+        env=deployment_env,
+        timeout=120,
+    ).stdout
+    try:
+        bake = json.loads(bake_text)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise DeployError("production Compose build did not produce valid Bake JSON") from exc
+    if not isinstance(bake, dict) or not isinstance(bake.get("target"), dict) or not bake["target"]:
+        raise DeployError("production Compose Bake configuration has no build targets")
+    targets = bake["target"]
+    for name, target in targets.items():
+        if not isinstance(target, dict):
+            raise DeployError(f"invalid production Bake target: {name}")
+        existing = target.get("entitlements", [])
+        if not isinstance(existing, list) or any(not isinstance(x, str) for x in existing):
+            raise DeployError(f"invalid production Bake entitlements: {name}")
+        # No security.insecure or additional BuildKit entitlements are granted.
+        if any(value not in ("network.host",) for value in existing):
+            raise DeployError(f"unexpected privileged production Bake entitlement: {name}")
+        target["network"] = "host"
+        target["entitlements"] = ["network.host"]
+        target["pull"] = True
+
+    print(
+        json.dumps(
+            {
+                "schema": "aegisscan.production-build-uplink.v1",
+                "status": "building",
+                "build_targets": len(targets),
+                "build_network": "host",
+                "runtime_networks_changed": False,
+                "granted_entitlements": ["network.host"],
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    _run(
+        ["docker", "buildx", "bake", "--file", "-", "--allow=network.host", "--pull"],
+        cwd=PLATFORM_DIR,
+        env=deployment_env,
+        input_data=json.dumps(bake, separators=(",", ":")),
+        capture=False,
+        timeout=7200,
+    )
+
+
 def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, object]:
-    build_argv = _compose(env_file, "build", "--pull")
     dns_readiness: dict[str, object] = {}
     build_attempt = 0
     for build_attempt in range(1, PRODUCTION_BUILD_ATTEMPTS + 1):
@@ -1041,13 +1104,7 @@ def _build_stack(env_file: Path, deployment_env: dict[str, str]) -> dict[str, ob
             time.sleep(PRODUCTION_BUILD_BACKOFF_SECONDS * build_attempt)
             continue
         try:
-            _run(
-                build_argv,
-                cwd=PLATFORM_DIR,
-                env=deployment_env,
-                capture=False,
-                timeout=7200,
-            )
+            _build_images_with_host_uplink(env_file, deployment_env)
             break
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             if build_attempt >= PRODUCTION_BUILD_ATTEMPTS:

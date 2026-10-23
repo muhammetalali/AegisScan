@@ -69,6 +69,26 @@ def _env_file(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def mock_image_build(monkeypatch):
+    """Keep existing retry/storage unit scenarios focused on orchestration.
+
+    The real production Buildx host-uplink transformation is asserted in its
+    own tests below, not silently mocked away.
+    """
+    monkeypatch.setattr(
+        deploy,
+        "_build_images_with_host_uplink",
+        lambda env_file, environment: deploy._run(
+            deploy._compose(env_file, "build", "--pull"),
+            cwd=deploy.PLATFORM_DIR,
+            env=environment,
+            capture=False,
+            timeout=7200,
+        ),
+    )
+
+
 def test_env_file_must_be_private(tmp_path: Path):
     path = _env_file(tmp_path)
     path.chmod(0o644)
@@ -810,6 +830,71 @@ def test_registry_dns_readiness_requires_consecutive_uplink_stability(monkeypatc
     assert sleeps == [1, 1, 1, 1, 1, 1]
 
 
+def test_production_buildx_host_uplink_uses_only_explicit_network_entitlement(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    bake = {
+        "group": {"default": {"targets": ["django", "scanner_worker"]}},
+        "target": {
+            "django": {"context": "./backend", "dockerfile": "Dockerfile.django"},
+            "scanner_worker": {
+                "context": "./backend",
+                "dockerfile": "Dockerfile.django",
+                "target": "production-no-legacy-recon",
+                "args": {"AEGIS_RETIRE_NMAP": "1"},
+            },
+        },
+    }
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        if argv[:2] == ["docker", "compose"]:
+            return SimpleNamespace(stdout=json.dumps(bake))
+        if argv[:3] == ["docker", "buildx", "bake"]:
+            actual = json.loads(kwargs["input_data"])
+            assert set(actual["target"]) == {"django", "scanner_worker"}
+            assert actual["group"] == bake["group"]
+            for name in actual["target"]:
+                assert actual["target"][name]["network"] == "host"
+                assert actual["target"][name]["entitlements"] == ["network.host"]
+                assert actual["target"][name]["pull"] is True
+            assert actual["target"]["scanner_worker"]["target"] == "production-no-legacy-recon"
+            assert kwargs["capture"] is False
+            return SimpleNamespace(stdout="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
+    monkeypatch.setattr(deploy, "_run", fake_run)
+    deploy._build_images_with_host_uplink(env_file, {})
+
+    assert calls[0][0] == ["docker", "compose", "build", "--print", "--pull"]
+    assert calls[1][0] == [
+        "docker", "buildx", "bake", "--file", "-", "--allow=network.host", "--pull"
+    ]
+
+
+def test_production_buildx_host_uplink_rejects_invalid_or_extra_privileged_bake(tmp_path, monkeypatch):
+    env_file = _env_file(tmp_path)
+    bad_bakes = [
+        "not JSON",
+        json.dumps({"group": {"default": {"targets": []}}, "target": {}}),
+        json.dumps({"target": {"django": {"entitlements": ["security.insecure"]}}}),
+        json.dumps({"target": {"django": {"entitlements": "network.host"}}}),
+    ]
+    monkeypatch.setattr(deploy, "_compose", lambda _env, *args: ["docker", "compose", *args])
+    for bad in bad_bakes:
+        monkeypatch.setattr(
+            deploy, "_run",
+            lambda argv, **kwargs: (
+                SimpleNamespace(stdout=bad)
+                if argv[:2] == ["docker", "compose"]
+                else pytest.fail("Buildx must never run after a malformed/privileged Bake input")
+            ),
+        )
+        with pytest.raises(deploy.DeployError):
+            deploy._build_images_with_host_uplink(env_file, {})
+
+
 def test_registry_dns_readiness_fails_closed_before_build(monkeypatch):
     sleeps = []
     monkeypatch.setattr(
@@ -835,7 +920,7 @@ def test_registry_dns_readiness_fails_closed_before_build(monkeypatch):
     assert sleeps == [1]
 
 
-def test_build_stack_retries_transient_build_failure_after_dns_readiness(tmp_path, monkeypatch):
+def test_build_stack_retries_transient_build_failure_after_dns_readiness(tmp_path, monkeypatch, mock_image_build):
     env_file = _env_file(tmp_path)
     calls = []
     sleeps = []
@@ -871,7 +956,7 @@ def test_build_stack_retries_transient_build_failure_after_dns_readiness(tmp_pat
     assert result["registry_dns_readiness"]["status"] == "ready"
 
 
-def test_build_stack_stops_after_bounded_failed_attempts(tmp_path, monkeypatch):
+def test_build_stack_stops_after_bounded_failed_attempts(tmp_path, monkeypatch, mock_image_build):
     env_file = _env_file(tmp_path)
     calls = []
     sleeps = []
@@ -907,7 +992,7 @@ def test_build_stack_stops_after_bounded_failed_attempts(tmp_path, monkeypatch):
     assert sleeps == [deploy.PRODUCTION_BUILD_BACKOFF_SECONDS]
 
 
-def test_production_28_capacity_recovers_before_start_without_pruning_images_or_volumes(tmp_path, monkeypatch):
+def test_production_28_capacity_recovers_before_start_without_pruning_images_or_volumes(tmp_path, monkeypatch, mock_image_build):
     monkeypatch.setattr(
         deploy,
         "_wait_for_registry_dns",
@@ -1014,7 +1099,7 @@ def test_validate_nginx_config_uses_isolated_docker_run(tmp_path: Path, monkeypa
 
 
 
-def test_unrecoverable_build_capacity_does_not_start_services(tmp_path, monkeypatch, capsys):
+def test_unrecoverable_build_capacity_does_not_start_services(tmp_path, monkeypatch, capsys, mock_image_build):
     monkeypatch.setattr(
         deploy,
         "_wait_for_registry_dns",
@@ -1179,7 +1264,7 @@ def test_post_build_storage_reclaim_remains_fail_closed_when_cache_is_insufficie
         deploy._post_build_storage("application-image-build")
 
 
-def test_deploy_stack_recovers_post_build_floor_before_service_mutation(tmp_path: Path, monkeypatch):
+def test_deploy_stack_recovers_post_build_floor_before_service_mutation(tmp_path: Path, monkeypatch, mock_image_build):
     monkeypatch.setattr(
         deploy,
         "_wait_for_registry_dns",
@@ -1218,7 +1303,7 @@ def test_deploy_stack_recovers_post_build_floor_before_service_mutation(tmp_path
     ]
 
 
-def test_invalid_gateway_config_stops_build_boundary_before_service_start(tmp_path, monkeypatch):
+def test_invalid_gateway_config_stops_build_boundary_before_service_start(tmp_path, monkeypatch, mock_image_build):
     monkeypatch.setattr(
         deploy,
         "_wait_for_registry_dns",
@@ -1351,7 +1436,7 @@ def test_legacy_alert_delivery_network_with_live_endpoints_is_preserved(monkeypa
     assert not any(argv[1:3] == ["network", "rm"] for argv in calls)
 
 
-def test_build_stack_retries_registry_dns_readiness_before_build(tmp_path, monkeypatch):
+def test_build_stack_retries_registry_dns_readiness_before_build(tmp_path, monkeypatch, mock_image_build):
     env_file = _env_file(tmp_path)
     readiness_calls = []
     build_calls = []
