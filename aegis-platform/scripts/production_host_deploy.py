@@ -42,6 +42,8 @@ MAX_STORAGE_DIAGNOSTIC_BYTES = 16 * 1024
 INTERNAL_ALERT_PATH = "/_aegis/alerts"
 INTERNAL_ALERT_PORT = 8443
 ALERT_RECEIVER_TOKEN_PATH = Path("/etc/aegisscan/secrets/alert-receiver-token")
+BACKUP_EGRESS_ROUTE_HELPER = Path("/etc/aegisscan/backup-egress-route.sh")
+BACKUP_EGRESS_ROUTE_UNIT_FILE = Path("/etc/systemd/system/aegisscan-backup-egress-route.service")
 ALERT_RECEIVER_UID = 10003
 ALERT_RECEIVER_GID = 10003
 LAB_NETWORK_BOUNDARIES = (
@@ -811,10 +813,67 @@ def _running_services(env_file: Path, deployment_env: dict[str, str]) -> set[str
     return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
 
+def _reconcile_existing_backup_egress_route(deployment_env: dict[str, str]) -> bool:
+    """Recover only the preinstalled, backup-scoped route before a durable backup.
+
+    A systemd oneshot service can remain 'active (exited)' after its kernel
+    policy rule/table disappear. Never change the global default route or
+    scanner namespaces; delegate to the existing root-owned, fail-closed
+    backup-egress route helper instead of constructing a second route.
+    """
+    helper = BACKUP_EGRESS_ROUTE_HELPER
+    unit_file = BACKUP_EGRESS_ROUTE_UNIT_FILE
+    unit = "aegisscan-backup-egress-route.service"
+    if not helper.is_file() and not unit_file.is_file():
+        # Other deployments may not use the dedicated two-uplink backup route.
+        return False
+    if not helper.is_file() or not unit_file.is_file():
+        raise DeployError("existing production backup-egress route installation is incomplete")
+
+    _run(["systemctl", "is-active", "--quiet", unit], timeout=20)
+    recovered = False
+    try:
+        _run([str(helper), "check"], timeout=30)
+    except subprocess.CalledProcessError:
+        _run(["systemctl", "reload", unit], timeout=60)
+        _run([str(helper), "check"], timeout=30)
+        recovered = True
+
+    # A correct kernel route alone does not prove the S3 network path.
+    # Probe outbound TLS from the existing, unprivileged backup container,
+    # without loading credentials, making an S3 mutation or emitting its URL.
+    probe = (
+        "import os,socket,ssl,urllib.parse;"
+        "v=urllib.parse.urlsplit(os.environ['AEGIS_BACKUP_S3_ENDPOINT']);"
+        "assert v.scheme=='https' and v.hostname;"
+        "s=socket.create_connection((v.hostname,v.port or 443),timeout=8);"
+        "t=ssl.create_default_context().wrap_socket(s,server_hostname=v.hostname);"
+        "assert t.version();t.close()"
+    )
+    try:
+        _run(
+            ["docker", "exec", "aegis-remote-backup", "python3", "-c", probe],
+            cwd=PLATFORM_DIR, env=deployment_env, timeout=40,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise DeployError(
+            "production backup S3 TLS egress unreachable after scoped route verification"
+        ) from exc
+    print(json.dumps({
+        "schema": "aegisscan.backup-egress-preflight.v1",
+        "status": "success",
+        "scoped_route_reloaded": recovered,
+        "backup_s3_tls": "ready",
+        "runtime_scanner_network_changed": False,
+    }, sort_keys=True), flush=True)
+    return recovered
+
+
 def _backup_before_upgrade(env_file: Path, deployment_env: dict[str, str]) -> dict[str, str | bool]:
     running = _running_services(env_file, deployment_env)
     if "postgres" not in running:
         return {"performed": False, "reason": "first-deploy-or-postgres-not-running"}
+    _reconcile_existing_backup_egress_route(deployment_env)
     result = _run(
         _compose(
             env_file,

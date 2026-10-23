@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "g0-buildx-uplink-20261023-021814",
+  "request_id": "g0-scoped-backup-route-20261023-124427",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "7f9a5334567b9388b8a4c9ad71a1ed9e973df17c",
-  "requested_at": "2026-10-23T02:18:14Z",
-  "expires_at": "2026-10-23T22:18:14Z"
+  "requested_base_sha": "0a3bbaa6879e99352575015e178df3c1c9572028",
+  "requested_at": "2026-10-23T12:44:27Z",
+  "expires_at": "2026-10-24T08:44:27Z"
 }
