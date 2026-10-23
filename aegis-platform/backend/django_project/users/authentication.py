@@ -19,6 +19,24 @@ class CookieJWTAuthentication(JWTAuthentication):
             raise AuthenticationFailed('Invalid or expired authentication cookie.') from exc
 
 
+def revoke_outstanding_refresh_tokens(user) -> None:
+    """Permanently invalidate a user's outstanding refresh JWTs before later reactivation.
+
+    A disabled account is rejected by the current is_active authentication check,
+    but unblacklisted refresh JWTs could work again if that account is reactivated
+    before expiry. Reuse this one helper for administrative and self revocation.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken, OutstandingToken,
+    )
+
+    tokens = OutstandingToken.objects.filter(
+        user=user, blacklistedtoken__isnull=True,
+    ).iterator(chunk_size=500)
+    for token in tokens:
+        BlacklistedToken.objects.get_or_create(token=token)
+
+
 class ScopedAPIKeyAuthentication(BaseAuthentication):
     """Accept issued API keys only on views that explicitly opt in.
 

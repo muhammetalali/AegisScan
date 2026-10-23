@@ -20,6 +20,7 @@ from .serializers import (
     APIKeySerializer, APIKeyCreateSerializer, UserSessionSerializer, LoginAttemptSerializer
 )
 from .permissions import IsOwnerOrReadOnly, HasPermission, IsTeamAdmin, CompanyOwnerControlsAccounts, can_manage_account
+from .authentication import revoke_outstanding_refresh_tokens
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ class UserViewSet(viewsets.ModelViewSet):
         # Preserve security/audit relations: a revoked account is never hard-deleted.
         instance.is_active = False
         instance.save(update_fields=['is_active'])
+        revoke_outstanding_refresh_tokens(instance)
         append_audit(
             user=self.request.user, action=AuditLog.Action.USER_DELETE,
             result=AuditLog.Result.SUCCESS, resource_type='User',
@@ -183,9 +185,7 @@ class UserViewSet(viewsets.ModelViewSet):
         target.set_password(raw)
         target.save(update_fields=['password'])
         # Revoke outstanding refresh tokens after an administrative password change.
-        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
-        for token in OutstandingToken.objects.filter(user=target):
-            BlacklistedToken.objects.get_or_create(token=token)
+        revoke_outstanding_refresh_tokens(target)
         return Response({'message': 'Password updated; prior refresh tokens revoked.'})
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
@@ -221,6 +221,9 @@ class UserViewSet(viewsets.ModelViewSet):
         user = self.get_object()
         if not can_manage_account(request.user, user):
             return Response({'detail': 'Only the primary owner can manage privileged accounts.'}, status=403)
+        # Legacy disabled accounts may still carry pre-fix refresh credentials.
+        # Invalidate them before reactivation, without resetting the password.
+        revoke_outstanding_refresh_tokens(user)
         user.is_active = True
         user.save(update_fields=['is_active'])
         append_audit(
@@ -242,6 +245,7 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response({'error': 'The primary company owner cannot be deactivated.'}, status=status.HTTP_400_BAD_REQUEST)
         user.is_active = False
         user.save(update_fields=['is_active'])
+        revoke_outstanding_refresh_tokens(user)
         append_audit(
             user=request.user, action=AuditLog.Action.USER_UPDATE,
             result=AuditLog.Result.SUCCESS, resource_type='User',

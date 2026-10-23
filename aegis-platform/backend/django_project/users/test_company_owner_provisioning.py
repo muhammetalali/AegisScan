@@ -579,3 +579,85 @@ def test_existing_account_inventory_can_filter_active_and_search(company_owner):
     viewer_client.force_authenticate(user=active)
     denied = viewer_client.get(url, {'status': 'all', 'q': 'operations'})
     assert denied.status_code == 403
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('revocation_action', ['deactivate', 'delete'])
+def test_account_revocation_blacklists_refresh_even_after_later_activation(
+    company_owner, revocation_action,
+):
+    """An old token must never regain validity when an employee is reactivated."""
+    from rest_framework_simplejwt.tokens import RefreshToken
+    from rest_framework_simplejwt.exceptions import TokenError
+    from rest_framework_simplejwt.token_blacklist.models import (
+        OutstandingToken, BlacklistedToken,
+    )
+
+    employee = User.objects.create_user(
+        email=f'revoke-refresh-{revocation_action}@example.invalid',
+        password='Strong-Test-Employee!2026',
+        role=UserRole.VIEWER,
+        is_active=True,
+    )
+    stale = RefreshToken.for_user(employee)
+    unrelated = RefreshToken.for_user(company_owner)
+    original = OutstandingToken.objects.get(jti=stale['jti'])
+    keep = OutstandingToken.objects.get(jti=unrelated['jti'])
+    assert not BlacklistedToken.objects.filter(token=original).exists()
+
+    owner = APIClient()
+    owner.force_authenticate(user=company_owner)
+    endpoint = f'/api/v1/auth/users/{employee.pk}/'
+    if revocation_action == 'deactivate':
+        response = owner.post(endpoint + 'deactivate/', {}, format='json')
+        assert response.status_code == 200
+    else:
+        response = owner.delete(endpoint)
+        assert response.status_code == 204
+
+    employee.refresh_from_db()
+    assert not employee.is_active
+    assert BlacklistedToken.objects.filter(token=original).exists()
+    assert not BlacklistedToken.objects.filter(token=keep).exists()
+
+    # Re-enabling an account cannot revive refresh credentials from its prior life.
+    assert owner.post(endpoint + 'activate/', {}, format='json').status_code == 200
+    with pytest.raises(TokenError):
+        RefreshToken(str(stale))
+    assert not BlacklistedToken.objects.filter(token=keep).exists()
+
+
+@pytest.mark.django_db
+def test_reactivation_blacklists_preexisting_refresh_from_legacy_disabled_account(
+    company_owner,
+):
+    """Existing disabled identities must not revive refresh tokens issued before this fix."""
+    from rest_framework_simplejwt.tokens import RefreshToken
+    from rest_framework_simplejwt.exceptions import TokenError
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken, OutstandingToken,
+    )
+
+    employee = User.objects.create_user(
+        email='legacy-disabled-refresh@example.invalid',
+        password='Strong-Test-Employee!2026',
+        role=UserRole.VIEWER,
+        is_active=True,
+    )
+    stale = RefreshToken.for_user(employee)
+    outstanding = OutstandingToken.objects.get(jti=stale['jti'])
+    employee.is_active = False  # Reproduce the historical pre-fix state.
+    employee.save(update_fields=['is_active'])
+    assert not BlacklistedToken.objects.filter(token=outstanding).exists()
+
+    owner = APIClient()
+    owner.force_authenticate(user=company_owner)
+    response = owner.post(
+        f'/api/v1/auth/users/{employee.pk}/activate/', {}, format='json',
+    )
+    assert response.status_code == 200
+    employee.refresh_from_db()
+    assert employee.is_active
+    assert BlacklistedToken.objects.filter(token=outstanding).exists()
+    with pytest.raises(TokenError):
+        RefreshToken(str(stale))
