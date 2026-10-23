@@ -69,6 +69,9 @@ class VersionedTokenRefreshSerializer(TokenRefreshSerializer):
 
 
 class LoginView(APIView):
+    # Stale access cookies must not prevent credential login, refresh denial,
+    # or logout cleanup. Each endpoint validates its own supplied credential.
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     @method_decorator(csrf_protect)
@@ -142,6 +145,9 @@ class RegisterView(APIView):
 
 
 class RefreshView(APIView):
+    # Stale access cookies must not prevent credential login, refresh denial,
+    # or logout cleanup. Each endpoint validates its own supplied credential.
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     @method_decorator(csrf_protect)
@@ -161,6 +167,9 @@ class RefreshView(APIView):
 
 
 class LogoutView(APIView):
+    # Stale access cookies must not prevent credential login, refresh denial,
+    # or logout cleanup. Each endpoint validates its own supplied credential.
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     @method_decorator(csrf_protect)
