@@ -42,6 +42,8 @@ MAX_STORAGE_DIAGNOSTIC_BYTES = 16 * 1024
 INTERNAL_ALERT_PATH = "/_aegis/alerts"
 INTERNAL_ALERT_PORT = 8443
 ALERT_RECEIVER_TOKEN_PATH = Path("/etc/aegisscan/secrets/alert-receiver-token")
+BACKUP_EGRESS_ROUTE_HELPER = Path("/etc/aegisscan/backup-egress-route.sh")
+BACKUP_EGRESS_ROUTE_UNIT_FILE = Path("/etc/systemd/system/aegisscan-backup-egress-route.service")
 ALERT_RECEIVER_UID = 10003
 ALERT_RECEIVER_GID = 10003
 LAB_NETWORK_BOUNDARIES = (
@@ -819,8 +821,8 @@ def _reconcile_existing_backup_egress_route(deployment_env: dict[str, str]) -> b
     scanner namespaces; delegate to the existing root-owned, fail-closed
     backup-egress route helper instead of constructing a second route.
     """
-    helper = Path("/etc/aegisscan/backup-egress-route.sh")
-    unit_file = Path("/etc/systemd/system/aegisscan-backup-egress-route.service")
+    helper = BACKUP_EGRESS_ROUTE_HELPER
+    unit_file = BACKUP_EGRESS_ROUTE_UNIT_FILE
     unit = "aegisscan-backup-egress-route.service"
     if not helper.is_file() and not unit_file.is_file():
         # Other deployments may not use the dedicated two-uplink backup route.
