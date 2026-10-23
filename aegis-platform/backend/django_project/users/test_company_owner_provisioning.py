@@ -625,3 +625,39 @@ def test_account_revocation_blacklists_refresh_even_after_later_activation(
     with pytest.raises(TokenError):
         RefreshToken(str(stale))
     assert not BlacklistedToken.objects.filter(token=keep).exists()
+
+
+@pytest.mark.django_db
+def test_reactivation_blacklists_preexisting_refresh_from_legacy_disabled_account(
+    company_owner,
+):
+    """Existing disabled identities must not revive refresh tokens issued before this fix."""
+    from rest_framework_simplejwt.tokens import RefreshToken
+    from rest_framework_simplejwt.exceptions import TokenError
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken, OutstandingToken,
+    )
+
+    employee = User.objects.create_user(
+        email='legacy-disabled-refresh@example.invalid',
+        password='Strong-Test-Employee!2026',
+        role=UserRole.VIEWER,
+        is_active=True,
+    )
+    stale = RefreshToken.for_user(employee)
+    outstanding = OutstandingToken.objects.get(jti=stale['jti'])
+    employee.is_active = False  # Reproduce the historical pre-fix state.
+    employee.save(update_fields=['is_active'])
+    assert not BlacklistedToken.objects.filter(token=outstanding).exists()
+
+    owner = APIClient()
+    owner.force_authenticate(user=company_owner)
+    response = owner.post(
+        f'/api/v1/auth/users/{employee.pk}/activate/', {}, format='json',
+    )
+    assert response.status_code == 200
+    employee.refresh_from_db()
+    assert employee.is_active
+    assert BlacklistedToken.objects.filter(token=outstanding).exists()
+    with pytest.raises(TokenError):
+        RefreshToken(str(stale))
