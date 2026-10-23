@@ -211,6 +211,7 @@ RUN command -v nmap >/dev/null \
     && command -v exiftool >/dev/null \
     && command -v gobuster >/dev/null \
     && command -v ffuf >/dev/null \
+    && test -d /home/aegis/.config/ffuf/scraper \
     && command -v dirb >/dev/null \
     && command -v dnsenum >/dev/null \
     && command -v fierce >/dev/null \
