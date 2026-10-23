@@ -530,6 +530,13 @@ def _normalize_feroxbuster(raw: str) -> list[dict[str, Any]]:
 
 
 def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
+    """Preserve Nikto observations without elevating error-page headers to bugs.
+
+    Nikto has numeric rule IDs shared by multiple independent HTTP headers.
+    Extend their identities with the *header name*, never dynamic header values.
+    A Vercel DEPLOYMENT_NOT_FOUND report is a target-availability diagnostic:
+    keep all raw observations in evidence, project only one informational issue.
+    """
     data = _embedded_json(raw)
     reports = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
     observations: list[dict[str, Any]] = []
@@ -540,37 +547,86 @@ def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
         ip = str(report.get('ip') or '')[:64]
         port = _positive_int(report.get('port'), 65535)
         vulnerabilities = report.get('vulnerabilities')
-        if isinstance(vulnerabilities, list) and vulnerabilities:
-            for item in vulnerabilities[:2000]:
-                if not isinstance(item, dict):
-                    continue
-                message = str(item.get('msg') or '').strip()[:5000]
-                rule = str(item.get('id') or 'unknown').strip()[:100]
-                uri = str(item.get('url') or '').strip()[:2048]
-                refs = item.get('references')
-                observations.append({
-                    'kind': 'web-vulnerability',
-                    'rule_id': f'nikto.{rule}',
-                    'title': (message[:500] or f'Nikto finding {rule}'),
-                    'description': message or 'Nikto reported a web-server security observation.',
-                    'severity': 'medium',
-                    'confidence': 'medium',
-                    'category': 'web-vulnerability-assessment',
-                    'host': host,
-                    'ip': ip,
-                    'port': port,
-                    'location': uri,
-                    'method': str(item.get('method') or 'GET').upper()[:16],
-                    'references': [str(value)[:2048] for value in refs[:20]] if isinstance(refs, list) else [],
-                    'remediation': 'Review the affected web-server configuration or resource and remove the reported exposure.',
-                })
-        else:
+        if not isinstance(vulnerabilities, list) or not vulnerabilities:
             observations.append({
-                'kind': 'web-scan-summary',
-                'host': host,
-                'ip': ip,
-                'port': port,
-                'finding_count': 0,
+                'kind': 'web-scan-summary', 'host': host, 'ip': ip,
+                'port': port, 'finding_count': 0,
+            })
+            continue
+
+        items = [item for item in vulnerabilities[:2000] if isinstance(item, dict)]
+        missing_deployment = any(
+            str(item.get('id') or '') == '999100'
+            and 'x-vercel-error' in str(item.get('msg') or '').lower()
+            and 'DEPLOYMENT_NOT_FOUND' in str(item.get('msg') or '').upper()
+            for item in items
+        )
+        if missing_deployment:
+            observations.append({
+                'kind': 'web-vulnerability',
+                'rule_id': 'nikto.target-unavailable.vercel-deployment-not-found',
+                'title': 'Target unavailable: Vercel DEPLOYMENT_NOT_FOUND (not a confirmed vulnerability)',
+                'description': (
+                    'The hosting edge reports DEPLOYMENT_NOT_FOUND. Header observations '
+                    'on this error page do not establish the application security posture. '
+                    'Verify the hostname, deployment and authorized target before testing again.'
+                ),
+                'severity': 'info',
+                'confidence': 'high',
+                'category': 'web-target-diagnostic',
+                'host': host, 'ip': ip, 'port': port,
+                'location': str(items[0].get('url') or '')[:2048],
+                'method': 'GET',
+                'references': [],
+                'remediation': 'Verify the authorized deployment and target URL. Do not attempt WAF evasion.',
+            })
+
+        for item in items:
+            message = str(item.get('msg') or '').strip()[:5000]
+            rule = str(item.get('id') or 'unknown').strip()[:100]
+            uri = str(item.get('url') or '').strip()[:2048]
+            refs = item.get('references')
+            rule_id = f'nikto.{rule}'
+            severity = 'medium'
+            confidence = 'medium'
+            remediation = 'Review the affected web-server configuration or resource and remove the reported exposure.'
+            if rule == '013587':
+                match = re.search(
+                    r'Suggested security header missing:\\s*([A-Za-z0-9-]+)',
+                    message, re.IGNORECASE,
+                )
+                if match:
+                    rule_id += '.' + match.group(1).lower()
+                severity = 'low'
+                confidence = 'medium'
+                remediation = 'Validate the header on a successful application response before recommending hardening.'
+            elif rule == '999100':
+                match = re.search(r"Uncommon header\\(s\\) '([^']{1,100})'", message, re.IGNORECASE)
+                if match:
+                    names = re.sub(r'[^a-z0-9-]+', '-', match.group(1).lower()).strip('-')
+                    if names:
+                        rule_id += '.' + names[:80]
+                severity = 'info'
+                confidence = 'low'
+                remediation = 'Header presence is informational; verify context before security classification.'
+            elif rule == '999979' and 'x-vercel-id' in message.lower():
+                severity = 'info'
+                confidence = 'low'
+                remediation = 'A Vercel request ID is not proof of a disclosed server IP address.'
+
+            observations.append({
+                'kind': 'web-target-diagnostic' if missing_deployment else 'web-vulnerability',
+                'rule_id': rule_id,
+                'title': (message[:500] or f'Nikto observation {rule}'),
+                'description': message or 'Nikto reported a web-server observation.',
+                'severity': 'info' if missing_deployment else severity,
+                'confidence': 'low' if missing_deployment else confidence,
+                'category': 'web-target-diagnostic' if missing_deployment else 'web-vulnerability-assessment',
+                'host': host, 'ip': ip, 'port': port,
+                'location': uri,
+                'method': str(item.get('method') or 'GET').upper()[:16],
+                'references': [str(value)[:2048] for value in refs[:20]] if isinstance(refs, list) else [],
+                'remediation': remediation,
             })
     return observations
 
