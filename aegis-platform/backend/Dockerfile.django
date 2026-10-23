@@ -145,6 +145,8 @@ RUN mkdir -p /opt/aegis-wordlists \
 
 RUN groupadd --gid 10001 aegis \
     && useradd --uid 10001 --gid aegis --create-home --shell /usr/sbin/nologin aegis \
+    && mkdir -p /home/aegis/.config/ffuf/scraper \
+    && chown -R aegis:aegis /home/aegis/.config \
     && mkdir -p /app/staticfiles /app/media \
     && chown -R aegis:aegis /app /opt/trivy-cache \
     && chmod 0755 \
