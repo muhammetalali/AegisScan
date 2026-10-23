@@ -33,10 +33,10 @@ def test_get_current_user_accepts_cookie_only_session(monkeypatch):
 
     async def fake_verify_token(token: str):
         seen.append(token)
-        return {"user_id": "cookie-user", "token_type": "access"}
+        return {"user_id": "cookie-user", "auth_version": 1, "token_type": "access"}
 
-    async def fake_is_active_user(user_id: str):
-        return user_id == "cookie-user"
+    async def fake_is_active_user(user_id: str, auth_version: int):
+        return user_id == "cookie-user" and auth_version == 1
 
     monkeypatch.setattr(dependencies, "verify_token", fake_verify_token)
     monkeypatch.setattr(dependencies, "_is_active_user", fake_is_active_user)
@@ -60,7 +60,7 @@ def test_deactivated_employee_cookie_is_rejected_immediately(monkeypatch):
     )
 
     async def still_valid_signed_token(_token: str):
-        return {"user_id": str(employee.pk), "token_type": "access"}
+        return {"user_id": str(employee.pk), "auth_version": employee.auth_version, "token_type": "access"}
 
     monkeypatch.setattr(dependencies, "verify_token", still_valid_signed_token)
     request = _request_with_cookie("still-cryptographically-valid-token")
@@ -77,11 +77,40 @@ def test_deactivated_employee_cookie_is_rejected_immediately(monkeypatch):
 @pytest.mark.django_db(transaction=True)
 def test_unknown_or_invalid_signed_identity_is_denied(monkeypatch):
     async def signed_token_with_invalid_identity(_token: str):
-        return {"user_id": "invalid-account-id", "token_type": "access"}
+        return {"user_id": "invalid-account-id", "auth_version": 1, "token_type": "access"}
 
     monkeypatch.setattr(dependencies, "verify_token", signed_token_with_invalid_identity)
     with pytest.raises(HTTPException) as exc:
         asyncio.run(dependencies.get_current_user(
             _request_with_cookie("otherwise-valid-token"), credentials=None,
         ))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.django_db(transaction=True)
+def test_previous_generation_token_rejected_after_reactivation(monkeypatch):
+    employee = User.objects.create_user(
+        email="revoked-epoch-fastapi@example.invalid",
+        password="Strong-Test-Password-123!",
+    )
+    old_generation = employee.auth_version
+
+    async def signed_token(_token: str):
+        return {
+            "user_id": str(employee.pk),
+            "auth_version": old_generation,
+            "token_type": "access",
+        }
+
+    monkeypatch.setattr(dependencies, "verify_token", signed_token)
+    request = _request_with_cookie("pre-revocation-signed-token")
+    assert asyncio.run(dependencies.get_current_user(request, credentials=None))
+    from django.db.models import F
+    employee.is_active = False
+    employee.save(update_fields=["is_active"])
+    User.objects.filter(pk=employee.pk).update(auth_version=F("auth_version") + 1)
+    employee.is_active = True
+    employee.save(update_fields=["is_active"])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dependencies.get_current_user(request, credentials=None))
     assert exc.value.status_code == 401
