@@ -167,6 +167,97 @@ def test_privileged_storage_reclaim_fails_closed_below_minimum(monkeypatch):
         deploy._host_storage_reclaim()
 
 
+def test_backup_scoped_route_is_checked_without_reloading_when_healthy(tmp_path, monkeypatch):
+    helper = tmp_path / "backup-egress-route.sh"
+    helper.write_text("existing helper", encoding="utf-8")
+    unit_file = tmp_path / "aegisscan-backup-egress-route.service"
+    unit_file.write_text("existing unit", encoding="utf-8")
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_HELPER", helper)
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_UNIT_FILE", unit_file)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    assert deploy._reconcile_existing_backup_egress_route({}) is False
+    assert calls[0] == [
+        "systemctl", "is-active", "--quiet",
+        "aegisscan-backup-egress-route.service",
+    ]
+    assert calls[1] == [str(helper), "check"]
+    assert calls[2][:4] == ["docker", "exec", "aegis-remote-backup", "python3"]
+    assert all("reload" not in argv for argv in calls)
+
+
+def test_backup_scoped_route_recovers_drift_once_then_probes_tls(tmp_path, monkeypatch):
+    helper = tmp_path / "backup-egress-route.sh"
+    helper.write_text("existing helper", encoding="utf-8")
+    unit_file = tmp_path / "aegisscan-backup-egress-route.service"
+    unit_file.write_text("existing unit", encoding="utf-8")
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_HELPER", helper)
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_UNIT_FILE", unit_file)
+    calls = []
+    check_attempts = 0
+
+    def run(argv, **kwargs):
+        nonlocal check_attempts
+        calls.append(list(argv))
+        if list(argv) == [str(helper), "check"]:
+            check_attempts += 1
+            if check_attempts == 1:
+                raise subprocess.CalledProcessError(1, argv)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    assert deploy._reconcile_existing_backup_egress_route({}) is True
+    assert check_attempts == 2
+    assert calls[2] == [
+        "systemctl", "reload", "aegisscan-backup-egress-route.service"
+    ]
+    assert calls[3] == [str(helper), "check"]
+    assert calls[4][:4] == ["docker", "exec", "aegis-remote-backup", "python3"]
+    assert all(argv[:2] != ["ip", "route"] for argv in calls)
+
+
+def test_backup_route_incomplete_installation_fails_closed(tmp_path, monkeypatch):
+    missing_helper = tmp_path / "missing-helper"
+    unit = tmp_path / "aegisscan-backup-egress-route.service"
+    unit.write_text("exists", encoding="utf-8")
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_HELPER", missing_helper)
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_UNIT_FILE", unit)
+    monkeypatch.setattr(
+        deploy, "_run", lambda *args, **kwargs: pytest.fail("must not invoke network operations")
+    )
+    with pytest.raises(deploy.DeployError, match="installation is incomplete"):
+        deploy._reconcile_existing_backup_egress_route({})
+
+
+def test_backup_route_tls_failure_blocks_upgrade_backup(tmp_path, monkeypatch):
+    helper = tmp_path / "backup-egress-route.sh"
+    helper.write_text("existing helper", encoding="utf-8")
+    unit = tmp_path / "aegisscan-backup-egress-route.service"
+    unit.write_text("exists", encoding="utf-8")
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_HELPER", helper)
+    monkeypatch.setattr(deploy, "BACKUP_EGRESS_ROUTE_UNIT_FILE", unit)
+    monkeypatch.setattr(deploy, "_running_services", lambda *_: {"postgres"})
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[:3] == ["docker", "exec", "aegis-remote-backup"]:
+            raise subprocess.CalledProcessError(1, argv)
+        if "once" in argv:
+            pytest.fail("database backup must not start when S3 network is unreachable")
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "_run", run)
+    with pytest.raises(deploy.DeployError, match="TLS egress unreachable"):
+        deploy._backup_before_upgrade(_env_file(tmp_path), {})
+    assert calls[-1][:3] == ["docker", "exec", "aegis-remote-backup"]
+
+
 def test_backup_skips_only_when_postgres_is_not_running(tmp_path: Path, monkeypatch):
     env_file = _env_file(tmp_path)
     monkeypatch.setattr(deploy, "_running_services", lambda *_: set())
