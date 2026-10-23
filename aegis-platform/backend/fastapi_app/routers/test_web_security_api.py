@@ -147,8 +147,8 @@ def test_web_security_http_api_persists_policy_validation_and_blocks_viewer_writ
         role=ProjectMembership.Role.VIEWER,
     )
     client = TestClient(app)
-    owner_headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(owner.id)})}'}
-    viewer_headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(viewer.id)})}'}
+    owner_headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(owner.id), "auth_version": owner.auth_version})}'}
+    viewer_headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(viewer.id), "auth_version": viewer.auth_version})}'}
 
     policy_response = client.post(
         f'/api/v1/web-security/projects/{project.id}/authorization/policies',
@@ -256,7 +256,7 @@ def test_protocol_validation_api_persists_websocket_graphql_and_transition_linea
         owner=owner,
     )
     client = TestClient(app)
-    headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(owner.id)})}'}
+    headers = {'Authorization': f'Bearer {create_access_token({"user_id": str(owner.id), "auth_version": owner.auth_version})}'}
     protocol_secret = 'protocol-api-test-secret-only'
     credential = create_credential_secret(
         project=project,
