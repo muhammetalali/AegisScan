@@ -184,6 +184,8 @@ class User(AbstractUser):
     granted_permissions = models.JSONField(null=True, blank=True, default=None)
     enabled_scan_types = models.JSONField(null=True, blank=True, default=None)
     enabled_pages = models.JSONField(null=True, blank=True, default=None)
+    # Increments on any access revocation/reinstatement. JWTs must match exactly.
+    auth_version = models.PositiveBigIntegerField(default=1)
     two_factor_enabled = models.BooleanField(_('2FA enabled'), default=False)
     two_factor_secret = models.CharField(_('2FA secret'), max_length=32, blank=True)
     password_reset_token = models.UUIDField(_('password reset token'), default=uuid.uuid4, editable=False)
