@@ -1,10 +1,10 @@
 {
   "schema": "aegisscan.internal-production-deployment-request.v1",
-  "request_id": "g0-scoped-backup-route-20261023-124427",
+  "request_id": "g2-session-revocation-pr435-20261023-213923",
   "confirm": "DEPLOY",
   "deployment_mode": "internal",
   "requested_branch": "main",
-  "requested_base_sha": "0a3bbaa6879e99352575015e178df3c1c9572028",
-  "requested_at": "2026-10-23T12:44:27Z",
-  "expires_at": "2026-10-24T08:44:27Z"
+  "requested_base_sha": "3fa0cf7e630247d6bd063eb9c3d351fb893f6785",
+  "requested_at": "2026-10-23T21:39:23Z",
+  "expires_at": "2026-10-24T20:39:23Z"
 }
