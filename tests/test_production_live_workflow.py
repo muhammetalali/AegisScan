@@ -29,6 +29,52 @@ def _construct_compose_tag(loader: ComposeLoader, node):
 ComposeLoader.add_constructor("!reset", _construct_compose_tag)
 ComposeLoader.add_constructor("!override", _construct_compose_tag)
 
+def test_production_build_network_uses_host_uplink_without_changing_runtime_isolation():
+    # The failed release could reach Debian from Ubuntu but not from Docker's
+    # build bridge. Host networking is allowed for *image build steps only*.
+    # Keep every scanner's runtime network namespace governed by scanner_egress.
+    compose_files = (
+        BASE_COMPOSE,
+        PROD_COMPOSE,
+        ROOT / "aegis-platform/docker-compose.monitoring.yml",
+        ROOT / "aegis-platform/docker-compose.backup.yml",
+    )
+    parsed = [
+        yaml.load(path.read_text(encoding="utf-8"), Loader=ComposeLoader)
+        for path in compose_files
+    ]
+    build_services = {
+        name
+        for config in parsed
+        for name, service in config["services"].items()
+        if "build" in service
+    }
+    assert build_services == {
+        "django", "fastapi", "scanner_egress", "celery_worker",
+        "scanner_worker", "browser_worker", "celery_beat", "frontend",
+        "alert_receiver", "alertmanager", "backup",
+    }
+
+    production_services = parsed[1]["services"]
+    for name in build_services:
+        build = production_services[name]["build"]
+        assert build["network"] == "host", name
+        assert production_services[name].get("network_mode") != "host", name
+
+    # Production must never provide host network access to a running scanner.
+    base_services = parsed[0]["services"]
+    for name in ("scanner_worker", "browser_worker", "kali_recon"):
+        assert base_services[name]["network_mode"] == "service:scanner_egress"
+    for name in ("kali_network", "kali_masscan", "kali_web", "kali_code"):
+        assert production_services[name]["network_mode"] == "service:scanner_egress"
+
+    # The dedicated scanner_worker build target and capability retirement flags
+    # must remain intact after changing only the build-stage network.
+    scanner_build = production_services["scanner_worker"]["build"]
+    assert scanner_build["target"] == "production-no-legacy-recon"
+    assert all(value == "1" for value in scanner_build["args"].values())
+
+
 
 def _workflow() -> dict:
     data = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
