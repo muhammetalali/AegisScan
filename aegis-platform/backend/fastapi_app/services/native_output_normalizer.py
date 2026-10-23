@@ -592,7 +592,7 @@ def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
             remediation = 'Review the affected web-server configuration or resource and remove the reported exposure.'
             if rule == '013587':
                 match = re.search(
-                    r'Suggested security header missing:\\s*([A-Za-z0-9-]+)',
+                    r'Suggested security header missing:\s*([A-Za-z0-9-]+)',
                     message, re.IGNORECASE,
                 )
                 if match:
@@ -601,7 +601,7 @@ def _normalize_nikto(raw: str) -> list[dict[str, Any]]:
                 confidence = 'medium'
                 remediation = 'Validate the header on a successful application response before recommending hardening.'
             elif rule == '999100':
-                match = re.search(r"Uncommon header\\(s\\) '([^']{1,100})'", message, re.IGNORECASE)
+                match = re.search(r"Uncommon header\(s\) '([^']{1,100})'", message, re.IGNORECASE)
                 if match:
                     names = re.sub(r'[^a-z0-9-]+', '-', match.group(1).lower()).strip('-')
                     if names:
