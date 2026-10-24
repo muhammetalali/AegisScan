@@ -7,6 +7,14 @@ from django.conf import settings
 class CookieJWTAuthentication(JWTAuthentication):
     """Authenticate DRF requests with the access JWT stored in an HttpOnly cookie."""
 
+    def get_user(self, validated_token):
+        user = super().get_user(validated_token)
+        generation = validated_token.get('auth_version')
+        if (type(generation) is not int or generation != user.auth_version
+                or user.two_factor_enabled):
+            raise AuthenticationFailed('Authentication session revoked.')
+        return user
+
     def authenticate(self, request):
         raw_token = request.COOKIES.get(settings.AUTH_ACCESS_COOKIE)
         if not raw_token:
@@ -74,3 +82,14 @@ class ScopedAPIKeyAuthentication(BaseAuthentication):
 
     def authenticate_header(self, request):
         return 'X-API-Key'
+
+def bump_auth_version(user) -> None:
+    """Atomically revoke issued access JWTs across all devices and API protocols.
+
+    Call within the same database transaction as status/password changes. The
+    new auth generation invalidates even short-lived access tokens on later
+    reactivation, while separate blacklist state revokes outstanding refreshes.
+    """
+    from django.db.models import F
+    type(user).objects.filter(pk=user.pk).update(auth_version=F('auth_version') + 1)
+    user.refresh_from_db(fields=['auth_version'])

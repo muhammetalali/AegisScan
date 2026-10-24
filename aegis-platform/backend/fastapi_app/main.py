@@ -17,7 +17,7 @@ from .services.decision_action_orchestration import initialize_action_store
 from .services.workflow_live_bridge import WorkflowLiveBridge
 from .services.policy_engine import initialize_policy_store
 from .core.config import settings
-from .core.dependencies import get_current_user, require_permission
+from .core.dependencies import get_current_user, require_permission, _is_active_user
 from .core.security import verify_token
 from django_project.users.models import Permission, User
 logging.basicConfig(level=logging.INFO); logger=logging.getLogger(__name__)
@@ -51,59 +51,93 @@ def _validation_access(validation_id:str,user_id:str)->bool:
 def _has_system_monitor_permission(user_id:str)->bool:
     user=User.objects.filter(pk=user_id,is_active=True).first()
     return bool(user and user.has_permission(Permission.SYSTEM_MONITOR))
-async def _authenticate_socket(websocket:WebSocket):
-    token=websocket.cookies.get(settings.AUTH_ACCESS_COOKIE)
-    if not token: await websocket.close(code=4001); return None
-    user=await verify_token(token)
-    if not user: await websocket.close(code=4001); return None
+async def _authenticate_socket(websocket: WebSocket):
+    token = websocket.cookies.get(settings.AUTH_ACCESS_COOKIE)
+    if not token:
+        await websocket.close(code=4001)
+        return None
+    user = await verify_token(token)
+    if (not user or type(user.get('auth_version')) is not int
+            or not await _is_active_user(
+                str(user.get('user_id') or ''), user['auth_version'])):
+        await websocket.close(code=4001)
+        return None
     return user
+
+
+async def _receive_authorized_socket(websocket: WebSocket, identity: dict) -> None:
+    """Check live revocation even on idle, already-admitted WebSocket sessions.
+
+    Keep one pending ASGI receive task rather than cancelling receive_text on
+    each polling cycle, because some ASGI servers cannot safely cancel it.
+    Broadcast independently validates generation BEFORE each sensitive send.
+    """
+    receive_task = asyncio.create_task(websocket.receive_text())
+    try:
+        while True:
+            if not await _is_active_user(
+                str(identity.get('user_id') or ''), identity.get('auth_version')):
+                await websocket.close(code=4001)
+                return
+            done, _ = await asyncio.wait({receive_task}, timeout=2.0)
+            if receive_task in done:
+                try:
+                    receive_task.result()
+                except WebSocketDisconnect:
+                    return
+                receive_task = asyncio.create_task(websocket.receive_text())
+    finally:
+        if not receive_task.done():
+            receive_task.cancel()
+            await asyncio.gather(receive_task, return_exceptions=True)
+
 @app.websocket('/ws/workflow')
 async def websocket_workflow(websocket:WebSocket):
     user=await _authenticate_socket(websocket)
     if not user:return
-    await websocket_manager.connect('workflow',websocket)
+    await websocket_manager.connect('workflow',websocket, user)
     try:
         await websocket.send_json({'type':'workflow.connected','user_id':user.get('user_id')})
-        while True: await websocket.receive_text()
-    except WebSocketDisconnect: websocket_manager.disconnect('workflow',websocket)
+        await _receive_authorized_socket(websocket,user)
+    finally: websocket_manager.disconnect('workflow',websocket)
 @app.websocket('/ws/scan/{scan_id}')
 async def websocket_scan_progress(websocket:WebSocket,scan_id:str):
     user=await _authenticate_socket(websocket)
     if not user or not await _scan_access(scan_id,str(user.get('user_id'))):
         if user: await websocket.close(code=4003)
         return
-    await websocket_manager.connect(scan_id,websocket); await websocket_manager.connect(f'scan_{scan_id}',websocket)
+    await websocket_manager.connect(scan_id,websocket, user); await websocket_manager.connect(f'scan_{scan_id}',websocket, user)
     try:
-        while True: await websocket.receive_text()
-    except WebSocketDisconnect: websocket_manager.disconnect(scan_id,websocket); websocket_manager.disconnect(f'scan_{scan_id}',websocket)
+        await _receive_authorized_socket(websocket,user)
+    finally: websocket_manager.disconnect(scan_id,websocket); websocket_manager.disconnect(f'scan_{scan_id}',websocket)
 @app.websocket('/ws/validations/{validation_id}')
 async def websocket_validation_progress(websocket:WebSocket,validation_id:str):
     user=await _authenticate_socket(websocket)
     if not user or not await _validation_access(validation_id,str(user.get('user_id'))):
         if user: await websocket.close(code=4003)
         return
-    await websocket_manager.connect(validation_id,websocket); await websocket_manager.connect(f'validation_{validation_id}',websocket)
+    await websocket_manager.connect(validation_id,websocket, user); await websocket_manager.connect(f'validation_{validation_id}',websocket, user)
     try:
-        while True: await websocket.receive_text()
-    except WebSocketDisconnect: websocket_manager.disconnect(validation_id,websocket); websocket_manager.disconnect(f'validation_{validation_id}',websocket)
+        await _receive_authorized_socket(websocket,user)
+    finally: websocket_manager.disconnect(validation_id,websocket); websocket_manager.disconnect(f'validation_{validation_id}',websocket)
 @app.websocket('/ws/notifications')
 async def websocket_notifications(websocket:WebSocket):
     user=await _authenticate_socket(websocket)
     if not user:return
-    key=f'user_{user.get("user_id")}'; await websocket_manager.connect(key,websocket)
+    key=f'user_{user.get("user_id")}'; await websocket_manager.connect(key,websocket, user)
     try:
-        while True: await websocket.receive_text()
-    except WebSocketDisconnect: websocket_manager.disconnect(key,websocket)
+        await _receive_authorized_socket(websocket,user)
+    finally: websocket_manager.disconnect(key,websocket)
 @app.websocket('/ws/system/monitor')
 async def websocket_system_monitor(websocket:WebSocket):
     user=await _authenticate_socket(websocket)
     if not user or not await _has_system_monitor_permission(str(user.get('user_id') or '')):
         if user: await websocket.close(code=4003)
         return
-    await websocket_manager.connect('system_monitor',websocket)
+    await websocket_manager.connect('system_monitor',websocket, user)
     try:
-        while True: await websocket.receive_text()
-    except WebSocketDisconnect: websocket_manager.disconnect('system_monitor',websocket)
+        await _receive_authorized_socket(websocket,user)
+    finally: websocket_manager.disconnect('system_monitor',websocket)
 @app.get('/health')
 async def health_check(): return {'status':'healthy','timestamp':datetime.now(timezone.utc).isoformat()}
 _READINESS_PROBE_INTERVAL_SECONDS=2.0

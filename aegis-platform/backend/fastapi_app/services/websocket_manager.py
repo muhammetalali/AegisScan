@@ -10,12 +10,17 @@ class WebSocketManager:
     def __init__(self):
         self.connections: Dict[str, Set[WebSocket]] = {}
         self.user_connections: Dict[str, Set[WebSocket]] = {}
+        self.connection_identity: dict[WebSocket, tuple[str, int]] = {}
 
-    async def connect(self, channel: str, websocket: WebSocket):
-        await websocket.accept()
-        if channel not in self.connections:
-            self.connections[channel] = set()
-        self.connections[channel].add(websocket)
+    async def connect(self, channel: str, websocket: WebSocket, identity: dict | None = None):
+        if websocket not in self.connection_identity:
+            if not identity or type(identity.get('auth_version')) is not int:
+                raise ValueError('Authenticated WebSocket identity required')
+            await websocket.accept()
+            self.connection_identity[websocket] = (
+                str(identity.get('user_id') or ''), identity['auth_version'],
+            )
+        self.connections.setdefault(channel, set()).add(websocket)
         logger.info(f"WebSocket connected to {channel}. Total connections: {len(self.connections[channel])}")
 
     def disconnect(self, channel: str, websocket: WebSocket):
@@ -23,9 +28,28 @@ class WebSocketManager:
             self.connections[channel].discard(websocket)
             if not self.connections[channel]:
                 del self.connections[channel]
+        if not any(websocket in sockets for sockets in self.connections.values()):
+            self.connection_identity.pop(websocket, None)
         logger.info(f"WebSocket disconnected from {channel}")
 
+    async def _authorized_for_send(self, websocket: WebSocket) -> bool:
+        # Revalidate before EACH broadcast; periodic WS receive checks bound the
+        # lifetime of an idle revoked connection separately.
+        from ..core.dependencies import _is_active_user
+        identity = self.connection_identity.get(websocket)
+        if identity and await _is_active_user(*identity):
+            return True
+        try:
+            await websocket.close(code=4001)
+        except Exception:
+            pass
+        for channel in list(self.connections):
+            self.disconnect(channel, websocket)
+        return False
+
     async def send_personal_message(self, message: dict, websocket: WebSocket):
+        if not await self._authorized_for_send(websocket):
+            return
         try:
             await websocket.send_json(message)
         except Exception as e:
@@ -35,7 +59,9 @@ class WebSocketManager:
         if channel not in self.connections:
             return
         disconnected = set()
-        for websocket in self.connections[channel]:
+        for websocket in list(self.connections[channel]):
+            if not await self._authorized_for_send(websocket):
+                continue
             try:
                 await websocket.send_json(message)
             except Exception as e:

@@ -184,6 +184,8 @@ class User(AbstractUser):
     granted_permissions = models.JSONField(null=True, blank=True, default=None)
     enabled_scan_types = models.JSONField(null=True, blank=True, default=None)
     enabled_pages = models.JSONField(null=True, blank=True, default=None)
+    # Increments on any access revocation/reinstatement. JWTs must match exactly.
+    auth_version = models.PositiveBigIntegerField(default=1)
     two_factor_enabled = models.BooleanField(_('2FA enabled'), default=False)
     two_factor_secret = models.CharField(_('2FA secret'), max_length=32, blank=True)
     password_reset_token = models.UUIDField(_('password reset token'), default=uuid.uuid4, editable=False)
@@ -200,6 +202,20 @@ class User(AbstractUser):
         indexes = [models.Index(fields=['email']), models.Index(fields=['role']), models.Index(fields=['is_active'])]
     def __str__(self): return self.email
     def get_full_name(self): return f"{self.first_name} {self.last_name}".strip()
+
+    def _get_session_auth_hash(self, secret=None):
+        """Invalidate ordinary Django sessions when auth_version changes.
+
+        Django's stock session hash only depends on password: suspension and
+        quick reactivation leave that value unchanged. Keep the same HMAC
+        key salt and SECRET_KEY fallback mechanism, but bind the generation.
+        """
+        from django.utils.crypto import salted_hmac
+        return salted_hmac(
+            "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash",
+            f"{self.password}:{self.auth_version}",
+            secret=secret, algorithm="sha256",
+        ).hexdigest()
     @property
     def is_company_owner(self) -> bool:
         from django.conf import settings
