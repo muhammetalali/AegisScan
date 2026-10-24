@@ -28,4 +28,5 @@ RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
 SystemCallArchitectures=native
 IPAddressDeny=any
-IPAddressAllow=192.168.49.53/32
+# Signed updates talk only to the local authoritative BIND instance.
+IPAddressAllow=127.0.0.1/32
