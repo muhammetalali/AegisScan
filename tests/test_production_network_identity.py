@@ -229,3 +229,98 @@ def test_windows_entrypoint_detects_lan_from_relative_project_tree():
     assert "ExecutionPolicy Bypass" not in starter
     assert "192.168.49." not in starter
     assert "VMnet8" not in starter
+
+
+def test_vmware_adapter_is_a_service_candidate_without_becoming_scan_scope():
+    records = [
+        {"name": "VMware Network Adapter VMnet8",
+         "description": "VMware Virtual Ethernet Adapter", "index": 35,
+         "up": True, "ipv4": "192.168.49.1", "prefix": 24, "gateway": None},
+        {"name": "Ethernet", "description": "Intel Ethernet", "index": 7,
+         "up": True, "ipv4": "10.12.34.56", "prefix": 24, "gateway": "10.12.34.1"},
+    ]
+    result = network.windows_host_identity(records)
+    assert result["networks"] == [{
+        "interface": "Ethernet", "interface_index": 7,
+        "ipv4": "10.12.34.56", "subnet": "10.12.34.0/24",
+        "gateway": "10.12.34.1", "origin": "windows-active-adapter",
+    }]
+    assert {row["interface"] for row in result["service_connection_candidates"]} == {
+        "Ethernet", "VMware Network Adapter VMnet8",
+    }
+    assert all(row["route_validation"] == "required" for row in result["service_connection_candidates"])
+    assert all(row["scan_authorization"] == "not-inferred-from-connectivity"
+               for row in result["service_connection_candidates"])
+    assert result["service_selection"] == "reachability-and-verified-tls-required"
+
+
+def test_windows_service_candidates_change_with_active_adapter_not_saved_ip():
+    def connection(name, ip):
+        return [{"name": name, "description": "Intel Ethernet",
+                 "index": 10, "up": True, "ipv4": ip, "prefix": 24,
+                 "gateway": None}]
+    before = network.windows_host_identity(connection("Ethernet", "10.4.5.6"))
+    after = network.windows_host_identity(connection("Wi-Fi", "192.168.72.3"))
+    assert before["service_connection_candidates"][0]["subnet"] == "10.4.5.0/24"
+    assert after["service_connection_candidates"][0]["subnet"] == "192.168.72.0/24"
+    assert before["scan_authorization"] == after["scan_authorization"]
+
+
+def test_down_virtual_adapter_never_masquerades_as_connected_service_path():
+    result = network.windows_host_identity([{
+        "name": "VMware", "description": "VMware Virtual Ethernet",
+        "index": 25, "up": False, "ipv4": "192.168.9.1", "prefix": 24,
+    }])
+    assert result["service_connection_candidates"] == []
+    assert result["networks"] == []
+
+
+def test_multihomed_dns_reuses_trusted_signed_record_on_current_dhcp(monkeypatch):
+    routes = route("192.168.49.2", "ens33", 1024) + route("172.23.192.1", "ens37", 1024)
+    def ip_json(*parts):
+        if parts == ("route", "show", "default"):
+            return routes
+        if parts == ("addr", "show", "dev", "ens33"):
+            return addr("192.168.49.136", 24, "ens33")
+        if parts == ("addr", "show", "dev", "ens37"):
+            return addr("172.23.201.247", 20, "ens37")
+        raise AssertionError(parts)
+    monkeypatch.setattr(network, "_ip_json", ip_json)
+    assert network.current_dns_binding_identity(previous_addresses=("192.168.49.134",))["interface"] == "ens33"
+    assert network.current_dns_binding_identity(previous_addresses=("172.23.201.200",))["interface"] == "ens37"
+
+
+def test_multihomed_dns_rejects_untrusted_new_subnet(monkeypatch):
+    routes = route("10.21.7.1", "ens35", 100) + route("172.22.16.1", "ens36", 100)
+    def ip_json(*parts):
+        if parts == ("route", "show", "default"):
+            return routes
+        if parts == ("addr", "show", "dev", "ens35"):
+            return addr("10.21.7.123", 24, "ens35")
+        if parts == ("addr", "show", "dev", "ens36"):
+            return addr("172.22.16.15", 24, "ens36")
+        raise AssertionError(parts)
+    monkeypatch.setattr(network, "_ip_json", ip_json)
+    assert network.current_dns_binding_identity(
+        approved_network="10.21.0.0/16", previous_addresses=("10.21.7.100",)
+    )["ipv4"] == "10.21.7.123"
+    with pytest.raises(network.NetworkDiscoveryError, match="equally preferred"):
+        network.current_dns_binding_identity(previous_addresses=("10.21.9.100",))
+
+
+def test_disappeared_previous_adapter_never_selected_as_live_service_route(monkeypatch):
+    routes = route("10.66.1.1", "enp5s0", 100)
+    def ip_json(*parts):
+        if parts == ("route", "show", "default"):
+            return routes
+        if parts == ("addr", "show", "dev", "enp5s0"):
+            return addr("10.66.1.47", 24, "enp5s0")
+        raise AssertionError(parts)
+    monkeypatch.setattr(network, "_ip_json", ip_json)
+    current = network.current_dns_binding_identity(previous_addresses=("172.20.33.14",))
+    assert current["interface"] == "enp5s0"
+    assert current["ipv4"] == "10.66.1.47"
+    with pytest.raises(network.NetworkDiscoveryError, match="no approved"):
+        network.current_dns_binding_identity(
+            approved_network="172.20.0.0/16", previous_addresses=("172.20.33.14",)
+        )

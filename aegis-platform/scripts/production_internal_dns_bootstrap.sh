@@ -301,7 +301,7 @@ fi
 
 cat >"$RUNTIME_ENV_FILE" <<EOF
 AEGIS_DDNS_INTERFACE=$INTERFACE
-AEGIS_DDNS_SERVER=$DNS_SERVICE_IP
+AEGIS_DDNS_SERVER=127.0.0.1
 AEGIS_DNS_SERVICE_IP=$DNS_SERVICE_IP
 AEGIS_DDNS_NETWORK=$INTERNAL_CIDR
 AEGIS_DDNS_FQDN=$FQDN_ABS
@@ -389,13 +389,19 @@ fi
 named-checkconf
 named-checkzone "$ZONE_NAME" "$ZONE_FILE"
 
+# Both the signed DDNS reconciler and the existing DHCP identity detector
+# must be installed together. Do not create a second network-discovery path.
+install -o root -g root -m 0755 \
+  "$PLATFORM_DIR/scripts/production_network_identity.py" \
+  /usr/local/sbin/production_network_identity.py
 install -o root -g root -m 0750 \
   "$PLATFORM_DIR/scripts/production_ddns_reconcile.py" \
   /usr/local/sbin/aegisscan-ddns-reconcile
-sed \
-  -e "s|^IPAddressAllow=.*$|IPAddressAllow=$DNS_SERVICE_IP/32|" \
+# The DDNS updater is never permitted outbound network access: its signed
+# update and its consistency query use local BIND, independently of DHCP.
+install -o root -g root -m 0644 \
   "$PLATFORM_DIR/systemd/aegisscan-ddns-reconcile.service" \
-  >/etc/systemd/system/aegisscan-ddns-reconcile.service
+  /etc/systemd/system/aegisscan-ddns-reconcile.service
 chown root:root /etc/systemd/system/aegisscan-ddns-reconcile.service
 chmod 0644 /etc/systemd/system/aegisscan-ddns-reconcile.service
 install -o root -g root -m 0644 \
