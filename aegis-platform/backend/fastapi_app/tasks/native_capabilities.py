@@ -151,6 +151,7 @@ def _execute_runtime(
             options,
             state_getter=state_getter,
             credential_materials=credential_materials,
+            approved_target=str(authorization.target_snapshot),
         )
         return result, {'provider': 'internal-wstg-validator'}
     routing_decision = recon_provider_decision(capability_id, routing_key=str(scan.id))

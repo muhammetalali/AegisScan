@@ -8,6 +8,8 @@ from fastapi_app.services import wstg_native_capabilities as wstg
 from fastapi_app.services.capability_registry import get_capability
 from fastapi_app.services.native_tool_runtime import NATIVE_TOOL_SPECS, NativeExecutionCancelled
 from fastapi_app.services.pinned_http import PinnedHTTPResponse
+from fastapi_app.services import pinned_http, scope_authorization
+from fastapi_app.services.scope_authorization import ScopeAuthorizationError
 
 
 def _response(status: int = 200, body: bytes = b'ok', headers=None) -> PinnedHTTPResponse:
@@ -236,3 +238,158 @@ def test_method_policy_normalizer_never_claims_unsafe_method_execution():
     normalized = wstg.normalize_wstg_internal_output('web.http-method-policy', raw)
 
     assert normalized['observations'][0]['unsafe_methods_sent'] is False
+
+
+def test_wstg_binding_reaches_pinned_transport_without_static_allowlist(monkeypatch):
+    """One persisted exact scan authorization may authorize its original host only."""
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.setattr(
+        scope_authorization, '_resolve_host_addresses',
+        lambda host: (__import__('ipaddress').ip_address('93.184.216.34'),),
+    )
+
+    def observe(target, checkpoint=lambda: None):
+        pinned = pinned_http._operation_destination(target)
+        assert pinned is not None
+        assert pinned.host == 'approved.example'
+        assert pinned_http._OPERATION_APPROVED_TARGET.get() == 'https://approved.example/path'
+        assert pinned.resolved_ips == ('93.184.216.34',)
+        return {**wstg._base('web.http-method-policy'), 'unsafe_methods_sent': False}
+
+    monkeypatch.setattr(wstg, '_method_policy', observe)
+    result = wstg.run_wstg_internal_capability(
+        'web.http-method-policy',
+        'https://approved.example/path',
+        {},
+        approved_target='https://approved.example/path',
+    )
+    assert result.exit_code == 0
+    assert pinned_http._OPERATION_DESTINATION.get() is None
+    assert pinned_http._OPERATION_APPROVED_TARGET.get() is None
+
+
+def test_wstg_bound_snapshot_rejects_cross_origin_and_unapproved_dns(monkeypatch):
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    import ipaddress
+    monkeypatch.setattr(
+        scope_authorization, '_resolve_host_addresses',
+        lambda host: (ipaddress.ip_address('93.184.216.34'),),
+    )
+
+    # Another allowlisted hostname must NOT be reachable through this scan's pin.
+    monkeypatch.setenv('AUTHORIZED_SCAN_TARGETS', 'other.example')
+    with pinned_http.pinned_http_operation(
+        'https://approved.example/path',
+        approved_target='https://approved.example/path',
+    ):
+        with pytest.raises(ScopeAuthorizationError, match='cannot cross'):
+            pinned_http.request_pinned('GET', 'https://other.example/path')
+        assert pinned_http._OPERATION_APPROVED_TARGET.get() == 'https://approved.example/path'
+    with pytest.raises(ScopeAuthorizationError):
+        pinned_http.pin_http_destination('https://approved.example/path')
+    assert pinned_http._OPERATION_APPROVED_TARGET.get() is None
+
+    monkeypatch.setattr(
+        scope_authorization, '_resolve_host_addresses',
+        lambda host: (ipaddress.ip_address('127.0.0.1'),),
+    )
+    with pytest.raises(ScopeAuthorizationError, match='non-global destination'):
+        with pinned_http.pinned_http_operation(
+            'https://approved.example/path',
+            approved_target='https://approved.example/path',
+        ):
+            pass
+    assert pinned_http._OPERATION_DESTINATION.get() is None
+
+
+def test_wstg_authorization_context_cleans_on_failure(monkeypatch):
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    import ipaddress
+    monkeypatch.setattr(
+        scope_authorization, '_resolve_host_addresses',
+        lambda host: (ipaddress.ip_address('93.184.216.34'),),
+    )
+
+    def rejected(target, checkpoint=lambda: None):
+        assert pinned_http._OPERATION_APPROVED_TARGET.get() == 'https://approved.example/path'
+        raise RuntimeError('simulated transport failure')
+
+    monkeypatch.setattr(wstg, '_method_policy', rejected)
+    with pytest.raises(RuntimeError, match='simulated transport failure'):
+        wstg.run_wstg_internal_capability(
+            'web.http-method-policy',
+            'https://approved.example/path',
+            {},
+            approved_target='https://approved.example/path',
+        )
+    assert pinned_http._OPERATION_APPROVED_TARGET.get() is None
+    assert pinned_http._OPERATION_DESTINATION.get() is None
+
+
+def test_wstg_snapshot_never_authorizes_other_scheme_or_origin(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    import ipaddress
+    monkeypatch.setattr(
+        scope_authorization, '_resolve_host_addresses',
+        lambda host: (ipaddress.ip_address('93.184.216.34'),),
+    )
+    for url in ('http://approved.example/path', 'https://other.example/path'):
+        with pytest.raises(ScopeAuthorizationError, match='does not cover'):
+            pinned_http.pin_http_destination(
+                url, approved_target='https://approved.example/path'
+            )
+
+
+def test_wstg_snapshot_query_specific_never_widens_to_unapproved_probe(monkeypatch):
+    monkeypatch.delenv('AUTHORIZED_SCAN_TARGETS', raising=False)
+    monkeypatch.delenv('AEGIS_LAB_NETWORK_CIDRS', raising=False)
+    import ipaddress
+    monkeypatch.setattr(
+        scope_authorization, '_resolve_host_addresses',
+        lambda host: (ipaddress.ip_address('93.184.216.34'),),
+    )
+    # Query-scoped decisions are exact; normalization must never strip them
+    # into a broader authorization.
+    with pytest.raises(ScopeAuthorizationError):
+        pinned_http.pin_http_destination(
+            'https://approved.example/path?other=2',
+            approved_target='https://approved.example/path?keep=1',
+        )
+
+
+def test_native_worker_propagates_persisted_approval_into_wstg(monkeypatch):
+    """The Celery path must forward the server-side decision, not a client option."""
+    import django
+    from django.apps import apps
+    import os
+    from types import SimpleNamespace
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+    if not apps.ready:
+        django.setup()
+    from fastapi_app.tasks import native_capabilities as worker
+
+    seen = {}
+
+    def fake_validator(capability_id, target, options, **kwargs):
+        seen.update(capability_id=capability_id, target=target, options=options, **kwargs)
+        return wstg.ScanResult(tool='wstg', target=target, exit_code=0, stdout='{}', stderr='')
+
+    monkeypatch.setattr(worker, 'run_wstg_internal_capability', fake_validator)
+    result, provenance = worker._execute_runtime(
+        capability_id='web.http-method-policy',
+        target='https://approved.example/path',
+        options={},
+        scan=SimpleNamespace(id='test-existing-scan'),
+        authorization=SimpleNamespace(target_snapshot='https://approved.example/path'),
+        spec=None,
+        credential_materials=(),
+    )
+    assert result.exit_code == 0
+    assert provenance['provider'] == 'internal-wstg-validator'
+    assert seen['approved_target'] == 'https://approved.example/path'
+    assert seen['target'] == 'https://approved.example/path'
+    assert seen['capability_id'] == 'web.http-method-policy'

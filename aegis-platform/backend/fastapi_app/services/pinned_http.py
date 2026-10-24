@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Iterator, Mapping
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-from .scope_authorization import require_authorized_target
+from .scope_authorization import ScopeAuthorizationError, require_authorized_target
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,9 @@ class PinnedHTTPDestination:
 _OPERATION_DESTINATION: ContextVar[PinnedHTTPDestination | None] = ContextVar(
     'aegis_pinned_http_destination', default=None
 )
+_OPERATION_APPROVED_TARGET: ContextVar[str | None] = ContextVar(
+    'aegis_pinned_http_approved_target', default=None
+)
 
 
 def origin(url: str) -> tuple[str, str, int]:
@@ -74,10 +77,15 @@ def _socket_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address, port
     return (str(address), port)
 
 
-def pin_http_destination(url: str) -> PinnedHTTPDestination:
-    """Resolve and authorize an HTTP(S) origin exactly once for later reuse."""
+def pin_http_destination(url: str, *, approved_target: str | None = None) -> PinnedHTTPDestination:
+    """Resolve and authorize one origin, including an explicitly bound scan snapshot."""
     scheme, host, port = origin(url)
-    checked = require_authorized_target(_scope_url(url), url=True, resolve_dns=True)
+    if approved_target is not None and origin(approved_target) != (scheme, host, port):
+        raise ScopeAuthorizationError('Bound scan authorization does not cover this HTTP origin')
+    approval = {'approved_target': approved_target} if approved_target is not None else {}
+    checked = require_authorized_target(
+        _scope_url(url), url=True, resolve_dns=True, **approval
+    )
     addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
     for raw in checked:
         try:
@@ -94,17 +102,21 @@ def pin_http_destination(url: str) -> PinnedHTTPDestination:
 
 
 @contextmanager
-def pinned_http_operation(url: str) -> Iterator[PinnedHTTPDestination]:
-    """Pin one authorized origin for the lifetime of a multi-request operation.
+def pinned_http_operation(
+    url: str, *, approved_target: str | None = None
+) -> Iterator[PinnedHTTPDestination]:
+    """Pin one approved origin and its immutable authorization snapshot per operation.
 
-    ContextVar scoping prevents a pin from leaking into another thread, async
-    context, Celery delivery, or later execution in the same worker process.
+    ContextVar state is restored on success, failure, and cancellation. A bound
+    snapshot never authorizes a different origin or unapproved private DNS IP.
     """
-    destination = pin_http_destination(url)
+    destination = pin_http_destination(url, approved_target=approved_target)
     token = _OPERATION_DESTINATION.set(destination)
+    approval_token = _OPERATION_APPROVED_TARGET.set(approved_target)
     try:
         yield destination
     finally:
+        _OPERATION_APPROVED_TARGET.reset(approval_token)
         _OPERATION_DESTINATION.reset(token)
 
 
@@ -141,15 +153,26 @@ def request_pinned(
         raise ValueError('Pinned HTTP response limit must be between 0 and 8388608 bytes')
 
     scheme, host, port = origin(url)
+    active_operation = _OPERATION_DESTINATION.get()
+    if active_operation is not None and active_operation.origin != (scheme, host, port):
+        raise ScopeAuthorizationError('Pinned HTTP operation cannot cross its authorized origin')
     reused = destination is not None
     if destination is None:
         destination = _operation_destination(url)
         reused = destination is not None
     if destination is None:
-        destination = pin_http_destination(url)
+        destination = pin_http_destination(
+            url, approved_target=_OPERATION_APPROVED_TARGET.get()
+        )
     elif reused:
-        # Re-check logical authorization while deliberately not consulting DNS.
-        require_authorized_target(_scope_url(url), url=True, resolve_dns=False)
+        # Re-check logical authorization for each request without a fresh DNS lookup.
+        approval = _OPERATION_APPROVED_TARGET.get()
+        require_authorized_target(
+            _scope_url(url),
+            url=True,
+            resolve_dns=False,
+            **({'approved_target': approval} if approval is not None else {}),
+        )
         if destination.origin != (scheme, host, port):
             raise ValueError('Pinned HTTP destination does not match the requested origin')
         if not destination.resolved_ips:

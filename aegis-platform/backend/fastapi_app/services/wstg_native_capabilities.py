@@ -384,6 +384,7 @@ def run_wstg_internal_capability(
     state_getter: Callable[[], str] | None = None,
     poll_interval: float = 0.5,
     credential_materials: tuple[Mapping[str, Any], ...] | None = None,
+    approved_target: str | None = None,
 ) -> ScanResult:
     spec = get_wstg_internal_spec(capability_id)
     normalized_options = validate_wstg_internal_options(capability_id, options or {})
@@ -393,7 +394,8 @@ def run_wstg_internal_capability(
     checkpoint()
     canonical = validate_authorized_web_target(target)
     checkpoint()
-    with pinned_http_operation(canonical) as destination:
+    pin_kwargs = {'approved_target': approved_target} if approved_target is not None else {}
+    with pinned_http_operation(canonical, **pin_kwargs) as destination:
         checkpoint()
         if capability_id == 'web.http-method-policy':
             observation = _method_policy(canonical, checkpoint)
