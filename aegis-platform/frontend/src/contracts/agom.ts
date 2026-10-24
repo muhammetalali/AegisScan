@@ -57,7 +57,7 @@ export const AgomActionContractSchema = z.object({
   idempotency_required: z.boolean(),
   time_aware: z.boolean(),
   side_effects: z.array(z.string()),
-  resulting_projection: z.record(z.string()),
+  resulting_projection: z.record(z.string(), z.string()),
   audit_event: z.string().min(1),
   policy_version: z.string().min(1),
 }).strict()
@@ -124,8 +124,8 @@ export const AgomDecisionPacketSchema = z.object({
   entity: AgomEntityRefSchema,
   current_projection: AgomProjectionSnapshotSchema,
   requested_action: z.string().min(1),
-  risk_context: z.record(z.unknown()),
-  evidence_summary: z.record(z.unknown()),
+  risk_context: z.record(z.string(), z.unknown()),
+  evidence_summary: z.record(z.string(), z.unknown()),
   gate_results: z.array(AgomGateResultSchema),
   sod_eligible: z.boolean(),
   deadline: z.string().nullable(),
@@ -157,7 +157,7 @@ export const AgomActionExecutionSchema = z.object({
   correlation_id: z.string().min(1),
   before_projection: AgomProjectionSnapshotSchema,
   gate_results: z.array(AgomGateResultSchema),
-  result: z.record(z.unknown()),
+  result: z.record(z.string(), z.unknown()),
   after_projection: AgomProjectionSnapshotSchema,
   audit: AgomActionAuditSchema,
   execution_fingerprint: z.string().min(1),
@@ -180,7 +180,7 @@ export const AgomActionRequestSchema = z.object({
   contract_policy_version: z.string().min(1),
   contract_fingerprint: z.string().min(1),
   correlation_id: z.string().min(1),
-  parameters: z.record(z.unknown()),
+  parameters: z.record(z.string(), z.unknown()),
   replayed: z.boolean(),
   created_at: z.string().min(1),
 }).strict()
@@ -214,7 +214,7 @@ export const AgomWorkItemSchema = z.object({
   overdue: z.boolean(),
   created_at: z.string().min(1),
   updated_at: z.string().min(1),
-  details: z.record(z.unknown()),
+  details: z.record(z.string(), z.unknown()),
   item_key: z.string().min(1),
   organization_id: z.string().min(1),
   project_id: z.string().min(1),
@@ -226,7 +226,7 @@ export const AgomWorkQueueSchema = z.object({
   items: z.array(AgomWorkItemSchema),
   total: z.number().int().nonnegative(),
   returned: z.number().int().nonnegative(),
-  counts: z.record(z.number().int().nonnegative()),
+  counts: z.record(z.string(), z.number().int().nonnegative()),
 }).strict().superRefine((queue, ctx) => {
   if (queue.returned !== queue.items.length) {
     ctx.addIssue({
@@ -254,7 +254,7 @@ export const AgomWorkMutationSchema = z.object({
   organization_id: z.string().min(1),
   operation: AgomWorkOperationSchema,
   claim: AgomWorkClaimSchema,
-  source_snapshot: z.record(z.unknown()),
+  source_snapshot: z.record(z.string(), z.unknown()),
   source_snapshot_sha256: z.string().length(64),
   replayed: z.boolean(),
 }).strict()
@@ -269,7 +269,7 @@ export const AgomExecuteActionInputSchema = z.object({
   idempotency_key: z.string().min(1).max(128),
   request_id: z.string().uuid().optional(),
   correlation_id: z.string().uuid().optional(),
-  parameters: z.record(z.unknown()).default({}),
+  parameters: z.record(z.string(), z.unknown()).default({}),
 }).strict()
 
 export const AgomActionRequestCreateInputSchema = AgomExecuteActionInputSchema.omit({
