@@ -162,3 +162,31 @@ def test_reused_governed_assessment_launcher_decision_has_exact_target_and_linea
     ):
         with pytest.raises(RuntimeError):
             harness.require_durable_launcher_decision(invalid, target, allowed)
+
+
+def test_capacity_fixture_uses_versioned_tokens_for_both_actors(monkeypatch, tmp_path):
+    """Provision the existing governed fixtures with the real session generation contract."""
+    import subprocess
+
+    captured_scripts = []
+
+    def fake_compose(compose_root, *args, **kwargs):
+        assert args == ("exec", "-T", "django", "python", "manage.py", "shell")
+        captured_scripts.append(kwargs["input_text"])
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            'CAPACITY_FIXTURE_READY={"actor_access":"aaa.bbb.ccc","approver_access":"ddd.eee.fff"}\n',
+            "",
+        )
+
+    monkeypatch.setattr(capacity, "_compose", fake_compose)
+    fixture = capacity.provision_tenant_fixture(tmp_path, 7)
+    assert fixture["AEGIS_E2E_ACCESS_TOKEN"] == "aaa.bbb.ccc"
+    assert fixture["AEGIS_E2E_APPROVER_ACCESS_TOKEN"] == "ddd.eee.fff"
+    assert len(captured_scripts) == 1
+    script = captured_scripts[0]
+    assert "from django_project.users.auth_views import VersionedTokenObtainPairSerializer" in script
+    assert script.count("VersionedTokenObtainPairSerializer.get_token(") == 2
+    assert "RefreshToken.for_user(" not in script
+    compile(script, "<isolated-capacity-fixture>", "exec")

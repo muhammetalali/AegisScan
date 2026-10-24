@@ -210,7 +210,7 @@ def provision_tenant_fixture(compose_root: Path, index: int) -> dict[str, str]:
     script = f"""
 from django.contrib.auth import get_user_model
 from django_project.users.models import UserRole
-from rest_framework_simplejwt.tokens import RefreshToken
+from django_project.users.auth_views import VersionedTokenObtainPairSerializer
 import json
 
 User = get_user_model()
@@ -239,8 +239,8 @@ def upsert(email, password, first_name, last_name):
 operator = upsert({encoded["email"]}, {encoded["password"]}, "Capacity", "Operator")
 approver = upsert({encoded["approver_email"]}, {encoded["approver_password"]}, "Capacity", "Approver")
 print("CAPACITY_FIXTURE_READY=" + json.dumps(dict(
-    actor_access=str(RefreshToken.for_user(operator).access_token),
-    approver_access=str(RefreshToken.for_user(approver).access_token),
+    actor_access=str(VersionedTokenObtainPairSerializer.get_token(operator).access_token),
+    approver_access=str(VersionedTokenObtainPairSerializer.get_token(approver).access_token),
 ), separators=(",", ":")))
 """
     result = _compose(
